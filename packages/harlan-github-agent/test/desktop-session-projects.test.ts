@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { acquireDesktopSessionClaim, releaseDesktopSessionClaim } from '../src/desktop-session-claim.ts'
 import { executeDesktopSessionTurn } from '../src/desktop-session-execute.ts'
 import { discoverDesktopSessionProjects, prepareDesktopSessionWorkspace, resolveDesktopSessionProject } from '../src/desktop-session-projects.ts'
@@ -37,6 +37,33 @@ it('rejects traversal and symlink escapes when resolving a selected project', as
   await symlink(tmpdir(), join(home, 'pkg', 'escape'))
   await expect(resolveDesktopSessionProject(home, 'pkg/escape')).rejects.toThrow()
   await expect(resolveDesktopSessionProject(home, 'pkg/../../etc')).rejects.toThrow()
+})
+it('skips malformed Git directories without hiding valid projects', async () => {
+  const home = await fixture()
+  const repo = join(home, 'pkg', 'app')
+  await exec('git', ['init', repo])
+  await mkdir(join(home, 'sites', 'broken', '.git'), { recursive: true })
+  const corrupt = join(home, 'sites', 'corrupt')
+  await exec('git', ['init', corrupt])
+  await writeFile(join(corrupt, '.git', 'config'), 'invalid configuration\n')
+  const diagnostic = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    expect(await discoverDesktopSessionProjects(home)).toEqual([{ id: 'pkg/app', name: 'app', path: repo, kind: 'pkg' }])
+    expect(diagnostic).toHaveBeenCalledWith(expect.stringContaining('sites/broken'))
+    expect(diagnostic).toHaveBeenCalledWith(expect.stringContaining('sites/corrupt'))
+    await expect(resolveDesktopSessionProject(home, 'sites/broken')).rejects.toThrow('Git control checkout')
+    await expect(resolveDesktopSessionProject(home, 'sites/corrupt')).rejects.toThrow('Git control checkout')
+  }
+  finally { diagnostic.mockRestore() }
+})
+it('propagates infrastructure failures during project discovery', async () => {
+  const home = await fixture()
+  await exec('git', ['init', join(home, 'pkg', 'app')])
+  vi.stubEnv('PATH', '')
+  try {
+    await expect(discoverDesktopSessionProjects(home)).rejects.toMatchObject({ code: 'ENOENT' })
+  }
+  finally { vi.unstubAllEnvs() }
 })
 it('preserves session edits across turns and rejects a substituted Worktree', async () => {
   const home = await fixture()
