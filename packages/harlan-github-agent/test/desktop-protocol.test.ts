@@ -3,6 +3,11 @@ import { DESKTOP_PROTOCOL, parseDesktopEvents, parseDesktopMemory, parseDesktopR
 import { DESKTOP_WORKTREE_LIMITS } from '../src/desktop-worktree.ts'
 
 describe('desktop boundaries', () => {
+  it.each(['host-cancelled', 'sandbox-setup'])('preserves %s attribution across hosts', (cause) => {
+    const event = { _tag: 'Failed', reason: 'The host stopped the turn.', cause }
+    expect(parseDesktopEvents([event])).toEqual([event])
+    expect(() => parseDesktopEvents([{ ...event, cause: 'unknown' }])).toThrow('failure cause is invalid')
+  })
   it('accepts a whole memory limit and refuses malformed settings', () => {
     expect(parseDesktopMemory({ memoryGiB: 16 })).toBe(16)
     for (const value of [null, {}, { memoryGiB: 0 }, { memoryGiB: 1.5 }, { memoryGiB: '16' }, { memoryGiB: 257 }])

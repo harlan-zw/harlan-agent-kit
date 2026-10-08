@@ -143,7 +143,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
             ...(options.readOnly === undefined ? {} : { readOnly: options.readOnly }),
           }).then(value => ({ _tag: 'Ok' as const, value })).catch((error: unknown) => ({ _tag: 'Err' as const, error }))
           if (prepared._tag === 'Err') {
-            yield { _tag: 'Failed', reason: `The Codex Agent worker isolation failed: ${prepared.error instanceof Error ? prepared.error.message : String(prepared.error)}` }
+            yield { _tag: 'Failed', reason: `The Codex Agent worker isolation failed: ${prepared.error instanceof Error ? prepared.error.message : String(prepared.error)}`, cause: 'sandbox-setup' }
             return
           }
           sandbox = prepared.value

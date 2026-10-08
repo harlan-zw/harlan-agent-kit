@@ -24,8 +24,11 @@ function record(value: unknown): value is Record<string, unknown> {
  * 6: provider processes require the isolated Agent worker configuration.
  * 7: authenticated controller proof callbacks through desktop child duplex IO.
  * 8: exact base revision supplied for immutable Review static evidence.
+ * 9: fenced event delivery and host failure attribution across the desktop boundary.
  */
-export const DESKTOP_PROTOCOL = 8
+export const DESKTOP_PROTOCOL = 9
+
+export const DESKTOP_TURN_LEASE_MILLISECONDS = 15_000
 
 /**
  * Why one desktop turn failed.
@@ -152,8 +155,11 @@ export function parseDesktopEvents(value: unknown): AgentEvent[] {
       return { _tag: 'SessionStarted', sessionId: event.sessionId }
     if (event._tag === 'Message' && typeof event.text === 'string')
       return { _tag: 'Message', text: event.text }
-    if (event._tag === 'Failed' && typeof event.reason === 'string')
-      return { _tag: 'Failed', reason: event.reason }
+    if (event._tag === 'Failed' && typeof event.reason === 'string') {
+      if (event.cause !== undefined && event.cause !== 'host-cancelled' && event.cause !== 'sandbox-setup')
+        throw new Error('The desktop failure cause is invalid.')
+      return { _tag: 'Failed', reason: event.reason, ...(event.cause === undefined ? {} : { cause: event.cause }) }
+    }
     if (event._tag === 'Progress' && typeof event.text === 'string' && Number.isFinite(event.percent) && Number(event.percent) >= 0 && Number(event.percent) <= 100)
       return { _tag: 'Progress', text: event.text, percent: Number(event.percent) }
     if (event._tag === 'CommandStarted' && typeof event.command === 'string')

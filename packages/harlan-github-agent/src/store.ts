@@ -988,6 +988,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     at: string
     leaseMilliseconds: number
   }) => ProviderStartReservation
+  /** Releases a host-interrupted canary without claiming provider health evidence. */
+  releaseProviderStart: (input: { circuitId: string, workerId: string, fence: number, at: string }) => boolean
   recordProviderFailure: (input: {
     provider: AgentProviderName
     credential: string
@@ -13314,6 +13316,28 @@ export function openJournalStore(
     }
   }
 
+  const releaseProviderStart: JournalStore['releaseProviderStart'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const changed = database.prepare(`
+        UPDATE provider_circuits
+        SET state_tag = 'Open', retry_at = ?, canary_worker_id = NULL,
+          canary_lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'HalfOpen' AND canary_worker_id = ? AND canary_fence = ?
+      `).run(input.at, input.at, input.circuitId, input.workerId, input.fence).changes === 1
+      if (changed) {
+        const released = database.prepare('SELECT * FROM provider_circuits WHERE id = ?').get(input.circuitId) as unknown as ProviderCircuitRow
+        recordProviderCircuitEvent(database, released, 'CanaryReleased', 'HalfOpen', 'Open', input.at, 'The host interrupted the provider canary.')
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const recordProviderFailure: JournalStore['recordProviderFailure'] = (input) => {
     const id = input.canaryCircuitId ?? digest(`${input.provider}:${input.credential}:${input.model}:${input.failureClass}`)
     const detail = `The Agent provider reported a ${input.failureClass.replace('_', ' ')} failure.`
@@ -16206,6 +16230,7 @@ export function openJournalStore(
     listWorkflowEvents,
     providerCanStart,
     reserveProviderStart,
+    releaseProviderStart,
     recordProviderFailure,
     recordProviderSuccess,
     listProviderCircuits,

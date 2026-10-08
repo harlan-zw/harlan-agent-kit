@@ -104,11 +104,37 @@ it('imports one desktop result and rejects late duplicate completion', async () 
   })
   const claimed = turn as unknown as DesktopTurn
   expect(broker.claim()).toBeNull()
-  expect(broker.events(claimed.id, [{ _tag: 'Message', text: 'finished' }])).toBe(true)
+  expect(broker.events(claimed.id, [{ _tag: 'Message', text: 'finished' }], 0)).toBe(true)
   expect(broker.complete(claimed.id, claimed.worktree, null)).toBe(true)
   expect(await response).toEqual({ done: false, value: { _tag: 'Message', text: 'finished' } })
   expect((await iterator.next()).done).toBe(true)
   expect(broker.complete(claimed.id, claimed.worktree, null)).toBe(false)
+})
+
+it('keeps an active turn through stale inventory and fences duplicated event delivery', async () => {
+  const f = await fixture()
+  let now = 1
+  const broker = createDesktopBroker({ now: () => now })
+  broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
+  const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: '', sessionId: null, signal: new AbortController().signal, workspace: f.repository })[Symbol.asyncIterator]()
+  const first = iterator.next()
+  let turn: DesktopTurn | null = null
+  await vi.waitFor(() => {
+    turn = broker.claim()
+    expect(turn).not.toBeNull()
+  })
+  const id = (turn as unknown as DesktopTurn).id
+  now = 10_001
+  expect(broker.active(id)).toBe(true)
+  now = 20_001
+  expect(broker.active(id)).toBe(true)
+  expect(broker.available()).toBe(false)
+  const message = [{ _tag: 'Message' as const, text: 'once' }]
+  expect(broker.events(id, message, 0)).toBe(true)
+  expect(broker.events(id, message, 0)).toBe(true)
+  expect(broker.complete(id, (turn as unknown as DesktopTurn).worktree, null)).toBe(true)
+  expect(await first).toEqual({ done: false, value: message[0] })
+  expect((await iterator.next()).done).toBe(true)
 })
 
 it('pins proof callbacks to the active desktop turn and refuses cancelled or disconnected turns', async () => {
@@ -374,7 +400,7 @@ it('stands down a desktop running another revision', async () => {
     expect(turn).not.toBeNull()
   })
   const claimed = turn as unknown as DesktopTurn
-  broker.events(claimed.id, [{ _tag: 'Message', text: 'finished' }])
+  broker.events(claimed.id, [{ _tag: 'Message', text: 'finished' }], 0)
   broker.complete(claimed.id, claimed.worktree, null)
   expect(await response).toEqual({ done: false, value: { _tag: 'Message', text: 'finished' } })
   await iterator.next()

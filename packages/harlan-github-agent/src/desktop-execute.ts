@@ -62,7 +62,7 @@ async function runDesktopProvider(options: DesktopTurnOptions, snapshot: Desktop
   try {
     for await (const event of provider.runTurn(request)) {
       const mapped = JSON.parse(JSON.stringify(event).replaceAll(workspace, turn.request.workspace)) as AgentEvent
-      options.emit(mapped)
+      options.emit(mapped._tag === 'Failed' && signal.aborted ? { ...mapped, cause: 'host-cancelled' } : mapped)
     }
   }
   catch (error) {
