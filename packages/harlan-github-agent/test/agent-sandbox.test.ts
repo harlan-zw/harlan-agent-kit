@@ -26,6 +26,7 @@ it('blocks controller credentials, Git helpers, and parent process reads while p
   await mkdir(join(home, '.config/opencode'), { recursive: true })
   await writeFile(join(home, '.config/opencode/opencode.json'), JSON.stringify({ provider: { 'zai-coding-plan': { options: { apiKey: 'fake-provider-key' } } }, mcp: { unsafe: { command: ['cat', secret] } } }))
   await execute('git', ['init', primary])
+  await execute('git', ['-C', primary, 'remote', 'add', 'origin', 'https://github.com/owner/site.git'])
   await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
   await execute('git', ['-C', primary, 'config', 'credential.helper', `!cat ${secret}`])
   const wtConfig = join(root, 'wt.toml')
@@ -137,6 +138,25 @@ if (process.argv[2] === 'serve') {
     expect(await readFile(secret, 'utf8')).toBe('fake-controller-secret')
     expect((await execute('git', ['-C', workspace, 'log', '-1', '--format=%s'])).stdout.trim()).toBe('test: prove isolated Git writes')
     expect((await execute('git', ['-C', workspace, 'status', '--porcelain'])).stdout).toBe('?? .env\n')
+    await mkdir(join(home, '.config/harlan-checkin'), { recursive: true, mode: 0o700 })
+    await writeFile(join(home, '.config/harlan-checkin/site.env'), 'CHECKIN_TOKEN=private-site-token\nSENTRY_AUTH_TOKEN=private-sentry-token\nGH_TOKEN=refused\n', { mode: 0o600 })
+    await writeFile(join(home, '.config/harlan-checkin/other.env'), 'OTHER_SITE_TOKEN=private-other-token\n', { mode: 0o600 })
+    const daily = await prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'codex', taskId: 'owner/site:daily-checkin:2026-10-08T00:00:00.000Z' })
+    try {
+      const proof = await execute(daily.binary, [...daily.args, '/usr/bin/bash', '-c', `
+        test "$CHECKIN_TOKEN" = private-site-token || exit 40
+        test "$SENTRY_AUTH_TOKEN" = private-sentry-token || exit 41
+        test "$CI" = true || exit 42
+        test -z "$GH_TOKEN$OTHER_SITE_TOKEN" || exit 43
+        test ! -e '${join(home, '.config/harlan-checkin/site.env')}' || exit 44
+        echo scoped-checkin
+      `], { env: daily.environment })
+      expect(proof.stdout.trim()).toBe('scoped-checkin')
+    }
+    finally {
+      await daily.release()
+    }
+    await expect(prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'codex', taskId: 'other/site:daily-checkin:2026-10-08T00:00:00.000Z' })).rejects.toThrow('repository')
     const request = { taskId: 'owner/site:daily-checkin:2026-10-08T00:00:00.000Z', model: 'fixture', outputSchema: {}, prompt: 'Return protected.'.repeat(16_000), sessionId: null, signal: new AbortController().signal, workspace }
     const originalHome = process.env.HOME
     process.env.HOME = home
