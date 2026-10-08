@@ -30,13 +30,10 @@ start_repo() {
 start_repo "$sandbox/pkg/inside"
 start_repo "$sandbox/elsewhere/outside"
 
-# Commits the subject and answers whether git accepted it.
+# Empty commits exercise the hook without random fixture filename collisions.
 try_commit() {
-  local path=$1 subject=$2 file
-  file="f$RANDOM"
-  printf 'x\n' > "$path/$file"
-  git -C "$path" add "$file" >/dev/null 2>&1
-  git -C "$path" commit --quiet --message "$subject" >/dev/null 2>&1
+  local path=$1 subject=$2
+  git -C "$path" commit --quiet --allow-empty --message "$subject" >/dev/null 2>&1
 }
 
 accepts() {
