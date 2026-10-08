@@ -295,7 +295,7 @@ export function reviewFindingFingerprint(identity: string): string {
 const reviewSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['premise', 'findings', 'confidence'],
+  required: ['premise', 'findings', 'confidence', 'mergeRisk'],
   properties: {
     premise: {
       type: 'object',
