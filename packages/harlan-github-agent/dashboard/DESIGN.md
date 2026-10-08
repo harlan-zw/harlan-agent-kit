@@ -128,6 +128,7 @@ One persistent 176px navigation rail and one 48px header.
 - Command output, file changes, and Reasoning stay inside the Activity disclosure.
 - The composer selects project, provider, model, and Reasoning effort before the first message.
 - A session keeps its provider and model for later messages. It shows its Worktree path below the composer.
+- Maintenance Agent selection, Pause, Selection mode, and Restart controls appear only on monitoring routes.
 - Offline desktop state disables Send. Request failures preserve the prompt and display a Retry control.
 - Stop remains visible until the desktop confirms the process stopped.
 - Mobile uses a project drawer within the page. Toggle projects opens and closes it.

@@ -3,7 +3,7 @@ import type { AgentProviderName } from '../../../src/agent-provider.ts'
 import type { DesktopSession, SessionProject, StartSessionRequest } from '../../../src/session-protocol.ts'
 import type { CodexReasoningEffort } from '../../../src/types.ts'
 import { useEventListener, useIntervalFn, useScroll } from '@vueuse/core'
-import { sessionActivity, sessionRunning, sessionTranscript } from '../utils/session.ts'
+import { sessionAcceptsMessage, sessionActivity, sessionFailureMessage, sessionRunning, sessionTranscript } from '../utils/session.ts'
 
 const route = useRoute()
 const { snapshot } = useDashboard()
@@ -23,13 +23,13 @@ const conversation = useTemplateRef<HTMLElement>('conversation')
 const { arrivedState } = useScroll(conversation)
 let lastRequest: { signature: string, id: string } | undefined
 const selected = computed(() => data.value?.sessions.find(session => session.id === route.query.session))
-const online = computed(() => data.value?.desktop.connected === true && data.value.desktop.current)
+const online = computed(() => loadFailure.value === '' && data.value?.desktop.connected === true && data.value.desktop.current)
 const projects = computed(() => data.value?.projects.filter(project => project.name.toLowerCase().includes(filter.value.toLowerCase())) ?? [])
 const models = computed(() => [...snapshot.value.agentModels[provider.value]])
 const running = computed(() => sessionRunning(selected.value))
 const transcript = computed(() => sessionTranscript(selected.value))
 const activity = computed(() => sessionActivity(selected.value))
-const canSend = computed(() => online.value && !pending.value && !running.value && prompt.value.trim().length > 0 && (selected.value !== undefined || (projectId.value !== '' && model.value !== '')))
+const canSend = computed(() => online.value && !pending.value && prompt.value.trim().length > 0 && (selected.value !== undefined ? sessionAcceptsMessage(selected.value) : projectId.value !== '' && model.value !== ''))
 
 watch(models, (values) => {
   if (!values.includes(model.value as never))
@@ -53,7 +53,7 @@ async function refresh(): Promise<void> {
     data.value = value
     loadFailure.value = ''
   }).catch((error: unknown) => {
-    loadFailure.value = error instanceof Error ? error.message : 'Could not load sessions. Retry.'
+    loadFailure.value = sessionFailureMessage(error, 'Could not load sessions. Retry.')
   })
   loading.value = false
 }
@@ -83,7 +83,7 @@ async function send(): Promise<void> {
     await refresh()
     await selectSession(session.id)
   }).catch((error: unknown) => {
-    failure.value = { action: 'send', message: error instanceof Error ? error.message : 'Could not send the prompt. Retry.' }
+    failure.value = { action: 'send', message: sessionFailureMessage(error, 'Could not send the prompt. Retry.') }
   })
   pending.value = false
 }
@@ -94,7 +94,7 @@ async function stop(): Promise<void> {
   pending.value = true
   failure.value = undefined
   await $fetch(`/api/sessions/${selected.value.id}/stop`, { method: 'POST' }).then(refresh).catch((error: unknown) => {
-    failure.value = { action: 'stop', message: error instanceof Error ? error.message : 'Could not stop the Agent. Retry.' }
+    failure.value = { action: 'stop', message: sessionFailureMessage(error, 'Could not stop the Agent. Retry.') }
   })
   pending.value = false
 }
@@ -186,7 +186,7 @@ usePageTitle('Sessions')
             <h2 class="text-xl font-medium">
               What do you want to work on?
             </h2>
-            <p class="mt-2 text-base text-muted">
+            <p v-if="!loadFailure" class="mt-2 text-base text-muted">
               {{ online ? 'Choose a project to start.' : 'Connect your desktop to Tailscale to start.' }}
             </p>
           </div>
@@ -202,7 +202,7 @@ usePageTitle('Sessions')
             <span class="live-dot size-1.5 rounded-full bg-success" />{{ selected?.status === 'queued' ? 'Starting Agent…' : selected?.status === 'stopping' ? 'Stopping Agent…' : 'Agent is working…' }}
           </p>
           <p v-if="selected?.status === 'interrupted'" class="mb-5 text-muted" role="status">
-            The desktop disconnected. Send a new message to continue.
+            The desktop disconnected. Stop the Agent before continuing.
           </p>
           <details v-if="activity.length" class="mb-6 rounded-md border border-default">
             <summary class="min-h-11 cursor-pointer px-4 py-3 font-medium">

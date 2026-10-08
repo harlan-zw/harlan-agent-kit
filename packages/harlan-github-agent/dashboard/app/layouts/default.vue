@@ -78,7 +78,7 @@ onMounted(start)
 
         <div class="ms-auto flex items-center gap-1.5">
           <SystemChip />
-          <div class="hidden items-center gap-1.5 lg:flex">
+          <div v-if="!sessionPage" class="hidden items-center gap-1.5 lg:flex">
             <AgentSelectionMenu />
             <UButton
               :color="paused ? 'primary' : 'neutral'"

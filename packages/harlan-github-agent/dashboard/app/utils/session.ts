@@ -1,7 +1,24 @@
 import type { DesktopSession } from '../../../src/session-protocol.ts'
 
+export function sessionFailureMessage(error: unknown, fallback: string): string {
+  if (typeof error === 'object' && error !== null && 'data' in error) {
+    const data = error.data
+    if (typeof data === 'object' && data !== null) {
+      if ('message' in data && typeof data.message === 'string' && data.message.trim().length > 0)
+        return data.message
+      if ('statusMessage' in data && typeof data.statusMessage === 'string' && data.statusMessage.trim().length > 0)
+        return data.statusMessage
+    }
+  }
+  return fallback
+}
+
 export function sessionRunning(session: DesktopSession | undefined): boolean {
   return session !== undefined && ['queued', 'running', 'stopping'].includes(session.status)
+}
+
+export function sessionAcceptsMessage(session: DesktopSession): boolean {
+  return session.status === 'idle' || session.status === 'stopped' || session.status === 'failed'
 }
 
 export function sessionTranscript(session: DesktopSession | undefined) {
