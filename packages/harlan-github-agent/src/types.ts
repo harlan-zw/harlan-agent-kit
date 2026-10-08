@@ -164,7 +164,7 @@ export interface AgentConfig {
     port: number
     allowedOrigin: string
     /** Enable only after the public ingress denies desktop session routes. */
-    desktopSessions?: boolean
+    agentSessions?: boolean
     /** HTTPS or loopback HTTP origins allowed to frame the dashboard. Empty keeps framing denied. */
     frameAncestors: readonly string[]
   }

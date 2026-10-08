@@ -71,11 +71,14 @@ The nonexistent POST route tests Origin handling without changing Service state.
 The Tailscale address retains its existing access.
 The Dashboard's live Hogwild metrics remain available through Tailscale only.
 
-## Desktop Agent sessions
+## Agent sessions
 
-The Sessions page starts Agents in desktop Projects under `~/pkg` and `~/sites`.
+The Sessions page starts Agents on Hogwild or the desktop.
+Select where to run, then select a Project from that host's `~/pkg` or `~/sites` directories.
 Each Agent session keeps one Worktree and its provider conversation across turns.
-The Agent uses the desktop's local credentials and Agent instructions.
+The Agent uses that host's local credentials, tools, and Agent instructions.
+Hogwild sessions do not require the desktop connection.
+Agent sessions stay on their selected host.
 
 Install the updated `scripts/30-agent.caddy` route before enabling Agent sessions.
 The route denies public `/api/sessions` and `/api/desktop/sessions` requests, including their child paths.
@@ -86,21 +89,22 @@ After installing and reloading Caddy, set this key in the existing Service confi
 
 ```yaml
 server:
-  desktop_sessions: true
+  agent_sessions: true
 ```
 
 Keep the other `server` keys. The default is `false`.
+If the configuration contains `desktop_sessions`, replace that key with `agent_sessions`.
 Update both Service checkouts with `pnpm service:hogwild:update`.
 Open `https://hogwild.tailcad325.ts.net/sessions` through Tailscale.
 
-If the desktop sleeps, the Agent session shows an interruption.
-Reconnect the desktop, select Stop Agent, then send the next message after stop confirmation.
+If the selected host disconnects, the Agent session shows an interruption.
+Reconnect that host, select Stop Agent, then send the next message after stop confirmation.
 Browser disconnects preserve the Agent session and its Worktree.
 The Worktree sweep preserves `agent/session-<UUID>` branches between turns.
 
 Verify public Session APIs return 403, including authenticated requests with the correct public Origin.
 Then verify Project selection, prompt delivery, follow-up, and Stop through the Tailscale address.
-Disabling `server.desktop_sessions` preserves stored Agent sessions and leaves maintenance offload available.
+Disabling `server.agent_sessions` preserves stored Agent sessions and leaves maintenance offload available.
 
 ## Rollback
 

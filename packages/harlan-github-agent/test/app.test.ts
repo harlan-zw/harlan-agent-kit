@@ -106,7 +106,7 @@ describe('dashboard HTTP app', () => {
     expect(await readDesktopResponse(claim)).toBeNull()
     const browser = await app.request(`${allowedOrigin}/api/sessions`, { headers })
     expect(browser.status).toBe(503)
-    expect(await browser.text()).toContain('Enable desktop sessions after installing the private ingress.')
+    expect(await browser.text()).toContain('Enable Agent sessions after installing the private ingress.')
   })
   it('keeps its dashboard generation while an update replaces files', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agent-dashboard-'))

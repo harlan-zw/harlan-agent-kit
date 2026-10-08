@@ -291,20 +291,23 @@ The dashboard shows `Review and repair` for outside contributors, and for every 
 Use `Eject` on a running agent to stop automation and resume its session in Ghostty. Codex sessions reopen with `codex resume`. opencode sessions reopen with `opencode --session`.
 The desktop tray has separate Agent and GitHub Actions icons.
 
-The Dashboard's Sessions page starts interactive desktop Agents in Projects under `~/pkg` and `~/sites`.
-Select a Project, Agent provider, model, and Reasoning effort, then send a prompt.
+The Dashboard's Sessions page starts interactive Agents on Hogwild or the desktop.
+Select where to run, then choose that host's Project, Agent provider, model, and Reasoning effort.
+Projects come from the selected host's `~/pkg` and `~/sites` directories.
 Follow-up messages resume the same native conversation and persistent Worktree.
-The desktop must be connected and have free Agent capacity.
+The selected host must be connected and have free Agent capacity.
+Hogwild sessions work while the desktop is offline.
 Only immediate Git control checkouts appear in the Project list.
 
-Agent sessions use the desktop's local credentials, tools, and Agent instructions.
+Agent sessions use the selected host's local credentials, tools, and Agent instructions.
+Each Agent session stays on its original host.
 Maintenance Workers retain their existing isolation and controller publication rules.
 Session Worktrees stay available after browser disconnects and between turns.
-Stop Agent waits for desktop process termination before another turn can start.
-If a session is interrupted, reconnect the desktop and confirm Stop Agent before resuming.
+Stop Agent waits for process termination on that host before another turn can start.
+If a session is interrupted, reconnect its host and confirm Stop Agent before resuming.
 
-Agent sessions require explicit `server.desktop_sessions: true` configuration.
-Install the private ingress first, following [Desktop Agent sessions](../../scripts/public-dashboard.md#desktop-agent-sessions).
+Agent sessions require explicit `server.agent_sessions: true` configuration.
+Install the private ingress first, following [Agent sessions](../../scripts/public-dashboard.md#agent-sessions).
 The public Dashboard retains monitoring access while Session APIs require the private ingress.
 The Agent menu groups current Agent tasks under Hogwild and Desktop.
 Tasks without a current provider turn stay outside those groups.
