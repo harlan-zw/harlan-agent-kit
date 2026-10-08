@@ -187,7 +187,7 @@ Limit reviews, issue triage, and conflict fixes to three active agents in total.
 The CLI does not expose Review runs yet. Inspect them through
 `/api/reviews?repository=OWNER%2FREPOSITORY&pull_request=NUMBER`.
 
-Use `Eject` to cancel one active automated Task and open its saved agent session in Ghostty. The terminal resumes after the active turn stops.
+Use `Watch logs` to read live Task and Routine activity in Sessions. Automation continues.
 
 Set the Selection mode with `Auto` or `Manual` in the dashboard header. `Auto` acts on every eligible pull request. `Manual` acts on a pull request only after Harlan selects it, with `Review and repair` in the dashboard or the `harlan-agent-review` label on GitHub. Use `Manual` when a repository has many open pull requests that need triage first. The Selection mode persists across restart, and covers pull requests only.
 

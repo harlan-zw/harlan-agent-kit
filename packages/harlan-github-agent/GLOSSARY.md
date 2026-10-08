@@ -36,8 +36,7 @@ did not cover it.
 | Service update | `origin/main`, `restart_requests.operation_tag` | Controller | One check, optional Restart request | Update available; Update after current work |
 | Selection mode | `agent_control.selection_mode` | Controller | One per service | Selection mode |
 | Dismissal | `item_dismissals` | Controller | One per Item | Dismiss |
-| Eject | dashboard and System pane action | Controller | Transfers one active agent session to Harlan's terminal | Eject |
-| Watch logs | System pane action | Observer | Opens one read-only live Task event stream | Watch logs |
+| Watch logs | Sessions and running Agent actions | Observer | Opens read-only live Task or Routine activity | Watch logs |
 | Weekly Codex limit | live Codex account | System pane | One seven-day usage window | Weekly Codex limit |
 | Recently finished | derived dashboard state | System pane | Three newest finished Tasks or Review runs | Recently finished |
 | Self-hosted runner | Docker container labels | GitHub Actions | N per repository, independent of this service | self-hosted runner |
@@ -143,7 +142,7 @@ Never: workspace, folder. Use Project.
 
 The one local agent runtime that answers every Agent turn: `codex` or `opencode`.
 
-The Agent provider owns its models, reasoning efforts, sessions, and Eject command. A saved session belongs to the provider that created it.
+The Agent provider owns its models, reasoning efforts, and sessions. A saved session belongs to the provider that created it.
 
 Use Agent provider. Do not use backend, engine, model provider, or vendor.
 
@@ -393,15 +392,9 @@ Restoring queues nothing by itself. The next observation replans the Item from i
 
 Use Dismissal for the record and `Dismiss` for the control. Do not use skip, ignore, delete, mute, or snooze.
 
-### Eject
-
-Stop one active automated Task, then open its saved agent session in Harlan's terminal for interactive control.
-
-Use Eject for this transfer. Do not use attach or take over.
-
 ### Watch logs
 
-Open one active Task's live agent event stream in Harlan's terminal. Automation continues unchanged.
+Open one active Task or Routine run's live Agent activity in Sessions. Automation continues unchanged.
 
 Use Watch logs for this view. Do not use Monitor or attach.
 

@@ -4,7 +4,7 @@ import type { ButtonProps } from '@nuxt/ui'
 /**
  * Arms on the first press, fires on the second, disarms after five seconds.
  *
- * Cancel and Eject both end minutes of agent work, so neither may fire on one
+ * Cancel ends minutes of Agent work, so it must not fire on one
  * misclick. Colour arrives only once the button is armed.
  */
 const {

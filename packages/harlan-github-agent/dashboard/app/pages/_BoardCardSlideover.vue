@@ -40,7 +40,7 @@ const {
   busy?: boolean
 }>()
 
-const emit = defineEmits<{ act: [action: CardAction], primary: [], eject: [] }>()
+const emit = defineEmits<{ act: [action: CardAction], primary: [] }>()
 const open = defineModel<boolean>('open', { default: false })
 const { snapshot, now, relativeTime, duration } = useDashboard()
 const { copy, copied } = useClipboard()
@@ -140,8 +140,6 @@ const actionLabels: Record<CardAction, string> = {
   cancel: 'Cancel task',
   dismiss: 'Dismiss',
 }
-
-const canEject = computed(() => card._tag === 'Running' && card.agent.session._tag === 'Connected')
 </script>
 
 <template>
@@ -223,6 +221,9 @@ const canEject = computed(() => card._tag === 'Running' && card.agent.session._t
 
     <template #footer>
       <div class="flex flex-wrap items-center gap-2 [&_button]:min-h-11 [&_a]:min-h-11 md:[&_button]:min-h-0 md:[&_a]:min-h-0">
+        <UButton v-if="card._tag === 'Running'" color="neutral" variant="outline" icon="i-octicon-terminal-16" :to="{ path: '/sessions', query: { task: card.agent.id } }">
+          Watch logs
+        </UButton>
         <UButton v-if="copiedTask" size="sm" :icon="copied ? 'i-octicon-check-16' : 'i-octicon-copy-16'" @click="copyTask">
           {{ copied ? 'Copied' : 'Copy task' }}
         </UButton>
@@ -238,17 +239,6 @@ const canEject = computed(() => card._tag === 'Running' && card.agent.session._t
         >
           {{ recommendation.label }}
         </UButton>
-        <ConfirmButton
-          v-if="canEject"
-          label="Eject"
-          confirm-label="Confirm eject"
-          aria-label="Eject this agent into your terminal"
-          confirm-aria-label="Confirm ejecting this agent into your terminal"
-          color="primary"
-          icon="i-octicon-terminal-16"
-          :disabled="busy"
-          @confirm="emit('eject')"
-        />
         <template v-for="action in actions" :key="action">
           <UButton
             v-if="action === 'open' && identity"

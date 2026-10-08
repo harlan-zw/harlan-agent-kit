@@ -2,8 +2,10 @@
 import type { AgentProviderName } from '../../../src/agent-provider.ts'
 import type { DesktopSession, SessionHost, StartSessionRequest } from '../../../src/session-protocol.ts'
 import type { CodexReasoningEffort } from '../../../src/types.ts'
+import type { AgentLogSelection } from '../utils/agent-logs.ts'
 import type { SessionViewSnapshot } from '../utils/session.ts'
 import { useEventListener, useIntervalFn, useResizeObserver, useSessionStorage } from '@vueuse/core'
+import { agentLogs, selectAgentLog } from '../utils/agent-logs.ts'
 import { createSessionDisclosures } from '../utils/session-disclosure.ts'
 import { createSessionImeLatch } from '../utils/session-ime.ts'
 import { sessionBottomTarget, sessionCanFollow, sessionDistanceFromBottom, sessionFollowOnScroll } from '../utils/session-scroll.ts'
@@ -13,6 +15,12 @@ import SessionMessage from './_SessionMessage.vue'
 
 const route = useRoute()
 const { snapshot } = useDashboard()
+const selectedLogId = computed(() => typeof route.query.task === 'string' ? route.query.task : undefined)
+const logSelection = shallowRef<AgentLogSelection>({ _tag: 'Unselected' })
+const logs = computed(() => agentLogs(snapshot.value).filter(log => (log.host === host.value || log.host === null) && `${log.repository} ${log.title}`.toLowerCase().includes(filter.value.toLowerCase())))
+watch([snapshot, selectedLogId], () => {
+  logSelection.value = selectAgentLog(snapshot.value, selectedLogId.value, logSelection.value)
+}, { immediate: true })
 const data = ref<SessionViewSnapshot>()
 const loading = ref(true)
 const failure = ref<{ action: 'send' | 'stop', message: string }>()
@@ -55,7 +63,7 @@ const sessions = computed(() => data.value?.sessions.filter(session => session.h
 const models = computed(() => [...snapshot.value.agentModels[provider.value]])
 const running = computed(() => sessionRunning(selected.value))
 const timeline = computed(() => sessionTimeline(selected.value))
-const canSend = computed(() => !loading.value && online.value && !pending.value && prompt.value.trim().length > 0 && (selected.value !== undefined ? sessionAcceptsMessage(selected.value) : sessionProjectAvailable(data.value, host.value, projectId.value) && model.value !== ''))
+const canSend = computed(() => !selectedLogId.value && !loading.value && online.value && !pending.value && prompt.value.trim().length > 0 && (selected.value !== undefined ? sessionAcceptsMessage(selected.value) : sessionProjectAvailable(data.value, host.value, projectId.value) && model.value !== ''))
 const unavailable = computed(() => sessionHostStatus(data.value, activeHost.value))
 const disclosures = createSessionDisclosures(reactive(new Map<string, boolean>()))
 const ime = createSessionImeLatch()
@@ -145,6 +153,16 @@ async function selectHost(value: SessionHost): Promise<void> {
   filter.value = ''
   await selectSession()
 }
+
+async function watchLogs(id: string): Promise<void> {
+  sidebarOpen.value = false
+  await navigateTo({ path: '/sessions', query: { task: id } })
+}
+
+watch(() => logSelection.value, (selection) => {
+  if (selection._tag === 'Live' && selection.log.host !== null)
+    host.value = selection.log.host
+}, { immediate: true })
 
 function remember(session: DesktopSession): void {
   if (!data.value)
@@ -236,6 +254,18 @@ usePageTitle('Sessions')
         <UInput v-model="filter" class="w-full" icon="i-octicon-search-16" placeholder="Find a project" aria-label="Find a project" />
       </div>
       <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+        <div class="mb-4">
+          <h2 class="px-2 py-2 text-sm font-medium text-muted">
+            Watch logs
+          </h2>
+          <button v-for="log in logs" :key="log.id" type="button" class="flex min-h-11 w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-accented" :class="selectedLogId === log.id ? 'bg-accented text-highlighted' : 'text-muted'" :aria-current="selectedLogId === log.id ? 'page' : undefined" @click="watchLogs(log.id)">
+            <UIcon name="i-octicon-terminal-16" class="mt-0.5 size-4 shrink-0" />
+            <span class="min-w-0"><span class="block truncate text-sm">{{ log.title }}</span><span class="block truncate text-xs text-muted">{{ log.kind }} / {{ log.phase }}</span></span>
+          </button>
+          <p v-if="!logs.length" class="px-2 text-sm text-muted">
+            No running Agents on this host.
+          </p>
+        </div>
         <p v-if="loading" class="px-2 py-4 text-muted" role="status">
           Loading projects…
         </p>
@@ -254,7 +284,8 @@ usePageTitle('Sessions')
       </div>
     </aside>
 
-    <section class="relative flex min-h-0 min-w-0 flex-col bg-default" aria-label="Agent conversation">
+    <AgentLogs v-if="selectedLogId" :selection="logSelection" :sidebar-open="sidebarOpen" @projects="sidebarOpen = !sidebarOpen" />
+    <section v-else class="relative flex min-h-0 min-w-0 flex-col bg-default" aria-label="Agent conversation">
       <header class="flex min-h-16 shrink-0 items-center gap-3 border-b border-default px-4 lg:px-8">
         <UButton class="md:hidden" color="neutral" variant="ghost" icon="i-octicon-sidebar-expand-16" aria-label="Toggle projects" :aria-expanded="sidebarOpen" aria-controls="session-projects" @click="sidebarOpen = !sidebarOpen" />
         <div class="min-w-0 flex-1">
