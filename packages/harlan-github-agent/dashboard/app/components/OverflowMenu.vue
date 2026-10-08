@@ -37,6 +37,7 @@ const items = computed<DropdownMenuItem[][]>(() => {
     ? []
     : [
         [
+          { label: 'Sessions', to: '/sessions', icon: 'i-octicon-comment-discussion-16' },
           { label: 'Board', to: '/', icon: 'i-octicon-columns-16' },
           { label: 'History', to: '/history', icon: 'i-octicon-history-16' },
           { label: 'Watching', to: '/watching', icon: 'i-octicon-broadcast-16' },

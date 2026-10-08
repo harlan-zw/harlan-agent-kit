@@ -81,13 +81,14 @@ Vocabulary is `../GLOSSARY.md`. GitHub's word wins where GitHub has one.
 - **Theme**: Scandinavian minimal. Paper neutrals, hairline borders, generous margins, no ornament.
 - **Mode**: Light first, dark with full token parity.
 - **Vibe**: Quiet, exact, calm.
-- **Influences**: GitHub Primer (list rows, outlined labels, counter pills, semantic state colours, Mona Sans), Trello (one board, fixed columns, cards you open), Linear (density without noise), Scandinavian print (margin, restraint, one weight of ink).
+- **Influences**: GitHub Primer for entities, Cursor for persistent navigation and conversations, Linear for density, Scandinavian print for restraint.
 - **Design principle**: We prioritise the exception over the inventory. The screen shows what changed or what needs a decision; everything else waits one click away.
 - **Personality of motion**: Nearly none. 120ms to 160ms ease-out on colour and opacity. Overlays slide 200ms. The live dot is the only looping animation.
 
 ## What This Dashboard Is For
 
-Harlan keeps it open on a second screen while agents work his repositories. It answers four questions in order. The layout is that order made visible.
+Harlan starts desktop Agent sessions and monitors repository work from one workspace.
+Sessions give conversations a stable home. The Board answers four monitoring questions.
 
 1. Does anything need me?
 2. What is running right now?
@@ -101,6 +102,7 @@ Repository health, provider limits, Routines, and host metrics are reference mat
 | Route | Answers | Shape |
 | --- | --- | --- |
 | `/` Board | Questions 1 to 3, and the last eight of 4 | A full-width **Needs you** list, then three fixed columns: **Up next** (with a **Waiting** disclosure), **Running**, **Done** |
+| `/sessions` | What to work on in a desktop project | Projects and sessions at left, conversation at center, composer at bottom |
 | `/history` | What happened, on what evidence | GitHub style list rows. Evidence opens in a slideover |
 | `/watching` | What is being polled | Repository table that flags exceptions only, open items, Dismissed group |
 | `/routines` | What is coming on the clock | Schedule table, soonest first, then the last runs |
@@ -110,13 +112,25 @@ Repository health, provider limits, Routines, and host metrics are reference mat
 
 ### Chrome
 
-One header, one row, 48px, on every page.
+One persistent 176px navigation rail and one 48px header.
 
-- Left: wordmark, then tabs `Board`, `History`, `Watching`, `Routines`, `Stats`.
+- Navigation: wordmark, then `Sessions`, `Board`, `History`, `Watching`, `Routines`, `Stats`. `How it works` sits below.
 - Right: **System** chip, Agent selection button, Pause or Resume, overflow menu.
 - The System chip reads `n/3` agents with a state dot. Grey is normal. Amber means work cannot start (Paused, Manual, writes off, Reserve reached, capacity unavailable, restart requested) and the chip names the reason. Red means an unresolved Incident and the chip carries the count. Red outranks amber. Before the first snapshot the chip shows a grey placeholder and no reason. Clicking it opens the System slideover.
 - The overflow menu holds `Selection mode`, `Restart after current work`, `Notifications`, `Theme`, `How it works`.
 - No status bar. No footer. Per-role model configuration lives inside the Agent selection menu.
+
+### Agent sessions
+
+- A 256px project list borders a full-height conversation. The composer stays visible at the bottom.
+- Project names precede their sessions. Session titles truncate; the conversation header shows the full title.
+- Messages use 16px body text and 28px leading. User and Agent labels orient each message.
+- Command output, file changes, and Reasoning stay inside the Activity disclosure.
+- The composer selects project, provider, model, and Reasoning effort before the first message.
+- A session keeps its provider and model for later messages. It shows its Worktree path below the composer.
+- Offline desktop state disables Send. Request failures preserve the prompt and display a Retry control.
+- Stop remains visible until the desktop confirms the process stopped.
+- Mobile uses a project drawer within the page. Toggle projects opens and closes it.
 
 ### System slideover
 
@@ -271,12 +285,7 @@ The `Ui*` components under `app/components/ui/` are ports of the nuxtseo.com des
 
 ## Voice and Tone
 
-- **Button labels**: verb plus object. `Review and repair`, `Approve`, `Cancel task`, `Dismiss`, `Eject`, `Resume`. Never `OK`, never `Submit`.
-- **State lines**: one sentence, present tense, names the reason. `Blocked on a draft.` `Position 3.` `Issue work stops above 8 open pull requests, and 17 are open.`
-- **Errors**: what happened, then the next action. `Approval refused: the head commit moved. Reload.`
-- **Empty states**: one line naming the cause. A control if the cause has one. No second sentence.
-- **Confirmations**: consequence first. `This pull request will never run again.` then `Dismiss`.
-- **Simplified Technical English**: one idea per sentence, under 20 words, active voice, condition before command.
+`COPY.md` owns dashboard copy. `../GLOSSARY.md` owns product concepts.
 
 ## Avoid
 
