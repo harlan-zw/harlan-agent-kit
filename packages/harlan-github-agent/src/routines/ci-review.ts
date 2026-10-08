@@ -7,7 +7,6 @@ export const ciReview: RoutineDefinition = {
   ...candidateRoutine,
   schema: {
     ...candidateRoutine.schema,
-    required: ['report', 'candidates'],
     properties: {
       ...candidateRoutine.schema.properties,
       report: { ...candidateRoutine.schema.properties.report, maxLength: MAXIMUM_REPORT_DETAIL_LENGTH },

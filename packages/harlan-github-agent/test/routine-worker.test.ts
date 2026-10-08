@@ -1,4 +1,4 @@
-import type { AgentEvent } from '../src/agent-provider.ts'
+import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
 import type { GitHubIssuePublisher } from '../src/github.ts'
 import type { RoutineScanInput } from '../src/routines/contract.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
@@ -26,9 +26,26 @@ function claimStoredRun(store: ReturnType<typeof openJournalStore>, at = now().t
 function scanning(answer: unknown, capture?: { prompts: string[] }) {
   return {
     name: 'codex' as const,
-    runTurn: (request: { prompt: string }) => {
+    runTurn: (request: AgentTurnRequest) => {
       capture?.prompts.push(request.prompt)
       return (async function* (): AsyncIterable<AgentEvent> {
+        // Codex rejects the whole turn when an object property is not required.
+        const pending: unknown[] = [request.outputSchema]
+        while (pending.length > 0) {
+          const schema = pending.pop()
+          if (typeof schema !== 'object' || schema === null)
+            continue
+          const object = schema as { properties?: Record<string, unknown>, required?: string[], items?: unknown }
+          for (const [key, property] of Object.entries(object.properties ?? {})) {
+            if (!object.required?.includes(key)) {
+              yield { _tag: 'Failed', reason: `Invalid response schema: required must include ${key}.` }
+              return
+            }
+            pending.push(property)
+          }
+          if (object.items !== undefined)
+            pending.push(object.items)
+        }
         yield { _tag: 'SessionStarted', sessionId: 'session-1' }
         yield { _tag: 'Message', text: JSON.stringify(answer) }
         yield { _tag: 'TurnCompleted' }
@@ -273,6 +290,24 @@ describe('building the scan prompt', () => {
 })
 
 describe('running one scan', () => {
+  it.each(['pr-triage', 'sentry-checkin', 'ci-review', 'perf-review', 'seo-review'] as const)(
+    'completes %s without a check-in verdict',
+    async (name) => {
+      const store = openJournalStore(':memory:')
+      try {
+        seed(store, name)
+        const result = await workerFor(store, scanning({ report: 'No findings.', verdict: null, candidates: [] }))
+          .run(claimStoredRun(store), new AbortController().signal)
+
+        expect(result).toMatchObject({ _tag: 'Ok' })
+        expect(store.listCandidates(`harlan-zw/example:${name}`)).toEqual([])
+      }
+      finally {
+        store.close()
+      }
+    },
+  )
+
   it('rejects oversized CI reports before persisting findings', async () => {
     const store = openJournalStore(':memory:')
     try {
