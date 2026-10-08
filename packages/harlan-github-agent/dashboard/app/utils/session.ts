@@ -8,6 +8,29 @@ export interface SessionViewSnapshot {
 
 export const sessionHostLabels: Record<SessionHost, string> = { desktop: 'Desktop', hogwild: 'Hogwild' }
 
+export interface SessionComposerSelection { host: SessionHost, projectId: string }
+
+export function parseSessionComposerStorage(stored: string): SessionComposerSelection {
+  const fallback: SessionComposerSelection = { host: 'desktop', projectId: '' }
+  let value: unknown
+  try {
+    value = JSON.parse(stored)
+  }
+  catch {
+    // An invalid browser storage entry has no recoverable selection.
+    return fallback
+  }
+  if (typeof value !== 'object' || value === null || !('host' in value) || !('projectId' in value))
+    return fallback
+  if ((value.host !== 'desktop' && value.host !== 'hogwild') || typeof value.projectId !== 'string')
+    return fallback
+  return { host: value.host, projectId: value.projectId }
+}
+
+export function sessionProjectAvailable(snapshot: SessionViewSnapshot | undefined, host: SessionHost, projectId: string): boolean {
+  return snapshot?.projects[host].some(project => project.id === projectId) === true
+}
+
 export function sessionHostProjects(snapshot: SessionViewSnapshot | undefined, host: SessionHost): SessionProject[] {
   if (!snapshot)
     return []

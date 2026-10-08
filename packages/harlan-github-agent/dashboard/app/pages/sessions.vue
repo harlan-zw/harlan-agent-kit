@@ -7,7 +7,7 @@ import { useEventListener, useIntervalFn, useResizeObserver, useSessionStorage }
 import { createSessionDisclosures } from '../utils/session-disclosure.ts'
 import { createSessionImeLatch } from '../utils/session-ime.ts'
 import { sessionBottomTarget, sessionCanFollow, sessionDistanceFromBottom, sessionFollowOnScroll } from '../utils/session-scroll.ts'
-import { sessionAcceptsMessage, sessionFailureMessage, sessionHostLabels, sessionHostProjects, sessionHostStatus, sessionRunning, sessionTimeline } from '../utils/session.ts'
+import { parseSessionComposerStorage, sessionAcceptsMessage, sessionFailureMessage, sessionHostLabels, sessionHostProjects, sessionHostStatus, sessionProjectAvailable, sessionRunning, sessionTimeline } from '../utils/session.ts'
 import SessionActivity from './_SessionActivity.vue'
 import SessionMessage from './_SessionMessage.vue'
 
@@ -18,8 +18,17 @@ const loading = ref(true)
 const failure = ref<{ action: 'send' | 'stop', message: string }>()
 const loadFailure = ref('')
 const pending = ref(false)
-const host = ref<SessionHost>('desktop')
-const projectId = ref('')
+const composerSelection = useSessionStorage('agent-session-composer', { host: 'desktop' as SessionHost, projectId: '' }, {
+  serializer: { read: parseSessionComposerStorage, write: JSON.stringify },
+})
+const host = computed({
+  get: () => composerSelection.value.host,
+  set: (value: SessionHost) => { composerSelection.value = { ...composerSelection.value, host: value } },
+})
+const projectId = computed({
+  get: () => composerSelection.value.projectId,
+  set: (value: string) => { composerSelection.value = { ...composerSelection.value, projectId: value } },
+})
 const provider = ref<AgentProviderName>('codex')
 const model = ref('')
 const reasoningEffort = ref<CodexReasoningEffort>('high')
@@ -45,7 +54,7 @@ const sessions = computed(() => data.value?.sessions.filter(session => session.h
 const models = computed(() => [...snapshot.value.agentModels[provider.value]])
 const running = computed(() => sessionRunning(selected.value))
 const timeline = computed(() => sessionTimeline(selected.value))
-const canSend = computed(() => !loading.value && online.value && !pending.value && prompt.value.trim().length > 0 && (selected.value !== undefined ? sessionAcceptsMessage(selected.value) : projectId.value !== '' && model.value !== ''))
+const canSend = computed(() => !loading.value && online.value && !pending.value && prompt.value.trim().length > 0 && (selected.value !== undefined ? sessionAcceptsMessage(selected.value) : sessionProjectAvailable(data.value, host.value, projectId.value) && model.value !== ''))
 const unavailable = computed(() => sessionHostStatus(data.value, activeHost.value))
 const disclosures = createSessionDisclosures(reactive(new Map<string, boolean>()))
 const ime = createSessionImeLatch()
