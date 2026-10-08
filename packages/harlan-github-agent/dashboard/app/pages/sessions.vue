@@ -19,6 +19,7 @@ const failure = ref<{ action: 'send' | 'stop', message: string }>()
 const loadFailure = ref('')
 const pending = ref(false)
 const composerSelection = useSessionStorage('agent-session-composer', { host: 'desktop' as SessionHost, projectId: '' }, {
+  initOnMounted: true,
   serializer: { read: parseSessionComposerStorage, write: JSON.stringify },
 })
 const host = computed({
@@ -38,7 +39,7 @@ const conversation = useTemplateRef<HTMLElement>('conversation')
 const content = useTemplateRef<HTMLElement>('content')
 const following = ref(true)
 const atBottom = ref(true)
-const drafts = useSessionStorage<Record<string, string>>('agent-session-drafts', {})
+const drafts = useSessionStorage<Record<string, string>>('agent-session-drafts', {}, { initOnMounted: true })
 const selected = computed(() => data.value?.sessions.find(session => session.id === route.query.session))
 const activeHost = computed(() => selected.value?.host ?? host.value)
 const draftKey = computed(() => selected.value?.id ?? `new:${host.value}:${projectId.value}`)
