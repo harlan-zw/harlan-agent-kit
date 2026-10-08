@@ -10,8 +10,10 @@ interface WorkerMemoryDependencies {
   newId: () => string
 }
 
+interface Reservation { references: number, memoryGiB: number, events: string, unit: string }
+
 export function createWorkerMemoryLimiter(dependencies: WorkerMemoryDependencies) {
-  const reservations = new Map<string, Promise<{ references: number, memoryGiB: number, events: string, unit: string }>>()
+  const reservations = new Map<string, Promise<Reservation>>()
 
   /** Keep every process for one Task under one memory budget, outside the controller. */
   return async function workerMemoryCommand(input: { binary: string, args: string[], memoryGiB: number, taskId?: string }) {
@@ -21,28 +23,35 @@ export function createWorkerMemoryLimiter(dependencies: WorkerMemoryDependencies
     if (identity.length === 0 || identity.length > 4096)
       throw new Error('The Agent Task identity is invalid.')
     const key = createHash('sha256').update(identity).digest('hex')
-    let pending = reservations.get(key)
-    if (pending === undefined) {
-      const unit = `hrlagent${key}${dependencies.newId().replaceAll('-', '')}.slice`
-      pending = (async () => {
-        await dependencies.execute(['--user', 'set-property', '--runtime', unit, `MemoryMax=${Math.floor(input.memoryGiB * 1024 ** 3)}`, 'MemorySwapMax=0'])
-        await dependencies.execute(['--user', 'start', unit])
-        const { stdout } = await dependencies.execute(['--user', 'show', unit, '--property=ControlGroup', '--value'])
-        if (!stdout.trim().startsWith('/user.slice/'))
-          throw new Error('The Agent Task memory group is missing.')
-        return { references: 0, memoryGiB: input.memoryGiB, events: `/sys/fs/cgroup${stdout.trim()}/memory.events`, unit }
-      })().catch(async (error: unknown) => {
-        await dependencies.execute(['--user', 'stop', unit])
-        await dependencies.execute(['--user', 'revert', unit])
+    let pending: Promise<Reservation> | undefined
+    let reservation: Reservation
+    while (true) {
+      pending = reservations.get(key)
+      if (pending === undefined) {
+        const unit = `hrlagent${key}${dependencies.newId().replaceAll('-', '')}.slice`
+        pending = (async () => {
+          await dependencies.execute(['--user', 'set-property', '--runtime', unit, `MemoryMax=${Math.floor(input.memoryGiB * 1024 ** 3)}`, 'MemorySwapMax=0'])
+          await dependencies.execute(['--user', 'start', unit])
+          const { stdout } = await dependencies.execute(['--user', 'show', unit, '--property=ControlGroup', '--value'])
+          if (!stdout.trim().startsWith('/user.slice/'))
+            throw new Error('The Agent Task memory group is missing.')
+          return { references: 0, memoryGiB: input.memoryGiB, events: `/sys/fs/cgroup${stdout.trim()}/memory.events`, unit }
+        })().catch(async (error: unknown) => {
+          await dependencies.execute(['--user', 'stop', unit])
+          await dependencies.execute(['--user', 'revert', unit])
+          throw error
+        })
+        reservations.set(key, pending)
+      }
+      reservation = await pending.catch((error: unknown) => {
+        if (reservations.get(key) === pending)
+          reservations.delete(key)
         throw error
       })
-      reservations.set(key, pending)
-    }
-    const reservation = await pending.catch((error: unknown) => {
+      // Acquisition must join a group that still owns the Task reservation.
       if (reservations.get(key) === pending)
-        reservations.delete(key)
-      throw error
-    })
+        break
+    }
     if (reservation.memoryGiB !== input.memoryGiB)
       throw new Error('The Agent Task memory budget changed during its turn.')
     reservation.references += 1

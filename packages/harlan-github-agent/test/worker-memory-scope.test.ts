@@ -140,3 +140,28 @@ it('removes its owned memory group when startup fails', async () => {
   await expect(command({ binary: '/usr/bin/true', args: [], memoryGiB: 1 })).rejects.toThrow('refused startup')
   expect(cleaned).toEqual(['stop', 'revert'])
 })
+
+it('reacquires a bounded Task after cached OOM release overtakes acquisition', async () => {
+  const active = new Map<string, string>()
+  const command = createWorkerMemoryLimiter({
+    newId: randomUUID,
+    readEvents: async () => 'oom_kill 1\n',
+    execute: async (args) => {
+      const action = args[1]
+      const unit = args[action === 'set-property' ? 3 : 2]!
+      if (action === 'set-property')
+        active.set(unit, args[4]!)
+      if (action === 'revert')
+        active.delete(unit)
+      return { stdout: action === 'show' ? `/user.slice/test/${unit}\n` : '' }
+    },
+  })
+  const input = { binary: '/usr/bin/true', args: [], memoryGiB: 1, taskId: 'same-task' }
+  const old = await command(input)
+  expect(await old.memoryExceeded()).toBe(true)
+  const closing = old.release()
+  const replacement = await command(input)
+  await closing
+  expect([...active.values()]).toEqual(['MemoryMax=1073741824'])
+  await replacement.release()
+})
