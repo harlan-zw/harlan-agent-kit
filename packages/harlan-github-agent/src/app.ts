@@ -4,6 +4,7 @@ import type { AgentHost, AgentSlotLimits, HostAgentPool, HostCapacity } from './
 import type { PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
 import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 import type { Result } from './result.ts'
+import type { SessionController } from './session-controller.ts'
 import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
 import type { DashboardSnapshot, WorkflowEventStream } from './types.ts'
@@ -20,6 +21,7 @@ import { parseDesktopEvents, parseDesktopFailure, parseDesktopMemory, parseDeskt
 import { parseAgentSlots } from './host-capacity.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { parseRepairRecoveryRequest } from './repair-recovery.ts'
+import { registerSessionRoutes } from './session-routes.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
@@ -29,6 +31,7 @@ export interface AgentAppOptions {
     observe: (target: PullRequestWatchTarget, signal: AbortSignal) => Promise<Result<void, string>>
   }
   reloadExternalWatches?: () => Promise<Result<{ repositories: number, issues: number }, string>>
+  sessions?: SessionController
   desktop?: DesktopBroker
   hostCapacity?: () => HostCapacity
   hostTasks?: HostAgentPool['tasks']
@@ -406,6 +409,9 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       response.headers.set('content-security-policy', `default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; frame-ancestors ${framing.frameAncestors}; img-src 'self' data: https://github.com https://avatars.githubusercontent.com; object-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'`)
     },
   })
+
+  if (options.sessions !== undefined)
+    registerSessionRoutes(app, options.sessions)
 
   app.get('/health', () => {
     const snapshot = options.store.getDashboardSnapshot(options.now().toISOString())
