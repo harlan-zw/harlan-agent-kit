@@ -11,6 +11,7 @@ import { workspaceEnvironment } from './workspace-environment.ts'
 
 const execute = promisify(execFile)
 const workerHome = '/home/agent'
+const workerStateHome = `${workerHome}/.local/state`
 
 const mutableGitFiles = ['HEAD', 'index', 'ORIG_HEAD', 'MERGE_HEAD', 'MERGE_MSG', 'MERGE_MODE', 'FETCH_HEAD', 'AUTO_MERGE', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'REBASE_HEAD', 'SQUASH_MSG', 'logs/HEAD'] as const
 
@@ -129,6 +130,8 @@ export interface AgentSandbox {
   binary: string
   args: string[]
   environment: NodeJS.ProcessEnv
+  /** The worker's state root, separate from the host process environment. */
+  workerStateHome: string
   providerBinary: string
   adapterPath: string
   release: () => Promise<void>
@@ -324,7 +327,7 @@ export async function prepareAgentSandbox(input: {
       ...(input.environment.CI === undefined ? {} : { CI: input.environment.CI }),
       XDG_CONFIG_HOME: `${workerHome}/.config`,
       XDG_DATA_HOME: `${workerHome}/.local/share`,
-      XDG_STATE_HOME: `${workerHome}/.local/state`,
+      XDG_STATE_HOME: workerStateHome,
       CODEX_HOME: `${workerHome}/.codex`,
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_TERMINAL_PROMPT: '0',
@@ -366,7 +369,7 @@ export async function prepareAgentSandbox(input: {
       await execute('/usr/bin/git', [...safeGit.slice(1), 'update-ref', branch, newSha, originalSha], { env: { PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }, timeout: 30_000 })
       await privateGit.save()
     }
-    return { binary: '/usr/bin/bwrap', args, environment: { PATH: '/usr/bin:/bin' }, adapterPath, providerBinary: profile[input.provider], release: () => {
+    return { binary: '/usr/bin/bwrap', args, environment: { PATH: '/usr/bin:/bin' }, workerStateHome, adapterPath, providerBinary: profile[input.provider], release: () => {
       released ??= (async () => {
         try {
           if (!readOnly)
