@@ -61,6 +61,8 @@ export function parseStartSession(value: unknown): StartSessionRequest {
   const reasoningEffort = input.reasoningEffort
   if (reasoningEffort !== 'none' && reasoningEffort !== 'max' && reasoningEffort !== 'low' && reasoningEffort !== 'medium' && reasoningEffort !== 'high' && reasoningEffort !== 'xhigh')
     throw new Error('Select a supported Reasoning effort.')
+  if (provider === 'codex' && reasoningEffort === 'none')
+    throw new Error('Select a supported Codex Reasoning effort.')
   return { ...parseSessionMessage(input), projectId: sessionText(input.projectId, 'project ID'), provider, model, reasoningEffort }
 }
 export function parseSessionProjects(value: unknown): SessionProject[] {

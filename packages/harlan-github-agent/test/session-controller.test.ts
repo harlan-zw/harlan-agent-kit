@@ -110,3 +110,9 @@ it('rejects a failed save without acknowledging an unpersisted Session on retry'
   const session = controller.start(input)
   expect(createSessionController(options).get(session.id).messages[0]?.text).toBe(input.prompt)
 })
+
+it('rejects Codex Reasoning effort values unsupported by its native runtime', () => {
+  const { input } = fixture()
+  expect(() => parseStartSession({ ...input, reasoningEffort: 'none' })).toThrow('Reasoning effort')
+  expect(parseStartSession({ ...input, reasoningEffort: 'max' }).reasoningEffort).toBe('max')
+})
