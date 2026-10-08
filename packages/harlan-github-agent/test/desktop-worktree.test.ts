@@ -91,6 +91,42 @@ it('prepares a real Worktrunk checkout from the transferred commit', async () =>
   expect(await readFile(join(workspace, 'file.txt'), 'utf8')).toBe('original\n')
 })
 
+it('round trips a pending merge with a base-added file and retains its merge parents', async () => {
+  const f = await fixture()
+  await f.git(['checkout', '-b', 'feature'])
+  await writeFile(join(f.repository, 'file.txt'), 'feature\n')
+  await f.git(['commit', '-am', 'fix: change feature'])
+  const head = await f.git(['rev-parse', 'HEAD'])
+  await f.git(['checkout', 'main'])
+  await writeFile(join(f.repository, 'file.txt'), 'base\n')
+  await mkdir(join(f.repository, 'docs'))
+  await writeFile(join(f.repository, 'docs/video-runbook.md'), 'Existing base content.\n')
+  await f.git(['add', '.'])
+  await f.git(['commit', '-m', 'docs: add base runbook'])
+  const base = await f.git(['rev-parse', 'HEAD'])
+  await f.git(['checkout', 'feature'])
+  await expect(f.git(['merge', '--no-commit', '--no-ff', base])).rejects.toThrow()
+  const initial = await exportDesktopWorktree(f.repository, f.transfer)
+  const desktop = await prepareDesktopWorktree(initial, join(f.root, 'desktop'), join(f.root, 'desktop-transfer'), 'merge-task')
+  try {
+    expect(await desktopCommand('git', ['ls-files', '--', 'docs/video-runbook.md'], desktop.workspace)).toBe('docs/video-runbook.md')
+    await writeFile(join(desktop.workspace, 'file.txt'), 'feature and base\n')
+    await writeFile(join(desktop.workspace, 'unrelated.txt'), 'Untracked worker output.\n')
+    const result = await exportDesktopWorktree(desktop.workspace, join(f.root, 'desktop-transfer'), { against: initial.head })
+    expect(result.files.map(file => file.path)).toEqual(['unrelated.txt'])
+    await importDesktopWorktree(f.repository, initial, result, f.transfer)
+    expect(await f.git(['rev-parse', 'MERGE_HEAD'])).toBe(base)
+    expect(await f.git(['ls-files', '--others', '--exclude-standard'])).toBe('unrelated.txt')
+    expect(await f.git(['ls-files', '--', 'docs/video-runbook.md'])).toBe('docs/video-runbook.md')
+    expect(await readFile(join(f.repository, 'docs/video-runbook.md'), 'utf8')).toBe('Existing base content.\n')
+    await f.git(['commit', '-m', 'fix: reconcile merge'])
+    expect(await f.git(['show', '--no-patch', '--format=%P', 'HEAD'])).toBe(`${head} ${base}`)
+  }
+  finally {
+    await desktop.release()
+  }
+})
+
 it('imports one desktop result and rejects late duplicate completion', async () => {
   const f = await fixture()
   const broker = createDesktopBroker({ now: () => 1 })
