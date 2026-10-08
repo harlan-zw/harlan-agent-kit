@@ -1,5 +1,5 @@
 import type { ChildProcessByStdio } from 'node:child_process'
-import type { Readable } from 'node:stream'
+import type { Readable, Writable } from 'node:stream'
 import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest, ContextBudgetPhase } from './agent-provider.ts'
 import type { Result } from './result.ts'
 import type { ReviewProofAuthorityFactory } from './review-proof-authority.ts'
@@ -28,6 +28,7 @@ const searchTools = new Set(['webfetch', 'websearch'])
 const maximumErrorCharacters = 600
 
 export type OpencodeProcess = ChildProcessByStdio<null, Readable, Readable>
+type OpencodeClientProcess = ChildProcessByStdio<Writable | null, Readable, Readable>
 
 type OpencodeExit
   = | { _tag: 'Exited', code: number | null, signal: NodeJS.Signals | null }
@@ -188,7 +189,7 @@ export interface OpencodeProviderOptions {
   /** Injected for tests. Starts the server one turn attaches to. */
   startOpencodeServer?: StartOpencodeServer
   /** Injected for tests. Returns the raw NDJSON line stream of one run. */
-  spawnOpencode?: (args: string[], workspace: string, environment: NodeJS.ProcessEnv) => OpencodeProcess
+  spawnOpencode?: (args: string[], workspace: string, environment: NodeJS.ProcessEnv) => OpencodeClientProcess
 }
 
 interface OpencodeToolPart {
@@ -317,7 +318,7 @@ export function opencodeAgentEvent(line: OpencodeLine): AgentEvent | undefined {
  * Create an empty session in this turn's prepared worktree before the CLI starts.
  * Its identity remains available even when the attached CLI emits no events.
  */
-export function opencodeArguments(request: AgentTurnRequest, prompt: string, serverUrl: string, mediaPaths: readonly string[] = [], freshSessionId?: string): string[] {
+export function opencodeArguments(request: AgentTurnRequest, serverUrl: string, mediaPaths: readonly string[] = [], freshSessionId?: string): string[] {
   return [
     'run',
     ...(request.toolPolicy?._tag === 'Review' ? ['--pure'] : []),
@@ -333,7 +334,6 @@ export function opencodeArguments(request: AgentTurnRequest, prompt: string, ser
     '--dir',
     request.workspace,
     ...(request.reasoningEffort === undefined ? [] : ['--variant', request.reasoningEffort]),
-    prompt,
   ]
 }
 
@@ -349,7 +349,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
     const child = spawn(sandbox.binary, [...sandbox.args, sandbox.providerBinary, ...args], {
       cwd: workspace,
       env: sandbox.environment,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
     const release = () => {
       void sandbox.release().catch(error => process.stderr.write(`Agent sandbox cleanup failed: ${error.message}\n`))
@@ -388,7 +388,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       return
     }
     const launched = await Promise.resolve().then(() => spawnOpencode(
-      opencodeArguments(request, prompt, server.url, mediaPaths, created.value),
+      opencodeArguments(request, server.url, mediaPaths, created.value),
       request.workspace,
       { ...turnEnvironment.value, ...serverCredentials(server.password) },
       mediaPaths,
@@ -419,6 +419,13 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       child.once('error', error => resolve({ _tag: 'SpawnFailed', error }))
       child.once('exit', (code, signal) => resolve({ _tag: 'Exited', code, signal }))
     })
+    // Evidence can exceed the OS argument limit. OpenCode reads the full prompt from stdin.
+    let inputError: Error | undefined
+    child.stdin?.once('error', (error: Error) => {
+      inputError = error
+      stop('SIGKILL')
+    })
+    child.stdin?.end(prompt)
 
     // A silent run means a wedged agent, and its Task holds its lease until the
     // process ends. Stop it so the Task can fail and retry.
@@ -533,6 +540,10 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       }
       if (request.signal.aborted) {
         yield { _tag: 'Failed', reason: 'The OpenCode turn was cancelled.' }
+        return
+      }
+      if (inputError !== undefined) {
+        yield { _tag: 'Failed', reason: `The OpenCode prompt delivery failed: ${inputError.message}` }
         return
       }
       if (completed && exit.code === 0) {

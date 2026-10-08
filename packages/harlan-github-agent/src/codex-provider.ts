@@ -165,7 +165,8 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
           workingDirectory: request.workspace,
           webSearchMode: review === undefined ? 'live' : 'disabled',
           approvalPolicy: 'never',
-          ...(review === undefined ? {} : { sandboxMode: 'read-only' as const }),
+          // The controller already isolates the whole process. Mutation tools cannot nest Bubblewrap inside it.
+          sandboxMode: review === undefined ? 'danger-full-access' : 'read-only',
         } satisfies ThreadOptions
         const threadOptions: ThreadOptions = request.reasoningEffort === undefined
           ? baseOptions

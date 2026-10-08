@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { describe, expect, it } from 'vitest'
-import { extractJsonObject } from '../src/agent-provider.ts'
+import { extractJsonObject, jsonOutputInstruction } from '../src/agent-provider.ts'
 import { createOpencodeProvider, opencodeAgentEvent, opencodeArguments, opencodeCachedTokensRead } from '../src/opencode-provider.ts'
 
 function request(overrides: Partial<AgentTurnRequest> = {}): AgentTurnRequest {
@@ -91,7 +91,7 @@ const completedLine = { type: 'step_finish', sessionID: 'ses_abc12345', part: { 
 
 describe('opencodeArguments', () => {
   it('runs the pinned model in the prepared worktree with permissions answered', () => {
-    expect(opencodeArguments(request(), 'the prompt', 'http://127.0.0.1:4097')).toEqual([
+    expect(opencodeArguments(request(), 'http://127.0.0.1:4097')).toEqual([
       'run',
       '--attach',
       'http://127.0.0.1:4097',
@@ -102,23 +102,58 @@ describe('opencodeArguments', () => {
       'opencode-go/deepseek-v4-flash',
       '--dir',
       '/tmp/worktree',
-      'the prompt',
     ])
   })
 
   it('passes the reasoning variant the role pins', () => {
-    expect(opencodeArguments(request({ reasoningEffort: 'high' }), 'the prompt', 'http://127.0.0.1:4097'))
+    expect(opencodeArguments(request({ reasoningEffort: 'high' }), 'http://127.0.0.1:4097'))
       .toEqual(expect.arrayContaining(['--variant', 'high']))
   })
 
   it('never resumes a saved session, because a resumed run ignores the prepared worktree', () => {
-    expect(opencodeArguments(request({ sessionId: 'ses_abc12345' }), 'the prompt', 'http://127.0.0.1:4097'))
+    expect(opencodeArguments(request({ sessionId: 'ses_abc12345' }), 'http://127.0.0.1:4097'))
       .not
       .toContain('--session')
   })
 })
 
 describe('attached result recovery', () => {
+  it('reports a closed prompt pipe and releases the turn server', async () => {
+    const server = fakeServer()
+    const provider = createOpencodeProvider({
+      startOpencodeServer: server.start,
+      spawnOpencode: args => spawn(process.execPath, ['-e', `
+        require('node:fs').closeSync(0)
+        setInterval(() => {}, 1000)
+      `, ...args], { stdio: ['pipe', 'pipe', 'pipe'] }),
+    })
+    const events = await collect(provider.runTurn(request({ prompt: 'evidence'.repeat(128_000) })))
+    expect(events).toEqual([{ _tag: 'Failed', reason: expect.stringContaining('The OpenCode prompt delivery failed:') }])
+    expect(server.closed()).toBe(true)
+  })
+
+  it('delivers a prompt larger than the OS argument limit without truncation', async () => {
+    const prompt = 'Large conflict evidence 🐛\n'.repeat(16_000)
+    const server = fakeServer()
+    const provider = createOpencodeProvider({
+      startOpencodeServer: server.start,
+      spawnOpencode: args => spawn(process.execPath, ['-e', `
+        let prompt = ''
+        process.stdin.setEncoding('utf8')
+        process.stdin.on('data', chunk => { prompt += chunk })
+        process.stdin.on('end', () => {
+          console.log(JSON.stringify({ type: 'text', sessionID: 'ses_abc12345', part: { type: 'text', text: JSON.stringify({ prompt }) } }))
+          console.log(JSON.stringify(${JSON.stringify(completedLine)}))
+        })
+      `, ...args], { stdio: ['pipe', 'pipe', 'pipe'] }),
+    })
+    const events = await collect(provider.runTurn(request({ prompt })))
+    expect(events.at(-1)).toEqual({ _tag: 'TurnCompleted' })
+    const answer = events.find(event => event._tag === 'Message')
+    expect(answer?._tag === 'Message' && JSON.parse(answer.text).prompt).toBe(`${prompt}\n\n${jsonOutputInstruction({ type: 'object' })}`)
+    expect(server.closed()).toBe(true)
+  })
+
   const identity = { sessionID: 'ses_abc12345', messageID: 'msg_current' }
   const start = { type: 'step_start', sessionID: identity.sessionID, part: { id: 'part_start', ...identity, type: 'step-start' } }
   const persisted = [{ info: { id: identity.messageID, sessionID: identity.sessionID, role: 'assistant', parentID: 'msg_user', finish: 'stop', time: { created: 50, completed: 100 } }, parts: [
