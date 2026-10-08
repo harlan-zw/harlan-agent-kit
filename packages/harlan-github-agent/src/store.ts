@@ -6936,7 +6936,17 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 83
   }
-  if (version === 83)
+  if (version === 83) {
+    // Review refresh checks cancellation and Repair history for each subject.
+    // These lookups must not scan every historical Task for each Review.
+    applyMigration(database, `
+      CREATE INDEX IF NOT EXISTS worker_tasks_subject_kind ON worker_tasks(subject_id, kind);
+      CREATE INDEX IF NOT EXISTS tasks_subject_kind ON tasks(subject_id, kind);
+      PRAGMA user_version = 84;
+    `)
+    version = 84
+  }
+  if (version === 84)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }

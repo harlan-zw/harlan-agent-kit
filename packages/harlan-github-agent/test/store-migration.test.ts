@@ -18,6 +18,62 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+it('preserves current and cancelled Review authority when upgrading Task lookups', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  before.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+  for (const number of [24, 25]) {
+    const subject = pullRequestItem({ number, mergeState: 'clean' })
+    const observed = before.recordObservation({ externalId: `review-${number}`, observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a Review Revision.')
+    const task = before.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:01:00.000Z', 600_000)
+    if (task === null)
+      throw new Error('Expected a Review Task.')
+    const reviewRunId = `run-${number}`
+    before.recordReviewRun({
+      id: reviewRunId,
+      repository: subject.repository,
+      pullRequestNumber: number,
+      revisionId: observed.revisionId,
+      headSha: subject.headSha,
+      provider: 'codex',
+      sessionId: 'session',
+      model: 'model',
+      agentVersion: '1',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates: {
+        merge: { _tag: 'Passed', evidence: [] },
+        review: { _tag: 'Passed', evidence: [] },
+        ci: { _tag: 'Passed', evidence: [] },
+      },
+      confidence: 95,
+      findings: [],
+    })
+    before.recordReviewPublication({ id: `publication-${number}`, reviewRunId, body: '### READY', at: '2026-08-13T01:03:00.000Z', result: { _tag: 'Published', githubCommentId: number, url: `${subject.url}#comment-${number}` } })
+    if (number === 24)
+      before.completeWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: '2026-08-13T01:03:01.000Z', evidence: reviewRunId })
+    else
+      before.cancelTask({ taskId: task.id, at: '2026-08-13T01:03:01.000Z' })
+  }
+  const eligible = before.listReviewGateRefreshes()
+  expect(eligible.map(review => review.pullRequestNumber)).toEqual([24])
+  before.close()
+  const legacy = new DatabaseSync(path)
+  legacy.exec('DROP INDEX IF EXISTS worker_tasks_subject_kind; DROP INDEX IF EXISTS tasks_subject_kind; PRAGMA user_version = 83;')
+  legacy.close()
+
+  for (let reopen = 0; reopen < 2; reopen += 1) {
+    const migrated = openJournalStore(path)
+    try {
+      expect(migrated.listReviewGateRefreshes()).toEqual(eligible)
+    }
+    finally { migrated.close() }
+  }
+})
+
 it('backfills an issue Approval from every issue work Task an older journal queued', () => {
   const path = join(directory, 'state.sqlite')
   const before = openJournalStore(path)
