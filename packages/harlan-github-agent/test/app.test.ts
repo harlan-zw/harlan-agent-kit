@@ -343,6 +343,95 @@ describe('dashboard HTTP app', () => {
     expect(new TextDecoder().decode(update?.value)).toContain('Reading the changed files.')
   })
 
+  it('samples one Dashboard per tick and preserves each live subscriber baseline', async () => {
+    vi.useFakeTimers()
+    const shutdown = new AbortController()
+    let current = dashboardSnapshot({ status: 'ready' })
+    const getDashboardSnapshot = vi.fn(() => current)
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      eventIntervalMilliseconds: 1_000,
+      shutdownSignal: shutdown.signal,
+      store: { ...agentControls, approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
+    })
+    const connect = async () => {
+      const response = await app.request(`http://${allowedHost}/api/events`, { headers: { authorization, host: allowedHost } })
+      const reader = response.body!.getReader()
+      await reader.read()
+      return reader
+    }
+    const readState = async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
+      const frame = new TextDecoder().decode((await reader.read()).value)
+      return JSON.parse(frame.split('\n').find(line => line.startsWith('data:'))!.slice(5))
+    }
+    const first = await connect()
+    current = dashboardSnapshot({ status: 'starting' })
+    const second = await connect()
+    const secondRead = readState(second)
+    let secondReceived = false
+    void secondRead.then(() => {
+      secondReceived = true
+    })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect((await readState(first)).status).toBe('starting')
+    expect(secondReceived).toBe(false)
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(3)
+
+    current = dashboardSnapshot({ status: 'degraded' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await secondRead).toEqual(await readState(first))
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(4)
+    await first.cancel()
+    current = dashboardSnapshot({ status: 'ready' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect((await readState(second)).status).toBe('ready')
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(5)
+
+    await second.cancel()
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(5)
+    const reconnected = await connect()
+    current = dashboardSnapshot({ status: 'starting' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect((await readState(reconnected)).status).toBe('starting')
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(7)
+    shutdown.abort()
+    expect(await reconnected.read()).toEqual({ value: undefined, done: true })
+    await reconnected.cancel()
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(7)
+  })
+
+  it('keeps live Dashboard updates flowing when another subscriber does not read', async () => {
+    vi.useFakeTimers()
+    const shutdown = new AbortController()
+    let current = dashboardSnapshot({ status: 'ready' })
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      eventIntervalMilliseconds: 1_000,
+      shutdownSignal: shutdown.signal,
+      store: { ...agentControls, approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => current, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
+    })
+    const responses = await Promise.all([1, 2].map(() => app.request(`http://${allowedHost}/api/events`, { headers: { authorization, host: allowedHost } })))
+    const stalled = responses[0]!.body!.getReader()
+    const active = responses[1]!.body!.getReader()
+    await active.read()
+    for (const status of ['starting', 'degraded', 'ready'] as const) {
+      current = dashboardSnapshot({ status })
+      await vi.advanceTimersByTimeAsync(1_000)
+      const frame = new TextDecoder().decode((await active.read()).value)
+      expect(JSON.parse(frame.split('\n').find(line => line.startsWith('data:'))!.slice(5)).status).toBe(status)
+    }
+    shutdown.abort()
+    await Promise.all([stalled.cancel(), active.cancel()])
+  })
+
   it('switches the Agent provider, model, and reasoning effort', async () => {
     const switches: unknown[] = []
     const app = createAgentApp({
