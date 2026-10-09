@@ -93,6 +93,7 @@ import type {
   ReviewOutcome,
   ReviewPublication,
   ReviewPublicationResult,
+  ReviewRerunRejection,
   ReviewRerunResult,
   ReviewRerunSource,
   ReviewResolution,
@@ -1228,6 +1229,15 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     revisionId: string
     requestId: string
     source: ReviewRerunSource
+    requestedBy: string
+    at: string
+  }) => ReviewRerunResult
+  requestPullRequestChange: (input: {
+    repository: string
+    pullRequestNumber: number
+    revisionId: string
+    requestId: string
+    instruction: string
     requestedBy: string
     at: string
   }) => ReviewRerunResult
@@ -3851,7 +3861,8 @@ function supersedeTasks(
       AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
       AND (? IS NULL OR revision_id != ?)
       AND (NOT ? OR id NOT IN (SELECT task_id FROM logged_finding_requests WHERE task_id IS NOT NULL))
-  `).all(subjectId, kind, exceptRevisionId ?? null, exceptRevisionId ?? null, preserveLoggedPickups ? 1 : 0) as unknown as Array<{ id: string, state_tag: TaskRow['state_tag'], fence: number }>
+      AND (NOT ? OR id NOT IN (SELECT task_id FROM pull_request_change_requests))
+  `).all(subjectId, kind, exceptRevisionId ?? null, exceptRevisionId ?? null, preserveLoggedPickups ? 1 : 0, preserveLoggedPickups ? 1 : 0) as unknown as Array<{ id: string, state_tag: TaskRow['state_tag'], fence: number }>
 
   const update = database.prepare(`
     UPDATE tasks
@@ -4185,6 +4196,11 @@ function planReviewFix(
   observedAt: string,
   mapping: RepositoryMapping,
 ): ReviewFixPlan {
+  // An owner request has its own scope. Review must not reuse its Task.
+  if (database.prepare(`SELECT 1 FROM tasks JOIN pull_request_change_requests ON task_id = tasks.id
+    WHERE subject_id = ? AND revision_id = ? AND state_tag IN ('Queued', 'Running', 'Publishing')`).get(subjectId, revisionId) !== undefined) {
+    return { _tag: 'Refused', reason: 'An owner request already has Repair work.' }
+  }
   const refuse = (reason: string): ReviewFixPlan => {
     supersedeTasks(database, subjectId, observedAt, 'The pull request no longer has an approved repair.', undefined, 'review_fix', true)
     return { _tag: 'Refused', reason }
@@ -4234,6 +4250,7 @@ function planReviewFix(
     FROM tasks
     WHERE subject_id = ? AND kind = 'review_fix' AND revision_id = ?
       AND id NOT IN (SELECT task_id FROM logged_finding_requests WHERE task_id IS NOT NULL)
+      AND id NOT IN (SELECT task_id FROM pull_request_change_requests)
   `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], fence: number, cancelled: number } | undefined
   if (existing === undefined) {
     const taskId = digest(`${mapping.github}:pull_request:${subject.number}:${revisionId}:review_fix`)
@@ -6954,7 +6971,20 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 85
   }
-  if (version === 85)
+  if (version === 85) {
+    applyMigration(database, `
+      CREATE TABLE IF NOT EXISTS pull_request_change_requests (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id),
+        instruction TEXT NOT NULL,
+        requested_by TEXT NOT NULL,
+        requested_at TEXT NOT NULL
+      );
+      PRAGMA user_version = 86;
+    `)
+    version = 86
+  }
+  if (version === 86)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7577,6 +7607,68 @@ export function openJournalStore(
       const result = cancelStoredTask(database, input.taskId, input.at, 'Cancelled from the dashboard.')
       database.exec('COMMIT')
       return result
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const requestPullRequestChange: JournalStore['requestPullRequestChange'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const duplicate = database.prepare('SELECT task_id FROM pull_request_change_requests WHERE id = ?')
+        .get(input.requestId) as { task_id: string } | undefined
+      if (duplicate !== undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'Duplicate', taskId: duplicate.task_id }
+      }
+      const row = database.prepare(`
+        SELECT subjects.id, subjects.current_revision_id, revisions.payload, repositories.policy_json,
+          EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id) AS dismissed
+        FROM subjects JOIN repositories ON repositories.id = subjects.repository_id
+        JOIN revisions ON revisions.id = subjects.current_revision_id
+        WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+      `).get(input.repository, input.pullRequestNumber) as {
+        id: number
+        current_revision_id: string
+        payload: string
+        policy_json: string
+        dismissed: number
+      } | undefined
+      const reject = (reason: ReviewRerunRejection): ReviewRerunResult => {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason }
+      }
+      if (row === undefined)
+        return reject({ _tag: 'ItemNotFound' })
+      if (row.current_revision_id !== currentSameHeadRevision(database, input.revisionId))
+        return reject({ _tag: 'RevisionMismatch' })
+      const mapping = JSON.parse(row.policy_json) as RepositoryMapping
+      const subject = JSON.parse(row.payload) as GitHubPullRequestItem
+      if (mapping.ownership !== 'owned'
+        || input.requestedBy.toLowerCase() !== mapping.github.split('/')[0]!.toLowerCase()
+        || !mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === input.requestedBy.toLowerCase())) {
+        return reject({ _tag: 'AuthorNotAllowed' })
+      }
+      if (row.dismissed === 1 || !mapping.pullRequestReview || !canRepairPullRequestHead(mapping, subject)
+        || subject.state !== 'open' || subject.draft || subject.mergeState !== 'clean'
+        || input.instruction.trim() === '' || input.instruction.length > 12_000) {
+        return reject({ _tag: 'ReviewNotReady' })
+      }
+      if (database.prepare('SELECT 1 FROM review_stops WHERE subject_id = ? AND head_sha = ?').get(row.id, subject.headSha) !== undefined)
+        return reject({ _tag: 'ReviewStopped' })
+      const taskId = digest(`owner-change:${mapping.github}:${input.requestId}`)
+      database.prepare(`INSERT INTO tasks (id, subject_id, revision_id, kind, state_tag, updated_at)
+        VALUES (?, ?, ?, 'review_fix', 'Queued', ?)`).run(taskId, row.id, row.current_revision_id, input.at)
+      database.prepare(`INSERT INTO pull_request_change_requests (id, task_id, instruction, requested_by, requested_at)
+        VALUES (?, ?, ?, ?, ?)`).run(input.requestId, taskId, input.instruction, input.requestedBy, input.at)
+      // The owner's instruction grants scoped Repair, including Manual Selection mode.
+      database.prepare(`INSERT OR IGNORE INTO pull_request_approvals (subject_id, revision_id, kind, approved_at)
+        VALUES (?, ?, 'fixes', ?)`).run(row.id, row.current_revision_id, input.at)
+      recordTransition(database, { taskId, from: null, to: 'Queued', reason: 'Owner requested a pull request change.', fence: 0, at: input.at })
+      database.exec('COMMIT')
+      return { _tag: 'Queued', taskId }
     }
     catch (error) {
       database.exec('ROLLBACK')
@@ -9554,6 +9646,15 @@ export function openJournalStore(
             WHERE combined.task_id = tasks.id AND commands.state_tag IN ('Pending', 'Running')
           )
           AND ${mutationRevisionAuthoritySql}
+          AND NOT EXISTS (SELECT 1 FROM tasks AS owner_task JOIN pull_request_change_requests ON task_id = owner_task.id
+            WHERE owner_task.subject_id = subjects.id AND owner_task.id != tasks.id AND owner_task.state_tag IN ('Running', 'Publishing'))
+          AND (NOT EXISTS (SELECT 1 FROM pull_request_change_requests WHERE task_id = tasks.id) OR (
+            NOT EXISTS (SELECT 1 FROM worker_tasks WHERE subject_id = subjects.id AND state_tag IN ('Queued', 'Running', 'Publishing'))
+            AND NOT EXISTS (SELECT 1 FROM tasks AS sibling WHERE sibling.subject_id = subjects.id AND sibling.id != tasks.id
+              AND (sibling.state_tag IN ('Running', 'Publishing') OR (sibling.state_tag = 'Queued' AND (sibling.updated_at < tasks.updated_at OR (sibling.updated_at = tasks.updated_at AND sibling.id < tasks.id)))))
+            AND NOT EXISTS (SELECT 1 FROM review_stops WHERE subject_id = subjects.id AND head_sha = json_extract(revisions.payload, '$.headSha'))
+            AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
+          ))
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
           AND repositories.paused = 0
@@ -9727,7 +9828,9 @@ export function openJournalStore(
       if (kind === 'review_fix') {
         const prior = reviewFixRounds(database, row.subject_id, subject.headSha)
         const finding = loggedFindingStore.getLoggedFindingForTask(row.id)
-        return { ...task, kind, ...(finding === null ? {} : { pickup: { _tag: 'LoggedFinding' as const, finding } }), rounds: finding === null ? { number: prior.length + 1, limit: REPAIR_ROUND_LIMIT, prior } : { number: 1, limit: 1, prior: [] } }
+        const request = database.prepare('SELECT id, instruction, requested_by FROM pull_request_change_requests WHERE task_id = ?')
+          .get(row.id) as { id: string, instruction: string, requested_by: string } | undefined
+        return { ...task, kind, ...(request === undefined ? {} : { request: { _tag: 'OwnerComment' as const, instruction: request.instruction, requestedBy: request.requested_by, requestId: request.id } }), ...(finding === null ? {} : { pickup: { _tag: 'LoggedFinding' as const, finding } }), rounds: finding === null ? { number: prior.length + 1, limit: REPAIR_ROUND_LIMIT, prior } : { number: 1, limit: 1, prior: [] } }
       }
       if (kind === 'resolve_conflict')
         return { ...task, kind }
@@ -10141,6 +10244,8 @@ export function openJournalStore(
         JOIN repositories ON repositories.id = subjects.repository_id
         JOIN revisions ON revisions.id = worker_tasks.revision_id
         WHERE (? IS NULL OR worker_tasks.kind = ?) AND worker_tasks.state_tag = 'Queued'
+          AND NOT EXISTS (SELECT 1 FROM tasks AS owner_task JOIN pull_request_change_requests ON task_id = owner_task.id
+            WHERE owner_task.subject_id = subjects.id AND owner_task.state_tag IN ('Running', 'Publishing'))
           AND worker_tasks.revision_id = subjects.current_revision_id
           -- A different base needs the Item's active Baseline repair slot.
           -- Wait before claiming Review, so it spends no retry attempts.
@@ -16318,6 +16423,7 @@ export function openJournalStore(
     supersedeReviewRun,
     recordReviewPublication,
     requestReviewRerun,
+    requestPullRequestChange,
     resumeAgents,
     selectAgent,
     recoverInterruptedAgentTasks,

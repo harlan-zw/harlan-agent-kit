@@ -102,6 +102,20 @@ Review decides the pull request premise once. A sound premise permits Repair. A 
 
 GitHub status, comments, and labels hold durable workflow truth. The local journal coordinates leases, Agent sessions, Recovery, and Review usage.
 
+On an open pull request, the repository owner can request a change with a leading Agent mention:
+
+```text
+@harlan-github-agent change trailingSlash to false
+```
+
+`@harlan-agent`, `@harlan-github-agent[bot]`, and `/harlan-agent` also work.
+An exact `rerun` command still requests Review.
+Other text requests scoped Repair on the current head commit.
+The Service saves each request once and waits for existing Review or Repair work.
+A changed head commit cancels the request. Closed pull requests cannot accept it.
+Only owned repositories and writable head branches accept change requests.
+Pause, Dismissal, Stop Review, and write controls still apply.
+
 Pull request triage uses `harlan-agent-review-required` or `harlan-agent-review-skipped`.
 The final Review replaces that route with one outcome label: `ready`, `pending`, or `blocked`.
 The canonical comment lists every Review gate and the next action.

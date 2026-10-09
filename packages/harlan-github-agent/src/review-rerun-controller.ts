@@ -11,7 +11,7 @@ export interface ReviewRerunSync {
 
 export interface ReviewRerunDependencies {
   github: Pick<GitHubSource, 'listReviewRerunRequests'>
-  store: Pick<JournalStore, 'getDashboardSnapshot' | 'requestReviewRerun'>
+  store: Pick<JournalStore, 'getDashboardSnapshot' | 'requestReviewRerun' | 'requestPullRequestChange'>
   allowedAuthors: string[]
   now: () => Date
   signal?: AbortSignal
@@ -37,6 +37,17 @@ export function syncReviewRerunRequests(
       )
       if (subject === undefined)
         return []
+      if (request.origin === 'ChangeRequest') {
+        return [dependencies.store.requestPullRequestChange({
+          repository: repository.github,
+          pullRequestNumber: request.pullRequestNumber,
+          revisionId: subject.revisionId,
+          requestId: `github-change:${repository.github}:${request.commentId}:${request.updatedAt}`,
+          instruction: request.instruction,
+          requestedBy: request.author,
+          at,
+        })]
+      }
       return [dependencies.store.requestReviewRerun({
         repository: repository.github,
         pullRequestNumber: request.pullRequestNumber,

@@ -637,6 +637,7 @@ export interface ClaimedReviewFixTask extends ReviewFixTask {
   pullRequest: GitHubPullRequestItem
   rounds: { number: number, limit: number, prior: RepairRound[] }
   pickup?: { _tag: 'LoggedFinding', finding: Extract<ReviewFinding, { _tag: 'Logged' }> }
+  request?: { _tag: 'OwnerComment', instruction: string, requestedBy: string, requestId: string }
 }
 
 /**

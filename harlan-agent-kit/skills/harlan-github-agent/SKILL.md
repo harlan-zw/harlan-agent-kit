@@ -293,6 +293,19 @@ Allow Harlan to rerun the current head commit from the dashboard or with the exa
 
 If GitHub closes the pull request unmerged, revoke its running task. Stop the agent within five seconds.
 
+Accept a leading Agent mention followed by a change request from the repository owner only.
+The same handles and slash form used for `rerun` accept the request.
+Keep exact `rerun` commands as Review requests.
+Require an owned repository, enabled Review, and a writable open pull request head branch.
+Save the exact request and author once, bound to the observed head commit and base branch.
+Queue scoped Repair. Wait for existing Review and Repair work before claiming it.
+Keep Pause, Dismissal, Stop Review, and write controls effective.
+If the head changes, cancel the old request. Never replay it on the new head.
+Give the Repair Agent the owner's exact request as its scope.
+Allow it to replace the original approach and remove changes that the request replaces.
+Keep controller policy effective. The request grants no merge or publication authority to the Agent.
+Return Action required when the request is unclear, unsafe, already satisfied, or only changes GitHub metadata.
+
 If GitHub merges during an active Review, let that Review finish and store every finding.
 If Harlan needs to merge now, leave Review running.
 If Harlan decides Review is unnecessary, select Stop Review in the automated comment before merging.
