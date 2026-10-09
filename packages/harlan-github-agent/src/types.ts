@@ -369,6 +369,8 @@ export type ReviewFinding
       _tag: 'Logged'
       impact: number
       summary: string
+      /** Older stored Review runs may have no proposed action. */
+      nextAction?: string
       details: {
         fingerprint: string
         identity: string

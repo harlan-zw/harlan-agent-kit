@@ -405,6 +405,7 @@ describe('subject Workers', () => {
       _tag: impact > 80 ? 'Open' : 'Logged',
       impact,
       summary: 'The parser drops data.',
+      nextAction: 'Preserve the buffered bytes.',
       details: expect.objectContaining({ location: { path: 'src/parser.ts', line: 42 } }),
     })])
     expect(queued).toBe(impact > 80)
@@ -415,9 +416,9 @@ describe('subject Workers', () => {
       expect(terminal).toContain(impact > 80 ? '### 🤖 BLOCKED' : '### 🤖 READY')
       expect(terminal).toContain('The parser drops data.')
       if (impact <= 80)
-        expect(terminal).toContain('Optional follow-up.')
+        expect(terminal).toContain('Optional follow-up: Preserve the buffered bytes.')
       else
-        expect(terminal).not.toContain('Optional follow-up.')
+        expect(terminal).not.toContain('Optional follow-up')
     }
     expect(worktreeVerified).toBe(true)
   })

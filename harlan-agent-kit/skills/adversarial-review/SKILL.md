@@ -114,8 +114,8 @@ Use the [review contract](references/review-contract.md#adversarial-review) impa
 Record every evidence-backed finding. Never cap the finding count.
 
 Give each finding an impact score, stable identity, exact location, and proof.
-Only findings above 80 receive a next action and `Repair` or `Dismissal` resolution.
-Describe findings at 80 or below as optional follow-ups. Include the proposed improvement in their summary.
+Give every finding a proposed next action. Only findings above 80 receive `Repair` or `Dismissal` resolution.
+Describe findings at 80 or below as optional follow-ups. Show their proposed next action beside the finding.
 They never block Review or start automatic Repair.
 
 Decide the pull request premise once before classifying findings.

@@ -22,7 +22,7 @@ Check:
 Do not report style preferences. Record credible defects with an impact score from 0 to 100.
 Score harm if merged unfixed. Consider likelihood, affected users, blast radius, and reversibility.
 Scores from 81 to 100 require action. Scores from 0 to 80 stay Logged without Repair.
-Logged findings are optional follow-ups. Include the proposed improvement in their summary.
+Logged findings are optional follow-ups. Show their proposed next action beside the finding.
 They never block Review or start automatic Repair.
 Do not raise a score to trigger Repair. Visible UI defects can qualify when they harm use.
 Use 81 to 90 for common broken paths or wrong results without a practical workaround.
@@ -131,7 +131,7 @@ When Review found issues, show each finding once:
 
 ```markdown
 - **Fixed:** SHORT_DESCRIPTION
-- **Logged (IMPACT/100):** SHORT_DESCRIPTION. Optional follow-up.
+- **Logged (IMPACT/100):** SHORT_DESCRIPTION. Optional follow-up: NEXT_ACTION
 - **Open (IMPACT/100):** SHORT_DESCRIPTION. Next: NEXT_ACTION
 - **Dismissal recommended (IMPACT/100):** SHORT_DESCRIPTION. Next: Dismiss this pull request.
 ```
@@ -149,8 +149,8 @@ an issue bullet for a clean result.
 
 Record every evidence-backed Review finding. Never cap the finding count.
 
-Each finding records impact, a stable fingerprint, exact path and line, proof, and summary.
-An actionable finding also records its next action and resolution.
+Each finding records impact, a stable fingerprint, exact path and line, proof, summary, and proposed next action.
+An actionable finding also records its resolution.
 
 Decide the pull request premise once before classifying findings.
 

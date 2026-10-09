@@ -19,6 +19,7 @@ const finding = {
   _tag: 'Logged' as const,
   impact: 40,
   summary: 'The parser drops buffered bytes.',
+  nextAction: 'Preserve buffered bytes between chunks.',
   details: { fingerprint: 'f'.repeat(64), identity: 'buffered bytes', location: { path: 'src/parser.ts', line: 42 }, proof: 'A split sequence loses bytes.' },
 }
 

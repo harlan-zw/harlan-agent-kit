@@ -25,8 +25,9 @@ function record(value: unknown): value is Record<string, unknown> {
  * 7: authenticated controller proof callbacks through desktop child duplex IO.
  * 8: exact base revision supplied for immutable Review static evidence.
  * 9: fenced event delivery and host failure attribution across the desktop boundary.
+ * 11: proposed next actions carried by selected Logged findings.
  */
-export const DESKTOP_PROTOCOL = 10
+export const DESKTOP_PROTOCOL = 11
 
 export const DESKTOP_TURN_LEASE_MILLISECONDS = 15_000
 
