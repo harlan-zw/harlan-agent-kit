@@ -1,7 +1,86 @@
+import { generateKeyPairSync } from 'node:crypto'
 import { Octokit } from 'octokit'
-import { describe, expect, it } from 'vitest'
-import { createAuthenticatedClient, createRepositoryTokenProvider } from '../src/github-auth.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createAuthenticatedClient, createGitHubAppTokenProvider, createRepositoryTokenProvider } from '../src/github-auth.ts'
 import { ok } from '../src/result.ts'
+
+afterEach(() => vi.restoreAllMocks())
+
+describe('renamed GitHub App repositories', () => {
+  const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
+
+  it.each([
+    ['read', { contents: 'read', issues: 'read', metadata: 'read', pull_requests: 'read' }],
+    ['item_write', { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }],
+  ] as const)('scopes %s to the renamed repository after the old installation name returns 404', async (access, permissions) => {
+    const minted: unknown[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const endpoint = String(url)
+      let response: Response
+      if (endpoint === 'https://api.github.com/repos/harlan-zw/ripast/installation') {
+        response = Response.json({ message: 'Not Found' }, { status: 404 })
+      }
+      else if (endpoint === 'https://api.github.com/repos/harlan-zw/ripide/installation') {
+        response = Response.json({ id: 42 })
+      }
+      else if (endpoint === 'https://api.github.com/app/installations/42/access_tokens') {
+        const body = JSON.parse(String(init?.body))
+        minted.push(body)
+        response = body.repositories?.[0] === 'ripide'
+          ? Response.json({ token: 'scoped-token', expires_at: '2126-01-01T00:00:00Z', permissions }, { status: 201 })
+          : Response.json({ message: 'Repository does not exist in this installation.' }, { status: 422 })
+      }
+      else {
+        throw new Error(`Unexpected request: ${endpoint}`)
+      }
+      return response
+    })
+    const provider = createGitHubAppTokenProvider({ appId: 123, privateKey, resolveRenamedRepository: async () => 'harlan-zw/ripide' })
+
+    expect(await provider.getToken('harlan-zw/ripast', access)).toEqual(ok({ token: 'scoped-token', expiresAt: '2126-01-01T00:00:00Z' }))
+    expect(minted).toEqual([{ repositories: ['ripide'], permissions }])
+  })
+
+  it.each([
+    'another-owner/ripide',
+    'harlan-zw/ripast',
+    'harlan-zw/ripide/another',
+    undefined,
+  ])('refuses a token when trusted discovery cannot name a same-owner rename: %s', async (current) => {
+    const requested: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      requested.push(String(url))
+      return Response.json({ message: 'Not Found' }, { status: 404 })
+    })
+    const provider = createGitHubAppTokenProvider({ appId: 123, privateKey, resolveRenamedRepository: async () => current })
+
+    expect(await provider.getToken('harlan-zw/ripast', 'item_write')).toEqual({
+      _tag: 'Err',
+      error: expect.objectContaining({ repository: 'harlan-zw/ripast', status: 404 }),
+    })
+    expect(requested).toEqual(['https://api.github.com/repos/harlan-zw/ripast/installation'])
+  })
+
+  it('refreshes the installation name when a cached name no longer accepts token minting', async () => {
+    let name = 'ripast'
+    const minted: string[] = []
+    const provider = createRepositoryTokenProvider({
+      getInstallation: async () => ({ installationId: 42, repositoryName: name }),
+      mintToken: async (input) => {
+        minted.push(input.repositoryName)
+        if (minted.length === 2) {
+          name = 'ripide'
+          throw Object.assign(new Error('Repository does not exist in this installation.'), { status: 422 })
+        }
+        return { token: input.repositoryName, expiresAt: '2126-01-01T00:00:00Z', permissions: input.permissions }
+      },
+    })
+
+    await provider.getToken('harlan-zw/ripast', 'read')
+    expect(await provider.getToken('harlan-zw/ripast', 'item_write')).toEqual(ok({ token: 'ripide', expiresAt: '2126-01-01T00:00:00Z' }))
+    expect(minted).toEqual(['ripast', 'ripast', 'ripide'])
+  })
+})
 
 describe('gitHub App authentication', () => {
   it.each([
@@ -16,7 +95,7 @@ describe('gitHub App authentication', () => {
   ] as const)('mints one repository-scoped %s token', async (access, permissions) => {
     const requests: unknown[] = []
     const provider = createRepositoryTokenProvider({
-      getInstallationId: () => Promise.resolve(42),
+      getInstallation: () => Promise.resolve({ installationId: 42, repositoryName: 'example' }),
       mintToken: (input) => {
         requests.push(input)
         return Promise.resolve({ token: 'installation-token', expiresAt: '2026-08-13T01:00:00.000Z', permissions: input.permissions })
@@ -40,7 +119,7 @@ describe('gitHub App authentication', () => {
   it('covers issues and pull requests with the one write access', async () => {
     const requests: Array<Record<string, string>> = []
     const provider = createRepositoryTokenProvider({
-      getInstallationId: () => Promise.resolve(42),
+      getInstallation: () => Promise.resolve({ installationId: 42, repositoryName: 'example' }),
       mintToken: (input) => {
         requests.push(input.permissions)
         return Promise.resolve({ token: 'installation-token', expiresAt: '2126-01-01T00:00:00.000Z', permissions: input.permissions })
@@ -56,7 +135,7 @@ describe('gitHub App authentication', () => {
 
   it('rejects a token GitHub scoped below the request', async () => {
     const provider = createRepositoryTokenProvider({
-      getInstallationId: () => Promise.resolve(42),
+      getInstallation: () => Promise.resolve({ installationId: 42, repositoryName: 'example' }),
       mintToken: () => Promise.resolve({
         token: 'short-token',
         expiresAt: '2126-01-01T00:00:00.000Z',
@@ -73,7 +152,7 @@ describe('gitHub App authentication', () => {
   it('never caches a token GitHub scoped below the request', async () => {
     let issued = 0
     const provider = createRepositoryTokenProvider({
-      getInstallationId: () => Promise.resolve(42),
+      getInstallation: () => Promise.resolve({ installationId: 42, repositoryName: 'example' }),
       mintToken: (input) => {
         issued += 1
         return Promise.resolve(issued === 1
@@ -92,7 +171,7 @@ describe('gitHub App authentication', () => {
 
   it('accepts a grant wider than the request', async () => {
     const provider = createRepositoryTokenProvider({
-      getInstallationId: () => Promise.resolve(42),
+      getInstallation: () => Promise.resolve({ installationId: 42, repositoryName: 'example' }),
       mintToken: () => Promise.resolve({
         token: 'wide-token',
         expiresAt: '2126-01-01T00:00:00.000Z',
@@ -106,7 +185,7 @@ describe('gitHub App authentication', () => {
   it('reuses a live repository-scoped token', async () => {
     let mintCount = 0
     const provider = createRepositoryTokenProvider({
-      getInstallationId: () => Promise.resolve(42),
+      getInstallation: () => Promise.resolve({ installationId: 42, repositoryName: 'example' }),
       mintToken: (input) => {
         mintCount += 1
         return Promise.resolve({ token: 'installation-token', expiresAt: '2026-08-13T02:00:00.000Z', permissions: input.permissions })
@@ -124,7 +203,7 @@ describe('gitHub App authentication', () => {
     let installationId = 1
     const requests: number[] = []
     const provider = createRepositoryTokenProvider({
-      getInstallationId: () => Promise.resolve(installationId),
+      getInstallation: () => Promise.resolve({ installationId, repositoryName: 'example' }),
       mintToken: (input) => {
         requests.push(input.installationId)
         if (input.installationId === 1 && requests.length > 1) {
@@ -149,7 +228,7 @@ describe('rejected credential recovery', () => {
     const minted: Array<{ refresh: boolean }> = []
     let issued = 0
     const provider = createRepositoryTokenProvider({
-      getInstallationId: () => Promise.resolve(42),
+      getInstallation: () => Promise.resolve({ installationId: 42, repositoryName: 'example' }),
       mintToken: (input) => {
         minted.push({ refresh: input.refresh })
         issued += 1
@@ -172,7 +251,7 @@ describe('rejected credential recovery', () => {
   it('leaves other access levels of the same repository alone', async () => {
     let issued = 0
     const provider = createRepositoryTokenProvider({
-      getInstallationId: () => Promise.resolve(42),
+      getInstallation: () => Promise.resolve({ installationId: 42, repositoryName: 'example' }),
       mintToken: (input) => {
         issued += 1
         return Promise.resolve({ token: `token-${issued}`, expiresAt: '2126-01-01T00:00:00.000Z', permissions: input.permissions })
