@@ -210,6 +210,9 @@ function gitEnvironment(githubToken?: string): NodeJS.ProcessEnv {
 }
 
 function runGit(checkout: string, args: string[], signal: AbortSignal, githubToken?: string, allowFileProtocol = false): Promise<CommandResult> {
+  // Path lists scale with the change. Stream them instead of applying execFile's 1 MiB limit.
+  if (args.includes('--name-only'))
+    return runGitPathOutput(checkout, args, signal, githubToken, allowFileProtocol)
   return new Promise((resolve) => {
     const protocols = allowFileProtocol
       ? ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.file.allow=always']
@@ -235,6 +238,45 @@ function runGit(checkout: string, args: string[], signal: AbortSignal, githubTok
         })
       },
     )
+  })
+}
+
+function runGitPathOutput(checkout: string, args: string[], signal: AbortSignal, githubToken?: string, allowFileProtocol = false): Promise<CommandResult> {
+  return new Promise((resolve) => {
+    const protocols = allowFileProtocol
+      ? ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.file.allow=always']
+      : ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always']
+    const child = spawn('git', ['-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null', ...protocols, '-C', checkout, ...args], {
+      env: gitEnvironment(githubToken),
+      signal,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+    let stdout = ''
+    let stderr = ''
+    let failure = ''
+    const decode = (chunk?: Buffer) => {
+      if (failure !== '')
+        return
+      try {
+        stdout += decoder.decode(chunk, { stream: chunk !== undefined })
+      }
+      catch {
+        failure = 'Git output contains invalid UTF-8.'
+        child.kill('SIGTERM')
+      }
+    }
+    child.stdout.on('data', decode)
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = `${stderr}${chunk.toString('utf8')}`.slice(-64 * 1024)
+    })
+    child.on('error', (error: Error) => {
+      failure = error.message
+    })
+    child.on('close', (code) => {
+      decode()
+      resolve({ exitCode: failure === '' ? code ?? 1 : 1, stdout: failure === '' ? stdout : '', stderr: failure || stderr.trim() })
+    })
   })
 }
 
