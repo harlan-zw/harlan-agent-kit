@@ -86,6 +86,22 @@ function pushStackBase(checkout: string, ref: string, contents: string): string 
 const defaultBranch: PullRequestBase = { _tag: 'DefaultBranch', ref: 'main' }
 
 describe('issue worktree', () => {
+  it('verifies changed paths larger than the child process output buffer', async () => {
+    const { manager, task } = fixture()
+    const signal = new AbortController().signal
+    const prepared = await manager.prepare(task, defaultBranch, signal)
+    if (prepared._tag === 'Err')
+      throw new Error(prepared.error)
+    const paths = Array.from({ length: 4800 }, (_, index) => ` ${String(index).padStart(4, '0')}-${'x'.repeat(230)}-🐛.ts`)
+    for (const path of paths)
+      writeFileSync(join(prepared.value.path, path), 'export const value = 2\n')
+    expect(await manager.verify(task, prepared.value, signal)).toEqual(ok({
+      digest: expect.any(String),
+      changedFiles: paths.length,
+      changedPaths: paths,
+    }))
+  }, 30_000)
+
   it('reports an unchanged worktree without losing the Agent result', async () => {
     const { manager, task } = fixture()
     const signal = new AbortController().signal
