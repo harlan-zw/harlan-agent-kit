@@ -293,6 +293,7 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    ```
 5. Read each scored finding from `/api/reviews?repository=OWNER%2FREPO&pull_request=NUMBER`.
    Leave findings at 80/100 or below Logged. They do not require a code change.
+   Mention them as optional follow-ups. Keep authorized Repair work moving until fixed or blocked by an exact boundary.
    If the resolution is `Dismissal`, report the `BLOCKED` outcome and ask Harlan to decide whether to Dismiss the pull request.
    Do not repair or request another Review for a Dismissal finding.
    Act on findings with resolution `Repair`. If the service owns a current-head Repair Task, let it finish before editing.

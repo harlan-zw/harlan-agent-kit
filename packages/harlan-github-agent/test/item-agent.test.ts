@@ -288,6 +288,7 @@ describe('subject Workers', () => {
   it.each([
     { merged: false, impact: 81 },
     { merged: true, impact: 81 },
+    { merged: false, impact: 79 },
     { merged: false, impact: 80 },
   ])('handles a finding at impact $impact when merged is $merged', async ({ merged, impact }) => {
     const repository = repositoryMapping({ ownership: 'maintained' })
@@ -414,7 +415,9 @@ describe('subject Workers', () => {
       expect(terminal).toContain(impact > 80 ? '### 🤖 BLOCKED' : '### 🤖 READY')
       expect(terminal).toContain('The parser drops data.')
       if (impact <= 80)
-        expect(terminal).toContain('**Logged (80/100):**')
+        expect(terminal).toContain('Optional follow-up.')
+      else
+        expect(terminal).not.toContain('Optional follow-up.')
     }
     expect(worktreeVerified).toBe(true)
   })
