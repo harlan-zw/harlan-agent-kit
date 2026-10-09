@@ -69,6 +69,8 @@ export async function createAgentEgress(socketPath: string): Promise<AgentEgress
   })
   server.on('connection', (socket) => {
     sockets.add(socket)
+    // A client can leave before parsing or DNS finishes. Own errors for the whole connection lifetime.
+    socket.on('error', () => socket.destroy())
     socket.once('close', () => sockets.delete(socket))
   })
   server.on('connect', (incoming, client, head) => {
@@ -84,7 +86,6 @@ export async function createAgentEgress(socketPath: string): Promise<AgentEgress
         upstream.pipe(client)
       })
       upstream.once('error', () => client.destroy())
-      client.once('error', () => upstream.destroy())
       client.once('close', () => upstream.destroy())
     })().catch(() => client.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'))
   })

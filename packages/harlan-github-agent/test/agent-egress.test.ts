@@ -1,3 +1,8 @@
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 import { agentEgressAddress, publicIPv4 } from '../src/agent-egress.ts'
 
@@ -18,4 +23,16 @@ it('refuses a mixed public and private DNS answer', async () => {
 
 it('accepts a public IPv4 destination', () => {
   expect(publicIPv4('1.1.1.1')).toBe(true)
+})
+
+it.each(['connect', 'http'])('keeps serving when clients disconnect before a %s refusal', (mode) => {
+  const root = mkdtempSync(join(tmpdir(), 'egress-disconnect-'))
+  try {
+    const result = spawnSync(process.execPath, ['--experimental-strip-types', fileURLToPath(new URL('./fixtures/agent-egress-client-disconnect.ts', import.meta.url)), join(root, 'proxy.sock'), mode], { encoding: 'utf8', timeout: 20_000 })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('Refused the destination after disconnected clients.')
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
