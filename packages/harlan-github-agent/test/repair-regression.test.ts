@@ -79,11 +79,11 @@ it.each(['package', 'repository'])('uses the %s test script before checking curr
   const directory = scope === 'package' ? join(root, 'packages/query') : root
   const selected = join(directory, 'selected.test.ts')
   const run = (input: { command: string, args: string[], workspace: string, signal: AbortSignal }) => new Promise<{ exitCode: number }>((resolve, reject) => {
-    if (input.command === 'check' || input.args[0] === 'install') {
+    if ((input.command === 'check' && scope !== 'package') || input.args[0] === 'install') {
       resolve({ exitCode: 0 })
       return
     }
-    execFile(input.command, input.args, { cwd: input.workspace, signal: input.signal }, error => error !== null && typeof error.code !== 'number'
+    execFile(input.command === 'check' ? process.execPath : input.command, input.command === 'check' ? ['root-check.ts'] : input.args, { cwd: input.workspace, signal: input.signal }, error => error !== null && typeof error.code !== 'number'
       ? reject(error)
       : resolve({ exitCode: typeof error?.code === 'number' ? error.code : 0 }))
   })
@@ -92,8 +92,12 @@ it.each(['package', 'repository'])('uses the %s test script before checking curr
     symlinkSync(resolve(import.meta.dirname, '../../../node_modules'), join(root, 'node_modules'))
     writeFileSync(join(root, 'pnpm-workspace.yaml'), 'verifyDepsBeforeRun: false\n')
     writeFileSync(join(root, 'package.json'), '{"name":"repository","type":"module","private":true}')
-    if (scope === 'package')
+    if (scope === 'package') {
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'repository', type: 'module', private: true, scripts: { 'dev:prepare': 'node root-prepare.ts' } }))
+      writeFileSync(join(root, 'root-prepare.ts'), 'import { writeFileSync } from "node:fs"; writeFileSync("root-types.ts", "export const input = 42")')
+      writeFileSync(join(root, 'root-check.ts'), 'import { input } from "./root-types.ts"; if (input !== 42) process.exit(1)')
       writeFileSync(join(root, 'vitest.config.ts'), 'export default { test: { include: ["*.test.ts"] } }')
+    }
     writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: scope, type: 'module', private: true, scripts: {
       [scope === 'package' ? 'test' : 'test:run']: 'node prepare.ts && vitest',
       ...(scope === 'package' ? { 'dev:prepare': 'node module-prepare.ts' } : {}),
