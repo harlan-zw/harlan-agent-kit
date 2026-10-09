@@ -35,6 +35,7 @@ describe('review rerun controller', () => {
       store: {
         getDashboardSnapshot: () => dashboardSnapshot({ items }),
         requestReviewRerun: () => ({ _tag: 'Duplicate', taskId: 'b'.repeat(64) }),
+        requestPullRequestChange: () => ({ _tag: 'Duplicate', taskId: 'b'.repeat(64) }),
       },
       now: () => new Date('2026-08-13T01:02:00.000Z'),
     })
@@ -60,6 +61,7 @@ describe('review rerun controller', () => {
       },
       store: {
         getDashboardSnapshot: () => dashboardSnapshot({ items: [subject] }),
+        requestPullRequestChange: () => ({ _tag: 'Duplicate', taskId: 'b'.repeat(64) }),
         requestReviewRerun(input) {
           requests.push(input)
           return { _tag: 'Queued', taskId: 'b'.repeat(64) }

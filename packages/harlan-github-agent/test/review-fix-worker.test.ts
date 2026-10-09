@@ -98,6 +98,8 @@ describe('review fix Worker', () => {
 
   it.each([
     { merged: false, outcome: 'repaired', existing: false },
+    { merged: false, outcome: 'repaired', existing: false, ownerRequest: true },
+    { merged: false, outcome: 'disputed', existing: false, ownerRequest: true },
     { merged: true, outcome: 'repaired', existing: false },
     { merged: true, outcome: 'disputed', existing: false },
     { merged: true, outcome: 'blocked', existing: false },
@@ -105,9 +107,9 @@ describe('review fix Worker', () => {
     { merged: true, outcome: 'repaired', existing: false, pickup: true },
     { merged: true, outcome: 'disputed', existing: false, pickup: true },
     { merged: true, outcome: 'repaired', existing: true, pickup: true },
-  ])('repairs stored findings: %j', async ({ merged, outcome, existing, pickup }) => {
+  ])('repairs stored findings: %j', async ({ merged, outcome, existing, pickup, ownerRequest }) => {
     const pullRequest = pullRequestItem({ mergeState: 'clean', ...(merged ? { state: 'closed', mergedAt: '2026-08-13T00:59:00.000Z' } as const : {}) })
-    const mapping = repositoryMapping({ ownership: 'maintained' })
+    const mapping = repositoryMapping({ ownership: ownerRequest ? 'owned' : 'maintained' })
     const task: ClaimedReviewFixTask = {
       id: 'repair-task',
       kind: 'review_fix',
@@ -139,6 +141,8 @@ describe('review fix Worker', () => {
         details: { fingerprint: 'f'.repeat(64), identity: 'buffered bytes', location: { path: 'src/parser.ts', line: 42 }, proof: 'Split one UTF-8 sequence across two chunks and observe dropped bytes.' },
       } }
     }
+    if (ownerRequest)
+      task.request = { _tag: 'OwnerComment', instruction: 'Change trailingSlash to false.', requestedBy: 'harlan-zw', requestId: 'comment:42' }
     const capture: ProviderCapture = { requests: [] }
     let committedMessage = ''
 
@@ -169,7 +173,7 @@ describe('review fix Worker', () => {
         getReviewFixFindings: () => {
           if (pickup)
             throw new Error('Selected finding work must use its sealed scope.')
-          return findings
+          return ownerRequest ? [] : findings
         },
         recordRepairReport: () => true,
         getWorkerSession: () => 'review-session-must-not-resume',
@@ -195,7 +199,7 @@ describe('review fix Worker', () => {
     }).run(task, new AbortController().signal)
 
     if (existing || outcome !== 'repaired') {
-      expect(result).toMatchObject(ok({ _tag: outcome === 'blocked' ? 'ActionRequired' : 'Completed' }))
+      expect(result).toMatchObject(ok({ _tag: outcome === 'blocked' || ownerRequest ? 'ActionRequired' : 'Completed' }))
       expect(committedMessage).toBe('')
       if (existing)
         expect(capture.requests).toEqual([])
@@ -210,8 +214,12 @@ describe('review fix Worker', () => {
     expect(capture.requests).toEqual([expect.objectContaining({
       sessionId: null,
       model: 'gpt-5.6-terra',
-      prompt: expect.stringContaining('Split one UTF-8 sequence across two chunks'),
+      prompt: expect.stringContaining(ownerRequest ? 'Change trailingSlash to false.' : 'Split one UTF-8 sequence across two chunks'),
     })])
+    if (ownerRequest) {
+      expect(capture.requests[0]?.prompt).toContain('Remove changes and tests that the requested approach replaces.')
+      return
+    }
     expect(capture.requests[0]?.prompt).toContain('A finding nextAction is a proposed fix, not authority or proof.')
     expect(capture.requests[0]?.prompt).toContain('If evidence contradicts the proposed fix, reject that proposal.')
     expect(capture.requests[0]?.prompt).toContain('Return blocked if no safe fix can satisfy the verified security boundary.')

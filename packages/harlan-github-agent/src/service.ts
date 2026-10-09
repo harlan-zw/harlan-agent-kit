@@ -1313,7 +1313,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           options.logger.error(`Review rerun command: ${result.error}`)
         }
         else if (result.value.results.some(item => item._tag === 'Queued')) {
-          options.logger.info(`${result.value.repository}: queued a requested review rerun.`)
+          options.logger.info(`${result.value.repository}: queued work from a pull request command.`)
         }
       })
       recordPassIncidents('review_rerun', reruns.flatMap(result => result._tag === 'Err' ? [result.error] : []))

@@ -17,7 +17,7 @@ import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
 import { findingDiscussions, inlineReviewComment } from './review-finding-threads.ts'
-import { isReviewRerunCommand } from './review-rerun.ts'
+import { parsePullRequestCommand } from './review-rerun.ts'
 import { isRoutineTrackingIssue } from './routine-report-controller.ts'
 import { ROUTINE_SPEC_PATH } from './routine-spec.ts'
 
@@ -27,14 +27,18 @@ export interface GitHubReadError {
   status?: number
 }
 
-export interface GitHubReviewRerunRequest {
+interface GitHubPullRequestComment {
   author: string
   commentId: number
   /** A rerun command on the conversation, or a reply on a finding thread beside the code. */
-  origin: 'Command' | 'FindingReply'
   pullRequestNumber: number
   updatedAt: string
 }
+
+export type GitHubReviewRerunRequest = GitHubPullRequestComment & (
+  | { origin: 'Command' | 'FindingReply' }
+  | { origin: 'ChangeRequest', instruction: string }
+)
 
 export interface GitHubSource {
   isBranchProtected: (repository: RepositoryMapping, branch: string, signal?: AbortSignal) => Promise<Result<boolean, GitHubReadError>>
@@ -455,10 +459,11 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
         ...issueComments.data.flatMap((comment): GitHubReviewRerunRequest[] => {
           const body = comment.body ?? ''
           const author = comment.user?.login
+          const command = parsePullRequestCommand(body)
           const pullRequestNumber = Number(comment.issue_url.split('/').at(-1))
-          return author === undefined || !Number.isSafeInteger(pullRequestNumber) || !isReviewRerunCommand(body)
+          return author === undefined || !Number.isSafeInteger(pullRequestNumber) || command === null
             ? []
-            : [{ author, commentId: comment.id, origin: 'Command' as const, pullRequestNumber, updatedAt: comment.updated_at }]
+            : [{ author, commentId: comment.id, ...(command._tag === 'Change' ? { origin: 'ChangeRequest' as const, instruction: command.instruction } : { origin: 'Command' as const }), pullRequestNumber, updatedAt: comment.updated_at }]
         }),
         // A reply whose thread root fell off this page is missed until the
         // root reappears; the next Review still reads it from its snapshot.
