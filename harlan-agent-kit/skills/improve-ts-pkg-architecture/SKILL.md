@@ -28,29 +28,41 @@ Keep mutation in a task-owned `wt` worktree with a live claim. Keep the primary 
 
 ### 1. Explore
 
-**Always run ripast first.** Every claim about depth, caller counts, locality, or cross-package leaks must be backed by a ripast invocation; text search misses shadowed identifiers, type-only imports, and re-exports through a subpath. If you cannot cite ripast output, drop the claim.
+Read the published surface and the requested boundary first. Use scoped inspection to resolve a specific uncertainty.
+Read the installed `ripast` Skill before using RipIDE. Prefer a supplied launcher and preserve its version.
+Use RipIDE for supported mechanical operations. Design new contracts with direct edits.
+Before a cross-package move, check destination dependencies and exported entry points.
 
-Pass `--tsconfig tsconfig.json` (root, or per-package in a monorepo) so subpath aliases and workspace refs resolve. For `scan` (rg-driven) and noisy `tree` output, scope with `--glob 'src/**,packages/*/src/**,test/**'`; trim per project (`bin/**`, `scripts/**`, `playground/**` as needed).
+Support architectural claims with the relevant exports, imports, call sites, or semantic tool evidence.
+Text matches and classified `scan` occurrences do not establish unique semantic consumers.
+State the evidence's scope and limits. Do not run every discovery command merely to establish tool usage.
 
-Opening pass — run before forming any candidate:
+In examples, `ripide` means the supplied or prepared launcher.
+Pass `--tsconfig` only to commands that accept it. `scan`, `tree`, and `unused` do not accept it.
+Scope discovery with a relevant `--glob`, such as `'packages/core/src/**'`. Expand only when needed.
+
+Choose an inspection only when it can change the next decision:
 
 | Command | What it surfaces |
 | --- | --- |
-| `pnpm dlx @ripast/cli unused --tsconfig tsconfig.json --exports local` | Top-level declarations with zero project references → deletion-test slam-dunks |
-| `pnpm dlx @ripast/cli tree --exports exported --tsconfig tsconfig.json` | Public surface per file → shallow modules + leaks (anything exported that isn't in the `exports` map is a confessed private leak) |
-| `pnpm dlx @ripast/cli tree --exports local --tsconfig tsconfig.json` | Internals per file → locality opportunities |
+| `ripide unused --glob 'packages/core/src/**' --exports local` | Top-level declarations with zero project references → deletion-test slam-dunks |
+| `ripide tree --glob 'packages/core/src/**' --exports exported` | Public surface per file → shallow modules + leaks (anything exported that isn't in the `exports` map is a confessed private leak) |
+| `ripide tree --glob 'packages/core/src/**' --exports local` | Internals per file → locality opportunities |
 
 Per-candidate, before listing (`scan` is rg-driven — use `--glob` here):
 
 | Command | What it surfaces |
 | --- | --- |
-| `pnpm dlx @ripast/cli scan <symbol> --glob ...` | Caller count + kind classification → drives deletion test + §2 thresholds |
-| `pnpm dlx @ripast/cli scan <symbol> --kind identifier-reference,import-specifier --glob ...` | Same, minus string-literal noise |
-| `pnpm dlx @ripast/cli scan <symbol> --graph mermaid --glob ...` | Importer graph → cross-package leaks (graph spanning `packages/a/src/` + `packages/b/src/` via deep import) |
+| `ripide scan <symbol> --glob ...` | Caller count + kind classification → drives deletion test + §2 thresholds |
+| `ripide scan <symbol> --kind identifier-reference,import-specifier --glob ...` | Same, minus string-literal noise |
+| `ripide scan <symbol> --graph mermaid --glob ...` | Importer graph → cross-package leaks (graph spanning `packages/a/src/` + `packages/b/src/` via deep import) |
 
-Cite numbers when presenting.
+Cite supported numbers when presenting. Otherwise describe the verified relationship without an invented count.
+Save full output as an artifact. Read relevant names, locations, and short context into the model.
+Batch independent reads. Keep dependent mutations and checks sequential.
 
-**Read the package's published surface first**: `package.json` `exports`, `bin`, `peerDependencies`, `sideEffects`, `engines`. The `exports` map is the contract. Then read `GLOSSARY.md`, `docs/arch/`, and `docs/adr/` if present.
+Read `package.json` `exports`, `bin`, `peerDependencies`, `sideEffects`, and `engines`. The `exports` map is the contract.
+Then read `GLOSSARY.md`, `docs/arch/`, and `docs/adr/` when present.
 
 Orient on the package shape:
 
@@ -83,7 +95,8 @@ Present a numbered list of deepening opportunities. For each candidate:
 
 **Use GLOSSARY.md for the domain, [LANGUAGE.md](LANGUAGE.md) for the architecture, [TS-PKG-SEAMS.md](TS-PKG-SEAMS.md) for the framework seam, and the relevant convention section from [PKG-CONVENTIONS.md](PKG-CONVENTIONS.md) when the candidate is a convention gap.** Example phrasings: *"the Order intake module exposed as a `./intake` subpath"*, *"establish PKG-CONVENTIONS.md §Hook bus for the build pipeline"* — not *"the FooBarHandler"*, not *"the Order service"*.
 
-**Reject before listing.** Validate caller-count thresholds with `scan <symbol> --kind identifier-reference,import-specifier`; no guesswork.
+**Reject before listing.** Validate consumer relationships from resolved imports and call sites; no guesswork.
+Use `scan <symbol> --kind identifier-reference,import-specifier` to locate candidates, then inspect their identity.
 
 - **Deletion test fails.** Thresholds: subpath export ≥3 consumers or a distinct public concept; workspace `packages/*` ≥2 independent consumers AND zero coupling back to the host; factory ≥2 callers OR real branching/options; pure value/type mapping ≥4 callers.
 - **No locality win.** Pure-function extraction with no consolidation, speculative seams, defensive re-validation of invariants the caller's types already enforce.
@@ -109,17 +122,23 @@ Side effects happen inline as decisions crystallize:
 - **Sharpening a fuzzy term during the conversation?** Update `GLOSSARY.md` right there.
 - **User rejects the candidate with a load-bearing reason?** Offer an ADR, framed as: _"Want me to record this as an ADR so future architecture reviews don't re-suggest it?"_ Only offer when the reason would actually be needed by a future explorer to avoid re-suggesting the same thing — skip ephemeral reasons ("not worth it right now") and self-evident ones. Write it to `docs/adr/NNNN-slug.md` with context, decision, and consequences.
 - **Want to explore alternative interfaces for the deepened module?** See [INTERFACE-DESIGN.md](INTERFACE-DESIGN.md). Sub-agents are pre-seeded with TS-pkg-native shapes (single factory, factory + hook bus, subpath-exposed surface, ports & adapters) so the design space is grounded in what the ecosystem already offers.
-- **Need to know the true blast radius of a rename/move before committing?** `pnpm dlx @ripast/cli scan <symbol>` (counts) or `pnpm dlx @ripast/cli scan <symbol> --graph mermaid` (importer graph). Quote numbers before promising scope.
+- **Need to know the true blast radius of a rename/move before committing?** `ripide scan <symbol>` (counts) or `ripide scan <symbol> --graph mermaid` (importer graph). Quote numbers before promising scope.
 - **Decision crystallized into a concrete refactor?** Execute through ripast, not Edit. Pick the primitive:
 
   Pass `--tsconfig tsconfig.json` (or the per-package one) on `rename`, `move`, and `rename-file` so all callers are rewritten.
 
   | Refactor | Command |
   | --- | --- |
-  | Rename a symbol across files | `pnpm dlx @ripast/cli rename <from> <to> --tsconfig tsconfig.json --apply` (add `--scope <file>` if multi-declared) |
-  | Move an exported declaration | `pnpm dlx @ripast/cli move <symbol> --from <a> --to <b> --tsconfig tsconfig.json --apply` |
-  | Move a file (e.g. `src/utils/foo.ts` → `src/pipeline/foo.ts` to close a leak) | `pnpm dlx @ripast/cli rename-file <old> <new> --tsconfig tsconfig.json --apply` |
+  | Rename a symbol across files | `ripide rename <from> <to> --tsconfig tsconfig.json --apply` (add `--scope <file>` if multi-declared) |
+  | Move an exported declaration | `ripide move <symbol> --from <a> --to <b> --tsconfig tsconfig.json --apply` |
+  | Move a file (e.g. `src/utils/foo.ts` → `src/pipeline/foo.ts` to close a leak) | `ripide rename-file <old> <new> --tsconfig tsconfig.json --apply` |
 
-  All mutating commands default to dry-run — preview the diff, then `--apply`. `--verify` (default on for `rename`/`move`) blocks the apply on new type diagnostics; fix them, never `--no-verify` past them. Edit is only correct for single-file or <5-match changes. ripast carries out the move; it does not justify the deepening.
+  Use the installed `ripast` Skill's operation and verification guidance.
+  Keep verification enabled. Recover complete diagnostics before classifying an apparent false positive.
+  Design new APIs and behavior with direct edits. Use supported semantic commands for their mechanical changes.
+  If public types or exports change, rebuild affected declarations before downstream typechecks.
+  Repair a failed check, then run the focused proving check before broad verification.
+  Keep meaningful failing-first tests. Do not repeat unchanged failing lint commands.
+  Repeat passed checks only after relevant edits or new evidence. Run required final checks on the submitted tree.
 
 - **The refactor changes the `exports` map?** Update `package.json` `exports` in the same pass. If a subpath is added or removed, the change is a SemVer-visible event — note it for the next release.
