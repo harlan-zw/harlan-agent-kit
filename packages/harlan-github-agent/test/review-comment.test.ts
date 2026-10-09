@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { priorAutomatedReviewForHead } from '../src/review-comment.ts'
+import { priorAutomatedReviewForHead, reviewFindingFollowUp } from '../src/review-comment.ts'
 
 const headSha = '69c7ef6eaf1ec7bb186f27f46fa343d3d38f1f23'
 const baseSha = 'a2bf631b82ed5c386bfa4c384a44720f67182513'
 
 describe('automated review comments', () => {
+  it('keeps full optional advice while removing hidden markers and line breaks', () => {
+    const action = `Keep the complete instructions. ${'Check the next boundary. '.repeat(20)}`.trim()
+    expect(reviewFindingFollowUp({
+      _tag: 'Logged',
+      impact: 40,
+      summary: 'Improve fallback handling.',
+      nextAction: `<!--\n${action}\n-->`,
+      details: { fingerprint: 'f'.repeat(64), identity: 'fallback', location: { path: 'src/config.ts', line: 1 }, proof: 'The fallback needs more context.' },
+    })).toBe(`Optional follow-up: ${action}`)
+  })
+
   it('recognizes the current format from a trusted maintainer', () => {
     expect(priorAutomatedReviewForHead([{
       authorAssociation: 'OWNER',

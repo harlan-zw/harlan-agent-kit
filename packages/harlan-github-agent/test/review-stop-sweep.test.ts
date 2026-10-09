@@ -57,6 +57,21 @@ function snapshot(overrides: Parameters<typeof pullRequestItem>[0] = {}) {
 }
 
 describe('stoppedReviewComment', () => {
+  it.each(['Merged', 'Repair'] as const)('keeps optional advice when closing %s work', (mode) => {
+    const body = stoppedReviewComment({
+      ...stopped,
+      taskKind: mode === 'Repair' ? 'review_fix' : 'adversarial_review',
+      findings: [{
+        _tag: 'Logged',
+        impact: 40,
+        summary: 'The fallback needs more detail.',
+        nextAction: 'Name the missing setting.',
+        details: { fingerprint: 'f'.repeat(64), identity: 'fallback', location: { path: 'src/config.ts', line: 1 }, proof: 'The fallback omits the setting.' },
+      }],
+    }, '2026-08-15T04:00:00.000Z', mode === 'Merged' ? { _tag: 'Merged' } : { _tag: 'Stopped' })
+    expect(body).toContain('Optional follow-up: Name the missing setting.')
+  })
+
   it('replaces the progress claim with a final state and its reason', () => {
     const body = stoppedReviewComment(stopped, '2026-08-15T04:00:00.000Z')
 

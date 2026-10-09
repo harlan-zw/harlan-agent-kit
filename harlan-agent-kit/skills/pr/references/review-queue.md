@@ -63,7 +63,7 @@ Spawn one native subagent for this exact head SHA.
 Give it the pull request snapshot and disproof checks in the [review contract](../../adversarial-review/references/review-contract.md#adversarial-review).
 It reads the full diff, surrounding code, author images, and current checks.
 Keep it read only. It returns evidence-backed findings with impact from 0 to 100, path, line, and proof.
-Only findings above 80 need a next action. Include lower scores in the assessment as Logged.
+Give every finding a proposed next action. Include lower scores as Logged optional follow-ups.
 It does not post comments, set labels, approve, or merge.
 The Service Review is stopped for this head. A new head needs a new Review request.
 Refetch the head before acting on findings. Discard the subagent assessment if the head moved.

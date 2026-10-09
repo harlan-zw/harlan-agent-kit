@@ -1,8 +1,15 @@
 import type { ReviewFinding } from './types.ts'
+import { cleanText } from './text.ts'
 
 export const AUTOMATED_REVIEW_MARKER = '<!-- harlan-agent-kit:pr-triage -->'
 /** The login the GitHub App posts as. */
 export const AGENT_ACTOR_LOGIN = 'harlan-github-agent[bot]'
+
+/** Show advice without implying that a Logged finding requires Repair. */
+export function reviewFindingFollowUp(finding: Extract<ReviewFinding, { _tag: 'Logged' }>): string {
+  const action = finding.nextAction === undefined ? '' : cleanText(finding.nextAction).replaceAll(/\s+/g, ' ')
+  return action === '' ? 'Optional follow-up.' : `Optional follow-up: ${action}`
+}
 
 const AGENT_LINK = '[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit)'
 const POLICY_LINK = '[AI open source policy](https://harlanzw.com/blog/ai-in-open-source)'
