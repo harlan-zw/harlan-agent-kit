@@ -181,7 +181,7 @@ export function createRepairRecoveryController(options: {
         return artifact
       if (artifact.value.regressionPaths.length === 0)
         return err('The retained repair has no selected regression test. Add current evidence before recovery.')
-      const plan: RepairRecoveryPlan = { ...artifact.value, _tag: 'Plan', taskId: request.taskId, repository: target.value.task.repository, pullRequestNumber: target.value.task.pullRequestNumber, commitSha: request.commitSha, expectedBase: base.value, operation: artifact.value.parentSha === base.value ? 'Reuse' : 'Port', checks: ['Selected regression tests', 'check', 'pnpm build when declared'] }
+      const plan: RepairRecoveryPlan = { ...artifact.value, _tag: 'Plan', taskId: request.taskId, repository: target.value.task.repository, pullRequestNumber: target.value.task.pullRequestNumber, commitSha: request.commitSha, expectedBase: base.value, operation: artifact.value.parentSha === base.value ? 'Reuse' : 'Port', checks: ['Selected regression tests', 'Declared repository check scripts', 'pnpm build when declared'] }
       if (request._tag === 'Plan')
         return ok(plan)
       if (request.expectedBase !== plan.expectedBase)

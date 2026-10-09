@@ -6,6 +6,65 @@ import process from 'node:process'
 import { expect, it } from 'vitest'
 import { confirmRepairRecoveryRegression, runRepairRecoveryChecks } from '../src/worktree.ts'
 
+it('refuses recovery when the repository declares no check scripts', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'repair-no-checks-'))
+  let ran = false
+  try {
+    writeFileSync(join(root, 'package.json'), '{"name":"repository","private":true}')
+    writeFileSync(join(root, 'selected.test.ts'), 'export {}')
+    const result = await runRepairRecoveryChecks(root, ['selected.test.ts'], AbortSignal.timeout(5_000), async () => {
+      ran = true
+      return { exitCode: 0 }
+    })
+    expect(result).toEqual({ _tag: 'Err', error: 'The recovery repository declares no check scripts.' })
+    expect(ran).toBe(false)
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+it.each(['check', 'scripts', 'failed'])('runs declared full checks without the desktop command: %s', async (mode) => {
+  const root = mkdtempSync(join(tmpdir(), 'repair-full-checks-'))
+  const run = (input: { command: string, args: string[], workspace: string, signal: AbortSignal }) => new Promise<{ exitCode: number }>((resolveResult, reject) => {
+    if (input.command === 'check' || input.args[0] === 'install') {
+      resolveResult({ exitCode: input.command === 'check' ? 127 : 0 })
+      return
+    }
+    execFile(input.command, input.args, { cwd: input.workspace, signal: input.signal, env: { ...process.env, CI: 'true' } }, error => error !== null && typeof error.code !== 'number'
+      ? reject(error)
+      : resolveResult({ exitCode: typeof error?.code === 'number' ? error.code : 0 }))
+  })
+  try {
+    symlinkSync(resolve(import.meta.dirname, '../../../node_modules'), join(root, 'node_modules'))
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'verifyDepsBeforeRun: false\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'repository', type: 'module', private: true, scripts: {
+      'test:run': 'vitest run',
+      'test': 'node reject-watch.ts',
+      'lint': 'node full-check.ts lint',
+      'typecheck': 'node full-check.ts typecheck',
+      ...(mode === 'check' ? { check: 'node full-check.ts check' } : {}),
+    } }))
+    writeFileSync(join(root, 'vitest.config.ts'), 'export default { test: { include: ["selected.test.ts"] } }')
+    writeFileSync(join(root, 'selected.test.ts'), 'import { it, expect } from "vitest"; it("keeps input", () => expect(1).toBe(1))')
+    writeFileSync(join(root, 'reject-watch.ts'), 'process.exit(13)')
+    writeFileSync(join(root, 'full-check.ts'), `import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[2] + '.passed', 'yes'); ${mode === 'failed' ? 'process.exit(12)' : ''}`)
+    const result = await runRepairRecoveryChecks(root, ['selected.test.ts'], AbortSignal.timeout(30_000), run)
+    if (mode === 'failed') {
+      expect(result).toEqual({ _tag: 'Err', error: 'Fresh Repair checks failed: pnpm run lint.' })
+      expect(existsSync(join(root, 'typecheck.passed'))).toBe(false)
+    }
+    else {
+      expect(result._tag, JSON.stringify(result)).toBe('Ok')
+      expect(existsSync(join(root, `${mode === 'check' ? 'check' : 'lint'}.passed`))).toBe(true)
+      expect(existsSync(join(root, 'typecheck.passed'))).toBe(mode !== 'check')
+    }
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 45_000)
+
 it('accepts a current assertion failure alongside passing tests in another package', async () => {
   const root = mkdtempSync(join(tmpdir(), 'repair-package-evidence-'))
   try {
@@ -92,8 +151,15 @@ it.each(['package', 'repository'])('uses the %s test script before checking curr
     symlinkSync(resolve(import.meta.dirname, '../../../node_modules'), join(root, 'node_modules'))
     writeFileSync(join(root, 'pnpm-workspace.yaml'), 'verifyDepsBeforeRun: false\n')
     writeFileSync(join(root, 'package.json'), '{"name":"repository","type":"module","private":true}')
-    if (scope === 'package')
+    if (scope === 'package') {
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'repository', type: 'module', private: true, scripts: {
+        'dev:prepare': 'node root-prepare.ts',
+        'check': 'node root-check.ts',
+      } }))
+      writeFileSync(join(root, 'root-prepare.ts'), 'import { writeFileSync } from "node:fs"; writeFileSync("root-types.ts", "export const input = 42")')
+      writeFileSync(join(root, 'root-check.ts'), 'import { input } from "./root-types.ts"; if (input !== 42) process.exit(1)')
       writeFileSync(join(root, 'vitest.config.ts'), 'export default { test: { include: ["*.test.ts"] } }')
+    }
     writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: scope, type: 'module', private: true, scripts: {
       [scope === 'package' ? 'test' : 'test:run']: 'node prepare.ts && vitest',
       ...(scope === 'package' ? { 'dev:prepare': 'node module-prepare.ts' } : {}),
@@ -116,6 +182,8 @@ it.each(['package', 'repository'])('uses the %s test script before checking curr
     const green = await runRepairRecoveryChecks(root, paths, AbortSignal.timeout(20_000), run)
     expect(green._tag, JSON.stringify(green)).toBe('Ok')
     expect(existsSync(join(directory, 'generated.ts'))).toBe(true)
+    if (scope === 'package')
+      expect(existsSync(join(root, 'root-types.ts'))).toBe(true)
   }
   finally {
     rmSync(root, { recursive: true, force: true })
