@@ -34,9 +34,12 @@ export interface GitHubTokenProvider {
 
 type PermissionLevel = 'read' | 'write'
 
-interface MintTokenInput {
+interface RepositoryInstallation {
   installationId: number
   repositoryName: string
+}
+
+interface MintTokenInput extends RepositoryInstallation {
   permissions: Record<string, PermissionLevel>
   /** Mints a new token instead of reading the provider's own cache. */
   refresh: boolean
@@ -54,16 +57,9 @@ interface MintedToken extends GitHubRepositoryToken {
 }
 
 export interface RepositoryTokenDependencies {
-  getInstallationId: (repository: string, signal?: AbortSignal) => Promise<number>
+  getInstallation: (repository: string, signal?: AbortSignal) => Promise<RepositoryInstallation>
   mintToken: (input: MintTokenInput) => Promise<MintedToken>
   now?: () => Date
-}
-
-function repositoryName(repository: string): string {
-  const name = repository.split('/')[1]
-  if (name === undefined || name.length === 0)
-    throw new Error(`Invalid repository mapping: ${repository}.`)
-  return name
 }
 
 /**
@@ -124,7 +120,7 @@ function errorStatus(error: unknown): number | undefined {
 }
 
 export function createRepositoryTokenProvider(dependencies: RepositoryTokenDependencies): GitHubTokenProvider {
-  const installationIds = new Map<string, number>()
+  const installations = new Map<string, RepositoryInstallation>()
   const tokens = new Map<string, GitHubRepositoryToken>()
   /** Credentials a caller reported as rejected, which must never be reused. */
   const stale = new Set<string>()
@@ -146,11 +142,10 @@ export function createRepositoryTokenProvider(dependencies: RepositoryTokenDepen
    * reads one failure that names the missing permission, rather than a GitHub
    * rejection an hour of cached requests later.
    */
-  const mint = (repository: string, access: GitHubRepositoryAccess, installationId: number, refresh: boolean): Promise<Result<GitHubRepositoryToken, GitHubTokenError>> => {
+  const mint = (repository: string, access: GitHubRepositoryAccess, installation: RepositoryInstallation, refresh: boolean): Promise<Result<GitHubRepositoryToken, GitHubTokenError>> => {
     const requested = permissions(access)
     return dependencies.mintToken({
-      installationId,
-      repositoryName: repositoryName(repository),
+      ...installation,
       permissions: requested,
       refresh,
     }).then((minted): Result<GitHubRepositoryToken, GitHubTokenError> => {
@@ -169,7 +164,7 @@ export function createRepositoryTokenProvider(dependencies: RepositoryTokenDepen
     invalidate(repository, access) {
       const tokenKey = `${repository.toLowerCase()}:${access}`
       tokens.delete(tokenKey)
-      installationIds.delete(repository)
+      installations.delete(repository)
       stale.add(tokenKey)
     },
     async getToken(repository, access, signal) {
@@ -179,31 +174,31 @@ export function createRepositoryTokenProvider(dependencies: RepositoryTokenDepen
       if (cachedToken !== undefined && Date.parse(cachedToken.expiresAt) - now().getTime() > 60_000)
         return ok(cachedToken)
 
-      const cached = installationIds.get(repository)
-      const installationId = await Promise.resolve(cached)
-        .then(id => id ?? dependencies.getInstallationId(repository, signal).then((resolved) => {
-          installationIds.set(repository, resolved)
+      const cached = installations.get(repository)
+      const installation = await Promise.resolve(cached)
+        .then(value => value ?? dependencies.getInstallation(repository, signal).then((resolved) => {
+          installations.set(repository, resolved)
           return resolved
         }))
-        .then((value): Result<number, GitHubTokenError> => ok(value))
-        .catch((error: unknown): Result<number, GitHubTokenError> => failure(repository, error))
-      if (installationId._tag === 'Err')
-        return installationId
+        .then((value): Result<RepositoryInstallation, GitHubTokenError> => ok(value))
+        .catch((error: unknown): Result<RepositoryInstallation, GitHubTokenError> => failure(repository, error))
+      if (installation._tag === 'Err')
+        return installation
 
-      const token = await mint(repository, access, installationId.value, refresh)
+      const token = await mint(repository, access, installation.value, refresh)
       if (token._tag === 'Ok') {
         tokens.set(tokenKey, token.value)
         return token
       }
-      if (cached === undefined || (token.error.status !== 401 && token.error.status !== 404))
+      if (cached === undefined || ![401, 404, 422].includes(token.error.status ?? 0))
         return token
 
       tokens.delete(tokenKey)
-      installationIds.delete(repository)
-      return dependencies.getInstallationId(repository, signal)
-        .then((refreshedId) => {
-          installationIds.set(repository, refreshedId)
-          return mint(repository, access, refreshedId, true).then((refreshed) => {
+      installations.delete(repository)
+      return dependencies.getInstallation(repository, signal)
+        .then((refreshedInstallation) => {
+          installations.set(repository, refreshedInstallation)
+          return mint(repository, access, refreshedInstallation, true).then((refreshed) => {
             if (refreshed._tag === 'Ok')
               tokens.set(tokenKey, refreshed.value)
             return refreshed
@@ -218,6 +213,8 @@ export interface GitHubAppTokenProviderOptions {
   appId: number
   privateKey: string
   userAgent?: string
+  /** Resolves a missing repository through trusted controller discovery. */
+  resolveRenamedRepository: (repository: string) => Promise<string | undefined>
 }
 
 export function createGitHubAppTokenProvider(options: GitHubAppTokenProviderOptions): GitHubTokenProvider {
@@ -228,16 +225,27 @@ export function createGitHubAppTokenProvider(options: GitHubAppTokenProviderOpti
   })
 
   return createRepositoryTokenProvider({
-    getInstallationId: async (repository, signal) => {
+    getInstallation: async (repository, signal) => {
       const [owner, repo] = repository.split('/')
       if (owner === undefined || repo === undefined)
         throw new Error(`Invalid repository mapping: ${repository}.`)
-      const response = await app.octokit.rest.apps.getRepoInstallation({
+      const read = (name: string) => app.octokit.rest.apps.getRepoInstallation({
         owner,
-        repo,
+        repo: name,
         ...(signal === undefined ? {} : { request: { signal } }),
+      }).then(response => ({ installationId: response.data.id, repositoryName: name }))
+      return read(repo).catch(async (error: unknown) => {
+        // Unlike repository metadata, this endpoint does not redirect old names.
+        if (errorStatus(error) !== 404)
+          throw error
+        const current = await options.resolveRenamedRepository(repository)
+        const match = current === undefined ? null : /^([^/]+)\/([^/]+)$/.exec(current)
+        if (match === null || match[1]!.toLowerCase() !== owner.toLowerCase()
+          || current!.toLowerCase() === repository.toLowerCase()) {
+          throw error
+        }
+        return read(match[2]!)
       })
-      return response.data.id
     },
     mintToken: async input => app.octokit.auth({
       type: 'installation',

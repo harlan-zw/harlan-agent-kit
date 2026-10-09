@@ -571,6 +571,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const appTokens = createGitHubAppTokenProvider({
     appId: config.github.appId,
     privateKey: options.githubPrivateKey,
+    resolveRenamedRepository: async (repository) => {
+      const resolved = await userAccess.readRepository(repository)
+      // A redirect alone grants no App access. Require the current repository
+      // in the same allowed installation discovery before minting its token.
+      return installedRepositories.find(installed => installed.github.toLowerCase() === resolved?.github.toLowerCase())?.github
+    },
   })
   const usesUserToken = (repository: string): boolean => userRepositoryNames.has(repository.toLowerCase())
   const rawUserTokens = createUserTokenProvider({ readToken: signal => userAccess.token(signal) })

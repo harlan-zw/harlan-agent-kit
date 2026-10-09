@@ -120,7 +120,7 @@ describe('gitHub auto-merge handoff', () => {
     const minted: Array<Record<string, string>> = []
     const merged: unknown[] = []
     const tokens = createRepositoryTokenProvider({
-      getInstallationId: () => Promise.resolve(42),
+      getInstallation: () => Promise.resolve({ installationId: 42, repositoryName: 'example' }),
       mintToken: ({ permissions }) => {
         minted.push(permissions)
         return Promise.resolve({ token: `token-${minted.length}`, expiresAt: '2126-01-01T00:00:00.000Z', permissions })
@@ -164,7 +164,7 @@ describe('gitHub auto-merge handoff', () => {
     const tokens = createGitHubWriteGate({
       mayWrite: () => false,
       source: createRepositoryTokenProvider({
-        getInstallationId: () => Promise.resolve(42),
+        getInstallation: () => Promise.resolve({ installationId: 42, repositoryName: 'example' }),
         mintToken: (request) => {
           minted.push(request)
           return Promise.resolve({ token: 'token', expiresAt: '2126-01-01T00:00:00.000Z', permissions: request.permissions })
