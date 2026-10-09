@@ -13,6 +13,7 @@ it('rejects malformed input without calling object coercion', () => {
 })
 function fixture() {
   const target: RepairRecoveryTarget = {
+    stateTag: 'Failed',
     fence: 3,
     task: { id: taskId, kind: 'review_fix', repository: 'harlan-zw/example', pullRequestNumber: 24, revisionId: 'revision', updatedAt: '', repositoryMapping: repositoryMapping(), pullRequest: pullRequestItem({ state: 'closed', mergedAt: '2026-10-06', baseSha }), rounds: { number: 1, limit: 1, prior: [] }, pickup: { _tag: 'LoggedFinding', finding: { _tag: 'Logged', impact: 40, summary: 'Fix parser', details: { fingerprint: 'f'.repeat(64), identity: 'parser', location: { path: 'src/parser.ts', line: 1 }, proof: 'Loses input' } } } },
     proof: { _tag: 'RepairRecovery', commitSha, originalFence: 3, originalFailure: `Could not pin the repair artifact: fatal: invalid refspec '+${commitSha}:refs/harlan-github-agent/publications/${taskId}'` },

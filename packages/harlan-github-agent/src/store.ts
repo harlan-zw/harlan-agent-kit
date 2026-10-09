@@ -9374,7 +9374,7 @@ export function openJournalStore(
     if (!mutationsEnabled)
       return err('Service mutations are disabled.')
     const row = database.prepare(`
-      SELECT tasks.id, tasks.fence, tasks.reason, tasks.evidence, tasks.updated_at,
+      SELECT tasks.id, tasks.state_tag, tasks.fence, tasks.reason, tasks.evidence, tasks.updated_at,
         subjects.current_revision_id AS revision_id, subjects.github_number,
         repositories.github AS repository, repositories.policy_json,
         revisions.payload AS subject_payload, repair_reports.summary, repair_reports.checks,
@@ -9385,7 +9385,7 @@ export function openJournalStore(
       JOIN revisions ON revisions.id = subjects.current_revision_id
       JOIN logged_finding_requests AS requests ON requests.task_id = tasks.id
       JOIN repair_reports ON repair_reports.task_id = tasks.id
-      WHERE tasks.id = ? AND tasks.kind = 'review_fix' AND tasks.state_tag = 'Failed'
+      WHERE tasks.id = ? AND tasks.kind = 'review_fix' AND tasks.state_tag IN ('Failed', 'ActionRequired')
         AND repositories.enabled = 1 AND repositories.writes_enabled = 1 AND repositories.paused = 0
         AND (SELECT state_tag FROM agent_control WHERE singleton = 1) = 'Running'
         AND NOT EXISTS (SELECT 1 FROM restart_requests WHERE state_tag IN ('Requested', 'Restarting'))
@@ -9404,6 +9404,7 @@ export function openJournalStore(
         AND NOT EXISTS (SELECT 1 FROM publication_commands WHERE task_id = tasks.id)
     `).get(taskId) as {
       id: string
+      state_tag: 'Failed' | 'ActionRequired'
       fence: number
       reason: string | null
       evidence: string | null
@@ -9419,7 +9420,7 @@ export function openJournalStore(
       base_ref: string
     } | undefined
     if (row === undefined)
-      return err('The failed Repair has no current recovery authority or has an active owner.')
+      return err('The retained Repair has no current recovery authority or has an active owner.')
     const proof = repairRecoveryProof({ taskId, reason: row.reason, evidence: row.evidence, fence: row.fence })
     if (proof === null || proof.commitSha !== commitSha)
       return err('The retained commit does not match the persisted failed pin.')
@@ -9431,7 +9432,7 @@ export function openJournalStore(
       || pullRequest.baseRef !== row.base_ref || finding === null) {
       return err('The selected finding no longer matches an authorized merged pull request.')
     }
-    return ok({ fence: row.fence, proof, report: { summary: row.summary, checks: JSON.parse(row.checks) as string[] }, task: {
+    return ok({ stateTag: row.state_tag, fence: row.fence, proof, report: { summary: row.summary, checks: JSON.parse(row.checks) as string[] }, task: {
       id: taskId,
       kind: 'review_fix',
       repository: row.repository,
@@ -9450,6 +9451,7 @@ export function openJournalStore(
     try {
       const current = inspectRepairRecovery(target.task.id, target.proof.commitSha)
       if (current._tag === 'Err' || current.value.fence !== target.fence
+        || current.value.stateTag !== target.stateTag
         || current.value.task.revisionId !== target.task.revisionId
         || JSON.stringify(current.value.task.repositoryMapping) !== JSON.stringify(target.task.repositoryMapping)
         || JSON.stringify(current.value.proof) !== JSON.stringify(target.proof)) {
@@ -9461,11 +9463,11 @@ export function openJournalStore(
       const update = database.prepare(`
         UPDATE tasks SET state_tag = 'Running', reason = NULL, worker_id = ?, fence = ?,
           revision_id = ?, evidence = ?, lease_expires_at = ?, updated_at = ?
-        WHERE id = ? AND state_tag = 'Failed' AND fence = ?
-      `).run(workerId, fence, current.value.task.revisionId, JSON.stringify(current.value.proof), leaseExpiresAt, at, target.task.id, target.fence)
+        WHERE id = ? AND state_tag = ? AND fence = ?
+      `).run(workerId, fence, current.value.task.revisionId, JSON.stringify(current.value.proof), leaseExpiresAt, at, target.task.id, target.stateTag, target.fence)
       if (update.changes !== 1)
         throw new Error('Repair recovery lost its fenced claim.')
-      recordTransition(database, { taskId: target.task.id, from: 'Failed', to: 'Running', reason: 'Explicit retained Repair recovery.', fence, at })
+      recordTransition(database, { taskId: target.task.id, from: current.value.stateTag, to: 'Running', reason: 'Explicit retained Repair recovery.', fence, at })
       database.exec('COMMIT')
       return ok({ ...current.value.task, updatedAt: at, state: { _tag: 'Running', workerId, fence, leaseExpiresAt } })
     }
@@ -13737,7 +13739,7 @@ export function openJournalStore(
       FROM tasks
       JOIN subjects ON subjects.id = tasks.subject_id
       JOIN repositories ON repositories.id = subjects.repository_id
-      WHERE tasks.kind = 'review_fix' AND tasks.state_tag = 'Failed' AND tasks.id LIKE 'logged-finding:%'
+      WHERE tasks.kind = 'review_fix' AND tasks.state_tag IN ('Failed', 'ActionRequired') AND tasks.id LIKE 'logged-finding:%'
         AND repositories.enabled = 1
         AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = tasks.id)
         AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)

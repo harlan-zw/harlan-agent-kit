@@ -46,7 +46,7 @@ function setup(findings = [finding], path = ':memory:') {
 }
 
 describe('durable Logged finding pickup', () => {
-  it.each(['claim', 'writes', 'dismissed', 'cancelled', 'wrong-commit', 'crash', 'restart', 'paused', 'drain', 'policy', 'head', 'write-loss', 'transient'])('recovers only the authorized retained repair: %s', (mode) => {
+  it.each(['claim', 'writes', 'dismissed', 'cancelled', 'wrong-commit', 'crash', 'restart', 'paused', 'drain', 'policy', 'head', 'write-loss', 'transient', 'evidence', 'evidence-writes', 'evidence-dismissed', 'evidence-no-proof'])('recovers only the authorized retained repair: %s', (mode) => {
     const { store, mapping, pullRequest, request } = setup()
     store.requestLoggedFindingPickup(request)
     store.recordObservation({ externalId: 'recovery-merge', observedAt: at, source: 'poll', subject: { ...pullRequest, state: 'closed', mergedAt: at } })
@@ -72,7 +72,7 @@ describe('durable Logged finding pickup', () => {
     if (mode === 'head')
       store.recordObservation({ externalId: 'head-moved', observedAt: at, source: 'poll', subject: { ...task.pullRequest, headSha: 'e'.repeat(40) } })
     const target = store.inspectRepairRecovery(task.id, mode === 'wrong-commit' ? 'd'.repeat(40) : commitSha)
-    if (!['claim', 'crash', 'restart', 'write-loss', 'transient'].includes(mode)) {
+    if (!['claim', 'crash', 'restart', 'write-loss', 'transient', 'evidence', 'evidence-writes', 'evidence-dismissed', 'evidence-no-proof'].includes(mode)) {
       expect(target._tag).toBe('Err')
       return
     }
@@ -85,6 +85,27 @@ describe('durable Logged finding pickup', () => {
     expect(store.claimRepairRecovery(target.value, 'duplicate', at, 60_000)._tag).toBe('Err')
     expect(store.getDashboardSnapshot(at).tasks.find(item => item.id === task.id)?.recoveryAttempts).toBe(0)
     expect(store.getDashboardSnapshot(at).repairRecoveryCandidates).toEqual([])
+    if (mode.startsWith('evidence')) {
+      if (recovered._tag === 'Err')
+        throw new Error(recovered.error)
+      expect(store.needsAttentionTask({ taskId: task.id, workerId: 'recovery', fence: recovered.value.state.fence, at, reason: 'The selected tests need current evidence.', evidence: mode === 'evidence-no-proof' ? 'No retained proof.' : JSON.stringify(target.value.proof) })).toBe(true)
+      if (mode === 'evidence-writes')
+        store.setRepositoryWritesEnabled(mapping.github, false)
+      if (mode === 'evidence-dismissed')
+        store.dismissItem({ repository: mapping.github, itemNumber: pullRequest.number, at })
+      const retry = store.inspectRepairRecovery(task.id, commitSha)
+      if (mode !== 'evidence') {
+        expect(retry._tag).toBe('Err')
+        return
+      }
+      expect(retry._tag).toBe('Ok')
+      expect(store.getDashboardSnapshot(at).repairRecoveryCandidates).toContainEqual(candidate)
+      if (retry._tag === 'Err')
+        throw new Error(retry.error)
+      expect(store.claimRepairRecovery({ ...retry.value, stateTag: 'Failed' }, 'stale-state', at, 60_000)._tag).toBe('Err')
+      expect(store.claimRepairRecovery(retry.value, 'retry', at, 60_000)).toMatchObject({ _tag: 'Ok', value: { state: { _tag: 'Running', fence: recovered.value.state.fence + 1 } } })
+      expect(store.claimRepairRecovery(retry.value, 'duplicate', at, 60_000)._tag).toBe('Err')
+    }
     if (mode === 'restart')
       store.recoverInterruptedAgentTasks(at)
     if (mode === 'write-loss' || mode === 'transient') {

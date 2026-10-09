@@ -4,7 +4,123 @@ import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { expect, it } from 'vitest'
-import { confirmRepairRecoveryRegression } from '../src/worktree.ts'
+import { confirmRepairRecoveryRegression, runRepairRecoveryChecks } from '../src/worktree.ts'
+
+it('accepts a current assertion failure alongside passing tests in another package', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'repair-package-evidence-'))
+  try {
+    symlinkSync(resolve(import.meta.dirname, '../../../node_modules'), join(root, 'node_modules'))
+    writeFileSync(join(root, 'package.json'), '{"name":"repository","type":"module","private":true}')
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'verifyDepsBeforeRun: false\n')
+    for (const name of ['failing', 'passing']) {
+      const directory = join(root, name)
+      mkdirSync(directory)
+      writeFileSync(join(directory, 'package.json'), JSON.stringify({ name, type: 'module', scripts: { test: 'vitest run' } }))
+      writeFileSync(join(directory, 'vitest.config.ts'), 'export default { test: { include: ["*.test.ts"] } }')
+      writeFileSync(join(directory, 'selected.test.ts'), `import { it, expect } from "vitest"; it("preserves input", () => expect(1).toBe(${name === 'failing' ? 2 : 1}))`)
+    }
+    const result = await confirmRepairRecoveryRegression(root, ['failing/selected.test.ts', 'passing/selected.test.ts'], AbortSignal.timeout(20_000), input => new Promise((resolve, reject) => {
+      execFile(input.command, input.args, { cwd: input.workspace, signal: input.signal }, error => error !== null && typeof error.code !== 'number'
+        ? reject(error)
+        : resolve({ exitCode: typeof error?.code === 'number' ? error.code : 0 }))
+    }))
+    expect(result).toEqual({ _tag: 'Ok', value: undefined })
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 30_000)
+
+it('rejects the worktree root as a selected test before running commands', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'repair-empty-path-'))
+  let ran = false
+  try {
+    const result = await confirmRepairRecoveryRegression(root, [''], AbortSignal.timeout(5_000), async () => {
+      ran = true
+      return { exitCode: 0 }
+    })
+    expect(result._tag).toBe('Err')
+    expect(ran).toBe(false)
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+it.each(['file', 'manifest'])('rejects an external %s alias before running repository commands', async (mode) => {
+  const root = mkdtempSync(join(tmpdir(), 'repair-test-boundary-'))
+  const workspace = join(root, 'worktree')
+  let ran = false
+  try {
+    mkdirSync(workspace)
+    writeFileSync(join(root, 'outside.ts'), 'export {}')
+    writeFileSync(join(root, 'package.json'), '{"scripts":{"test":"vitest"}}')
+    if (mode === 'file') {
+      symlinkSync(join(root, 'outside.ts'), join(workspace, 'selected.test.ts'))
+    }
+    else {
+      writeFileSync(join(workspace, 'selected.test.ts'), 'export {}')
+      symlinkSync(join(root, 'package.json'), join(workspace, 'package.json'))
+    }
+    const result = await confirmRepairRecoveryRegression(workspace, ['selected.test.ts'], AbortSignal.timeout(5_000), async () => {
+      ran = true
+      return { exitCode: 0 }
+    })
+    expect(result._tag).toBe('Err')
+    expect(ran).toBe(false)
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+it.each(['package', 'repository'])('uses the %s test script before checking current regression evidence', async (scope) => {
+  const root = mkdtempSync(join(tmpdir(), 'repair-script-'))
+  const directory = scope === 'package' ? join(root, 'packages/query') : root
+  const selected = join(directory, 'selected.test.ts')
+  const run = (input: { command: string, args: string[], workspace: string, signal: AbortSignal }) => new Promise<{ exitCode: number }>((resolve, reject) => {
+    if (input.command === 'check' || input.args[0] === 'install') {
+      resolve({ exitCode: 0 })
+      return
+    }
+    execFile(input.command, input.args, { cwd: input.workspace, signal: input.signal }, error => error !== null && typeof error.code !== 'number'
+      ? reject(error)
+      : resolve({ exitCode: typeof error?.code === 'number' ? error.code : 0 }))
+  })
+  try {
+    mkdirSync(directory, { recursive: true })
+    symlinkSync(resolve(import.meta.dirname, '../../../node_modules'), join(root, 'node_modules'))
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'verifyDepsBeforeRun: false\n')
+    writeFileSync(join(root, 'package.json'), '{"name":"repository","type":"module","private":true}')
+    if (scope === 'package')
+      writeFileSync(join(root, 'vitest.config.ts'), 'export default { test: { include: ["*.test.ts"] } }')
+    writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: scope, type: 'module', private: true, scripts: {
+      [scope === 'package' ? 'test' : 'test:run']: 'node prepare.ts && vitest',
+      ...(scope === 'package' ? { 'dev:prepare': 'node module-prepare.ts' } : {}),
+    } }))
+    if (scope === 'package') {
+      writeFileSync(join(directory, 'module-prepare.ts'), 'import { writeFileSync } from "node:fs"; writeFileSync("module.ts", "export const input = 1")')
+      writeFileSync(join(directory, 'prepare.ts'), 'import { input } from "./module.ts"; import { writeFileSync } from "node:fs"; writeFileSync("generated.ts", "export const input = " + input)')
+    }
+    else {
+      writeFileSync(join(directory, 'prepare.ts'), 'import { writeFileSync } from "node:fs"; writeFileSync("generated.ts", "export const input = 1")')
+    }
+    writeFileSync(join(directory, 'vitest.config.ts'), 'export default { test: { include: ["*.test.ts"] } }')
+    writeFileSync(selected, 'import { it, expect } from "vitest"; import { input } from "./generated.ts"; it("preserves input", () => expect(input).toBe(2))')
+    const paths = [relative(root, selected)]
+    expect(await confirmRepairRecoveryRegression(root, paths, AbortSignal.timeout(20_000), run)).toEqual({ _tag: 'Ok', value: undefined })
+    rmSync(join(directory, 'generated.ts'))
+    if (scope === 'package')
+      rmSync(join(directory, 'module.ts'))
+    writeFileSync(selected, 'import { it, expect } from "vitest"; import { input } from "./generated.ts"; it("preserves input", () => expect(input).toBe(1))')
+    const green = await runRepairRecoveryChecks(root, paths, AbortSignal.timeout(20_000), run)
+    expect(green._tag, JSON.stringify(green)).toBe('Ok')
+    expect(existsSync(join(directory, 'generated.ts'))).toBe(true)
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 45_000)
 
 it('runs regression evidence without exposing the controller code tree to the worker', async () => {
   const workspace = mkdtempSync(join(tmpdir(), 'repair-reporter-boundary-'))
