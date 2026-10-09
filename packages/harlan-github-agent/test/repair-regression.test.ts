@@ -1,10 +1,44 @@
 import { execFile, execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { expect, it } from 'vitest'
 import { confirmRepairRecoveryRegression } from '../src/worktree.ts'
+
+it('runs regression evidence without exposing the controller code tree to the worker', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'repair-reporter-boundary-'))
+  const serviceRoot = resolve(import.meta.dirname, '..')
+  const exposed: string[] = []
+  try {
+    symlinkSync(resolve(import.meta.dirname, '../../../node_modules'), join(workspace, 'node_modules'))
+    writeFileSync(join(workspace, 'package.json'), '{"name":"reporter-boundary","type":"module","private":true}')
+    writeFileSync(join(workspace, 'pnpm-workspace.yaml'), 'verifyDepsBeforeRun: false\n')
+    writeFileSync(join(workspace, 'vitest.config.ts'), 'export default { test: { include: [\'*.test.ts\'] } }\n')
+    writeFileSync(join(workspace, 'selected.test.ts'), 'import { it, expect } from \'vitest\'; it(\'preserves input\', () => expect(1).toBe(2))\n')
+    const result = await confirmRepairRecoveryRegression(workspace, ['selected.test.ts'], AbortSignal.timeout(20_000), input => new Promise((resolve, reject) => {
+      for (const mount of input.readOnlyPaths ?? []) {
+        exposed.push(mount)
+        if (!relative(serviceRoot, mount).startsWith('..')) {
+          reject(new Error('The worker cannot mount the controller code tree.'))
+          return
+        }
+        if (input.writablePaths?.some(writable => !relative(writable, mount).startsWith('..'))) {
+          reject(new Error('A writable mount hides the trusted reporter.'))
+          return
+        }
+      }
+      execFile(input.command, input.args, { cwd: input.workspace, signal: input.signal }, error => error !== null && typeof error.code !== 'number'
+        ? reject(error)
+        : resolve({ exitCode: typeof error?.code === 'number' ? error.code : 0 }))
+    }))
+    expect(result).toEqual({ _tag: 'Ok', value: undefined })
+    expect(exposed.every(path => !existsSync(path))).toBe(true)
+  }
+  finally {
+    rmSync(workspace, { recursive: true, force: true })
+  }
+}, 30_000)
 
 it('refuses repository checks when worker isolation is unavailable', async () => {
   const root = mkdtempSync(join(tmpdir(), 'repair-missing-boundary-'))

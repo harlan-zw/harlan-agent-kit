@@ -9,9 +9,9 @@ import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { basename, isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { runAgentSandboxCommand } from './agent-sandbox.ts'
@@ -1094,15 +1094,23 @@ const runRecoveryCommand: RecoveryCommand = input => runAgentSandboxCommand({ ..
 
 export async function confirmRepairRecoveryRegression(path: string, regressionPaths: string[], signal: AbortSignal, runCommand: RecoveryCommand = runRecoveryCommand): Promise<Result<void, string>> {
   const sourceReporter = fileURLToPath(new URL('./repair-regression-reporter.ts', import.meta.url))
-  const reporter = existsSync(sourceReporter)
+  const installedReporter = existsSync(sourceReporter)
     ? sourceReporter
     : fileURLToPath(import.meta.resolve('harlan-github-agent/repair-regression-reporter'))
-  const evidenceDirectory = await mkdtemp(join(tmpdir(), 'repair-regression-evidence-'))
+  const scratch = await mkdtemp(join(tmpdir(), 'repair-regression-evidence-'))
+  const reporterDirectory = join(scratch, 'reporter')
+  const reporter = join(reporterDirectory, basename(installedReporter))
+  const evidenceDirectory = join(scratch, 'evidence')
   const evidenceFile = join(evidenceDirectory, 'result.json')
   let output: string | undefined
   try {
+    // The Service checkout is protected. Expose only a standalone reporter,
+    // outside both that checkout and the worker's writable evidence directory.
+    await mkdir(reporterDirectory)
+    await mkdir(evidenceDirectory)
+    await copyFile(installedReporter, reporter)
     // Assertion failures are expected. The isolated reporter supplies their category.
-    await runCommand({ workspace: path, command: 'pnpm', args: ['exec', 'vitest', 'run', `--reporter=${reporter}`, `--outputFile=${evidenceFile}`, ...regressionPaths], signal, readOnlyPaths: [reporter], writablePaths: [evidenceDirectory] })
+    await runCommand({ workspace: path, command: 'pnpm', args: ['exec', 'vitest', 'run', `--reporter=${reporter}`, `--outputFile=${evidenceFile}`, ...regressionPaths], signal, readOnlyPaths: [reporterDirectory], writablePaths: [evidenceDirectory] })
     output = await readFile(evidenceFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT')
         return undefined
@@ -1110,7 +1118,7 @@ export async function confirmRepairRecoveryRegression(path: string, regressionPa
     })
   }
   finally {
-    await rm(evidenceDirectory, { recursive: true, force: true })
+    await rm(scratch, { recursive: true, force: true })
   }
   if (output === undefined)
     return err('The selected regression tests produced no current failure evidence.')
