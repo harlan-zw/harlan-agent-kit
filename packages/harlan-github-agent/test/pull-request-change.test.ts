@@ -62,6 +62,35 @@ describe('owner pull request changes', () => {
       .toEqual({ _tag: 'Rejected', reason: { _tag: 'AuthorNotAllowed' } })
   })
 
+  it('preserves the owner request when a clean Review finishes', () => {
+    const { store, request, at } = setup()
+    store.requestPullRequestChange(request)
+    const review = store.claimNextAdversarialReviewTask('review', at, 60_000)!
+    store.recordReviewRun({
+      id: 'clean-review',
+      repository: review.repository,
+      pullRequestNumber: review.pullRequestNumber,
+      revisionId: review.revisionId,
+      headSha: review.pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'clean-review-session',
+      model: 'test',
+      agentVersion: 'test',
+      skillDigest: 'f'.repeat(64),
+      startedAt: at,
+      completedAt: at,
+      gates: {
+        merge: { _tag: 'Passed', evidence: [] },
+        review: { _tag: 'Passed', evidence: [] },
+        ci: { _tag: 'Passed', evidence: [] },
+      },
+      confidence: 95,
+      findings: [],
+    })
+    store.completeWorkerTask({ taskId: review.id, workerId: 'review', fence: review.state.fence, at, evidence: 'clean-review' })
+    expect(store.claimNextReviewFixTask('repair', at, 60_000)?.request?.instruction).toBe(request.instruction)
+  })
+
   it('does not carry a request onto a different head', () => {
     const { store, request, at } = setup()
     store.requestPullRequestChange(request)

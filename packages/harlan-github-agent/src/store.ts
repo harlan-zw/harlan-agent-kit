@@ -3853,6 +3853,7 @@ function supersedeTasks(
   exceptRevisionId?: string,
   kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work' = 'resolve_conflict',
   preserveLoggedPickups = false,
+  preserveOwnerRequests = preserveLoggedPickups,
 ): void {
   const rows = database.prepare(`
     SELECT id, state_tag, fence FROM tasks
@@ -3862,7 +3863,7 @@ function supersedeTasks(
       AND (? IS NULL OR revision_id != ?)
       AND (NOT ? OR id NOT IN (SELECT task_id FROM logged_finding_requests WHERE task_id IS NOT NULL))
       AND (NOT ? OR id NOT IN (SELECT task_id FROM pull_request_change_requests))
-  `).all(subjectId, kind, exceptRevisionId ?? null, exceptRevisionId ?? null, preserveLoggedPickups ? 1 : 0, preserveLoggedPickups ? 1 : 0) as unknown as Array<{ id: string, state_tag: TaskRow['state_tag'], fence: number }>
+  `).all(subjectId, kind, exceptRevisionId ?? null, exceptRevisionId ?? null, preserveLoggedPickups ? 1 : 0, preserveOwnerRequests ? 1 : 0) as unknown as Array<{ id: string, state_tag: TaskRow['state_tag'], fence: number }>
 
   const update = database.prepare(`
     UPDATE tasks
@@ -8927,6 +8928,8 @@ export function openJournalStore(
           'A fresh Review found no repairable finding.',
           undefined,
           'review_fix',
+          false,
+          true,
         )
       }
       database.exec('COMMIT')
@@ -9099,6 +9102,8 @@ export function openJournalStore(
           'A fresh Review found no repairable finding.',
           undefined,
           'review_fix',
+          false,
+          true,
         )
       }
       database.exec('COMMIT')
