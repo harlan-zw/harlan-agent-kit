@@ -928,6 +928,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   isRoutineTrackingIssue: (github: string, issueNumber: number) => boolean
   /** Pull requests absent from the next open snapshot need one exact final GitHub read. */
   listOpenPullRequestNumbers: (github: string) => number[]
+  listOpenPullRequestRevisions: (github: string) => Array<{ number: number, revisionId: string }>
   /** Old inferred closures need one exact read before GitHub becomes final truth. */
   listUnverifiedClosedPullRequestNumbers: (github: string, limit?: number) => number[]
   /** Records one exact pull request read without trusting a local closure timestamp. */
@@ -8299,6 +8300,17 @@ export function openJournalStore(
 
   const listOpenIssueNumbers: JournalStore['listOpenIssueNumbers'] = github => listOpenItemNumbers(github, 'issue')
   const listOpenPullRequestNumbers: JournalStore['listOpenPullRequestNumbers'] = github => listOpenItemNumbers(github, 'pull_request')
+
+  const listOpenPullRequestRevisions: JournalStore['listOpenPullRequestRevisions'] = github => database.prepare(`
+    SELECT subjects.github_number AS number, revisions.id AS revisionId
+    FROM subjects
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions ON revisions.id = subjects.current_revision_id
+    WHERE repositories.github = ? AND repositories.enabled = 1
+      AND subjects.kind = 'pull_request'
+      AND json_extract(revisions.payload, '$.state') = 'open'
+    ORDER BY subjects.github_number
+  `).all(github) as Array<{ number: number, revisionId: string }>
 
   const isItemDismissed: JournalStore['isItemDismissed'] = (github, kind, itemNumber) => database.prepare(`
     SELECT 1
@@ -16296,6 +16308,7 @@ export function openJournalStore(
     isRoutineTrackingIssue,
     listOpenIssueNumbers,
     listOpenPullRequestNumbers,
+    listOpenPullRequestRevisions,
     listUnverifiedClosedPullRequestNumbers,
     recordExactPullRequestObservation,
     recordVerifiedPullRequestClosure,

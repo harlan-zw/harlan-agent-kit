@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
 import { syncOpenReviewRerunRequests, syncReviewRerunRequests } from '../src/review-rerun-controller.ts'
-import { dashboardSnapshot, pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 describe('review rerun controller', () => {
   it('polls only repositories with open pull requests, one at a time', async () => {
@@ -33,7 +33,7 @@ describe('review rerun controller', () => {
         },
       },
       store: {
-        getDashboardSnapshot: () => dashboardSnapshot({ items }),
+        listOpenPullRequestRevisions: repository => items.filter(item => item.repository === repository),
         requestReviewRerun: () => ({ _tag: 'Duplicate', taskId: 'b'.repeat(64) }),
         requestPullRequestChange: () => ({ _tag: 'Duplicate', taskId: 'b'.repeat(64) }),
       },
@@ -60,7 +60,7 @@ describe('review rerun controller', () => {
         }])),
       },
       store: {
-        getDashboardSnapshot: () => dashboardSnapshot({ items: [subject] }),
+        listOpenPullRequestRevisions: () => [subject],
         requestPullRequestChange: () => ({ _tag: 'Duplicate', taskId: 'b'.repeat(64) }),
         requestReviewRerun(input) {
           requests.push(input)
