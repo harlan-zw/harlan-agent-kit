@@ -1226,14 +1226,9 @@ export async function runRepairRecoveryChecks(path: string, regressionPaths: str
     return err('The recovery repository has no package manifest.')
   const scripts = (manifest as { scripts?: unknown }).scripts
   const declared = (name: string) => typeof scripts === 'object' && scripts !== null && typeof (scripts as Record<string, unknown>)[name] === 'string'
-  const fullChecks = declared('check')
-    ? ['check']
-    : ['lint', 'typecheck', declared('test:run') ? 'test:run' : 'test'].filter(declared)
-  if (fullChecks.length === 0)
-    return err('The recovery repository declares no check scripts.')
   if (declared('dev:prepare'))
     commands.push({ command: 'pnpm', args: ['run', 'dev:prepare'] })
-  commands.push(...fullChecks.map(name => ({ command: 'pnpm', args: ['run', name] })))
+  commands.push({ command: 'check', args: [] })
   if (declared('build'))
     commands.push({ command: 'pnpm', args: ['build'] })
   const checks: string[] = []

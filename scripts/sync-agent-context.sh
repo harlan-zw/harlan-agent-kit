@@ -28,6 +28,9 @@ github_cli_suffix='.local/bin/agent-gh'
 check_runner="$script_dir/agent-check.ts"
 check_install_suffix='.local/share/harlan-agent-kit/github-bin/agent-check.ts'
 check_cli_suffix='.local/bin/agent-check.ts'
+shared_check="$repo_root/bin/check"
+shared_check_install_suffix='.local/share/harlan-agent-kit/github-bin/check'
+shared_check_cli_suffix='.local/bin/check'
 # The site inventory the sentry-checkin skill reads first. The desktop owns it;
 # a worker on Hogwild starts without one and every routine run reports that.
 sites_inventory="${HARLAN_AGENT_CONTEXT_SITES_FILE:-$HOME/sites/SITES.md}"
@@ -74,6 +77,7 @@ require_sources() {
   [ -f "$commit_hook" ] || fail "The commit-msg hook is missing: $commit_hook"
   [ -f "$github_wrapper" ] || fail "The public GitHub CLI is missing: $github_wrapper"
   [ -f "$check_runner" ] || fail "The check command is missing: $check_runner"
+  [ -f "$shared_check" ] || fail "Check is missing: $shared_check"
   [ -f "$opencode_plugin" ] || fail "The opencode plugin is missing: $opencode_plugin"
   [ -f "$plugin_manifest" ] || fail "The plugin manifest is missing: $plugin_manifest"
   mapfile -t installed_hook_files < <(agent_context_installed_hooks "$plugin_hooks_dir" "$plugin_manifest")
@@ -149,6 +153,8 @@ sync_local() {
   install -m 755 "$github_wrapper" "$target_home/$github_cli_suffix"
   install -m 755 "$check_runner" "$target_home/$check_install_suffix"
   install -m 755 "$check_runner" "$target_home/$check_cli_suffix"
+  install -m 755 "$shared_check" "$target_home/$shared_check_install_suffix"
+  install -m 755 "$shared_check" "$target_home/$shared_check_cli_suffix"
   if [ -f "$sites_inventory" ] && [ "$sites_inventory" != "$target_home/$sites_install_suffix" ]; then
     mkdir -p "$target_home/$(dirname "$sites_install_suffix")"
     install -m 644 "$sites_inventory" "$target_home/$sites_install_suffix"
@@ -168,6 +174,8 @@ opencode_remote_targets() {
   printf '%s\n' "$hogwild_home/$github_cli_suffix"
   printf '%s\n' "$hogwild_home/$check_install_suffix"
   printf '%s\n' "$hogwild_home/$check_cli_suffix"
+  printf '%s\n' "$hogwild_home/$shared_check_install_suffix"
+  printf '%s\n' "$hogwild_home/$shared_check_cli_suffix"
 }
 
 # Local sources in the same order, so the two hash lists line up.
@@ -182,6 +190,8 @@ opencode_local_sources() {
   printf '%s\n' "$github_wrapper"
   printf '%s\n' "$check_runner"
   printf '%s\n' "$check_runner"
+  printf '%s\n' "$shared_check"
+  printf '%s\n' "$shared_check"
 }
 
 sync_hogwild() {

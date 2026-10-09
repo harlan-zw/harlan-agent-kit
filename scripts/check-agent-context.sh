@@ -74,6 +74,13 @@ for installed in "$TARGET_HOME/.local/share/harlan-agent-kit/github-bin/agent-ch
     || bad "The check command differs. Run pnpm sync:context."
   [ -x "$installed" ] || bad "The check command is not executable. Run pnpm sync:context."
 done
+# Check must be available to both the host and the worker.
+for installed in "$TARGET_HOME/.local/share/harlan-agent-kit/github-bin/check" "$TARGET_HOME/.local/bin/check"; do
+  cmp -s "$REPO_ROOT/bin/check" "$installed" \
+    || bad "Check differs. Run pnpm sync:context."
+  [ -x "$installed" ] || bad "Check is not executable. Run pnpm sync:context."
+done
+
 # The opencode plugin reads its hook list from the installed manifest.
 if [ ! -f "$INSTALLED_MANIFEST" ]; then
   bad "The plugin manifest is not installed. Run pnpm sync:context."
