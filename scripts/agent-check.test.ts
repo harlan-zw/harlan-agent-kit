@@ -61,3 +61,20 @@ it('installs an executable command that preserves the child exit', async () => {
     expect(await readFile(report.commands[0].log, 'utf8')).toBe('failure evidence')
   }
 })
+
+it('installs Check for host and worker use and rejects failing checks', async () => {
+  const root = await fixture()
+  const sync = spawnSync('bash', [resolve('scripts/sync-agent-context.sh'), 'local'], { env: { ...process.env, HARLAN_AGENT_CONTEXT_HOME: root }, encoding: 'utf8' })
+  expect(sync.status, sync.stderr).toBe(0)
+  await writeFile(join(root, 'package.json'), JSON.stringify({ scripts: { typecheck: 'node --experimental-strip-types fixture.ts' } }))
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'verifyDepsBeforeRun: false\n')
+  await writeFile(join(root, 'fixture.ts'), 'console.log("Check fixture ran"); process.exitCode = Number(process.env.CHECK_FIXTURE_EXIT ?? 0)\n')
+  for (const command of ['.local/bin/check', '.local/share/harlan-agent-kit/github-bin/check']) {
+    for (const exit of [0, 7]) {
+      const result = spawnSync(join(root, command), [], { cwd: root, env: { ...process.env, CHECK_SKIP: '', CHECK_FIXTURE_EXIT: String(exit), CI: 'true' }, encoding: 'utf8' })
+      expect(result.error).toBeUndefined()
+      expect(result.status, result.stderr).toBe(exit === 0 ? 0 : 1)
+      expect(result.stdout).toContain(exit === 0 ? 'All checks passed' : 'Check fixture ran')
+    }
+  }
+})

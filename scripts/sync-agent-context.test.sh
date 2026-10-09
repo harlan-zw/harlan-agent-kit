@@ -102,6 +102,7 @@ printf '%s %s\n' plugin.json \
 printf '%s %s\n' gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' agent-gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' agent-check.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-check.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
+printf '%s %s\n' check "$(/usr/bin/sha256sum "$repo_root/bin/check" | cut -d' ' -f1)" >> "$opencode_hashes"
 export HARLAN_AGENT_CONTEXT_TEST_OPENCODE_HASHES="$opencode_hashes"
 export HARLAN_AGENT_CONTEXT_TEST_OPENCODE_BAD=''
 
@@ -210,6 +211,8 @@ grep -E "chmod 644 '$manifest_target.next\.[0-9.]+'" "$calls" >/dev/null
 fixture="$test_root/fixture"
 mkdir -p "$fixture/scripts" "$fixture/harlan-agent-kit/hooks" \
   "$fixture/harlan-agent-kit/.claude-plugin" "$fixture/harlan-agent-kit/plugins/opencode"
+mkdir -p "$fixture/bin"
+cp "$repo_root/bin/check" "$fixture/bin/check"
 cp "$repo_root/scripts/sync-agent-context.sh" "$repo_root/scripts/agent-context-hooks.sh" "$repo_root/scripts/github-public.sh" "$repo_root/scripts/agent-check.ts" "$fixture/scripts/"
 cp -r "$repo_root/agent-context" "$fixture/agent-context"
 cp "$repo_root/harlan-agent-kit/hooks/"*.sh "$fixture/harlan-agent-kit/hooks/"
@@ -252,6 +255,7 @@ printf '%s %s\n' harlan-hooks.ts \
 printf '%s %s\n' gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$fixture_hashes"
 printf '%s %s\n' agent-gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$fixture_hashes"
 printf '%s %s\n' agent-check.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-check.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
+printf '%s %s\n' check "$(/usr/bin/sha256sum "$repo_root/bin/check" | cut -d' ' -f1)" >> "$fixture_hashes"
 PATH="$test_root/bin:/usr/bin:/bin" \
   HARLAN_AGENT_CONTEXT_TEST_OPENCODE_HASHES="$fixture_hashes" \
   HARLAN_AGENT_CONTEXT_HOGWILD_HOST=hogwild \
@@ -276,6 +280,19 @@ if ! grep -F 'Hogwild received different hook files.' "$opencode_log" >/dev/null
 fi
 if grep -F "mv '" "$calls" >/dev/null; then
   printf '%s\n' 'Hogwild installed an unverified opencode hook.' >&2
+  exit 1
+fi
+export HARLAN_AGENT_CONTEXT_TEST_OPENCODE_BAD=''
+
+# Check must pass digest verification before either copy is installed.
+: > "$calls"
+export HARLAN_AGENT_CONTEXT_TEST_OPENCODE_BAD=check
+if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/sync-agent-context.sh" hogwild >"$test_root/check.log" 2>&1; then
+  printf '%s\n' 'Hogwild accepted a different Check command.' >&2
+  exit 1
+fi
+if grep -F "mv '" "$calls" >/dev/null; then
+  printf '%s\n' 'Hogwild installed Check without digest verification.' >&2
   exit 1
 fi
 export HARLAN_AGENT_CONTEXT_TEST_OPENCODE_BAD=''
