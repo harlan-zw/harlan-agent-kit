@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
-import { syncReviewRerunRequests } from '../src/review-rerun-controller.ts'
+import { syncOpenReviewRerunRequests, syncReviewRerunRequests } from '../src/review-rerun-controller.ts'
 import { openJournalStore } from '../src/store.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: ReturnType<typeof openJournalStore>[] = []
 afterEach(() => stores.splice(0).forEach(store => store.close()))
@@ -22,6 +22,32 @@ function setup(path = ':memory:') {
 }
 
 describe('owner pull request changes', () => {
+  it('routes a comment when newer items fill the dashboard', async () => {
+    const { store, request, at } = setup()
+    const later = '2026-10-09T01:01:00.000Z'
+    for (let number = 1000; number < 1101; number++) {
+      store.recordObservation({ externalId: `issue:${number}`, observedAt: later, source: 'poll', subject: issueItem({ number }) })
+    }
+    expect(store.getDashboardSnapshot(later).items.some(item => item.kind === 'pull_request' && item.number === 24)).toBe(false)
+    const results = await syncOpenReviewRerunRequests([repositoryMapping()], {
+      github: { listReviewRerunRequests: async () => ok([{
+        author: request.requestedBy,
+        commentId: 6072523996,
+        origin: 'ChangeRequest',
+        instruction: request.instruction,
+        pullRequestNumber: 24,
+        updatedAt: at,
+      }]) },
+      store,
+      allowedAuthors: ['harlan-zw'],
+      now: () => new Date(later),
+    })
+    expect(results).toEqual([ok({ repository: request.repository, results: [expect.objectContaining({ _tag: 'Queued' })] })])
+    const review = store.claimNextAdversarialReviewTask('review', later, 60_000)!
+    store.completeWorkerTask({ taskId: review.id, workerId: 'review', fence: review.state.fence, at: later, evidence: 'done' })
+    expect(store.claimNextReviewFixTask('repair', later, 60_000)?.request?.instruction).toBe(request.instruction)
+  })
+
   it('routes the linked comment into Repair rather than another Review', async () => {
     const { store, request, at } = setup()
     const result = await syncReviewRerunRequests(repositoryMapping(), {
