@@ -9,9 +9,9 @@ import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { copyFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { runAgentSandboxCommand } from './agent-sandbox.ts'
@@ -1092,7 +1092,78 @@ type RecoveryCommand = (input: { workspace: string, command: string, args: strin
 
 const runRecoveryCommand: RecoveryCommand = input => runAgentSandboxCommand({ ...input, environment: { ...process.env, CI: 'true' } })
 
+/** Keep repository preparation and package-local test resolution in both test runs. */
+async function repairRecoveryTestCommands(path: string, regressionPaths: string[]): Promise<Result<Array<{ args: string[], paths: string[], prepare: string[][] }>, string>> {
+  const root = await realpath(path)
+  const commands = new Map<string, { args: string[], paths: string[], prepare: string[][] }>()
+  for (const selected of regressionPaths) {
+    const file = resolve(root, selected)
+    const outside = (target: string) => {
+      const name = relative(root, target)
+      return isAbsolute(name) || name === '..' || name.startsWith('../')
+    }
+    if (isAbsolute(selected) || file === root || outside(file) || outside(await realpath(file)))
+      return err('The selected regression test must stay inside its worktree.')
+    let directory = dirname(file)
+    let args = ['exec', 'vitest']
+    let owner = root
+    let prepare: string[][] = []
+    for (;;) {
+      const manifestPath = await realpath(join(directory, 'package.json')).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT')
+          return undefined
+        throw error
+      })
+      if (manifestPath !== undefined) {
+        if (outside(manifestPath))
+          return err('The recovery package manifest must stay inside its worktree.')
+        const parsed: unknown = JSON.parse(await readFile(manifestPath, 'utf8'))
+        if (typeof parsed !== 'object' || parsed === null)
+          return err('The recovery package manifest is invalid.')
+        const scripts = (parsed as { scripts?: unknown }).scripts
+        if (typeof scripts === 'object' && scripts !== null) {
+          // pnpm forwards selectors to the final command. Do not select recursive wrappers or pipelines.
+          const script = ['test:run', 'test'].find((name) => {
+            const command = (scripts as Record<string, unknown>)[name]
+            return typeof command === 'string' && /^(?:pnpm\s+exec\s+)?vitest(?:\s[^;&|<>`]+)?$/.test(command.split('&&').at(-1)!.trim())
+          })
+          if (script !== undefined) {
+            owner = directory
+            args = ['--dir', directory, 'run', script]
+            if (typeof (scripts as Record<string, unknown>)['dev:prepare'] === 'string')
+              prepare = [['--dir', directory, 'run', 'dev:prepare']]
+            break
+          }
+        }
+      }
+      if (directory === root)
+        break
+      directory = dirname(directory)
+    }
+    const command = commands.get(owner) ?? { args, paths: [], prepare }
+    command.paths.push(`./${relative(owner, file)}`)
+    commands.set(owner, command)
+  }
+  return ok([...commands.values()])
+}
+
 export async function confirmRepairRecoveryRegression(path: string, regressionPaths: string[], signal: AbortSignal, runCommand: RecoveryCommand = runRecoveryCommand): Promise<Result<void, string>> {
+  const commands = await repairRecoveryTestCommands(path, regressionPaths)
+  if (commands._tag === 'Err')
+    return commands
+  for (const command of commands.value) {
+    for (const args of command.prepare) {
+      if ((await runCommand({ workspace: path, command: 'pnpm', args, signal })).exitCode !== 0)
+        return err('The selected regression test preparation failed.')
+    }
+    const result = await confirmRegressionCommand(path, command, signal, runCommand)
+    if (result._tag === 'Err')
+      return result
+  }
+  return commands.value.length > 0 ? ok(undefined) : err('Select current regression tests before recovery.')
+}
+
+async function confirmRegressionCommand(path: string, command: { args: string[], paths: string[] }, signal: AbortSignal, runCommand: RecoveryCommand): Promise<Result<void, string>> {
   const sourceReporter = fileURLToPath(new URL('./repair-regression-reporter.ts', import.meta.url))
   const installedReporter = existsSync(sourceReporter)
     ? sourceReporter
@@ -1110,7 +1181,7 @@ export async function confirmRepairRecoveryRegression(path: string, regressionPa
     await mkdir(evidenceDirectory)
     await copyFile(installedReporter, reporter)
     // Assertion failures are expected. The isolated reporter supplies their category.
-    await runCommand({ workspace: path, command: 'pnpm', args: ['exec', 'vitest', 'run', `--reporter=${reporter}`, `--outputFile=${evidenceFile}`, ...regressionPaths], signal, readOnlyPaths: [reporterDirectory], writablePaths: [evidenceDirectory] })
+    await runCommand({ workspace: path, command: 'pnpm', args: [...command.args, '--run', `--reporter=${reporter}`, `--outputFile=${evidenceFile}`, ...command.paths], signal, readOnlyPaths: [reporterDirectory], writablePaths: [evidenceDirectory] })
     output = await readFile(evidenceFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT')
         return undefined
@@ -1139,9 +1210,14 @@ export async function confirmRepairRecoveryRegression(path: string, regressionPa
 }
 
 export async function runRepairRecoveryChecks(path: string, regressionPaths: string[], signal: AbortSignal, runCommand: RecoveryCommand = runRecoveryCommand): Promise<Result<string[], string>> {
+  const tests = await repairRecoveryTestCommands(path, regressionPaths)
+  if (tests._tag === 'Err')
+    return tests
+  if (tests.value.length === 0)
+    return err('Select current regression tests before recovery.')
   const commands: Array<{ command: string, args: string[] }> = [
     { command: 'pnpm', args: ['install', '--frozen-lockfile'] },
-    { command: 'pnpm', args: ['exec', 'vitest', 'run', ...regressionPaths] },
+    ...tests.value.flatMap(test => [...test.prepare, [...test.args, '--run', ...test.paths]].map(args => ({ command: 'pnpm', args }))),
     { command: 'check', args: [] },
   ]
   const manifest: unknown = JSON.parse(await readFile(join(path, 'package.json'), 'utf8'))
