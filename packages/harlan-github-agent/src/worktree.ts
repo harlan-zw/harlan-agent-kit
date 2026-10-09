@@ -1220,13 +1220,21 @@ export async function runRepairRecoveryChecks(path: string, regressionPaths: str
   const commands: Array<{ command: string, args: string[] }> = [
     { command: 'pnpm', args: ['install', '--frozen-lockfile'] },
     ...tests.value.flatMap(test => [...test.prepare, [...test.args, '--run', ...test.paths]].map(args => ({ command: 'pnpm', args }))),
-    { command: 'check', args: [] },
   ]
   const manifest: unknown = JSON.parse(await readFile(join(path, 'package.json'), 'utf8'))
   if (typeof manifest !== 'object' || manifest === null)
     return err('The recovery repository has no package manifest.')
   const scripts = (manifest as { scripts?: unknown }).scripts
-  if (typeof scripts === 'object' && scripts !== null && typeof (scripts as { build?: unknown }).build === 'string')
+  const declared = (name: string) => typeof scripts === 'object' && scripts !== null && typeof (scripts as Record<string, unknown>)[name] === 'string'
+  const fullChecks = declared('check')
+    ? ['check']
+    : ['lint', 'typecheck', declared('test:run') ? 'test:run' : 'test'].filter(declared)
+  if (fullChecks.length === 0)
+    return err('The recovery repository declares no check scripts.')
+  if (declared('dev:prepare'))
+    commands.push({ command: 'pnpm', args: ['run', 'dev:prepare'] })
+  commands.push(...fullChecks.map(name => ({ command: 'pnpm', args: ['run', name] })))
+  if (declared('build'))
     commands.push({ command: 'pnpm', args: ['build'] })
   const checks: string[] = []
   for (const command of commands) {
