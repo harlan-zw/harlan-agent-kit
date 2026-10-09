@@ -147,6 +147,8 @@ Return one evidence-based finding for every material consequence of a wrong prem
 Return every material defect.
 Score each finding's impact from 0 to 100 if the pull request merges unfixed. Weigh user harm, likelihood, blast radius, and reversibility.
 An impact of 81 to 100 calls for Repair or Dismissal. An impact of 0 to 80 is logged without Repair.
+For a Logged finding, include the proposed improvement in its summary as an optional follow-up.
+Optional follow-ups never block Review or start automatic Repair.
 Use 81 to 90 for common broken paths or wrong results without a practical workaround.
 Use 91 to 100 for credible data loss, security bypass, or broad outage.
 Use 0 to 80 for limited, recoverable defects.
@@ -1101,7 +1103,7 @@ export function terminalComment(headSha: string, baseSha: string, gates: ReviewG
     const sentence = `${summary}${/[.!?]$/.test(summary) ? '' : '.'}`
     const link = reviewFindingCodeLink(repository, headSha, finding)
     if (finding._tag === 'Logged')
-      return `- **Logged (${finding.impact}/100):** ${sentence}${link}`
+      return `- **Logged (${finding.impact}/100):** ${sentence}${link} Optional follow-up.`
     const score = finding.impact === undefined ? '' : ` (${finding.impact}/100)`
     return finding.resolution === 'Dismissal'
       ? `- **Dismissal recommended${score}:** ${sentence}${link} Next: ${cleanLine(finding.nextAction)}`

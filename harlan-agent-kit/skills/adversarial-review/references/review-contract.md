@@ -22,6 +22,8 @@ Check:
 Do not report style preferences. Record credible defects with an impact score from 0 to 100.
 Score harm if merged unfixed. Consider likelihood, affected users, blast radius, and reversibility.
 Scores from 81 to 100 require action. Scores from 0 to 80 stay Logged without Repair.
+Logged findings are optional follow-ups. Include the proposed improvement in their summary.
+They never block Review or start automatic Repair.
 Do not raise a score to trigger Repair. Visible UI defects can qualify when they harm use.
 Use 81 to 90 for common broken paths or wrong results without a practical workaround.
 Use 91 to 100 for credible data loss, security bypass, or broad outage.
@@ -129,7 +131,7 @@ When Review found issues, show each finding once:
 
 ```markdown
 - **Fixed:** SHORT_DESCRIPTION
-- **Logged (IMPACT/100):** SHORT_DESCRIPTION
+- **Logged (IMPACT/100):** SHORT_DESCRIPTION. Optional follow-up.
 - **Open (IMPACT/100):** SHORT_DESCRIPTION. Next: NEXT_ACTION
 - **Dismissal recommended (IMPACT/100):** SHORT_DESCRIPTION. Next: Dismiss this pull request.
 ```

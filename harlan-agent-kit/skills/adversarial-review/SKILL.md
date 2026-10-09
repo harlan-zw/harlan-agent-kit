@@ -115,6 +115,8 @@ Record every evidence-backed finding. Never cap the finding count.
 
 Give each finding an impact score, stable identity, exact location, and proof.
 Only findings above 80 receive a next action and `Repair` or `Dismissal` resolution.
+Describe findings at 80 or below as optional follow-ups. Include the proposed improvement in their summary.
+They never block Review or start automatic Repair.
 
 Decide the pull request premise once before classifying findings.
 
@@ -140,6 +142,8 @@ When the premise is sound and findings above 80 remain, queue one fresh Repair A
 For an outside contributor, use the existing Approval. A new external Revision invalidates Approval. The exact controller repair commit continues the workflow.
 
 The Repair Agent writes each failing regression test first. It fixes every actionable finding, then runs focused checks. The controller verifies and publishes the artifact.
+Publishing a finding comment does not complete an authorized Repair.
+Finish the fix, or report the exact blocker and next action.
 
 Repair uses the [focused check recipes](../../references/focused-checks.md) for logs, declared preparation, search, and lockfiles.
 
