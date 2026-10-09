@@ -14,6 +14,7 @@ export interface RepairRecoveryProof {
 }
 
 export interface RepairRecoveryTarget {
+  stateTag: 'Failed' | 'ActionRequired'
   task: Omit<ClaimedReviewFixTask, 'state'>
   fence: number
   proof: RepairRecoveryProof

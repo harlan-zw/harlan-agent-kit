@@ -6,6 +6,31 @@ import process from 'node:process'
 import { expect, it } from 'vitest'
 import { confirmRepairRecoveryRegression, runRepairRecoveryChecks } from '../src/worktree.ts'
 
+it('accepts a current assertion failure alongside passing tests in another package', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'repair-package-evidence-'))
+  try {
+    symlinkSync(resolve(import.meta.dirname, '../../../node_modules'), join(root, 'node_modules'))
+    writeFileSync(join(root, 'package.json'), '{"name":"repository","type":"module","private":true}')
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'verifyDepsBeforeRun: false\n')
+    for (const name of ['failing', 'passing']) {
+      const directory = join(root, name)
+      mkdirSync(directory)
+      writeFileSync(join(directory, 'package.json'), JSON.stringify({ name, type: 'module', scripts: { test: 'vitest run' } }))
+      writeFileSync(join(directory, 'vitest.config.ts'), 'export default { test: { include: ["*.test.ts"] } }')
+      writeFileSync(join(directory, 'selected.test.ts'), `import { it, expect } from "vitest"; it("preserves input", () => expect(1).toBe(${name === 'failing' ? 2 : 1}))`)
+    }
+    const result = await confirmRepairRecoveryRegression(root, ['failing/selected.test.ts', 'passing/selected.test.ts'], AbortSignal.timeout(20_000), input => new Promise((resolve, reject) => {
+      execFile(input.command, input.args, { cwd: input.workspace, signal: input.signal }, error => error !== null && typeof error.code !== 'number'
+        ? reject(error)
+        : resolve({ exitCode: typeof error?.code === 'number' ? error.code : 0 }))
+    }))
+    expect(result).toEqual({ _tag: 'Ok', value: undefined })
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 30_000)
+
 it('rejects the worktree root as a selected test before running commands', async () => {
   const root = mkdtempSync(join(tmpdir(), 'repair-empty-path-'))
   let ran = false

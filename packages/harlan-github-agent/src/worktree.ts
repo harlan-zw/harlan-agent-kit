@@ -1151,6 +1151,7 @@ export async function confirmRepairRecoveryRegression(path: string, regressionPa
   const commands = await repairRecoveryTestCommands(path, regressionPaths)
   if (commands._tag === 'Err')
     return commands
+  let assertions = 0
   for (const command of commands.value) {
     for (const args of command.prepare) {
       if ((await runCommand({ workspace: path, command: 'pnpm', args, signal })).exitCode !== 0)
@@ -1159,11 +1160,12 @@ export async function confirmRepairRecoveryRegression(path: string, regressionPa
     const result = await confirmRegressionCommand(path, command, signal, runCommand)
     if (result._tag === 'Err')
       return result
+    assertions += result.value
   }
-  return commands.value.length > 0 ? ok(undefined) : err('Select current regression tests before recovery.')
+  return assertions > 0 ? ok(undefined) : err('The selected regression tests must fail on the current base without setup errors.')
 }
 
-async function confirmRegressionCommand(path: string, command: { args: string[], paths: string[] }, signal: AbortSignal, runCommand: RecoveryCommand): Promise<Result<void, string>> {
+async function confirmRegressionCommand(path: string, command: { args: string[], paths: string[] }, signal: AbortSignal, runCommand: RecoveryCommand): Promise<Result<number, string>> {
   const sourceReporter = fileURLToPath(new URL('./repair-regression-reporter.ts', import.meta.url))
   const installedReporter = existsSync(sourceReporter)
     ? sourceReporter
@@ -1203,9 +1205,9 @@ async function confirmRegressionCommand(path: string, command: { args: string[],
   if (typeof report !== 'object' || report === null)
     return err('The selected regression report is invalid.')
   const result = report as { _tag?: unknown, assertions?: unknown, otherFailures?: unknown, setupFailed?: unknown, interrupted?: unknown }
-  return result._tag === 'RegressionEvidence' && typeof result.assertions === 'number' && result.assertions > 0
+  return result._tag === 'RegressionEvidence' && typeof result.assertions === 'number' && Number.isSafeInteger(result.assertions) && result.assertions >= 0
     && result.otherFailures === 0 && result.setupFailed === false && result.interrupted === false
-    ? ok(undefined)
+    ? ok(result.assertions)
     : err('The selected regression tests must fail on the current base without setup errors.')
 }
 

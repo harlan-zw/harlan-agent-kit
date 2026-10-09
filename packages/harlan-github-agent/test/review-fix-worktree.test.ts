@@ -113,7 +113,7 @@ describe('review fix worktree', () => {
     }
     const expectedBase = git(checkout, 'rev-parse', 'HEAD')
     git(checkout, 'push', 'origin', 'main')
-    const target: RepairRecoveryTarget = { task, fence: 1, proof: { _tag: 'RepairRecovery', commitSha, originalFence: 1, originalFailure: 'saved pin' }, report: { summary: 'Keep input', checks: ['prior checks'] } }
+    const target: RepairRecoveryTarget = { stateTag: 'Failed', task, fence: 1, proof: { _tag: 'RepairRecovery', commitSha, originalFence: 1, originalFailure: 'saved pin' }, report: { summary: 'Keep input', checks: ['prior checks'] } }
     if (mode === 'wrong-ref')
       git(checkout, 'branch', '-f', branch, parentSha)
     task.state = { ...task.state, fence: 2 }
