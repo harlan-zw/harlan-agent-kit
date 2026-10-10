@@ -4,6 +4,8 @@ description: "Build or polish Nuxt UI v4+ pages and design systems. Use for land
 user_invocable: true
 argument-hint: "[component/page/area]"
 effort: max
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Nuxt Frontend Design

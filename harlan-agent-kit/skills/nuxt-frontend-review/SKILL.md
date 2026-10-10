@@ -5,6 +5,8 @@ user_invocable: true
 argument-hint: "[job-id] [inline]"
 effort: high
 allowed-tools: Read, Bash, Glob, Grep
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Frontend Review

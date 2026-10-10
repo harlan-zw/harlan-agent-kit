@@ -1,6 +1,8 @@
 ---
 name: perf-review
 description: Read a repository's stored performance Measurements, confirm which Benchmarks carry a Regression, and repair the cause. Use for the perf-review Routine and its Issue work.
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Performance review

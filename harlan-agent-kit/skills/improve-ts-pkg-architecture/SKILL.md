@@ -2,6 +2,8 @@
 name: improve-ts-pkg-architecture
 description: "Review architecture for a TypeScript package without nuxt.config.ts. Use for package-native refactors, exports, workspaces, module boundaries, and testability."
 effort: high
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Improve TS Package Architecture

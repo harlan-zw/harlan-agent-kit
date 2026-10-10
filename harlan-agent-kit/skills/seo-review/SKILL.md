@@ -1,6 +1,8 @@
 ---
 name: seo-review
 description: Read a Site's ranked NuxtSEO actions through the nuxtseo CLI, confirm which ones this repository can fix, and repair the cause. Use for the seo-review Routine and its Issue work.
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # SEO review

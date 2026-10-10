@@ -2,6 +2,8 @@
 name: browser
 description: "Use Harlan's browsers with the correct identity. Use before browser testing, signed-in automation, screenshots, or Chrome connection recovery. Covers prompt-free Clients and Agent Chrome, shared Harlan Chrome, dev-browser, and tab cleanup."
 user_invocable: true
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Browser

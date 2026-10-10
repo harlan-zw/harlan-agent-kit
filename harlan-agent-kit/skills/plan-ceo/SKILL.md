@@ -6,6 +6,8 @@ context: fork
 agent: Plan
 effort: high
 argument-hint: "[feature-name]"
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # /plan-ceo -- Strategic Product & Scope Review

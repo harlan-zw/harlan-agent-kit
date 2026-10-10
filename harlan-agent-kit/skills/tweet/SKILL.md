@@ -3,6 +3,8 @@ name: tweet
 description: "Find tweet ideas, plan launch posts, and draft or polish tweets with code cards, stat cards, or screenshot wraps. Use for content strategy, what to post, when to post, or an X post."
 argument-hint: "[draft, topic, release notes, screenshot, or ideas]"
 user_invocable: true
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Tweet Skill

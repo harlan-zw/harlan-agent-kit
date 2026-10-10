@@ -1,6 +1,8 @@
 ---
 name: pr-triage
 description: "Triage all open pull requests in Harlan-owned repositories. Use to repair, rank, sign off, or decide merge order across the PR backlog."
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # PR Triage

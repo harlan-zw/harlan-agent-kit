@@ -1,6 +1,8 @@
 ---
 name: sentry-checkin
 description: "Triage and repair all open Sentry issues across Harlan's sites. Use for Sentry check-ins, production error backlogs, and verified repair PRs."
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Sentry Check-in

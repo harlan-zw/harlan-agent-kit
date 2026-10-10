@@ -3,6 +3,8 @@ name: unit-tests
 description: "Write or review unit tests through exported behavior. Use for new tests, bug-fix regression tests, coverage, replacing brittle implementation checks, or a test that went red because behaviour changed on purpose."
 user_invocable: true
 argument-hint: "[file or directory to test or review]"
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Unit Tests

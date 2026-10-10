@@ -3,6 +3,8 @@ name: brand-lab
 description: "Explore brand directions for a product on one private HTML page: a logo and small UI motifs, three or more variations each, with picks and rationale. Use when the user wants to rethink or strengthen a brand, logo, or brand motif, compare brand variations side by side, or says the branding feels basic."
 user_invocable: true
 argument-hint: "[product or repository] [reference brands]"
+license: MIT
+compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Brand Lab
