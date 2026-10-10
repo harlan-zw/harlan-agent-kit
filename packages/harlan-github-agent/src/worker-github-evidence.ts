@@ -26,7 +26,7 @@ export interface RoutineGitHubEvidence {
   jobLogs: JobLogSnapshot
 }
 export interface RoutineGitHubEvidenceSource {
-  collect: (mapping: RepositoryMapping, signal: AbortSignal, includeSuccessfulJobs?: boolean) => Promise<RoutineGitHubEvidence>
+  collect: (mapping: RepositoryMapping, signal: AbortSignal, includeSuccessfulJobs?: boolean, workflowBranch?: string) => Promise<RoutineGitHubEvidence>
 }
 
 type Read = (path: string) => Promise<Result<unknown, string>>
@@ -50,9 +50,10 @@ function section(input: unknown, fields: readonly string[], excludePullRequests 
 }
 
 /** Only allowlisted metadata reaches a Routine. An unreadable section never becomes an empty success. */
-export async function collectRoutineGitHubEvidence(input: { repository: string, read: Read, now: () => Date, readJob?: (id: number) => Promise<Result<FailedJobContext, string>>, includeSuccessfulJobs?: boolean }): Promise<RoutineGitHubEvidence> {
+export async function collectRoutineGitHubEvidence(input: { repository: string, read: Read, now: () => Date, readJob?: (id: number) => Promise<Result<FailedJobContext, string>>, includeSuccessfulJobs?: boolean, workflowBranch?: string }): Promise<RoutineGitHubEvidence> {
   const base = `/repos/${input.repository}`
-  const paths = [`${base}/issues?state=open&per_page=21`, `${base}/pulls?state=open&per_page=21`, `${base}/actions/runs?per_page=21`, `${base}/deployments?per_page=21`]
+  const branch = input.workflowBranch === undefined ? '' : `&branch=${encodeURIComponent(input.workflowBranch)}`
+  const paths = [`${base}/issues?state=open&per_page=21`, `${base}/pulls?state=open&per_page=21`, `${base}/actions/runs?per_page=${input.workflowBranch === undefined ? 21 : 10}${branch}`, `${base}/deployments?per_page=21`]
   const results = await Promise.all(paths.map(path => input.read(path)))
   const select = (index: number, fields: readonly string[], key?: string): Section => {
     const result = results[index]!
@@ -68,7 +69,7 @@ export async function collectRoutineGitHubEvidence(input: { repository: string, 
         const result = await input.read(`${base}/deployments/${entry.id}/statuses?per_page=1`)
         return { deploymentId: entry.id as number, evidence: result._tag === 'Err' ? { _tag: 'Unavailable' as const, reason: safeText(result.error) } : section(result.value, ['state', 'created_at', 'description']) }
       }))
-  const workflowRuns = select(2, ['id', 'name', 'head_sha', 'status', 'conclusion', 'html_url', 'created_at'], 'workflow_runs')
+  const workflowRuns = select(2, ['id', 'name', 'head_sha', 'head_branch', 'status', 'conclusion', 'html_url', 'created_at', 'updated_at'], 'workflow_runs')
   const jobLogs: JobLogSnapshot = input.readJob === undefined ? { _tag: 'NotRequested' } : await collectRoutineJobLogs(input, workflowRuns)
   return {
     observedAt: input.now().toISOString(),
@@ -124,7 +125,7 @@ function safeJob(job: FailedJobContext): FailedJobContext {
 
 export function createRoutineGitHubEvidenceSource(options: { tokens: GitHubTokenProvider, now: () => Date, jobs: Pick<GitHubAgentSource, 'getFailedJobContext'>, createClient?: Parameters<typeof createAuthenticatedClient>[0]['createClient'] }): RoutineGitHubEvidenceSource {
   return {
-    async collect(mapping, signal, includeSuccessfulJobs) {
+    async collect(mapping, signal, includeSuccessfulJobs, workflowBranch) {
       const repository = mapping.github
       const clients = new Map<GitHubRepositoryAccess, Promise<Result<Octokit, string>>>()
       const read: Read = async (path) => {
@@ -143,7 +144,7 @@ export function createRoutineGitHubEvidenceSource(options: { tokens: GitHubToken
           .then(response => ok(response.data as unknown))
           .catch((error: unknown) => err(error instanceof Error ? error.message : String(error)))
       }
-      return collectRoutineGitHubEvidence({ repository, read, now: options.now, includeSuccessfulJobs: includeSuccessfulJobs ?? false, readJob: id => options.jobs.getFailedJobContext(mapping, id, signal) })
+      return collectRoutineGitHubEvidence({ repository, read, now: options.now, includeSuccessfulJobs: includeSuccessfulJobs ?? false, ...(workflowBranch === undefined ? {} : { workflowBranch }), readJob: id => options.jobs.getFailedJobContext(mapping, id, signal) })
     },
   }
 }
