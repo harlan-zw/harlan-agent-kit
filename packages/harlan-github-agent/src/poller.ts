@@ -25,9 +25,11 @@ export interface PollerOptions {
 }
 
 export function createPoller(options: PollerOptions): Poller {
-  let stopped = true
+  let lifecycle: 'Manual' | 'Started' | 'Stopped' = 'Manual'
   let timer: NodeJS.Timeout | undefined
   let active: Promise<void> = Promise.resolve()
+  /** Requests before a pass starts share its promise, including one trailing pass. */
+  let pending: Promise<void> | undefined
   let controller: AbortController | undefined
   let consecutiveFailures = 0
   /** Passes that ran out of time and are still settling in the background. */
@@ -60,31 +62,39 @@ export function createPoller(options: PollerOptions): Poller {
   })
 
   const runNow = (): Promise<void> => {
-    if (abandoned > maximumAbandonedPasses) {
-      options.onError(new Error(`${abandoned} abandoned poll passes are still settling, so this pass was skipped.`))
-      // Resolved, never the pending pass. Returning `active` here would stop the
-      // caller rescheduling until the hung pass settled, which is the wedge.
+    if (lifecycle === 'Stopped')
       return Promise.resolve()
-    }
-    const passController = new AbortController()
-    controller = passController
+    if (pending !== undefined)
+      return pending
     active = active
-      .then(() => withTimeout(
-        options.poll(passController.signal),
-        () => passController.abort(),
-      ))
       .then(() => {
-        consecutiveFailures = 0
+        pending = undefined
+        if (lifecycle === 'Stopped')
+          return
+        // Check at execution time. The preceding pass may have been abandoned.
+        if (abandoned > maximumAbandonedPasses) {
+          options.onError(new Error(`${abandoned} abandoned poll passes are still settling, so this pass was skipped.`))
+          return
+        }
+        const passController = new AbortController()
+        controller = passController
+        return withTimeout(
+          options.poll(passController.signal),
+          () => passController.abort(),
+        ).then(() => {
+          consecutiveFailures = 0
+        })
       })
       .catch((error) => {
         consecutiveFailures += 1
         options.onError(error)
       })
+    pending = active
     return active
   }
 
   const schedule = (): void => {
-    if (stopped)
+    if (lifecycle !== 'Started')
       return
     const baseDelay = Math.min(
       options.intervalMilliseconds * 2 ** Math.min(consecutiveFailures, 5),
@@ -97,14 +107,14 @@ export function createPoller(options: PollerOptions): Poller {
   }
 
   const start = (): void => {
-    if (!stopped)
+    if (lifecycle === 'Started')
       return
-    stopped = false
+    lifecycle = 'Started'
     void runNow().finally(schedule)
   }
 
   const stop = async (): Promise<void> => {
-    stopped = true
+    lifecycle = 'Stopped'
     if (timer !== undefined)
       clearTimeout(timer)
     controller?.abort()
