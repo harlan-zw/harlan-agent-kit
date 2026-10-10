@@ -1514,6 +1514,7 @@ export type IncidentScope
  */
 export type IncidentKind
   = | 'github_unavailable'
+    | 'resource_limit'
     | 'github_access'
     | 'rate_limit'
     | 'network'

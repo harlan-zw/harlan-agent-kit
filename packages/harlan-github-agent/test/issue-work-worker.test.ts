@@ -218,7 +218,7 @@ describe('issue work worker', () => {
     expect(committed).toBe(false)
   })
 
-  it('resumes triage through personal authentication and prepares repository metadata', async () => {
+  it.each([1, 2])('prepares repository metadata with a fresh session on retry fence %i', async (fence) => {
     const repository = repositoryMapping({ authentication: 'user', ownership: 'maintained', conflictResolution: false })
     const issue = issueItem()
     const capture: ProviderCapture = { requests: [] }
@@ -280,7 +280,7 @@ Closes #12.`,
       repository: repository.github,
       issueNumber: issue.number,
       revisionId: 'revision-1',
-      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
+      state: { _tag: 'Running', workerId: 'worker-1', fence, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
       updatedAt: '2026-08-13T01:00:00.000Z',
       repositoryMapping: repository,
       issue,
@@ -289,7 +289,7 @@ Closes #12.`,
     expect(capture.requests).toEqual([expect.objectContaining({
       model: 'gpt-5.6-terra',
       reasoningEffort: 'medium',
-      sessionId: 'triage-session',
+      sessionId: fence === 1 ? 'triage-session' : null,
       workspace: '/tmp/issue-work',
     })])
     expect(snapshotReads).toBe(2)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
-import { contextBudgetExhaustedReason } from '../src/failure.ts'
+import { contextBudgetExhaustedReason, MEMORY_BUDGET_EXHAUSTED } from '../src/failure.ts'
 import { replaceServiceIncidents } from '../src/service.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -16,6 +16,35 @@ function createStore() {
 }
 
 describe('incident log', () => {
+  it.each(['review', 'conflict'] as const)('keeps memory recovery bounded during %s observations', (kind) => {
+    const store = createStore()
+    const at = (second: number) => new Date(Date.parse('2026-08-18T00:00:00Z') + second * 1000).toISOString()
+    store.syncRepositories([repositoryMapping()], at(0))
+    const subject = pullRequestItem({ mergeState: kind === 'review' ? 'clean' : 'conflicting' })
+    const observe = (second: number) => store.recordObservation({ externalId: `memory-${second}`, observedAt: at(second), source: 'poll', subject })
+    const claim = (second: number) => kind === 'review'
+      ? store.claimNextAdversarialReviewTask('worker', at(second), 600_000)
+      : store.claimNextConflictTask('worker', at(second), 600_000)
+    observe(1)
+    const task = claim(2)!
+    const fail = kind === 'review' ? store.failWorkerTask : store.failTask
+    expect(fail({ taskId: task.id, workerId: 'worker', fence: task.state.fence, at: at(3), reason: MEMORY_BUDGET_EXHAUSTED })).toBe('Failed')
+    observe(4)
+    expect(claim(5)).toBeNull()
+    observe(63)
+    const retry = claim(64)!
+    expect(retry).toMatchObject({ id: task.id, state: { fence: task.state.fence + 1 } })
+    expect(fail({ taskId: retry.id, workerId: 'worker', fence: retry.state.fence, at: at(65), reason: MEMORY_BUDGET_EXHAUSTED })).toBe('Failed')
+    observe(1000)
+    store.recordPollFailure(subject.repository, at(1001), 'fetch failed')
+    store.recordPollSuccess(subject.repository, at(1002))
+    expect(store.restoreOutageRecoveryBudget(at(1003))).toBe(0)
+    expect(store.retryRecoverableWorkerFailures(at(1004))).toBe(0)
+    expect(claim(1005)).toBeNull()
+    expect(store.listIncidents()).toMatchObject([{ kind: 'resource_limit', recovery: { _tag: 'Exhausted' } }])
+    store.close()
+  })
+
   it('clears a worktree sweep incident after the next clean sweep', () => {
     const store = createStore()
 

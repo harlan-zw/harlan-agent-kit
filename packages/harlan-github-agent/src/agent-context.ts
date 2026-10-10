@@ -387,6 +387,8 @@ export function checkBudgetLines(scope: CheckScope): string {
     : ''
   return `Check budget: ${scope}
 ${fullSuiteRule}${lastResort}
+Run checks serially. Use one test worker and disable file parallelism when the test runner supports it.
+Stop each dev server after its focused check. Do not leave builds or test runners running in the background.
 Run test commands without pipes. If you pipe output, set pipefail in the same shell command and report the program's exit code.
 For complete logs without pipes, use the installed agent-check.ts <plan.json>. Put its plan and logs in scratch.
 The JSON plan has prerequisites (argv arrays), check (one argv array), and logDirectory. It stops on the first nonzero exit.
