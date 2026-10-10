@@ -38,7 +38,7 @@ export interface AgentAppOptions {
   /** The bounds of the Agent slot control. Absent means the control is unavailable. */
   agentSlots?: AgentSlotLimits
   setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity
-  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead'>
+  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead'>
   allowedOrigin: string
   /**
    * The service's own listen address, such as `http://127.0.0.1:3210`. The
@@ -419,6 +419,18 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     return item
   })
 
+  app.get('/api/items/issue-status', (event) => {
+    const query = new URL(event.req.url).searchParams
+    const repository = query.get('repository')
+    const number = Number(query.get('number'))
+    if (repository === null || !/^[^/]+\/[^/]+$/.test(repository) || !Number.isSafeInteger(number) || number < 1)
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'Set valid repository and number query values.' })
+    const item = options.store.getOpenIssueStatus(repository, number)
+    if (item === null)
+      throw createError({ status: 404, statusText: 'Not Found', message: 'The open issue is not tracked.' })
+    return item
+  })
+
   app.post('/api/desktop/capacity', async (event) => {
     if (options.desktop === undefined)
       throw createError({ statusCode: 503, message: 'Desktop execution is unavailable.' })
@@ -668,6 +680,26 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       case 'ApprovalNotRequired': throw createError({ status: 409, statusText: 'Conflict', message: 'This issue does not require local approval.' })
       case 'NothingToStart': throw createError({ status: 409, statusText: 'Conflict', message: 'Nothing on this issue is waiting for approval.' })
       case 'NotAuthorized': throw createError({ status: 409, statusText: 'Conflict', message: 'Repository policy does not permit issue work.' })
+    }
+  })
+
+  app.post('/api/issues/rerun-triage', async (event) => {
+    const body = issueApprovalRequest(await event.req.json().catch(() => {
+      // The parser reports malformed JSON as a bad request.
+      return undefined
+    }))
+    if (body === undefined)
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'Set a valid repository, issue number, and Revision ID.' })
+    const result = options.store.requestIssueTriageRerun({ ...body, at: options.now().toISOString() })
+    if (result._tag !== 'Rejected')
+      return new Response(JSON.stringify(result), { status: 202, headers: { 'content-type': 'application/json' } })
+    switch (result.reason._tag) {
+      case 'ItemNotFound': throw createError({ status: 404, statusText: 'Not Found', message: 'The issue is no longer open.' })
+      case 'RevisionMismatch': throw createError({ status: 409, statusText: 'Conflict', message: 'The issue changed. Refresh before rerunning triage.' })
+      case 'Dismissed': throw createError({ status: 409, statusText: 'Conflict', message: 'The issue is dismissed.' })
+      case 'NotAuthorized': throw createError({ status: 409, statusText: 'Conflict', message: 'Repository policy does not permit Issue triage.' })
+      case 'ApprovalRequired': throw createError({ status: 409, statusText: 'Conflict', message: 'Approve this issue Revision before rerunning triage.' })
+      case 'WorkActive': throw createError({ status: 409, statusText: 'Conflict', message: 'Issue work is active. Wait before rerunning triage.' })
     }
   })
 

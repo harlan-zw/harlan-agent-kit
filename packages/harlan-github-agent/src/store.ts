@@ -55,6 +55,7 @@ import type {
   IncidentRecovery,
   IncidentScope,
   IssueApprovalResult,
+  IssueTriageRerunResult,
   IssueTriageTask,
   IssueWorkTask,
   ItemDismissalResult,
@@ -919,6 +920,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   isItemDismissed: (github: string, kind: GitHubItem['kind'], itemNumber: number) => boolean
   /** Exact open pull request state, including Items beyond the dashboard limit. */
   getOpenPullRequestStatus: (github: string, pullRequestNumber: number) => { headSha: string, dismissed: boolean } | null
+  getOpenIssueStatus: (github: string, issueNumber: number) => { revisionId: string, dismissed: boolean } | null
   /** Whether the routines table names one issue as a Routine's tracking issue. */
   isRoutineTrackingIssue: (github: string, issueNumber: number) => boolean
   /** Pull requests absent from the next open snapshot need one exact final GitHub read. */
@@ -1219,6 +1221,12 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   /** Atomically stores a refreshed Review and its published GitHub projection. */
   supersedeReviewRun: (input: SupersedeReviewRunInput) => SupersedeReviewRunResult
   recordReviewPublication: (input: RecordReviewPublicationInput) => RecordReviewPublicationResult
+  requestIssueTriageRerun: (input: {
+    repository: string
+    issueNumber: number
+    revisionId: string
+    at: string
+  }) => IssueTriageRerunResult
   requestReviewRerun: (input: {
     repository: string
     pullRequestNumber: number
@@ -7673,6 +7681,92 @@ export function openJournalStore(
     }
   }
 
+  const requestIssueTriageRerun: JournalStore['requestIssueTriageRerun'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = database.prepare(`
+        SELECT subjects.id AS subject_id, subjects.current_revision_id,
+          revisions.payload, repositories.policy_json, repositories.paused,
+          repositories.writes_enabled, worker_tasks.id AS task_id,
+          worker_tasks.state_tag, worker_tasks.fence
+        FROM subjects
+        JOIN repositories ON repositories.id = subjects.repository_id
+        JOIN revisions ON revisions.id = subjects.current_revision_id
+        LEFT JOIN worker_tasks ON worker_tasks.subject_id = subjects.id
+          AND worker_tasks.revision_id = subjects.current_revision_id AND worker_tasks.kind = 'issue_triage'
+        WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'issue'
+      `).get(input.repository, input.issueNumber) as {
+        subject_id: number
+        current_revision_id: string
+        payload: string
+        policy_json: string
+        paused: number
+        writes_enabled: number
+        task_id: string | null
+        state_tag: Exclude<TaskRow['state_tag'], 'Publishing'> | null
+        fence: number | null
+      } | undefined
+      const issue = row === undefined ? undefined : JSON.parse(row.payload) as Extract<GitHubItem, { kind: 'issue' }>
+      const mapping = row === undefined ? undefined : JSON.parse(row.policy_json) as RepositoryMapping
+      const rejection = (): Extract<IssueTriageRerunResult, { _tag: 'Rejected' }>['reason'] | undefined => {
+        if (row === undefined || issue?.state !== 'open')
+          return { _tag: 'ItemNotFound' }
+        if (row.current_revision_id !== input.revisionId)
+          return { _tag: 'RevisionMismatch' }
+        if (issue.routineTracking || routineTrackingIssueInDatabase(database, input.repository, input.issueNumber))
+          return { _tag: 'NotAuthorized' }
+        if (database.prepare('SELECT 1 FROM item_dismissals WHERE subject_id = ?').get(row.subject_id) !== undefined)
+          return { _tag: 'Dismissed' }
+        if (mapping === undefined || !canWorkIssues(mapping) || row.paused === 1 || (mutationsEnabled && row.writes_enabled !== 1))
+          return { _tag: 'NotAuthorized' }
+        if (requiresIssueApproval(mapping, issue) && !hasIssueApproval(database, row.subject_id, input.revisionId))
+          return { _tag: 'ApprovalRequired' }
+        if (database.prepare(`
+          SELECT 1 FROM tasks WHERE subject_id = ? AND kind = 'issue_work'
+            AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+        `).get(row.subject_id) !== undefined) {
+          return { _tag: 'WorkActive' }
+        }
+      }
+      const reason = rejection()
+      if (reason !== undefined || row === undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: reason ?? { _tag: 'ItemNotFound' } }
+      }
+      if (row.task_id !== null && (row.state_tag === 'Queued' || row.state_tag === 'Running')) {
+        database.exec('COMMIT')
+        return { _tag: 'AlreadyQueued', taskId: row.task_id }
+      }
+      const taskId = row.task_id ?? digest(`${input.repository}:issue:${input.issueNumber}:${input.revisionId}:issue_triage`)
+      if (row.task_id === null) {
+        database.prepare(`
+          INSERT INTO worker_tasks (id, subject_id, revision_id, kind, state_tag, updated_at)
+          VALUES (?, ?, ?, 'issue_triage', 'Queued', ?)
+        `).run(taskId, row.subject_id, input.revisionId, input.at)
+      }
+      else {
+        database.prepare(`
+          UPDATE worker_tasks SET state_tag = 'Queued', reason = NULL, evidence = NULL, attempts = 0,
+            worker_id = NULL, lease_expires_at = NULL, progress_percent = 0,
+            progress_label = 'Starting', updated_at = ? WHERE id = ?
+        `).run(input.at, taskId)
+        database.prepare('DELETE FROM task_cancellations WHERE task_id = ?').run(taskId)
+      }
+      database.prepare('DELETE FROM issue_triage_runs WHERE subject_id = ? AND revision_id = ?').run(row.subject_id, input.revisionId)
+      // Persist the Agent route so later polls cannot restore a cached classification.
+      insertIssueTriageRun(database, row.subject_id, input.revisionId, { _tag: 'AgentTriage', reason: 'Issue triage rerun requested.' }, input.at)
+      database.prepare('UPDATE issue_triage_runs SET reason = ? WHERE subject_id = ? AND revision_id = ?')
+        .run('Issue triage rerun requested.', row.subject_id, input.revisionId)
+      recordWorkerTransition(database, { taskId, from: row.state_tag, to: 'Queued', reason: 'Issue triage rerun requested.', fence: row.fence ?? 0, at: input.at })
+      database.exec('COMMIT')
+      return { _tag: 'Queued', taskId }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const requestReviewRerun: JournalStore['requestReviewRerun'] = (input) => {
     const revisionId = currentSameHeadRevision(database, input.revisionId)
     database.exec('BEGIN IMMEDIATE')
@@ -8314,6 +8408,20 @@ export function openJournalStore(
     JOIN repositories ON repositories.id = subjects.repository_id
     WHERE repositories.github = ? AND subjects.kind = ? AND subjects.github_number = ?
   `).get(github, kind, itemNumber) !== undefined
+
+  const getOpenIssueStatus: JournalStore['getOpenIssueStatus'] = (github, issueNumber) => {
+    const row = database.prepare(`
+      SELECT subjects.current_revision_id AS revision_id,
+        EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id) AS dismissed
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE repositories.github = ? AND repositories.enabled = 1
+        AND subjects.kind = 'issue' AND subjects.github_number = ?
+        AND json_extract(revisions.payload, '$.state') = 'open'
+    `).get(github, issueNumber) as { revision_id: string, dismissed: number } | undefined
+    return row === undefined ? null : { revisionId: row.revision_id, dismissed: row.dismissed === 1 }
+  }
 
   const getOpenPullRequestStatus: JournalStore['getOpenPullRequestStatus'] = (github, pullRequestNumber) => {
     const row = database.prepare(`
@@ -16416,6 +16524,7 @@ export function openJournalStore(
     isSafeToRestart,
     dismissItem,
     getOpenPullRequestStatus,
+    getOpenIssueStatus,
     getPullRequestWatchState,
     restoreItem,
     getSelectionMode,
@@ -16438,6 +16547,7 @@ export function openJournalStore(
     supersedeReviewRun,
     recordReviewPublication,
     requestReviewRerun,
+    requestIssueTriageRerun,
     requestPullRequestChange,
     resumeAgents,
     selectAgent,

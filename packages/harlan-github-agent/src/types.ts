@@ -307,6 +307,10 @@ export type IssueApprovalResult
     | { _tag: 'Duplicate', work: IssueApprovalWork, taskId: string }
     | { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' | 'RevisionMismatch' | 'ApprovalNotRequired' | 'NotAuthorized' | 'NothingToStart' } }
 
+export type IssueTriageRerunResult
+  = | { _tag: 'Queued' | 'AlreadyQueued', taskId: string }
+    | { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' | 'RevisionMismatch' | 'Dismissed' | 'NotAuthorized' | 'ApprovalRequired' | 'WorkActive' } }
+
 export type ReviewRerunSource = 'dashboard' | 'github_comment' | 'repair_dispute'
 
 export type ReviewRerunRejection

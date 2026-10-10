@@ -32,6 +32,44 @@ afterEach(async () => {
 })
 
 describe('harlan GitHub Agent control CLI', () => {
+  it.each(['valid', 'invalid', 'current'])('reruns triage only for an exact Issue Revision: %s', async (mode) => {
+    const directory = await mkdtemp(join(tmpdir(), 'harlan-triage-cli-'))
+    temporaryDirectories.push(directory)
+    const passwordFile = join(directory, 'password')
+    await writeFile(passwordFile, 'test-password-with-at-least-32-bytes\n', { mode: 0o600 })
+    const revisionId = mode === 'invalid' ? 'latest' : 'a'.repeat(64)
+    const requests: unknown[] = []
+    const receipt = { _tag: 'Queued', taskId: 'b'.repeat(64) }
+    const server = createServer(async (request, response) => {
+      if (request.method === 'GET') {
+        requests.push({ path: request.url })
+        response.setHeader('content-type', 'application/json')
+        response.end(JSON.stringify({ revisionId, dismissed: false }))
+        return
+      }
+      let body = ''
+      for await (const chunk of request) body += chunk
+      requests.push({ path: request.url, body: JSON.parse(body) })
+      response.setHeader('content-type', 'application/json')
+      response.statusCode = 202
+      response.end(JSON.stringify(receipt))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address() as AddressInfo
+    const result = await runControlCli(['control', 'rerun-issue', '--repository', 'harlan-zw/example', '--number', '12', ...(mode === 'current' ? [] : ['--revision', revisionId]), '--url', `http://127.0.0.1:${address.port}`, '--password-file', passwordFile])
+      .finally(() => new Promise<void>((resolve, reject) => server.close(error => error === undefined ? resolve() : reject(error))))
+    expect(result.code).toBe(mode === 'invalid' ? 1 : 0)
+    if (mode === 'invalid') {
+      expect(JSON.parse(result.stderr)._tag).toBe('InvalidIssueTarget')
+      expect(requests).toEqual([])
+      return
+    }
+    expect(JSON.parse(result.stdout)).toEqual(receipt)
+    expect(requests).toEqual([
+      ...(mode === 'current' ? [{ path: '/api/items/issue-status?repository=harlan-zw%2Fexample&number=12' }] : []),
+      { path: '/api/issues/rerun-triage', body: { repository: 'harlan-zw/example', issueNumber: 12, revisionId } },
+    ])
+  })
   it.each(['normal', 'logged-finding', 'invalid'])('cancels only supported Task identities: %s', async (mode) => {
     const directory = await mkdtemp(join(tmpdir(), 'harlan-recovery-cli-'))
     temporaryDirectories.push(directory)

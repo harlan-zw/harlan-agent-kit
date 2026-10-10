@@ -2,7 +2,7 @@ import type { PullRequestWatchOptions, PullRequestWatchState, PullRequestWatchTa
 import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 import type { Result } from './result.ts'
 import type { CancelTaskResult } from './store.ts'
-import type { AgentActivityItem, DashboardSnapshot, DashboardTask, Incident, RestartRequest, RoutineRun, StoredAgentControl, WorkflowEvent, WorkflowEventStream } from './types.ts'
+import type { AgentActivityItem, DashboardSnapshot, DashboardTask, Incident, IssueTriageRerunResult, RestartRequest, RoutineRun, StoredAgentControl, WorkflowEvent, WorkflowEventStream } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { parsePullRequestWatchTarget, watchPullRequestStream } from './pull-request-watch.ts'
 import { parseRepairRecoveryCandidate, parseRepairRecoveryResponse } from './repair-recovery.ts'
@@ -68,6 +68,8 @@ export interface ControlClient {
   update: () => Promise<Result<RestartRequest, ControlApiError>>
   cancelTask: (taskId: string) => Promise<Result<TaskCancellation, ControlApiError>>
   stopReview: (repository: string, pullRequestNumber: number, headSha: string) => Promise<Result<{ _tag: 'Stopped' | 'AlreadyStopped' }, ControlApiError>>
+  rerunIssueTriage: (repository: string, issueNumber: number, revisionId: string) => Promise<Result<Exclude<IssueTriageRerunResult, { _tag: 'Rejected' }>, ControlApiError>>
+  issueStatus: (repository: string, issueNumber: number) => Promise<Result<{ revisionId: string, dismissed: boolean }, ControlApiError>>
   /** Opens one run of a Routine for the current minute, ahead of its schedule. */
   runRoutine: (routineId: string) => Promise<Result<RoutineRun, ControlApiError>>
 }
@@ -168,6 +170,20 @@ function parseCancellation(value: unknown): Parsed<TaskCancellation> {
   if (input?._tag === 'Cancelled' || input?._tag === 'AlreadyCancelled')
     return ok({ _tag: input._tag })
   return err('The service returned an invalid Task cancellation.')
+}
+
+function parseIssueStatus(value: unknown): Parsed<{ revisionId: string, dismissed: boolean }> {
+  const input = record(value)
+  if (typeof input?.revisionId === 'string' && /^[a-f\d]{64}$/.test(input.revisionId) && typeof input.dismissed === 'boolean')
+    return ok({ revisionId: input.revisionId, dismissed: input.dismissed })
+  return err('The service returned invalid Issue status.')
+}
+
+function parseIssueTriageRerun(value: unknown): Parsed<Exclude<IssueTriageRerunResult, { _tag: 'Rejected' }>> {
+  const input = record(value)
+  if ((input?._tag === 'Queued' || input?._tag === 'AlreadyQueued') && typeof input.taskId === 'string' && /^[a-f\d]{64}$/.test(input.taskId))
+    return ok({ _tag: input._tag, taskId: input.taskId })
+  return err('The service returned an invalid Issue triage rerun result.')
 }
 
 function parseStoppedReview(value: unknown): Parsed<{ _tag: 'Stopped' | 'AlreadyStopped' }> {
@@ -320,6 +336,8 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
     update: () => request({ method: 'POST', path: 'api/service/update', body: { source: 'helper' }, parse: parseRestartRequest, acceptedStatuses: [202] }),
     cancelTask: taskId => request({ method: 'POST', path: 'api/tasks/cancel', body: { taskId }, parse: parseCancellation }),
     stopReview: (repository, pullRequestNumber, headSha) => request({ method: 'POST', path: 'api/reviews/stop', body: { repository, pullRequestNumber, headSha }, parse: parseStoppedReview }),
+    rerunIssueTriage: (repository, issueNumber, revisionId) => request({ method: 'POST', path: 'api/issues/rerun-triage', body: { repository, issueNumber, revisionId }, parse: parseIssueTriageRerun, acceptedStatuses: [202] }),
+    issueStatus: (repository, issueNumber) => request({ method: 'GET', path: `api/items/issue-status?${new URLSearchParams({ repository, number: String(issueNumber) })}`, parse: parseIssueStatus }),
     runRoutine: routineId => request({ method: 'POST', path: 'api/routines/run', body: { routineId }, parse: parseRoutineRun, acceptedStatuses: [202] }),
   })
 }

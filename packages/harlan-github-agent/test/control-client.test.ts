@@ -21,6 +21,24 @@ function clientWith(responses: Response[], requests: Request[]) {
 }
 
 describe('harlan GitHub Agent control client', () => {
+  it.each(['Queued', 'AlreadyQueued'])('reruns exact Issue triage: %s', async (_tag) => {
+    const requests: Request[] = []
+    const receipt = { _tag, taskId: 'b'.repeat(64) }
+    const created = clientWith([Response.json(receipt, { status: 202 })], requests)
+    if (created._tag === 'Err')
+      throw new Error(created.error.message)
+    expect(await created.value.rerunIssueTriage('harlan-zw/example', 12, 'a'.repeat(64))).toEqual({ _tag: 'Ok', value: receipt })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/issues/rerun-triage`)
+    expect(requests[0]?.headers.get('origin')).toBe(baseUrl)
+    expect(await requests[0]?.json()).toEqual({ repository: 'harlan-zw/example', issueNumber: 12, revisionId: 'a'.repeat(64) })
+  })
+
+  it('rejects malformed Issue triage acceptance', async () => {
+    const created = clientWith([Response.json({ _tag: 'Queued', taskId: '' }, { status: 202 })], [])
+    if (created._tag === 'Err')
+      throw new Error(created.error.message)
+    expect(await created.value.rerunIssueTriage('harlan-zw/example', 12, 'a'.repeat(64))).toMatchObject({ _tag: 'Err', error: { _tag: 'InvalidResponse' } })
+  })
   it.each([
     [{ _tag: 'Apply', taskId: `logged-finding:${'a'.repeat(64)}`, commitSha: 'b'.repeat(40), expectedBase: 'c'.repeat(40), repository: 'harlan-zw/example', pullRequestNumber: 24, reason: 'Failed' }],
     [{ _tag: 'Plan', taskId: 'another-task', commitSha: 'b'.repeat(40), repository: 'harlan-zw/example', pullRequestNumber: 24, reason: 'Failed' }],
