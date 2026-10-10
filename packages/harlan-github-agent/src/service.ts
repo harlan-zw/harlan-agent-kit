@@ -50,7 +50,7 @@ import { classifyFailure, isSubjectMovedReason } from './failure.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
 import { createGitHubMediaSource } from './github-media.ts'
-import { createGitHubRateLimitGate } from './github-rate-limit.ts'
+import { createGitHubRateLimitGate, readAfterGitHubRateLimit } from './github-rate-limit.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
 import { createUserAssetUploader } from './github-user-assets.ts'
 import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitHubWriteAccess, withGitHubWritePreflight } from './github-write-gate.ts'
@@ -368,10 +368,15 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   if (opencodeEnvironment._tag === 'Err')
     throw new Error(opencodeEnvironment.error)
   const [installedRepositories, localCheckouts] = await Promise.all([
-    discoverGitHubAppRepositories({
-      appId: options.config.github.appId,
-      allowedOwners: options.config.github.allowedOwners,
-      privateKey: options.githubPrivateKey,
+    readAfterGitHubRateLimit({
+      read: () => discoverGitHubAppRepositories({
+        appId: options.config.github.appId,
+        allowedOwners: options.config.github.allowedOwners,
+        privateKey: options.githubPrivateKey,
+      }),
+      now,
+      wait: milliseconds => waitForHost(milliseconds),
+      onHold: until => options.logger.info(`GitHub limited repository discovery. Startup will retry at ${until.toISOString()}.`),
     }),
     discoverLocalCheckouts(options.config.trustedCheckoutRoots),
   ])

@@ -28,6 +28,33 @@ export type GitHubRateLimit
 /** GitHub's fallback wait when a secondary limit names no delay. */
 const SECONDARY_FALLBACK_SECONDS = 60
 
+/** Keeps startup reads in one process while GitHub holds their quota. */
+export async function readAfterGitHubRateLimit<T>(options: {
+  read: () => Promise<T>
+  now: () => Date
+  wait: (milliseconds: number) => Promise<unknown>
+  onHold: (until: Date) => void
+}): Promise<T> {
+  for (;;) {
+    const result = await options.read().then(value => ({ _tag: 'Read' as const, value })).catch((error: unknown) => {
+      const limit = parseRateLimit(error)
+      if (limit === null)
+        throw error
+      return { _tag: 'RateLimited' as const, limit }
+    })
+    if (result._tag === 'Read')
+      return result.value
+    const current = options.now().getTime()
+    const until = result.limit._tag === 'Primary'
+      ? Math.max(current + 1000, result.limit.resetAt.getTime() + 1000)
+      : current + result.limit.retryAfterSeconds * 1000
+    options.onHold(new Date(until))
+    // Referenced, bounded waits keep startup alive without overflowing Node's timer.
+    while (options.now().getTime() < until)
+      await options.wait(Math.min(60_000, until - options.now().getTime()))
+  }
+}
+
 /** Reads a rate limit out of a rejected request, or null for any other failure. */
 export function parseRateLimit(error: unknown): GitHubRateLimit | null {
   if (!(error instanceof RequestError) || (error.status !== 403 && error.status !== 429))
