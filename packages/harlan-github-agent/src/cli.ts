@@ -66,6 +66,7 @@ type ControlCommandError
     | { _tag: 'InvalidEventLimit', message: string }
     | { _tag: 'InvalidStream', message: string }
     | { _tag: 'InvalidReviewTarget', message: string }
+    | { _tag: 'InvalidIssueTarget', message: string }
     | { _tag: 'InvalidWatchTarget', message: string }
     | { _tag: 'InvalidBaseUrl', message: string }
 
@@ -323,6 +324,29 @@ const controlCommand = defineCommand({
           return
         }
         await runControl(args, client => client.stopReview(args.repository, number, args.head))
+      },
+    }),
+    'rerun-issue': defineCommand({
+      meta: { name: 'rerun-issue', description: 'Rerun Issue triage for one current Revision.' },
+      args: {
+        ...controlConnectionArguments,
+        repository: { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
+        number: { type: 'string', description: 'Issue number.', required: true },
+        revision: { type: 'string', description: 'Exact Revision ID. Defaults to the tracked current Revision.' },
+      },
+      async run({ args }) {
+        const number = Number(args.number)
+        if (!/^[^/]+\/[^/]+$/.test(args.repository) || !Number.isSafeInteger(number) || number < 1 || (args.revision !== undefined && !/^[a-f\d]{64}$/.test(args.revision))) {
+          writeJson({ _tag: 'InvalidIssueTarget', message: 'Set a valid repository, issue number, and Revision ID.' } satisfies ControlCommandError, process.stderr)
+          process.exitCode = 1
+          return
+        }
+        await runControl(args, async (client) => {
+          if (args.revision !== undefined)
+            return client.rerunIssueTriage(args.repository, number, args.revision)
+          const current = await client.issueStatus(args.repository, number)
+          return current._tag === 'Err' ? current : client.rerunIssueTriage(args.repository, number, current.value.revisionId)
+        })
       },
     }),
     'routine-run': defineCommand({

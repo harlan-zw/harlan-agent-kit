@@ -167,6 +167,17 @@ harlan-github-agent control activity --task TASK_ID --config /absolute/path/to/h
 harlan-github-agent control events --limit 50 --config /absolute/path/to/harlan-github-agent.yml
 ```
 
+Rerun Issue triage after a controller fix without editing the issue:
+
+```bash
+harlan-github-agent control rerun-issue --repository OWNER/REPO --number NUMBER --config /absolute/path/to/harlan-github-agent.yml
+```
+
+The CLI reads the current Revision directly, including issues outside the dashboard's latest 100 Items.
+Pass `--revision REVISION_ID` to require a specific Revision.
+The command preserves Approval requirements and rejects Dismissals or active Issue work.
+Repeated requests return the existing queued or running Task.
+
 Target another instance with its URL and password file:
 
 ```bash

@@ -39,6 +39,8 @@ function statsSnapshot(range: StatsRange, generatedAt: string): StatsSnapshot {
   }
 }
 const agentControls = {
+  getOpenIssueStatus: () => null,
+  requestIssueTriageRerun: () => ({ _tag: 'Rejected' as const, reason: { _tag: 'ItemNotFound' as const } }),
   stopReviewForHead: () => ({ _tag: 'Stopped' as const }),
   getOpenPullRequestStatus: (_repository: string, _number: number) => null,
   getStats: (range: StatsRange, generatedAt: string) => statsSnapshot(range, generatedAt),
