@@ -15,6 +15,7 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Start control | New session | Navigation and session sidebar |
 | Host control | Run on | Project sidebar and mobile composer |
 | Session setup | Enable Agent sessions after installing the private ingress. | Refused session requests and setup guidance |
+| Memory Incident | Memory limit | Incident kind |
 
 ## Register by context
 

@@ -34,6 +34,8 @@ export type TransientKind
     | 'controller'
     | 'subject_changed'
     | 'agent_result'
+    /** One fresh turn may avoid memory pressure. Repeated exhaustion stops. */
+    | 'resource_limit'
 
 export type PermanentKind
   = | 'policy'
@@ -276,7 +278,7 @@ function matches(patterns: RegExp[], message: string): boolean {
 export function classifyFailure(signal: FailureSignal): FailureClass {
   const message = signal.message
   if (message.startsWith(MEMORY_BUDGET_EXHAUSTED))
-    return { _tag: 'Permanent', kind: 'policy' }
+    return { _tag: 'Transient', kind: 'resource_limit' }
 
   // Matched first and by prefix. No later pattern can then make a session that
   // already spent its whole budget spend another one.
@@ -356,11 +358,24 @@ export function isSubjectMovedReason(message: string): boolean {
  */
 export function mayRetryFailure(signal: FailureSignal): boolean {
   const failure = classifyFailure(signal)
+  // Memory recovery goes through delayed recovery, never immediate attempts.
+  if (failure.kind === 'resource_limit')
+    return false
   return failure._tag !== 'Permanent' || failure.kind === 'unknown'
 }
 
 /** Recovery limit for failures a person can affect. Provider outages keep capped backoff. */
 export const MAXIMUM_RECOVERY_ATTEMPTS = 5
+
+/** Shared by recovery, observation, and status reporting. */
+export function canRecoverFailure(signal: FailureSignal, recoveryAttempts: number): boolean {
+  const failure = classifyFailure(signal)
+  if (failure._tag !== 'Transient')
+    return false
+  if (failure.kind === 'agent_provider')
+    return true
+  return recoveryAttempts < (failure.kind === 'resource_limit' ? 1 : MAXIMUM_RECOVERY_ATTEMPTS)
+}
 
 const baseRecoveryDelayMilliseconds = 60_000
 const maximumRecoveryDelayMilliseconds = 30 * 60_000
@@ -382,8 +397,11 @@ export function recoveryDelayMilliseconds(recoveryAttempts: number): number {
   )
 }
 
-export function nextRecoveryAt(failedAt: string, recoveryAttempts: number): string {
-  return new Date(Date.parse(failedAt) + recoveryDelayMilliseconds(recoveryAttempts)).toISOString()
+export function nextRecoveryAt(failedAt: string, recoveryAttempts: number, signal?: FailureSignal): string {
+  const delay = signal !== undefined && classifyFailure(signal).kind === 'resource_limit'
+    ? Math.max(baseRecoveryDelayMilliseconds, recoveryDelayMilliseconds(recoveryAttempts))
+    : recoveryDelayMilliseconds(recoveryAttempts)
+  return new Date(Date.parse(failedAt) + delay).toISOString()
 }
 
 /**

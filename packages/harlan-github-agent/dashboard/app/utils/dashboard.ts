@@ -499,6 +499,7 @@ const incidentKindLabels: Record<IncidentKind, string> = {
   network: 'Network',
   policy: 'Repository policy',
   rate_limit: 'Rate limit',
+  resource_limit: 'Memory limit',
   runner_lost: 'Runner lost',
   subject_changed: 'Head commit moved',
   unknown: 'Unclassified',

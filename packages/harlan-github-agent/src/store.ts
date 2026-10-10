@@ -127,7 +127,7 @@ import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
 import { RESULT_PHASE_RANK } from './agent-progress.ts'
 import { createBatchStore } from './batch-store.ts'
-import { classifyFailure, isTransientFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
+import { canRecoverFailure, classifyFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
@@ -279,7 +279,7 @@ function recordTaskIncident(database: DatabaseSync, taskId: string, reason: stri
     return
   const failure = classifyFailure({ message: reason })
   const providerWillRetry = failure._tag === 'Transient' && failure.kind === 'agent_provider'
-  const exhausted = row.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS && !providerWillRetry
+  const exhausted = failure._tag === 'Transient' && !canRecoverFailure({ message: reason }, row.recovery_attempts)
   upsertIncident(database, {
     // One provider outage can stop every active Task. Keep each Task's retry
     // state in its own journal row, while the System pane reports one cause.
@@ -294,7 +294,7 @@ function recordTaskIncident(database: DatabaseSync, taskId: string, reason: stri
       ? { _tag: 'ActionRequired' }
       : exhausted
         ? { _tag: 'Exhausted' }
-        : { _tag: 'Retrying', attempt: row.recovery_attempts + 1, nextAttemptAt: nextRecoveryAt(at, row.recovery_attempts) },
+        : { _tag: 'Retrying', attempt: row.recovery_attempts + 1, nextAttemptAt: nextRecoveryAt(at, row.recovery_attempts, { message: reason }) },
     at,
   })
 }
@@ -447,14 +447,9 @@ interface RecoveryCandidateRow {
 function isRecoverable(row: RecoveryCandidateRow, at: string): boolean {
   if (row.reason === null)
     return false
-  const failure = classifyFailure({ message: row.reason })
-  if (failure._tag !== 'Transient')
+  if (!canRecoverFailure({ message: row.reason }, row.recovery_attempts))
     return false
-  // A provider outage cannot be fixed by a person. Keep checking it at capped
-  // backoff so every Task resumes after the selected provider recovers.
-  if (row.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS && failure.kind !== 'agent_provider')
-    return false
-  return Date.parse(at) >= Date.parse(nextRecoveryAt(row.updated_at, row.recovery_attempts))
+  return Date.parse(at) >= Date.parse(nextRecoveryAt(row.updated_at, row.recovery_attempts, { message: row.reason }))
 }
 
 function incidentId(input: Pick<RecordIncidentInput, 'scope' | 'kind' | 'operation' | 'message'>): string {
@@ -3040,11 +3035,9 @@ function queuePriority(entry: UnpositionedQueueEntry): number {
 }
 
 function failedQueueState(reason: string, recoveryAttempts?: number): QueueState {
-  const failure = classifyFailure({ message: reason })
   // A Task the controller can still requeue is Pending. An exhausted non-provider
   // failure is never requeued, so it needs a person and reads ActionRequired.
-  const recoverable = failure._tag === 'Transient'
-    && ((recoveryAttempts ?? 0) < MAXIMUM_RECOVERY_ATTEMPTS || failure.kind === 'agent_provider')
+  const recoverable = canRecoverFailure({ message: reason }, recoveryAttempts ?? 0)
   return recoverable
     ? { _tag: 'Pending', reason: `${reason} The controller will retry.` }
     : { _tag: 'ActionRequired', reason }
@@ -3961,11 +3954,11 @@ function planConflictResolution(
 
   supersedeTasks(database, subjectId, observedAt, 'A newer pull request head commit replaced this task.', revisionId)
   const existing = database.prepare(`
-    SELECT id, state_tag, reason, fence, recovery_attempts,
+    SELECT id, state_tag, reason, fence, recovery_attempts, updated_at,
       EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = tasks.id) AS cancelled
     FROM tasks
     WHERE subject_id = ? AND kind = 'resolve_conflict' AND revision_id = ?
-  `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, recovery_attempts: number, cancelled: number } | undefined
+  `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, recovery_attempts: number, updated_at: string, cancelled: number } | undefined
   const ready = canResolveConflictPullRequestHead(mapping, subject)
     && (subject.headRepository.toLowerCase() === mapping.github.toLowerCase() || reviewApproved)
   // Recovery used to match two exact reasons collected from past incidents, so
@@ -3979,7 +3972,9 @@ function planConflictResolution(
   const recoverableFailure = existing?.state_tag === 'Failed'
     && existing.reason !== null
     && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS
-    && isTransientFailure({ message: existing.reason })
+    && canRecoverFailure({ message: existing.reason }, existing.recovery_attempts)
+    && (classifyFailure({ message: existing.reason }).kind !== 'resource_limit'
+      || Date.parse(observedAt) >= Date.parse(nextRecoveryAt(existing.updated_at, existing.recovery_attempts, { message: existing.reason })))
   // A Superseded task that had already left Queued spent an agent turn on this
   // exact head commit, and the controller then threw that work away. Doing it
   // again is a retry, so it spends recovery budget. One stacked pull request
@@ -4545,9 +4540,7 @@ function mergedReviewCanContinue(worker: {
   }
   if (worker.state_tag !== 'Failed' || worker.reason === null)
     return false
-  const failure = classifyFailure({ message: worker.reason })
-  return failure._tag === 'Transient'
-    && (worker.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS || failure.kind === 'agent_provider')
+  return canRecoverFailure({ message: worker.reason }, worker.recovery_attempts)
 }
 
 function cancelSubjectTasks(database: DatabaseSync, subjectId: number, at: string, reason: string, preserveMergedReview = false, preserveBaseline = false): void {
@@ -4855,7 +4848,7 @@ function planAdversarialReview(
   // Review Tasks follow the head commit, so one Revision can hold several.
   // The live one answers, then the last one that ran.
   const existing = database.prepare(`
-    SELECT id, state_tag, reason, fence, recovery_attempts FROM worker_tasks
+    SELECT id, state_tag, reason, fence, recovery_attempts, updated_at FROM worker_tasks
     WHERE subject_id = ? AND kind = 'adversarial_review' AND revision_id = ?
     ORDER BY
       CASE state_tag
@@ -4864,14 +4857,16 @@ function planAdversarialReview(
       END,
       updated_at DESC, id DESC
     LIMIT 1
-  `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, recovery_attempts: number } | undefined
+  `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, recovery_attempts: number, updated_at: string } | undefined
   // The failure taxonomy decides, never a list of exact wordings. The list this
   // replaces was collected from past incidents, so rewording any one of those
   // messages silently left a recoverable review dead until someone noticed.
   const recoverableFailure = existing?.state_tag === 'Failed'
     && existing.reason !== null
     && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS
-    && isTransientFailure({ message: existing.reason })
+    && canRecoverFailure({ message: existing.reason }, existing.recovery_attempts)
+    && (classifyFailure({ message: existing.reason }).kind !== 'resource_limit'
+      || Date.parse(observedAt) >= Date.parse(nextRecoveryAt(existing.updated_at, existing.recovery_attempts, { message: existing.reason })))
   if (recoverableFailure) {
     database.prepare(`
       UPDATE worker_tasks

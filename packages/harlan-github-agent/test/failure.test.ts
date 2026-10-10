@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { classifyCheckFailure, classifyFailure, contextBudgetExhaustedReason, isSubjectMovedReason, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, recoveryDelayMilliseconds, REVIEW_REPAIR_REFUSALS } from '../src/failure.ts'
 
 describe('classifyFailure', () => {
-  it('does not retry a Task that exceeded its memory budget', () => {
+  it('defers memory exhaustion to bounded recovery instead of immediate attempts', () => {
     const reason = 'The Agent Task exceeded its memory budget. The opencode session exited with code 137.'
-    expect(classifyFailure({ message: reason })).toEqual({ _tag: 'Permanent', kind: 'policy' })
+    expect(classifyFailure({ message: reason })).toEqual({ _tag: 'Transient', kind: 'resource_limit' })
     expect(mayRetryFailure({ message: reason })).toBe(false)
   })
   it.each([

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
-import { MAXIMUM_RECOVERY_ATTEMPTS } from '../src/failure.ts'
+import { MAXIMUM_RECOVERY_ATTEMPTS, MEMORY_BUDGET_EXHAUSTED } from '../src/failure.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, repositoryMapping } from './fixtures.ts'
 
@@ -68,6 +68,45 @@ function publish(store: ReturnType<typeof openJournalStore>, second = 5, combine
 }
 
 describe('issue work handoffs', () => {
+  it('retries memory exhaustion once after a delay, across restart and repeated observations', () => {
+    const path = databasePath()
+    const ready = readyIssues([12], path)
+    let store = ready.store
+    const task = store.claimNextIssueWorkTask('implementer', at(5), 600_000)!
+    expect(store.failTask({ taskId: task.id, workerId: 'implementer', fence: task.state.fence, at: at(6), reason: MEMORY_BUDGET_EXHAUSTED })).toBe('Failed')
+    expect(store.listIncidents()).toMatchObject([{
+      kind: 'resource_limit',
+      recovery: { _tag: 'Retrying', attempt: 1, nextAttemptAt: at(66) },
+    }])
+    store = reopen(store, path)
+    store.recordObservation({ externalId: 'memory-retry', observedAt: at(7), source: 'poll', subject: ready.issues[0]! })
+    expect(store.retryRecoverableWorkerFailures(at(65))).toBe(0)
+    expect(store.claimNextIssueWorkTask('retry', at(65), 600_000)).toBeNull()
+    expect(store.retryRecoverableWorkerFailures(at(66))).toBe(1)
+    const retry = store.claimNextIssueWorkTask('retry', at(67), 600_000)!
+    expect(retry).toMatchObject({ id: task.id, state: { fence: task.state.fence + 1 } })
+    expect(store.failTask({ taskId: retry.id, workerId: 'retry', fence: retry.state.fence, at: at(68), reason: MEMORY_BUDGET_EXHAUSTED })).toBe('Failed')
+    store.recordObservation({ externalId: 'memory-exhausted', observedAt: at(69), source: 'poll', subject: ready.issues[0]! })
+    expect(store.retryRecoverableWorkerFailures(at(1000))).toBe(0)
+    expect(store.claimNextIssueWorkTask('third', at(1001), 600_000)).toBeNull()
+    expect(store.listIncidents()).toMatchObject([{ kind: 'resource_limit', recovery: { _tag: 'Exhausted' } }])
+    expect(store.getDashboardSnapshot(at(1001)).queue[0]?.state).toMatchObject({ _tag: 'ActionRequired', reason: MEMORY_BUDGET_EXHAUSTED })
+  })
+
+  it('does not recover memory exhaustion after cancellation or issue closure', () => {
+    for (const action of ['cancel', 'close'] as const) {
+      const { store, issues: [issue] } = readyIssues()
+      const task = store.claimNextIssueWorkTask('implementer', at(5), 600_000)!
+      store.failTask({ taskId: task.id, workerId: 'implementer', fence: task.state.fence, at: at(6), reason: MEMORY_BUDGET_EXHAUSTED })
+      if (action === 'cancel')
+        store.cancelTask({ taskId: task.id, at: at(7) })
+      else
+        store.recordObservation({ externalId: 'closed-memory-issue', observedAt: at(7), source: 'poll', subject: { ...issue!, state: 'closed' } })
+      expect(store.retryRecoverableWorkerFailures(at(1000))).toBe(0)
+      expect(store.claimNextIssueWorkTask('retry', at(1001), 600_000)).toBeNull()
+    }
+  })
+
   it('retries the same approved issue after the base changes before publication', () => {
     const { store, issues: [issue] } = readyIssues()
     const { task, command } = publish(store)
