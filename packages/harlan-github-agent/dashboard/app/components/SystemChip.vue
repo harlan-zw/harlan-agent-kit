@@ -46,8 +46,10 @@ const ariaLabel = computed(() => {
     <span v-else class="font-mono">{{ chip.active }}/{{ chip.maximum }}</span>
     <span v-if="chip._tag === 'CannotStart'" class="status-warning">{{ chip.reason }}</span>
     <template v-else-if="chip._tag === 'GitHubRateLimited'">
-      <span class="status-warning">GitHub rate limit</span>
-      <span v-if="chip.incidents > 0" class="status-error">{{ chip.incidents }} other Incidents</span>
+      <span class="whitespace-nowrap status-warning">GitHub rate limit</span>
+      <span v-if="chip.incidents > 0" class="whitespace-nowrap status-error" :title="`${chip.incidents} other Incidents`">
+        {{ chip.incidents }}<span class="hidden sm:inline"> other Incidents</span>
+      </span>
     </template>
 
     <span v-else-if="chip._tag === 'Incident'" class="status-error">{{ incidentLabel }}</span>
