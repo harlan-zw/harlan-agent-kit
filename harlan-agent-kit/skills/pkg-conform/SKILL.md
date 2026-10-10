@@ -1,7 +1,7 @@
 ---
 name: pkg-conform
 description: "Conform or scaffold TypeScript packages and Nuxt modules. Use for workspace catalogs, package config, CI, ESLint, Vitest, playgrounds, fixtures, or Nuxt module setup."
-user_invocable: true
+license: MIT
 ---
 
 # Package Conform Skill

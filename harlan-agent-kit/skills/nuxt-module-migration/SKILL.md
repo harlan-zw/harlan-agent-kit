@@ -1,6 +1,7 @@
 ---
 name: nuxt-module-migration
 description: Migrate Nuxt modules to Nuxt 4.6 or newer and prepare major releases for Nuxt 5. Remove Nuxt 3 support, adopt portable server APIs, reduce installed dependencies, audit native Node replacements, and separate optional DevTools packages.
+license: MIT
 ---
 
 # Nuxt module migration

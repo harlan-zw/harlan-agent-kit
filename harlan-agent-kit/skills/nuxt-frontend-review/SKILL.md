@@ -1,10 +1,10 @@
 ---
 name: nuxt-frontend-review
 description: "Adversarially review a Nuxt frontend. Run it and verify its contract, UX, and visual behavior. Use for frontend review or testing."
-user_invocable: true
 argument-hint: "[job-id] [inline]"
 effort: high
 allowed-tools: Read, Bash, Glob, Grep
+license: MIT
 ---
 
 # Frontend Review

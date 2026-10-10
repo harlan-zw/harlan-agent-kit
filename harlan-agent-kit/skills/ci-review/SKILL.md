@@ -1,6 +1,7 @@
 ---
 name: ci-review
 description: Inspect GitHub Actions logs for warnings and errors, triage their causes, and repair actionable findings. Use for the ci-review Routine and its Issue work.
+license: MIT
 ---
 
 # CI review

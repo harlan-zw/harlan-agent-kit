@@ -1,8 +1,8 @@
 ---
 name: issue-triage
 description: "Prioritize open issues by impact and difficulty. Use for backlog review, quick wins, or deciding what to work on next."
-user_invocable: true
 context: fork
+license: MIT
 ---
 
 Triage all open issues and rank by difficulty/impact.

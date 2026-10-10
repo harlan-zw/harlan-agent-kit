@@ -1,6 +1,7 @@
 ---
 name: agent-retro
 description: "Weekly retro of Harlan GitHub Agent sessions. Group transcripts by goal, find repeated and wasted work, and rank fixes to the controller, prompts, skills, or model. Use for agent retro, session review, agent efficiency, or self-improvement runs."
+license: MIT
 ---
 
 # Agent retro

@@ -1,8 +1,8 @@
 ---
 name: nuxt-4-minors-migration
 description: "Upgrade a Nuxt 4 site to the latest 4.x release with `future.compatibilityVersion: 5`, then migrate code that the 4.1 to 4.6 minors deprecated or improved. Use for Nuxt minor upgrades, enabling Nuxt 5 compatibility, explicit server imports or `nuxt/server`, and adopting new Nuxt 4.x features across sites."
-user_invocable: true
 argument-hint: "[site path or repository]"
+license: MIT
 ---
 
 # Nuxt 4 Minors Migration

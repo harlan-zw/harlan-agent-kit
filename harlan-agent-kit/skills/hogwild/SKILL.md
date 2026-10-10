@@ -1,8 +1,8 @@
 ---
 name: hogwild
 description: "Operate the Hogwild home server: which SSH host to use, which account holds sudo, what runs there, where each repo, service, route, and config lives, and how to install tools for the Agent. Use for any task that touches Hogwild over SSH."
-user_invocable: true
 argument-hint: "[task on Hogwild]"
+license: MIT
 ---
 
 # Hogwild

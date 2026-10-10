@@ -1,6 +1,7 @@
 ---
 name: dependency-updates
 description: Update repository dependencies weekly, including majors, in one pull request. Use for the dependency-updates Routine and its Issue work.
+license: MIT
 ---
 
 # Dependency updates

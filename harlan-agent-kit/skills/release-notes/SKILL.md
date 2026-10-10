@@ -1,10 +1,10 @@
 ---
 name: release-notes
 description: "Write release notes, changelogs, announcements, and upgrade guides for major or minor releases."
-user_invocable: true
 context: fork
 argument-hint: "[version]"
 effort: high
+license: MIT
 ---
 
 Generate Nuxt-style release notes with highlights, categorized changelog, and LLM upgrade prompts for breaking changes.

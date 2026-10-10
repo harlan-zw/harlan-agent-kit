@@ -1,11 +1,11 @@
 ---
 name: plan-ceo
 description: "Challenge product scope and strategy before implementation. Use for feature planning, architecture choices, premise review, ambition, and silent-failure analysis."
-user_invocable: true
 context: fork
 agent: Plan
 effort: high
 argument-hint: "[feature-name]"
+license: MIT
 ---
 
 # /plan-ceo -- Strategic Product & Scope Review

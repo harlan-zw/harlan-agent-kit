@@ -1,7 +1,7 @@
 ---
 name: ts-design-patterns
 description: "Apply Harlan's Effect-inspired TypeScript design principles. Use for non-trivial state, errors, dependencies, module boundaries, or API design, and after a production error, where a guard at the failure site would leave the category open."
-user_invocable: true
+license: MIT
 ---
 
 <!-- The six principles below are mirrored in agent-context/context.md. Run scripts/check-agent-context.sh after editing them. -->

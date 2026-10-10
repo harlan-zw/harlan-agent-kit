@@ -1,6 +1,7 @@
 ---
 name: perf-review
 description: Read a repository's stored performance Measurements, confirm which Benchmarks carry a Regression, and repair the cause. Use for the perf-review Routine and its Issue work.
+license: MIT
 ---
 
 # Performance review

@@ -1,8 +1,8 @@
 ---
 name: i-dont-know-just-keep-working
 description: "Find related gaps, opportunities, bugs, and improvements around current work. Use for what's next, anything else worth doing, related improvements, or zooming out after a task. Rank evidence-backed next steps by impact, effort, and confidence."
-user_invocable: true
 argument-hint: "[current work or related area]"
+license: MIT
 ---
 
 # I Don't Know, Just Keep Working

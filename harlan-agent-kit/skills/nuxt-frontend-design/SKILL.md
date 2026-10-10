@@ -1,9 +1,9 @@
 ---
 name: nuxt-frontend-design
 description: "Build or polish Nuxt UI v4+ pages and design systems. Use for landing pages, dashboards, tokens, motion, or generic-looking UX."
-user_invocable: true
 argument-hint: "[component/page/area]"
 effort: max
+license: MIT
 ---
 
 # Nuxt Frontend Design

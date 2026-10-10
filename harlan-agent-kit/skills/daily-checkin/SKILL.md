@@ -1,6 +1,7 @@
 ---
 name: daily-checkin
 description: Run a site's nuxt-checkin module, interpret its Check Results and prompt items, and report production changes and actions. Use for daily check-ins, morning reports, and overnight production status.
+license: MIT
 ---
 
 # Daily check-in

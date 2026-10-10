@@ -1,6 +1,7 @@
 ---
 name: adversarial-review
 description: "Review one pull request adversarially, hand permitted defects to Repair, verify the remote head, and publish the Harlan Agent Kit bot status. Use for rigorous pre-merge PR review."
+license: MIT
 ---
 
 # Adversarial Review

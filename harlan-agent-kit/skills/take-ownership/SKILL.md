@@ -1,8 +1,8 @@
 ---
 name: take-ownership
 description: "Own current work through delivery and smoke verification, finish loose ends, reconcile records, and clean task-owned Git state. Use to resume delivery, follow up after merge or deploy, check what remains, close off, wrap up, or finish up."
-user_invocable: true
 argument-hint: "[work item, pull request, or branch] | close [target]"
+license: MIT
 ---
 
 # Take Ownership

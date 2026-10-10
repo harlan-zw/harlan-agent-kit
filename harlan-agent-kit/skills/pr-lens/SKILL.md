@@ -1,8 +1,8 @@
 ---
 name: pr-lens
 description: "Draw a code change or part of a codebase as an animated architecture or data-flow diagram. Use when opening or updating a pull request that touches more than one module, when asked to diagram, visualise or explain a change or a system, or when a reviewer needs the blast radius before the diff."
-user_invocable: true
 argument-hint: "[base ref, PR number, or path to diagram]"
+license: MIT
 ---
 
 # PR Lens

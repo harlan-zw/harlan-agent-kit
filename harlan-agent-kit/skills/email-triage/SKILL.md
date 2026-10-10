@@ -1,8 +1,8 @@
 ---
 name: email-triage
 description: "Review inbox email with Himalaya and propose actions. Use for inbox checks, inbox zero, follow-ups, awaiting replies, or chase-ups."
-user_invocable: true
 context: fork
+license: MIT
 ---
 
 Review inbox mail, rank urgency, and propose actions.
