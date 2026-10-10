@@ -114,9 +114,13 @@ export function createHostAgentPool(options: {
     provider: (local, desktop) => ({
       name: local.name,
       runTurn: (request: AgentTurnRequest) => (async function* () {
-        const pinned: AgentHost | null = request.sessionId?.startsWith('desktop:') === true
-          ? 'desktop'
-          : request.sessionId !== null ? 'hogwild' : null
+        // Check-in credentials, controller snapshots, and durable archives belong to Hogwild.
+        const controllerCheckin = /^[^:]+:daily-checkin:/.test(request.taskId ?? '')
+        const pinned: AgentHost | null = controllerCheckin
+          ? 'hogwild'
+          : request.sessionId?.startsWith('desktop:') === true
+            ? 'desktop'
+            : request.sessionId !== null ? 'hogwild' : null
         // A host that cannot carry this Worktree at all, such as a desktop
         // asked for a repository whose history exceeds the turn payload.
         const refused = new Set<AgentHost>()

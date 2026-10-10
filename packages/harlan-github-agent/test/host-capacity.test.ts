@@ -20,6 +20,22 @@ function provider(name: 'codex' | 'opencode', started: () => void): AgentProvide
 }
 
 describe('host admission', () => {
+  it('waits for Hogwild capacity when a check-in needs its controller evidence and archive', async () => {
+    let maximum = 0
+    let waits = 0
+    const starts: string[] = []
+    const pool = createHostAgentPool({ localMaximum: () => maximum, desktopMaximum: 1, desktopAvailable: () => true, wait: async () => {
+      waits += 1
+      maximum = 1
+    } })
+    const turn = pool.provider(provider('codex', () => starts.push('hogwild')), provider('codex', () => starts.push('desktop')))
+      .runTurn({ ...request, taskId: 'harlan-zw/gscdump.com:daily-checkin:2026-10-10T07:00:00Z' })
+    for await (const _event of turn) {
+      expect(pool.tasks()).toEqual([{ taskId: 'harlan-zw/gscdump.com:daily-checkin:2026-10-10T07:00:00Z', host: 'hogwild' }])
+    }
+    expect(starts).toEqual(['hogwild'])
+    expect(waits).toBe(1)
+  })
   it('accounts for controller checks in the existing local host capacity', async () => {
     const pool = createHostAgentPool({ localMaximum: 1, desktopMaximum: 1, desktopAvailable: () => true, wait: async () => {} })
     const lease = pool.tryAcquireLocal('recovery')
