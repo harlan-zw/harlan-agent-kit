@@ -10,6 +10,7 @@ import type { AgentWorkspaceManager } from './worktree.ts'
 import { agentPhase } from './agent-progress.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { candidateIssueCommands } from './candidate-issue-controller.ts'
+import { writeCheckinGitHubEvidence } from './checkin-github-evidence.ts'
 import { err, ok } from './result.ts'
 import { routineReportCommand } from './routine-report-controller.ts'
 import { getRoutine } from './routines/index.ts'
@@ -17,6 +18,7 @@ import { getRoutine } from './routines/index.ts'
 export interface RoutineScanWorkerOptions {
   activityLog?: Pick<AgentActivityLog, 'record'>
   githubEvidence?: RoutineGitHubEvidenceSource
+  writeCheckinEvidence?: typeof writeCheckinGitHubEvidence
   logger: { error: (message: string) => void, info: (message: string) => void }
   maximumChangedFiles?: number
   now: () => Date
@@ -99,8 +101,16 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       const githubEvidence = task.name === 'agent-feedback'
         ? null
         : options.githubEvidence === undefined
-          ? { _tag: 'Unavailable', reason: 'The controller has no GitHub metadata source.' }
-          : await options.githubEvidence.collect(task.repositoryMapping, signal, task.name === 'ci-review')
+          ? { _tag: 'Unavailable' as const, reason: 'The controller has no GitHub metadata source.' }
+          : await options.githubEvidence.collect(task.repositoryMapping, signal, task.name === 'ci-review', task.name === 'daily-checkin' ? task.repositoryMapping.defaultBranch : undefined)
+      if (task.name === 'daily-checkin') {
+        await (options.writeCheckinEvidence ?? writeCheckinGitHubEvidence)({
+          workspace: workspace.value.path,
+          repository: task.repository,
+          branch: task.repositoryMapping.defaultBranch,
+          evidence: githubEvidence!,
+        })
+      }
       const turn = await runAgentTurn(
         {
           ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),

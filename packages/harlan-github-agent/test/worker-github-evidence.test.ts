@@ -4,6 +4,16 @@ import { err, ok } from '../src/result.ts'
 import { collectRepairGitHubEvidence, collectRoutineGitHubEvidence, createRoutineGitHubEvidenceSource, jobExecutionContext } from '../src/worker-github-evidence.ts'
 import { repositoryMapping } from './fixtures.ts'
 
+it('collects daily check-in workflow evidence for the mapped branch', async () => {
+  const paths: string[] = []
+  const result = await collectRoutineGitHubEvidence({ repository: 'harlan-zw/example', workflowBranch: 'main', now: () => new Date('2026-10-10T07:00:00Z'), read: async (path) => {
+    paths.push(path)
+    return ok(path.includes('/actions/runs?') ? { workflow_runs: [{ id: 12, name: 'CI', head_branch: 'main', updated_at: '2026-10-10T07:00:00Z' }] } : [])
+  } })
+  expect(paths).toContain('/repos/harlan-zw/example/actions/runs?per_page=10&branch=main')
+  expect(result.workflowRuns).toMatchObject({ entries: [{ id: 12, head_branch: 'main', updated_at: '2026-10-10T07:00:00Z' }] })
+})
+
 it('preserves failed job evidence without treating commit statuses as Actions jobs', async () => {
   const requested: number[] = []
   const result = await collectRepairGitHubEvidence({

@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
+import type { writeCheckinGitHubEvidence } from '../src/checkin-github-evidence.ts'
 import type { GitHubIssuePublisher } from '../src/github.ts'
 import type { RoutineScanInput } from '../src/routines/contract.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
@@ -59,8 +60,10 @@ function workerFor(
   provider: ReturnType<typeof scanning>,
   maximumChangedFiles?: number,
   activityLog?: ReturnType<typeof createAgentActivityLog>,
+  writtenEvidence?: Array<Parameters<typeof writeCheckinGitHubEvidence>[0]>,
 ) {
   return createRoutineScanWorker({
+    writeCheckinEvidence: async (input) => { writtenEvidence?.push(input) },
     githubEvidence: { collect: async () => ({ observedAt: now().toISOString(), issues: { _tag: 'Available', entries: [{ number: 7, title: 'Private controller issue' }], truncated: false }, pullRequests: { _tag: 'Available', entries: [], truncated: false }, workflowRuns: { _tag: 'Unavailable', reason: 'Controller cannot read Actions' }, deployments: { _tag: 'Available', entries: [], truncated: false }, deploymentStatuses: [], jobLogs: { _tag: 'NotRequested' } }) },
     ...(activityLog === undefined ? {} : { activityLog }),
     logger: { error: () => undefined, info: () => undefined },
@@ -467,6 +470,21 @@ describe('running one scan', () => {
         .run(claimStoredRun(store), new AbortController().signal)
       expect(result).toEqual({ _tag: 'Err', error: 'The daily check-in Routine answered without its verdict.' })
       expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('hands scoped private evidence to the collector before starting a daily turn', async () => {
+    const store = openJournalStore(':memory:')
+    const written: Array<Parameters<typeof writeCheckinGitHubEvidence>[0]> = []
+    try {
+      seed(store, 'daily-checkin')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      await workerFor(store, scanning({ report: 'Controller read is unavailable.', candidates: [], verdict: { severity: 'AMBER', coverage: 'incomplete' } }), undefined, undefined, written)
+        .run(claimStoredRun(store), new AbortController().signal)
+      expect(written).toMatchObject([{ workspace: '/tmp/routine', repository: 'harlan-zw/example', branch: 'main', evidence: { observedAt: now().toISOString(), workflowRuns: { _tag: 'Unavailable', reason: 'Controller cannot read Actions' } } }])
     }
     finally {
       store.close()
