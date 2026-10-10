@@ -14201,6 +14201,7 @@ export function openJournalStore(
       agentModels: AGENT_MODELS,
       reasoningEfforts: REASONING_EFFORTS,
       providerCapacities: [],
+      githubRateLimits: [],
       providerCircuits: listProviderCircuits(),
       agents,
       incidents,

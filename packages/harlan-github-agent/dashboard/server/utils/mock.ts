@@ -9,7 +9,7 @@ import { dashboardSnapshot, pullRequestItem } from '../../../test/fixtures.ts'
  * without the real controller. Never served from `.output/public`: the service
  * only ever serves that directory, and every handler here 404s outside dev.
  *
- * Scenario via `DASHBOARD_MOCK_SCENARIO`: `default`, `paused`, `stale`, `calm`.
+ * Scenario via `DASHBOARD_MOCK_SCENARIO`: `default`, `paused`, `stale`, `calm`, `rate-limited`.
  */
 export function assertDevMock(event: H3Event): void {
   if (!import.meta.dev) {
@@ -183,6 +183,13 @@ function fixture(): DashboardSnapshot {
 
 function scenario(base: DashboardSnapshot): DashboardSnapshot {
   switch (process.env.DASHBOARD_MOCK_SCENARIO) {
+    case 'rate-limited': return {
+      ...base,
+      githubRateLimits: [
+        { quota: { _tag: 'Installation', owner: 'harlan-zw' }, kind: 'Primary', retryAt: new Date(Date.now() + 25 * 60_000).toISOString() },
+        { quota: { _tag: 'User', login: 'harlan-zw' }, kind: 'Secondary', retryAt: new Date(Date.now() + 30_000).toISOString() },
+      ],
+    }
     case 'paused':
       return { ...base, agentControl: { _tag: 'Paused', pausedAt: minutesAgo(5), safeToRestart: false }, agentStart: { _tag: 'Paused' } }
     case 'calm':

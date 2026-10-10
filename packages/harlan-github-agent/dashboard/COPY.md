@@ -16,6 +16,13 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Host control | Run on | Project sidebar and mobile composer |
 | Session setup | Enable Agent sessions after installing the private ingress. | Refused session requests and setup guidance |
 | Memory Incident | Memory limit | Incident kind |
+| GitHub warning | GitHub rate limit | System chip |
+| GitHub section | GitHub rate limits | System pane |
+| GitHub loading | Checking GitHub rate limits. | System pane |
+| GitHub empty state | No controller GitHub requests paused. | System pane |
+| GitHub hold | Requests using this credential are paused. | System pane |
+| GitHub retry due | Retry due | System pane countdown |
+| GitHub recovery | The next GitHub request checks recovery. | System pane after the deadline |
 
 ## Register by context
 

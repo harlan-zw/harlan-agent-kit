@@ -59,10 +59,16 @@ describe('gitHub rate limit gate', () => {
       message: 'The App installation on harlan-zw hit the primary GitHub rate limit. Requests pause until 2026-09-23T10:40:00.000Z.',
     } })
     expect(github.gate.active()).toEqual([held._tag === 'Err' ? held.error.message : ''])
+    expect(github.gate.read()).toEqual([{
+      quota: { _tag: 'Installation', owner: 'harlan-zw' },
+      kind: 'Primary',
+      retryAt: '2026-09-23T10:40:00.000Z',
+    }])
 
     github.advanceTo('2026-09-23T10:40:00.001Z')
     expect((await github.tokens.getToken('harlan-zw/other', 'read'))._tag).toBe('Ok')
     expect(github.gate.active()).toEqual([])
+    expect(github.gate.read()).toEqual([])
   })
 
   it('leaves another installation readable', async () => {

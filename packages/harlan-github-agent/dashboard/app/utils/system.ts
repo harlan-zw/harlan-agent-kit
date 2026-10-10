@@ -1,4 +1,5 @@
 import type { AgentProviderName } from '../../../src/agent-provider.ts'
+import type { GitHubRateLimitHold } from '../../../src/github-rate-limit.ts'
 import type { CronExpression } from '../../../src/routine-schedule.ts'
 import type {
   AgentStartState,
@@ -37,6 +38,7 @@ export type SystemChipState
   = | { _tag: 'Loading' }
     | ({ _tag: 'Normal' } & SystemChipCounts)
     | ({ _tag: 'CannotStart', reason: string } & SystemChipCounts)
+    | ({ _tag: 'GitHubRateLimited', incidents: number } & SystemChipCounts)
     | ({ _tag: 'Incident', incidents: number } & SystemChipCounts)
     | ({ _tag: 'RepairRecovery', repairs: number } & SystemChipCounts)
 
@@ -79,6 +81,8 @@ export function systemChipState(snapshot: DashboardSnapshot): SystemChipState {
     ? snapshot.agentProfile.maximumActiveAgents
     : capacity.localMaximum + (capacity.desktopAvailable ? capacity.desktopMaximum : 0)
   const counts: SystemChipCounts = { active, maximum, live: active > 0 }
+  if (snapshot.githubRateLimits.length > 0)
+    return { _tag: 'GitHubRateLimited', incidents: snapshot.incidents.filter(incident => incident.operation !== 'github_rate_limit').length, ...counts }
   if (snapshot.incidents.length > 0)
     return { _tag: 'Incident', incidents: snapshot.incidents.length, ...counts }
   if (snapshot.repairRecoveryCandidates.length > 0)
@@ -92,6 +96,20 @@ export function systemChipState(snapshot: DashboardSnapshot): SystemChipState {
   if (manualHoldsQueue(snapshot))
     return { _tag: 'CannotStart', reason: 'Manual', ...counts }
   return { _tag: 'Normal', ...counts }
+}
+
+export function githubRateLimitRow(hold: GitHubRateLimitHold, now: Date) {
+  const seconds = Math.max(0, Math.ceil((Date.parse(hold.retryAt) - now.getTime()) / 1000))
+  const minutes = Math.floor(seconds / 60)
+  return {
+    owner: hold.quota._tag === 'Installation' ? hold.quota.owner : hold.quota.login,
+    credential: hold.quota._tag === 'Installation' ? 'GitHub App installation' : 'GitHub account',
+    limit: hold.kind === 'Primary' ? 'Primary rate limit' : 'Secondary rate limit',
+    retryAt: hold.retryAt,
+    deadline: new Date(hold.retryAt).toUTCString(),
+    retry: seconds === 0 ? 'Retry due' : `Retry in ${minutes > 0 ? `${minutes}m ` : ''}${seconds % 60}s`,
+    detail: seconds === 0 ? 'The next GitHub request checks recovery.' : 'Requests using this credential are paused.',
+  }
 }
 
 export interface CapacityRow {

@@ -85,6 +85,13 @@ interface Hold {
   until: Date
 }
 
+/** Current credential holds, without credentials or request contents. */
+export interface GitHubRateLimitHold {
+  quota: GitHubQuota
+  kind: GitHubRateLimit['_tag']
+  retryAt: string
+}
+
 function holdMessage(hold: Hold): string {
   const limit = hold.kind === 'Primary' ? 'the primary GitHub rate limit' : 'a secondary GitHub rate limit'
   return `${quotaName(hold.quota)} hit ${limit}. Requests pause until ${hold.until.toISOString()}.`
@@ -100,6 +107,7 @@ export interface GitHubRateLimitGate {
   guard: (source: GitHubTokenProvider, quotaFor: (repository: string) => GitHubQuota) => GitHubTokenProvider
   /** One message per quota that is held now, for the System pane. */
   active: () => string[]
+  read: () => GitHubRateLimitHold[]
 }
 
 export function createGitHubRateLimitGate(options: { now: () => Date }): GitHubRateLimitGate {
@@ -132,5 +140,6 @@ export function createGitHubRateLimitGate(options: { now: () => Date }): GitHubR
       },
     }),
     active: () => current().map(holdMessage),
+    read: () => current().map(hold => ({ quota: { ...hold.quota }, kind: hold.kind, retryAt: hold.until.toISOString() })),
   }
 }

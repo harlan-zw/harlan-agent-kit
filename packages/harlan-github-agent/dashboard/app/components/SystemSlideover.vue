@@ -19,6 +19,7 @@ import {
 } from '../utils/hogwild-status.ts'
 import { hostTasks } from '../utils/host-tasks.ts'
 import { batchRow, capacityRow, circuitNotice, nextRoutineInstant, serviceUpdatePresentation } from '../utils/system.ts'
+import GitHubRateLimits from './system/GitHubRateLimits.vue'
 import HostWork from './system/HostWork.vue'
 
 /**
@@ -142,6 +143,7 @@ function activityLine(item: AgentActivityItem): string {
       <section class="lg:hidden" aria-label="Agent selection">
         <AgentSelectionMenu />
       </section>
+      <GitHubRateLimits />
       <section aria-labelledby="system-execution">
         <h3 id="system-execution" class="field-label flex items-center gap-2">
           Hosts
