@@ -2,6 +2,96 @@ import { describe, expect, it, vi } from 'vitest'
 import { createPoller } from '../src/poller.ts'
 
 describe('poller', () => {
+  it('coalesces requests during a pass into one fresh follow-up', async () => {
+    vi.useFakeTimers()
+    const releases: Array<() => void> = []
+    const reads: number[] = []
+    let revision = 1
+    const poller = createPoller({
+      intervalMilliseconds: 60_000,
+      onError: (error) => { throw error },
+      poll: async () => {
+        reads.push(revision)
+        if (reads.length === 1)
+          await new Promise<void>(resolve => releases.push(resolve))
+      },
+    })
+    try {
+      const initial = poller.runNow()
+      await vi.advanceTimersByTimeAsync(0)
+      revision = 2
+      const deliveries = Array.from({ length: 20 }, () => poller.runNow())
+      releases[0]!()
+      await Promise.all([initial, ...deliveries])
+      expect(reads).toEqual([1, 2])
+    }
+    finally {
+      await poller.stop()
+      vi.useRealTimers()
+    }
+  })
+
+  it('waits for the follow-up read before resolving its callers', async () => {
+    const releases: Array<() => void> = []
+    const poll = vi.fn(() => new Promise<void>(resolve => releases.push(resolve)))
+    const poller = createPoller({
+      intervalMilliseconds: 60_000,
+      poll,
+      onError: (error) => { throw error },
+    })
+    const initial = poller.runNow()
+    await vi.waitFor(() => expect(poll).toHaveBeenCalledTimes(1))
+    const next = poller.runNow()
+    const settled = vi.fn()
+    void next.then(settled)
+    releases[0]!()
+    await initial
+    await vi.waitFor(() => expect(poll).toHaveBeenCalledTimes(2))
+    expect(settled).not.toHaveBeenCalled()
+    releases[1]!()
+    await next
+    expect(settled).toHaveBeenCalledTimes(1)
+    await poller.stop()
+  })
+
+  it('aborts the active read and discards queued reads when stopped', async () => {
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const signals: AbortSignal[] = []
+    const poller = createPoller({
+      intervalMilliseconds: 60_000,
+      onError: (error) => { throw error },
+      poll: signal => new Promise<void>((resolve) => {
+        signals.push(signal)
+        signal.addEventListener('abort', () => resolve(), { once: true })
+        entered()
+      }),
+    })
+    const initial = poller.runNow()
+    await started
+    const next = poller.runNow()
+    await poller.stop()
+    await Promise.all([initial, next, poller.runNow()])
+    expect(signals).toHaveLength(1)
+    expect(signals[0]!.aborted).toBe(true)
+  })
+
+  it('can start again after shutdown', async () => {
+    const poll = vi.fn(async () => {})
+    const poller = createPoller({
+      intervalMilliseconds: 60_000,
+      poll,
+      onError: (error) => { throw error },
+    })
+    await poller.runNow()
+    await poller.stop()
+    poller.start()
+    await vi.waitFor(() => expect(poll).toHaveBeenCalledTimes(2))
+    await poller.stop()
+  })
+
   it.each([undefined, 900_000])('keeps hourly polling when the maximum is %s', async (maxIntervalMilliseconds) => {
     vi.useFakeTimers()
     const poll = vi.fn(async () => {})
