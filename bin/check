@@ -36,28 +36,30 @@ skipped=()
 # eslint
 if should_skip eslint; then
   skipped+=("eslint")
+elif has_script lint; then
+  run_check eslint pnpm lint
 elif [ -f "node_modules/.bin/eslint" ]; then
   run_check eslint ./node_modules/.bin/eslint .
 else
   skipped+=("eslint")
 fi
 
-# typecheck — prefer nuxi > vue-tsc > tsc > pnpm script
+# Use the repository script before choosing a compiler.
 if should_skip typecheck; then
   skipped+=("typecheck")
+elif has_script typecheck; then
+  run_check typecheck pnpm typecheck
 elif { [ -f "nuxt.config.ts" ] || [ -f "nuxt.config.js" ]; } && [ -f "node_modules/.bin/nuxi" ]; then
   run_check typecheck ./node_modules/.bin/nuxi typecheck
 elif [ -f "node_modules/.bin/vue-tsc" ]; then
   run_check typecheck ./node_modules/.bin/vue-tsc --noEmit
 elif [ -f "node_modules/.bin/tsc" ] && { [ -f "tsconfig.json" ] || [ -f "tsconfig.app.json" ]; }; then
   run_check typecheck ./node_modules/.bin/tsc --noEmit
-elif has_script typecheck; then
-  run_check typecheck pnpm typecheck
 else
   skipped+=("typecheck")
 fi
 
-# test — prefer vitest direct, but only where its configuration is
+# Use the repository script before choosing a test runner.
 # Running the binary from a workspace root with no configuration of its own
 # globs every package's tests and applies none of their settings. One package
 # here raises the five second timeout because its tests drive real git and wt
@@ -68,10 +70,10 @@ has_vitest_config() {
 }
 if should_skip test; then
   skipped+=("test")
+elif has_script test; then
+  run_check test env CI=true pnpm test
 elif [ -f "node_modules/.bin/vitest" ] && has_vitest_config; then
   run_check test ./node_modules/.bin/vitest run
-elif has_script test; then
-  run_check test pnpm test
 elif [ -f "node_modules/.bin/vitest" ]; then
   run_check test ./node_modules/.bin/vitest run
 else
