@@ -5,7 +5,7 @@
   "mode": "symlink",
   "skills": {
     "ripast": {
-      "source": "github:harlan-zw/ripast/packages/cli/skills/ripast#commit:ad80a7b0c10cad823c0d9f92ff6d96b127bc5e24"
+      "source": "github:harlan-zw/ripide/packages/cli/skills/ripast#commit:83ca7c589958d58bde9dbef5888f1073b23b5c77"
     },
     "skilld": {
       "source": "github:skilld-dev/skilld/skills/skilld#commit:395000f01f4bbe3a681c7dd29fdfced00d609b52"
