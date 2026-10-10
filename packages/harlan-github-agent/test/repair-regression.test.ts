@@ -6,6 +6,21 @@ import process from 'node:process'
 import { expect, it } from 'vitest'
 import { confirmRepairRecoveryRegression, runRepairRecoveryChecks } from '../src/worktree.ts'
 
+it('retains failing Check output for recovery diagnosis', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'repair-check-output-'))
+  try {
+    writeFileSync(join(root, 'package.json'), '{"scripts":{"test":"vitest"}}')
+    writeFileSync(join(root, 'selected.test.ts'), 'export {}')
+    const result = await runRepairRecoveryChecks(root, ['selected.test.ts'], AbortSignal.timeout(5_000), async input => input.command === 'check'
+      ? { exitCode: 1, stdout: 'typecheck failed: missing generated types', stderr: 'TS2307: cannot find module' }
+      : { exitCode: 0 })
+    expect(result).toEqual({ _tag: 'Err', error: 'Fresh Repair checks failed: check.\ntypecheck failed: missing generated types\nTS2307: cannot find module' })
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 it('accepts a current assertion failure alongside passing tests in another package', async () => {
   const root = mkdtempSync(join(tmpdir(), 'repair-package-evidence-'))
   try {

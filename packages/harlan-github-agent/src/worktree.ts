@@ -1088,7 +1088,7 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
 }
 
 /** Runs current selected evidence without copying credentials into repository scripts. */
-type RecoveryCommand = (input: { workspace: string, command: string, args: string[], signal: AbortSignal, readOnlyPaths?: readonly string[], writablePaths?: readonly string[] }) => Promise<{ exitCode: number }>
+type RecoveryCommand = (input: { workspace: string, command: string, args: string[], signal: AbortSignal, readOnlyPaths?: readonly string[], writablePaths?: readonly string[] }) => Promise<{ exitCode: number, stdout?: string, stderr?: string }>
 
 const runRecoveryCommand: RecoveryCommand = input => runAgentSandboxCommand({ ...input, environment: { ...process.env, CI: 'true' } })
 
@@ -1233,9 +1233,12 @@ export async function runRepairRecoveryChecks(path: string, regressionPaths: str
     commands.push({ command: 'pnpm', args: ['build'] })
   const checks: string[] = []
   for (const command of commands) {
-    const passed = (await runCommand({ workspace: path, ...command, signal })).exitCode === 0
-    if (!passed)
-      return err(`Fresh Repair checks failed: ${command.command} ${command.args.join(' ')}.`)
+    const result = await runCommand({ workspace: path, ...command, signal })
+    if (result.exitCode !== 0) {
+      const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim().slice(-16 * 1024)
+      const label = [command.command, ...command.args].join(' ')
+      return err(`Fresh Repair checks failed: ${label}.${output ? `\n${output}` : ''}`)
+    }
     checks.push(`${command.command} ${command.args.join(' ')} passed`.trim())
   }
   return ok(checks)
