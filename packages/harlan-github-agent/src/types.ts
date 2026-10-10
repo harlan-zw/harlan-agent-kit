@@ -2,6 +2,7 @@ import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PullRequestPurpose } from './baseline-repair-state.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
+import type { GitHubRateLimitHold } from './github-rate-limit.ts'
 import type { AgentSlotLimits, HostCapacity } from './host-capacity.ts'
 import type { MergeRisk, MergeRiskPolicy } from './merge-risk.ts'
 import type { PackageReleaseConfig, PackageReleaseDefaults } from './package-release.ts'
@@ -1626,6 +1627,8 @@ export interface DashboardSnapshot {
   agentModels: Record<AgentProviderName, readonly AgentModel[]>
   reasoningEfforts: readonly CodexReasoningEffort[]
   providerCapacities: ProviderCapacityStatus[]
+  /** Credential holds reported by GitHub, read directly from the request gate. */
+  githubRateLimits: GitHubRateLimitHold[]
   /** Durable Agent provider health, separate from subscription capacity. */
   providerCircuits: ProviderCircuit[]
   agents: DashboardAgent[]

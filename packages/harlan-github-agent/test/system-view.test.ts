@@ -7,12 +7,35 @@ import {
   circuitNotice,
   documentTitle,
   faviconTone,
+  githubRateLimitRow,
   nextRoutineInstant,
   restartNotice,
   serviceUpdatePresentation,
   systemChipState,
 } from '../dashboard/app/utils/system.ts'
 import { dashboardSnapshot } from './fixtures.ts'
+
+it('names the GitHub credential and counts down without claiming recovery', () => {
+  const hold = { quota: { _tag: 'User' as const, login: 'harlan-zw' }, kind: 'Secondary' as const, retryAt: '2026-10-10T16:06:45.000Z' }
+  expect(githubRateLimitRow(hold, new Date('2026-10-10T16:05:00Z'))).toMatchObject({
+    credential: 'GitHub account',
+    owner: 'harlan-zw',
+    limit: 'Secondary rate limit',
+    retry: 'Retry in 1m 45s',
+  })
+  expect(githubRateLimitRow(hold, new Date('2026-10-10T16:07:00Z'))).toMatchObject({
+    retry: 'Retry due',
+    detail: 'The next GitHub request checks recovery.',
+  })
+})
+
+it('surfaces GitHub rate limits before generic Incidents and retains other Incident counts', () => {
+  const snapshot = dashboardSnapshot({
+    githubRateLimits: [{ quota: { _tag: 'Installation', owner: 'harlan-zw' }, kind: 'Primary', retryAt: '2026-10-10T16:06:45.000Z' }],
+    incidents: [incident(), incident({ id: 'rate-limit', operation: 'github_rate_limit' })],
+  })
+  expect(systemChipState(snapshot)).toMatchObject({ _tag: 'GitHubRateLimited', incidents: 1 })
+})
 
 function activeAgent(overrides: Partial<ActiveAgent> = {}): ActiveAgent {
   return {

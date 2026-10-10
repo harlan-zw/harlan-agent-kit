@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer'
 import { DatabaseSync } from 'node:sqlite'
 import { Octokit } from 'octokit'
 import { expect, it, vi } from 'vitest'
+import { createGitHubRateLimitGate } from '../src/github-rate-limit.ts'
 import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseSource } from '../src/package-release-github.ts'
 import { createPackageReleaseStore } from '../src/package-release-store.ts'
@@ -13,6 +14,30 @@ const mergeSha = 'b'.repeat(40)
 const mapping = { ...repositoryMapping(), writablePullRequestAuthors: ['harlan-github-agent[bot]'], release: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: ['test'], credential: { _tag: 'Repository' as const } } }
 const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: sha, mergeSha }
 const record = { repository: mapping.github, pullRequestNumber: 24, commentId: 99, body: '', policy: '', plan, state: { _tag: 'Queued' as const, requestedBy: 'harlan-zw' } }
+
+it('reports release rate limits for the selected account and holds later requests', async () => {
+  const now = () => new Date('2026-10-10T16:00:00.000Z')
+  const gate = createGitHubRateLimitGate({ now })
+  const tokens = gate.guard({ getToken: async () => ({ _tag: 'Ok', value: { token: 'user-token', expiresAt: '2099-01-01' } }), invalidate: () => {} }, () => ({ _tag: 'User', login: 'harlan-zw' }))
+  let requests = 0
+  const source = createPackageReleaseSource({
+    repository: { ...mapping, release: { ...mapping.release, credential: { _tag: 'User' } } },
+    actors: { repository: { login: 'unused', tokens }, user: { login: 'harlan-zw', tokens } },
+    template: async () => '',
+    assertLease: () => {},
+    review: () => ({ _tag: 'None' }),
+    signal: new AbortController().signal,
+    now,
+    createClient: clientOptions => new Octokit({ ...clientOptions, retry: { enabled: false }, throttle: { enabled: false }, request: { fetch: async () => {
+      requests += 1
+      return Response.json({ message: 'API rate limit exceeded.' }, { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Date.parse('2026-10-10T16:06:45.000Z') / 1000) } })
+    } } }),
+  })
+  await expect(source.comment(24, 'status')).rejects.toThrow('API rate limit exceeded.')
+  expect(gate.read()).toEqual([{ quota: { _tag: 'User', login: 'harlan-zw' }, kind: 'Primary', retryAt: '2026-10-10T16:06:45.000Z' }])
+  await expect(source.comment(24, 'status')).rejects.toThrow('Requests pause until 2026-10-10T16:06:45.000Z.')
+  expect(requests).toBe(1)
+})
 
 function fixture(repository: RepositoryMapping = mapping, files = [{ filename: 'src/index.ts', patch: '+return []' }] as Array<{ filename: string, patch?: string }>) {
   const writes: Array<{ path: string, body: Record<string, unknown> }> = []
@@ -139,7 +164,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
     Object.defineProperty(response, 'url', { value: req.url })
     return response
   }
-  const source = createPackageReleaseSource({ repository, actors: { repository: { login: 'harlan-github-agent[bot]', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} } }, user: { login: 'harlan-zw', tokens: { getToken: async () => ({ _tag: 'Err', error: { repository: mapping.github, message: 'The user credential is not used here.' } }), invalidate: () => {} } } }, template: async () => '### 📚 Description', assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: token => new Octokit({ auth: token, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: published ? '1.0.1' : '1.0.0' } }) })
+  const source = createPackageReleaseSource({ repository, actors: { repository: { login: 'harlan-github-agent[bot]', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} } }, user: { login: 'harlan-zw', tokens: { getToken: async () => ({ _tag: 'Err', error: { repository: mapping.github, message: 'The user credential is not used here.' } }), invalidate: () => {} } } }, template: async () => '### 📚 Description', assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: clientOptions => new Octokit({ ...clientOptions, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: published ? '1.0.1' : '1.0.0' } }) })
   return { source, writes, refs, sources, openSource: (title = 'fix: handle input') => {
     sourceOpen = true
     sourceTitle = title
@@ -370,7 +395,7 @@ it('writes a maintained repository release with the user credential even when th
     review: () => ({ _tag: 'None' }),
     signal: new AbortController().signal,
     now: () => new Date(),
-    createClient: token => new Octokit({ auth: token, request: { fetch: async (input: string | URL | Request, init?: RequestInit) => {
+    createClient: clientOptions => new Octokit({ ...clientOptions, request: { fetch: async (input: string | URL | Request, init?: RequestInit) => {
       const req = new Request(input, init)
       requests.push({ method: req.method, path: new URL(req.url).pathname, authorization: req.headers.get('authorization') })
       const response = Response.json(req.method === 'GET' ? [] : { id: 7 })

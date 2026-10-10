@@ -99,6 +99,7 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     },
     reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     providerCapacities: [],
+    githubRateLimits: [],
     providerCircuits: [],
     agents: [],
     incidents: [],

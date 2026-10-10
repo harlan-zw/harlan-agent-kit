@@ -1,11 +1,11 @@
+import type { Octokit } from 'octokit'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { PackageReleaseSource } from './package-release-controller.ts'
 import type { PackageReleaseOffer } from './package-release.ts'
 import type { GitHubRepositoryAccess, RepositoryMapping, StoredReviewForHead } from './types.ts'
 import { Buffer } from 'node:buffer'
-import { Octokit } from 'octokit'
 import { parse } from 'yaml'
-import { failFastThrottle } from './github-rate-limit.ts'
+import { createAuthenticatedClient } from './github-auth.ts'
 import { PACKAGE_RELEASE_MARKER, planPackageRelease, planPackageReleaseBeforeMerge, stableVersion } from './package-release.ts'
 
 interface Manifest { name?: string, version: string, private?: boolean, [key: string]: unknown }
@@ -39,7 +39,7 @@ export function createPackageReleaseSource(options: {
   signal: AbortSignal
   now: () => Date
   fetch?: typeof globalThis.fetch
-  createClient?: (token: string) => Octokit
+  createClient?: Parameters<typeof createAuthenticatedClient>[0]['createClient']
 }): PackageReleaseSource {
   const { repository, signal, assertLease } = options
   const config = repository.release
@@ -54,8 +54,19 @@ export function createPackageReleaseSource(options: {
     const result = await actor.tokens.getToken(repository.github, access, signal)
     if (result._tag === 'Err')
       throw new Error(result.error.message)
-    const octokit = options.createClient?.(result.value.token) ?? new Octokit({ auth: result.value.token, request, throttle: failFastThrottle })
-    octokit.hook.before('request', () => assertLease())
+    const octokit = createAuthenticatedClient({
+      tokens: actor.tokens,
+      repository: repository.github,
+      access,
+      token: result.value.token,
+      userAgent: 'harlan-github-agent',
+      signal,
+      ...(options.createClient === undefined ? {} : { createClient: options.createClient }),
+    })
+    octokit.hook.before('request', (requestOptions) => {
+      assertLease()
+      requestOptions.request = { ...requestOptions.request, ...request }
+    })
     return octokit
   }
   const getRef = async (ref: string): Promise<string | null> => {

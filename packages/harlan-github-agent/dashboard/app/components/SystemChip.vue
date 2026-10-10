@@ -13,7 +13,7 @@ const chip = computed(() => systemChipState(snapshot.value))
 const tone = computed(() => {
   if (chip.value._tag === 'Incident' || chip.value._tag === 'RepairRecovery')
     return 'error'
-  return chip.value._tag === 'CannotStart' ? 'warning' : 'neutral'
+  return chip.value._tag === 'CannotStart' || chip.value._tag === 'GitHubRateLimited' ? 'warning' : 'neutral'
 })
 
 const incidentLabel = computed(() => chip.value._tag === 'Incident'
@@ -29,6 +29,8 @@ const ariaLabel = computed(() => {
   const agents = `${chip.value.active} of ${chip.value.maximum} agents running`
   if (chip.value._tag === 'Incident')
     return `System: ${agents}, ${incidentLabel.value}`
+  if (chip.value._tag === 'GitHubRateLimited')
+    return `System: ${agents}, GitHub rate limit, ${chip.value.incidents} other Incidents`
   if (chip.value._tag === 'RepairRecovery')
     return `System: ${agents}, ${recoveryLabel.value}`
   if (chip.value._tag === 'CannotStart')
@@ -43,6 +45,10 @@ const ariaLabel = computed(() => {
     <span v-if="chip._tag === 'Loading'" class="font-mono text-dimmed">…</span>
     <span v-else class="font-mono">{{ chip.active }}/{{ chip.maximum }}</span>
     <span v-if="chip._tag === 'CannotStart'" class="status-warning">{{ chip.reason }}</span>
+    <template v-else-if="chip._tag === 'GitHubRateLimited'">
+      <span class="status-warning">GitHub rate limit</span>
+      <span v-if="chip.incidents > 0" class="status-error">{{ chip.incidents }} other Incidents</span>
+    </template>
 
     <span v-else-if="chip._tag === 'Incident'" class="status-error">{{ incidentLabel }}</span>
     <span v-else-if="chip._tag === 'RepairRecovery'" class="status-error">{{ recoveryLabel }}</span>

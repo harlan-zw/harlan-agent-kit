@@ -1660,6 +1660,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           ...snapshot,
           agentProviderOrder: config.agent.order,
           providerCapacities,
+          githubRateLimits: rateLimits.read(),
           ...(classification === undefined ? {} : { classification }),
         }
         return { ...current, agentStart: resolveAgentStartState(current) }
