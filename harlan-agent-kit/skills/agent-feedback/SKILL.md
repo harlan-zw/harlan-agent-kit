@@ -2,7 +2,6 @@
 name: agent-feedback
 description: Improve one Agent skill from explicit Review feedback. Use only for the agent-feedback Routine.
 license: MIT
-compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Agent feedback

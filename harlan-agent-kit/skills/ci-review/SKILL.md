@@ -2,7 +2,6 @@
 name: ci-review
 description: Inspect GitHub Actions logs for warnings and errors, triage their causes, and repair actionable findings. Use for the ci-review Routine and its Issue work.
 license: MIT
-compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # CI review

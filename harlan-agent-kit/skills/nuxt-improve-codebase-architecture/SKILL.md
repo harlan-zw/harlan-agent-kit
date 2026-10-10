@@ -3,7 +3,6 @@ name: nuxt-improve-codebase-architecture
 description: "Review architecture for a project with nuxt.config.ts. Use for Nuxt-native refactors across modules, layers, plugins, composables, server routes, Nitro, or runtime config."
 effort: high
 license: MIT
-compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Improve Nuxt Codebase Architecture

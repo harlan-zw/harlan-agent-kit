@@ -2,7 +2,6 @@
 name: harlan-github-agent
 description: "Manage or diagnose Harlan's local GitHub maintenance service. Use for repository monitoring, automated issue or PR work, agent activity, conflicts, and its dashboard."
 license: MIT
-compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Harlan GitHub Agent

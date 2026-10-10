@@ -1,9 +1,7 @@
 ---
 name: pr
 description: "Create or update a pull request from current work. Use when work should be branched, committed, pushed, submitted, shipped, or landed on an owned repository, and whenever a pull request title or description is written or revised, even if nothing is pushed."
-user_invocable: true
 license: MIT
-compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 Create or update a pull request for the current branch. Idempotent -- safe to run at any stage.

@@ -1,10 +1,8 @@
 ---
 name: content-refresh
 description: "Coordinate a collection refresh with shared evidence, reviewed briefs, and independent article reviews. Use for an editorial audit or a refresh across several articles."
-user_invocable: true
 argument-hint: "[content directory] [scope or exclusions]"
 license: MIT
-compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Content refresh

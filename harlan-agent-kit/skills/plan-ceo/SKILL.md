@@ -1,13 +1,11 @@
 ---
 name: plan-ceo
 description: "Challenge product scope and strategy before implementation. Use for feature planning, architecture choices, premise review, ambition, and silent-failure analysis."
-user_invocable: true
 context: fork
 agent: Plan
 effort: high
 argument-hint: "[feature-name]"
 license: MIT
-compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # /plan-ceo -- Strategic Product & Scope Review

@@ -1,10 +1,8 @@
 ---
 name: issue-triage
 description: "Prioritize open issues by impact and difficulty. Use for backlog review, quick wins, or deciding what to work on next."
-user_invocable: true
 context: fork
 license: MIT
-compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 Triage all open issues and rank by difficulty/impact.

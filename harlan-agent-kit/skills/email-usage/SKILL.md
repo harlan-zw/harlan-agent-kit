@@ -1,9 +1,7 @@
 ---
 name: email-usage
 description: "Choose Harlan's email address, Himalaya account, and Chrome profile. Use before reading email, drafting messages, configuring mail, or using signed-in browser sessions."
-user_invocable: true
 license: MIT
-compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Email usage

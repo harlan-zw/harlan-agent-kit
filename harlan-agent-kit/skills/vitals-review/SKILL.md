@@ -2,7 +2,6 @@
 name: vitals-review
 description: Read a Site's NuxtSEO field Core Web Vitals findings and lab Scan history, file what real users feel and what persists in the lab, and repair the cause. Use for the vitals-review Routine and its Issue work.
 license: MIT
-compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Vitals review

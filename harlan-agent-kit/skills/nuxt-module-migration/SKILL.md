@@ -2,7 +2,6 @@
 name: nuxt-module-migration
 description: Migrate Nuxt modules to Nuxt 4.6 or newer and prepare major releases for Nuxt 5. Remove Nuxt 3 support, adopt portable server APIs, reduce installed dependencies, audit native Node replacements, and separate optional DevTools packages.
 license: MIT
-compatibility: "Designed for Harlan Agent Kit workflows. Requires repository access and the tools named in this Skill."
 ---
 
 # Nuxt module migration
