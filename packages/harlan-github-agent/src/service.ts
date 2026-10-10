@@ -269,6 +269,27 @@ export function createPassIncidentRecorder(options: {
   }
 }
 
+/** Reconciles release repositories and records the pass's failures. */
+export async function reconcilePackageReleasePass(options: {
+  repositories: readonly RepositoryMapping[]
+  mayPublish: (repository: string) => boolean
+  reconcile: (repository: RepositoryMapping) => Promise<void>
+  guarded: <T>(step: string, run: () => T | Promise<T>, fallback: T) => Promise<T>
+  record: (operation: string, messages: readonly string[]) => void
+}): Promise<void> {
+  const failures: string[] = []
+  for (const repository of options.repositories) {
+    if (!options.mayPublish(repository.github))
+      continue
+    const errors = await options.guarded('Package releases', async () => {
+      await options.reconcile(repository)
+      return [] as string[]
+    }, [`${repository.github}: package release reconciliation failed.`])
+    failures.push(...errors)
+  }
+  options.record('package_release', failures)
+}
+
 /** Replaces one controller pass's Service Incidents with its current failures. */
 export function replaceServiceIncidents(
   store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents'>,
@@ -1347,10 +1368,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       recordPassIncidents('pull_request_status', statusSync.errors)
       if (mutationSchedulers !== undefined) {
         if (config.triggers.includes('github') && config.webhook._tag === 'Enabled' && store.getAgentControl()._tag !== 'Paused') {
-          for (const repository of config.repositories.filter(repository => releaseActorLogin(repository) !== null)) {
-            if (!store.mayPublishPackageRelease(repository.github))
-              continue
-            const errors = await guarded('Package releases', async () => {
+          await reconcilePackageReleasePass({
+            repositories: config.repositories.filter(repository => releaseActorLogin(repository) !== null),
+            mayPublish: repository => store.mayPublishPackageRelease(repository),
+            guarded,
+            record: recordPassIncidents,
+            reconcile: async (repository) => {
               await reconcilePackageReleases({
                 repository,
                 webhookReady: releaseWebhookReady,
@@ -1383,10 +1406,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                   },
                 }),
               })
-              return [] as string[]
-            }, [`${repository.github}: package release reconciliation failed.`])
-            recordPassIncidents('package_release', errors)
-          }
+            },
+          })
         }
         const stopped = await guarded('Stopped review comments', () => publishStoppedReviews({
           github: workerGithub,
