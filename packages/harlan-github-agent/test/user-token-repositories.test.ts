@@ -209,11 +209,21 @@ describe('createUserTokenProvider', () => {
 })
 
 describe('createGitHubUserAccess', () => {
-  it('reads one repository through the GitHub CLI', async () => {
-    const commands: string[][] = []
+  it('identifies the account when its REST quota is exhausted', async () => {
+    const access = createGitHubUserAccess({
+      run: args => args[1] === 'graphql'
+        ? Promise.resolve('h-z')
+        : Promise.reject(new Error('REST API rate limit exceeded')),
+    })
+
+    expect(await access.login()).toBe('h-z')
+  })
+
+  it('reads a repository when its REST quota is exhausted', async () => {
     const access = createGitHubUserAccess({
       run: (args) => {
-        commands.push(args)
+        if (args[1] !== 'graphql')
+          return Promise.reject(new Error('REST API rate limit exceeded'))
         return Promise.resolve(JSON.stringify({
           github: 'nuxt-modules/sitemap',
           defaultBranch: 'main',
@@ -230,6 +240,11 @@ describe('createGitHubUserAccess', () => {
       defaultBranch: 'main',
       fork: false,
     }))
-    expect(commands[0]?.slice(0, 2)).toEqual(['api', 'repos/nuxt-modules/sitemap'])
+  })
+
+  it('leaves an inaccessible repository untracked', async () => {
+    const access = createGitHubUserAccess({ run: () => Promise.resolve('null') })
+
+    expect(await access.readRepository('nuxt-modules/missing')).toBeUndefined()
   })
 })
