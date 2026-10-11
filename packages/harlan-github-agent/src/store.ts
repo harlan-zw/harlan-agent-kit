@@ -8696,6 +8696,12 @@ export function openJournalStore(
   const resolveStaleTaskIncidents: JournalStore['resolveStaleTaskIncidents'] = (at) => {
     // An Incident belongs to the current failure of work that can still run.
     // Startup repairs journals written before that invariant was enforced.
+    // Retired mappings cannot retry, even when an old Task identity is missing.
+    const retiredResolved = Number(database.prepare(`
+      UPDATE incidents SET resolved_at = ?
+      WHERE resolved_at IS NULL AND scope_tag = 'Task'
+        AND repository IN (SELECT github FROM repositories WHERE enabled = 0)
+    `).run(at).changes)
     const stale = (table: 'tasks' | 'worker_tasks') => `
       UPDATE incidents SET resolved_at = ?
       WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id IN (
@@ -8758,7 +8764,7 @@ export function openJournalStore(
       for (const task of missing)
         recordTaskIncident(database, task.id, task.reason, at)
     }
-    return resolved + serviceProviderResolved
+    return retiredResolved + resolved + serviceProviderResolved
   }
 
   const restoreOutageRecoveryBudget: JournalStore['restoreOutageRecoveryBudget'] = (at) => {

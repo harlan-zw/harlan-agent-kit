@@ -682,6 +682,39 @@ describe('recovery budget after a GitHub outage', () => {
 })
 
 describe('stale task incidents', () => {
+  it.each(['removed', 'disabled'] as const)('closes incidents after a Repository mapping is %s', (change) => {
+    const store = createStore()
+    const retired = repositoryMapping()
+    const active = repositoryMapping({ github: 'harlan-zw/active', checkout: '/home/harlan/sites/active' })
+    store.syncRepositories([retired, active], '2026-08-18T00:00:00.000Z')
+    for (const repository of [retired.github, active.github]) {
+      for (const scope of [
+        { _tag: 'Repository', repository } as const,
+        { _tag: 'Task', repository, taskId: `retained:${repository}`, itemNumber: 24 } as const,
+      ]) {
+        store.recordIncident({
+          scope,
+          kind: 'installation_access',
+          severity: 'error',
+          operation: 'adversarial_review',
+          message: 'The GitHub App installation cannot access this repository.',
+          recovery: { _tag: 'ActionRequired' },
+          at: '2026-08-18T00:00:01.000Z',
+        })
+      }
+    }
+    store.syncRepositories(change === 'removed' ? [active] : [{ ...retired, enabled: false }, active], '2026-08-18T00:00:02.000Z')
+    store.setRepositoryPaused(active.github, true)
+
+    expect(store.resolveStaleTaskIncidents('2026-08-18T00:00:03.000Z')).toBe(1)
+    expect(store.listIncidents().map(incident => incident.scope)).toEqual([
+      { _tag: 'Repository', repository: active.github },
+      { _tag: 'Task', repository: active.github, taskId: `retained:${active.github}`, itemNumber: 24 },
+    ])
+    expect(store.resolveStaleTaskIncidents('2026-08-18T00:00:04.000Z')).toBe(0)
+    store.close()
+  })
+
   it('refreshes a legacy exhausted provider Incident to Retrying', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
