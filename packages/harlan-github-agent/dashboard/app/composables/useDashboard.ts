@@ -16,6 +16,7 @@ import {
   humanDecisionEntries,
   incidentEntries,
   isSnapshotStale,
+  serviceClockOffset,
   taskNumber,
 } from '../utils/dashboard.ts'
 
@@ -78,7 +79,9 @@ function createDashboard() {
   const dismissErrors = ref<Record<string, string>>({})
 
   const visibility = useDocumentVisibility()
-  const now = useNow({ interval: 1_000 })
+  const browserNow = useNow({ interval: 1_000 })
+  const clockOffset = ref(0)
+  const now = computed(() => new Date(browserNow.value.getTime() + clockOffset.value))
 
   const {
     data: liveSnapshot,
@@ -116,8 +119,7 @@ function createDashboard() {
   }
 
   function relativeTime(value: string | null): string {
-    void now.value
-    return value === null || value.length === 0 ? 'Never' : formatTimeAgo(new Date(value))
+    return value === null || value.length === 0 ? 'Never' : formatTimeAgo(new Date(value), {}, now.value)
   }
 
   function duration(startedAt: string, completedAt?: string): string {
@@ -131,9 +133,12 @@ function createDashboard() {
 
   async function loadState(): Promise<void> {
     loadError.value = undefined
-    return $fetch<DashboardSnapshot>('/api/state')
-      .then((value) => {
-        snapshot.value = value
+    return $fetch.raw<DashboardSnapshot>('/api/state')
+      .then((response) => {
+        if (response._data === undefined)
+          throw new Error('The Service returned no state.')
+        clockOffset.value = serviceClockOffset(response.headers.get('date'), new Date())
+        snapshot.value = response._data
       })
       .catch((error: unknown) => {
         loadError.value = error instanceof Error

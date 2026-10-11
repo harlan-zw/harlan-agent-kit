@@ -28,6 +28,12 @@ export const stalledProgressSeconds = 120
 /** Past this the snapshot is old enough that acting on it could be wrong. */
 export const staleSnapshotSeconds = 90
 
+/** The HTTP Date keeps monitoring deadlines independent of the browser clock. */
+export function serviceClockOffset(serverDate: string | null, receivedAt: Date): number {
+  const at = serverDate === null ? Number.NaN : Date.parse(serverDate)
+  return Number.isFinite(at) ? at - receivedAt.getTime() : 0
+}
+
 export type StatusTone = 'error' | 'warning' | 'primary' | 'success'
 
 export type AgentProfileState
@@ -147,7 +153,7 @@ export function providerCapacityPresentation(entry: ProviderCapacityStatus): Pro
 
 /** The highest priority System state visible at one glance. */
 export function systemState(snapshot: DashboardSnapshot): { label: string, tone: StatusTone } {
-  if (snapshot.incidents.some(incident => incident.recovery._tag !== 'Retrying') || snapshot.repairRecoveryCandidates.length > 0)
+  if (snapshot.incidents.some(incident => incident.recovery._tag === 'Exhausted' || incident.recovery._tag === 'ActionRequired') || snapshot.repairRecoveryCandidates.length > 0)
     return { label: 'Action required', tone: 'error' }
   if (snapshot.incidents.length > 0 || snapshot.status === 'degraded')
     return { label: 'Retrying', tone: 'warning' }

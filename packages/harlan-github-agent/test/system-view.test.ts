@@ -135,6 +135,10 @@ describe('documentTitle', () => {
 })
 
 describe('systemChipState', () => {
+  it('keeps operation-based recovery out of the Action required state', () => {
+    const snapshot = dashboardSnapshot({ incidents: [incident({ recovery: { _tag: 'OnNextOperation' } })] })
+    expect(systemState(snapshot)).toEqual({ label: 'Retrying', tone: 'warning' })
+  })
   it('withholds live counts after the last confirmed update expires', () => {
     const snapshot = dashboardSnapshot({ agentStart: { _tag: 'Available' }, agents: [activeAgent()] })
     expect(systemChipState(snapshot, new Date('2026-08-13T01:01:31Z'))).toEqual({ _tag: 'Unavailable', lastUpdatedAt: snapshot.generatedAt })

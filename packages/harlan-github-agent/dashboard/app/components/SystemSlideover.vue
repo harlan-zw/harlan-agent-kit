@@ -492,7 +492,7 @@ function activityLine(item: AgentActivityItem): string {
           <UButton v-if="visibleIncidents.length < incidents.length" class="mt-3" color="neutral" variant="outline" @click="incidentLimit += 50">
             Show more Incidents ({{ incidents.length - visibleIncidents.length }} remaining)
           </UButton>
-          <p v-else class="mt-2 text-sm text-muted">
+          <p v-if="incidents.length === 0" class="mt-2 text-sm text-muted">
             No Incidents.
           </p>
         </section>

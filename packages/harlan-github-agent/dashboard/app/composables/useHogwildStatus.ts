@@ -1,5 +1,5 @@
 import type { HogwildStatus } from '../utils/hogwild-status.ts'
-import { useBrowserLocation, useMounted, useNow, useWebSocket } from '@vueuse/core'
+import { useBrowserLocation, useMounted, useWebSocket } from '@vueuse/core'
 import {
   appendHogwildSample,
   emptyHogwildHistory,
@@ -22,7 +22,7 @@ export function useHogwildStatus() {
     ? hogwildLiveUrl(location.value.hostname ?? '', location.value.protocol ?? '')
     : undefined)
   const lastConnection = shallowRef<HogwildConnection>({ _tag: 'NotOnHogwild' })
-  const now = useNow({ interval: 1_000 })
+  const { now } = useDashboard()
   const connection = computed<HogwildConnection>(() => {
     const value = lastConnection.value
     return value._tag === 'Connected' && !hogwildStatusFresh(value.status.updatedAt, now.value)

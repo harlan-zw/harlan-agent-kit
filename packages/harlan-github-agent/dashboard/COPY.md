@@ -24,6 +24,7 @@ The dashboard uses short, direct controls and specific state descriptions.
 | GitHub retry due | Retry due | System pane countdown |
 | GitHub recovery | The next GitHub request checks recovery. | System pane after the deadline |
 | Service data unavailable | Service data is unavailable. Reload before changing settings or work. | System pane and refused controls |
+| Service state missing | The Service returned no state. | State request error |
 | Service data label | Unavailable | System chip after its last update expires |
 | Desktop incompatible | Update required | Desktop state when protocols differ |
 | Desktop warning | Desktop update required | System chip and pane summary |

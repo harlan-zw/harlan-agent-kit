@@ -26,8 +26,8 @@ import {
   isSnapshotStale,
   presentWorkKinds,
   providerCapacityPresentation,
-
   queuedEntries,
+
   queueWork,
   repositoryName,
   repositoryWritesControl,
@@ -39,6 +39,7 @@ import {
   routineTrackingUrl,
   runningPhaseLine,
   scheduledRoutineRecords,
+  serviceClockOffset,
   shortAge,
   stalledLabel,
   systemState,
@@ -833,6 +834,17 @@ describe('activeAgentActivity', () => {
 })
 
 describe('isSnapshotStale', () => {
+  it('expires data on the Service clock when the browser clock differs', () => {
+    const receivedAt = new Date('2026-08-14T11:55:00Z')
+    const offset = serviceClockOffset('Fri, 14 Aug 2026 12:00:00 GMT', receivedAt)
+    expect(isSnapshotStale('2026-08-14T12:00:00Z', new Date(receivedAt.getTime() + offset))).toBe(false)
+    expect(isSnapshotStale('2026-08-14T12:00:00Z', new Date(receivedAt.getTime() + offset + 91_000))).toBe(true)
+  })
+
+  it('keeps the browser clock when the response has no usable Service date', () => {
+    expect(serviceClockOffset(null, now)).toBe(0)
+    expect(serviceClockOffset('invalid', now)).toBe(0)
+  })
   it('treats a snapshot that never loaded as fresh, so the page does not cry wolf', () => {
     expect(isSnapshotStale('', now)).toBe(false)
   })
