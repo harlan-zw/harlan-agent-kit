@@ -71,7 +71,7 @@ function workerFor(
     now,
     runtime: () => ({ profile: CODEX_AGENT_PROFILE, provider }),
     store,
-    workspaces: { prepareRoutine: async () => ok({ path: '/tmp/routine', baseSha: 'abc123', headSha: 'abc123' }) },
+    workspaces: { prepareRoutine: async () => ok({ path: '/tmp/routine', baseSha: 'abc123', headSha: 'abc123', defaultBranchSha: 'abc123' }) },
   })
 }
 
@@ -92,6 +92,7 @@ function seed(store: ReturnType<typeof openJournalStore>, name: ClaimedRoutineRu
 }
 
 const candidate = {
+  urgency: 'urgent',
   fingerprint: 'src/store.ts#openRoutineRun',
   title: 'Fixture title',
   target: 'src/store.ts',
@@ -260,7 +261,7 @@ describe('building the scan prompt', () => {
   it.each([
     { _tag: 'Merged', pullRequest: 42 } as const,
     { _tag: 'Superseded', reason: 'Handled by another fix.' } as const,
-  ])('leaves a $_tag Candidate out of the next scan memory', (result) => {
+  ])('preserves a $_tag Candidate for deployment and regression checks', (result) => {
     const prompt = routineScanPrompt({
       mode: 'propose',
       name: 'pr-triage',
@@ -281,7 +282,8 @@ describe('building the scan prompt', () => {
       repository: 'harlan-zw/example',
     })
 
-    expect(prompt).not.toContain('src/closed.ts')
+    expect(prompt).toContain('src/closed.ts')
+    expect(prompt).toContain(JSON.stringify(result))
     expect(prompt).toContain('Nothing has been rejected yet.')
   })
 
@@ -871,6 +873,10 @@ describe('running one scan', () => {
           calls.comments.push(input.body)
           return ok({ id: 900 })
         },
+        updateIssue: async (input) => {
+          calls.comments.push(input.body)
+          return ok(undefined)
+        },
         findOpenIssueByFingerprint: async () => ok(null),
         findRoutineTrackingIssue: async () => ok(null),
         findIssueCommentByMarker: async () => ok(null),
@@ -878,7 +884,7 @@ describe('running one scan', () => {
       await createRoutineReportController({ github, now, store, workerId: 'reporter' })
         .publishPending(new AbortController().signal)
 
-      expect(calls.issues).toEqual(['[BLOCKED] Daily check-in: 2026-08-27'])
+      expect(calls.issues).toEqual(['[BLOCKED] Daily check-in: harlan-zw/example'])
       expect(calls.comments[0]).toContain('Failed. The scan agent answered with something other than JSON.')
     }
     finally {

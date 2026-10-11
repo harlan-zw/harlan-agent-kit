@@ -110,11 +110,13 @@ For daily check-ins, apply [daily-checkin](../daily-checkin/SKILL.md). It owns c
 
 A `daily-checkin` Routine runs the central daily-checkin Skill against the site's `@harlan-zw/nuxt-checkin` module. Sites declare checks and prompt items in module configuration. They do not need `.claude/skills/daily-checkin/SKILL.md`. Credentials remain in the repository environment or private credential files.
 
-Each `daily-checkin` run opens a separate issue, including clear, failed, and skipped runs.
-Use `[CLEAR]`, `[ACTION NEEDED]`, or `[BLOCKED]` before `Daily check-in: YYYY-MM-DD`, using the scheduled UTC date.
-Retries find the same run by its marker, including closed issues. Other Routines keep their shared tracking issue.
-Link existing issues for ongoing actions. Update the title status when findings change.
-Close the daily issue when its actions are resolved or tracked in linked issues.
+Each site keeps one persistent daily report issue. Update its body and title with the latest settled report.
+Use `[CLEAR]`, `[ACTION NEEDED]`, or `[BLOCKED]` before `Daily check-in: OWNER/REPOSITORY`.
+Quiet runs create no new issues or comments. Keep every run in the private archive and Dashboard history.
+Retries reuse the canonical issue, including closed issues. A late retry cannot replace newer evidence with an older report.
+Link existing issues for ongoing actions. Keep archive maintenance inside the run, never separate proposal issues.
+Other Routines keep their shared tracking issue.
+For weekly production D1 review, apply [d1-query-review](../d1-query-review/SKILL.md).
 
 Use `pause`, `resume`, `restart`, `update`, or `cancel --task TASK_ID` for the matching durable control.
 Every command prints one JSON value. A tagged JSON error exits with status 1.

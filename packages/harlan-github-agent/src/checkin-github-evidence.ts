@@ -7,6 +7,7 @@ export async function writeCheckinGitHubEvidence(input: {
   workspace: string
   repository: string
   branch: string
+  checkout: { sha: string, observedAt: string }
   evidence: Pick<RoutineGitHubEvidence, 'observedAt' | 'workflowRuns'> | { _tag: 'Unavailable', reason: string }
 }): Promise<void> {
   const workspace = await realpath(input.workspace)
@@ -27,6 +28,7 @@ export async function writeCheckinGitHubEvidence(input: {
     schemaVersion: 1,
     repository: input.repository,
     branch: input.branch,
+    checkout: input.checkout,
     observedAt: 'observedAt' in evidence ? evidence.observedAt : new Date().toISOString(),
     workflowRuns: 'workflowRuns' in evidence ? evidence.workflowRuns : evidence,
   }

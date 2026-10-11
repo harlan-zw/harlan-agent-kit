@@ -12,6 +12,10 @@ const { snapshot, loading, now, relativeTime } = useDashboard()
 const minute = computed(() => Math.floor(now.value.getTime() / 60_000))
 const rows = computed(() => routineRows(snapshot.value.routines, snapshot.value.routineRuns, new Date(minute.value * 60_000)))
 const runs = computed(() => recentRoutineRuns(snapshot.value.routineRuns))
+const attention = computed(() => rows.value.filter(row => row.latestRun && (row.tone === 'warning' || row.tone === 'error'))
+  .sort((left, right) => Number(right.label === 'Blocked' || right.tone === 'error') - Number(left.label === 'Blocked' || left.tone === 'error')))
+const allAttention = ref(false)
+const visibleAttention = computed(() => allAttention.value ? attention.value : attention.value.slice(0, 6))
 const selectedRunId = ref<string>()
 const evidenceOpen = ref(false)
 const selectedRun = computed<HistoryRow | undefined>(() => {
@@ -40,6 +44,27 @@ useHead({
     <h1 class="sr-only">
       Routines
     </h1>
+
+    <section v-if="attention.length" aria-label="Action required">
+      <UiSectionHeader title="Action required">
+        <template #after-title>
+          <span class="font-mono text-sm text-muted">{{ attention.length }}</span>
+        </template>
+        <template v-if="attention.length > 6" #actions>
+          <UButton color="neutral" variant="ghost" size="sm" :label="allAttention ? 'Show less' : 'More'" @click="allAttention = !allAttention" />
+        </template>
+      </UiSectionHeader>
+      <ul class="divide-y divide-default border-y border-default">
+        <li v-for="row in visibleAttention" :key="row.routine.id">
+          <button type="button" class="flex min-h-11 w-full flex-wrap items-center gap-3 px-2 py-2 text-start hover:bg-muted" aria-haspopup="dialog" @click="showRun(row.latestRun!.id)">
+            <StateBadge :tone="row.tone" :label="row.label" />
+            <RepositoryIdentity :repository="row.routine.repository" />
+            <span>{{ row.routine.name }}</span>
+            <span class="text-sm text-muted">{{ row.detail }}</span>
+          </button>
+        </li>
+      </ul>
+    </section>
 
     <section class="min-w-0" aria-label="Upcoming">
       <UiSectionHeader title="Upcoming">

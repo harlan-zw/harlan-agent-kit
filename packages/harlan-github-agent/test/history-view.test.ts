@@ -81,6 +81,7 @@ function routineRun(overrides: Partial<DashboardRoutineRun> = {}): DashboardRout
     usage: { _tag: 'Unavailable' },
     candidates: [],
     activity: [],
+    report: null,
     reportState: 'Published',
     createdAt: '2026-08-19T12:00:00.000Z',
     updatedAt: '2026-08-19T12:05:00.000Z',

@@ -37,6 +37,8 @@ export function isRoutineTrackingIssue(input: {
   labels: readonly string[]
 }): boolean {
   if (input.labels.includes('routine:daily-checkin')) {
+    if (input.body?.startsWith(`<!-- routine-log: ${input.repository}:daily-checkin -->\n`))
+      return true
     const runId = input.body?.match(/^<!-- routine-run: (.+) -->\n/)?.[1]
     if (runId?.startsWith(`${input.repository}:daily-checkin:`) && input.body === dailyCheckinIssueBody(runId))
       return true
@@ -153,14 +155,27 @@ export function routineReportCommand(input: {
     runId: input.run.id,
     repository: input.repository,
     routineName: input.routineName,
+    verdict: input.report._tag === 'Completed' ? input.report.verdict ?? null : null,
     body: `${routineRunMarker(input.run.id)}\n${input.routineName === 'daily-checkin'
       ? `# [${dailyCheckinStatus(input.report)}] Daily check-in: ${input.run.scheduledFor.slice(0, 10)}\n\n`
       : ''}${routineReportBody(input.run, input.report)}`,
   }
 }
 
+function dailyReportTitle(command: RoutineReportCommand): string {
+  const status = command.body.match(/^# \[([^\]]+)\] Daily check-in:/m)?.[1] ?? 'BLOCKED'
+  return `[${status}] Daily check-in: ${command.repository}`
+}
+
+function dailyReportBody(command: RoutineReportCommand & { candidates: Candidate[] }): string {
+  return `<!-- routine-log: ${command.routineId} -->
+Harlan Agent Kit maintains this report automatically. Each run remains in the private archive.
+
+${command.body}${candidateDetails(command.candidates)}`
+}
+
 export interface RoutineReportControllerOptions {
-  github: Pick<GitHubIssuePublisher, 'createComment' | 'createIssue' | 'findIssueCommentByMarker' | 'findRoutineTrackingIssue'>
+  github: Pick<GitHubIssuePublisher, 'createComment' | 'createIssue' | 'updateIssue' | 'findIssueCommentByMarker' | 'findRoutineTrackingIssue'>
   leaseMilliseconds?: number
   now: () => Date
   store: Pick<JournalStore, 'claimNextRoutineReport' | 'completeRoutineReport' | 'failRoutineReport' | 'recordRoutineReportReceipt'>
@@ -218,7 +233,6 @@ export function createRoutineReportController(options: RoutineReportControllerOp
           const existing = await options.github.findRoutineTrackingIssue({
             repository: command.repositoryMapping,
             routineName: command.routineName,
-            ...(daily ? { runId: command.runId } : {}),
           }, signal)
           if (existing._tag === 'Err') {
             fail(existing.error.message)
@@ -233,10 +247,9 @@ export function createRoutineReportController(options: RoutineReportControllerOp
               // The staged heading already folds the run's Candidates in, so
               // the title reads the very status the comment heading carries.
               title: daily
-                ? (command.body.match(/^# (\[(?:CLEAR|ACTION NEEDED|BLOCKED)\] Daily check-in: \d{4}-\d{2}-\d{2})$/m)?.[1]
-                  ?? `[BLOCKED] Daily check-in: ${command.runId.slice(-24, -14)}`)
+                ? dailyReportTitle(command)
                 : trackingIssueTitle(command.routineName, command.repository),
-              body: daily ? dailyCheckinIssueBody(command.runId) : trackingIssueBody(command.routineName),
+              body: daily ? dailyReportBody(command) : trackingIssueBody(command.routineName),
               labels: [routineIssueLabel(command.routineName)],
             }, signal)
             if (created._tag === 'Err') {
@@ -259,7 +272,14 @@ export function createRoutineReportController(options: RoutineReportControllerOp
           continue
         }
 
-        const marker = routineRunMarker(command.runId)
+        if (daily) {
+          const updated = await options.github.updateIssue({ repository: command.repositoryMapping, issueNumber, title: dailyReportTitle(command), body: dailyReportBody(command) }, signal)
+          if (updated._tag === 'Err') {
+            fail(updated.error.message)
+            continue
+          }
+        }
+        const marker = daily ? `<!-- routine-report-index: ${command.routineId} -->` : routineRunMarker(command.runId)
         const existingComment = await options.github.findIssueCommentByMarker({
           repository: command.repositoryMapping,
           issueNumber,
@@ -296,7 +316,7 @@ export function createRoutineReportController(options: RoutineReportControllerOp
         const commented = await options.github.createComment({
           repository: command.repositoryMapping,
           issueNumber,
-          body: `${command.body}${candidateDetails(command.candidates)}`,
+          body: daily ? `${marker}\nHarlan Agent Kit updates the latest report in this issue body. Each run remains in the private archive and Dashboard history.` : `${command.body}${candidateDetails(command.candidates)}`,
         }, signal)
         if (commented._tag === 'Err') {
           fail(commented.error.message)

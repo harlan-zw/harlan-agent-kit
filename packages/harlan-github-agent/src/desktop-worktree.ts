@@ -166,6 +166,20 @@ async function desktopFiles(workspace: string, signal?: AbortSignal): Promise<De
       files.push({ path, data: (await readFile(absolute)).toString('base64'), mode: (await lstat(absolute)).mode & 0o777 })
     }
   }
+  // This controller file contains bounded GitHub metadata, never credentials.
+  // It is ignored under node_modules, so ordinary untracked export misses it.
+  const collectorPath = 'node_modules/.cache/harlan-checkin/github.json'
+  const collector = await lstat(join(workspace, collectorPath)).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT')
+      return null
+    throw error
+  })
+  if (collector !== null && !files.some(file => file.path === collectorPath)) {
+    if (!collector.isFile() || collector.size > 64 * 1024 || (collector.mode & 0o077) !== 0)
+      throw new Error('The collector snapshot must be a private, bounded file.')
+    const absolute = await regularDesktopFile(workspace, collectorPath)
+    files.push({ path: collectorPath, data: (await readFile(absolute)).toString('base64'), mode: 0o600 })
+  }
   return files.sort((left, right) => left.path.localeCompare(right.path))
 }
 

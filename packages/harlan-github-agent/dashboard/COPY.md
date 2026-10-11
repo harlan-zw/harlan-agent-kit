@@ -25,6 +25,13 @@ The dashboard uses short, direct controls and specific state descriptions.
 | GitHub recovery | The next GitHub request checks recovery. | System pane after the deadline |
 | Service data unavailable | Service data is unavailable. Reload before changing settings or work. | System pane and refused controls |
 | Service data label | Unavailable | System chip after its last update expires |
+| Routine incomplete coverage | Blocked | Routine result badge |
+| Routine passing checks | Clear | Routine result badge |
+| Routine warning or failure | Action required | Routine result badge |
+| Routine execution | Scan completed | Routine report evidence |
+| Routine coverage detail | Coverage incomplete. | Routine result detail |
+| Routine collapsed attention | More | Shows the remaining Routine actions |
+| Routine expanded attention | Show less | Returns to the first six Routine actions |
 | Desktop incompatible | Update required | Desktop state when protocols differ |
 | Desktop warning | Desktop update required | System chip and pane summary |
 | Operation recovery | The next Controller operation checks recovery. | Incident with no scheduled retry |

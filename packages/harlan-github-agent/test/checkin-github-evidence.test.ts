@@ -15,14 +15,15 @@ async function workspace() {
   return path
 }
 const evidence = { observedAt: '2026-10-10T07:00:00Z', workflowRuns: { _tag: 'Available' as const, entries: [{ id: 12, name: 'CI' }], truncated: false } }
+const checkout = { sha: 'a'.repeat(40), observedAt: '2026-10-10T07:00:00Z' }
 
 it('delivers scoped metadata through a private collector file', async () => {
   const root = await workspace()
-  await writeCheckinGitHubEvidence({ workspace: root, repository: 'harlan-zw/example', branch: 'main', evidence })
+  await writeCheckinGitHubEvidence({ workspace: root, repository: 'harlan-zw/example', branch: 'main', evidence, checkout })
   const path = join(root, 'node_modules/.cache/harlan-checkin/github.json')
-  expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ schemaVersion: 1, repository: 'harlan-zw/example', branch: 'main', ...evidence })
+  expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ schemaVersion: 1, repository: 'harlan-zw/example', branch: 'main', ...evidence, checkout })
   expect((await stat(path)).mode & 0o777).toBe(0o600)
-  await writeCheckinGitHubEvidence({ workspace: root, repository: 'harlan-zw/example', branch: 'main', evidence: { ...evidence, observedAt: '2026-10-10T07:01:00Z' } })
+  await writeCheckinGitHubEvidence({ workspace: root, repository: 'harlan-zw/example', branch: 'main', evidence: { ...evidence, observedAt: '2026-10-10T07:01:00Z' }, checkout })
   expect(JSON.parse(await readFile(path, 'utf8')).observedAt).toBe('2026-10-10T07:01:00Z')
 })
 
@@ -30,6 +31,6 @@ it('refuses a cache symlink outside its task Worktree', async () => {
   const root = await workspace()
   const outside = await workspace()
   await symlink(outside, join(root, 'node_modules/.cache'))
-  await expect(writeCheckinGitHubEvidence({ workspace: root, repository: 'harlan-zw/example', branch: 'main', evidence })).rejects.toThrow('inside its Worktree')
+  await expect(writeCheckinGitHubEvidence({ workspace: root, repository: 'harlan-zw/example', branch: 'main', evidence, checkout })).rejects.toThrow('inside its Worktree')
   await expect(stat(join(outside, 'harlan-checkin'))).rejects.toMatchObject({ code: 'ENOENT' })
 })

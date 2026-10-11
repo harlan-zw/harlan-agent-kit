@@ -34,6 +34,25 @@ async function fixture() {
   return { root, repository, git, transfer }
 }
 
+it('carries the controller collector snapshot without other ignored files', async () => {
+  const f = await fixture()
+  await writeFile(join(f.repository, '.gitignore'), 'node_modules/\n.env\n')
+  await f.git(['add', '.gitignore'])
+  await f.git(['commit', '-m', 'test: ignore private files'])
+  const path = 'node_modules/.cache/harlan-checkin/github.json'
+  const snapshot = JSON.stringify({ schemaVersion: 1, repository: 'harlan-zw/example', checkout: { sha: await f.git(['rev-parse', 'HEAD']) } })
+  await mkdir(join(f.repository, 'node_modules/.cache/harlan-checkin'), { recursive: true })
+  await writeFile(join(f.repository, path), snapshot, { mode: 0o600 })
+  await writeFile(join(f.repository, '.env'), 'PRIVATE_TOKEN=secret\n')
+  const exported = await exportDesktopWorktree(f.repository, f.transfer)
+  expect(exported.files.map(file => file.path)).toEqual([path])
+  expect(Buffer.from(exported.files[0]!.data, 'base64').toString()).toBe(snapshot)
+  const receiver = join(f.root, 'receiver')
+  await mkdir(receiver)
+  await applyDesktopFiles(receiver, exported, f.transfer)
+  expect(await readFile(join(receiver, path), 'utf8')).toBe(snapshot)
+})
+
 /**
  * A checkout with a reachable origin, as every real repository has.
  *

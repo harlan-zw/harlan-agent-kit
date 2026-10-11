@@ -46,3 +46,19 @@ it('rejects a credential alias to another file', async () => {
   await symlink(secret, join(input.controllerHome, '.config/harlan-checkin/site.env'))
   await expect(checkinEnvironment(input)).rejects.toThrow()
 })
+
+it('injects only the matching site credentials into a D1 review', async () => {
+  const input = await fixture()
+  await writeFile(join(input.controllerHome, '.config/harlan-checkin/site.env'), 'CLOUDFLARE_API_TOKEN=private\n', { mode: 0o600 })
+  expect(await checkinEnvironment({ ...input, taskId: 'owner/site:d1-query-review:2026-10-08T00:00:00.000Z' })).toEqual({ CLOUDFLARE_API_TOKEN: 'private', CI: 'true' })
+  await expect(checkinEnvironment({ ...input, repository: 'other/site', taskId: 'owner/site:d1-query-review:2026-10-08T00:00:00.000Z' })).rejects.toThrow('repository')
+})
+
+it('limits the shared D1 credential to approved production scans', async () => {
+  const input = await fixture()
+  await writeFile(join(input.controllerHome, '.config/harlan-checkin/d1-query-review.env'), 'CLOUDFLARE_API_TOKEN=readonly\nCLOUDFLARE_ACCOUNT_ID=account\nSENTRY_AUTH_TOKEN=unrelated\n', { mode: 0o600 })
+  const scope = { ...input, repository: 'harlan-zw/nuxtseo.com', taskId: 'harlan-zw/nuxtseo.com:d1-query-review:2026-10-08T00:00:00.000Z' }
+  expect(await checkinEnvironment(scope)).toEqual({ CLOUDFLARE_API_TOKEN: 'readonly', CLOUDFLARE_ACCOUNT_ID: 'account', CI: 'true' })
+  expect(await checkinEnvironment({ ...scope, taskId: 'harlan-zw/nuxtseo.com:daily-checkin:2026-10-08T00:00:00.000Z' })).toEqual({ CI: 'true' })
+  expect(await checkinEnvironment({ ...input, taskId: 'owner/site:d1-query-review:2026-10-08T00:00:00.000Z' })).toEqual({ CI: 'true' })
+})

@@ -272,6 +272,7 @@ describe('dashboard HTTP app', () => {
         candidates: [],
         activity: [],
         reportState: null,
+        report: null,
         createdAt: '2026-08-13T00:00:00.000Z',
         updatedAt: now().toISOString(),
       }],

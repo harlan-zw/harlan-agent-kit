@@ -192,6 +192,9 @@ function issueItem(
   const controllerLogin = actorLogin.toLowerCase()
   return {
     kind: 'issue',
+    closureReason: issue.state_reason ?? null,
+    closureDetail: comments.filter(comment => comment.user?.login.toLowerCase() !== controllerLogin
+      && repository.writablePullRequestAuthors.includes(comment.user?.login ?? '')).at(-1)?.body ?? null,
     approvalLabels: approvalLabels(labels),
     contentDigest: issueContentDigest({
       title: issue.title,
@@ -585,6 +588,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
 
 /** Files the issue one Candidate proposes, so the Item pipeline can act on it. */
 export interface GitHubIssuePublisher {
+  updateIssue: (input: { repository: RepositoryMapping, issueNumber: number, title: string, body: string }, signal?: AbortSignal) => Promise<Result<void, GitHubReadError>>
   createIssue: (input: {
     repository: RepositoryMapping
     title: string
@@ -639,6 +643,18 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
   }
 
   return {
+    async updateIssue(input, signal) {
+      const { owner, repo } = repositoryParts(input.repository.github)
+      const client = await itemWriteClient(input.repository.github, signal)
+      if (client._tag === 'Err')
+        return client
+      return client.value.rest.issues.update({ owner, repo, issue_number: input.issueNumber, title: input.title, body: input.body, ...(signal === undefined ? {} : { request: { signal } }) })
+        .then(() => ok(undefined))
+        .catch((error: unknown): Result<void, GitHubReadError> => {
+          const status = errorStatus(error)
+          return err({ repository: input.repository.github, message: error instanceof Error ? error.message : 'GitHub refused the report update.', ...(status === undefined ? {} : { status }) })
+        })
+    },
     async createIssue(input, signal) {
       const { owner, repo } = repositoryParts(input.repository.github)
       const octokit = await itemWriteClient(input.repository.github, signal)
