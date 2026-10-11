@@ -501,6 +501,30 @@ Issue work reproduces findings and verifies repairs without weakening checks or 
 Runner operations and GitHub settings appear in the report for their next actor.
 The usual Review and merge policies apply. Other repositories enable `ci-review` through their own Routine spec.
 
+## Daily Agent retro
+
+The `agent-retro` Routine reviews Service events and open Incidents at 07:00 Melbourne time.
+Only `harlan-zw/harlan-agent-kit` may enable it. The controller supplies evidence across its mapped repositories.
+The scan reads the latest 1,000 events within seven days and samples up to 200.
+Failures and repeated attempts come first. Up to 50 open Incidents join the sample.
+Event records include task identity, retries, duration, and available token use.
+Known token shapes are redacted. Prompts, raw transcripts, credentials, and host logs are excluded.
+Missing sources and omitted records remain explicit coverage gaps. They cannot establish fleet success rates.
+
+Each run publishes a report, including runs with no proposed fix.
+At most two proven defects become Candidates. Existing issues and pull requests retain their work.
+Issue triage and Issue work use the normal pipeline. Repairs need a focused reproduction before implementation.
+Changes stay within the Service package or Skills, with at most five changed files per fix.
+Model selection, budgets, permissions, and Review or merge policy remain operator decisions.
+The existing merge policy governs every resulting pull request.
+
+Hogwild runs the schedule without the desktop. Its systemd unit restarts a crashed process.
+The Routine cannot diagnose the controller while the controller is stopped.
+Use the remote dashboard to inspect health, Routine reports, Incidents, and update requests.
+After merging supporting code, use the existing Service update control before the first scheduled scan.
+Start a smoke run with `control routine-run --routine harlan-zw/harlan-agent-kit:agent-retro`.
+Verify the Routine run and its published GitHub report before relying on the schedule.
+
 ## Weekly performance review
 
 The `perf-review` Routine reads a repository's stored Measurements and files one issue per confirmed Regression.

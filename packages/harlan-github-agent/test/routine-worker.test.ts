@@ -63,6 +63,7 @@ function workerFor(
   writtenEvidence?: Array<Parameters<typeof writeCheckinGitHubEvidence>[0]>,
 ) {
   return createRoutineScanWorker({
+    serviceEvidence: store,
     writeCheckinEvidence: async (input) => { writtenEvidence?.push(input) },
     githubEvidence: { collect: async () => ({ observedAt: now().toISOString(), issues: { _tag: 'Available', entries: [{ number: 7, title: 'Private controller issue' }], truncated: false }, pullRequests: { _tag: 'Available', entries: [], truncated: false }, workflowRuns: { _tag: 'Unavailable', reason: 'Controller cannot read Actions' }, deployments: { _tag: 'Available', entries: [], truncated: false }, deploymentStatuses: [], jobLogs: { _tag: 'NotRequested' } }) },
     ...(activityLog === undefined ? {} : { activityLog }),
@@ -998,6 +999,32 @@ describe('claiming a Routine run', () => {
       })
 
       expect(store.claimNextRoutineRun('worker-1', '2026-08-27T07:05:00.000Z', 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+})
+
+describe('agent retro scan publication', () => {
+  it('passes durable Service evidence to the Agent and stages the proven fix', async () => {
+    const store = openJournalStore(':memory:')
+    const repository = 'harlan-zw/harlan-agent-kit'
+    try {
+      store.syncRepositories([repositoryMapping({ github: repository })], now().toISOString())
+      store.setRepositoryWritesEnabled(repository, true)
+      store.syncRoutines({ repository, specSha: 'abc123', entries: [{ name: 'agent-retro', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }], at: now().toISOString() })
+      store.openRoutineRun({ routineId: `${repository}:agent-retro`, scheduledFor: now().toISOString(), specSha: 'abc123', at: now().toISOString() })
+      const incident = store.recordIncident({ scope: { _tag: 'Service' }, kind: 'unknown', severity: 'error', message: 'A fixture retry loop.', operation: 'fixture', recovery: { _tag: 'ActionRequired' }, at: now().toISOString() })
+      const capture = { prompts: [] as string[] }
+      const result = await workerFor(store, scanning({ report: `Incident ${incident.id} needs a repair.`, verdict: { severity: 'RED', coverage: 'incomplete' }, candidates: [{ ...candidate, target: 'packages/harlan-github-agent/src/store.ts' }] }, capture))
+        .run(claimStoredRun(store), new AbortController().signal)
+      expect(result._tag).toBe('Ok')
+      expect(capture.prompts[0]).toContain(incident.id)
+      expect(capture.prompts[0]).toContain('A fixture retry loop.')
+      expect(store.listCandidates(`${repository}:agent-retro`)).toMatchObject([{ target: 'packages/harlan-github-agent/src/store.ts' }])
+      const command = store.claimNextCandidateIssue('publisher', now().toISOString(), 60_000)
+      expect(command).toMatchObject({ repository, body: expect.stringContaining('packages/harlan-github-agent/src/store.ts') })
     }
     finally {
       store.close()
