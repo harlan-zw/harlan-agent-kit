@@ -173,7 +173,7 @@ function activityLine(item: AgentActivityItem): string {
 </script>
 
 <template>
-  <USlideover v-model:open="open" title="System" :ui="{ body: 'space-y-10' }">
+  <USlideover v-model:open="open" title="System" :ui="{ body: 'space-y-10 wrap-anywhere' }">
     <template #body>
       <section v-if="controlsUnavailable" role="status" aria-label="Service data unavailable">
         <p class="text-sm status-warning">
