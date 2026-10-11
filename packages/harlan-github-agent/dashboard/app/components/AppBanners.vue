@@ -14,6 +14,7 @@ const {
   requestRestart,
   requestUpdate,
   controlPending,
+  controlsUnavailable,
 } = useDashboard()
 
 const restart = computed(() => restartNotice(snapshot.value.restartRequest))
@@ -29,7 +30,7 @@ const restart = computed(() => restartNotice(snapshot.value.restartRequest))
     </div>
 
     <div v-if="isStale" role="status" class="mx-auto flex max-w-[100rem] flex-wrap items-center gap-x-4 gap-y-2 px-6 py-2 text-sm xl:px-10">
-      <span class="status-warning">Last update {{ relativeTime(snapshot.generatedAt) }}. The board may have moved on.</span>
+      <span class="status-warning">Last update {{ relativeTime(snapshot.generatedAt) }}. Service data is unavailable.</span>
       <UButton size="xs" color="neutral" variant="outline" @click="loadState">
         Reload
       </UButton>
@@ -42,7 +43,7 @@ const restart = computed(() => restartNotice(snapshot.value.restartRequest))
         size="xs"
         color="neutral"
         variant="outline"
-        :disabled="controlPending"
+        :disabled="controlPending || controlsUnavailable"
         @click="snapshot.restartRequest?.operation._tag === 'Update' ? requestUpdate() : requestRestart()"
       >
         {{ snapshot.restartRequest?.operation._tag === 'Update' ? 'Update after current work' : 'Restart again' }}

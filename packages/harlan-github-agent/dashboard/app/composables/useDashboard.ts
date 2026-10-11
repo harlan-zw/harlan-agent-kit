@@ -106,6 +106,14 @@ function createDashboard() {
 
   /** Old data on a monitoring surface is worse than none, because it still looks authoritative. */
   const isStale = computed(() => !loading.value && isSnapshotStale(snapshot.value.generatedAt, now.value))
+  const controlsUnavailable = computed(() => loading.value || snapshot.value.generatedAt.length === 0 || isStale.value)
+
+  function refuseUnavailableControl(): boolean {
+    if (!controlsUnavailable.value)
+      return false
+    controlError.value = 'Service data is unavailable. Reload before changing settings or work.'
+    return true
+  }
 
   function relativeTime(value: string | null): string {
     void now.value
@@ -147,6 +155,8 @@ function createDashboard() {
 
   /** Every control writes through the controller, then reloads rather than guessing the result. */
   async function control(request: () => Promise<unknown>): Promise<void> {
+    if (refuseUnavailableControl())
+      return
     controlPending.value = true
     controlError.value = undefined
     return request()
@@ -180,6 +190,8 @@ function createDashboard() {
     control(() => $fetch('/api/agents/slots', { method: 'POST', body: { host, slots } }))
 
   async function setRepositoryPaused(repository: string, paused: boolean): Promise<void> {
+    if (refuseUnavailableControl())
+      return
     repositoryPending.value = repository
     controlError.value = undefined
     return $fetch(`/api/repositories/${paused ? 'pause' : 'resume'}`, { method: 'POST', body: { repository } })
@@ -193,6 +205,8 @@ function createDashboard() {
   }
 
   async function setRepositoryWritesEnabled(repository: string, writesEnabled: boolean): Promise<void> {
+    if (refuseUnavailableControl())
+      return
     repositoryPending.value = repository
     controlError.value = undefined
     return $fetch(`/api/repositories/writes/${writesEnabled ? 'enable' : 'disable'}`, { method: 'POST', body: { repository } })
@@ -210,6 +224,8 @@ function createDashboard() {
   }
 
   async function rerunReview(repository: string, pullRequestNumber: number, revisionId: string): Promise<void> {
+    if (refuseUnavailableControl())
+      return
     const key = itemKey(repository, pullRequestNumber, revisionId)
     rerunPending.value = key
     rerunErrors.value = without(rerunErrors.value, key)
@@ -237,6 +253,8 @@ function createDashboard() {
   }
 
   async function cancelAgentTask(taskId: string): Promise<void> {
+    if (refuseUnavailableControl())
+      return
     cancelPending.value = taskId
     cancelErrors.value = without(cancelErrors.value, taskId)
     return $fetch('/api/tasks/cancel', { method: 'POST', body: { taskId } })
@@ -250,6 +268,8 @@ function createDashboard() {
   }
 
   async function approveQueueEntry(entry: QueueEntry): Promise<void> {
+    if (refuseUnavailableControl())
+      return
     if (entry.state._tag !== 'AwaitingApproval')
       return
     const key = itemKey(entry.repository, entry.number, entry.revisionId)
@@ -304,6 +324,8 @@ function createDashboard() {
    * A Dismissal names the Item, so one call covers every future head commit.
    */
   async function changeDismissal(repository: string, itemNumber: number, action: 'dismiss' | 'restore'): Promise<void> {
+    if (refuseUnavailableControl())
+      return
     const key = `${repository}#${itemNumber}`
     dismissPending.value = key
     dismissErrors.value = without(dismissErrors.value, key)
@@ -371,8 +393,10 @@ function createDashboard() {
   }
 
   watch(liveSnapshot, (value) => {
-    if (value !== null)
+    if (value !== null) {
       snapshot.value = value
+      loading.value = false
+    }
   })
 
   watch(visibility, (value) => {
@@ -413,6 +437,7 @@ function createDashboard() {
     unhealthyRepositories,
     queueContext,
     isStale,
+    controlsUnavailable,
     relativeTime,
     duration,
     loadState,

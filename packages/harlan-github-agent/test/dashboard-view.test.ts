@@ -907,9 +907,11 @@ describe('incident pane', () => {
   })
 
   it('says what the controller will do next', () => {
-    expect(incidentRecoveryLabel(incident())).toBe('Retrying · retry 2')
-    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'Exhausted' } }))).toBe('Retries exhausted')
-    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'ActionRequired' } }))).toBe('Action required')
+    expect(incidentRecoveryLabel(incident(), new Date('2026-08-14T12:00:00Z'))).toBe('Retry in 1m 0s · retry 2')
+    expect(incidentRecoveryLabel(incident(), new Date('2026-08-14T12:02:00Z'))).toBe('Retry due · retry 2')
+    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'Exhausted' } }), now)).toBe('Retries exhausted')
+    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'ActionRequired' } }), now)).toBe('Action required')
+    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'OnNextOperation' } }), now)).toBe('The next Controller operation checks recovery.')
   })
 
   it('names the scope a person can act on', () => {

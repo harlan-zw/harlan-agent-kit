@@ -1316,7 +1316,7 @@ export const RUNNER_LOST_INCIDENT_MESSAGE = 'A runner stopped while jobs were ru
  * The controller never re-runs the workflow itself. GitHub refuses a failed-job
  * re-run while sibling jobs in the same run are still queued, and a retry storm
  * against a saturated runner pool makes the outage worse. Recovery is
- * `Retrying` because the next poll reads the same checks again.
+ * checked by the next operation because the next poll reads the same checks again.
  */
 function recordRunnerLostIncident(options: ReviewWorkerOptions, repository: string): void {
   const at = options.now().toISOString()
@@ -1326,7 +1326,7 @@ function recordRunnerLostIncident(options: ReviewWorkerOptions, repository: stri
     severity: 'warning',
     operation: 'read_checks',
     message: RUNNER_LOST_INCIDENT_MESSAGE,
-    recovery: { _tag: 'Retrying', attempt: 0, nextAttemptAt: at },
+    recovery: { _tag: 'OnNextOperation' },
     at,
   })
 }

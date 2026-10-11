@@ -201,6 +201,12 @@ function incidentScope(row: IncidentRow): IncidentScope {
 }
 
 function incidentFromRow(row: IncidentRow): Incident {
+  const recordedRecovery = JSON.parse(row.recovery) as IncidentRecovery
+  // Earlier Controller operations wrote the failure time as a retry deadline.
+  // No scheduler owns that deadline. Keep real, later retry deadlines intact.
+  const recovery: IncidentRecovery = recordedRecovery._tag === 'Retrying' && recordedRecovery.attempt === 0 && recordedRecovery.nextAttemptAt === row.last_seen_at
+    ? { _tag: 'OnNextOperation' }
+    : recordedRecovery
   return {
     id: row.id,
     scope: incidentScope(row),
@@ -208,7 +214,7 @@ function incidentFromRow(row: IncidentRow): Incident {
     severity: row.severity,
     message: row.message,
     operation: row.operation,
-    recovery: JSON.parse(row.recovery) as IncidentRecovery,
+    recovery,
     occurrences: row.occurrences,
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,
@@ -8644,7 +8650,7 @@ export function openJournalStore(
   const listIncidents: JournalStore['listIncidents'] = () => {
     const rows = database.prepare(`
       SELECT * FROM incidents WHERE resolved_at IS NULL
-      ORDER BY last_seen_at DESC LIMIT 50
+      ORDER BY CASE severity WHEN 'error' THEN 0 ELSE 1 END, last_seen_at DESC
     `).all() as unknown as IncidentRow[]
     return rows.map(incidentFromRow)
   }
@@ -8785,7 +8791,7 @@ export function openJournalStore(
       severity: failure._tag === 'Transient' ? 'warning' : 'error',
       operation: 'poll',
       message,
-      recovery: failure._tag === 'Transient' ? { _tag: 'Retrying', attempt: 0, nextAttemptAt: at } : { _tag: 'ActionRequired' },
+      recovery: failure._tag === 'Transient' ? { _tag: 'OnNextOperation' } : { _tag: 'ActionRequired' },
       at,
     })
   }

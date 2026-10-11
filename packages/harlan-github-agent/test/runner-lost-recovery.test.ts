@@ -192,10 +192,10 @@ describe('runner Incident recovery', () => {
     const probe = setup()
     for (let index = 0; index < 60; index++)
       probe.store.recordIncident({ scope: { _tag: 'Service' }, kind: 'unknown', severity: 'error', operation: 'unrelated', message: `Other failure ${index}.`, recovery: { _tag: 'ActionRequired' }, at: '2026-09-30T00:01:00.000Z' })
-    expect(probe.store.listIncidents().some(incident => incident.kind === 'runner_lost')).toBe(false)
+    expect(probe.store.listIncidents()).toContainEqual(expect.objectContaining({ kind: 'runner_lost' }))
     expect(await probe.run()).toEqual(ok(1))
     expect(probe.store.listRunnerLostIncidents(probe.repository.github)).toEqual([])
-    expect(probe.store.listIncidents()).toHaveLength(50)
+    expect(probe.store.listIncidents()).toHaveLength(60)
   })
 
   it('deduplicates shared head and base reads within one recovery pass', async () => {

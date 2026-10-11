@@ -218,7 +218,7 @@ describe('a required check that lost its runner', () => {
       severity: 'warning',
       operation: 'read_checks',
       message: RUNNER_LOST_INCIDENT_MESSAGE,
-      recovery: { _tag: 'Retrying', attempt: 0, nextAttemptAt: '2026-08-19T01:00:00.000Z' },
+      recovery: { _tag: 'OnNextOperation' },
       at: '2026-08-19T01:00:00.000Z',
     }])
   })

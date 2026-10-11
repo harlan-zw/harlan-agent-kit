@@ -9,7 +9,7 @@ import { restartNotice } from '../utils/system.ts'
  */
 const emit = defineEmits<{ keyboard: [] }>()
 
-const { snapshot, controlPending, setSelectionMode, setAgentControl, requestRestart } = useDashboard()
+const { snapshot, controlsUnavailable, controlPending, setSelectionMode, setAgentControl, requestRestart } = useDashboard()
 const notifications = useNotifications()
 const colorMode = useColorMode()
 const toast = useToast()
@@ -52,7 +52,7 @@ const items = computed<DropdownMenuItem[][]>(() => {
               {
                 label: paused.value ? 'Resume' : 'Pause',
                 icon: paused.value ? 'i-octicon-play-16' : 'i-octicon-stop-16',
-                disabled: controlPending.value,
+                disabled: controlPending.value || controlsUnavailable.value,
                 onSelect: () => setAgentControl(paused.value ? 'resume' : 'pause'),
               },
             ],
@@ -68,7 +68,7 @@ const items = computed<DropdownMenuItem[][]>(() => {
             description: 'The service selects each pull request.',
             type: 'checkbox',
             checked: snapshot.value.selectionMode === 'auto',
-            disabled: controlPending.value,
+            disabled: controlPending.value || controlsUnavailable.value,
             onUpdateChecked: () => setSelectionMode('auto'),
           },
           {
@@ -76,7 +76,7 @@ const items = computed<DropdownMenuItem[][]>(() => {
             description: 'You select each pull request.',
             type: 'checkbox',
             checked: snapshot.value.selectionMode === 'manual',
-            disabled: controlPending.value,
+            disabled: controlPending.value || controlsUnavailable.value,
             onUpdateChecked: () => setSelectionMode('manual'),
           },
         ],
@@ -118,7 +118,7 @@ const items = computed<DropdownMenuItem[][]>(() => {
           {
             label: restartActive.value && restart.value !== undefined ? restart.value.text : 'Restart after current work',
             icon: 'i-octicon-sync-16',
-            disabled: controlPending.value || restart.value?._tag === 'Requested' || restart.value?._tag === 'Restarting',
+            disabled: controlPending.value || controlsUnavailable.value || restart.value?._tag === 'Requested' || restart.value?._tag === 'Restarting',
             onSelect: () => requestRestart(),
           },
         ],

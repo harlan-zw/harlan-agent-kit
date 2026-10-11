@@ -23,6 +23,12 @@ The dashboard uses short, direct controls and specific state descriptions.
 | GitHub hold | Requests using this credential are paused. | System pane |
 | GitHub retry due | Retry due | System pane countdown |
 | GitHub recovery | The next GitHub request checks recovery. | System pane after the deadline |
+| Service data unavailable | Service data is unavailable. Reload before changing settings or work. | System pane and refused controls |
+| Service data label | Unavailable | System chip after its last update expires |
+| Desktop incompatible | Update required | Desktop state when protocols differ |
+| Desktop warning | Desktop update required | System chip and pane summary |
+| Operation recovery | The next Controller operation checks recovery. | Incident with no scheduled retry |
+| Agent recovery | The next Agent request checks recovery. | Capacity after the circuit deadline |
 
 ## Register by context
 

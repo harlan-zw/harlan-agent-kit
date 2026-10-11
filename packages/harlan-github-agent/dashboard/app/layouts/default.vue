@@ -8,7 +8,7 @@ import { isTypingTarget } from '../utils/keyboard.ts'
  * The layout is also the one subscriber that keeps the shared snapshot alive,
  * so changing page never costs a reconnect.
  */
-const { snapshot, loading, unhealthyRepositories, controlPending, controlError, isStale, setAgentControl, start } = useDashboard()
+const { snapshot, controlsUnavailable, unhealthyRepositories, controlPending, controlError, isStale, setAgentControl, start } = useDashboard()
 const { show: showSystem } = useSystemPane()
 useDocumentStatus()
 const toast = useToast()
@@ -85,7 +85,7 @@ onMounted(start)
               :variant="paused ? 'solid' : 'outline'"
               size="sm"
               :loading="controlPending"
-              :disabled="controlPending || loading"
+              :disabled="controlPending || controlsUnavailable"
               @click="setAgentControl(paused ? 'resume' : 'pause')"
             >
               {{ paused ? 'Resume' : 'Pause' }}
@@ -96,7 +96,7 @@ onMounted(start)
       </div>
     </header>
 
-    <AppBanners v-if="!sessionPage" />
+    <AppBanners />
 
     <main id="main" :class="sessionPage ? '' : 'mx-auto max-w-[100rem] px-6 py-6 xl:px-10 xl:py-10'">
       <div :class="isStale && !sessionPage ? 'stale' : undefined">

@@ -16,6 +16,42 @@ function createStore() {
 }
 
 describe('incident log', () => {
+  it('preserves scheduled deadlines and identifies operations without a retry scheduler', () => {
+    const store = createStore()
+    const at = '2026-10-11T00:00:00Z'
+    const record = (message: string, nextAttemptAt: string) => store.recordIncident({
+      scope: { _tag: 'Service' },
+      kind: 'network',
+      operation: 'probe',
+      message,
+      severity: 'warning',
+      recovery: { _tag: 'Retrying', attempt: 0, nextAttemptAt },
+      at,
+    })
+    record('Earlier Controller operation', at)
+    record('Scheduled retry', '2026-10-11T00:01:00Z')
+    expect(store.listIncidents().find(incident => incident.message === 'Earlier Controller operation')?.recovery).toEqual({ _tag: 'OnNextOperation' })
+    expect(store.listIncidents().find(incident => incident.message === 'Scheduled retry')?.recovery).toEqual({ _tag: 'Retrying', attempt: 0, nextAttemptAt: '2026-10-11T00:01:00Z' })
+    store.close()
+  })
+  it('keeps an older blocking Incident visible through a larger warning burst', () => {
+    const store = createStore()
+    for (let index = 0; index < 51; index++) {
+      store.recordIncident({
+        scope: { _tag: 'Service' },
+        kind: 'network',
+        operation: 'probe',
+        message: `Failure ${index}`,
+        severity: index === 0 ? 'error' : 'warning',
+        recovery: { _tag: 'ActionRequired' },
+        at: new Date(Date.parse('2026-10-11T00:00:00Z') + index * 1000).toISOString(),
+      })
+    }
+    expect(store.listIncidents()[0]?.message).toBe('Failure 0')
+    expect(store.getDashboardSnapshot('2026-10-11T00:01:00Z').incidents).toHaveLength(51)
+    store.close()
+  })
+
   it.each(['review', 'conflict'] as const)('keeps memory recovery bounded during %s observations', (kind) => {
     const store = createStore()
     const at = (second: number) => new Date(Date.parse('2026-08-18T00:00:00Z') + second * 1000).toISOString()

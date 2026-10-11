@@ -184,7 +184,7 @@ function recordServiceIncident(
     operation,
     message,
     recovery: failure._tag === 'Transient'
-      ? { _tag: 'Retrying', attempt: 0, nextAttemptAt: at }
+      ? { _tag: 'OnNextOperation' }
       : { _tag: 'ActionRequired' },
     at,
   })
@@ -849,7 +849,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           severity: 'warning',
           operation: 'review_status_comment',
           message: reason,
-          recovery: { _tag: 'Retrying', attempt: 0, nextAttemptAt: now().toISOString() },
+          recovery: { _tag: 'OnNextOperation' },
           at: now().toISOString(),
         })
       },
