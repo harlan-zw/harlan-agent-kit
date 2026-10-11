@@ -84,6 +84,17 @@ describe('routineRows', () => {
     expect(row!.detail).toBe('Sentry answered 500.')
     expect(row!.trackingUrl).toBe('https://github.com/harlan-zw/example/issues/42')
   })
+
+  it('keeps scan counters in run evidence and removes them from action rows', () => {
+    const completed = run({
+      state: { _tag: 'Completed', evidence: 'sentry-checkin on harlan-zw/example | 0 found | 0 new | 0 issues requested' },
+      report: { body: 'The deployment needs attention.', verdict: { severity: 'AMBER', coverage: 'complete' } },
+    })
+    const [row] = routineRows([routine()], [completed], now)
+
+    expect([row!.label, row!.tone, row!.detail]).toEqual(['Action required', 'warning', undefined])
+    expect(routineRunDetail(completed)).toBe('0 found · 0 new · 0 issues requested')
+  })
 })
 
 describe('recentRoutineRuns', () => {
@@ -108,4 +119,5 @@ it('shows blocked coverage even when the scan completed successfully', () => {
   const blocked = run({ name: 'daily-checkin', report: { body: 'Deployment identity is unavailable.', verdict: { severity: 'AMBER', coverage: 'incomplete' } } })
   const [row] = routineRows([routine({ name: 'daily-checkin' })], [blocked], new Date('2026-08-28T06:00:00.000Z'))
   expect([row!.label, row!.tone]).toEqual(['Blocked', 'warning'])
+  expect(row!.detail).toBe('Coverage incomplete.')
 })
