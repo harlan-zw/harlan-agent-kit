@@ -108,6 +108,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           workspace: workspace.value.path,
           repository: task.repository,
           branch: task.repositoryMapping.defaultBranch,
+          checkout: { sha: workspace.value.defaultBranchSha, observedAt: options.now().toISOString() },
           evidence: githubEvidence!,
         })
       }

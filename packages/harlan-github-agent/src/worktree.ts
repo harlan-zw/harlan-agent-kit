@@ -94,6 +94,10 @@ export interface PreparedWorkerWorkspace {
   path: string
 }
 
+export interface PreparedRoutineWorkspace extends PreparedWorkerWorkspace {
+  defaultBranchSha: string
+}
+
 /**
  * An issue workspace with the default branch tip it was prepared against.
  *
@@ -121,7 +125,7 @@ export interface AgentWorkspaceManager {
   prepareIssue: (task: ClaimedIssueTriageTask | ClaimedIssueWorkTask, base: PullRequestBase, signal: AbortSignal) => Promise<Result<PreparedIssueWorkspace, string>>
   prepareReview: (task: ClaimedAdversarialReviewTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   /** A Routine scan reads the default branch. It never starts from a pull request head. */
-  prepareRoutine: (task: ClaimedRoutineRun, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
+  prepareRoutine: (task: ClaimedRoutineRun, signal: AbortSignal) => Promise<Result<PreparedRoutineWorkspace, string>>
   /** A Batch planning turn reads the default branch, so it can see which issues touch the same code. */
   prepareBatch: (batch: ClaimedBatch, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   verifyReview: (task: ClaimedAdversarialReviewTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<void, string>>
@@ -903,13 +907,20 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       // A Routine runs from the exact source commit stored when its Run opened.
       // A later default branch push cannot change queued work.
       const baseRef = `refs/harlan-github-agent/routines/${task.name}`
-      return prepareRepository(
+      const defaultRef = `refs/harlan-github-agent/routines/${task.name}-default-branch`
+      const prepared = await prepareRepository(
         task,
         `routine-${task.name}-${task.scheduledFor.slice(0, 10)}`,
-        [`+${task.specSha}:${baseRef}`],
+        [`+${task.specSha}:${baseRef}`, `+refs/heads/${task.repositoryMapping.defaultBranch}:${defaultRef}`],
         baseRef,
         signal,
       )
+      if (prepared._tag === 'Err')
+        return prepared
+      const current = await runGitScalar(task.repositoryMapping.checkout, ['rev-parse', defaultRef], signal)
+      return current.exitCode === 0
+        ? ok({ ...prepared.value, defaultBranchSha: current.stdout })
+        : err(`Could not resolve the Routine default branch: ${current.stderr}`)
     },
 
     async prepareBaseline(task, signal) {

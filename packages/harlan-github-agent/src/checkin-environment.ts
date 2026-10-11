@@ -1,6 +1,7 @@
 import { constants } from 'node:fs'
 import { open, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
+import { PRODUCTION_D1_REPOSITORIES } from './d1-query-scope.ts'
 import { parseEnvironmentFile } from './workspace-environment.ts'
 
 /** Read only the scheduled repository's private check-in values before entering its isolated home. */
@@ -9,12 +10,13 @@ export async function checkinEnvironment(input: {
   repository: string | undefined
   taskId: string | undefined
 }): Promise<Record<string, string>> {
-  const routine = /^([a-z0-9][a-z0-9-]*\/([a-z0-9][\w.-]*)):daily-checkin:/i.exec(input.taskId ?? '')
+  const routine = /^([a-z0-9][a-z0-9-]*\/([a-z0-9][\w.-]*)):(daily-checkin|d1-query-review):/i.exec(input.taskId ?? '')
   if (routine === null)
     return {}
   if (routine[1]!.toLowerCase() !== input.repository?.toLowerCase())
     throw new Error('The daily check-in repository does not match its Worktree origin.')
-  const path = join(input.controllerHome, '.config/harlan-checkin', `${routine[2]}.env`)
+  const fleet = routine[3]?.toLowerCase() === 'd1-query-review' && PRODUCTION_D1_REPOSITORIES.has(routine[1]!.toLowerCase())
+  const path = join(input.controllerHome, '.config/harlan-checkin', `${fleet ? 'd1-query-review' : routine[2]}.env`)
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch((error: NodeJS.ErrnoException) => {
     // Missing credentials remain a coverage gap for the collector to report.
     if (error.code === 'ENOENT')
@@ -35,7 +37,10 @@ export async function checkinEnvironment(input: {
     delete values.DAILY_CHECKIN_DIR
     delete values.XDG_DATA_HOME
     delete values.XDG_STATE_HOME
-    return { ...values, CI: 'true' }
+    const collection = fleet
+      ? Object.fromEntries(Object.entries(values).filter(([name]) => ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'].includes(name)))
+      : values
+    return { ...collection, CI: 'true' }
   }
   finally {
     await file.close()

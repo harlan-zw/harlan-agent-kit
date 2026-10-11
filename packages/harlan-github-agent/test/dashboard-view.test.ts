@@ -115,6 +115,7 @@ function routineRun(overrides: Partial<DashboardRoutineRun> = {}): DashboardRout
     candidates: [],
     activity: [],
     reportState: null,
+    report: null,
     createdAt: '2026-08-27T21:00:00.000Z',
     updatedAt: '2026-08-27T21:01:00.000Z',
     ...overrides,

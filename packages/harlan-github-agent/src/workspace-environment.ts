@@ -112,7 +112,7 @@ function isDirectory(path: string): boolean {
 
 /** Routine IDs carry the trusted repository, independent of worktree and run date. */
 export function dailyCheckinDirectory(base: NodeJS.ProcessEnv, taskId?: string): string | undefined {
-  const routine = /^([a-z0-9][a-z0-9-]*)\/([a-z0-9][\w.-]*):daily-checkin:/i.exec(taskId ?? '')
+  const routine = /^([a-z0-9][a-z0-9-]*)\/([a-z0-9][\w.-]*):(daily-checkin|d1-query-review):/i.exec(taskId ?? '')
   if (!routine)
     return undefined
   const stateHome = base.XDG_STATE_HOME && isAbsolute(base.XDG_STATE_HOME)
@@ -120,7 +120,7 @@ export function dailyCheckinDirectory(base: NodeJS.ProcessEnv, taskId?: string):
     : base.HOME && isAbsolute(base.HOME) ? join(base.HOME, '.local', 'state') : undefined
   if (!stateHome)
     throw new Error('Daily check-in needs an absolute HOME or XDG_STATE_HOME.')
-  return join(stateHome, 'daily-checkin', routine[1]!, routine[2]!)
+  return join(stateHome, routine[3]!, routine[1]!, routine[2]!)
 }
 
 export function workspaceEnvironment(base: NodeJS.ProcessEnv, workspace: string, taskId?: string): NodeJS.ProcessEnv {

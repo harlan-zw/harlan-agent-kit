@@ -221,6 +221,9 @@ interface GitHubItemBase {
 
 export interface GitHubIssueItem extends GitHubItemBase {
   kind: 'issue'
+  /** Older Observations have no recorded closure reason. */
+  closureReason?: string | null
+  closureDetail?: string | null
   approvalLabels: PullRequestApprovalKind[]
   /** Title, body, non-controller comments, and human labels at observation time. */
   contentDigest: string
@@ -903,6 +906,7 @@ export interface RoutineReportCommand {
   repository: string
   routineName: RoutineName
   body: string
+  verdict: { severity: 'GREEN' | 'AMBER' | 'RED', coverage: 'complete' | 'incomplete' } | null
 }
 
 /** One leased report, with the tracking issue it belongs to when one exists. */
@@ -972,6 +976,7 @@ export interface DashboardRoutineRun extends RoutineRun {
   activity: AgentActivityItem[]
   /** State of this run's tracking-issue report command, or null when none was staged. */
   reportState: RoutineReportCommandState | null
+  report: Pick<RoutineReportCommand, 'body' | 'verdict'> | null
 }
 
 /** The lifecycle of one Routine run's tracking-issue report. */

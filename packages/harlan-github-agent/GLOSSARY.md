@@ -26,6 +26,7 @@ did not cover it.
 | Task | `tasks`, `worker_tasks` | Scheduler | N to 1 Item and Revision | task |
 | Routine | `routines` | Scheduler | N to 1 Repository mapping, 1 to N Routine runs | Routine |
 | Routine run | `routine_runs` | Scheduler | N to 1 Routine | run |
+| d1-query-review | compiled Routine definition | Scheduler | One weekly Routine per production site | d1-query-review |
 | Lease holder | `tasks.worker_id` | Scheduler | One per Running Task | none |
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
 | Stats | derived from Journal records | Dashboard | N completed records per date range | Stats |

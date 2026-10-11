@@ -163,7 +163,6 @@ export const candidateRoutine = {
 
 export function candidateScanPrompt(input: RoutineScanInput, turn: string, extra = ''): string {
   const remembered = input.priorCandidates
-    .filter(candidate => candidate.result._tag !== 'Merged' && candidate.result._tag !== 'Superseded')
     .slice(-MAXIMUM_MEMORY_CANDIDATES)
   const rejected = remembered.filter(candidate => candidate.result._tag === 'Rejected')
   const memory = rejected.length === 0

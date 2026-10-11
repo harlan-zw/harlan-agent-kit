@@ -220,6 +220,15 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
         <p v-if="outcome" class="text-sm text-default">
           {{ outcome }}
         </p>
+        <div v-if="row?._tag === 'Routine' && row.run.report" class="flex flex-col gap-2">
+          <p class="text-sm text-muted">
+            {{ row.run.state._tag === 'Completed' ? 'Scan completed' : row.run.state._tag }}
+            <template v-if="row.run.report.verdict">
+              · {{ row.run.report.verdict.severity }} · {{ row.run.report.verdict.coverage }} coverage
+            </template>
+          </p>
+          <pre class="whitespace-pre-wrap break-words font-sans text-sm text-default">{{ row.run.report.body }}</pre>
+        </div>
 
         <section v-if="review">
           <p class="field-label mb-2">

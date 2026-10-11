@@ -41,6 +41,7 @@ const run: DashboardRoutineRun = {
   candidates: [],
   activity: [{ _tag: 'Reasoning', at, text: 'Checking logs' }],
   reportState: null,
+  report: null,
 }
 
 describe('read-only Agent logs', () => {

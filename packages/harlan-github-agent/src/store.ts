@@ -48,6 +48,7 @@ import type {
   DashboardAgent,
   DashboardSnapshot,
   DashboardTask,
+  GitHubIssueItem,
   GitHubItem,
   GitHubPullRequestItem,
   Incident,
@@ -894,6 +895,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   listRoutineRuns: (routineId: string, limit?: number) => RoutineRun[]
   recordCandidates: (input: { routineId: string, runId: string, candidates: ReadonlyArray<Omit<Candidate, 'id' | 'routineId' | 'runId' | 'result' | 'createdAt' | 'updatedAt'>>, at: string }) => Candidate[]
   listCandidates: (routineId: string) => Candidate[]
+  reconcileRoutineCandidates: (at: string, repository?: string) => number
   /** Finds controller-owned Routine provenance for one published Candidate issue. */
   getRoutineIssueSource: (repository: string, issueNumber: number) => RoutineIssueSource | null
   /** Requests one issue per Candidate. Answers how many are new. */
@@ -6995,7 +6997,18 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 86
   }
-  if (version === 86)
+  if (version === 86) {
+    const columns = database.prepare('PRAGMA table_info(routine_report_commands)').all() as Array<{ name: string }>
+    applyMigration(database, `${columns.some(column => column.name === 'verdict_json') ? '' : 'ALTER TABLE routine_report_commands ADD COLUMN verdict_json TEXT CHECK (verdict_json IS NULL OR json_valid(verdict_json));'}
+      UPDATE routine_report_commands SET verdict_json = CASE
+        WHEN body LIKE '%# [BLOCKED] Daily check-in:%' THEN '{"severity":"AMBER","coverage":"incomplete"}'
+        WHEN body LIKE '%# [ACTION NEEDED] Daily check-in:%' THEN '{"severity":"AMBER","coverage":"complete"}'
+        WHEN body LIKE '%# [CLEAR] Daily check-in:%' THEN '{"severity":"GREEN","coverage":"complete"}'
+        ELSE NULL END WHERE verdict_json IS NULL AND routine_name = 'daily-checkin';
+      PRAGMA user_version = 87;`)
+    version = 87
+  }
+  if (version === 87)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -13996,8 +14009,14 @@ export function openJournalStore(
       SELECT routine_runs.*, routines.repository AS repository, routines.name AS name
       FROM routine_runs
       JOIN routines ON routines.id = routine_runs.routine_id
+      WHERE routine_runs.id IN (
+        SELECT id FROM routine_runs ORDER BY scheduled_for DESC LIMIT 50
+      ) OR routine_runs.id = (
+        SELECT latest.id FROM routine_runs AS latest
+        WHERE latest.routine_id = routine_runs.routine_id
+        ORDER BY latest.scheduled_for DESC LIMIT 1
+      )
       ORDER BY routine_runs.scheduled_for DESC
-      LIMIT 50
     `).all() as unknown as RoutineRunRow[]).map(readRoutineRun)
     const routineIds = [...new Set([
       ...routines.map(routine => routine.id),
@@ -14009,9 +14028,9 @@ export function openJournalStore(
     const reportStateRows = latestRoutineRuns.length === 0
       ? []
       : database.prepare(`
-          SELECT run_id, state_tag FROM routine_report_commands
+          SELECT run_id, state_tag, body, verdict_json FROM routine_report_commands
           WHERE run_id IN (${latestRoutineRuns.map(() => '?').join(', ')})
-        `).all(...latestRoutineRuns.map(run => run.id)) as unknown as Array<{ run_id: string, state_tag: RoutineReportCommandState }>
+        `).all(...latestRoutineRuns.map(run => run.id)) as unknown as Array<{ run_id: string, state_tag: RoutineReportCommandState, body: string, verdict_json: string | null }>
     const reportStatesByRun = new Map(reportStateRows.map(row => [row.run_id, row.state_tag]))
     const routineRuns = latestRoutineRuns
       .map(run => ({
@@ -14019,6 +14038,10 @@ export function openJournalStore(
         candidates: (candidatesByRoutine.get(run.routineId) ?? []).filter(candidate => candidate.runId === run.id),
         activity: [],
         reportState: reportStatesByRun.get(run.id) ?? null,
+        report: (() => {
+          const report = reportStateRows.find(row => row.run_id === run.id)
+          return report === undefined ? null : { body: report.body, verdict: report.verdict_json === null ? null : JSON.parse(report.verdict_json) }
+        })(),
       }))
     const rejectedIssueWorkResults = new Map((database.prepare(`
       SELECT task_transitions.task_id, COUNT(*) AS occurrences
@@ -15599,6 +15622,57 @@ export function openJournalStore(
     return row === undefined ? null : { routineName: row.routine_name, target: row.target }
   }
 
+  /** Rebuild outcomes from controller publication provenance and current GitHub Observations. */
+  const reconcileRoutineCandidates: JournalStore['reconcileRoutineCandidates'] = (at, repository) => {
+    const rows = database.prepare(`
+      SELECT candidates.id, candidates.result_tag, candidates.pull_request, candidates.reason,
+        commands.repository, commands.github_issue_number, revisions.payload AS issue_payload
+      FROM candidates
+      JOIN candidate_issue_commands commands ON commands.candidate_id = candidates.id AND commands.state_tag = 'Published'
+      JOIN repositories ON repositories.github = commands.repository
+      LEFT JOIN subjects ON subjects.repository_id = repositories.id
+        AND subjects.kind = 'issue' AND subjects.github_number = commands.github_issue_number
+      LEFT JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE candidates.result_tag != 'Merged' ${repository === undefined ? '' : 'AND commands.repository = ?'}
+    `).all(...(repository === undefined ? [] : [repository])) as unknown as Array<{ id: string, result_tag: string, pull_request: number | null, reason: string | null, repository: string, github_issue_number: number, issue_payload: string | null }>
+    let changed = 0
+    for (const row of rows) {
+      const publications = database.prepare(`
+        SELECT DISTINCT COALESCE(publication_commands.pull_request_number, pr.github_number) AS pull_request_number, revisions.payload
+        FROM tasks
+        JOIN subjects issue ON issue.id = tasks.subject_id AND issue.kind = 'issue'
+        JOIN repositories ON repositories.id = issue.repository_id
+        JOIN publication_commands ON publication_commands.task_id = tasks.id
+          OR publication_commands.id IN (SELECT command_id FROM combined_issue_publications WHERE task_id = tasks.id)
+        LEFT JOIN subjects pr ON pr.repository_id = issue.repository_id AND pr.kind = 'pull_request'
+        LEFT JOIN revisions ON revisions.id = pr.current_revision_id
+        WHERE repositories.github = ? AND issue.github_number = ?
+          AND publication_commands.state_tag = 'Published'
+          AND (pr.github_number = publication_commands.pull_request_number
+            OR (publication_commands.pull_request_number IS NULL AND json_extract(revisions.payload, '$.headRef') = publication_commands.head_ref
+              AND json_extract(revisions.payload, '$.headRepository') = repositories.github))
+        ORDER BY publication_commands.published_at DESC
+      `).all(row.repository, row.github_issue_number) as unknown as Array<{ pull_request_number: number, payload: string | null }>
+      const merged = publications.find(publication => publication.payload !== null
+        && (JSON.parse(publication.payload) as GitHubPullRequestItem).mergedAt !== null)
+      const issue = row.issue_payload === null ? null : JSON.parse(row.issue_payload) as GitHubIssueItem
+      const result: CandidateResult = merged !== undefined
+        ? { _tag: 'Merged', pullRequest: merged.pull_request_number }
+        : issue?.state === 'closed'
+          ? issue.closureReason === 'not_planned'
+            ? { _tag: 'Rejected', reason: issue.closureDetail ?? 'GitHub closed the proposal as not planned.' }
+            : { _tag: 'Superseded', reason: issue.closureDetail ?? 'GitHub closed the proposal. No merged controller fix proves its resolution.' }
+          : { _tag: 'Proposed', pullRequest: publications[0]?.pull_request_number ?? null }
+      const reason = 'reason' in result ? result.reason : null
+      const pullRequest = 'pullRequest' in result ? result.pullRequest : null
+      if (row.result_tag === result._tag && row.reason === reason && row.pull_request === pullRequest)
+        continue
+      changed += Number(database.prepare('UPDATE candidates SET result_tag = ?, reason = ?, pull_request = ?, updated_at = ? WHERE id = ?')
+        .run(result._tag, reason, pullRequest, at, row.id).changes)
+    }
+    return changed
+  }
+
   /**
    * Returns a Running Routine run whose lease expired to the queue.
    *
@@ -15780,15 +15854,18 @@ export function openJournalStore(
       JOIN routines ON routines.id = routine_runs.routine_id
       WHERE routine_runs.id = ?
     `).get(taskId) as unknown as { scheduled_for: string, routine_id: string, repository: string, name: string } | undefined
-    if (run === undefined || run.name !== 'daily-checkin')
+    if (run === undefined)
       return
-    insertRoutineReportCommand(routineReportCommand({
+    const command = routineReportCommand({
       repository: run.repository,
       routineId: run.routine_id,
-      routineName: 'daily-checkin',
+      routineName: run.name as Routine['name'],
       run: { id: taskId, scheduledFor: run.scheduled_for },
       report: { _tag: 'Failed', reason },
-    }), at)
+    })
+    insertRoutineReportCommand(command, at)
+    database.prepare('UPDATE routine_report_commands SET body = ?, verdict_json = NULL, updated_at = ? WHERE id = ? AND state_tag = \'Pending\'')
+      .run(command.body, at, command.id)
   }
 
   /**
@@ -16115,9 +16192,9 @@ export function openJournalStore(
   const insertRoutineReportCommand = (command: RoutineReportCommand, at: string): boolean => {
     const inserted = database.prepare(`
       INSERT INTO routine_report_commands (
-        id, routine_id, run_id, repository, routine_name, body, state_tag, created_at, updated_at
+        id, routine_id, run_id, repository, routine_name, body, verdict_json, state_tag, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
       ON CONFLICT (run_id) DO NOTHING
     `).run(
       command.id,
@@ -16126,6 +16203,7 @@ export function openJournalStore(
       command.repository,
       command.routineName,
       command.body,
+      command.verdict === null ? null : JSON.stringify(command.verdict),
       at,
       at,
     ).changes === 1
@@ -16194,6 +16272,7 @@ export function openJournalStore(
           routine_report_commands.repository,
           routine_report_commands.routine_name,
           routine_report_commands.body,
+          routine_report_commands.verdict_json,
           routine_report_commands.fence,
           routines.tracking_issue_number,
           repositories.policy_json
@@ -16203,6 +16282,8 @@ export function openJournalStore(
         JOIN repositories ON repositories.github = routine_report_commands.repository
         WHERE routine_report_commands.state_tag = 'Pending'
           AND routine_runs.state_tag NOT IN ('Queued', 'Running')
+          AND NOT EXISTS (SELECT 1 FROM routine_report_commands active
+            WHERE active.routine_id = routine_report_commands.routine_id AND active.state_tag = 'Running')
           AND repositories.enabled = 1
           AND repositories.writes_enabled = 1
           ${exclusion}
@@ -16214,6 +16295,7 @@ export function openJournalStore(
             run_id: string
             repository: string
             routine_name: string
+            verdict_json: string | null
             body: string
             fence: number
             tracking_issue_number: number | null
@@ -16243,14 +16325,22 @@ export function openJournalStore(
           at: now,
         })
       }
-      const candidates = (database.prepare('SELECT * FROM candidates WHERE run_id = ? ORDER BY created_at').all(row.run_id) as unknown as CandidateRow[])
+      // A late retry updates the shared issue with the latest settled report.
+      // Each command retains its original archive and publication receipt.
+      const content = row.routine_name === 'daily-checkin'
+        ? database.prepare(`SELECT report.run_id, report.body, report.verdict_json
+            FROM routine_report_commands report JOIN routine_runs run ON run.id = report.run_id
+            WHERE report.routine_id = ? AND run.state_tag NOT IN ('Queued', 'Running')
+            ORDER BY run.scheduled_for DESC LIMIT 1`).get(row.routine_id) as unknown as { run_id: string, body: string, verdict_json: string | null }
+        : row
+      const candidates = (database.prepare('SELECT * FROM candidates WHERE run_id = ? ORDER BY created_at').all(content.run_id) as unknown as CandidateRow[])
         .map(readCandidate)
       // The report only claims once its run has settled, so a crash between
       // staging and settling cannot publish a morning the retry is about to
       // rewrite. The retry records its Candidates and settles first; the fold
       // below then carries them into the heading, the issue title derived
       // from it, and the proposal block the comment lists.
-      const body = foldCandidatesIntoDailyHeading(row.body, candidates)
+      const body = foldCandidatesIntoDailyHeading(content.body, candidates)
       database.exec('COMMIT')
       if (!claimed)
         return null
@@ -16260,6 +16350,7 @@ export function openJournalStore(
         runId: row.run_id,
         repository: row.repository,
         routineName: row.routine_name as ClaimedRoutineReportCommand['routineName'],
+        verdict: content.verdict_json === null ? null : JSON.parse(content.verdict_json),
         repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping,
         body,
         trackingIssueNumber: row.tracking_issue_number,
@@ -16393,6 +16484,7 @@ export function openJournalStore(
     retireRoutines,
     recordCandidates,
     listCandidates,
+    reconcileRoutineCandidates,
     stageCandidateIssues,
     claimNextCandidateIssue,
     completeCandidateIssue,

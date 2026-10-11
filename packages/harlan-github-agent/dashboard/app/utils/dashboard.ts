@@ -83,13 +83,26 @@ export function scheduledRoutineRecords(routines: readonly Routine[], runs: read
 }
 
 /** Gives one Routine run a label, semantic tone, and durable outcome detail. */
-export function routineRunPresentation(run: RoutineRun | undefined): RoutineRunPresentation {
+export function routineRunPresentation(run: RoutineRun | DashboardRoutineRun | undefined): RoutineRunPresentation {
   if (run === undefined)
     return { label: 'Never run', tone: 'neutral' }
   switch (run.state._tag) {
     case 'Queued': return { label: 'Queued', tone: 'neutral' }
     case 'Running': return { label: 'Running', tone: 'primary', detail: run.progress.label }
-    case 'Completed': return { label: 'Completed', tone: 'success', detail: run.state.evidence }
+    case 'Completed': {
+      const report = 'report' in run ? run.report : null
+      if (report?.verdict?.coverage === 'incomplete')
+        return { label: 'Blocked', tone: 'warning', detail: 'Coverage incomplete.' }
+      if (report?.verdict?.severity === 'RED')
+        return { label: 'Action required', tone: 'error', detail: run.state.evidence }
+      if (report?.verdict?.severity === 'AMBER')
+        return { label: 'Action required', tone: 'warning', detail: run.state.evidence }
+      if ('candidates' in run && run.candidates.some(candidate => candidate.result._tag === 'Proposed'))
+        return { label: 'Action required', tone: 'warning', detail: run.state.evidence }
+      if (report?.verdict?.severity === 'GREEN')
+        return { label: 'Clear', tone: 'success', detail: run.state.evidence }
+      return { label: 'Completed', tone: 'neutral', detail: run.state.evidence }
+    }
     case 'Failed': return { label: 'Failed', tone: 'error', detail: run.state.reason }
     case 'Skipped': return { label: 'Skipped', tone: 'neutral', detail: run.state.reason }
     case 'ActionRequired': return { label: 'Action required', tone: 'warning', detail: run.state.reason }

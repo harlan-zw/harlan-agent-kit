@@ -1513,6 +1513,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             throw new Error(`${result.error.repository}: ${result.error.message}`)
           options.logger.info(`${result.value.repository}: observed ${result.value.subjects} open pull requests and issues.`)
         }
+        store.reconcileRoutineCandidates(now().toISOString(), repository.github)
         if (config.mutationsEnabled && store.getAgentControl()._tag === 'Running'
           && restartAllowsTaskClaims(store.getRestartRequest())) {
           await runCompletionTask({ repository, store, now, workerId: 'take-ownership', source: createCompletionSource({ tokens, fetch: globalThis.fetch }) }, signal)

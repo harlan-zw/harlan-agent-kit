@@ -38,6 +38,7 @@ function run(overrides: Partial<DashboardRoutineRun> = {}): DashboardRoutineRun 
     candidates: [],
     activity: [],
     reportState: null,
+    report: null,
     ...overrides,
   }
 }
@@ -101,4 +102,10 @@ describe('routineRunDetail', () => {
     expect(routineRunDetail(run({ state: { _tag: 'Failed', reason: 'Sentry answered 500.' } }))).toBe('Sentry answered 500.')
     expect(routineRunDetail(run({ state: { _tag: 'Queued' } }))).toBeUndefined()
   })
+})
+
+it('shows blocked coverage even when the scan completed successfully', () => {
+  const blocked = run({ name: 'daily-checkin', report: { body: 'Deployment identity is unavailable.', verdict: { severity: 'AMBER', coverage: 'incomplete' } } })
+  const [row] = routineRows([routine({ name: 'daily-checkin' })], [blocked], new Date('2026-08-28T06:00:00.000Z'))
+  expect([row!.label, row!.tone]).toEqual(['Blocked', 'warning'])
 })
