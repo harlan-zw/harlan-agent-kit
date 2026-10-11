@@ -970,6 +970,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         permits: routinePermits,
         // GitHub writes remain controller-owned. Sentry propose runs may resolve verified fixes.
         worker: createRoutineScanWorker({
+          serviceEvidence: store,
+          serviceUpdate: options.serviceUpdate.read,
           activityLog,
           githubEvidence: createRoutineGitHubEvidenceSource({ tokens: routedTokens, now, jobs: workerGithub }),
           logger: {

@@ -1,5 +1,12 @@
 version: 1
 routines:
+  - name: agent-retro
+    on:
+      schedule:
+        - cron: '0 7 * * *'
+    timezone: Australia/Melbourne
+    mode: propose
+    enabled: true
   - name: agent-feedback
     on:
       schedule:

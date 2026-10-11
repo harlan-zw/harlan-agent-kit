@@ -1,4 +1,5 @@
 import { agentFeedback } from './agent-feedback.ts'
+import { agentRetro } from './agent-retro.ts'
 import { ciReview } from './ci-review.ts'
 import { d1QueryReview } from './d1-query-review.ts'
 import { dailyCheckin } from './daily-checkin.ts'
@@ -14,6 +15,7 @@ const routines = {
   'sentry-checkin': sentryCheckin,
   'pr-triage': prTriage,
   'agent-feedback': agentFeedback,
+  'agent-retro': agentRetro,
   'daily-checkin': dailyCheckin,
   'd1-query-review': d1QueryReview,
   'dependency-updates': dependencyUpdates,

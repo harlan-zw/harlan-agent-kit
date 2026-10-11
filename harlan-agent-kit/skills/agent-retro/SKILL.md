@@ -8,6 +8,12 @@ license: MIT
 
 Read what the Agents did last week and return ranked fixes with evidence. The Agent retro reads transcripts. It never edits skills or service code itself.
 
+## Scheduled Routine mode
+
+If the controller starts an `agent-retro` Routine, follow [scheduled Routine mode](references/scheduled-routine.md).
+Use its supplied evidence instead of the transcript export below.
+Do not run the interactive export, analysts, or publish steps in scheduled mode.
+
 ## Where the evidence lives
 
 Everything is on Hogwild. Read only.
