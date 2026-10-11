@@ -67,7 +67,7 @@ did not cover it.
 | Legacy issue cutoff | `issue_cutoff` | Configuration | One per service | none |
 | Action required | `tasks.state_tag` | Scheduler | One Task state | action required |
 | Incident | `incidents` | Controller | N to 1 Repository mapping, Task, or the service | incident |
-| Recovery | `incidents.recovery` | Controller | One per Incident | Retrying, Retries exhausted, or Action required |
+| Recovery | `incidents.recovery` | Controller | One per Incident | Retrying, OnNextOperation, Retries exhausted, or Action required |
 | Process finding | `process_findings` | Supervision | N per workflow | none |
 
 ### GitHub terms adopted unchanged
