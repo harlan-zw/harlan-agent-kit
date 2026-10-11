@@ -1,5 +1,64 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createPoller } from '../src/poller.ts'
+import { createIndependentPollers, createPoller } from '../src/poller.ts'
+
+describe('independent controller passes', () => {
+  it('aborts every active pass when the service stops', async () => {
+    const signals: AbortSignal[] = []
+    const poll = (signal: AbortSignal) => new Promise<void>((resolve) => {
+      signals.push(signal)
+      signal.addEventListener('abort', () => resolve(), { once: true })
+    })
+    const options = {
+      intervalMilliseconds: 60_000,
+      poll,
+      onError: (error: unknown) => { throw error },
+    }
+    const pollers = createIndependentPollers([options, options])
+    pollers.start()
+    await vi.waitFor(() => expect(signals).toHaveLength(2))
+
+    await pollers.stop()
+
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+  })
+
+  it('publishes a staged report while recovery is waiting', async () => {
+    vi.useFakeTimers()
+    let releaseRecovery: () => void = () => undefined
+    const recovery = new Promise<void>((resolve) => {
+      releaseRecovery = resolve
+    })
+    let staged = false
+    let published = 0
+    const pollers = createIndependentPollers([
+      { intervalMilliseconds: 300_000, poll: () => recovery, onError: (error) => { throw error } },
+      {
+        intervalMilliseconds: 60_000,
+        random: () => 0,
+        onError: (error) => { throw error },
+        poll: async () => {
+          if (staged) {
+            published += 1
+            staged = false
+          }
+        },
+      },
+    ])
+    try {
+      pollers.start()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(published).toBe(0)
+      staged = true
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(published).toBe(1)
+    }
+    finally {
+      releaseRecovery()
+      await pollers.stop()
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('poller', () => {
   it('coalesces requests during a pass into one fresh follow-up', async () => {
