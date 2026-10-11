@@ -24,6 +24,16 @@ export interface PollerOptions {
   onError: (error: unknown) => void
 }
 
+/** Share lifecycle controls without making one pass wait for another. */
+export function createIndependentPollers(options: readonly [PollerOptions, ...PollerOptions[]]): Poller {
+  const pollers = options.map(createPoller)
+  return {
+    start: () => pollers.forEach(poller => poller.start()),
+    stop: async () => { await Promise.all(pollers.map(poller => poller.stop())) },
+    runNow: async () => { await Promise.all(pollers.map(poller => poller.runNow())) },
+  }
+}
+
 export function createPoller(options: PollerOptions): Poller {
   let lifecycle: 'Manual' | 'Started' | 'Stopped' = 'Manual'
   let timer: NodeJS.Timeout | undefined

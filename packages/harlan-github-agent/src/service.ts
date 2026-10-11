@@ -67,7 +67,7 @@ import { createOpencodeProvider } from './opencode-provider.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
 import { createPackageReleaseSource } from './package-release-github.ts'
 import { runPassStep } from './poll-pass.ts'
-import { createPoller } from './poller.ts'
+import { createIndependentPollers, createPoller } from './poller.ts'
 import { chooseAgentProvider, createProviderCapacitySource } from './provider-capacity.ts'
 import { createCircuitProtectedProvider } from './provider-circuit.ts'
 import { createPublicationScheduler } from './publication-scheduler.ts'
@@ -1230,7 +1230,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store.resolveIncidents(scope, at, 'review_gate_refresh', messages)
     return messages.length === 0 ? ok(undefined) : err(messages.join('\n'))
   }
-  const poller = createPoller({
+  const poller = createIndependentPollers([{
     intervalMilliseconds: config.pollIntervalSeconds * 1_000,
     timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
     poll: async (signal) => {
@@ -1296,20 +1296,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }))
       }
       recordPassIncidents('routine_spec', routineFailures)
-
-      // Candidate issues are filed on the same pass, a few at a time. A scan
-      // that found twenty proposals must not open twenty issues at once.
-      if (config.mutationsEnabled && config.triggers.includes('routine')) {
-        const filed = await guarded('Candidate issue publication', () => candidateIssues.publishPending(signal), [])
-        filed.forEach((result) => {
-          if (result._tag === 'Ok')
-            options.logger.info(`${result.value.repository}#${result.value.issueNumber}: filed a routine proposal.`)
-        })
-        recordPassIncidents('candidate_issue', filed.flatMap(result => result._tag === 'Err' ? [result.error] : []))
-
-        const reported = await guarded('Routine report publication', () => routineReports.publishPending(signal), [])
-        recordPassIncidents('routine_report', reported.flatMap(result => result._tag === 'Err' ? [result.error] : []))
-      }
 
       if (config.mutationsEnabled && config.triggers.includes('routine')) {
         const planned = await guarded('Routine planning', () => planRoutineRuns({ now, repositories: config.repositories, store }), { opened: [], skipped: [], unmapped: [] })
@@ -1476,7 +1462,38 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }
     },
     onError: error => options.logger.error(error),
-  })
+  }, {
+    // Pending commands live locally. Quiet passes make no GitHub requests.
+    // Delivery must keep its cadence when repository recovery is slow.
+    intervalMilliseconds: 60_000,
+    timeoutMilliseconds: 60_000,
+    poll: async (signal) => {
+      if (!config.mutationsEnabled || !config.triggers.includes('routine'))
+        return
+      const recordPassIncidents = createPassIncidentRecorder({ store, now, signal })
+      const passDefects: string[] = []
+      recordPassIncidents('routine_publication', [])
+      const guarded = <T>(step: string, run: () => T | Promise<T>, fallback: T): Promise<T> =>
+        runPassStep(step, run, fallback, {
+          signal,
+          onDefect: (name, reason) => {
+            options.logger.error(`${name}: ${reason}`)
+            passDefects.push(`${name}: ${reason}`)
+            recordPassIncidents('routine_publication', passDefects)
+          },
+        })
+      // Keep the existing bounded batches. One scan cannot file twenty issues at once.
+      const filed = await guarded('Candidate issue publication', () => candidateIssues.publishPending(signal), [])
+      filed.forEach((result) => {
+        if (result._tag === 'Ok')
+          options.logger.info(`${result.value.repository}#${result.value.issueNumber}: filed a routine proposal.`)
+      })
+      recordPassIncidents('candidate_issue', filed.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+      const reported = await guarded('Routine report publication', () => routineReports.publishPending(signal), [])
+      recordPassIncidents('routine_report', reported.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+    },
+    onError: error => options.logger.error(error),
+  }])
   // Timer and webhook reads share one poller per repository, so they cannot overlap.
   // Each repository backs off independently when its reads fail.
   const repositoryPollers = new Map(config.repositories
