@@ -72,7 +72,9 @@ export function routineRows(routines: readonly Routine[], runs: readonly Dashboa
         schedule: routineSchedule(record.routine),
         label: presentation.label,
         tone: presentation.tone === 'primary' ? 'neutral' as const : presentation.tone,
-        detail: presentation.detail,
+        detail: record.latestRun?.state._tag === 'Completed' && record.latestRun.report?.verdict?.coverage !== 'incomplete'
+          ? undefined
+          : presentation.detail,
         trackingUrl: routineTrackingUrl(record.routine),
       }
     })
