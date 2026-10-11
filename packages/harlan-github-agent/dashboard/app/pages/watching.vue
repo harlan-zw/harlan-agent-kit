@@ -26,6 +26,7 @@ import {
  */
 const {
   snapshot,
+  controlsUnavailable,
   loading,
   relativeTime,
   repositoryPending,
@@ -71,7 +72,7 @@ function menuItems(repository: RepositoryStatus): DropdownMenuItem[] {
   return repositoryActions(repository).map(action => ({
     label: repositoryActionLabel(action),
     icon: repositoryActionIcon(action),
-    disabled: busy.value,
+    disabled: busy.value || controlsUnavailable.value,
     onSelect: () => act(repository, action),
   }))
 }
@@ -275,7 +276,7 @@ useHead({
                 icon="i-octicon-undo-16"
                 class="shrink-0"
                 :loading="dismissPending === dismissKey(item.repository, item.number)"
-                :disabled="dismissPending !== undefined"
+                :disabled="dismissPending !== undefined || controlsUnavailable"
                 :aria-label="`Restore ${item.repository} ${itemLabel(item)} ${item.number}`"
                 @click="restoreItem(item.repository, item.number)"
               >

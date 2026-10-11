@@ -38,6 +38,7 @@ const open = defineModel<boolean>('open', { default: false })
 
 const {
   snapshot,
+  controlsUnavailable,
   relativeTime,
   duration,
   feedbackPending,
@@ -400,7 +401,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
           color="neutral"
           icon="i-octicon-sync-16"
           :loading="rerunning"
-          :disabled="rerunPending !== undefined"
+          :disabled="rerunPending !== undefined || controlsUnavailable"
           @click="rerun"
         >
           Rerun review

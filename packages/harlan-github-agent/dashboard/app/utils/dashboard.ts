@@ -227,7 +227,8 @@ export function stalledLabel(agent: ActiveAgent, now: Date): string {
 export function isSnapshotStale(generatedAt: string, now: Date): boolean {
   if (generatedAt.length === 0)
     return false
-  return secondsSince(generatedAt, now) > staleSnapshotSeconds
+  const at = Date.parse(generatedAt)
+  return !Number.isFinite(at) || now.getTime() - at > staleSnapshotSeconds * 1000 || at > now.getTime() + staleSnapshotSeconds * 1000
 }
 
 export function activeAgentProgress(agent: ActiveAgent): string {
@@ -521,9 +522,14 @@ export function incidentTone(incident: Incident): StatusTone {
 }
 
 /** Says what the controller will do next, so the pane answers "do I act on this?". */
-export function incidentRecoveryLabel(incident: Incident): string {
-  if (incident.recovery._tag === 'Retrying')
-    return incident.recovery.attempt > 0 ? `Retrying · retry ${incident.recovery.attempt}` : 'Retrying'
+export function incidentRecoveryLabel(incident: Incident, now: Date): string {
+  if (incident.recovery._tag === 'OnNextOperation')
+    return 'The next Controller operation checks recovery.'
+  if (incident.recovery._tag === 'Retrying') {
+    const seconds = Math.max(0, Math.ceil((Date.parse(incident.recovery.nextAttemptAt) - now.getTime()) / 1000))
+    const label = !Number.isFinite(seconds) || seconds === 0 ? 'Retry due' : `Retry in ${Math.floor(seconds / 60)}m ${seconds % 60}s`
+    return incident.recovery.attempt > 0 ? `${label} · retry ${incident.recovery.attempt}` : label
+  }
   return incident.recovery._tag === 'Exhausted' ? 'Retries exhausted' : 'Action required'
 }
 

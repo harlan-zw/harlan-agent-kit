@@ -13,7 +13,7 @@ import { providerLabels } from '../utils/system.ts'
  * Follow configuration hands the whole choice back to the configuration file.
  * Automatic hands it to remaining capacity in the configured order.
  */
-const { snapshot, loading, controlPending, selectAgent } = useDashboard()
+const { snapshot, loading, controlsUnavailable, controlPending, selectAgent } = useDashboard()
 
 const profile = computed(() => agentProfileState(snapshot.value, loading.value))
 
@@ -122,6 +122,7 @@ const roles = computed(() => AGENT_ROLES.map((role) => {
       size="sm"
       trailing-icon="i-octicon-chevron-down-16"
       :loading="controlPending"
+      :disabled="controlsUnavailable || controlPending"
       aria-label="Agent selection"
       title="Agent selection"
     >

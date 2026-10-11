@@ -652,7 +652,8 @@ Use instead of error, problem, outage, or alert in dashboard copy.
 
 What the controller will do about one Incident without being asked.
 
-One of `Retrying`, `Retries exhausted`, or `Action required`.
+Recovery names a scheduled retry deadline, the next Controller operation, exhausted retries, or a required action.
+A past deadline reads `Retry due`. It does not claim that a retry is running.
 
 ### Merge risk
 

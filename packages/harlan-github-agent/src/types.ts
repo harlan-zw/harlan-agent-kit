@@ -1551,6 +1551,7 @@ export type IncidentKind
 /** What the controller will do about an Incident without being asked. */
 export type IncidentRecovery
   = | { _tag: 'Retrying', attempt: number, nextAttemptAt: string }
+    | { _tag: 'OnNextOperation' }
     | { _tag: 'Exhausted' }
     | { _tag: 'ActionRequired' }
 

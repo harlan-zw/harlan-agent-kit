@@ -20,6 +20,7 @@ import {
  */
 const {
   snapshot,
+  controlsUnavailable,
   loading,
   relativeTime,
   duration,
@@ -89,7 +90,7 @@ function menuItems(row: HistoryRow): DropdownMenuItem[][] {
     items.push({
       label: 'Rerun review',
       icon: 'i-octicon-sync-16',
-      disabled: rerunPending.value !== undefined,
+      disabled: rerunPending.value !== undefined || controlsUnavailable.value,
       onSelect: () => {
         void rerunReview(agent.repository, agent.pullRequestNumber, agent.revisionId)
       },

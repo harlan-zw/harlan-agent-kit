@@ -142,6 +142,14 @@ One persistent 176px navigation rail and one 48px header.
 
 The System pane is a slideover, not a section above the board. It holds, in order:
 
+A compact exception summary leads the pane. Each entry links to evidence or a recovery control.
+Service data expires after 90 seconds. Then the chip shows Unavailable without live counts.
+The pane shows its last confirmed update and Reload. Settings wait for fresh data.
+Host samples and runner samples expire separately after 30 seconds.
+An incompatible desktop shows Update required and takes no new work.
+The API returns every open Incident. The pane shows 50 rows, with errors first, and offers Show more.
+Recovery shows a retry deadline or names the next operation. A due deadline never claims execution.
+
 1. **Hosts**: Hogwild and the desktop, each with its running Agents, its Agent slot control, and the memory it holds. The slot buttons run from zero to the ceiling the controller allows. Host memory sits under them as advice, in amber when the count passes it.
 2. **Service**: Service update state, deployed and latest commits, last check time. The update control appears only when available.
 3. **Capacity**: each Agent provider, percent left, Reserve, reset countdown. Circuit state when open or half open.

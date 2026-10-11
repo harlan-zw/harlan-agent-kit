@@ -34,6 +34,7 @@ const { card, tabindex = 0 } = defineProps<{
 
 const {
   snapshot,
+  controlsUnavailable,
   now,
   duration,
   relativeTime,
@@ -85,7 +86,7 @@ const cancelling = computed(() => taskId.value !== undefined && cancelPending.va
 const dismissing = computed(() => itemDismissKey.value.length > 0 && dismissPending.value === itemDismissKey.value)
 
 /** Any write in flight on this board. One at a time keeps the result readable. */
-const busy = computed(() => approvalPending.value !== undefined
+const busy = computed(() => controlsUnavailable.value || approvalPending.value !== undefined
   || cancelPending.value !== undefined
   || dismissPending.value !== undefined
   || rerunPending.value !== undefined)
@@ -171,6 +172,8 @@ function act(action: CardAction): void {
 }
 
 async function confirm(): Promise<void> {
+  if (controlsUnavailable.value)
+    return
   if (confirming.value === 'cancel' && taskId.value !== undefined) {
     const id = taskId.value
     await cancelAgentTask(id)

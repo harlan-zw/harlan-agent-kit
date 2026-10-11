@@ -4,7 +4,7 @@ import { parseRepairRecoveryResponse } from '../../../src/repair-recovery.ts'
 
 const { candidate } = defineProps<{ candidate: Extract<RepairRecoveryRequest, { _tag: 'Plan' }> | null }>()
 const open = defineModel<boolean>('open', { default: false })
-const { snapshot } = useDashboard()
+const { snapshot, controlsUnavailable } = useDashboard()
 type RecoveryState
   = | { _tag: 'Idle' }
     | { _tag: 'Loading' }
@@ -19,6 +19,7 @@ const pending = computed(() => state.value._tag === 'Loading' || state.value._ta
 const accepted = computed(() => state.value._tag === 'Accepted')
 let requestGeneration = 0
 const canApply = computed(() => state.value._tag === 'Inspecting'
+  && !controlsUnavailable.value
   && snapshot.value.mutationsEnabled && snapshot.value.agentControl._tag === 'Running'
   && snapshot.value.agentStart._tag === 'Available')
 

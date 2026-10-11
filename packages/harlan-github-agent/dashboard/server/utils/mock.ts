@@ -2,6 +2,7 @@ import type { H3Event } from 'h3'
 import type { DashboardSnapshot } from '../../../src/types.ts'
 import { randomBytes } from 'node:crypto'
 import { createError } from 'h3'
+import { DESKTOP_PROTOCOL } from '../../../src/desktop-protocol.ts'
 import { dashboardSnapshot, pullRequestItem } from '../../../test/fixtures.ts'
 
 /**
@@ -52,7 +53,7 @@ function fixture(): DashboardSnapshot {
     hostCapacity: { localActive: 1, localMaximum: 2, desktopActive: 1, desktopMaximum: 1, desktopAvailable: true },
     agentSlots: { hogwildCeiling: 4, hogwildMemoryMaximum: 2, desktopCeiling: 2, memoryPerAgentGiB: 8 },
     hostTasks: [{ taskId: hex('1'), host: 'desktop' }, { taskId: 'run-1', host: 'hogwild' }],
-    desktop: { connected: true, report: { memoryGiB: 16, reservedGiB: 12, agents: 1, actions: 1, jobs: { _tag: 'Available', jobs: [{ runner: 'desktop-1', repository: nuxtSeo, name: 'Build and test sitemap fixtures across supported Nuxt versions', startedAt: Date.now() - 120_000 }] } }, requestedMemoryGiB: null },
+    desktop: { connected: true, current: true, protocol: DESKTOP_PROTOCOL, report: { protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 12, agents: 1, actions: 1, jobs: { _tag: 'Available', jobs: [{ runner: 'desktop-1', repository: nuxtSeo, name: 'Build and test sitemap fixtures across supported Nuxt versions', startedAt: Date.now() - 120_000 }] } }, requestedMemoryGiB: null },
     status: 'degraded',
     mutationsEnabled: true,
     serviceUpdate: {
@@ -183,6 +184,28 @@ function fixture(): DashboardSnapshot {
 
 function scenario(base: DashboardSnapshot): DashboardSnapshot {
   switch (process.env.DASHBOARD_MOCK_SCENARIO) {
+    case 'desktop-incompatible': return {
+      ...base,
+      incidents: [],
+      repairRecoveryCandidates: [],
+      desktop: base.desktop === undefined ? undefined : { ...base.desktop, current: false, report: base.desktop.report === null ? null : { ...base.desktop.report, protocol: DESKTOP_PROTOCOL - 1 } },
+    }
+    case 'health': return {
+      ...base,
+      desktop: base.desktop === undefined ? undefined : { ...base.desktop, current: false, report: base.desktop.report === null ? null : { ...base.desktop.report, protocol: DESKTOP_PROTOCOL - 1 } },
+      incidents: [
+        ...base.incidents,
+        ...Array.from({ length: 51 }, (_value, index) => ({
+          ...base.incidents[0]!,
+          id: `burst-${index}`,
+          severity: 'warning' as const,
+          message: `Network request ${index + 1} could not complete.`,
+          recovery: index === 0 ? { _tag: 'Retrying' as const, attempt: 1, nextAttemptAt: minutesAgo(5) } : { _tag: 'OnNextOperation' as const },
+          firstSeenAt: minutesAgo(6),
+          lastSeenAt: minutesAgo(5),
+        })),
+      ],
+    }
     case 'rate-limited': return {
       ...base,
       githubRateLimits: [
