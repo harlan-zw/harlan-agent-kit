@@ -221,8 +221,8 @@ export function parseTerminalServerMessage(value: unknown): TerminalResult<Termi
       return invalid()
     return ok({ type: 'Scrollback', generation: value.generation, total: value.total, offset: value.offset, ...result.value })
   }
-  if (value.type === 'InputReceipt' && integer(value.sequence, 1))
-    return ok({ type: 'InputReceipt', sequence: value.sequence })
+  if (value.type === 'InputReceipt' && integer(value.sequence, 1) && text(value.lease))
+    return ok({ type: 'InputReceipt', sequence: value.sequence, lease: value.lease })
   if (value.type === 'Process' && member(value.state, states))
     return ok({ type: 'Process', state: value.state })
   if (value.type === 'Failure' && member(value.reason, failures))

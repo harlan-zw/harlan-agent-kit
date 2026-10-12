@@ -93,16 +93,18 @@ describe('terminal browser boundary', () => {
   })
   it('validates writer leases and every small server message', () => {
     const writer = { viewId: 'view', lease: 'lease', expiresAt: 100 }
-    const messages = [{ type: 'Attached', protocol: 1, session, writer }, { type: 'WriterChanged', writer }, { type: 'WriterChanged', writer: null }, { type: 'InputReceipt', sequence: 1 }, { type: 'Process', state: 'Exited' }, { type: 'Failure', reason: 'DeliveryUnknown' }]
+    const messages = [{ type: 'Attached', protocol: 1, session, writer }, { type: 'WriterChanged', writer }, { type: 'WriterChanged', writer: null }, { type: 'InputReceipt', sequence: 1, lease: 'lease' }, { type: 'Process', state: 'Exited' }, { type: 'Failure', reason: 'DeliveryUnknown' }]
     for (const message of messages) expect(parseTerminalServerMessage(message)).toEqual({ _tag: 'Ok', value: message })
     expect(parseTerminalServerMessage({ type: 'WriterChanged', writer: { ...writer, expiresAt: Infinity } })).toEqual(error)
     expect(parseTerminalServerMessage({ type: 'InputReceipt', sequence: 0 })).toEqual(error)
+    expect(parseTerminalServerMessage({ type: 'InputReceipt', sequence: 1 })).toEqual(error)
+    expect(parseTerminalServerMessage({ type: 'InputReceipt', sequence: 1, lease: '' })).toEqual(error)
     expect(parseTerminalServerMessage({ type: 'Unknown' })).toEqual(error)
   })
   it('rejects malformed and oversized UTF8 frames before use', () => {
     expect(parseTerminalFrame('{')).toEqual(error)
     expect(parseTerminalFrame('null')).toEqual(error)
     expect(parseTerminalFrame('"中"'.repeat(3_000_000))).toEqual(size)
-    expect(parseTerminalFrame(JSON.stringify({ type: 'InputReceipt', sequence: 5 }))).toEqual({ _tag: 'Ok', value: { type: 'InputReceipt', sequence: 5 } })
+    expect(parseTerminalFrame(JSON.stringify({ type: 'InputReceipt', sequence: 5, lease: 'lease' }))).toEqual({ _tag: 'Ok', value: { type: 'InputReceipt', sequence: 5, lease: 'lease' } })
   })
 })
