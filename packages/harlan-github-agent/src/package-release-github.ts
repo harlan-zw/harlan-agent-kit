@@ -78,10 +78,10 @@ export function createPackageReleaseSource(options: {
       userAgent: 'harlan-github-agent',
       signal,
       responseCache,
+      assertRequest: assertLease,
       ...(options.createClient === undefined ? {} : { createClient: options.createClient }),
     })
     octokit.hook.before('request', (requestOptions) => {
-      assertLease()
       requestOptions.request = { ...requestOptions.request, ...request }
     })
     return octokit

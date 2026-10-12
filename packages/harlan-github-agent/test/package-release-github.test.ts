@@ -16,6 +16,69 @@ const mapping = { ...repositoryMapping(), writablePullRequestAuthors: ['harlan-g
 const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: sha, mergeSha }
 const record = { repository: mapping.github, pullRequestNumber: 24, commentId: 99, body: '', policy: '', plan, state: { _tag: 'Queued' as const, requestedBy: 'harlan-zw' } }
 
+it('stops a release comment retry when Pause arrives during authentication refresh', async () => {
+  const database = new DatabaseSync(':memory:')
+  const store = createPackageReleaseStore(database)
+  const signal = new AbortController().signal
+  let allowed = true
+  let tokenCalls = 0
+  let rejected = false
+  const requests: Array<{ method: string, allowed: boolean }> = []
+  const tokens = {
+    getToken: async () => {
+      if (++tokenCalls === 2)
+        allowed = false
+      return { _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }
+    },
+    invalidate: () => {},
+  }
+  const run = () => reconcilePackageReleases({
+    repository: mapping,
+    webhookReady: true,
+    store,
+    signal,
+    now: () => 1000,
+    mayPublish: () => allowed,
+    source: assertLease => ({
+      ...createPackageReleaseSource({
+        repository: mapping,
+        actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
+        assertLease,
+        signal,
+        now: () => new Date(),
+        template: async () => '',
+        review: () => ({ _tag: 'None' }),
+        createClient: clientOptions => new Octokit({ ...clientOptions, retry: { enabled: false }, throttle: { enabled: false }, request: { fetch: async (input: string | URL | Request, init?: RequestInit) => {
+          const method = new Request(input, init).method
+          requests.push({ method, allowed })
+          if (method === 'GET')
+            return Response.json([])
+          if (!rejected) {
+            rejected = true
+            return Response.json({ message: 'Bad credentials' }, { status: 401 })
+          }
+          return Response.json({ id: 99 })
+        } } }),
+      }),
+      candidates: async () => [24],
+      inspect: async () => plan,
+    }),
+  })
+  try {
+    expect(await run()).toEqual({ _tag: 'Paused' })
+    expect(requests).toEqual([{ method: 'GET', allowed: true }, { method: 'POST', allowed: true }])
+    expect(store.listPackageReleases(mapping.github)).toEqual([])
+    allowed = true
+    expect(await run()).toEqual({ _tag: 'Completed' })
+    expect(requests.filter(request => !request.allowed)).toEqual([])
+    expect(store.listPackageReleases(mapping.github)[0]?.commentId).toBe(99)
+    expect(store.claimPackageReleaseLease(mapping.github, 1000)).not.toBeNull()
+  }
+  finally {
+    database.close()
+  }
+})
+
 it('stops the Octokit request when Pause arrives during credential acquisition', async () => {
   const database = new DatabaseSync(':memory:')
   const store = createPackageReleaseStore(database)
