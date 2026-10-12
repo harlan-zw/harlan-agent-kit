@@ -62,11 +62,25 @@ function rateLimit(message: unknown): RateLimit {
   if (typeof message !== 'object' || message === null || !('response' in message))
     return { _tag: 'Unavailable' }
   const response = message.response
-  if (typeof response !== 'object' || response === null || !('headers' in response)
-    || !Array.isArray(response.headers) || !response.headers.every(value => Buffer.isBuffer(value))) {
+  if (typeof response !== 'object' || response === null || !('headers' in response)) {
     return { _tag: 'Unavailable' }
   }
-  const headers: string[] = response.headers.map(value => value.toString())
+  const rawHeaders = response.headers
+  const headers: string[] = []
+  if (Array.isArray(rawHeaders)) {
+    if (rawHeaders.length % 2 !== 0 || !rawHeaders.every(value => typeof value === 'string' || value instanceof Uint8Array))
+      return { _tag: 'Unavailable' }
+    headers.push(...rawHeaders.map(value => typeof value === 'string' ? value : Buffer.from(value).toString()))
+  }
+  else if (typeof rawHeaders === 'object' && rawHeaders !== null) {
+    for (const [name, value] of Object.entries(rawHeaders)) {
+      if (typeof value === 'string')
+        headers.push(name, value)
+    }
+  }
+  else {
+    return { _tag: 'Unavailable' }
+  }
   const resource = header(headers, 'x-ratelimit-resource')
   const remainingText = header(headers, 'x-ratelimit-remaining')
   const usedText = header(headers, 'x-ratelimit-used')
@@ -101,7 +115,29 @@ export function createGitHubRequestCounts(options: {
     if (completed === 0)
       return
     const to = options.now().toISOString()
-    options.report({ from, to, completed, overflow, rows: [...groups.values()].sort((left, right) => right.completed - left.completed) })
+    // The journal truncates large log lines. Each chunk is a complete report with additive totals.
+    let batch: GitHubRequestCountsReport = { from, to, completed: overflow, overflow, rows: [] }
+    const emit = (): void => {
+      if (batch.completed > 0)
+        options.report(batch)
+      batch = { from, to, completed: 0, overflow: 0, rows: [] }
+    }
+    for (const row of [...groups.values()].sort((left, right) => right.completed - left.completed)) {
+      const single = { from, to, completed: row.completed, overflow: 0, rows: [row] }
+      if (Buffer.byteLength(JSON.stringify(single)) > 16_384) {
+        emit()
+        batch.completed = row.completed
+        batch.overflow = row.completed
+        emit()
+        continue
+      }
+      const candidate = { ...batch, completed: batch.completed + row.completed, rows: [...batch.rows, row] }
+      if (Buffer.byteLength(JSON.stringify(candidate)) > 16_384)
+        emit()
+      batch.completed += row.completed
+      batch.rows.push(row)
+    }
+    emit()
     groups.clear()
     completed = 0
     overflow = 0
