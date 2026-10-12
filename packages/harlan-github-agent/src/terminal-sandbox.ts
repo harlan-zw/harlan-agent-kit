@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 
 const execute = promisify(execFile)
+const preparationClaim = '/tmp/harlan-terminal-preparation/worktree-claim.sh'
 const isolation = [
   '--die-with-parent',
   '--unshare-user',
@@ -50,6 +51,7 @@ export async function prepareTerminalSandbox(options: {
   writable?: string[]
   denied?: string[]
   home?: string
+  preparationTool?: string
 }) {
   // node-pty establishes the controlling session. Nested setsid would break interactive terminal ownership.
   await execute('/usr/bin/bwrap', [...isolation, '/usr/bin/true'], {
@@ -139,6 +141,13 @@ export async function prepareTerminalSandbox(options: {
     COLORTERM: 'truecolor',
     PNPM_HOME: packageManagerHome,
   }
+  if (options.preparationTool) {
+    const tool = await realpath(options.preparationTool)
+    if (!(await lstat(tool)).isFile())
+      throw new Error('Terminal preparation requires an ordinary claim tool')
+    // Re-expose one immutable tool after private masks. Its host parent stays hidden.
+    args.push('--dir', dirname(preparationClaim), '--ro-bind', tool, preparationClaim)
+  }
   for (const name of [
     'DBUS_SESSION_BUS_ADDRESS',
     'DBUS_SYSTEM_BUS_ADDRESS',
@@ -190,8 +199,7 @@ export async function createTerminalPreparationRunner(
     join(home, '.cache'),
   ]
   // The claim store belongs to this user. No hook can reach the user manager through /run or DBus.
-  const claimDirectory = dirname(claimScript)
-  await realpath(claimDirectory)
+  const claim = await realpath(claimScript)
   return (async (
     file: string,
     args: readonly string[],
@@ -200,11 +208,12 @@ export async function createTerminalPreparationRunner(
     const sandbox = await prepareTerminalSandbox({
       cwd: settings.cwd ?? project,
       executable: '/usr/bin/env',
-      argv: [file, ...args],
+      argv: [file === claimScript ? preparationClaim : file, ...args.map((argument, index) => index === 0 && argument === claimScript ? preparationClaim : argument)],
       environment: preparationGitEnvironment(environment),
       writable,
       denied,
       home,
+      preparationTool: claim,
     })
     return execute(sandbox.executable, sandbox.argv, {
       ...settings,
