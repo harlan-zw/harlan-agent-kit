@@ -74,6 +74,7 @@ export function createTerminalOwner(options: {
   function snapshot(): TerminalScreen {
     emulator.update()
     const dimensions = emulator.getDimensions()
+    const cursor = emulator.getCursor()
     const viewport = emulator.getViewport()
     const lines = Array.from({ length: dimensions.rows }, (_, row) =>
       viewport
@@ -84,7 +85,7 @@ export function createTerminalOwner(options: {
       scrollbackLength: Math.min(historyLimit, emulator.getScrollbackLength()),
       dimensions,
       lines,
-      cursor: { ...emulator.getCursor() },
+      cursor: { x: cursor.x, y: cursor.y, visible: Boolean(cursor.visible) },
       graphemes: lines.map((line, row) =>
         line.map((cell, col) =>
           cell.grapheme_len

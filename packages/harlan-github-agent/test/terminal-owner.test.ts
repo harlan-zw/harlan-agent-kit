@@ -150,6 +150,7 @@ describe('canonical terminal owner', () => {
     const { owner, writes, sizes, lease } = await fixture()
     owner.output('\x1B[?2004h\x1B[?1004h\x1B[?1000h\x1B[?1006h中👩‍💻')
     const screen = owner.snapshot()
+    expect(typeof screen.cursor.visible).toBe('boolean')
     owner.message('one', {
       type: 'Paste',
       lease,
