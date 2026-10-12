@@ -77,7 +77,7 @@ export interface ControlClient {
   resume: () => Promise<Result<StoredAgentControl, ControlApiError>>
   restart: () => Promise<Result<RestartRequest, ControlApiError>>
   reloadExternalWatches: () => Promise<Result<{ repositories: number, issues: number }, ControlApiError>>
-  update: () => Promise<Result<RestartRequest, ControlApiError>>
+  update: (targetCommit?: string) => Promise<Result<RestartRequest, ControlApiError>>
   cancelTask: (taskId: string) => Promise<Result<TaskCancellation, ControlApiError>>
   stopReview: (repository: string, pullRequestNumber: number, headSha: string) => Promise<Result<{ _tag: 'Stopped' | 'AlreadyStopped' }, ControlApiError>>
   rerunIssueTriage: (repository: string, issueNumber: number, revisionId: string) => Promise<Result<Exclude<IssueTriageRerunResult, { _tag: 'Rejected' }>, ControlApiError>>
@@ -188,7 +188,7 @@ function parseRestartRequest(value: unknown): Parsed<RestartRequest> {
   const input = record(value)
   const operation = record(input?.operation)
   const validOperation = operation?._tag === 'Restart'
-    || (operation?._tag === 'Update' && typeof operation.targetCommit === 'string')
+    || (operation?._tag === 'Update' && typeof operation.targetCommit === 'string' && (operation.preparation === 'Pending' || operation.preparation === 'Ready'))
   if (input === undefined
     || !['Requested', 'Restarting', 'Completed', 'ActionRequired'].includes(String(input._tag))
     || typeof input.id !== 'string'
@@ -394,7 +394,7 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
     resume: () => request({ method: 'POST', path: 'api/agents/resume', parse: parseAgentControl }),
     restart: () => request({ method: 'POST', path: 'api/service/restart', body: { source: 'helper' }, parse: parseRestartRequest, acceptedStatuses: [202] }),
     reloadExternalWatches: () => request({ method: 'POST', path: 'api/external-watches/reload', parse: parseExternalWatchReload }),
-    update: () => request({ method: 'POST', path: 'api/service/update', body: { source: 'helper' }, parse: parseRestartRequest, acceptedStatuses: [202] }),
+    update: targetCommit => request({ method: 'POST', path: 'api/service/update', body: { source: 'helper', ...(targetCommit === undefined ? {} : { targetCommit }) }, parse: parseRestartRequest, acceptedStatuses: [202] }),
     cancelTask: taskId => request({ method: 'POST', path: 'api/tasks/cancel', body: { taskId }, parse: parseCancellation }),
     stopReview: (repository, pullRequestNumber, headSha) => request({ method: 'POST', path: 'api/reviews/stop', body: { repository, pullRequestNumber, headSha }, parse: parseStoppedReview }),
     rerunIssueTriage: (repository, issueNumber, revisionId) => request({ method: 'POST', path: 'api/issues/rerun-triage', body: { repository, issueNumber, revisionId }, parse: parseIssueTriageRerun, acceptedStatuses: [202] }),

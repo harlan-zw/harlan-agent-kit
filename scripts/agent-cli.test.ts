@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { planAgentCli } from './agent-cli-plan.ts'
 
-const options = { home: '/home/test', hostname: 'desktop', executable: '/home/test/.local/bin/harlan-github-agent', runtime: '/service/node', checkout: '/service', args: ['control', 'status'] }
+const options = { home: '/home/test', hostname: 'desktop', executable: '/home/test/.local/bin/harlan-github-agent', runtime: '/service/node', checkout: '/service', cwd: '/caller', args: ['control', 'status'] }
 
 describe('installed Agent commands', () => {
   it('uses the service runtime and configuration from an unrelated directory', () => {
@@ -47,4 +47,9 @@ it('installs executable commands that work in a noninteractive shell', async () 
 it('uses the configured desktop Control API URL without replacing explicit connection options', () => {
   expect(planAgentCli({ ...options, url: 'https://hogwild.test' }).args.slice(-2)).toEqual(['--url', 'https://hogwild.test'])
   expect(planAgentCli({ ...options, url: 'https://hogwild.test', args: ['control', 'status', '--config', '/other.yml'] }).args).not.toContain('https://hogwild.test')
+})
+
+it('keeps relative connection files rooted in the caller directory', () => {
+  const plan = planAgentCli({ ...options, args: ['control', 'status', '-c', './config.yml', '--password-file=./password'] })
+  expect(plan.args.slice(3)).toEqual(['control', 'status', '-c', '/caller/config.yml', '--password-file=/caller/password'])
 })

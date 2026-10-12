@@ -25,6 +25,8 @@ export HOGWILD_SERVICE_TEST_STATE_POLLS="$test_root/state-polls"
 # Present once this deploy files its own Restart request. Before that, the
 # controller reports whatever restart an earlier deploy left behind.
 export HOGWILD_SERVICE_TEST_RESTART_FILED="$test_root/restart-filed"
+export HOGWILD_SERVICE_TEST_UPDATE_PENDING="$test_root/update-pending"
+export HOGWILD_SERVICE_TEST_UPDATE_READY="$test_root/update-ready"
 export HOGWILD_SERVICE_TEST_DEPLOYED_SHA=1c2b3a49f5d60e7b8a9c0d1e2f3a4b5c6d7e8f90
 export HOGWILD_SERVICE_TEST_LEGACY=false
 export HOGWILD_SERVICE_TEST_LEGACY_SAFE_AFTER=1
@@ -78,7 +80,7 @@ printf '%s\n' \
   > "$test_root/bin/ssh"
 cat >> "$test_root/bin/ssh" <<'FAKE_SSH'
 # Hogwild reports the commit it landed on, so the desktop can be pinned to it.
-if [[ "$*" == *"-- 'revision'"* ]]; then
+if [[ "$*" == *"-- 'revision'"* || "$*" == *"-- 'resolve-update'"* ]]; then
   printf '%s\n' "$HOGWILD_SERVICE_TEST_DEPLOYED_SHA"
   exit
 fi
@@ -126,6 +128,12 @@ printf '%s\n' \
   '    exit' \
   '  fi' \
   'fi' \
+  'if [[ "$*" == *api/service/update/preparation* ]]; then' \
+  '  if [[ "$*" != *POST* ]]; then printf '\''{"supported":true}\n'\''; exit; fi' \
+  '  if [[ "$*" == *Failed* ]]; then rm -f "$HOGWILD_SERVICE_TEST_UPDATE_PENDING" "$HOGWILD_SERVICE_TEST_UPDATE_READY"; printf '\''{"_tag":"ActionRequired"}\n'\''; exit; fi' \
+  '  : > "$HOGWILD_SERVICE_TEST_UPDATE_READY"; printf '\''{"_tag":"Requested"}\n'\''; exit' \
+  'fi' \
+  'if [[ "$*" == *api/service/update* ]]; then : > "$HOGWILD_SERVICE_TEST_RESTART_FILED"; : > "$HOGWILD_SERVICE_TEST_UPDATE_PENDING"; printf '\''{"_tag":"Requested","id":"restart-1","operation":{"_tag":"Update","targetCommit":"%s","preparation":"Pending"}}\n'\'' "$HOGWILD_SERVICE_TEST_DEPLOYED_SHA"; exit; fi' \
   'if [[ "$*" == *api/service/restart* ]]; then : > "$HOGWILD_SERVICE_TEST_RESTART_FILED"; printf '\''{"_tag":"Requested","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}\n'\''; exit; fi' \
   'if [[ "$*" == *api/state* && ! -e "$HOGWILD_SERVICE_TEST_RESTART_FILED" ]]; then' \
   '  printf '\''{"agentControl":{"_tag":"Running"},"restartRequest":{"_tag":"%s","id":"restart-0","source":"helper","requestedAt":"2026-08-29T00:00:00.000Z"}}\n'\'' "${HOGWILD_SERVICE_TEST_PRIOR_RESTART:-Completed}"' \
@@ -136,6 +144,7 @@ printf '%s\n' \
   '  printf '\''%s\n'\'' "$polls" > "$HOGWILD_SERVICE_TEST_STATE_POLLS"' \
   '  status=Requested' \
   '  if ((polls >= HOGWILD_SERVICE_TEST_RESTART_AFTER)); then status=Completed; fi' \
+  '  if [ "$status" = Completed ] && [ -e "$HOGWILD_SERVICE_TEST_UPDATE_READY" ]; then printf '\''controller prepare-update\n'\'' >> "$HOGWILD_SERVICE_TEST_CALLS"; rm -f "$HOGWILD_SERVICE_TEST_UPDATE_READY" "$HOGWILD_SERVICE_TEST_UPDATE_PENDING"; fi' \
   '  printf '\''{"agentControl":{"_tag":"Running"},"restartRequest":{"_tag":"%s","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}}\n'\'' "$status"' \
   'fi' \
   > "$test_root/bin/curl"
@@ -166,21 +175,26 @@ env_manifest_install_line=$(grep -nE "mv '/home/harlan/.config/harlan-agent-kit/
 worktrunk_install_line=$(grep -nE "mv '/home/harlan/.config/worktrunk/config.toml.next\.[0-9.]+' '/home/harlan/.config/worktrunk/config.toml'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 env_copy_line=$(grep -n '^rsync ' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 env_install_line=$(grep -nF "install-staged '/home/harlan/.cache/harlan-repository-env.fixture'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-prepare_line=$(grep -nF "bash -s -- 'prepare-update' 'origin/main'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-restart_line=$(grep -n '/api/service/restart' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+resolve_line=$(grep -nF "bash -s -- 'resolve-update' 'origin/main'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+prepare_line=$(grep -n '^controller prepare-update$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+restart_line=$(grep -n 'api/service/update$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 
 # An empty capture reads as 0 inside (( )), so a pattern that matched nothing
 # would still satisfy the ordering below. Refuse that before comparing.
 for step in claude_copy_line codex_copy_line install_line limits_copy_line limits_install_line \
   env_tool_install_line env_manifest_install_line worktrunk_install_line env_copy_line \
-  env_install_line prepare_line restart_line; do
+  env_install_line resolve_line prepare_line restart_line; do
   if [ -z "${!step}" ]; then
     printf '%s\n' "Hogwild update never logged the step this test orders: $step." >&2
     exit 1
   fi
 done
-if ! ((claude_copy_line < codex_copy_line && codex_copy_line < install_line && install_line < limits_copy_line && limits_copy_line < limits_install_line && limits_install_line < env_tool_install_line && env_tool_install_line < env_manifest_install_line && env_manifest_install_line < worktrunk_install_line && worktrunk_install_line < env_copy_line && env_copy_line < env_install_line && env_install_line < prepare_line && prepare_line < restart_line)); then
-  printf '%s\n' 'Hogwild update did not prepare files before its Restart request.' >&2
+if ! ((resolve_line < restart_line && restart_line < claude_copy_line && claude_copy_line < codex_copy_line && codex_copy_line < install_line && install_line < limits_copy_line && limits_copy_line < limits_install_line && limits_install_line < env_tool_install_line && env_tool_install_line < env_manifest_install_line && env_manifest_install_line < worktrunk_install_line && worktrunk_install_line < env_copy_line && env_copy_line < env_install_line && env_install_line < prepare_line)); then
+  printf '%s\n' 'Hogwild prepared the checkout before its durable Update request.' >&2
+  exit 1
+fi
+if grep -F "bash -s -- 'prepare-update'" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+  printf '%s\n' 'The helper prepared Hogwild outside the durable Update.' >&2
   exit 1
 fi
 if grep -E '/api/agents/(pause|resume)' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
@@ -227,7 +241,7 @@ if grep '^rsync ' "$HOGWILD_SERVICE_TEST_CALLS" | grep -qF " $test_home/ "; then
   printf '%s\n' 'Repository environment sync sent the desktop files without Hogwild overrides.' >&2
   exit 1
 fi
-if grep -E "prepare-update|api/service/restart" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+if grep -E "^controller prepare-update|api/service/restart" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
   printf '%s\n' 'Manual repository environment sync changed the service.' >&2
   exit 1
 fi
@@ -252,6 +266,10 @@ if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" upd
 fi
 if grep -E "prepare-update|api/service/restart" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
   printf '%s\n' 'Hogwild updated or restarted after a context hash mismatch.' >&2
+  exit 1
+fi
+if ! grep -F 'Failed' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+  printf '%s\n' 'The helper did not release its failed Update preparation.' >&2
   exit 1
 fi
 
@@ -368,14 +386,13 @@ for pending in Requested Restarting; do
   fi
 done
 
-# A restart that is stuck in Restarting would otherwise block every deploy
-# forever, and a deploy is how Hogwild recovers. A person can say so on purpose.
+# The retired override cannot bypass an owned Restart request.
 rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED"
 printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
 : > "$HOGWILD_SERVICE_TEST_CALLS"
-if ! HOGWILD_SERVICE_TEST_PRIOR_RESTART=Restarting HOGWILD_DEPLOY_DESPITE_PENDING_RESTART=1 \
+if HOGWILD_SERVICE_TEST_PRIOR_RESTART=Restarting HOGWILD_DEPLOY_DESPITE_PENDING_RESTART=1 \
   PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null 2>&1; then
-  printf '%s\n' 'Hogwild refused an update a person explicitly allowed over a stuck restart.' >&2
+  printf '%s\n' 'The retired override bypassed durable Update ownership.' >&2
   exit 1
 fi
 

@@ -198,10 +198,10 @@ Enable the global mutation switch only after repository mappings and publication
 Use the exact issue state or pull request head commit for every dispatch.
 
 - New issue: select one Issue triage route. Post its result and matching route label through the controller.
-- Open pull request: run Pull request triage first. If it requires Review, the controller applies `../adversarial-review/SKILL.md` completely. Give the Review Agent only the compact disproof contract. Do not make it reload controller authority, gates, status, publication, or Repair rules.
-- PR metadata: apply `../pr/SKILL.md`. Preserve its AI disclosure.
-- Work item lifecycle: apply `../take-ownership/SKILL.md` after eligibility passes.
-- Regression repair: apply `../unit-tests/SKILL.md` before the fix.
+- Open pull request: run Pull request triage first. If it requires Review, the controller applies `../../adversarial-review/SKILL.md` completely. Give the Review Agent only the compact disproof contract. Do not make it reload controller authority, gates, status, publication, or Repair rules.
+- PR metadata: apply `../../pr/SKILL.md`. Preserve its AI disclosure.
+- Work item lifecycle: apply `../../take-ownership/SKILL.md` after eligibility passes.
+- Regression repair: apply `../../unit-tests/SKILL.md` before the fix.
 
 Keep one implementation Agent for an issue and its resulting pull request. Start one fresh Review Agent per head SHA.
 
@@ -304,7 +304,7 @@ With active Take Ownership, continue delivery verification.
 
 Use the dashboard `Cancel` control for active or queued tasks. Store that cancellation for the current commit. A later poll must not queue it again. Closing a pull request must use the same durable cancellation path.
 
-When required CI fails on the current base of an owned repository, dispatch a separate baseline repair task. Use a fresh worktree and `../pr/SKILL.md`. Keep the original review waiting until the repair merges, then resume its existing review worker.
+When required CI fails on the current base of an owned repository, dispatch a separate baseline repair task. Use a fresh worktree and `../../pr/SKILL.md`. Keep the original review waiting until the repair merges, then resume its existing review worker.
 
 ## Selected Review findings
 

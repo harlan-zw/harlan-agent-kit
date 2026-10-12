@@ -21,6 +21,17 @@ function clientWith(responses: Response[], requests: Request[]) {
 }
 
 describe('harlan GitHub Agent control client', () => {
+  it('pins a helper Update commit and parses its preparation phase', async () => {
+    const requests: Request[] = []
+    const targetCommit = 'c'.repeat(40)
+    const receipt = { _tag: 'Requested', id: 'update-1', source: 'helper', operation: { _tag: 'Update', targetCommit, preparation: 'Ready' }, requestedAt: '2026-10-12T01:00:00.000Z' }
+    const created = clientWith([Response.json(receipt, { status: 202 })], requests)
+    if (created._tag === 'Err')
+      throw new Error(created.error.message)
+    expect(await created.value.update(targetCommit)).toEqual({ _tag: 'Ok', value: receipt })
+    expect(await requests[0]?.json()).toEqual({ source: 'helper', targetCommit })
+  })
+
   it.each(['Queued', 'AlreadyQueued'])('reruns exact Issue triage: %s', async (_tag) => {
     const requests: Request[] = []
     const receipt = { _tag, taskId: 'b'.repeat(64) }

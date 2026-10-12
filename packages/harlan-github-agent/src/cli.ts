@@ -312,8 +312,8 @@ const controlCommand = defineCommand({
     }),
     'update': defineCommand({
       meta: { name: 'update', description: 'Request Update after current work.' },
-      args: controlConnectionArguments,
-      run: ({ args }) => runControl(args, client => client.update()),
+      args: { ...controlConnectionArguments, commit: { type: 'string', description: 'Full commit SHA for this Update.' } },
+      run: ({ args }) => runControl(args, client => client.update(args.commit)),
     }),
     'cancel': controlTaskCommand({ name: 'cancel', description: 'Cancel one active or queued Task.' }),
     'recover-repair': defineCommand({

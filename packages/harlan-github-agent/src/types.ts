@@ -1692,7 +1692,7 @@ export type RestartRequestSource = 'dashboard' | 'tray' | 'helper'
 
 export type RestartOperation
   = | { _tag: 'Restart' }
-    | { _tag: 'Update', targetCommit: string }
+    | { _tag: 'Update', targetCommit: string, preparation: 'Pending' | 'Ready' }
 
 interface RestartRequestBase {
   id: string
