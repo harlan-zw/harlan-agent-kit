@@ -11,7 +11,7 @@ import { repositoryMapping } from './fixtures.ts'
 const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: 'a'.repeat(40), mergeSha: 'b'.repeat(40) }
 const repository = { ...repositoryMapping(), release: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: ['test'], credential: { _tag: 'Repository' as const } } }
 
-function setup() {
+function setup(mayPublish = () => true) {
   const database = new DatabaseSync(':memory:')
   const store = createPackageReleaseStore(database)
   const source: PackageReleaseSource = {
@@ -22,12 +22,68 @@ function setup() {
     merge: vi.fn(async () => null),
     publish: vi.fn(async () => null),
   }
-  const run = (webhookReady = true) => reconcilePackageReleases({ webhookReady, repository, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
+  const run = (webhookReady = true) => reconcilePackageReleases({ webhookReady, repository, mayPublish, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
   const click = () => store.requestPackageRelease({ repository: repository.github, pullRequestNumber: 24, commentId: 99, before: renderPackageRelease(plan), requestId: 'select', selected: true, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })
   return { database, store, source, run, click }
 }
 
 describe('release controller', () => {
+  it('keeps a selected release resumable when Pause arrives during inspection', async () => {
+    let allowed = true
+    const task = setup(() => allowed)
+    await task.run()
+    task.click()
+    vi.mocked(task.source.comment).mockClear()
+    task.source.inspect = async () => {
+      allowed = false
+      return plan
+    }
+    expect(await task.run()).toEqual({ _tag: 'Paused' })
+    expect(task.source.prepare).not.toHaveBeenCalled()
+    expect(task.source.comment).not.toHaveBeenCalled()
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Queued')
+    allowed = true
+    task.source.inspect = async () => plan
+    await task.run()
+    expect(task.source.prepare).toHaveBeenCalledTimes(1)
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Prepared')
+    task.database.close()
+  })
+
+  it('preserves a real failure when Pause prevents its status comment', async () => {
+    let allowed = true
+    const task = setup(() => allowed)
+    await task.run()
+    task.click()
+    vi.mocked(task.source.comment).mockClear()
+    task.source.inspect = async () => {
+      allowed = false
+      throw new Error('Connection lost')
+    }
+    await expect(task.run()).rejects.toThrow('Connection lost')
+    expect(task.source.comment).not.toHaveBeenCalled()
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Queued')
+    task.database.close()
+  })
+
+  it('preserves the original failure when Pause interrupts its status receipt', async () => {
+    let allowed = true
+    const task = setup(() => allowed)
+    await task.run()
+    task.click()
+    task.source.inspect = async () => {
+      throw new Error('Connection lost')
+    }
+    task.source.comment = vi.fn(async () => {
+      allowed = false
+      return 99
+    })
+    await expect(task.run()).rejects.toThrow('Connection lost')
+    expect(task.source.comment).toHaveBeenCalledTimes(1)
+    expect(task.store.listPackageReleases(repository.github)[0]?.body).toBe(renderPackageRelease(plan))
+    task.database.close()
+  })
+
   it.each([false, true])('explains a manual major release without authorizing publication, text request: %s', async (requested) => {
     const task = setup()
     task.source.inspect = async () => planPackageReleaseBeforeMerge({
@@ -201,7 +257,7 @@ it.each([
 ] as const)('offers a maintained repository release only with the %s credential opt in', async (credential, offers) => {
   const task = setup()
   const maintained = { ...repository, github: 'nuxt-modules/example', ownership: 'maintained' as const, release: { ...repository.release, credential: { _tag: credential } } }
-  await reconcilePackageReleases({ webhookReady: true, repository: maintained, store: task.store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
+  await reconcilePackageReleases({ webhookReady: true, repository: maintained, mayPublish: () => true, store: task.store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
   expect(task.source.comment).toHaveBeenCalledTimes(offers)
   task.database.close()
 })
