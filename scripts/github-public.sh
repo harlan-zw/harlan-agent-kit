@@ -53,7 +53,7 @@ unset GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN GH_DEBUG
 
 # Use trusted host binaries, never a repository binary that can capture the token.
 self=$(readlink -f "${BASH_SOURCE[0]}")
-for binary in "$HOME/.local/bin/gh" /usr/local/bin/gh /usr/bin/gh /bin/gh; do
+for binary in /run/agent/host-tools/gh "$HOME/.local/share/harlan-agent-kit/tools/bin/gh" "$HOME/.local/bin/gh" /usr/local/bin/gh /usr/bin/gh /bin/gh; do
   [ -x "$binary" ] || continue
   candidate=$(readlink -f "$binary")
   [ "$candidate" != "$self" ] || continue

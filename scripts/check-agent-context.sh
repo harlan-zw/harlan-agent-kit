@@ -68,6 +68,8 @@ for installed in "$TARGET_HOME/.local/share/harlan-agent-kit/github-bin/gh" "$TA
     || bad "The public GitHub CLI differs. Run pnpm sync:context."
   [ -x "$installed" ] || bad "The public GitHub CLI is not executable. Run pnpm sync:context."
 done
+cmp -s "$REPO_ROOT/scripts/agent-tools.ts" "$TARGET_HOME/.local/share/harlan-agent-kit/agent-tools.ts" \
+  || bad "The Agent tool sync differs. Run pnpm sync:context."
 # The check command shares the worker PATH with the public GitHub CLI.
 for installed in "$TARGET_HOME/.local/share/harlan-agent-kit/github-bin/agent-check.ts" "$TARGET_HOME/.local/bin/agent-check.ts"; do
   cmp -s "$REPO_ROOT/scripts/agent-check.ts" "$installed" \

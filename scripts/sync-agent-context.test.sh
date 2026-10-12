@@ -101,6 +101,7 @@ printf '%s %s\n' plugin.json \
   "$(/usr/bin/sha256sum "$repo_root/harlan-agent-kit/.claude-plugin/plugin.json" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' agent-gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
+printf '%s %s\n' agent-tools.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-tools.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' agent-check.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-check.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' check "$(/usr/bin/sha256sum "$repo_root/bin/check" | cut -d' ' -f1)" >> "$opencode_hashes"
 for name in harlan-github-agent hw; do
@@ -219,7 +220,7 @@ mkdir -p "$fixture/scripts" "$fixture/harlan-agent-kit/hooks" \
   "$fixture/harlan-agent-kit/.claude-plugin" "$fixture/harlan-agent-kit/plugins/opencode"
 mkdir -p "$fixture/bin"
 cp "$repo_root/bin/check" "$fixture/bin/check"
-cp "$repo_root/scripts/sync-agent-context.sh" "$repo_root/scripts/agent-context-hooks.sh" "$repo_root/scripts/github-public.sh" "$repo_root/scripts/agent-check.ts" "$fixture/scripts/"
+cp "$repo_root/scripts/sync-agent-context.sh" "$repo_root/scripts/agent-context-hooks.sh" "$repo_root/scripts/github-public.sh" "$repo_root/scripts/agent-check.ts" "$repo_root/scripts/agent-tools.ts" "$fixture/scripts/"
 cp "$repo_root/scripts/agent-cli.ts" "$repo_root/scripts/agent-cli-plan.ts" "$fixture/scripts/"
 mkdir -p "$fixture/harlan-agent-kit/skills/hogwild/scripts"
 cp "$repo_root/harlan-agent-kit/skills/hogwild/scripts/"*.ts "$fixture/harlan-agent-kit/skills/hogwild/scripts/"
@@ -263,6 +264,7 @@ printf '%s %s\n' harlan-hooks.ts \
 : > "$calls"
 printf '%s %s\n' gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$fixture_hashes"
 printf '%s %s\n' agent-gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$fixture_hashes"
+printf '%s %s\n' agent-tools.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-tools.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
 printf '%s %s\n' agent-check.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-check.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
 printf '%s %s\n' check "$(/usr/bin/sha256sum "$repo_root/bin/check" | cut -d' ' -f1)" >> "$fixture_hashes"
 for name in harlan-github-agent hw; do
