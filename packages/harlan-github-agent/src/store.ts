@@ -773,6 +773,9 @@ export type StoredIssueTriageRun
     }
 
 export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore {
+  getTask: (taskId: string) => DashboardTask | null
+  listTasks: () => DashboardTask[]
+  getOpenPullRequest: (repository: string, number: number) => GitHubPullRequestItem | null
   inspectRepairRecovery: (taskId: string, commitSha: string) => Result<RepairRecoveryTarget, string>
   claimRepairRecovery: (target: RepairRecoveryTarget, workerId: string, at: string, leaseMilliseconds: number) => Result<ClaimedReviewFixTask, string>
   getPullRequestWatchState: (repository: string, number: number) => PullRequestWatchState | null
@@ -7114,7 +7117,8 @@ function openDatabase(path: string): DatabaseSync {
   return database
 }
 
-function taskRows(database: DatabaseSync, subjectId?: number): TaskRow[] {
+function taskRows(database: DatabaseSync, filter: { _tag: 'Dashboard' } | { _tag: 'Subject', id: number } | { _tag: 'Task', id: string } = { _tag: 'Dashboard' }): TaskRow[] {
+  const predicate = (table: string) => filter._tag === 'Dashboard' ? '' : `${table}.${filter._tag === 'Subject' ? 'subject_id' : 'id'} = ?`
   const rows = (table: 'tasks' | 'worker_tasks', current: boolean): TaskRow[] => database.prepare(`
     SELECT
       ${table}.id,
@@ -7141,14 +7145,16 @@ function taskRows(database: DatabaseSync, subjectId?: number): TaskRow[] {
          WHERE ${table}.revision_id = subjects.current_revision_id
            AND repositories.enabled = 1
            AND json_extract(revisions.payload, '$.state') = 'open'
-           ${subjectId === undefined ? '' : `AND ${table}.subject_id = ?`}`
-      : subjectId === undefined ? '' : `WHERE ${table}.subject_id = ?`}
+           ${filter._tag === 'Dashboard' ? '' : `AND ${predicate(table)}`}`
+      : filter._tag === 'Dashboard' ? '' : `WHERE ${predicate(table)}`}
     ORDER BY ${table}.updated_at DESC
-    ${current || subjectId !== undefined ? '' : 'LIMIT 100'}
-  `).all(...(subjectId === undefined ? [] : [subjectId])) as unknown as TaskRow[]
+    ${current || filter._tag !== 'Dashboard' ? '' : 'LIMIT 100'}
+  `).all(...(filter._tag === 'Dashboard' ? [] : [filter.id])) as unknown as TaskRow[]
+  if (filter._tag === 'Task')
+    return [...rows('tasks', false), ...rows('worker_tasks', false)]
   const current = [...rows('tasks', true), ...rows('worker_tasks', true)]
   const currentIds = new Set(current.map(row => row.id))
-  const historyLimit = subjectId === undefined ? Math.max(0, 100 - current.length) : Number.POSITIVE_INFINITY
+  const historyLimit = filter._tag === 'Dashboard' ? Math.max(0, 100 - current.length) : Number.POSITIVE_INFINITY
   const history = [...rows('tasks', false), ...rows('worker_tasks', false)]
     .filter(row => !currentIds.has(row.id))
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at) || left.id.localeCompare(right.id))
@@ -8519,6 +8525,24 @@ export function openJournalStore(
     return row === undefined ? null : { revisionId: row.revision_id, dismissed: row.dismissed === 1 }
   }
 
+  const getTask: JournalStore['getTask'] = (taskId) => {
+    const row = taskRows(database, { _tag: 'Task', id: taskId })[0]
+    return row === undefined ? null : taskFromRow(row)
+  }
+  const listTasks: JournalStore['listTasks'] = () => taskRows(database).map(taskFromRow)
+  const getOpenPullRequest: JournalStore['getOpenPullRequest'] = (github, number) => {
+    const row = database.prepare(`
+      SELECT revisions.payload
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE repositories.github = ? AND repositories.enabled = 1
+        AND subjects.kind = 'pull_request' AND subjects.github_number = ?
+        AND json_extract(revisions.payload, '$.state') = 'open'
+    `).get(github, number) as { payload: string } | undefined
+    return row === undefined ? null : JSON.parse(row.payload) as GitHubPullRequestItem
+  }
+
   const getOpenPullRequestStatus: JournalStore['getOpenPullRequestStatus'] = (github, pullRequestNumber) => {
     const row = database.prepare(`
       SELECT json_extract(revisions.payload, '$.headSha') AS head_sha,
@@ -8556,7 +8580,7 @@ export function openJournalStore(
     const pullRequest = JSON.parse(row.payload) as GitHubPullRequestItem
     const sameHeadRevisions = new Set((database.prepare(`SELECT id FROM revisions WHERE subject_id = ?
       AND json_extract(payload, '$.headSha') = ?`).all(row.id, pullRequest.headSha) as unknown as Array<{ id: string }>).map(row => row.id))
-    const tasks = taskRows(database, row.id).filter(task => task.repository === repository.github && task.github_number === number
+    const tasks = taskRows(database, { _tag: 'Subject', id: row.id }).filter(task => task.repository === repository.github && task.github_number === number
       && task.kind !== 'issue_work' && task.kind !== 'issue_triage' && sameHeadRevisions.has(task.revision_id)).filter((task, index, rows) => rows.findIndex(candidate => candidate.kind === task.kind) === index).map(taskFromRow)
     const observed = { pullRequest, tasks }
     if (pullRequest.state === 'closed')
@@ -16796,6 +16820,9 @@ export function openJournalStore(
     isSafeToRestart,
     dismissItem,
     getOpenPullRequestStatus,
+    getOpenPullRequest,
+    getTask,
+    listTasks,
     getOpenIssueStatus,
     getPullRequestWatchState,
     restoreItem,

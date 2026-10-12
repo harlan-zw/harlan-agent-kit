@@ -249,7 +249,7 @@ const controlCommand = defineCommand({
     'tasks': defineCommand({
       meta: { name: 'tasks', description: 'List current Tasks.' },
       args: controlConnectionArguments,
-      run: ({ args }) => runControl(args, client => client.state().then(result => result._tag === 'Err' ? result : { _tag: 'Ok', value: { tasks: result.value.tasks, completionTasks: result.value.completionTasks ?? [] } })),
+      run: ({ args }) => runControl(args, client => client.tasks()),
     }),
     'incidents': defineCommand({
       meta: { name: 'incidents', description: 'List unresolved Incidents.' },

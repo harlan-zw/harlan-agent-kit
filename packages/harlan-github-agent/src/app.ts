@@ -43,7 +43,7 @@ export interface AgentAppOptions {
   agentSlots?: AgentSlotLimits
   setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity | Promise<HostCapacity>
   hostSlotPolicy?: () => { hogwild: number, desktop: number }
-  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'finishUpdatePreparation' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
+  store: Pick<JournalStore, 'getTask' | 'listTasks' | 'listCompletionTasks' | 'listIncidents' | 'getOpenPullRequest' | 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'finishUpdatePreparation' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
   allowedOrigin: string
   /**
    * The service's own listen address, such as `http://127.0.0.1:3210`. The
@@ -447,6 +447,22 @@ export function createAgentApp(options: AgentAppOptions): H3 {
 
   app.get('/api/state', () => dashboardSnapshot(options))
 
+  app.get('/api/tasks', () => ({ tasks: options.store.listTasks(), completionTasks: options.store.listCompletionTasks() }))
+  app.get('/api/incidents', () => ({ incidents: options.store.listIncidents() }))
+  app.get('/api/tasks/activity', (event) => {
+    const taskId = new URL(event.req.url).searchParams.get('task')
+    if (taskId === null || taskId.length === 0 || taskId.length > 128)
+      throw createError({ status: 400, message: 'Provide one Task ID.' })
+    const task = options.store.getTask(taskId)
+    if (task === null)
+      return { _tag: 'Err', error: { _tag: 'TaskNotFound', taskId, message: 'The Service has no record of this Task.' } }
+    if (task.state._tag !== 'Running' && task.state._tag !== 'Publishing')
+      return { _tag: 'Err', error: { _tag: 'TaskActivityUnavailable', taskId, state: task.state._tag, message: `This Task is ${task.state._tag}. Live activity is available while a Task runs.` } }
+    if (options.activityLog === undefined)
+      return { _tag: 'Err', error: { _tag: 'TaskActivityUnavailable', taskId, state: task.state._tag, message: 'Live activity is unavailable for this Task.' } }
+    return { _tag: 'Ok', value: { taskId, activity: options.activityLog.read(taskId) } }
+  })
+
   app.get('/api/items/pull-request-diff', async (event) => {
     if (event.req.headers.get('x-harlan-agent-ingress') === 'public')
       throw createError({ status: 403, message: 'Connect through private ingress to view the diff.' })
@@ -457,10 +473,8 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       return { _tag: 'Err', error: 'InvalidRequest' }
     if (options.pullRequestDiff === undefined)
       return { _tag: 'Err', error: 'Unavailable' }
-    const item = options.store.getDashboardSnapshot(options.now().toISOString()).items.find(item =>
-      item.kind === 'pull_request' && item.repository === repository && item.number === number && item.state === 'open',
-    )
-    if (item?.kind !== 'pull_request')
+    const item = options.store.getOpenPullRequest(repository, number)
+    if (item === null)
       return { _tag: 'Err', error: 'Unavailable' }
     const snapshot = query.get('snapshot')
     const path = query.get('path')
