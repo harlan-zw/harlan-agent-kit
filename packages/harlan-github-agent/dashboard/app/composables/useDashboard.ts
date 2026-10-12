@@ -62,6 +62,8 @@ function emptySnapshot(): DashboardSnapshot {
  * and Watching keeps a single event stream instead of opening one per page.
  */
 function createDashboard() {
+  const { readOnly, controllerPath } = useTerminalHost()
+  let started = false
   const snapshot = shallowRef<DashboardSnapshot>(emptySnapshot())
   const loading = ref(true)
   const loadError = ref<string>()
@@ -89,7 +91,7 @@ function createDashboard() {
     data: liveSnapshot,
     open: openLiveUpdates,
     close: closeLiveUpdates,
-  } = useEventSource<['state'], DashboardSnapshot>('/api/events', ['state'], {
+  } = useEventSource<['state'], DashboardSnapshot>(computed(() => controllerPath('/api/events')), ['state'], {
     immediate: false,
     autoReconnect: { delay: 1_500 },
     serializer: { read: value => JSON.parse(value ?? '{}') as DashboardSnapshot },
@@ -111,12 +113,12 @@ function createDashboard() {
 
   /** Old data on a monitoring surface is worse than none, because it still looks authoritative. */
   const isStale = computed(() => !loading.value && isSnapshotStale(snapshot.value.generatedAt, now.value))
-  const controlsUnavailable = computed(() => loading.value || snapshot.value.generatedAt.length === 0 || isStale.value)
+  const controlsUnavailable = computed(() => readOnly.value || loading.value || snapshot.value.generatedAt.length === 0 || isStale.value)
 
   function refuseUnavailableControl(): boolean {
     if (!controlsUnavailable.value)
       return false
-    controlError.value = 'Service data is unavailable. Reload before changing settings or work.'
+    controlError.value = readOnly.value ? 'Read-only Service connection.' : 'Service data is unavailable. Reload before changing settings or work.'
     return true
   }
 
@@ -135,7 +137,7 @@ function createDashboard() {
 
   async function loadState(): Promise<void> {
     loadError.value = undefined
-    return $fetch.raw<DashboardSnapshot>('/api/state')
+    return $fetch.raw<DashboardSnapshot>(controllerPath('/api/state'))
       .then((response) => {
         if (response._data === undefined)
           throw new Error('The Service returned no state.')
@@ -255,6 +257,8 @@ function createDashboard() {
   }
 
   async function recordAgentFeedback(reviewRunId: string, feedback: AgentFeedbackInput): Promise<void> {
+    if (refuseUnavailableControl())
+      return
     feedbackPending.value = reviewRunId
     feedbackErrors.value = without(feedbackErrors.value, reviewRunId)
     return $fetch('/api/reviews/feedback', { method: 'POST', body: { reviewRunId, feedback } })
@@ -402,6 +406,9 @@ function createDashboard() {
   }
 
   function start(): void {
+    if (started)
+      return
+    started = true
     void loadState()
     if (visibility.value === 'visible')
       openLiveUpdates()
@@ -415,6 +422,8 @@ function createDashboard() {
   })
 
   watch(visibility, (value) => {
+    if (!started)
+      return
     if (value === 'visible') {
       void loadState()
       openLiveUpdates()

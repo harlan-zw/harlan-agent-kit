@@ -24,6 +24,8 @@ const canApply = computed(() => state.value._tag === 'Inspecting'
   && snapshot.value.agentStart._tag === 'Available')
 
 async function request(input: RepairRecoveryRequest): Promise<void> {
+  if (controlsUnavailable.value)
+    return
   if (input._tag === 'Apply' && state.value._tag !== 'Inspecting')
     return
   const generation = ++requestGeneration

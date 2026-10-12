@@ -6,8 +6,7 @@ name: Test
 # hosted runner on a public repository lets a fork pull request run code on that
 # host. No self hosted runner is registered here either.
 #
-# Markdown: every event ignores `**/*.md`. Harlan pushes Markdown only changes
-# straight to `main` with no pull request, so this workflow must not block them.
+# Markdown: every event ignores `**/*.md`. Markdown changes still use pull requests.
 # Some tests do read tracked Markdown, so a Markdown only change can still break
 # `pnpm test`. The next non Markdown commit reports it.
 
@@ -44,6 +43,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+      - run: pnpm --filter ghostty-terminal-bindings build
+      - run: pnpm --filter ghostty-terminal-bindings typecheck
       - run: pnpm typecheck
       - run: pnpm --filter advocaat typecheck
 
@@ -172,6 +173,9 @@ jobs:
 
       - name: Service package
         run: pnpm --filter harlan-github-agent test:run
+
+      - name: Native terminal bindings
+        run: pnpm --filter ghostty-terminal-bindings test:run
 
       - name: Notes viewer build smoke
         run: pnpm test:notes-viewer

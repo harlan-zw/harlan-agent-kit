@@ -1,6 +1,7 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
 import type { AgentHost, AgentSlotLimits, HostAgentPool, HostCapacity } from './host-capacity.ts'
+import type { createPullRequestDiffSource } from './pull-request-diff.ts'
 import type { PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
 import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 import type { Result } from './result.ts'
@@ -17,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { createError, createEventStream, H3, setResponseStatus } from 'h3'
 import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
-import { parseDesktopEvents, parseDesktopFailure, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
+import { parseDesktopEvents, parseDesktopFailure, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
 import { parseAgentSlots } from './host-capacity.ts'
 import { parseIncidentResolutionRequest } from './incident-resolution.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
@@ -26,6 +27,7 @@ import { registerSessionRoutes } from './session-routes.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
+  pullRequestDiff?: ReturnType<typeof createPullRequestDiffSource>
   repairRecovery?: (request: RepairRecoveryRequest) => Promise<Result<RepairRecoveryResponse, string>>
   pullRequestWatch?: {
     state: (repository: string, number: number) => PullRequestWatchState | null
@@ -38,7 +40,8 @@ export interface AgentAppOptions {
   hostTasks?: HostAgentPool['tasks']
   /** The bounds of the Agent slot control. Absent means the control is unavailable. */
   agentSlots?: AgentSlotLimits
-  setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity
+  setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity | Promise<HostCapacity>
+  hostSlotPolicy?: () => { hogwild: number, desktop: number }
   store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'finishUpdatePreparation' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
   allowedOrigin: string
   /**
@@ -408,6 +411,35 @@ export function createAgentApp(options: AgentAppOptions): H3 {
 
   app.get('/api/state', () => dashboardSnapshot(options))
 
+  app.get('/api/items/pull-request-diff', async (event) => {
+    if (event.req.headers.get('x-harlan-agent-ingress') === 'public')
+      throw createError({ status: 403, message: 'Connect through private ingress to view the diff.' })
+    const query = new URL(event.req.url).searchParams
+    const repository = query.get('repository') ?? ''
+    const number = Number(query.get('number'))
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !Number.isSafeInteger(number) || number < 1)
+      return { _tag: 'Err', error: 'InvalidRequest' }
+    if (options.pullRequestDiff === undefined)
+      return { _tag: 'Err', error: 'Unavailable' }
+    const item = options.store.getDashboardSnapshot(options.now().toISOString()).items.find(item =>
+      item.kind === 'pull_request' && item.repository === repository && item.number === number && item.state === 'open',
+    )
+    if (item?.kind !== 'pull_request')
+      return { _tag: 'Err', error: 'Unavailable' }
+    const snapshot = query.get('snapshot')
+    const path = query.get('path')
+    if (snapshot !== null || path !== null) {
+      if (snapshot === null || path === null)
+        return { _tag: 'Err', error: 'InvalidRequest' }
+      return options.pullRequestDiff.file({ repository, number, snapshot, path }, event.req.signal)
+    }
+    const base = query.get('base') ?? ''
+    const head = query.get('head') ?? ''
+    if (item.baseSha !== base || item.headSha !== head)
+      return { _tag: 'Err', error: 'Changed' }
+    return options.pullRequestDiff.list({ repository, number, base, head }, event.req.signal)
+  })
+
   app.get('/api/items/pull-request-status', (event) => {
     const query = new URL(event.req.url).searchParams
     const repository = query.get('repository')
@@ -432,17 +464,14 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     return item
   })
 
-  app.post('/api/desktop/capacity', async (event) => {
-    if (options.desktop === undefined)
-      throw createError({ statusCode: 503, message: 'Desktop execution is unavailable.' })
-    const memoryGiB = desktopInput(parseDesktopMemory, await desktopBody(event))
-    options.desktop.setMemory(memoryGiB)
-    return { memoryGiB }
+  app.post('/api/desktop/capacity', () => {
+    throw createError({ statusCode: 403, message: 'Change Desktop memory in the host configuration.' })
   })
   app.post('/api/desktop/report', async (event) => {
     if (options.desktop === undefined)
       throw createError({ statusCode: 503, message: 'Desktop execution is unavailable.' })
-    return options.desktop.report(desktopInput(parseDesktopReport, await desktopBody(event)))
+    const policy = options.hostSlotPolicy?.()
+    return { ...options.desktop.report(desktopInput(parseDesktopReport, await desktopBody(event))), ...(policy === undefined ? {} : { agentSlots: policy.desktop, maintenanceReserve: Math.min(1, policy.desktop) }) }
   })
   app.post('/api/desktop/claim', () => options.desktop?.claim() ?? null)
   app.post('/api/desktop/defer', async (event) => {

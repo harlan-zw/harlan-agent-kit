@@ -1,7 +1,6 @@
 import type { ConsolaInstance } from 'consola'
 import type { Server } from 'srvx'
 import type { AgentProviderName } from './agent-provider.ts'
-import type { CodexProviderOptions } from './codex-provider.ts'
 import type { ReloadableExternalWatchController } from './external-watch.ts'
 import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
@@ -12,14 +11,12 @@ import type { AgentSlotCounts } from './host-memory.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunReport } from './review-check-run.ts'
 import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
-import type { ReviewProofAuthorityFactory } from './review-proof-authority.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
 import type { ServiceUpdateSource } from './service-update.ts'
 import type { SessionController } from './session-controller.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedAgentTask, DashboardSnapshot, IncidentScope, RepositoryMapping, ServiceTrigger, ValidatedAgentConfig } from './types.ts'
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as waitForHost } from 'node:timers/promises'
 import { jev } from 'advocaat'
@@ -28,7 +25,6 @@ import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } 
 import { agentLabelItem } from './agent-label.ts'
 import { createAgentPermitPool, createRoutinePermitPools } from './agent-permit-pool.ts'
 import { AGENT_PROVIDER_NAMES, agentProfile, createAgentRuntimeSource } from './agent-profile.ts'
-import { DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
 import { createAgentApp } from './app.ts'
 import { createApprovalController } from './approval-controller.ts'
 import { createAutoMergeController } from './auto-merge-controller.ts'
@@ -39,18 +35,17 @@ import { createBatchWorker } from './batch-worker.ts'
 import { createCandidateIssueController } from './candidate-issue-controller.ts'
 import { agentStartBlockedReason, hasSpendableCapacity, resolveAgentStartState } from './capacity.ts'
 import { createClassificationSource } from './classification.ts'
-import { createCodexProvider } from './codex-provider.ts'
 import { loadConfig, validateRepositoryMappings } from './config.ts'
 import { createConflictWorker } from './conflict-worker.ts'
 import { createDesktopBroker } from './desktop-broker.ts'
 import { DESKTOP_AGENT_SLOT_CEILING } from './desktop-protocol.ts'
-import { createDesktopSessionClient } from './desktop-session-client.ts'
 import { createReloadableExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
 import { classifyFailure, isSubjectMovedReason } from './failure.ts'
 import { createGitHubAccountTokenProvider, readGitHubAccountLogin, readGitHubAccountToken } from './github-account.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
 import { createGitHubMediaSource } from './github-media.ts'
+import { createGitHubPullRequestDiff } from './github-pull-request-diff.ts'
 import { createGitHubRateLimitGate, readAfterGitHubRateLimit } from './github-rate-limit.ts'
 import { createGitHubRequestCounts } from './github-request-counts.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
@@ -60,13 +55,13 @@ import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitH
 import { createGitHubIssuePublisher, createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createHostAgentPool } from './host-capacity.ts'
 import { agentSlotLine, agentSlotSizing, localAgentMemoryBytes } from './host-memory.ts'
+import { setHostSlotPolicy } from './host-slot-policy.ts'
 import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
-import { createLocalSessionRunner, localSessionSlotMaximum } from './local-session-runner.ts'
 import { publishLoggedFindingPickups } from './logged-finding-sweep.ts'
-import { createOpencodeProvider } from './opencode-provider.ts'
+import { createMaintenanceCheckCommand, createMaintenanceScopeProvider } from './maintenance-scope.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
 import { createPackageReleaseSource } from './package-release-github.ts'
 import { runPassStep, runPassStepResult } from './poll-pass.ts'
@@ -105,6 +100,7 @@ import { openJournalStore } from './store.ts'
 import { runCompletionTask } from './take-ownership-completion.ts'
 import { createCompletionSource } from './take-ownership-github.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
+import { createControllerTerminals } from './terminal-controller.ts'
 import { createWebhookControls } from './webhook-controls.ts'
 import { createReconcileHint, createWebhookApp } from './webhook.ts'
 import { createRoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
@@ -127,6 +123,7 @@ export interface StartAgentServiceOptions {
   classification?: { accountId: string, apiToken: string, gatewayId?: string, model: string }
   userAccess?: GitHubUserAccess
   dashboardPassword: string
+  capacityCommand?: string
   githubPrivateKey: string
   gitIdentity: GitIdentity
   logger: Pick<ConsolaInstance, 'error' | 'info'>
@@ -462,7 +459,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   })
   const processId = randomUUID()
   let sessions: SessionController | undefined
-  let localSessions: ReturnType<typeof createLocalSessionRunner> | undefined
   const restartController = createRestartController({
     store,
     processId,
@@ -517,8 +513,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // Both provider runtimes are built once. Switching the Agent selection then
   // costs one journal read, and the service never restarts to answer it.
   const reviewProofAuthority = createReviewProofAuthority(store, now)
-  const codexProofOptions: CodexProviderOptions & { reviewProofAuthority: ReviewProofAuthorityFactory } = { reviewProofAuthority, memoryPerAgentGiB: config.agent.memoryPerAgentGiB }
-  const desktop = createDesktopBroker({ now: () => now().getTime(), settingsPath: join(dirname(config.storage.path), 'desktop-capacity.json'), reviewProofAuthority })
+  const maintenanceAdmission = { capacityCommand: options.capacityCommand ?? '/usr/local/bin/harlan-host-capacity', memoryGiB: config.agent.memoryPerAgentGiB }
+  const runMaintenanceCommand = createMaintenanceCheckCommand(maintenanceAdmission)
+  const desktop = createDesktopBroker({ now: () => now().getTime(), reviewProofAuthority })
   const sizing = agentSlotSizing(
     configuredProfile.maximumActiveAgents,
     await localAgentMemoryBytes(config.agent.hostReserveGiB),
@@ -536,12 +533,16 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     const setting = store.getAgentSlots()
     return {
       hogwild: Math.min(setting.hogwild ?? sizing.suggested, slotLimits.hogwildCeiling),
-      desktop: Math.min(setting.desktop ?? 1, slotLimits.desktopCeiling),
+      desktop: Math.min(setting.desktop ?? 2, slotLimits.desktopCeiling),
     }
   }
   options.logger.info(agentSlotLine(agentSlots(), sizing))
+  await setHostSlotPolicy(maintenanceAdmission.capacityCommand, agentSlots().hogwild).catch((cause: unknown) => {
+    store.close()
+    throw cause
+  })
   const hosts = createHostAgentPool({
-    localMaximum: () => localSessionSlotMaximum(agentSlots().hogwild, sessions?.snapshot().sessions ?? [], id => localSessions?.holds(id) ?? false),
+    localMaximum: () => agentSlots().hogwild,
     desktopMaximum: () => agentSlots().desktop,
     desktopAvailable: desktop.available,
     wait: signal => waitForHost(500, undefined, { signal }),
@@ -559,13 +560,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       codex: createCircuitProtectedProvider({
         credential: agentProfile('codex').authentication,
         now,
-        provider: hosts.provider(createCodexProvider(codexProofOptions), desktop.provider('codex')),
+        provider: hosts.provider(createMaintenanceScopeProvider({ ...maintenanceAdmission, name: 'codex', reviewProofAuthority }), desktop.provider('codex')),
         store,
       }),
       opencode: createCircuitProtectedProvider({
         credential: agentProfile('opencode').authentication,
         now,
-        provider: hosts.provider(createOpencodeProvider({ ...codexProofOptions, cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: opencodeEnvironment.value }), desktop.provider('opencode')),
+        provider: hosts.provider(createMaintenanceScopeProvider({ ...maintenanceAdmission, name: 'opencode', reviewProofAuthority, environment: opencodeEnvironment.value }), desktop.provider('opencode')),
         store,
       }),
     },
@@ -913,8 +914,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           gitIdentity: options.gitIdentity,
           root: controllerRoot,
           tokens,
-          runChecks: runRepairRecoveryChecks,
-          confirmRegression: confirmRepairRecoveryRegression,
+          runChecks: (path, paths, signal) => runRepairRecoveryChecks(path, paths, signal, runMaintenanceCommand),
+          confirmRegression: (path, paths, signal) => confirmRepairRecoveryRegression(path, paths, signal, runMaintenanceCommand),
+          runCommand: runMaintenanceCommand,
           recordChecks: (task, checks) => store.recordRepairReport({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: now().toISOString(), summary: `Recovered selected finding: ${task.pickup!.finding.summary}`, checks }),
         }),
       }),
@@ -1619,8 +1621,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     onError: error => options.logger.error(error),
   })
   const dashboardShutdown = new AbortController()
-  const localSessionShutdown = new AbortController()
-  const localSessionMaximum = () => agentSlots().hogwild
   sessions = config.server.agentSessions === true
     ? createSessionController({
         path: join(dirname(config.storage.path), 'desktop-sessions.json'),
@@ -1630,38 +1630,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             return 0
           return host === 'desktop'
             ? Math.max(0, agentSlots().desktop - hosts.read().desktopActive)
-            : Math.max(0, localSessionMaximum() - hosts.read().localActive + (localSessions?.activeCount() ?? 0))
+            : Math.max(0, agentSlots().hogwild - hosts.read().localActive)
         },
       })
     : undefined
-  if (sessions !== undefined) {
-    const controller = sessions
-    const client = createDesktopSessionClient({
-      host: 'hogwild',
-      home: homedir(),
-      root: join(dirname(config.storage.path), 'hogwild-sessions'),
-      memoryPerAgentGiB: config.agent.memoryPerAgentGiB,
-      signal: localSessionShutdown.signal,
-      onStopped: fence => localSessions?.release(fence.turnId),
-      transport: {
-        report: async input => controller.report(input),
-        claim: async input => controller.claim(input),
-        heartbeat: async input => controller.heartbeat(input),
-        events: async input => controller.events(input),
-        complete: async input => controller.complete(input),
-        defer: async input => controller.defer(input),
-      },
-    })
-    localSessions = createLocalSessionRunner({
-      pool: hosts,
-      maximum: localSessionMaximum,
-      client,
-      onError: error => options.logger.error(error),
-      abort: () => localSessionShutdown.abort(),
-      mayClaim: () => restartAllowsTaskClaims(store.getRestartRequest()),
-    })
-  }
   const app = createAgentApp({
+    pullRequestDiff: createGitHubPullRequestDiff({ tokens: routedTokens, now: () => now().getTime(), log: message => options.logger.error(message) }),
     ...(sessions === undefined ? {} : { sessions }),
     ...(mutationSchedulers === undefined ? {} : { repairRecovery: mutationSchedulers.repairRecovery.run }),
     ...(config.triggers.includes('github')
@@ -1704,7 +1678,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     hostCapacity: hosts.read,
     hostTasks: hosts.tasks,
     agentSlots: slotLimits,
-    setAgentSlots: (host, slots) => {
+    hostSlotPolicy: agentSlots,
+    setAgentSlots: async (host, slots) => {
+      if (host === 'hogwild')
+        await setHostSlotPolicy(maintenanceAdmission.capacityCommand, slots)
       store.setAgentSlots({ host, slots, at: now().toISOString() })
       return hosts.read()
     },
@@ -1769,11 +1746,31 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     now,
     shutdownSignal: dashboardShutdown.signal,
   })
+  const listenOrigin = `http://${config.server.host.includes(':') ? `[${config.server.host}]` : config.server.host}:${config.server.port}`
+  const terminals = config.server.agentSessions === true
+    ? await createControllerTerminals({
+        directory: join(dirname(config.storage.path), 'terminals'),
+        origin: config.server.allowedOrigin,
+        listenOrigin,
+        password: options.dashboardPassword,
+        memoryGiB: config.agent.memoryPerAgentGiB,
+        admissionCli: maintenanceAdmission.capacityCommand,
+        protectedPaths: [
+          dirname(config.storage.path),
+          config.github.privateKeyPath,
+          ...(options.configPath === undefined ? [] : [dirname(options.configPath)]),
+          ...(config.webhook._tag === 'Enabled' ? [config.webhook.secretPath] : []),
+          ...(config.classification._tag === 'Enabled' ? [config.classification.tokenPath] : []),
+        ],
+      })
+    : undefined
   const server = await startAgentServer({
     app,
     hostname: config.server.host,
     port: config.server.port,
+    ...(terminals === undefined ? {} : { terminals: terminals.routes }),
   }).catch((error) => {
+    void terminals?.close()
     store.close()
     throw error
   })
@@ -1892,7 +1889,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     repositoryPollers.forEach(repositoryPoller => repositoryPoller.start())
   }
   worktreeSweeper.start()
-  localSessions?.start()
   if (answers('github'))
     mutationSchedulers?.tasks.forEach(scheduler => scheduler.start())
   if (answers('github'))
@@ -1918,9 +1914,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     waitForRestart: restartController.waitForRestart,
     stop: async () => {
       restartController.stop()
-      localSessionShutdown.abort()
       await Promise.all([
-        localSessions?.stop() ?? Promise.resolve(),
         capacity.stop(),
         options.serviceUpdate.stop(),
         reconcileHint.stop(),
@@ -1941,6 +1935,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         mutationSchedulers?.routines.stop() ?? Promise.resolve(),
       ])
       dashboardShutdown.abort()
+      await terminals?.close()
       await Promise.all([server.close(), webhookServer?.close() ?? Promise.resolve()])
       requestCounts.stop()
       store.close()

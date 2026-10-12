@@ -4,10 +4,9 @@ import type { DesktopWorktree } from './desktop-worktree.ts'
 import type { ReviewProofAuthorityFactory, ReviewProofOwnership } from './review-proof-authority.ts'
 import type { RunnerJobs } from './runner-jobs.ts'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTOCOL, DESKTOP_TURN_LEASE_MILLISECONDS, desktopErrorCause } from './desktop-protocol.ts'
 import { exportDesktopWorktree, importDesktopWorktree } from './desktop-worktree.ts'
@@ -41,21 +40,10 @@ export interface DesktopReport {
   jobs?: RunnerJobs
 }
 
-export function createDesktopBroker(options: { now: () => number, settingsPath?: string, reviewProofAuthority?: ReviewProofAuthorityFactory }) {
+export function createDesktopBroker(options: { now: () => number, reviewProofAuthority?: ReviewProofAuthorityFactory }) {
   const pending = new Map<string, PendingTurn>()
   let report: DesktopReport | null = null
   let seenAt = 0
-  let requestedMemoryGiB: number | null = options.settingsPath !== undefined && existsSync(options.settingsPath)
-    ? JSON.parse(readFileSync(options.settingsPath, 'utf8')).requestedMemoryGiB
-    : null
-  const persistMemory = (value: number | null): void => {
-    if (options.settingsPath !== undefined) {
-      mkdirSync(dirname(options.settingsPath), { recursive: true })
-      writeFileSync(`${options.settingsPath}.next`, JSON.stringify({ requestedMemoryGiB: value }), { mode: 0o600 })
-      renameSync(`${options.settingsPath}.next`, options.settingsPath)
-    }
-    requestedMemoryGiB = value
-  }
   const connected = () => report !== null && options.now() - seenAt < 15_000
   // A desktop on another revision reads a turn it was never taught. Standing it
   // down keeps the work on Hogwild, where the old design instead sent the turn
@@ -64,14 +52,11 @@ export function createDesktopBroker(options: { now: () => number, settingsPath?:
   const ownsTurn = (entry: PendingTurn | undefined): entry is PendingTurn => entry?.state === 'running' && !entry.signal.aborted && options.now() < entry.leaseExpiresAt
   return {
     available: () => connected() && current() && report !== null && report.memoryGiB - report.reservedGiB >= DESKTOP_MEMORY_PER_AGENT_GIB,
-    read: () => ({ connected: connected(), current: current(), protocol: DESKTOP_PROTOCOL, report, requestedMemoryGiB }),
-    setMemory: persistMemory,
+    read: () => ({ connected: connected(), current: current(), protocol: DESKTOP_PROTOCOL, report }),
     report: (value: DesktopReport) => {
       report = value
       seenAt = options.now()
-      if (requestedMemoryGiB === value.memoryGiB)
-        persistMemory(null)
-      return { memoryGiB: requestedMemoryGiB }
+      return { memoryGiB: value.memoryGiB }
     },
     claim: (): DesktopTurn | null => {
       if (!connected() || !current())

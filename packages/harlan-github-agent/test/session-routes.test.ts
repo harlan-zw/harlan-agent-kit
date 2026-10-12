@@ -6,7 +6,7 @@ import { expect, it } from 'vitest'
 import { createSessionController } from '../src/session-controller.ts'
 import { registerSessionRoutes } from '../src/session-routes.ts'
 
-it('runs the browser and desktop Session APIs and rejects malformed boundaries', async () => {
+it('keeps legacy history and Stop while refusing new structured Session input', async () => {
   const controller = createSessionController({ path: join(mkdtempSync(join(tmpdir(), 'session-routes-')), 'sessions.json'), now: () => new Date('2026-10-08T00:00:00Z') })
   const app = new H3()
   registerSessionRoutes(app, controller)
@@ -15,19 +15,22 @@ it('runs the browser and desktop Session APIs and rejects malformed boundaries',
   }
   expect((await post('/api/desktop/sessions/report', { host: 'desktop' as const, instanceId: 'desktop', protocol: 2, projects: [{ id: 'pkg/demo', name: 'demo', path: '/home/harlan/pkg/demo', kind: 'pkg' }] })).status).toBe(200)
   const started = await post('/api/sessions', { host: 'desktop' as const, projectId: 'pkg/demo', provider: 'codex', model: 'gpt-5.6-sol', reasoningEffort: 'high', prompt: 'Fix it', requestId: 'request' })
-  expect(started.status).toBe(200)
-  const session = await started.json() as { id: string }
+  expect(started.status).toBe(409)
+  const session = controller.start({ host: 'desktop', projectId: 'pkg/demo', provider: 'codex', model: 'gpt-5.6-sol', reasoningEffort: 'high', prompt: 'Saved work', requestId: 'saved' })
+  expect((await post(`/api/sessions/${session.id}/messages`, { prompt: 'New work', requestId: 'new' })).status).toBe(409)
   expect((await app.request(`http://localhost/api/sessions/${session.id}`)).status).toBe(200)
   const claimed = await post('/api/desktop/sessions/claim', { host: 'desktop' as const, instanceId: 'desktop', freeSlots: 1 })
-  const turn = await claimed.json() as { sessionId: string, turnId: string, leaseToken: string }
+  expect(await claimed.json()).toBeNull()
+  expect(controller.get(session.id).status).toBe('queued')
+  const turn = controller.claim({ host: 'desktop', instanceId: 'desktop', freeSlots: 1 })!
   const fence = { host: 'desktop' as const, instanceId: 'desktop', sessionId: turn.sessionId, turnId: turn.turnId, leaseToken: turn.leaseToken }
   expect(await (await post('/api/desktop/sessions/heartbeat', fence)).json()).toEqual({ active: true, cancelled: false })
   expect((await post('/api/desktop/sessions/events', { ...fence, seq: 1, events: [{ _tag: 'ShellExecute', command: 'anything' }] })).status).toBe(400)
   expect((await post('/api/desktop/sessions/complete', { ...fence, outcome: 'completed', workspacePath: '../escape' })).status).toBe(400)
   expect((await post(`/api/sessions/${session.id}/stop`, {})).status).toBe(200)
   expect(await (await post('/api/desktop/sessions/complete', { ...fence, outcome: 'stopped' })).json()).toEqual({ accepted: true })
-  expect((await post('/api/sessions', { projectId: '../../etc', prompt: 'bad' })).status).toBe(400)
-  expect((await app.request('http://localhost/api/sessions', { method: 'POST', body: '{bad' })).status).toBe(400)
+  expect((await post('/api/sessions', { projectId: '../../etc', prompt: 'bad' })).status).toBe(409)
+  expect((await app.request('http://localhost/api/sessions', { method: 'POST', body: '{bad' })).status).toBe(409)
 })
 
 it('denies public ingress even when a session route was matched', async () => {

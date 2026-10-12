@@ -177,7 +177,7 @@ const details = computed<DetailItem[]>(() => {
 })
 
 function save(verdict: FeedbackVerdict): void {
-  if (review.value === undefined || feedback.value?._tag !== 'Open')
+  if (controlsUnavailable.value || review.value === undefined || feedback.value?._tag !== 'Open')
     return
   const text = feedback.value.reason
   const input: AgentFeedbackInput = verdict === 'Useful'
@@ -295,7 +295,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
               class="w-full"
               placeholder="Reason. Noisy and Wrong require one."
               aria-label="Agent feedback reason"
-              :disabled="feedback.pending"
+              :disabled="controlsUnavailable || feedback.pending"
             />
             <div class="mt-2 flex flex-wrap items-center gap-2" role="group" aria-label="Agent feedback">
               <UButton
@@ -303,7 +303,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
                 variant="outline"
                 color="neutral"
                 :loading="feedback.pending && chosen === 'Useful'"
-                :disabled="!feedback.usefulEnabled"
+                :disabled="controlsUnavailable || !feedback.usefulEnabled"
                 @click="save('Useful')"
               >
                 Useful
@@ -313,7 +313,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
                 variant="outline"
                 color="neutral"
                 :loading="feedback.pending && chosen === 'Noisy'"
-                :disabled="!feedback.reasonedEnabled"
+                :disabled="controlsUnavailable || !feedback.reasonedEnabled"
                 @click="save('Noisy')"
               >
                 Noisy
@@ -323,7 +323,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
                 variant="outline"
                 color="neutral"
                 :loading="feedback.pending && chosen === 'Wrong'"
-                :disabled="!feedback.reasonedEnabled"
+                :disabled="controlsUnavailable || !feedback.reasonedEnabled"
                 @click="save('Wrong')"
               >
                 Wrong

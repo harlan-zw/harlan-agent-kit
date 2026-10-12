@@ -93,13 +93,6 @@ const memoryAdvice = computed(() => {
 const overMemory = computed(() => slotLimits.value !== undefined && hogwildSlots.value !== undefined && hogwildSlots.value > slotLimits.value.hogwildMemoryMaximum)
 
 const hostStatus = computed(() => host.value._tag === 'Connected' ? host.value.status : undefined)
-const desktopMemory = ref(16)
-const capacityPending = ref(false)
-const capacityMessage = ref('')
-watch(() => snapshot.value.desktop?.report?.memoryGiB, (value) => {
-  if (value !== undefined && !capacityPending.value)
-    desktopMemory.value = value
-}, { immediate: true })
 const desktopReport = computed(() => desktopState.value.report)
 const hogwildTasks = computed(() => hostTasks(snapshot.value, 'hogwild'))
 const desktopTasks = computed(() => hostTasks(snapshot.value, 'desktop'))
@@ -117,21 +110,6 @@ const hogwildJobs = computed(() => runnerPools.value?.reduce((total, pool) => to
 const hogwildQueued = computed(() => runnerPools.value?.every(pool => pool.queue._tag === 'Available')
   ? runnerPools.value.reduce((total, pool) => total + (pool.queue._tag === 'Available' ? pool.queue.jobs : 0), 0)
   : undefined)
-
-async function saveDesktopMemory(): Promise<void> {
-  if (controlsUnavailable.value)
-    return
-  if (!Number.isInteger(desktopMemory.value) || desktopMemory.value < 1 || desktopMemory.value > 256) {
-    capacityMessage.value = 'Enter a whole number from 1 to 256 GiB.'
-    return
-  }
-  capacityPending.value = true
-  capacityMessage.value = ''
-  await $fetch('/api/desktop/capacity', { method: 'POST', body: { memoryGiB: desktopMemory.value } })
-    .then(() => { capacityMessage.value = 'Saved. Current work finishes within its existing limits.' })
-    .catch(() => { capacityMessage.value = 'Could not save desktop memory. Try again.' })
-    .finally(() => { capacityPending.value = false })
-}
 
 const batches = computed(() => snapshot.value.batches.map(batchRow))
 const healthEntries = computed(() => {
@@ -339,25 +317,15 @@ function activityLine(item: AgentActivityItem): string {
                   Zero keeps every Agent on Hogwild. Each desktop Agent needs {{ slotLimits.memoryPerAgentGiB }} GiB.
                 </p>
               </div>
-              <form class="mt-4" @submit.prevent="saveDesktopMemory">
-                <label for="desktop-memory" class="field-label">Desktop memory, shared by both queues</label>
-                <div class="mt-2 flex flex-wrap items-center gap-2">
-                  <UInput id="desktop-memory" v-model.number="desktopMemory" type="number" :min="1" :max="256" :step="1" class="w-24" aria-describedby="desktop-memory-help" />
-                  <span class="text-sm text-muted">GiB</span>
-                  <UButton type="submit" color="neutral" variant="outline" :loading="capacityPending" :disabled="controlsUnavailable">
-                    Save
-                  </UButton>
-                </div>
-                <p id="desktop-memory-help" class="mt-2 text-xs text-muted">
-                  Each desktop Agent needs 8 GiB. GitHub Actions jobs use their container limits.
+              <div class="mt-4">
+                <span class="field-label">Desktop memory</span>
+                <p class="mt-2 font-mono text-sm">
+                  {{ desktopReport ? `${desktopReport.memoryGiB} GiB` : 'Unavailable' }}
                 </p>
-                <p v-if="capacityMessage" role="status" class="mt-2 text-sm">
-                  {{ capacityMessage }}
+                <p class="mt-2 text-xs text-muted">
+                  Shared by Agents and GitHub Actions.
                 </p>
-                <p v-if="snapshot.desktop?.requestedMemoryGiB" class="mt-2 text-xs text-muted">
-                  {{ snapshot.desktop.requestedMemoryGiB }} GiB will apply when the desktop next connects.
-                </p>
-              </form>
+              </div>
             </div>
           </div>
         </section>

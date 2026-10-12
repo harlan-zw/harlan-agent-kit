@@ -27,7 +27,7 @@ function record(value: unknown): value is Record<string, unknown> {
  * 9: fenced event delivery and host failure attribution across the desktop boundary.
  * 11: proposed next actions carried by selected Logged findings.
  */
-export const DESKTOP_PROTOCOL = 11
+export const DESKTOP_PROTOCOL = 12
 
 export const DESKTOP_TURN_LEASE_MILLISECONDS = 15_000
 
@@ -101,12 +101,6 @@ export function parseDesktopReport(value: unknown): DesktopReport {
     ? parseRunnerJobs({ updatedAt: 0, runners: value.jobs.jobs.map(job => record(job) ? { activity: 'Running', name: job.runner, repository: job.repository, job } : job) }, 0)
     : { _tag: 'Unavailable' as const }
   return { protocol, memoryGiB: Number(value.memoryGiB), reservedGiB: Number(value.reservedGiB), agents: Number(value.agents), actions: Number(value.actions), jobs }
-}
-
-export function parseDesktopMemory(value: unknown): number {
-  if (!record(value) || !Number.isSafeInteger(value.memoryGiB) || Number(value.memoryGiB) < 1 || Number(value.memoryGiB) > 256)
-    throw new Error('Desktop memory must be between 1 and 256 GiB.')
-  return Number(value.memoryGiB)
 }
 
 /** A turn carries only what the receiver cannot reach, so the shape says which. */

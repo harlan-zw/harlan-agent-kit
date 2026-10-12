@@ -73,15 +73,17 @@ The Dashboard's live Hogwild metrics remain available through Tailscale only.
 
 ## Agent sessions
 
-The Sessions page starts Agents on Hogwild or the desktop.
-Select where to run, then select a Project from that host's `~/pkg` or `~/sites` directories.
-Each Agent session keeps one Worktree and its provider conversation across turns.
+The Sessions page lists Projects and terminal Agent sessions on its connected host.
+Select a Project and an installed Agent provider to start a terminal.
+Codex, Claude Code, and OpenCode keep their own terminal interface.
+Each Agent session owns one Worktree and an independent process scope.
+The scope shares the host's admission authority with maintenance and GitHub Actions.
 The Agent uses that host's local credentials, tools, and Agent instructions.
-Hogwild sessions do not require the desktop connection.
-Agent sessions stay on their selected host.
+Use the standalone terminal host for local Projects.
+Stored structured Agent sessions remain available through History and Stop.
 
 Install the updated `scripts/30-agent.caddy` route before enabling Agent sessions.
-The route denies public `/api/sessions` and `/api/desktop/sessions` requests, including their child paths.
+The route denies public `/api/sessions`, `/api/desktop/sessions`, and `/api/terminal` requests, including child paths.
 It also stamps public proxy requests with `X-Harlan-Agent-Ingress: public`.
 The Service refuses that marker on every Agent session route.
 
@@ -97,13 +99,15 @@ If the configuration contains `desktop_sessions`, replace that key with `agent_s
 Update both Service checkouts with `pnpm service:hogwild:update`.
 Open `https://hogwild.tailcad325.ts.net/sessions` through Tailscale.
 
-If the selected host disconnects, the Agent session shows an interruption.
-Reconnect that host, select Stop Agent, then send the next message after stop confirmation.
-Browser disconnects preserve the Agent session and its Worktree.
-The Worktree sweep preserves `agent/session-<UUID>` branches between turns.
+Browser disconnects preserve the Agent process and its Worktree.
+API restarts reconnect to the independent process scope.
+Only the terminal writer may send input or resize the process.
+Other viewers receive the same terminal screen without input authority.
+Select Stop to end the entire owned process scope.
+The host releases the Worktree claim only after it proves the scope is empty.
 
-Verify public Session APIs return 403, including authenticated requests with the correct public Origin.
-Then verify Project selection, prompt delivery, follow-up, and Stop through the Tailscale address.
+Verify public Session and terminal APIs return 403, including authenticated requests with the correct public Origin.
+Then verify Project selection, terminal input, reconnect, and Stop through the Tailscale address.
 Disabling `server.agent_sessions` preserves stored Agent sessions and leaves maintenance offload available.
 
 ## Rollback

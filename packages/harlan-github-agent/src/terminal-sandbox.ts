@@ -1,0 +1,182 @@
+import { execFile } from 'node:child_process'
+import { lstat, realpath } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { promisify } from 'node:util'
+
+const execute = promisify(execFile)
+const isolation = [
+  '--die-with-parent',
+  '--unshare-user',
+  '--unshare-pid',
+  '--unshare-ipc',
+  '--unshare-cgroup',
+  '--cap-drop',
+  'ALL',
+  '--ro-bind',
+  '/',
+  '/',
+  '--proc',
+  '/proc',
+  '--dev',
+  '/dev',
+  '--tmpfs',
+  '/run',
+  '--tmpfs',
+  '/tmp',
+  '--tmpfs',
+  '/sys/fs/cgroup',
+]
+export async function prepareTerminalSandbox(options: {
+  cwd: string
+  executable: string
+  argv: string[]
+  environment: NodeJS.ProcessEnv
+  writable?: string[]
+  denied?: string[]
+  home?: string
+}) {
+  // node-pty establishes the controlling session. Nested setsid would break interactive terminal ownership.
+  await execute('/usr/bin/bwrap', [...isolation, '/usr/bin/true'], {
+    timeout: 10000,
+    env: { PATH: '/usr/bin:/bin' },
+  })
+  const cwd = await realpath(options.cwd)
+  const home = options.home ?? homedir()
+  const args = [...isolation, '--bind', cwd, cwd]
+  // Host resolver symlinks commonly enter /run. Preserve only their read-only file, never its directory.
+  const resolver = await realpath('/etc/resolv.conf')
+  if (resolver.startsWith('/run/') || resolver.startsWith('/tmp/'))
+    args.push('--dir', dirname(resolver), '--ro-bind', resolver, resolver)
+  for (const path of options.writable ?? []) {
+    const canonical = await realpath(path)
+    args.push('--bind', canonical, canonical)
+  }
+  for (const name of [
+    '.codex',
+    '.claude',
+    '.config/opencode',
+    '.local/share/opencode',
+    '.local/state/opencode',
+    '.cache/opencode',
+    '.cache/claude',
+    '.cache/claude-code',
+  ]) {
+    const path = join(home, name)
+    const metadata = await lstat(path).catch((cause: NodeJS.ErrnoException) => {
+      if (cause.code === 'ENOENT')
+        return null
+      throw cause
+    })
+    if (!metadata)
+      continue
+    if (!metadata.isDirectory() || (await realpath(path)) !== path) {
+      throw new Error(
+        'Terminal provider state requires ordinary host directories',
+      )
+    }
+    args.push('--bind', path, path)
+  }
+  const claudeFile = join(home, '.claude.json')
+  const claudeMetadata = await lstat(claudeFile).catch(
+    (cause: NodeJS.ErrnoException) => {
+      if (cause.code === 'ENOENT')
+        return null
+      throw cause
+    },
+  )
+  if (claudeMetadata) {
+    if (!claudeMetadata.isFile() || (await realpath(claudeFile)) !== claudeFile)
+      throw new Error('Claude state requires an ordinary host file')
+    args.push('--bind', claudeFile, claudeFile)
+  }
+  for (const path of [
+    ...(options.denied ?? []),
+    join(home, '.ssh'),
+    ...(options.environment.SSH_AUTH_SOCK ? [options.environment.SSH_AUTH_SOCK] : []),
+    join(home, '.codex/app-server-daemon'),
+    join(home, '.config/harlan-github-agent'),
+    join(home, '.local/share/harlan-github-agent'),
+    join(home, '.local/state/harlan-desktop-capacity'),
+  ]) {
+    const metadata = await lstat(path).catch((cause: NodeJS.ErrnoException) => {
+      if (cause.code === 'ENOENT')
+        return null
+      throw cause
+    })
+    if (!metadata)
+      continue
+    const canonical = await realpath(path)
+    // Private runtime directories are already empty. Their parents cannot host a bind target.
+    if (canonical.startsWith('/run/') || canonical.startsWith('/tmp/'))
+      continue
+    const target = await lstat(canonical)
+    args.push(
+      ...(target.isDirectory()
+        ? ['--tmpfs', canonical]
+        : ['--ro-bind', '/dev/null', canonical]),
+    )
+  }
+  const environment: NodeJS.ProcessEnv = {
+    ...options.environment,
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+  }
+  for (const name of [
+    'DBUS_SESSION_BUS_ADDRESS',
+    'DBUS_SYSTEM_BUS_ADDRESS',
+    'SYSTEMD_BUS_ADDRESS',
+    'XDG_RUNTIME_DIR',
+    'SSH_AUTH_SOCK',
+    'LISTEN_FDS',
+    'LISTEN_PID',
+    'LISTEN_FDNAMES',
+    'NOTIFY_SOCKET',
+  ])
+    delete environment[name]
+  args.push('--chdir', cwd, '--', options.executable, ...options.argv)
+  return { executable: '/usr/bin/bwrap', argv: args, environment }
+}
+
+/** Worktrunk hooks share the provider's denied bus and cgroup boundary. */
+export async function createTerminalPreparationRunner(
+  project: string,
+  claimScript: string,
+  denied: string[],
+  home = homedir(),
+): Promise<typeof execute> {
+  const parent = dirname(await realpath(project))
+  const common = await execute(
+    'git',
+    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    { cwd: project },
+  )
+  const writable = [
+    parent,
+    common.stdout.trim(),
+    join(home, '.local/state'),
+    join(home, '.cache'),
+  ]
+  // The claim store belongs to this user. No hook can reach the user manager through /run or DBus.
+  const claimDirectory = dirname(claimScript)
+  await realpath(claimDirectory)
+  return (async (
+    file: string,
+    args: readonly string[],
+    settings: { cwd?: string, timeout?: number, maxBuffer?: number } = {},
+  ) => {
+    const sandbox = await prepareTerminalSandbox({
+      cwd: settings.cwd ?? project,
+      executable: '/usr/bin/env',
+      argv: [file, ...args],
+      environment: process.env,
+      writable,
+      denied,
+      home,
+    })
+    return execute(sandbox.executable, sandbox.argv, {
+      ...settings,
+      env: sandbox.environment,
+    })
+  }) as typeof execute
+}

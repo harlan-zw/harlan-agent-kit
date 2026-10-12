@@ -1,0 +1,9 @@
+.generated/*
+!.generated/ghostty-vt.wasm
+!.generated/ghostty-web.js
+!.generated/browser.js
+!.generated/ghostty-web.d.ts
+!.generated/browser.d.ts
+!.generated/LICENSE.ghostty
+!.generated/LICENSE.ghostty-web
+!.generated/build-manifest.json

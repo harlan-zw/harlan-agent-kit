@@ -63,6 +63,7 @@ overrides:
 
 allowBuilds:
   esbuild: false
+  node-pty: true
   vue-demi: true
 
 catalog:
@@ -76,18 +77,24 @@ catalog:
   '@nuxt/icon': ^2.5.1
   '@nuxt/ui': ^4.11.3
   '@openai/codex-sdk': ^0.160.0
+  '@pierre/diffs': 1.2.0
   '@resvg/resvg-js': ^2.6.2
   '@types/node': ^26.6.4
   '@types/semver': ^7.7.1
+  '@types/ws': 8.18.2
   '@vueuse/nuxt': ^15.0.0
   citty: ^0.2.2
   consola: ^3.4.2
+  esbuild: 0.28.2
   eslint: ^10.12.0
   eslint-plugin-harlanzw: ^0.23.0
+  ghostty-web: 0.4.0
   h3: ^2.0.1
   image-size: ^2.0.4
   marked: ^17.0.6
   mermaid: ^12.1.0
+  node-gyp: 13.1.0
+  node-pty: 1.1.0
   nuxt: ^4.5.2
   nuxt-skew-protection: ^1.6.1
   obuild: ^0.4.43
@@ -101,4 +108,5 @@ catalog:
   vitest: ^5.0.3
   vue: ^3.5.43
   vue-tsc: ^3.3.12
+  ws: 8.22.0
   yaml: ^2.9.1

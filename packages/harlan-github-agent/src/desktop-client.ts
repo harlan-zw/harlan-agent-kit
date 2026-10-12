@@ -15,6 +15,8 @@ import { DESKTOP_AGENT_SLOT_CEILING, DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTO
 import { createDesktopSessionClient, createSessionHttpTransport } from './desktop-session-client.ts'
 import { createDesktopTurnLease } from './desktop-turn-client.ts'
 import { desktopCommand } from './desktop-worktree.ts'
+import { setHostSlotPolicy } from './host-slot-policy.ts'
+import { parseMaintenanceAuthority } from './maintenance-scope.ts'
 import { parseReviewProofCallback } from './review-proof-duplex.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
 
@@ -24,7 +26,7 @@ async function main(): Promise<void> {
   if (origin === undefined || !origin.startsWith('https://'))
     throw new Error('An HTTPS controller URL is required.')
   const password = (await readFile(process.env.HARLAN_GITHUB_AGENT_PASSWORD_FILE ?? join(homedir(), '.config/harlan-github-agent/dashboard-password'), 'utf8')).trim()
-  const capacity = process.env.HARLAN_DESKTOP_CAPACITY_COMMAND ?? join(homedir(), '.local/bin/harlan-desktop-capacity')
+  const capacity = process.env.HARLAN_HOST_CAPACITY_COMMAND ?? '/usr/local/bin/harlan-host-capacity'
   const root = process.env.HARLAN_DESKTOP_AGENT_ROOT ?? join(homedir(), '.local/share/harlan-github-agent/desktop')
   await mkdir(root, { recursive: true, mode: 0o700 })
   const shutdown = new AbortController()
@@ -45,6 +47,7 @@ async function main(): Promise<void> {
 
   async function report(): Promise<boolean> {
     const state = JSON.parse(await desktopCommand(capacity, ['status'], root))
+    parseMaintenanceAuthority(state)
     const entries = Object.values(state.reservations) as Array<{ kind: string }>
     const statusPath = process.env.HARLAN_DESKTOP_RUNNER_STATUS_FILE ?? join(process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid!()}`, 'harlan-desktop-github-runner/status.json')
     const jobs = await readFile(statusPath, 'utf8')
@@ -55,7 +58,7 @@ async function main(): Promise<void> {
           console.error('GitHub Actions status is unavailable.', error)
         return { _tag: 'Unavailable' as const }
       })
-    const requested = await api<{ memoryGiB: number | null }>('/api/desktop/report', {
+    const requested = await api<{ memoryGiB: number, agentSlots: number, maintenanceReserve: number }>('/api/desktop/report', {
       protocol: DESKTOP_PROTOCOL,
       memoryGiB: state.memoryGiB,
       reservedGiB: state.reservedGiB,
@@ -65,8 +68,14 @@ async function main(): Promise<void> {
     })
     if (requested === null)
       throw new Error('Controller returned no desktop memory status.')
-    if (requested.memoryGiB !== null)
-      await desktopCommand(capacity, ['set', String(requested.memoryGiB)], root)
+    if (requested.memoryGiB !== state.memoryGiB)
+      throw new Error('The Controller returned a different host memory budget.')
+    if (!Number.isSafeInteger(requested.agentSlots) || requested.agentSlots < 0 || requested.agentSlots > DESKTOP_AGENT_SLOT_CEILING
+      || requested.maintenanceReserve !== Math.min(1, requested.agentSlots)) {
+      throw new Error('The Controller returned no shared Agent slot policy.')
+    }
+    if (state.policy.agentSlots !== requested.agentSlots || state.policy.maintenanceReserve !== requested.maintenanceReserve)
+      await setHostSlotPolicy(capacity, requested.agentSlots)
     return state.memoryGiB - state.reservedGiB >= DESKTOP_MEMORY_PER_AGENT_GIB
   }
 
@@ -168,34 +177,19 @@ async function main(): Promise<void> {
   // queues that many turns. This loop claims each one and runs them together,
   // so an Agent slot count above one is real work rather than a queue.
   const running = new Set<Promise<void>>()
-  const sessions = createDesktopSessionClient({ transport: createSessionHttpTransport(api), host: 'desktop', root, capacity, signal: shutdown.signal })
+  const historyReport = createDesktopSessionClient({ transport: createSessionHttpTransport(api), host: 'desktop', root, capacity, signal: shutdown.signal })
   while (!shutdown.signal.aborted) {
     try {
-      let interactive = false
       try {
-        await sessions.report()
-        interactive = true
+        await historyReport.report()
       }
       catch (error) {
-        console.error('Interactive session report failed.', error)
+        console.error('Session history report failed.', error)
       }
       if (running.size < DESKTOP_AGENT_SLOT_CEILING && await report()) {
-        const session = interactive
-          ? await sessions.claim(DESKTOP_AGENT_SLOT_CEILING - running.size).catch((error: unknown) => {
-              console.error('Interactive session claim failed.', error)
-              return null
-            })
-          : null
-        if (session !== null) {
-          const work = sessions.run(session)
-            .catch((error: unknown) => { console.error(error) })
-            .finally(() => { running.delete(work) })
-          running.add(work)
-          continue
-        }
         const turn = await api<DesktopTurn | null>('/api/desktop/claim', {})
         if (turn !== null) {
-          // `harlan-desktop-capacity` refuses a turn memory cannot hold, and
+          // The shared authority refuses a turn memory cannot hold, and
           // the controller queues it again, so claiming never overcommits.
           const work = run(turn)
             .catch((error: unknown) => {
