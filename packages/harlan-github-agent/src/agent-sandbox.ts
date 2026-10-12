@@ -289,11 +289,7 @@ export async function prepareAgentSandbox(input: {
     for (const [name, path] of Object.entries(hostTools)) {
       const canonical = await permittedPath(path, controllerHome)
       // Preserve installation paths for scripts that resolve adjacent package files.
-      args.push('--ro-bind', canonical, canonical, '--symlink', canonical, `/run/agent/host-tools/${name}`)
-      if (name === 'codex') {
-        const directory = await permittedPath(dirname(canonical), controllerHome)
-        args.push('--ro-bind', directory, directory)
-      }
+      args.push('--ro-bind', canonical, canonical, '--ro-bind', canonical, `/run/agent/host-tools/${name}`)
     }
     const publicWrapper = join(controllerHome, '.local/share/harlan-agent-kit/github-bin/gh')
     if (await stat(publicWrapper).then(() => true).catch((error: NodeJS.ErrnoException) => {
@@ -439,7 +435,7 @@ export async function prepareAgentSandbox(input: {
     }
     const memory = input.memoryPerAgentGiB === undefined ? undefined : await workerMemoryCommand({ binary: '/usr/bin/bwrap', args, memoryGiB: input.memoryPerAgentGiB, ...(input.taskId === undefined ? {} : { taskId: input.taskId }) })
     const launchEnvironment = { PATH: '/usr/bin:/bin', ...(memory === undefined ? {} : { XDG_RUNTIME_DIR: input.environment.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: input.environment.DBUS_SESSION_BUS_ADDRESS }) }
-    return { binary: memory?.binary ?? '/usr/bin/bwrap', args: memory?.args ?? args, environment: launchEnvironment, workerStateHome, adapterPath, providerBinary: profile[input.provider], memoryExceeded: memory?.memoryExceeded ?? (async () => false), release: () => {
+    return { binary: memory?.binary ?? '/usr/bin/bwrap', args: memory?.args ?? args, environment: launchEnvironment, workerStateHome, adapterPath, providerBinary: hostTools[input.provider] === undefined ? profile[input.provider] : `/run/agent/host-tools/${input.provider}`, memoryExceeded: memory?.memoryExceeded ?? (async () => false), release: () => {
       released ??= (async () => {
         try {
           if (!readOnly)
