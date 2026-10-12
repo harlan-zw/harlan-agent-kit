@@ -26,6 +26,18 @@ function stableVersionAtLeast(value: string | undefined, required: string): bool
   return true
 }
 
+/**
+ * True when one check run passed, as GitHub reads a required check.
+ *
+ * GitHub passes a job that `if:` skipped. A docs-only commit in a repository
+ * with a `changes` job skips every other job, and nuxt-modules/robots skips
+ * `ci / test-redis` on every commit. Success alone held each such release at
+ * the check gate forever.
+ */
+function checkRunPassed(check: { status: string, conclusion: string | null }): boolean {
+  return check.status === 'completed' && (check.conclusion === 'success' || check.conclusion === 'skipped')
+}
+
 function hasReleasePatch(file: { filename: string, patch?: string }): boolean {
   // GitHub omits large generated lockfile patches. Classification uses commit
   // messages, and the public API removal check needs source patches only.
@@ -157,11 +169,11 @@ export function createPackageReleaseSource(options: {
       const relevant = latest.filter(check => (!defaultBranch || suites.has(check.check_suite?.id)) && check.app?.slug === 'github-actions')
       const pushPassed = latestRuns.length > 0 && latestRuns.every(run => run.status === 'completed' && run.conclusion === 'success')
       return relevant.length > 0 && (!defaultBranch || pushPassed)
-        && relevant.every(check => check.status === 'completed' && check.conclusion === 'success')
+        && relevant.every(checkRunPassed)
     }
     const passedSuites = new Set(latestRuns.filter(run => run.status === 'completed' && run.conclusion === 'success').map(run => run.check_suite_id))
     return config.checks.every(name => latest.some(check => (!defaultBranch || passedSuites.has(check.check_suite?.id)) && check.name === name && check.app?.slug === 'github-actions'
-      && check.status === 'completed' && check.conclusion === 'success'))
+      && checkRunPassed(check)))
   }
   const blocked = (reason: string) => ({ _tag: 'Blocked' as const, reason })
   const inspect = async (number: number): Promise<PackageReleaseOffer> => {

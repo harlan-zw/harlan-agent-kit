@@ -457,7 +457,7 @@ release_defaults:
   checks: all
 ```
 
-The default applies only to matching owned checkouts. Every GitHub Actions check run must pass.
+The default applies only to matching owned checkouts. Every GitHub Actions check run must pass. A skipped check run passes, as GitHub reads a required check.
 An explicit Repository `release` block replaces the default. Set `release: false` to exclude one Repository.
 Private packages, prereleases, monorepos, and repositories without a matching tag workflow need separate policy or setup.
 Each npm package still needs a trusted publisher for its workflow.

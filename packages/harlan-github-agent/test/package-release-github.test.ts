@@ -195,7 +195,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
   let sourceOpen = false
   let sourceTitle = 'fix: handle input'
   let mainChecks = true
-  let extraCheckPassed = true
+  let extraCheckConclusion = 'success'
   let checkEvent = 'push'
   let checkBranch = 'main'
   let sourceHead = 'f'.repeat(40)
@@ -254,7 +254,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
     else if (path.endsWith('/check-runs')) {
       const main = { id: 10, name: 'test', check_suite: { id: 10 }, app: { slug: 'github-actions' }, status: 'completed', conclusion: 'success' }
       const tag = { ...main, id: 20, check_suite: { id: 20 } }
-      const extra = { ...main, id: 11, name: 'lint', conclusion: extraCheckPassed ? 'success' : 'failure' }
+      const extra = { ...main, id: 11, name: 'lint', conclusion: extraCheckConclusion }
       const checkRuns = refs.has('tags/v1.0.1') ? url.searchParams.get('filter') === 'all' ? [tag, main, extra] : [tag] : [main, extra]
       data = { total_count: checkRuns.length, check_runs: checkRuns }
     }
@@ -318,8 +318,8 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
     mainChecks = passed
     checkEvent = event
     checkBranch = branch
-  }, setExtraCheck: (passed: boolean) => {
-    extraCheckPassed = passed
+  }, setExtraCheck: (conclusion: string) => {
+    extraCheckConclusion = conclusion
   }, allowReview: () => {
     ready = true
   }, changeMergeTree: () => {
@@ -527,9 +527,18 @@ it.each(['pending', 'pull_request', 'other-branch'])('waits for default branch p
 
 it('waits for every GitHub Actions check run under an inherited policy', async () => {
   const task = fixture({ ...mapping, release: { ...mapping.release, checks: 'all' } })
-  task.setExtraCheck(false)
+  task.setExtraCheck('failure')
   expect(await task.source.prepare(record)).toBeNull()
-  task.setExtraCheck(true)
+  task.setExtraCheck('success')
+  expect(await task.source.prepare(record)).toMatchObject({ _tag: 'Prepared' })
+})
+
+// nuxt-modules/robots reports `ci / test-redis` as skipped on every commit, and
+// a docs-only commit skips every job behind its `changes` job. GitHub reads a
+// skipped required check as passed, so a release must too.
+it.each<{ checks: 'all' | string[] }>([{ checks: 'all' }, { checks: ['test', 'lint'] }])('passes a skipped check run under checks $checks', async ({ checks }) => {
+  const task = fixture({ ...mapping, release: { ...mapping.release, checks } })
+  task.setExtraCheck('skipped')
   expect(await task.source.prepare(record)).toMatchObject({ _tag: 'Prepared' })
 })
 
