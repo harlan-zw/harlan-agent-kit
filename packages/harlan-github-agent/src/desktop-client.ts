@@ -15,6 +15,7 @@ import { DESKTOP_AGENT_SLOT_CEILING, DESKTOP_MEMORY_PER_AGENT_GIB, DESKTOP_PROTO
 import { createDesktopSessionClient, createSessionHttpTransport } from './desktop-session-client.ts'
 import { createDesktopTurnLease } from './desktop-turn-client.ts'
 import { desktopCommand } from './desktop-worktree.ts'
+import { parseMaintenanceAuthority } from './maintenance-scope.ts'
 import { parseReviewProofCallback } from './review-proof-duplex.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
 
@@ -45,6 +46,7 @@ async function main(): Promise<void> {
 
   async function report(): Promise<boolean> {
     const state = JSON.parse(await desktopCommand(capacity, ['status'], root))
+    parseMaintenanceAuthority(state)
     const entries = Object.values(state.reservations) as Array<{ kind: string }>
     const statusPath = process.env.HARLAN_DESKTOP_RUNNER_STATUS_FILE ?? join(process.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid!()}`, 'harlan-desktop-github-runner/status.json')
     const jobs = await readFile(statusPath, 'utf8')

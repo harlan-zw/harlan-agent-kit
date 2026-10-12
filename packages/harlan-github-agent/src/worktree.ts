@@ -14,7 +14,6 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { runAgentSandboxCommand } from './agent-sandbox.ts'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
 import { canPushBranch, canRepairBaseline, canResolveConflictPullRequestHead, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -1099,9 +1098,11 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
 }
 
 /** Runs current selected evidence without copying credentials into repository scripts. */
-type RecoveryCommand = (input: { workspace: string, command: string, args: string[], signal: AbortSignal, readOnlyPaths?: readonly string[], writablePaths?: readonly string[] }) => Promise<{ exitCode: number, stdout?: string, stderr?: string }>
+export type RecoveryCommand = (input: { workspace: string, command: string, args: string[], signal: AbortSignal, readOnlyPaths?: readonly string[], writablePaths?: readonly string[] }) => Promise<{ exitCode: number, stdout?: string, stderr?: string }>
 
-const runRecoveryCommand: RecoveryCommand = input => runAgentSandboxCommand({ ...input, environment: { ...process.env, CI: 'true' } })
+const runRecoveryCommand: RecoveryCommand = async () => {
+  throw new Error('Recovery commands require shared host admission.')
+}
 
 /** Keep repository preparation and package-local test resolution in both test runs. */
 async function repairRecoveryTestCommands(path: string, regressionPaths: string[]): Promise<Result<Array<{ args: string[], paths: string[], prepare: string[][] }>, string>> {
