@@ -3,6 +3,7 @@ import type { TerminalHelperConfig } from '../src/terminal-manager.ts'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { writeTerminalJson } from '../src/terminal-storage.ts'
 import { createTerminalManager } from '../src/terminal.ts'
@@ -25,6 +26,9 @@ async function fixture() {
   let releaseResult: TerminalAdmissionResult = { _tag: 'Empty' }
   let refused = false
   let reserveCount = 0
+  let raceRelease = false
+  let emptyChecks = 0
+  let released = false
   const starts: string[] = []
   const releases: string[] = []
   const scope = {
@@ -72,11 +76,17 @@ async function fixture() {
         reservationId: 'reservation',
         scope,
       }),
-      reconcile: async () =>
-        running
-          ? { _tag: 'Alive', reservationId: 'reservation', scope }
-          : { _tag: 'Empty' },
-      release: async () => releaseResult,
+      reconcile: async () => {
+        if (running)
+          return { _tag: 'Alive', reservationId: 'reservation', scope }
+        if (raceRelease && emptyChecks++ > 0)
+          await delay(15)
+        return released && raceRelease ? { _tag: 'Missing' } : { _tag: 'Empty' }
+      },
+      release: async () => {
+        released = releaseResult._tag === 'Empty'
+        return releaseResult
+      },
       cancel: async () => ({ _tag: 'Conflict' }),
     },
     processHost: {
@@ -145,6 +155,10 @@ async function fixture() {
       refused = false
     },
     reserveCount: () => reserveCount,
+    raceRelease: () => {
+      running = false
+      raceRelease = true
+    },
     refuseRelease: () => {
       releaseResult = { _tag: 'Unknown', reason: 'Scope changed' }
     },
@@ -156,6 +170,15 @@ const launch = {
   provider: 'codex' as const,
 }
 describe('durable terminal launch and ownership', () => {
+  it('keeps released ownership final when concurrent discovery observes Missing', async () => {
+    const fixture_ = await fixture()
+    const manager = await fixture_.manager()
+    await manager.launch(launch)
+    fixture_.raceRelease()
+    await Promise.all([manager.sessions(), manager.sessions()])
+    expect((await manager.sessions())[0]?.state).toBe('Exited')
+    expect(fixture_.releases).toHaveLength(1)
+  })
   it('replays definitive capacity refusal without creating a dead session', async () => {
     const fixture_ = await fixture()
     fixture_.refuse()

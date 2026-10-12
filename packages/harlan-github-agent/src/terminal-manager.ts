@@ -78,6 +78,17 @@ export async function createTerminalManager(options: {
     ]),
   )
   const launches = new Map<string, Promise<TerminalResult<TerminalSession>>>()
+  const operations = new Map<string, Promise<unknown>>()
+  function owned<T>(id: string, task: () => Promise<T>): Promise<T> {
+    const previous = operations.get(id)
+    // Each caller receives its own error. Later independent work can reconcile that session.
+    const next = (previous ? previous.then(task, task) : task()).finally(() => {
+      if (operations.get(id) === next)
+        operations.delete(id)
+    })
+    operations.set(id, next)
+    return next
+  }
   async function persist(intent: TerminalIntent) {
     intents.set(intent.session.id, intent)
     await writeTerminalJson(
@@ -304,18 +315,22 @@ export async function createTerminalManager(options: {
   const housekeeping = setInterval(
     () => {
       void (async () => {
-        for (const intent of intents.values()) {
-          await reconcile(intent)
-          if (
-            intent.session.worktree
-            && !['Exited', 'Interrupted'].includes(intent.session.state)
-          ) {
-            await options.renewWorktree(
-              intent.session.id,
-              intent.session.worktree,
-            )
-          }
-        }
+        await Promise.all(
+          [...intents.values()].map(intent =>
+            owned(intent.session.id, async () => {
+              await reconcile(intent)
+              if (
+                intent.session.worktree
+                && !['Exited', 'Interrupted'].includes(intent.session.state)
+              ) {
+                await options.renewWorktree(
+                  intent.session.id,
+                  intent.session.worktree,
+                )
+              }
+            }),
+          ),
+        )
       })().catch(cause =>
         options.log('Terminal ownership reconciliation failed', cause),
       )
@@ -385,7 +400,11 @@ export async function createTerminalManager(options: {
     },
     projects: () => options.projects.map(project => ({ ...project })),
     async sessions() {
-      for (const intent of intents.values()) await reconcile(intent)
+      await Promise.all(
+        [...intents.values()].map(intent =>
+          owned(intent.session.id, () => reconcile(intent)),
+        ),
+      )
       return [...intents.values()].map(session)
     },
     intent(id: string) {
@@ -402,45 +421,47 @@ export async function createTerminalManager(options: {
             : ({ _tag: 'Err', reason: 'LaunchConflict' } as const)
         })
       }
-      const promise = launch(request).finally(() =>
+      const promise = owned(identity.id, () => launch(request)).finally(() =>
         launches.delete(identity.id),
       )
       launches.set(identity.id, promise)
       return promise
     },
     async stop(id: string): Promise<TerminalResult<TerminalSession>> {
-      const intent = intents.get(id)
-      if (!intent)
-        return { _tag: 'Err', reason: 'SessionUnavailable' }
-      await reconcile(intent)
-      if (
-        intent.session.state === 'Exited'
-        || intent.session.state === 'Interrupted'
-      ) {
-        return { _tag: 'Ok', value: session(intent) }
-      }
-      if (!intent.invocationId && intent.reservationId) {
-        const cancelled = await options.admission.cancel({
-          key: `terminal:${id}`,
-          reservationId: intent.reservationId,
-        })
-        if (cancelled._tag === 'Empty') {
-          if (intent.session.worktree)
-            await options.releaseWorktree(id, intent.session.worktree)
-          intent.session.state = 'Interrupted'
-          await persist(intent)
+      return owned(id, async () => {
+        const intent = intents.get(id)
+        if (!intent)
+          return { _tag: 'Err', reason: 'SessionUnavailable' }
+        await reconcile(intent)
+        if (
+          intent.session.state === 'Exited'
+          || intent.session.state === 'Interrupted'
+        ) {
           return { _tag: 'Ok', value: session(intent) }
         }
-        if (cancelled._tag === 'Conflict')
-          await reconcile(intent)
-      }
-      if (!intent.invocationId)
-        return { _tag: 'Err', reason: 'OwnershipUnknown' }
-      intent.session.state = 'Stopping'
-      await persist(intent)
-      await options.processHost.stop(intent.unit, intent.invocationId)
-      await reconcile(intent)
-      return { _tag: 'Ok', value: session(intent) }
+        if (!intent.invocationId && intent.reservationId) {
+          const cancelled = await options.admission.cancel({
+            key: `terminal:${id}`,
+            reservationId: intent.reservationId,
+          })
+          if (cancelled._tag === 'Empty') {
+            if (intent.session.worktree)
+              await options.releaseWorktree(id, intent.session.worktree)
+            intent.session.state = 'Interrupted'
+            await persist(intent)
+            return { _tag: 'Ok', value: session(intent) }
+          }
+          if (cancelled._tag === 'Conflict')
+            await reconcile(intent)
+        }
+        if (!intent.invocationId)
+          return { _tag: 'Err', reason: 'OwnershipUnknown' }
+        intent.session.state = 'Stopping'
+        await persist(intent)
+        await options.processHost.stop(intent.unit, intent.invocationId)
+        await reconcile(intent)
+        return { _tag: 'Ok', value: session(intent) }
+      })
     },
   }
 }
