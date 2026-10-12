@@ -44,6 +44,10 @@ export async function prepareTerminalSandbox(options: {
   const cwd = await realpath(options.cwd)
   const home = options.home ?? homedir()
   const args = [...isolation, '--bind', cwd, cwd]
+  // Host resolver symlinks commonly enter /run. Preserve only their read-only file, never its directory.
+  const resolver = await realpath('/etc/resolv.conf')
+  if (resolver.startsWith('/run/') || resolver.startsWith('/tmp/'))
+    args.push('--dir', dirname(resolver), '--ro-bind', resolver, resolver)
   for (const path of options.writable ?? []) {
     const canonical = await realpath(path)
     args.push('--bind', canonical, canonical)

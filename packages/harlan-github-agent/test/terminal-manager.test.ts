@@ -33,6 +33,7 @@ async function fixture() {
   let receiptResult: TerminalAdmissionResult = { _tag: 'Conflict' }
   let receipt: Parameters<TerminalAdmission['completedReceipt']>[0] | null = null
   const starts: string[] = []
+  const arguments_: string[][] = []
   const releases: string[] = []
   const scope = {
     unit: '',
@@ -110,6 +111,7 @@ async function fixture() {
         const config = JSON.parse(
           await readFile(value.config, 'utf8'),
         ) as TerminalHelperConfig
+        arguments_.push(config.argv)
         await writeTerminalJson(
           join(
             directory,
@@ -158,6 +160,7 @@ async function fixture() {
       return { entered: entered.promise, release: gate.resolve }
     },
     starts,
+    arguments_,
     releases,
     sweepOnStop(result: TerminalAdmissionResult) {
       missingAfterStop = true
@@ -219,6 +222,13 @@ describe('durable terminal launch and ownership', () => {
     expect(stopped._tag === 'Ok' && stopped.value.state).toBe('Unknown')
     expect(f.releases).toEqual([])
     expect(f.reserveCount()).toBe(1)
+  })
+  it('runs Codex without the shared daemon and keeps other provider arguments', async () => {
+    const fixture_ = await fixture()
+    const manager = await fixture_.manager()
+    await manager.launch(launch)
+    await manager.launch({ ...launch, requestId: 'claude', provider: 'claude' })
+    expect(fixture_.arguments_).toEqual([['--no-daemon'], []])
   })
   it('drains accepted Stop writes and refuses operations after close', async () => {
     const fixture_ = await fixture()
