@@ -39,6 +39,8 @@ it('holds an exhausted model after one failure without blocking OpenCode Go', ()
     throw new Error('Expected a shared plan canary.')
   expect(journal.recordProviderSuccess({ ...circuit, model, workerId: canary.canary.workerId, canaryCircuitId: canary.canary.circuitId, canaryFence: canary.canary.fence, at: '2026-10-12T06:01:10.000Z' })).toBe(1)
   expect(journal.providerCanStart({ ...circuit, at: '2026-10-12T06:02:00.000Z' })).toBe(true)
+  journal.recordProviderFailure({ ...circuit, failureClass: 'usage_limit', detail: 'Weekly limit exhausted.', at: '2026-10-12T06:03:00.000Z' })
+  expect(journal.providerCanStart({ ...circuit, at: '2026-10-12T06:04:00.000Z' })).toBe(false)
 })
 
 describe('persistent Agent provider circuits', () => {

@@ -13765,7 +13765,7 @@ export function openJournalStore(
       const canaryFailed = existing.state_tag === 'HalfOpen'
         && existing.canary_worker_id === input.workerId
         && existing.canary_fence === input.canaryFence
-      const shouldOpen = canaryFailed || (existing.state_tag === 'Closed' && failures >= providerFailureThreshold)
+      const shouldOpen = usageLimit || canaryFailed || (existing.state_tag === 'Closed' && failures >= providerFailureThreshold)
       const retryAt = shouldOpen
         ? new Date(Date.parse(input.at) + (usageLimit ? 5 * 60 * 60_000 : providerCircuitCooldownMilliseconds)).toISOString()
         : existing.retry_at
@@ -14146,6 +14146,11 @@ export function openJournalStore(
         SELECT latest.id FROM routine_runs AS latest
         WHERE latest.routine_id = routine_runs.routine_id
         ORDER BY latest.scheduled_for DESC LIMIT 1
+      ) OR routine_runs.id = (
+        SELECT settled.id FROM routine_runs AS settled
+        WHERE settled.routine_id = routine_runs.routine_id
+          AND settled.state_tag IN ('Completed', 'Failed')
+        ORDER BY settled.scheduled_for DESC LIMIT 1
       )
       ORDER BY routine_runs.scheduled_for DESC
     `).all() as unknown as RoutineRunRow[]).map(readRoutineRun)
