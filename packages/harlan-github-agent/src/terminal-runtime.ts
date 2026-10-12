@@ -69,6 +69,7 @@ export async function createTerminalRuntime(
   async function initialize() {
     const artifact = await buildTerminalArtifact({
       source: config.helperSource,
+      claimScript: config.claimScript,
       directory: join(config.directory, 'artifacts'),
     })
     const providers = {} as Record<
@@ -97,12 +98,13 @@ export async function createTerminalRuntime(
       ),
       providers,
       artifact,
+      claimScript: artifact.claimScript,
       bootId: (
         await readFile('/proc/sys/kernel/random/boot_id', 'utf8')
       ).trim(),
       admission: createTerminalAdmissionCli(config.admissionCli),
       processHost: createTerminalSystemdHost(process.execPath),
-      ...createTerminalWorktreeAdapter(config.claimScript),
+      ...createTerminalWorktreeAdapter(artifact.claimScript),
       ready: intent => probeTerminalHelper(config.directory, intent),
       now: () => new Date(),
       log: (message, cause) =>

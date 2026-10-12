@@ -56,6 +56,8 @@ async function fixture() {
       digest: 'digest',
       wasm: '/wasm',
       wasmDigest: 'wasm',
+      claimScript: '/claim',
+      claimDigest: 'claim-digest',
     },
     admissionCli: '/capacity',
     claimScript: '/claim',
