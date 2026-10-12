@@ -569,7 +569,7 @@ function pullRequestItem(
 export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitHubAgentSource & RunnerLostRecoverySource & ExistingReviewLabelSource & ReviewFindingThreadSource & ReviewApprovalSource & NativeReviewPublisher {
   // Review snapshots reread every open pull request and its base branch on
   // each sweep. Revalidated reads answer 304 when nothing changed, and GitHub
-  // charges no primary quota for a 304. Only `read` access uses the cache.
+  // charges no primary quota for a 304. All read-only access uses the cache.
   const responseCache = createGitHubResponseCache()
   const clientWith = async (tokens: GitHubTokenProvider, repository: string, access: GitHubRepositoryAccess, signal: AbortSignal): Promise<Result<Octokit, string>> => {
     const token = await tokens.getToken(repository, access, signal)

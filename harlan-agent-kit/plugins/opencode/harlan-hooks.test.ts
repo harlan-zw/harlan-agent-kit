@@ -70,6 +70,43 @@ function projectWithRecordingEslint(): { directory: string, log: string } {
 }
 
 describe('tool.execute.before', () => {
+  it.each([
+    'gh api repos/owner/public/issues',
+    'gh api "repos/owner/public/issues"',
+    '"/usr/bin/gh" api repos/owner/public/issues',
+    'bash -c \'gh api repos/owner/public/issues\'',
+    'for number in 1 2; do gh pr view "$number" --repo owner/public; done',
+    '/usr/bin/gh api repos/owner/public/issues',
+    'gh pr view 1 --repo owner/public',
+    'env FOO=1 timeout 30 gh run list --repo owner/public',
+    'env -u GH_TOKEN /usr/bin/gh api repos/owner/public/issues',
+    'gh pr view 1 --repo owner/private HARLAN_AGENT_GITHUB_PRIVATE=owner/private',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh pr view 1 --repo owner/private; gh api repos/owner/public/issues',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh pr view 1 --repo owner/public',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh pr view 1 --repo owner/private --repo owner/public',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh api repos/owner/public -f api repos/owner/private/issues',
+    'gh api graphql -f query=query',
+  ])('routes GitHub reads through the public CLI: %s', async (command) => {
+    await expect(runShellHook(command)).rejects.toThrow(/agent-gh/)
+  })
+
+  it.each([
+    'agent-gh api repos/owner/public/issues',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh pr view 1 --repo owner/private',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh api repos/owner/private/actions/runs',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh api /repos/owner/private/actions/runs',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh pr view 1 --repo=owner/private',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh pr view 1 --repo "owner/private"',
+    'gh api user --jq .login',
+    'gh auth status',
+    'gh api repos/owner/public/issues/1 -X PATCH --input body.json',
+    'printf "gh api repos/owner/public/issues"',
+    'printf "example; gh api repos/owner/public/issues"',
+    'cat <<\'EOF\'\ngh api repos/owner/public/issues\nEOF',
+  ])('preserves deliberate GitHub access and command examples: %s', async (command) => {
+    await expect(runShellHook(command)).resolves.toBe(command)
+  })
+
   it('rewrites npm to pnpm', async () => {
     await expect(runShellHook('npm install --frozen-lockfile')).resolves.toBe('pnpm install --frozen-lockfile')
   })
