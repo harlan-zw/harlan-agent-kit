@@ -52,6 +52,7 @@ import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
 import { createGitHubMediaSource } from './github-media.ts'
 import { createGitHubRateLimitGate, readAfterGitHubRateLimit } from './github-rate-limit.ts'
+import { createGitHubRequestCounts } from './github-request-counts.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
 import { createUserAssetUploader } from './github-user-assets.ts'
@@ -621,21 +622,26 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // A rate limited quota refuses its credentials until GitHub resets it, so a
   // held installation spends no request and the System pane names it.
   const rateLimits = createGitHubRateLimitGate({ now })
+  const requestCounts = createGitHubRequestCounts({
+    now,
+    report: report => options.logger.info(`GitHub requests: ${JSON.stringify(report)}`),
+  })
   const userQuota = (): GitHubQuota => ({ _tag: 'User', login: userLogin })
-  const userTokens = rateLimits.guard(rawUserTokens, userQuota)
+  const userTokens = requestCounts.tokens(rateLimits.guard(rawUserTokens, userQuota), userQuota)
   const accountFor = (name: string) => config.repositories.find(repository => repository.github.toLowerCase() === name.toLowerCase())?.githubAccount
-  const routedTokens = rateLimits.guard(createGitHubAccountTokenProvider({
+  const repositoryQuota = (repository: string): GitHubQuota => {
+    const account = accountFor(repository)
+    return account !== undefined
+      ? { _tag: 'User', login: account.login }
+      : usesUserToken(repository) ? userQuota() : { _tag: 'Installation', owner: repository.split('/')[0] ?? repository }
+  }
+  const routedTokens = requestCounts.tokens(rateLimits.guard(createGitHubAccountTokenProvider({
     fallback: createRoutedTokenProvider({ app: appTokens, user: rawUserTokens, usesUserToken }),
     account: accountFor,
     readToken: readGitHubAccountToken,
     readLogin: readGitHubAccountLogin,
     now,
-  }), (repository): GitHubQuota => {
-    const account = accountFor(repository)
-    return account !== undefined
-      ? { _tag: 'User', login: account.login }
-      : usesUserToken(repository) ? userQuota() : { _tag: 'Installation', owner: repository.split('/')[0] ?? repository }
-  })
+  }), repositoryQuota), repositoryQuota)
   // Write authority belongs at the credential boundary. Every current and
   // future mutation needs one of these write credentials before it can leave.
   const gatedTokens = (source: GitHubTokenProvider): GitHubTokenProvider => createGitHubWriteGate({
@@ -1852,6 +1858,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       })
 
   releaseWebhookReady = webhookServer !== null
+  requestCounts.start()
 
   // A process that died mid-Task left the Running label saying an Agent is on
   // an Item nothing is on. The journal answers that, so it is settled once here
@@ -1934,6 +1941,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       ])
       dashboardShutdown.abort()
       await Promise.all([server.close(), webhookServer?.close() ?? Promise.resolve()])
+      requestCounts.stop()
       store.close()
     },
   }
