@@ -50,4 +50,36 @@ describe('registered Codex GitHub routing', () => {
     expect(decision('gh pr create --fill')).toMatch(/PR skill/)
     expect(decision('HARLAN_AGENT_PR_SKILL=1 gh pr create --fill')).toBeUndefined()
   })
+
+  it.each([
+    'run watch 123',
+    'run watch 123 --interval 3',
+    'run watch 123 --interval=59',
+    'run watch 123 -i 0',
+    'run watch 123 --interval 60 --interval 3',
+    'run watch 123 --interval nope',
+    'run watch 123 --interval',
+    'pr checks 1 --watch',
+    'pr checks 1 --watch --interval 10',
+  ])('rejects rapid private CI watching: %s', (command) => {
+    expect(decision(`HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh ${command} --repo owner/private`)).toMatch(/60/)
+  })
+
+  it.each([
+    'run watch 123 --interval 60',
+    'run watch 123 --interval=120',
+    'run watch 123 -i 60',
+    'run watch 123 -i60',
+    'run watch 123 --interval 060',
+    'pr checks 1 --watch --interval 60',
+    'pr checks 1',
+  ])('allows bounded private CI watching: %s', (command) => {
+    expect(decision(`HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh ${command} --repo owner/private`)).toBeUndefined()
+  })
+
+  it('checks watches with global repository arguments', () => {
+    expect(decision('HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh --repo owner/private run watch 123')).toMatch(/60/)
+    expect(decision('HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh -R owner/private run watch 123 --interval 60')).toBeUndefined()
+    expect(decision('gh --repo owner/public pr view 1')).toMatch(/agent-gh/)
+  })
 })

@@ -13,13 +13,14 @@ code=$(command_code "$command" true)
 # It cannot grant the following command access to the ordinary account.
 lead_item='[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|env([[:space:]]+(-u[[:space:]]+[A-Za-z_][A-Za-z0-9_]*|--unset=[^[:space:]]+|-i|--ignore-environment))*|timeout([[:space:]]+[^[:space:]]+)?|bash[[:space:]]+-c|sh[[:space:]]+-c|command|exec|do|then|else|!'
 lead="((${lead_item})[[:space:]]+)*"
-read_call="^[[:space:]\(\`]*${lead}([^[:space:]]*/)?gh[[:space:]]+(api|pr|issue|run|repo|search|release)[[:space:]]+([^[:space:]]+)"
+global_repo='((--repo|-R)[[:space:]]+[^[:space:]]+[[:space:]]+|--repo=[^[:space:]]+[[:space:]]+)*'
+read_call="^[[:space:]\(\`]*${lead}([^[:space:]]*/)?gh[[:space:]]+${global_repo}(api|pr|issue|run|repo|search|release)[[:space:]]+([^[:space:]]+)"
 IFS=';|&' read -r -a calls <<< "$code"
 for call in "${calls[@]}"; do
   [[ "$call" =~ $read_call ]] || continue
   invocation=${BASH_REMATCH[0]}
-  family=${BASH_REMATCH[7]}
-  action=${BASH_REMATCH[8]}
+  family=${BASH_REMATCH[9]}
+  action=${BASH_REMATCH[10]}
   # GitHub writes retain the existing approval and PR-skill rules.
   if [ "$family" = api ]; then
     [[ "$call" =~ [[:space:]](-X[[:space:]]*|--method[=[:space:]]+)(POST|PATCH|PUT|DELETE)([[:space:]]|$) ]] && continue
@@ -31,6 +32,27 @@ for call in "${calls[@]}"; do
       'search '*|'release view'|'release list'|'release download') ;;
       *) continue ;;
     esac
+  fi
+
+  # A private credential exception must not permit three-second CI polling.
+  if [[ "$family $action" = 'run watch' ]] || \
+    { [[ "$family $action" = 'pr checks' ]] && [[ "$call" =~ [[:space:]]--watch(=true)?([[:space:]]|$) ]]; }; then
+    interval=''
+    pending=false
+    read -r -a watch_words <<< "$call"
+    for word in "${watch_words[@]}"; do
+      if [ "$pending" = true ]; then interval=$word; pending=false; continue; fi
+      case "$word" in
+        --interval|-i) pending=true ;;
+        --interval=*) interval=${word#--interval=} ;;
+        -i[0-9]*) interval=${word#-i} ;;
+      esac
+    done
+    if [ "$pending" = true ] || [[ ! "$interval" =~ ^[0-9]{1,9}$ ]] || ((10#$interval < 60)); then
+      reason='If you must watch private CI, set --interval 60 or higher. Use the Service Control API for tracked pull requests.'
+      jq -nc --arg reason "$reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
+      exit 0
+    fi
   fi
 
   private='HARLAN_AGENT_GITHUB_PRIVATE=([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)([[:space:]]|$)'
