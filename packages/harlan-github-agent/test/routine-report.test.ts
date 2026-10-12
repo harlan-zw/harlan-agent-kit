@@ -10,6 +10,29 @@ const now = () => new Date('2026-08-27T07:10:00.000Z')
 const routineId = 'harlan-zw/example:pr-triage'
 const runId = `${routineId}:2026-08-27T07:00:00.000Z`
 
+it('replaces a staged result when a retry finishes with newer evidence', () => {
+  const store = openJournalStore(':memory:')
+  seed(store)
+  stage(store, { _tag: 'Completed', evidence: 'First attempt', detail: 'Provider was unavailable.' })
+  stage(store, { _tag: 'Completed', evidence: 'Final attempt', detail: 'The scan found no issues.' })
+  settleRun(store, runId)
+  const report = store.claimNextRoutineReport('publisher', now().toISOString(), 60_000)
+  expect(report?.body).toContain('Final attempt')
+  expect(report?.body).not.toContain('First attempt')
+  store.close()
+})
+
+it('publishes the final failure when a retried scan staged an earlier report', () => {
+  const store = openJournalStore(':memory:')
+  seed(store)
+  stage(store, { _tag: 'Failed', reason: 'Weekly/Monthly Limit Exhausted' })
+  failRun(store, runId, 'GitHub requests reached their rate limit.')
+  const report = store.claimNextRoutineReport('publisher', now().toISOString(), 60_000)
+  expect(report?.body).toContain('GitHub requests reached their rate limit.')
+  expect(report?.body).not.toContain('Weekly/Monthly Limit Exhausted')
+  store.close()
+})
+
 function seed(store: ReturnType<typeof openJournalStore>, name: RoutineName = 'pr-triage'): void {
   store.syncRepositories([repositoryMapping()], '2026-08-27T00:00:00.000Z')
   store.setRepositoryWritesEnabled('harlan-zw/example', true)
@@ -242,13 +265,13 @@ describe('publishing the run log', () => {
     }
   })
 
-  it('writes one report per run however often it is staged', () => {
+  it('does not restage identical evidence', () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
 
       expect(stage(store, { _tag: 'Completed', evidence: 'first' })).toBe(true)
-      expect(stage(store, { _tag: 'Completed', evidence: 'again' })).toBe(false)
+      expect(stage(store, { _tag: 'Completed', evidence: 'first' })).toBe(false)
     }
     finally {
       store.close()
@@ -589,8 +612,7 @@ describe('daily check-in issues', () => {
       await controller.publishPending(new AbortController().signal)
       expect(calls.issues).toEqual([])
 
-      // The retry records a Candidate, and its re-stage keeps the report the
-      // first attempt staged, because the run's identity owns the command.
+      // The retry updates the pending report owned by the same run.
       store.recordCandidates({
         routineId: dailyId,
         runId: dailyRun,
@@ -613,7 +635,7 @@ describe('daily check-in issues', () => {
           report: { _tag: 'Completed', evidence: '1 found', detail: 'GREEN. All checks passed.', verdict: { severity: 'GREEN', coverage: 'complete' } },
         }),
         at: now().toISOString(),
-      })).toBe(false)
+      })).toBe(true)
       const task = store.claimNextRoutineRun('scanner', now().toISOString(), 45 * 60_000)
       if (task === null)
         throw new Error('Expected a queued Routine run.')

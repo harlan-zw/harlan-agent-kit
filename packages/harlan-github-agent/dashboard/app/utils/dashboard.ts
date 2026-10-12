@@ -63,6 +63,7 @@ export interface ProviderCapacityPresentation {
 export interface ScheduledRoutineRecord {
   routine: Routine
   latestRun: DashboardRoutineRun | undefined
+  resultRun: DashboardRoutineRun | undefined
 }
 
 export interface RoutineRunPresentation {
@@ -74,12 +75,16 @@ export interface RoutineRunPresentation {
 /** Pairs each declared Routine with the newest run the snapshot retained. */
 export function scheduledRoutineRecords(routines: readonly Routine[], runs: readonly DashboardRoutineRun[]): ScheduledRoutineRecord[] {
   const newest = new Map<string, DashboardRoutineRun>()
+  const results = new Map<string, DashboardRoutineRun>()
   runs.forEach((run) => {
     const current = newest.get(run.routineId)
     if (current === undefined || run.scheduledFor > current.scheduledFor)
       newest.set(run.routineId, run)
+    const result = results.get(run.routineId)
+    if ((run.state._tag === 'Completed' || run.state._tag === 'Failed') && (result === undefined || run.scheduledFor > result.scheduledFor))
+      results.set(run.routineId, run)
   })
-  return routines.map(routine => ({ routine, latestRun: newest.get(routine.id) }))
+  return routines.map(routine => ({ routine, latestRun: newest.get(routine.id), resultRun: results.get(routine.id) }))
 }
 
 /** Gives one Routine run a label, semantic tone, and durable outcome detail. */

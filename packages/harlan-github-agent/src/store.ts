@@ -911,7 +911,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
    * its attempts. `Unchanged` means the lease moved on before this call.
    */
   failCandidateIssue: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string, status?: number | undefined }) => 'Deferred' | 'Failed' | 'Unchanged'
-  /** Requests the run log entry for one run. Answers false when it already exists. */
+  /** Stages the latest pending run report. Answers false when its content already matches or publication owns it. */
   stageRoutineReport: (input: { command: RoutineReportCommand, at: string }) => boolean
   claimNextRoutineReport: (workerId: string, now: string, leaseMilliseconds: number, excludedCommandIds?: readonly string[]) => ClaimedRoutineReportCommand | null
   completeRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, trackingIssueNumber: number }) => boolean
@@ -7061,7 +7061,23 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 89;`)
     version = 89
   }
-  if (version === 89)
+  if (version === 89) {
+    const schema = database.prepare('SELECT sql FROM sqlite_master WHERE name = \'provider_circuits\'').get() as { sql: string }
+    if (!schema.sql.includes('\'usage_limit\'')) {
+      const expanded = schema.sql.replace(/^CREATE TABLE[^(]+/, 'CREATE TABLE provider_circuits_v90 ').replace('\'unknown\'', '\'unknown\', \'usage_limit\'')
+      applyForeignKeyMigration(database, `${expanded};
+        INSERT INTO provider_circuits_v90 SELECT * FROM provider_circuits;
+        DROP TABLE provider_circuits;
+        ALTER TABLE provider_circuits_v90 RENAME TO provider_circuits;
+        CREATE INDEX provider_circuits_availability ON provider_circuits(provider, credential, state_tag, retry_at);
+        PRAGMA user_version = 90;`)
+    }
+    else {
+      applyMigration(database, 'PRAGMA user_version = 90;')
+    }
+    version = 90
+  }
+  if (version === 90)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -13605,10 +13621,10 @@ export function openJournalStore(
     `).all() as unknown as ProviderCircuitRow[]).map(providerCircuitFromRow)
 
   const providerCanStart: JournalStore['providerCanStart'] = (input) => {
-    const modelClause = input.model === undefined ? '' : 'AND model = ?'
+    const modelClause = input.model === undefined ? '' : 'AND (model = ? OR (failure_class = \'usage_limit\' AND substr(model, 1, instr(model, \'/\')) = ?))'
     const parameters = input.model === undefined
       ? [input.provider, input.credential]
-      : [input.provider, input.credential, input.model]
+      : [input.provider, input.credential, input.model, input.model.slice(0, input.model.indexOf('/') + 1)]
     const rows = database.prepare(`
       SELECT * FROM provider_circuits
       WHERE provider = ? AND credential = ? ${modelClause}
@@ -13624,9 +13640,10 @@ export function openJournalStore(
     try {
       const readRows = (): ProviderCircuitRow[] => database.prepare(`
         SELECT * FROM provider_circuits
-        WHERE provider = ? AND credential = ? AND model = ?
+        WHERE provider = ? AND credential = ?
+          AND (model = ? OR (failure_class = 'usage_limit' AND substr(model, 1, instr(model, '/')) = ?))
         ORDER BY updated_at, id
-      `).all(input.provider, input.credential, input.model) as unknown as ProviderCircuitRow[]
+      `).all(input.provider, input.credential, input.model, input.model.slice(0, input.model.indexOf('/') + 1)) as unknown as ProviderCircuitRow[]
 
       for (const row of readRows()) {
         if (row.state_tag !== 'HalfOpen' || Date.parse(row.canary_lease_expires_at ?? input.at) > Date.parse(input.at))
@@ -13721,7 +13738,8 @@ export function openJournalStore(
 
   const recordProviderFailure: JournalStore['recordProviderFailure'] = (input) => {
     const id = input.canaryCircuitId ?? digest(`${input.provider}:${input.credential}:${input.model}:${input.failureClass}`)
-    const detail = `The Agent provider reported a ${input.failureClass.replace('_', ' ')} failure.`
+    const usageLimit = input.failureClass === 'usage_limit'
+    const detail = usageLimit ? 'The Agent provider reached its usage limit.' : `The Agent provider reported a ${input.failureClass.replace('_', ' ')} failure.`
     database.exec('BEGIN IMMEDIATE')
     try {
       const existing = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
@@ -13734,11 +13752,11 @@ export function openJournalStore(
             id, provider, credential, model, failure_class, state_tag, failures,
             retry_at, canary_worker_id, canary_fence, canary_lease_expires_at,
             last_detail, updated_at
-          ) VALUES (?, ?, ?, ?, ?, 'Closed', 1, NULL, NULL, 0, NULL, ?, ?)
-        `).run(id, input.provider, input.credential, input.model, input.failureClass, detail, input.at)
+          ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, 0, NULL, ?, ?)
+        `).run(id, input.provider, input.credential, input.model, input.failureClass, usageLimit ? 'Open' : 'Closed', usageLimit ? new Date(Date.parse(input.at) + 5 * 60 * 60_000).toISOString() : null, detail, input.at)
         const inserted = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
           .get(id) as unknown as ProviderCircuitRow
-        recordProviderCircuitEvent(database, inserted, 'FailureObserved', null, 'Closed', input.at, detail)
+        recordProviderCircuitEvent(database, inserted, 'FailureObserved', null, usageLimit ? 'Open' : 'Closed', input.at, detail)
         database.exec('COMMIT')
         return providerCircuitFromRow(inserted)
       }
@@ -13747,9 +13765,9 @@ export function openJournalStore(
       const canaryFailed = existing.state_tag === 'HalfOpen'
         && existing.canary_worker_id === input.workerId
         && existing.canary_fence === input.canaryFence
-      const shouldOpen = canaryFailed || (existing.state_tag === 'Closed' && failures >= providerFailureThreshold)
+      const shouldOpen = usageLimit || canaryFailed || (existing.state_tag === 'Closed' && failures >= providerFailureThreshold)
       const retryAt = shouldOpen
-        ? new Date(Date.parse(input.at) + providerCircuitCooldownMilliseconds).toISOString()
+        ? new Date(Date.parse(input.at) + (usageLimit ? 5 * 60 * 60_000 : providerCircuitCooldownMilliseconds)).toISOString()
         : existing.retry_at
       database.prepare(`
         UPDATE provider_circuits
@@ -13793,12 +13811,14 @@ export function openJournalStore(
     try {
       const rows = database.prepare(`
         SELECT * FROM provider_circuits
-        WHERE provider = ? AND credential = ? AND model = ?
+        WHERE provider = ? AND credential = ?
+          AND (model = ? OR (failure_class = 'usage_limit' AND substr(model, 1, instr(model, '/')) = ?))
           ${input.canaryCircuitId === undefined ? '' : 'AND id = ?'}
       `).all(
         input.provider,
         input.credential,
         input.model,
+        input.model.slice(0, input.model.indexOf('/') + 1),
         ...(input.canaryCircuitId === undefined ? [] : [input.canaryCircuitId]),
       ) as unknown as ProviderCircuitRow[]
       const ownsCanary = rows.some(row => row.state_tag === 'HalfOpen'
@@ -14126,6 +14146,11 @@ export function openJournalStore(
         SELECT latest.id FROM routine_runs AS latest
         WHERE latest.routine_id = routine_runs.routine_id
         ORDER BY latest.scheduled_for DESC LIMIT 1
+      ) OR routine_runs.id = (
+        SELECT settled.id FROM routine_runs AS settled
+        WHERE settled.routine_id = routine_runs.routine_id
+          AND settled.state_tag IN ('Completed', 'Failed')
+        ORDER BY settled.scheduled_for DESC LIMIT 1
       )
       ORDER BY routine_runs.scheduled_for DESC
     `).all() as unknown as RoutineRunRow[]).map(readRoutineRun)
@@ -16301,10 +16326,8 @@ export function openJournalStore(
   }
 
   /**
-   * Writes one pending report command, once per run.
-   *
-   * The run's identity owns the command, so restaging a report a retry already
-   * staged changes nothing.
+   * Keeps one report command per run. A retry replaces pending content.
+   * Publication owns Running and Completed reports, so restaging leaves those alone.
    */
   const insertRoutineReportCommand = (command: RoutineReportCommand, at: string): boolean => {
     const inserted = database.prepare(`
@@ -16312,7 +16335,9 @@ export function openJournalStore(
         id, routine_id, run_id, repository, routine_name, body, verdict_json, state_tag, created_at, updated_at
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
-      ON CONFLICT (run_id) DO NOTHING
+      ON CONFLICT (run_id) DO UPDATE SET body = excluded.body, verdict_json = excluded.verdict_json, updated_at = excluded.updated_at
+      WHERE routine_report_commands.state_tag = 'Pending'
+        AND (routine_report_commands.body <> excluded.body OR routine_report_commands.verdict_json IS NOT excluded.verdict_json)
     `).run(
       command.id,
       command.routineId,

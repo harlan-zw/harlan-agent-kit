@@ -240,6 +240,8 @@ export function resolveAgentProfile(
 }
 
 export interface AgentRuntimeSourceOptions {
+  /** A provider may choose a separately authenticated model under Automatic selection. */
+  automaticSelection?: (provider: AgentProviderName) => PinnedAgentSelection
   /** Picks the provider automatic selection uses. Omitted keeps preference order. */
   chooseProvider?: AgentProviderChooser
   /** The Agent provider the configuration file names, read at every start. */
@@ -262,7 +264,9 @@ export interface AgentRuntimeSourceOptions {
 export function createAgentRuntimeSource(options: AgentRuntimeSourceOptions): AgentRuntimeSource {
   const configured = providerAgentSelection(options.configuredProvider)
   return (repository, runSelection) => {
-    const selection = runSelection ?? resolveAgentSelection(options.selection(), configured, options.chooseProvider)
+    const stored = options.selection()
+    const resolved = resolveAgentSelection(stored, configured, options.chooseProvider)
+    const selection = runSelection ?? (stored._tag === 'Automatic' ? options.automaticSelection?.(resolved.provider) ?? resolved : resolved)
     return {
       profile: resolveAgentProfile(selection, options.maximumActiveAgents, options.roleReasoningEfforts, repository === undefined ? undefined : options.repositoryReasoningEfforts?.get(repository)),
       provider: options.providers[selection.provider],

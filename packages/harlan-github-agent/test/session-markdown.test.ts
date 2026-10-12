@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { sessionMarkdown, sessionSafeHref } from '../dashboard/app/utils/session-markdown.ts'
 
 describe('agent Markdown', () => {
+  it('hides report markers and renders evidence disclosures without activating HTML', () => {
+    expect(sessionMarkdown('<!-- routine-run:private -->\n\n<details>\n<summary>Evidence</summary>\n\n**Passed** [report](https://example.com)\n\n</details>\n', { report: true })).toEqual([
+      { kind: 'details', summary: 'Evidence', blocks: [{ kind: 'paragraph', content: [{ kind: 'strong', content: [{ kind: 'text', text: 'Passed' }] }, { kind: 'text', text: ' ' }, { kind: 'link', href: 'https://example.com', content: [{ kind: 'text', text: 'report' }] }] }] },
+    ])
+  })
   it('preserves headings, strong text, lists, and fenced code as semantic content', () => {
     expect(sessionMarkdown('# Result\n\n**Passed** for `src/a.ts`.\n\n- First\n- Second\n\n```ts\nconst value = 1\n```')).toEqual([
       { kind: 'heading', level: 1, content: [{ kind: 'text', text: 'Result' }] },

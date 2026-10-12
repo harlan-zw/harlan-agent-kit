@@ -5,7 +5,7 @@ import { defineComponent, h } from 'vue'
 import { sessionMarkdown } from '../utils/session-markdown.ts'
 import SessionCode from './_SessionCode.vue'
 
-const { text } = defineProps<{ text: string }>()
+const { text, report = false } = defineProps<{ text: string, report?: boolean }>()
 
 function inline(nodes: SessionInline[]): VNodeChild[] {
   return nodes.map((node): VNodeChild => {
@@ -32,11 +32,12 @@ function render(blocks: SessionMarkdownBlock[]): VNodeChild[] {
       case 'list': return h(block.ordered ? 'ol' : 'ul', { class: `my-3 space-y-1 pl-6 ${block.ordered ? 'list-decimal' : 'list-disc'}`, start: block.ordered ? block.start : undefined }, block.items.map(item => h('li', { class: item.checked === null ? '' : 'list-none -ml-5' }, [item.checked === null ? null : h('input', { 'type': 'checkbox', 'checked': item.checked, 'disabled': true, 'aria-label': 'Task completed', 'class': 'mr-2' }), ...render(item.blocks)])))
       case 'table': return h('div', { 'class': 'my-4 max-w-full overflow-x-auto rounded-md border border-default', 'tabindex': 0, 'role': 'region', 'aria-label': 'Message table' }, [h('table', { class: 'min-w-full text-left text-sm' }, [h('thead', { class: 'bg-muted' }, [h('tr', block.header.map(cell => h('th', { class: 'px-3 py-2 font-medium whitespace-nowrap' }, inline(cell))))]), h('tbody', block.rows.map(row => h('tr', { class: 'border-t border-default' }, row.map(cell => h('td', { class: 'px-3 py-2' }, inline(cell))))))])])
       case 'rule': return h('hr', { class: 'my-6 border-default' })
+      case 'details': return h('details', { class: 'my-4 rounded-md border border-default px-3' }, [h('summary', { class: 'min-h-11 cursor-pointer py-3 font-medium text-highlighted' }, block.summary), ...render(block.blocks)])
     }
     return null
   })
 }
-const Content = defineComponent({ setup: () => () => h('div', { class: 'min-w-0 text-base' }, render(sessionMarkdown(text))) })
+const Content = defineComponent({ setup: () => () => h('div', { class: 'min-w-0 text-base' }, render(sessionMarkdown(text, { report }))) })
 </script>
 
 <template>

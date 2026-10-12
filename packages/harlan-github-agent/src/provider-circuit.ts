@@ -46,6 +46,8 @@ export interface CircuitProtectedProviderOptions {
 
 /** Classifies a provider failure without keeping random request identifiers. */
 export function stableProviderFailureClass(reason: string): ProviderFailureClass {
+  if (/\b(?:limit exhausted|usage limit|quota exceeded|credits? exhausted|weekly\/monthly limit)\b/i.test(reason))
+    return 'usage_limit'
   if (/\b(?:network|ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed)\b/i.test(reason))
     return 'network'
   if (/\b(?:overloaded|capacity|busy|too many requests)\b/i.test(reason))

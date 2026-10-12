@@ -3,6 +3,7 @@ import type { AgentActivityItem, AgentFeedbackInput } from '../../../src/types.t
 import type { FeedbackVerdict, HistoryRow } from '../utils/history.ts'
 import type { DetailItem } from './DetailList.vue'
 import { useClipboard } from '@vueuse/core'
+import SessionMarkdown from '../pages/_SessionMarkdown.vue'
 import {
   gateTone,
   reviewOutcomeDetail,
@@ -234,7 +235,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
               · {{ row.run.report.verdict.severity }} · {{ row.run.report.verdict.coverage }} coverage
             </template>
           </p>
-          <pre class="whitespace-pre-wrap break-words font-sans text-sm text-default">{{ row.run.report.body }}</pre>
+          <SessionMarkdown :text="row.run.report.body" report />
         </div>
 
         <section v-if="review">

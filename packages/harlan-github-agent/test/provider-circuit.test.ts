@@ -10,6 +10,9 @@ async function events(iterable: AsyncIterable<AgentEvent>): Promise<AgentEvent[]
 }
 
 describe('agent provider circuit boundary', () => {
+  it('recognizes exhausted subscription windows', () => {
+    expect(stableProviderFailureClass('Weekly/Monthly Limit Exhausted')).toBe('usage_limit')
+  })
   it.each(['host-cancelled', 'sandbox-setup', 'resource-limit'] as const)('excludes %s events from model health with a live controller signal', async (cause) => {
     const failures: unknown[] = []
     const successes: unknown[] = []

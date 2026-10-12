@@ -148,6 +148,12 @@ describe('historyRows', () => {
 })
 
 describe('historyRangeFromQuery', () => {
+  it('opens older Routine results for the selected repository and Routine', () => {
+    const snapshot = dashboardSnapshot()
+    snapshot.routineRuns = [routineRun({ id: 'wanted', repository: 'harlan-zw/nuxt-seo', name: 'daily-checkin' }), routineRun({ id: 'other', repository: 'unjs/unhead', name: 'daily-checkin' })]
+    const range = historyRangeFromQuery({ work: 'routine_scan', repository: 'harlan-zw/nuxt-seo', routine: 'daily-checkin' })
+    expect(historyRows(snapshot, 'all', range).map(row => row.key)).toEqual(['wanted'])
+  })
   it('reads nothing as every record', () => {
     expect(historyRangeFromQuery({})).toEqual({ _tag: 'All' })
     expect(historyRangeFromQuery({ from: '' })).toEqual({ _tag: 'All' })

@@ -1123,7 +1123,8 @@ export interface WorkflowEvent {
 }
 
 export type ProviderFailureClass
-  = | 'network'
+  = | 'usage_limit'
+    | 'network'
     | 'overloaded'
     | 'stalled'
     | 'process_exit'
@@ -1647,6 +1648,8 @@ export interface DashboardSnapshot {
   agentModels: Record<AgentProviderName, readonly AgentModel[]>
   reasoningEfforts: readonly CodexReasoningEffort[]
   providerCapacities: ProviderCapacityStatus[]
+  /** OpenCode plans have separate usage windows, even within the same CLI. */
+  agentModelCapacities?: { opencodeGo: ProviderCapacity, zaiCodingPlan: ProviderCapacity }
   /** Credential holds reported by GitHub, read directly from the request gate. */
   githubRateLimits: GitHubRateLimitHold[]
   /** Durable Agent provider health, separate from subscription capacity. */
