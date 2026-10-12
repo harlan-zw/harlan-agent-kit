@@ -55,6 +55,11 @@ Never treat a timeout or connection error as an empty Queue or successful Review
 
 ## Wait for merge
 
+After readiness, the PR Skill hands the pull request back and ends the turn by default.
+Use a foreground merge watch only when Harlan requests an active wait.
+Retain the exact target and delivery evidence for the next turn.
+Never start a background watch or promise an automatic chat wake-up.
+
 The default stops at merge, closure, Dismissal, or actionable work without an active Service Task.
 It keeps waiting while Service Review, Repair, or Publication owns the work.
 `--until merged` waits through actionable findings. Use it only when Harlan wants that wait.
@@ -70,6 +75,10 @@ On `ActionRequired`, inspect the returned reason and Tasks. Follow the existing 
 On `Closed` or `Dismissed`, report the outcome. Do not delete unintegrated work.
 
 ## Recover
+
+After a handoff, read the recorded target's current remote state when Harlan reports a merge or requests follow-up.
+Confirm the merge commit before Completion. If the head changed, repeat the PR Skill's current-head checks.
+Acquire the task's worktree claim before mutation. Preserve unintegrated work until integration is confirmed.
 
 If the Service restarts or the connection fails, run the same command again.
 The initial event reads the Journal, so a merge during disconnection still returns immediately.
