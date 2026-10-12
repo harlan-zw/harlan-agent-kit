@@ -1178,7 +1178,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .then(async (existing) => {
           if (existing.data.issue_url !== undefined && !existing.data.issue_url.endsWith(`/${pullRequestNumber}`))
             return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another pull request.' as const })
-          const legacyActor = options.legacyActor
+          const legacyActor = repository.githubAccount === undefined ? options.legacyActor : undefined
           const existingHead = automatedReviewHead(existing.data.body ?? '')?.toLowerCase()
           const expectedHead = automatedReviewHead(expectedBody)?.toLowerCase()
           const nextHead = automatedReviewHead(body)?.toLowerCase()

@@ -6,7 +6,7 @@ import { createGitHubAccountTokenProvider, githubAccountBody } from '../src/gith
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from '../src/issue-triage-comment.ts'
 import { err, ok } from '../src/result.ts'
-import { automatedDisclosure } from '../src/review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from '../src/review-comment.ts'
 import { isRoutineTrackingIssue, trackingIssueBody } from '../src/routine-report-controller.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -131,4 +131,30 @@ it('uses the account attribution for inline review findings', async () => {
     body,
   }, new AbortController().signal, () => ok(undefined))).toEqual(ok({ _tag: 'Posted' }))
   expect(createReviewComment).toHaveBeenCalledWith(expect.objectContaining({ body: githubAccountBody(body, account) }))
+})
+
+it('refuses owner credentials when a dedicated account edits a legacy review', async () => {
+  const body = `${AUTOMATED_REVIEW_MARKER}\n<!-- reviewed-sha: ${'a'.repeat(40)} -->\nReview in progress.`
+  const legacyTokens: GitHubTokenProvider = {
+    getToken: vi.fn(async () => ok({ token: 'owner-token', expiresAt: '2126-01-01T00:00:00Z' })),
+    invalidate: vi.fn(),
+  }
+  const updateComment = vi.fn(async () => undefined)
+  const source = createGitHubAgentSource({
+    actorLogin: () => account.login,
+    ownAppId: 123,
+    tokens: { getToken: async () => ok({ token: 'account-token', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined },
+    legacyActor: { login: 'harlan-zw', tokens: legacyTokens },
+    createClient: () => ({ rest: { issues: {
+      getComment: async () => ({ data: { id: 1, user: { login: 'harlan-zw' }, body, html_url: 'https://github.com/old' } }),
+      updateComment,
+    } } } as unknown as Octokit),
+  })
+  const mapping = repositoryMapping({ github: repository, authentication: 'user', githubAccount: account })
+  expect(await source.editReviewStatus(mapping, 44, 1, body, `${body}\nComplete.`, new AbortController().signal, () => ok(undefined))).toEqual(ok({
+    _tag: 'Foreign',
+    reason: 'The stored automated review comment belongs to another GitHub actor.',
+  }))
+  expect(legacyTokens.getToken).not.toHaveBeenCalled()
+  expect(updateComment).not.toHaveBeenCalled()
 })
