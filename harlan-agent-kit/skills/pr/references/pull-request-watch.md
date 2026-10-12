@@ -33,6 +33,10 @@ pnpm --filter harlan-github-agent dev control watch-pr \
 The command writes changed states to stderr and one terminal JSON result to stdout.
 It follows the pull request through later pushes and repairs. Read the returned head before acting.
 The result includes current-head Tasks and the merge commit when GitHub supplies it.
+While a Task is queued, events include the Dashboard's `agentStart` state.
+`RestartRequested`, `Paused`, `WritesDisabled`, `ReserveReached`, and `CapacityUnavailable` explain Service start holds.
+The stream reports `Available` when the hold clears, even if the Task stays queued.
+Task eligibility and Agent slots still control when that Task starts.
 A saved closure needs an exact GitHub confirmation before the command returns `Merged` or `Closed`.
 
 ## Wait for Review

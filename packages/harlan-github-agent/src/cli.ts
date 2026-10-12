@@ -232,7 +232,7 @@ const controlCommand = defineCommand({
             until,
             onUpdate: state => writeJson({ event: 'pull-request', status: state._tag, ...(state._tag === 'NotObserved'
               ? {}
-              : { headSha: state.pullRequest.headSha, tasks: state.tasks.map(task => ({ id: task.id, kind: task.kind, state: task.state._tag })) }) }, process.stderr),
+              : { headSha: state.pullRequest.headSha, tasks: state.tasks.map(task => ({ id: task.id, kind: task.kind, state: task.state._tag })), ...(state.agentStart === undefined ? {} : { agentStart: state.agentStart }) }) }, process.stderr),
           }))
         }
         finally {
