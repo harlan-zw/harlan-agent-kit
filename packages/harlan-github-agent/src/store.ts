@@ -3,6 +3,7 @@ import type { BatchStore } from './batch-store.ts'
 import type { TransientKind } from './failure.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { AgentHost, AgentSlotSetting } from './host-capacity.ts'
+import type { IncidentResolutionError, IncidentResolutionReceipt, IncidentResolutionRequest } from './incident-resolution.ts'
 import type { IssueClassificationDecision } from './issue-classification.ts'
 import type { IssueTriageResult, IssueTriageState } from './issue-triage.ts'
 import type { LoggedFindingStore } from './logged-finding-store.ts'
@@ -1218,6 +1219,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   recordPollAttempt: (github: string, at: string) => void
   recordPollFailure: (github: string, at: string, message: string, status?: number) => void
   recordPollSuccess: (github: string, at: string) => void
+  /** Resolves one exact Incident and records verified evidence. */
+  resolveIncident: (input: IncidentResolutionRequest & { at: string }) => Result<IncidentResolutionReceipt, IncidentResolutionError>
   /** Names one failure for the system pane. Repeats raise `occurrences`. */
   recordIncident: (input: RecordIncidentInput) => Incident
   /** Clears every open Incident for one scope once the work behind it succeeds. */
@@ -7008,7 +7011,49 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 87;`)
     version = 87
   }
-  if (version === 87)
+  if (version === 87) {
+    applyMigration(database, `
+  ALTER TABLE workflow_events RENAME TO workflow_events_v88;
+  CREATE TABLE workflow_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stream TEXT NOT NULL CHECK (stream IN (
+      'task', 'worker_task', 'publication', 'review_run', 'review_gate',
+      'review_resolution', 'review_status', 'issue_triage_status', 'routine_run',
+      'candidate_issue', 'routine_report', 'provider_circuit', 'incident'
+    )),
+    event TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    repository TEXT,
+    item_number INTEGER,
+    revision_id TEXT,
+    task_id TEXT,
+    from_state TEXT,
+    to_state TEXT NOT NULL,
+    reason TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+    fence INTEGER NOT NULL DEFAULT 0 CHECK (fence >= 0),
+    duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+    usage TEXT CHECK (usage IS NULL OR json_valid(usage)),
+    occurred_at TEXT NOT NULL
+  );
+  INSERT INTO workflow_events SELECT * FROM workflow_events_v88;
+  DROP TABLE workflow_events_v88;
+  CREATE INDEX workflow_events_stream_time
+    ON workflow_events(stream, occurred_at DESC, id DESC);
+  CREATE INDEX workflow_events_entity
+    ON workflow_events(stream, entity_id, occurred_at, id);
+      CREATE TABLE IF NOT EXISTS incident_resolutions (
+        incident_id TEXT NOT NULL REFERENCES incidents(id),
+        last_seen_at TEXT NOT NULL,
+        evidence_digest TEXT NOT NULL,
+        resolved_at TEXT NOT NULL,
+        PRIMARY KEY (incident_id, last_seen_at)
+      );
+      PRAGMA user_version = 88;
+    `)
+    version = 88
+  }
+  if (version === 88)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -8637,6 +8682,45 @@ export function openJournalStore(
     return missing.length
   }
 
+  const resolveIncident: JournalStore['resolveIncident'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = database.prepare('SELECT * FROM incidents WHERE id = ?').get(input.incidentId) as unknown as (IncidentRow & { resolved_at: string | null }) | undefined
+      const refusal = row === undefined ? 'NotFound' : row.last_seen_at !== input.lastSeenAt ? 'Changed' : null
+      if (refusal !== null) {
+        database.exec('COMMIT')
+        return { _tag: 'Err', error: { _tag: refusal } }
+      }
+      if (row === undefined)
+        throw new Error('Expected an Incident after the existence check.')
+      const active = row.task_id !== null && ['tasks', 'worker_tasks'].some(table => database.prepare(`SELECT 1 FROM ${table} WHERE id = ? AND state_tag IN ('Queued', 'Running', 'Publishing')`).get(row.task_id) !== undefined)
+      if (active) {
+        database.exec('COMMIT')
+        return { _tag: 'Err', error: { _tag: 'TaskActive' } }
+      }
+      const receipt = database.prepare('SELECT evidence_digest FROM incident_resolutions WHERE incident_id = ? AND last_seen_at = ?').get(input.incidentId, input.lastSeenAt) as { evidence_digest: string } | undefined
+      if (row.resolved_at !== null) {
+        database.exec('COMMIT')
+        return receipt?.evidence_digest === digest(input.evidence)
+          ? { _tag: 'Ok', value: { _tag: 'AlreadyResolved' } }
+          : { _tag: 'Err', error: { _tag: 'Changed' } }
+      }
+      if (receipt !== undefined) {
+        database.exec('COMMIT')
+        return { _tag: 'Err', error: { _tag: 'Changed' } }
+      }
+      database.prepare('UPDATE incidents SET resolved_at = ? WHERE id = ?').run(input.at, input.incidentId)
+      database.prepare('INSERT INTO incident_resolutions (incident_id, last_seen_at, evidence_digest, resolved_at) VALUES (?, ?, ?, ?)').run(input.incidentId, input.lastSeenAt, digest(input.evidence), input.at)
+      recordWorkflowEvent(database, { stream: 'incident', event: 'resolved', entityId: input.incidentId, repository: row.repository, itemNumber: row.subject_number, taskId: row.task_id, from: 'Open', to: 'Resolved', reason: input.evidence, at: input.at })
+      database.exec('COMMIT')
+      return { _tag: 'Ok', value: { _tag: 'Resolved' } }
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const recordIncident: JournalStore['recordIncident'] = input => upsertIncident(database, input)
 
   const resolveIncidents: JournalStore['resolveIncidents'] = (scope, at, operation, exceptMessages = []) => {
@@ -8775,6 +8859,15 @@ export function openJournalStore(
           AND ${table}.reason IS NOT NULL
           AND ${table}.revision_id = subjects.current_revision_id
           AND repositories.enabled = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM incidents
+            JOIN incident_resolutions ON incident_resolutions.incident_id = incidents.id
+              AND incident_resolutions.last_seen_at = incidents.last_seen_at
+            WHERE incidents.resolved_at IS NOT NULL
+              AND incidents.message = ${table}.reason
+              AND ((incidents.scope_tag = 'Task' AND incidents.task_id = ${table}.id)
+                OR (incidents.scope_tag = 'Service' AND incidents.kind = 'agent_provider'))
+          )
           AND NOT EXISTS (
             SELECT 1 FROM incidents
             WHERE incidents.resolved_at IS NULL
@@ -13994,6 +14087,13 @@ export function openJournalStore(
       JOIN repositories ON repositories.id = subjects.repository_id
       WHERE tasks.kind = 'review_fix' AND tasks.state_tag IN ('Failed', 'ActionRequired') AND tasks.id LIKE 'logged-finding:%'
         AND repositories.enabled = 1
+        AND NOT EXISTS (
+          SELECT 1 FROM incidents
+          JOIN incident_resolutions ON incident_resolutions.incident_id = incidents.id
+            AND incident_resolutions.last_seen_at = incidents.last_seen_at
+          WHERE incidents.resolved_at IS NOT NULL AND incidents.scope_tag = 'Task'
+            AND incidents.task_id = tasks.id AND incidents.message = tasks.reason
+        )
         AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = tasks.id)
         AND NOT EXISTS (SELECT 1 FROM item_dismissals WHERE subject_id = subjects.id)
       ORDER BY tasks.updated_at DESC, tasks.id
@@ -16644,6 +16744,7 @@ export function openJournalStore(
     recordObservation,
     recordPollObservation,
     recordIncident,
+    resolveIncident,
     resolveIncidents,
     resolveRunnerLostIncident,
     listIncidents,
