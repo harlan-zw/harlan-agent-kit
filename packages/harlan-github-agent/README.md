@@ -85,7 +85,24 @@ server:
 
 Configure one public address. Its Passkeys remain separate from the private address.
 The public proxy must set `X-Harlan-Agent-Ingress: public` and preserve the existing trusted Host and Origin mapping.
-The public address still refuses terminal and diff access.
+The public address refuses terminals unless you enable them explicitly.
+
+Enroll a public Passkey before disabling its password login.
+Then enable public terminals with persistent storage and private Agent sessions:
+
+```yaml
+server:
+  browser_origins: [https://agent.example.com]
+  public_browser_password_login: false
+  agent_sessions: true
+  public_terminal_sessions: true
+```
+
+Open `/sessions` at the public address, or select Sessions from the Board.
+Public terminals use the public browser session and run on Hogwild.
+The proxy must forward terminal HTTP and WebSocket paths with the trusted ingress headers.
+Desktop session routes and pull request diffs remain private.
+Terminal diffs show only the authenticated Agent session's Worktree.
 
 Configure your normal global Git profile before starting. The controller uses its identity and commit-signing settings for every commit it creates.
 

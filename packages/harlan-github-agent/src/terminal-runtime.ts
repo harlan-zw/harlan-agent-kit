@@ -20,6 +20,7 @@ export async function createTerminalRuntime(
     origins?: string[]
     authorize?: Parameters<typeof createTerminalServer>[0]['authorize']
     browserAuth?: Parameters<typeof createTerminalServer>[0]['browserAuth']
+    publicBrowserAuth?: Parameters<typeof createTerminalServer>[0]['publicBrowserAuth']
     diff?: Parameters<typeof createTerminalServer>[0]['diff']
     lockEntry?: string
     observer?: Parameters<typeof createTerminalServer>[0]['observer']
@@ -119,6 +120,7 @@ export async function createTerminalRuntime(
       ...(config.origins ? { origins: config.origins } : {}),
       ...(config.authorize ? { authorize: config.authorize } : {}),
       ...(config.browserAuth ? { browserAuth: config.browserAuth } : {}),
+      ...(config.publicBrowserAuth ? { publicBrowserAuth: config.publicBrowserAuth } : {}),
       ...(config.diff ? { diff: config.diff } : {}),
       ...(config.observer ? { observer: config.observer } : {}),
       now: Date.now,

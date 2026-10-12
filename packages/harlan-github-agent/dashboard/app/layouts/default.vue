@@ -93,6 +93,7 @@ onMounted(() => {
           <span class="flex h-full shrink-0 items-center border-r border-default border-t-2 border-t-accented bg-default px-2 text-sm font-medium text-highlighted sm:px-4">{{ tabs.find(tab => tab.to === route.path)?.label ?? 'Agent' }}</span>
 
           <div class="ms-auto flex items-center gap-1.5">
+            <UButton v-if="terminalHost.controller.value && !sessionPage" to="/sessions" label="Sessions" icon="i-octicon-terminal-16" color="neutral" variant="outline" class="min-h-11 md:hidden" />
             <span v-if="terminalHost.readOnly.value" class="sr-only rounded border border-default text-xs text-muted sm:not-sr-only sm:px-2 sm:py-1" role="status">Read-only Service connection.</span>
             <SystemChip v-if="terminalHost.controller.value" class="max-sm:max-w-28 max-sm:overflow-hidden" />
             <div v-if="terminalHost.controller.value && !sessionPage" class="hidden items-center gap-1.5 lg:flex">

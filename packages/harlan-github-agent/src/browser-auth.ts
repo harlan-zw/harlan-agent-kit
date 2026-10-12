@@ -41,6 +41,7 @@ export function createBrowserAuth(options: {
   webauthn?: typeof webauthn
   bootstrap: (body: Record<string, unknown>) => boolean | Promise<boolean>
   bootstrapKind: 'pairing' | 'password' | 'passkey'
+  requirePasskeySession?: boolean
   surface: { _tag: 'Dashboard' } | { _tag: 'TerminalHost' }
 }) {
   const origin = new URL(options.origin)
@@ -58,7 +59,8 @@ export function createBrowserAuth(options: {
   const cookieValue = (name: string, value: string, seconds: number) => `${name}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${seconds}${secure ? '; Secure' : ''}`
   function session(headers: Headers) {
     const token = cookie(headers, sessionName)
-    return token ? options.store.sessionByHash(hash(token), options.now()) : null
+    const session = token ? options.store.sessionByHash(hash(token), options.now()) : null
+    return session && (!options.requirePasskeySession || session.credentialId !== null) ? session : null
   }
   function issueSession(credentialId: string | null) {
     const token = randomBytes(32).toString('base64url')
