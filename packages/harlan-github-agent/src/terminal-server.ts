@@ -1,10 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
+import type { BrowserAuth } from './browser-auth.ts'
 import type { TerminalManager } from './terminal-manager.ts'
 import type { TerminalIntent } from './terminal-storage.ts'
 import {
-  createHmac,
   randomBytes,
   randomUUID,
   timingSafeEqual,
@@ -13,6 +13,8 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, relative } from 'node:path'
 import { WebSocketServer } from 'ws'
+import { openBrowserAuthStore } from './browser-auth-store.ts'
+import { createBrowserAuth } from './browser-auth.ts'
 import { connectTerminalHelper } from './terminal-helper-client.ts'
 import {
   parseTerminalClientMessage,
@@ -35,6 +37,7 @@ export function createTerminalServer(options: {
   }
   staticDirectory?: string
   authorize?: (request: IncomingMessage) => boolean | Promise<boolean>
+  browserAuth?: BrowserAuth
   diff?: (intent: TerminalIntent, url: URL) => Promise<unknown>
   now: () => number
   log: (message: string, cause: unknown) => void
@@ -50,36 +53,38 @@ export function createTerminalServer(options: {
   const grace = options.shutdownGraceMs ?? 100
   if (!Number.isSafeInteger(grace) || grace < 0 || grace > 5000)
     throw new Error('Invalid terminal shutdown interval')
-  function sign(value: string) {
-    return createHmac('sha256', options.manager.host.authSecret)
-      .update(value)
-      .digest('base64url')
-  }
   function constant(a: string, b: string) {
     return (
       Buffer.byteLength(a) === Buffer.byteLength(b)
       && timingSafeEqual(Buffer.from(a), Buffer.from(b))
     )
   }
-  function cookieAuth(request: IncomingMessage) {
-    const token = request.headers.cookie
-      ?.split(';')
-      .map(part => part.trim())
-      .find(part => part.startsWith('terminal_auth='))
-      ?.slice('terminal_auth='.length)
-    if (!token || token.length > 512)
+  const canonical = new URL(options.origin)
+  if (!options.authorize && canonical.hostname === '127.0.0.1')
+    canonical.hostname = 'localhost'
+  if (!options.authorize) {
+    if (new URL(options.origin).hostname === '127.0.0.1') {
+      origins.delete(options.origin)
+      hosts.delete(new URL(options.origin).host)
+    }
+    origins.add(canonical.origin)
+    hosts.add(canonical.host)
+  }
+  const authStore = options.browserAuth ? undefined : openBrowserAuthStore(join(options.manager.directory, 'browser-auth.sqlite'))
+  function consumePair(value: unknown) {
+    if (typeof value !== 'string' || pairConsumed || options.now() >= pairExpires || !constant(value, pairCode))
       return false
-    const [nonce, expiry, signature] = token.split('.')
-    return Boolean(
-      nonce
-      && expiry
-      && signature
-      && Number(expiry) > options.now()
-      && constant(sign(`${nonce}.${expiry}`), signature),
-    )
+    pairConsumed = true
+    return true
+  }
+  const browserAuth = options.browserAuth ?? createBrowserAuth({ origin: canonical.origin, rpId: canonical.hostname, store: authStore!, now: options.now, bootstrapKind: 'pairing', bootstrap: body => consumePair(body.token ?? body.code) })
+  function requestHeaders(request: IncomingMessage) {
+    return new Headers(Object.entries(request.headers).flatMap(([name, value]) => value === undefined ? [] : [[name, Array.isArray(value) ? value.join(', ') : value]]))
   }
   async function authenticated(request: IncomingMessage) {
-    return options.authorize ? options.authorize(request) : cookieAuth(request)
+    if (request.headers['x-harlan-agent-ingress'] === 'public')
+      return false
+    return Boolean(browserAuth.session(requestHeaders(request))) || Boolean(await options.authorize?.(request))
   }
   function json(response: ServerResponse, value: unknown, status = 200) {
     response
@@ -113,6 +118,10 @@ export function createTerminalServer(options: {
     socket.once('close', () => transports.delete(socket))
   })
   async function handle(request: IncomingMessage, response: ServerResponse) {
+    if (!options.authorize && request.method === 'GET' && request.headers.host === `127.0.0.1:${canonical.port}`) {
+      response.writeHead(307, { Location: `${canonical.origin}${request.url ?? '/'}` }).end()
+      return
+    }
     if (
       !request.headers.host
       || !hosts.has(request.headers.host)
@@ -131,6 +140,23 @@ export function createTerminalServer(options: {
       `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`,
     )
     const url = new URL(request.url ?? '/', options.origin)
+    if (url.pathname.startsWith('/api/browser-auth/')) {
+      const decoded = request.method === 'GET' ? undefined : await body(request)
+      if (decoded?._tag === 'Err') {
+        json(response, decoded, 400)
+        return
+      }
+      const result = await browserAuth.handle(new Request(`${canonical.origin}${url.pathname}`, { method: request.method ?? 'GET', headers: requestHeaders(request), ...(decoded?._tag === 'Ok' ? { body: JSON.stringify(decoded.value) } : {}) }))
+      if (result) {
+        for (const [name, value] of result.headers) {
+          if (name !== 'set-cookie')
+            response.setHeader(name, value)
+        }
+        response.setHeader('set-cookie', result.headers.getSetCookie())
+        response.writeHead(result.status).end(await result.text())
+      }
+      return
+    }
     if (closed || (options.active && !options.active())) {
       json(response, { _tag: 'Err', reason: 'OwnershipUnknown' }, 503)
       return
@@ -150,21 +176,14 @@ export function createTerminalServer(options: {
           ? parsed.value.code
           : null
       if (
-        typeof code !== 'string'
-        || pairConsumed
-        || options.now() >= pairExpires
-        || !constant(code, pairCode)
+        !consumePair(code)
       ) {
         json(response, { _tag: 'Err', reason: 'AuthenticationRequired' }, 401)
         return
       }
-      pairConsumed = true
-      const nonce = randomUUID()
-      const expiry = options.now() + 30 * 24 * 60 * 60 * 1000
-      const token = `${nonce}.${expiry}.${sign(`${nonce}.${expiry}`)}`
       response.setHeader(
         'Set-Cookie',
-        `terminal_auth=${token}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=2592000${new URL(options.origin).protocol === 'https:' ? '; Secure' : ''}`,
+        browserAuth.issueSession(null),
       )
       json(response, { _tag: 'Ok', value: true })
       return
@@ -297,6 +316,17 @@ export function createTerminalServer(options: {
     socket: Duplex,
     head: Buffer,
   ) {
+    type Principal = { _tag: 'Machine' } | { _tag: 'Browser', hash: string }
+    const machine = request.headers['x-harlan-agent-ingress'] !== 'public'
+      && Boolean(await options.authorize?.(request))
+    const session = browserAuth.session(requestHeaders(request))
+    const principal: Principal | null = machine
+      ? { _tag: 'Machine' }
+      : session && request.headers['x-harlan-agent-ingress'] !== 'public'
+        ? { _tag: 'Browser', hash: session.hash }
+        : null
+    const browserAccess = () => principal?._tag === 'Machine'
+      || (principal?._tag === 'Browser' && browserAuth.session(requestHeaders(request))?.hash === principal.hash)
     if (
       closed
       || (options.active && !options.active())
@@ -304,7 +334,8 @@ export function createTerminalServer(options: {
       || !hosts.has(request.headers.host)
       || !request.headers.origin
       || !origins.has(request.headers.origin)
-      || !(await authenticated(request))
+      || !principal
+      || !browserAccess()
     ) {
       socket.end('HTTP/1.1 403 Forbidden\r\n\r\n', () => socket.destroy())
       return
@@ -321,11 +352,34 @@ export function createTerminalServer(options: {
       socket.end('HTTP/1.1 409 Conflict\r\n\r\n', () => socket.destroy())
       return
     }
+    if (!browserAccess()) {
+      socket.end('HTTP/1.1 403 Forbidden\r\n\r\n', () => socket.destroy())
+      return
+    }
     sockets.handleUpgrade(request, socket, head, (websocket) => {
+      const expired = () => {
+        helper.close()
+        websocket.close(1008, 'Authentication required')
+      }
+      const revoke = browserAuth.onSessionRevocation((hash) => {
+        if (principal._tag === 'Browser' && hash === principal.hash)
+          expired()
+      })
+      const expiry = principal._tag === 'Browser'
+        ? setInterval(() => {
+            if (!browserAccess())
+              expired()
+          }, 1000)
+        : undefined
+      expiry?.unref()
       const helper = connectTerminalHelper({
         directory: options.manager.directory,
         intent,
         message: (message) => {
+          if (!browserAccess()) {
+            expired()
+            return
+          }
           if (websocket.bufferedAmount > 8 * 1024 * 1024) {
             websocket.close(1013, 'Reconnect to receive the current screen')
             return
@@ -338,6 +392,10 @@ export function createTerminalServer(options: {
         },
       })
       websocket.on('message', (bytes) => {
+        if (!browserAccess()) {
+          expired()
+          return
+        }
         if (closed || (options.active && !options.active())) {
           helper.close()
           websocket.terminate()
@@ -361,6 +419,11 @@ export function createTerminalServer(options: {
       })
       websocket.on('error', cause =>
         options.log('Terminal stream failed', cause))
+      websocket.on('close', () => {
+        revoke()
+        if (expiry)
+          clearInterval(expiry)
+      })
       websocket.on('close', () => helper.close())
     })
   }
@@ -369,11 +432,12 @@ export function createTerminalServer(options: {
     handle,
     upgrade,
     handles: (path: string) =>
-      path === '/api/terminal'
+      (!options.authorize && path.startsWith('/api/browser-auth/'))
+      || path === '/api/terminal'
       || path.startsWith('/api/terminal/')
       || Boolean(options.observer?.handles(path)),
     pairCode,
-    pairingUrl: `${options.origin}/#pair=${pairCode}`,
+    pairingUrl: `${canonical.origin}/#pair=${pairCode}`,
     sockets,
     close() {
       if (closing)
@@ -392,6 +456,7 @@ export function createTerminalServer(options: {
           if (!httpClosed || !streamsClosed)
             return
           clearTimeout(timer)
+          authStore?.close()
           resolve()
         }
         for (const client of sockets.clients)

@@ -43,6 +43,15 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('accepts one explicit public Passkey origin and rejects ambiguous or insecure authorities', () => {
+    const configured = (origins: string) => parseConfigText(configText.replace('server:', `server:\n  browser_origins: ${origins}`))
+    const valid = configured('[https://agent.example.com]')
+    expect(valid._tag === 'Ok' && valid.value.server.browserOrigins).toEqual(['https://agent.example.com'])
+    for (const origins of ['[https://one.example, https://two.example]', '[http://agent.example.com]', '[https://agent.example.com/path]', '[https://harlan-github-agent.localhost]']) {
+      const result = configured(origins)
+      expect(result._tag === 'Err' && result.error.map(issue => issue.path)).toContain('$.server.browser_origins')
+    }
+  })
   it('reads a dedicated GitHub account for one repository', () => {
     const text = configText.replace('    enabled: true', `    enabled: true
     github_account:

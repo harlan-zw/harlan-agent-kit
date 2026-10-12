@@ -19,6 +19,7 @@ export async function createTerminalRuntime(
     controller: boolean
     origins?: string[]
     authorize?: Parameters<typeof createTerminalServer>[0]['authorize']
+    browserAuth?: Parameters<typeof createTerminalServer>[0]['browserAuth']
     diff?: Parameters<typeof createTerminalServer>[0]['diff']
     lockEntry?: string
     observer?: Parameters<typeof createTerminalServer>[0]['observer']
@@ -117,6 +118,7 @@ export async function createTerminalRuntime(
       staticDirectory: config.staticDirectory,
       ...(config.origins ? { origins: config.origins } : {}),
       ...(config.authorize ? { authorize: config.authorize } : {}),
+      ...(config.browserAuth ? { browserAuth: config.browserAuth } : {}),
       ...(config.diff ? { diff: config.diff } : {}),
       ...(config.observer ? { observer: config.observer } : {}),
       now: Date.now,

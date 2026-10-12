@@ -132,6 +132,36 @@ The dashboard uses short, direct controls and specific state descriptions.
 | AI-powered | Agent | The control already names the actor |
 | seamless | State the observed behavior | The claim cannot be checked |
 
+## Browser authentication assets
+
+| Asset | String |
+| --- | --- |
+| Browser sign in | Sign in to Agent |
+| Passkey sign in | Sign in with Passkey |
+| Password sign in | Sign in with password |
+| Browser password label | Password |
+| Browser sign-in checking | Checking sign-in access. |
+| Browser access retry | Retry |
+| Passkey management | Manage Passkeys |
+| Passkey heading | Passkeys |
+| Passkey management description | Manage Passkeys for this address. |
+| Passkey loading | Loading Passkeys. |
+| Passkey empty | No Passkeys added. |
+| Passkey name | Passkey name |
+| Passkey add | Add Passkey |
+| Passkey remove | Remove |
+| Passkey remove accessible | Remove Passkey: {name} |
+| Passkey default name | Passkey |
+| Browser sign out | Sign out |
+| Passkey unsupported | This browser does not support Passkeys. |
+| Passkey recovery | Use the password or pairing link if you lose a Passkey. |
+| Passkey cancelled | Passkey request was cancelled. Retry. |
+| Browser password failure | Could not sign in. Check the password and retry. |
+| Browser access failure | Could not check sign-in access. Retry. |
+| Browser sign-out failure | Could not sign out. Retry. |
+| Passkey request failure | The Passkey request failed. Retry. |
+| Browser pairing failure | The pairing link is invalid. Open a new pairing link. |
+
 ## Open questions
 
 None.
