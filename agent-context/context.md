@@ -84,7 +84,7 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 - Authorized controller writes and private access keep their existing GitHub credentials.
 
 - Find and search files: ripgrep (`rg`).
-- Rename, move, or import update spanning 2+ files: `pnpm dlx @ripast/cli`. AST-aware across TS/JS/Vue SFCs; dry-run by default, `--apply` to write.
+- Rename, move, or import update spanning 2+ files: use `ripide` through the launcher selected by its Skill. The retired `@ripast/cli` package stays stale. Dry run is the default; use `--apply` to write.
 - Before using Ripast, read its skilld-managed `ripast` Skill. Use `pnpm check:skills` to check the shared installation.
 - Browser testing and automation: `dev-browser` (`--help`). Always pass `--headless` for unattended tests, even with `$DISPLAY`.
 - Launch dedicated Agent and Clients Chrome headless with `harlan-browser open <identity>`. Visible work requires an explicit user request.
