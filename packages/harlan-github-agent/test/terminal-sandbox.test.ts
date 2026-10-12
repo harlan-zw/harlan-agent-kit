@@ -9,6 +9,39 @@ import { createTerminalPreparationRunner, prepareTerminalSandbox } from '../src/
 
 const execute = promisify(execFile)
 
+it('uses HTTPS for GitHub preparation without changing stored remotes or unrelated transports', async () => {
+  const root = await mkdtemp(join(homedir(), 'scratch/terminal-git-test-'))
+  const home = join(root, 'home')
+  const project = join(root, 'project')
+  try {
+    await Promise.all([mkdir(project), mkdir(join(home, '.local/state'), { recursive: true }), mkdir(join(home, '.cache'), { recursive: true })])
+    await execute('git', ['init', project])
+    const prepare = await createTerminalPreparationRunner(project, join(project, 'claim'), [], home, {
+      ...process.env,
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'test.existing',
+      GIT_CONFIG_VALUE_0: 'preserved',
+    })
+    const existing = await prepare('git', ['config', '--get', 'test.existing'], { cwd: project })
+    expect(existing.stdout.trim()).toBe('preserved')
+    for (const [remote, transport] of [
+      ['git@github.com:harlan-zw/harlan-agent-kit.git', 'https://github.com/harlan-zw/harlan-agent-kit.git'],
+      ['ssh://git@github.com/harlan-zw/harlan-agent-kit.git', 'https://github.com/harlan-zw/harlan-agent-kit.git'],
+      ['git@example.com:owner/repo.git', 'git@example.com:owner/repo.git'],
+      ['git@github.com.evil.test:owner/repo.git', 'git@github.com.evil.test:owner/repo.git'],
+    ] as const) {
+      await execute('git', ['config', 'remote.origin.url', remote], { cwd: project })
+      const resolved = await prepare('git', ['remote', 'get-url', 'origin'], { cwd: project })
+      expect(resolved.stdout.trim()).toBe(transport)
+      const stored = await execute('git', ['config', '--get', 'remote.origin.url'], { cwd: project })
+      expect(stored.stdout.trim()).toBe(remote)
+    }
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 it.each(['directory', 'symlink'] as const)('hides host SSH credentials from provider and preparation with a %s SSH directory', async (kind) => {
   const root = await mkdtemp(join(homedir(), 'scratch/terminal-ssh-test-'))
   const home = join(root, 'home')
