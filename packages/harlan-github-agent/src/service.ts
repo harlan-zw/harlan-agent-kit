@@ -52,6 +52,7 @@ import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
 import { createGitHubMediaSource } from './github-media.ts'
 import { createGitHubRateLimitGate, readAfterGitHubRateLimit } from './github-rate-limit.ts'
+import { createGitHubResponseCache } from './github-response-cache.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
 import { createUserAssetUploader } from './github-user-assets.ts'
 import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitHubWriteAccess, withGitHubWritePreflight } from './github-write-gate.ts'
@@ -605,6 +606,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       return installedRepositories.find(installed => installed.github.toLowerCase() === resolved?.github.toLowerCase())?.github
     },
   })
+  const releaseResponseCache = createGitHubResponseCache()
   const usesUserToken = (repository: string): boolean => userRepositoryNames.has(repository.toLowerCase())
   const rawUserTokens = createUserTokenProvider({ readToken: signal => userAccess.token(signal) })
   // A rate limited quota refuses its credentials until GitHub resets it, so a
@@ -1377,6 +1379,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                 signal,
                 source: assertLease => createPackageReleaseSource({
                   repository,
+                  responseCache: releaseResponseCache,
                   actors: {
                     repository: { login: actorLogin(repository), tokens },
                     user: { login: userLogin, tokens: legacyUserTokens },
