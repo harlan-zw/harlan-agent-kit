@@ -240,3 +240,22 @@ describe('durable Logged finding pickup', () => {
     expect(restored.claimNextReviewFixTask('duplicate', at, 60_000)).toBeNull()
   })
 })
+
+it('hides verified obsolete retained Repair recovery without removing Task history', () => {
+  const { store, pullRequest, request } = setup()
+  store.requestLoggedFindingPickup(request)
+  store.recordObservation({ externalId: 'resolved-recovery-merge', observedAt: at, source: 'poll', subject: { ...pullRequest, state: 'closed', mergedAt: at } })
+  let task = store.claimNextReviewFixTask('repair', at, 60000)!
+  const commitSha = 'c'.repeat(40)
+  const reason = `Could not pin the repair artifact: Could not pin the publication artifact: fatal: invalid refspec '+${commitSha}:refs/harlan-github-agent/publications/${task.id}'`
+  while (store.failTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, reason }) === 'Retrying')
+    task = store.claimNextReviewFixTask('repair', at, 60000)!
+  const before = store.getDashboardSnapshot(at)
+  expect(before.repairRecoveryCandidates).toMatchObject([{ taskId: task.id, commitSha }])
+  const incident = store.listIncidents().find(value => value.scope._tag === 'Task' && value.scope.taskId === task.id)
+  if (incident === undefined)
+    throw new Error('Expected retained Repair incident.')
+  expect(store.resolveIncident({ incidentId: incident.id, lastSeenAt: incident.lastSeenAt, evidence: 'Verified merged fix covers the retained patch.', at })).toEqual({ _tag: 'Ok', value: { _tag: 'Resolved' } })
+  expect(store.getDashboardSnapshot(at).repairRecoveryCandidates).toEqual([])
+  expect(store.getDashboardSnapshot(at).tasks).toEqual(before.tasks)
+})

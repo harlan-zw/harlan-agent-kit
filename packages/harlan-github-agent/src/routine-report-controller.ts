@@ -2,8 +2,9 @@ import type { GitHubIssuePublisher } from './github.ts'
 import type { Result } from './result.ts'
 import type { CheckinVerdict } from './routines/contract.ts'
 import type { JournalStore } from './store.ts'
-import type { Candidate, RoutineName, RoutineReportCommand, RoutineRun } from './types.ts'
+import type { Candidate, GitHubAccount, RoutineName, RoutineReportCommand, RoutineRun } from './types.ts'
 import { routineIssueLabel } from './candidate-issue-controller.ts'
+import { githubAccountBody } from './github-account.ts'
 import { err, ok } from './result.ts'
 import { MAXIMUM_REPORT_DETAIL_LENGTH } from './routines/contract.ts'
 
@@ -32,6 +33,7 @@ export function routineRunMarker(runId: string): string {
 /** Recognises a run log even when another controller filed it. */
 export function isRoutineTrackingIssue(input: {
   repository: string
+  account?: GitHubAccount | undefined
   title: string
   body: string | null | undefined
   labels: readonly string[]
@@ -40,7 +42,7 @@ export function isRoutineTrackingIssue(input: {
     if (input.body?.startsWith(`<!-- routine-log: ${input.repository}:daily-checkin -->\n`))
       return true
     const runId = input.body?.match(/^<!-- routine-run: (.+) -->\n/)?.[1]
-    if (runId?.startsWith(`${input.repository}:daily-checkin:`) && input.body === dailyCheckinIssueBody(runId))
+    if (runId?.startsWith(`${input.repository}:daily-checkin:`) && (input.body === dailyCheckinIssueBody(runId) || input.body === githubAccountBody(dailyCheckinIssueBody(runId), input.account)))
       return true
   }
   const prefix = 'routine:'
@@ -50,7 +52,7 @@ export function isRoutineTrackingIssue(input: {
     const routineName = label.slice(prefix.length)
     return routineName.length > 0
       && input.title.toLowerCase() === `${routineName}: run log for ${input.repository}`.toLowerCase()
-      && input.body === trackingIssueBodyText(routineName)
+      && (input.body === trackingIssueBodyText(routineName) || input.body === githubAccountBody(trackingIssueBodyText(routineName), input.account))
   })
 }
 

@@ -10,6 +10,7 @@ import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { candidateFingerprintMarker, hasRoutineIssueLabel } from './candidate-issue-controller.ts'
+import { githubAccountBody } from './github-account.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
@@ -408,7 +409,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
           comments,
           labels,
           hasRoutineIssueLabel(labels),
-          isRoutineTrackingIssue({ repository: repository.github, title: response.data.title, body: response.data.body, labels }),
+          isRoutineTrackingIssue({ repository: repository.github, account: repository.githubAccount, title: response.data.title, body: response.data.body, labels }),
           options.actorLogin(repository),
         ))
       }).catch((error: unknown): Result<GitHubIssueItem, GitHubReadError> => {
@@ -519,6 +520,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             const labels = labelNames(issue.labels)
             const routineFiled = hasRoutineIssueLabel(labels)
             const routineTracking = isRoutineTrackingIssue({
+              account: repository.githubAccount,
               repository: repository.github,
               title: issue.title,
               body: issue.body,
@@ -648,7 +650,7 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
       const client = await itemWriteClient(input.repository.github, signal)
       if (client._tag === 'Err')
         return client
-      return client.value.rest.issues.update({ owner, repo, issue_number: input.issueNumber, title: input.title, body: input.body, ...(signal === undefined ? {} : { request: { signal } }) })
+      return client.value.rest.issues.update({ owner, repo, issue_number: input.issueNumber, title: input.title, body: githubAccountBody(input.body, input.repository.githubAccount), ...(signal === undefined ? {} : { request: { signal } }) })
         .then(() => ok(undefined))
         .catch((error: unknown): Result<void, GitHubReadError> => {
           const status = errorStatus(error)
@@ -665,7 +667,7 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
         owner,
         repo,
         title: input.title,
-        body: input.body,
+        body: githubAccountBody(input.body, input.repository.githubAccount),
         ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
         ...request,
       })
@@ -688,7 +690,7 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
         owner,
         repo,
         issue_number: input.issueNumber,
-        body: input.body,
+        body: githubAccountBody(input.body, input.repository.githubAccount),
         ...(signal === undefined ? {} : { request: { signal } }),
       })
         .then(response => ok({ id: response.data.id }))
@@ -745,6 +747,7 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
       })
         .then((rows): Result<{ number: number, url: string } | null, GitHubReadError> => {
           const row = rows.find(row => row.pull_request === undefined && isRoutineTrackingIssue({
+            account: input.repository.githubAccount,
             repository: input.repository.github,
             title: row.title,
             body: row.body,

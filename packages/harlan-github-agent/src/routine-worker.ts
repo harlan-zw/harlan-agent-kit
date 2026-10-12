@@ -12,6 +12,7 @@ import { collectAgentRetroEvidence } from './agent-retro.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { candidateIssueCommands } from './candidate-issue-controller.ts'
 import { writeCheckinGitHubEvidence } from './checkin-github-evidence.ts'
+import { githubAccountInstructions } from './github-account.ts'
 import { err, ok } from './result.ts'
 import { routineReportCommand } from './routine-report-controller.ts'
 import { getRoutine } from './routines/index.ts'
@@ -134,7 +135,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           // A Routine answers a clock, so it belongs to no issue or pull
           // request. Nothing reads this number, because no session is saved.
           number: 0,
-          prompt: `${definition.scanPrompt({
+          prompt: `${githubAccountInstructions(task.repositoryMapping.githubAccount)}\n${definition.scanPrompt({
             mode: task.mode,
             name: task.name,
             priorCandidates: options.store.listCandidates(task.routineId),

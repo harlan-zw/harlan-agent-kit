@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { Octokit } from 'octokit'
 import { expect, it, vi } from 'vitest'
 import { createGitHubRateLimitGate } from '../src/github-rate-limit.ts'
+import { createGitHubResponseCache } from '../src/github-response-cache.ts'
 import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseSource } from '../src/package-release-github.ts'
 import { createPackageReleaseStore } from '../src/package-release-store.ts'
@@ -14,6 +15,41 @@ const mergeSha = 'b'.repeat(40)
 const mapping = { ...repositoryMapping(), writablePullRequestAuthors: ['harlan-github-agent[bot]'], release: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: ['test'], credential: { _tag: 'Repository' as const } } }
 const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: sha, mergeSha }
 const record = { repository: mapping.github, pullRequestNumber: 24, commentId: 99, body: '', policy: '', plan, state: { _tag: 'Queued' as const, requestedBy: 'harlan-zw' } }
+
+it('revalidates release candidates across passes and observes changed pull requests', async () => {
+  const cache = createGitHubResponseCache()
+  const seen: Array<string | null> = []
+  const responses = [
+    Response.json([{ number: 24, title: 'fix: handle input', draft: false }], { headers: { etag: '"open-1"' } }),
+    Response.json([], { headers: { etag: '"closed-1"' } }),
+    new Response(null, { status: 304 }),
+    new Response(null, { status: 304 }),
+    Response.json([{ number: 25, title: 'feat: add input', draft: false }], { headers: { etag: '"open-2"' } }),
+    new Response(null, { status: 304 }),
+  ]
+  const tokens = { getToken: async () => ({ _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }
+  const source = () => createPackageReleaseSource({
+    repository: mapping,
+    actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
+    template: async () => '',
+    assertLease: () => {},
+    review: () => ({ _tag: 'None' }),
+    signal: new AbortController().signal,
+    now: () => new Date(),
+    responseCache: cache,
+    createClient: clientOptions => new Octokit({ ...clientOptions, retry: { enabled: false }, throttle: { enabled: false }, request: { fetch: async (input: string | URL | Request, init?: RequestInit) => {
+      seen.push(new Request(input, init).headers.get('if-none-match'))
+      const response = responses.shift()
+      if (response === undefined)
+        throw new Error('Unexpected request')
+      return response
+    } } }),
+  })
+  expect(await source().candidates()).toEqual([24])
+  expect(await source().candidates()).toEqual([24])
+  expect(await source().candidates()).toEqual([25])
+  expect(seen).toEqual([null, null, '"open-1"', '"closed-1"', '"open-1"', '"closed-1"'])
+})
 
 it('reports release rate limits for the selected account and holds later requests', async () => {
   const now = () => new Date('2026-10-10T16:00:00.000Z')

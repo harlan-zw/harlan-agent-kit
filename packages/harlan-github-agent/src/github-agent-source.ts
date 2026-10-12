@@ -14,6 +14,7 @@ import { AGENT_LABELS, planAgentLabels, staleAgentLabels } from './agent-label.t
 import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
+import { githubAccountBody } from './github-account.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseChecks, currentBaseSha } from './github-base.ts'
 import { renderedMediaReferences } from './github-media.ts'
@@ -26,7 +27,7 @@ import { writeNativeReview } from './native-review.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
+import { AGENT_ACTOR_LOGIN, AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
 import { findingDiscussions, inlineReviewComment, reviewFindingThreadFingerprint } from './review-finding-threads.ts'
 import { jobExecutionContext } from './worker-github-evidence.ts'
 
@@ -1005,7 +1006,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         : err('GitHub returned an invalid pull request template.')).catch((error: unknown): Result<PullRequestTemplate, string> => err(message(error)))
     },
 
-    async upsertIssueTriageComment(repository, issueNumber, commentId, body, signal) {
+    async upsertIssueTriageComment(repository, issueNumber, commentId, bodyText, signal) {
+      const body = githubAccountBody(bodyText, repository.githubAccount)
       if (!body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
         return err('The automated issue triage comment is missing its marker.')
       const octokit = await client(repository.github, 'item_write', signal)
@@ -1020,7 +1022,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         per_page: 100,
         ...requestOptions,
       }).then(async (comments) => {
-        const existing = commentId === null
+        const stored = comments.find(comment => comment.id === commentId)
+        const migrating = repository.githubAccount !== undefined && stored?.body?.includes(AUTOMATED_ISSUE_TRIAGE_MARKER)
+          && [AGENT_ACTOR_LOGIN, AGENT_ACTOR_LOGIN.replace('[bot]', '')].includes(stored.user?.login.toLowerCase() ?? '')
+        const existing = commentId === null || migrating
           ? comments
             .filter(comment => comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() && comment.body?.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
             .sort((left, right) => right.id - left.id)[0]
@@ -1160,7 +1165,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       }).catch((error: unknown) => err(message(error)))
     },
 
-    async editReviewStatus(repository, pullRequestNumber, commentId, expectedBody, body, signal, authorize) {
+    async editReviewStatus(repository, pullRequestNumber, commentId, expectedBodyText, bodyText, signal, authorize) {
+      const body = githubAccountBody(bodyText, repository.githubAccount)
+      const expectedBody = githubAccountBody(expectedBodyText, repository.githubAccount)
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
@@ -1171,7 +1178,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .then(async (existing) => {
           if (existing.data.issue_url !== undefined && !existing.data.issue_url.endsWith(`/${pullRequestNumber}`))
             return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another pull request.' as const })
-          const legacyActor = options.legacyActor
+          const legacyActor = repository.githubAccount === undefined ? options.legacyActor : undefined
           const existingHead = automatedReviewHead(existing.data.body ?? '')?.toLowerCase()
           const expectedHead = automatedReviewHead(expectedBody)?.toLowerCase()
           const nextHead = automatedReviewHead(body)?.toLowerCase()
@@ -1215,7 +1222,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .catch((error: unknown) => isMissingComment(error) ? ok({ _tag: 'Missing' as const }) : err(message(error)))
     },
 
-    async upsertReviewStatus(repository, pullRequestNumber, commentId, body, replacePriorReview, signal, authorize) {
+    async upsertReviewStatus(repository, pullRequestNumber, commentId, bodyText, replacePriorReview, signal, authorize) {
+      const body = githubAccountBody(bodyText, repository.githubAccount)
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
@@ -1243,6 +1251,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
               }]), headSha, options.actorLogin(repository))
         const legacyActor = options.legacyActor
         const adoptablePrior = priorReview._tag === 'Found'
+          && repository.githubAccount === undefined
           && legacyActor !== undefined
           && priorReview.authorLogin.toLowerCase() === legacyActor.login.toLowerCase()
           && (priorReview.state === 'active' || replacePriorReview)
@@ -1254,7 +1263,12 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           : undefined
         if (priorReview._tag === 'Found' && priorReview.authorLogin.toLowerCase() !== actor && adoptablePrior === undefined && !replacePriorReview)
           return err(`The current head commit already has an automated review by @${priorReview.authorLogin}: ${priorReview.url}`)
-        const existing = commentId === null
+        const stored = comments.find(comment => comment.id === commentId)
+        const migrating = repository.githubAccount !== undefined && stored?.body?.includes(AUTOMATED_REVIEW_MARKER)
+          && [AGENT_ACTOR_LOGIN, AGENT_ACTOR_LOGIN.replace('[bot]', '')].includes(stored.user?.login.toLowerCase() ?? '')
+        if (migrating && stored !== undefined && normalizeReviewControl(stored.body ?? '') !== stored.body)
+          return err('Review cancellation is pending.')
+        const existing = commentId === null || migrating
           ? adoptablePrior ?? comments
             .filter(comment => comment.user?.login.toLowerCase() === actor && comment.body?.includes(AUTOMATED_REVIEW_MARKER))
             .sort((left, right) => right.id - left.id)[0]
@@ -1328,7 +1342,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(repository.github)
-      const request = { owner, repo, pull_number: pullRequestNumber, commit_id: comment.headSha, path: comment.path, body: comment.body, request: { signal } }
+      const request = { owner, repo, pull_number: pullRequestNumber, commit_id: comment.headSha, path: comment.path, body: githubAccountBody(comment.body, repository.githubAccount), request: { signal } }
       // GitHub refuses a line outside the diff with 422, and a file outside
       // the diff the same way. A line it refuses falls back to the file.
       const post = (line: number | null): Promise<Result<'Posted' | 'Refused', string>> => {
@@ -1364,13 +1378,14 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .catch((error: unknown): Result<void, string> => err(message(error)))
     },
 
-    async upsertNativeReview(repository, pullRequestNumber, headSha, body, signal, authorize) {
-      // Native reviews must use the App identity, never Harlan's user token.
-      if (repository.authentication !== 'app')
+    async upsertNativeReview(repository, pullRequestNumber, headSha, bodyText, signal, authorize) {
+      // Native reviews use the App or an explicit automation account, never Harlan's user token.
+      if (repository.authentication !== 'app' && repository.githubAccount === undefined)
         return ok(undefined)
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
+      const body = githubAccountBody(bodyText, repository.githubAccount)
       return writeNativeReview(octokit.value, { repository: repository.github, pullRequestNumber, actorLogin: options.actorLogin(repository), headSha, body }, signal, authorize)
     },
 

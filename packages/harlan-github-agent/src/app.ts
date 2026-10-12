@@ -19,6 +19,7 @@ import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
 import { parseDesktopEvents, parseDesktopFailure, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
 import { parseAgentSlots } from './host-capacity.ts'
+import { parseIncidentResolutionRequest } from './incident-resolution.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { parseRepairRecoveryRequest } from './repair-recovery.ts'
 import { registerSessionRoutes } from './session-routes.ts'
@@ -38,7 +39,7 @@ export interface AgentAppOptions {
   /** The bounds of the Agent slot control. Absent means the control is unavailable. */
   agentSlots?: AgentSlotLimits
   setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity
-  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead'>
+  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
   allowedOrigin: string
   /**
    * The service's own listen address, such as `http://127.0.0.1:3210`. The
@@ -649,6 +650,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       'candidate_issue',
       'routine_report',
       'provider_circuit',
+      'incident',
     ])
     if (stream !== null && !allowed.has(stream))
       throw createError({ status: 400, statusText: 'Bad Request', message: 'Select a valid workflow event stream.' })
@@ -750,6 +752,24 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (result.value._tag === 'Accepted')
       setResponseStatus(event, 202)
     return result.value
+  })
+
+  app.post('/api/incidents/resolve', async (event) => {
+    const body = parseIncidentResolutionRequest(await event.req.json().catch(() => {
+      // The parser reports malformed JSON as a bad request.
+      return undefined
+    }))
+    if (body._tag === 'Err')
+      throw createError({ status: 400, message: body.error })
+    const result = options.store.resolveIncident({ ...body.value, at: options.now().toISOString() })
+    if (result._tag === 'Ok')
+      return result.value
+    const message = result.error._tag === 'NotFound'
+      ? 'The incident was not found.'
+      : result.error._tag === 'TaskActive'
+        ? 'The owning Task is active. Wait for it to finish.'
+        : 'The incident changed. Read it again before resolving it.'
+    throw createError({ status: result.error._tag === 'NotFound' ? 404 : 409, message })
   })
 
   app.post('/api/reviews/stop', async (event) => {
