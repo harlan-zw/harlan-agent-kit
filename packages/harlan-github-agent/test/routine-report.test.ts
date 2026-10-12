@@ -282,6 +282,35 @@ describe('publishing the run log', () => {
     }
   })
 
+  it('leaves a report queued while GitHub holds a quota', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      stage(store, { _tag: 'Completed', evidence: 'first run' })
+      settleRun(store, runId)
+      const calls: Calls = { issues: [], comments: [] }
+      let held = true
+      const controller = createRoutineReportController({
+        canPublish: () => !held,
+        github: publisher(calls),
+        now,
+        store,
+        workerId: 'reporter',
+      })
+
+      expect(await controller.publishPending(new AbortController().signal)).toEqual([])
+      expect(calls).toEqual({ issues: [], comments: [] })
+
+      held = false
+      expect(await controller.publishPending(new AbortController().signal)).toEqual([
+        { _tag: 'Ok', value: { repository: 'harlan-zw/example', issueNumber: 42 } },
+      ])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('adopts unknown issue and comment writes without creating duplicates', async () => {
     const store = openJournalStore(':memory:')
     try {

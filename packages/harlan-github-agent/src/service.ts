@@ -337,8 +337,8 @@ export async function resolveUserLogin(
 }
 
 /** Whether a Routine run may take a free Agent permit. */
-export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask' | 'hasOverdueRoutineRun'>, now: string): boolean {
-  return canClaim && (!triggers.includes('github') || store.hasOverdueRoutineRun(now) || !store.hasPriorityAgentTask(now))
+export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask' | 'hasOverdueRoutineRun'>, now: string, mayUseGitHub = true): boolean {
+  return mayUseGitHub && canClaim && (!triggers.includes('github') || store.hasOverdueRoutineRun(now) || !store.hasPriorityAgentTask(now))
 }
 
 export interface ExternalWatchReloadOptions {
@@ -964,7 +964,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         workerId: randomUUID(),
       })),
       routines: createWorkerTaskScheduler({
-        canClaim: () => canClaimRoutineRun(canClaim(), config.triggers, store, now().toISOString()),
+        canClaim: () => canClaimRoutineRun(canClaim(), config.triggers, store, now().toISOString(), rateLimits.read().length === 0),
         claim: store.claimNextRoutineRun,
         complete: store.completeRoutineRun,
         fail: store.failRoutineRun,
@@ -1189,6 +1189,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     workerId: randomUUID(),
   })
   const routineReports = createRoutineReportController({
+    canPublish: () => rateLimits.read().length === 0,
     github: createGitHubIssuePublisher({ tokens: routedTokens }),
     now,
     store,

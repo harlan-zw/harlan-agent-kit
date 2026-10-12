@@ -27,6 +27,12 @@ function setup(mutationsEnabled = false, maximumOpenPullRequests = 8) {
   return store
 }
 
+it('holds Routine runs while GitHub holds a quota', () => {
+  const store = setup()
+
+  expect(canClaimRoutineRun(true, ['routine'], store, later, false)).toBe(false)
+})
+
 function readyIssues(store: ReturnType<typeof openJournalStore>, repository: string, observedAt: string, numbers = [101, 102]) {
   for (const number of numbers) {
     store.recordObservation({
