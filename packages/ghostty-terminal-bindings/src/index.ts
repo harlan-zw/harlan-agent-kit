@@ -2,6 +2,12 @@ import type { GhosttyTerminal, KeyEncoder, KeyEvent } from '../.generated/ghostt
 import { fileURLToPath } from 'node:url'
 import { Ghostty, Key, KeyAction, Mods } from '../.generated/ghostty-web.js'
 
+interface WasmMemory { buffer: ArrayBuffer }
+interface WasmInstance { exports: Record<string, unknown> }
+interface WasmRuntime {
+  instantiate: (bytes: Uint8Array, imports: { env: { log: (pointer: number, length: number) => void } }) => Promise<{ instance: WasmInstance }>
+}
+
 export { Ghostty, Key, KeyAction, KeyEncoder, Mods } from '../.generated/ghostty-web.js'
 export type { GhosttyCell, GhosttyTerminal, IRenderable, KeyEvent } from '../.generated/ghostty-web.js'
 
@@ -12,8 +18,9 @@ export function wasmPath(): string {
 
 /** Instantiate one authoritative parser. The caller owns diagnostic handling. */
 export async function createGhostty(wasmBytes: Uint8Array, onLog: (message: string) => void): Promise<Ghostty> {
-  let memory: WebAssembly.Memory | undefined
-  const { instance } = await WebAssembly.instantiate(wasmBytes as Uint8Array<ArrayBuffer>, {
+  let memory: WasmMemory | undefined
+  const runtime = Reflect.get(globalThis, 'WebAssembly') as WasmRuntime
+  const { instance } = await runtime.instantiate(wasmBytes, {
     env: {
       log(pointer: number, length: number) {
         if (!memory)
@@ -22,8 +29,8 @@ export async function createGhostty(wasmBytes: Uint8Array, onLog: (message: stri
       },
     },
   })
-  memory = instance.exports.memory as WebAssembly.Memory
-  return new Ghostty(instance)
+  memory = instance.exports.memory as WasmMemory
+  return new Ghostty(instance as ConstructorParameters<typeof Ghostty>[0])
 }
 
 /** Read all native negotiation state immediately before each keyboard event. */
