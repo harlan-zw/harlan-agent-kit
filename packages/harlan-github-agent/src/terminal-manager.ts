@@ -111,12 +111,24 @@ export async function createTerminalManager(options: {
     const prepared = await readTerminalPrepared(options.directory, intent)
     if (prepared)
       intent.session.worktree = prepared.worktree
-    const reservation = await options.admission
+    let reservation = await options.admission
       .reconcile(`terminal:${intent.session.id}`)
       .catch((cause) => {
         options.log('Host ownership unavailable', cause)
         return { _tag: 'Unknown' } as const
       })
+    if (reservation._tag === 'Missing' && intent.reservationId && intent.decision._tag === 'Accepted') {
+      reservation = await options.admission.completedReceipt({
+        requestId: intent.launch.requestId,
+        fingerprint: intent.fingerprint,
+        key: `terminal:${intent.session.id}`,
+        reservationId: intent.reservationId,
+        unit: intent.unit,
+      }).catch((cause) => {
+        options.log('Host completion proof unavailable', cause)
+        return { _tag: 'Unknown' } as const
+      })
+    }
     if (reservation._tag === 'Empty' || reservation._tag === 'Completed') {
       const released = await options.admission.release(
         `terminal:${intent.session.id}`,

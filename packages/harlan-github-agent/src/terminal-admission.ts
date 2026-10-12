@@ -38,6 +38,13 @@ export type TerminalAdmissionResult
   | { _tag: 'Conflict' | 'Missing' }
   | { _tag: 'Completed' }
 export interface TerminalAdmission {
+  completedReceipt: (value: {
+    requestId: string
+    fingerprint: string
+    key: string
+    reservationId: string
+    unit: string
+  }) => Promise<TerminalAdmissionResult>
   status: () => Promise<TerminalAdmissionResult>
   reserve: (value: {
     requestId: string
@@ -96,6 +103,7 @@ export function createTerminalAdmissionCli(path: string): TerminalAdmission {
     return result
   }
   return {
+    completedReceipt: value => command(['completed', JSON.stringify(value)]),
     status: () => command(['status']),
     reserve: value => command(['reserve', JSON.stringify(value)]),
     bind: value => command(['bind', JSON.stringify(value)]),

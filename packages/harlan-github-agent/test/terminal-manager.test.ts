@@ -1,4 +1,4 @@
-import type { TerminalAdmissionResult } from '../src/terminal-admission.ts'
+import type { TerminalAdmission, TerminalAdmissionResult } from '../src/terminal-admission.ts'
 import type { TerminalHelperConfig } from '../src/terminal-manager.ts'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -29,6 +29,9 @@ async function fixture() {
   let raceRelease = false
   let emptyChecks = 0
   let released = false
+  let missingAfterStop = false
+  let receiptResult: TerminalAdmissionResult = { _tag: 'Conflict' }
+  let receipt: Parameters<TerminalAdmission['completedReceipt']>[0] | null = null
   const starts: string[] = []
   const releases: string[] = []
   const scope = {
@@ -57,9 +60,11 @@ async function fixture() {
     claimScript: '/claim',
     memoryGiB: 1,
     admission: {
+      completedReceipt: async value => receipt && value.requestId === receipt.requestId && value.fingerprint === receipt.fingerprint && value.key === receipt.key && value.reservationId === receipt.reservationId && value.unit === receipt.unit ? receiptResult : { _tag: 'Conflict' },
       status: async () => ({ _tag: 'Unavailable', reason: 'Fixture' }),
       reserve: async (value) => {
         reserveCount++
+        receipt = { requestId: value.requestId, fingerprint: value.fingerprint, key: value.key, reservationId: 'reservation', unit: value.unit }
         return refused
           ? { _tag: 'AtCapacity', reason: 'Slots' }
           : {
@@ -79,6 +84,8 @@ async function fixture() {
       reconcile: async () => {
         if (running)
           return { _tag: 'Alive', reservationId: 'reservation', scope }
+        if (missingAfterStop)
+          return { _tag: 'Missing' }
         if (raceRelease && emptyChecks++ > 0)
           await delay(15)
         return released && raceRelease ? { _tag: 'Missing' } : { _tag: 'Empty' }
@@ -152,6 +159,10 @@ async function fixture() {
     },
     starts,
     releases,
+    sweepOnStop(result: TerminalAdmissionResult) {
+      missingAfterStop = true
+      receiptResult = result
+    },
     empty: () => {
       running = false
     },
@@ -181,6 +192,34 @@ const launch = {
   provider: 'codex' as const,
 }
 describe('durable terminal launch and ownership', () => {
+  it('releases an adopted Worktree after another client sweeps the proven-empty charge', async () => {
+    const f = await fixture()
+    const original = await f.manager()
+    const launched = await original.launch(launch)
+    expect(launched._tag).toBe('Ok')
+    if (launched._tag !== 'Ok')
+      throw new Error('Fixture launch failed')
+    await original.close()
+    const adopted = await f.manager()
+    f.sweepOnStop({ _tag: 'Completed' })
+    const stopped = await adopted.stop(launched.value.id)
+    expect(stopped._tag === 'Ok' && stopped.value.state).toBe('Exited')
+    expect(f.releases).toEqual([launched.value.id])
+    expect(f.reserveCount()).toBe(1)
+    expect(f.starts).toHaveLength(1)
+  })
+  it.each(['Missing', 'Conflict', 'Unknown'] as const)('retains the Worktree when a swept charge has a %s receipt', async (_tag) => {
+    const f = await fixture()
+    const manager = await f.manager()
+    const launched = await manager.launch(launch)
+    if (launched._tag !== 'Ok')
+      throw new Error('Fixture launch failed')
+    f.sweepOnStop({ _tag })
+    const stopped = await manager.stop(launched.value.id)
+    expect(stopped._tag === 'Ok' && stopped.value.state).toBe('Unknown')
+    expect(f.releases).toEqual([])
+    expect(f.reserveCount()).toBe(1)
+  })
   it('drains accepted Stop writes and refuses operations after close', async () => {
     const fixture_ = await fixture()
     const manager = await fixture_.manager()

@@ -45,6 +45,7 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
     claimScript: '/claim',
     memoryGiB: 1,
     admission: {
+      completedReceipt: async () => ({ _tag: 'Missing' }),
       status: async () => ({ _tag: 'Unavailable', reason: 'Fixture' }),
       reserve: async () => ({ _tag: 'Unavailable', reason: 'Fixture' }),
       bind: async () => ({ _tag: 'Missing' }),
