@@ -1,7 +1,7 @@
 import type { AgentProviderName } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { Result } from './result.ts'
-import type { AgentConfig, AgentRole, ClassificationConfig, CodexReasoningEffort, ExternalRepositoryWatch, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
+import type { AgentConfig, AgentRole, ClassificationConfig, CodexReasoningEffort, ExternalRepositoryWatch, GitHubAccount, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
 import { execFile } from 'node:child_process'
 import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -597,6 +597,31 @@ function serviceTriggers(source: UnknownRecord, issues: ConfigIssue[]): readonly
   return triggers
 }
 
+function githubAccount(value: unknown, path: string, issues: ConfigIssue[]): GitHubAccount | undefined {
+  if (!isRecord(value)) {
+    issues.push({ path, message: 'Expected an object.' })
+    return undefined
+  }
+  const login = requiredString(value, 'login', path, issues)
+  const tokenPath = requiredString(value, 'token_path', path, issues)
+  const name = requiredString(value, 'name', path, issues)
+  const url = requiredString(value, 'url', path, issues)
+  const instructions = requiredString(value, 'instructions', path, issues)
+  if (login !== undefined && !/^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i.test(login))
+    issues.push({ path: `${path}.login`, message: 'Expected a GitHub account login.' })
+  if (tokenPath !== undefined && !isAbsolute(tokenPath))
+    issues.push({ path: `${path}.token_path`, message: 'Expected an absolute path.' })
+  if (name !== undefined && (name.length > 100 || /[\r\n[\]]/.test(name)))
+    issues.push({ path: `${path}.name`, message: 'Expected a plain display name under 101 characters.' })
+  if (url !== undefined && !/^https:\/\/[a-z\d.-]+(?:\/[^\s()<>]*)?$/i.test(url))
+    issues.push({ path: `${path}.url`, message: 'Expected an HTTPS URL without Markdown delimiters.' })
+  if (instructions !== undefined && instructions.length > 8000)
+    issues.push({ path: `${path}.instructions`, message: 'Keep account instructions under 8001 characters.' })
+  if (login === undefined || tokenPath === undefined || name === undefined || url === undefined || instructions === undefined)
+    return undefined
+  return { login, tokenPath, name, url, instructions }
+}
+
 function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[]): RepositoryMapping | undefined {
   const path = `$.repositories[${index}]`
   if (!isRecord(value)) {
@@ -604,6 +629,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     return undefined
   }
 
+  const account = value.github_account === undefined ? undefined : githubAccount(value.github_account, `${path}.github_account`, issues)
   const releaseDisabled = value.release === false
   const release = value.release === undefined || releaseDisabled ? undefined : parsePackageReleaseConfig(value.release)
   if (release?._tag === 'Err')
@@ -686,6 +712,7 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
 
   return {
     github,
+    ...(account === undefined ? {} : { githubAccount: account }),
     ...(releaseDisabled ? { release: undefined } : release?._tag === 'Ok' ? { release: release.value } : {}),
     checkout,
     enabled,

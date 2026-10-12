@@ -98,6 +98,17 @@ issue_cutoff: 2026-07-14
 #   issues: all
 external_repositories: []
 repositories: []
+# Give one Repository mapping a dedicated automation account:
+#   github_account:
+#     login: im-brundlefly
+#     token_path: /home/harlan/.config/harlan-github-agent/brundlefly-token
+#     name: Brundlefly
+#     url: https://github.com/harlan-zw/brundlefly
+#     instructions: |
+#       Use plain English and short sentences.
+#       Explain each finding before a sparse, dry aside.
+# The token needs an owned regular file with mode 0600.
+# Its verified login must match. Failed credentials never use another account.
 # Owned repositories enable issue work and conflict resolution by default.
 # Maintained repositories need an explicit policy. Without an installation,
 # the controller uses the authenticated GitHub account.
