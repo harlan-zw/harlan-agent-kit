@@ -1036,7 +1036,7 @@ describe('system pane', () => {
     expect(systemState(snapshot)).toEqual({ label: 'Action required', tone: 'error' })
   })
 
-  it('pairs each Routine with its newest run', () => {
+  it('pairs each Routine with its newest run and settled result', () => {
     const older = routineRun()
     const newest = routineRun({
       id: 'routine-run-2',
@@ -1048,6 +1048,7 @@ describe('system pane', () => {
     expect(scheduledRoutineRecords([routine()], [older, newest])).toEqual([{
       routine: routine(),
       latestRun: newest,
+      resultRun: newest,
     }])
   })
 

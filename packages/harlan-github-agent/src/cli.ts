@@ -181,6 +181,24 @@ const controlCommand = defineCommand({
     description: 'Read and control one running Harlan GitHub Agent service.',
   },
   subCommands: {
+    'reviews': defineCommand({
+      meta: { name: 'reviews', description: 'Read Review runs, findings, and gates for one pull request.' },
+      args: {
+        ...controlConnectionArguments,
+        repository: { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
+        number: { type: 'string', description: 'Pull request number.', required: true },
+        head: { type: 'string', description: 'Optional full head SHA.' },
+      },
+      async run({ args }) {
+        const target = parsePullRequestWatchTarget({ repository: args.repository, number: Number(args.number) })
+        if (target._tag === 'Err' || (args.head !== undefined && !/^[a-f\d]{40}$/.test(args.head))) {
+          writeJson({ _tag: 'InvalidReviewTarget', message: target._tag === 'Err' ? target.error : 'Set head to one full head SHA.' } satisfies ControlCommandError, process.stderr)
+          process.exitCode = 1
+          return
+        }
+        await runControl(args, client => client.reviews({ ...target.value, ...(args.head === undefined ? {} : { head: args.head }) }))
+      },
+    }),
     'watch-pr': defineCommand({
       meta: { name: 'watch-pr', description: 'Watch one pull request through Service events, without polling GitHub.' },
       args: {

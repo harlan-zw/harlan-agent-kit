@@ -14,6 +14,8 @@ import re
 import sqlite3
 import sys
 import time
+import subprocess
+from pathlib import Path
 from functools import cache
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -21,6 +23,8 @@ parser.add_argument('out')
 parser.add_argument('--days', type=int, default=7)
 parser.add_argument('--per-goal', type=int, default=10)
 parser.add_argument('--redact-env-file', action='append', default=[], metavar='PATH')
+parser.add_argument('--codex-root', action='append', default=[], metavar='PATH')
+parser.add_argument('--codex-node', default=os.environ.get('HARLAN_CODEX_EXPORT_NODE', 'node'))
 args = parser.parse_args()
 out, days, per_goal = args.out, args.days, args.per_goal
 
@@ -72,9 +76,14 @@ def open_readonly(path):
     return con
 
 
-con = open_readonly(OPENCODE_DB)
+con = open_readonly(OPENCODE_DB) if os.path.exists(OPENCODE_DB) else None
 journal = open_readonly(JOURNAL_DB) if os.path.exists(JOURNAL_DB) else None
 since = int((time.time() - days * 86400) * 1000)
+codex_reader = str(Path(__file__).with_name('codex-sessions.ts'))
+codex = json.loads(subprocess.run(
+    [args.codex_node, '--experimental-strip-types', codex_reader, str(since), *args.codex_root],
+    capture_output=True, text=True, check=True,
+).stdout)
 
 # Worktree slug -> goal. The controller names each worktree after its role.
 GOALS = [
@@ -226,14 +235,25 @@ def journal_outcome(goal, sess):
 
 
 def render(goal, sess):
-    parts = con.execute(
-        'select p.data, p.time_created, m.data as mdata from part p join message m on m.id=p.message_id where p.session_id=? order by p.time_created, p.id',
-        (sess['id'],),
-    ).fetchall()
+    if sess.get('provider') == 'codex':
+        exported = json.loads(subprocess.run(
+            [args.codex_node, '--experimental-strip-types', codex_reader, '--file', sess['file']],
+            capture_output=True, text=True, check=True,
+        ).stdout)
+        if exported['session'] is None:
+            raise ValueError('The selected Codex session has no session metadata.')
+        parts = exported['session']['parts']
+        sess['end_reason'] = exported['session']['end_reason']
+    else:
+        parts = con.execute(
+            'select p.data, p.time_created, m.data as mdata from part p join message m on m.id=p.message_id where p.session_id=? order by p.time_created, p.id',
+            (sess['id'],),
+        ).fetchall()
     lines = []
     dur = (sess['time_updated'] - sess['time_created']) / 1000
     outcome = journal_outcome(goal, sess)
     lines.append(f"# session {sess['id']}")
+    lines.append(f"provider: {sess.get('provider', 'opencode')}")
     lines.append(f"title: {sess['title']}")
     lines.append(f"directory: {sess['directory']}")
     lines.append(f"model: {sess['model']}")
@@ -304,7 +324,7 @@ def render(goal, sess):
         elif typ == 'patch':
             body.append(f"{ts} PATCH files={d.get('files')}")
             last_kind = 'patch'
-    end_reason = 'answered' if last_kind == 'assistant' else f'ended on {last_kind} (still running at export, killed, or provider error; see journal)'
+    end_reason = sess.get('end_reason') or ('answered' if last_kind == 'assistant' else f'ended on {last_kind} (still running at export, killed, or provider error; see journal)')
     lines.append(f"end_reason: {end_reason}")
     lines.append('')
     lines.extend(body)
@@ -320,7 +340,10 @@ def render(goal, sess):
     return redact('\n'.join(lines)), dict(tools=dict(tool_counts), tool_seconds={k: round(v) for k, v in tool_seconds.items()}, duration_min=round(dur / 60, 1), end_reason=end_reason, journal=outcome)
 
 
-sessions = con.execute('select * from session where time_created > ? and parent_id is null order by time_created desc', (since,)).fetchall()
+sessions = [dict(row) for row in con.execute('select * from session where time_created > ? and parent_id is null order by time_created desc', (since,))] if con is not None else []
+sessions.extend(session for session in codex['sessions'] if session['parent_id'] is None)
+sessions.sort(key=lambda session: session['time_created'], reverse=True)
+os.makedirs(out, exist_ok=True)
 groups = collections.defaultdict(list)
 for s in sessions:
     groups[goal_of(s['directory'])].append(s)
@@ -349,7 +372,7 @@ for goal, ss in groups.items():
         with open(os.path.join(gdir, f"{s['id']}.md"), 'w') as f:
             f.write(text)
         model = json.loads(s['model'] or '{}')
-        stats.append(dict(id=s['id'], title=s['title'], subject=subject_of(s['directory']), model=model.get('id'), tokens_in=s['tokens_input'], tokens_out=s['tokens_output'], reasoning=s['tokens_reasoning'], cache_read=s['tokens_cache_read'], **meta))
+        stats.append(dict(id=s['id'], provider=s.get('provider', 'opencode'), title=s['title'], subject=subject_of(s['directory']), model=model.get('id'), tokens_in=s['tokens_input'], tokens_out=s['tokens_output'], reasoning=s['tokens_reasoning'], cache_read=s['tokens_cache_read'], **meta))
     repeats = {k: len(v) for k, v in by_subject.items() if len(v) > 1}
     with open(os.path.join(gdir, 'INDEX.md'), 'w') as f:
         f.write(f"# {goal}: {len(ss)} sessions in last {days} days, {len(picked)} exported\n\n")
@@ -361,6 +384,7 @@ for goal, ss in groups.items():
 
 with open(os.path.join(out, 'INDEX.md'), 'w') as f:
     f.write(f"window: last {days} days, sessions total: {len(sessions)}, journal joined: {journal is not None}\n")
+    f.write(f"Codex sessions: {sum(s.get('provider') == 'codex' for s in sessions)}, malformed Codex records: {codex['malformed']}\n")
     for goal, n, k, repeats in sorted(index, key=lambda r: -r[1]):
         top = max(repeats.values()) if repeats else 0
         f.write(f"- {goal}: {n} sessions, {k} exported, repeated subjects: {len(repeats)} (max {top})\n")

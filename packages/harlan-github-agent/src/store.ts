@@ -889,7 +889,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   /** Retires every active Routine of one repository and supersedes its Queued runs with `reason`. Returns the retired names. */
   retireRoutines: (input: { repository: string, reason: string, at: string }) => string[]
   /** Inserts one run for one exact cron instant. Answers null when it already exists. */
-  openRoutineRun: (input: { routineId: string, scheduledFor: string, specSha: string, at: string }) => RoutineRun | null
+  openRoutineRun: (input: { routineId: string, scheduledFor: string, specSha: string, at: string, agentSelection?: PinnedAgentSelection }) => RoutineRun | null
   /** Records an instant that fell outside the catch-up window, so a missed run stays visible. */
   skipRoutineRun: (input: { routineId: string, scheduledFor: string, specSha: string, reason: string, at: string }) => RoutineRun | null
   getRoutineRun: (runId: string) => RoutineRun | null
@@ -911,13 +911,13 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
    * its attempts. `Unchanged` means the lease moved on before this call.
    */
   failCandidateIssue: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string, status?: number | undefined }) => 'Deferred' | 'Failed' | 'Unchanged'
-  /** Requests the run log entry for one run. Answers false when it already exists. */
+  /** Stages the latest pending run report. Answers false when its content already matches or publication owns it. */
   stageRoutineReport: (input: { command: RoutineReportCommand, at: string }) => boolean
   claimNextRoutineReport: (workerId: string, now: string, leaseMilliseconds: number, excludedCommandIds?: readonly string[]) => ClaimedRoutineReportCommand | null
   completeRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, trackingIssueNumber: number }) => boolean
   recordRoutineReportReceipt: (input: { commandId: string, workerId: string, fence: number, at: string, sink: 'tracking_issue' | 'run_comment' }) => boolean
   failRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
-  claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedRoutineRun | null
+  claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number, canStart?: (selection: PinnedAgentSelection | undefined) => boolean) => ClaimedRoutineRun | null
   hasOverdueRoutineRun: (now: string) => boolean
   heartbeatRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   updateRoutineRunProgress: (input: { taskId: string, workerId: string, fence: number, progress: AgentProgress, at: string }) => boolean
@@ -7012,36 +7012,38 @@ function installSchema(database: DatabaseSync): void {
     version = 87
   }
   if (version === 87) {
+    const columns = database.prepare('PRAGMA table_info(routine_runs)').all() as Array<{ name: string }>
     applyMigration(database, `
-  ALTER TABLE workflow_events RENAME TO workflow_events_v88;
-  CREATE TABLE workflow_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    stream TEXT NOT NULL CHECK (stream IN (
-      'task', 'worker_task', 'publication', 'review_run', 'review_gate',
-      'review_resolution', 'review_status', 'issue_triage_status', 'routine_run',
-      'candidate_issue', 'routine_report', 'provider_circuit', 'incident'
-    )),
-    event TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    repository TEXT,
-    item_number INTEGER,
-    revision_id TEXT,
-    task_id TEXT,
-    from_state TEXT,
-    to_state TEXT NOT NULL,
-    reason TEXT,
-    attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
-    fence INTEGER NOT NULL DEFAULT 0 CHECK (fence >= 0),
-    duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
-    usage TEXT CHECK (usage IS NULL OR json_valid(usage)),
-    occurred_at TEXT NOT NULL
-  );
-  INSERT INTO workflow_events SELECT * FROM workflow_events_v88;
-  DROP TABLE workflow_events_v88;
-  CREATE INDEX workflow_events_stream_time
-    ON workflow_events(stream, occurred_at DESC, id DESC);
-  CREATE INDEX workflow_events_entity
-    ON workflow_events(stream, entity_id, occurred_at, id);
+      ${columns.some(column => column.name === 'agent_selection_json') ? '' : 'ALTER TABLE routine_runs ADD COLUMN agent_selection_json TEXT CHECK (agent_selection_json IS NULL OR json_valid(agent_selection_json));'}
+      ALTER TABLE workflow_events RENAME TO workflow_events_v88;
+      CREATE TABLE workflow_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stream TEXT NOT NULL CHECK (stream IN (
+          'task', 'worker_task', 'publication', 'review_run', 'review_gate',
+          'review_resolution', 'review_status', 'issue_triage_status', 'routine_run',
+          'candidate_issue', 'routine_report', 'provider_circuit', 'incident'
+        )),
+        event TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        repository TEXT,
+        item_number INTEGER,
+        revision_id TEXT,
+        task_id TEXT,
+        from_state TEXT,
+        to_state TEXT NOT NULL,
+        reason TEXT,
+        attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+        fence INTEGER NOT NULL DEFAULT 0 CHECK (fence >= 0),
+        duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+        usage TEXT CHECK (usage IS NULL OR json_valid(usage)),
+        occurred_at TEXT NOT NULL
+      );
+      INSERT INTO workflow_events SELECT * FROM workflow_events_v88;
+      DROP TABLE workflow_events_v88;
+      CREATE INDEX workflow_events_stream_time
+        ON workflow_events(stream, occurred_at DESC, id DESC);
+      CREATE INDEX workflow_events_entity
+        ON workflow_events(stream, entity_id, occurred_at, id);
       CREATE TABLE IF NOT EXISTS incident_resolutions (
         incident_id TEXT NOT NULL REFERENCES incidents(id),
         last_seen_at TEXT NOT NULL,
@@ -7053,7 +7055,29 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 88
   }
-  if (version === 88)
+  if (version === 88) {
+    const columns = database.prepare('PRAGMA table_info(routine_runs)').all() as Array<{ name: string }>
+    applyMigration(database, `${columns.some(column => column.name === 'agent_selection_json') ? '' : 'ALTER TABLE routine_runs ADD COLUMN agent_selection_json TEXT CHECK (agent_selection_json IS NULL OR json_valid(agent_selection_json));'}
+      PRAGMA user_version = 89;`)
+    version = 89
+  }
+  if (version === 89) {
+    const schema = database.prepare('SELECT sql FROM sqlite_master WHERE name = \'provider_circuits\'').get() as { sql: string }
+    if (!schema.sql.includes('\'usage_limit\'')) {
+      const expanded = schema.sql.replace(/^CREATE TABLE[^(]+/, 'CREATE TABLE provider_circuits_v90 ').replace('\'unknown\'', '\'unknown\', \'usage_limit\'')
+      applyForeignKeyMigration(database, `${expanded};
+        INSERT INTO provider_circuits_v90 SELECT * FROM provider_circuits;
+        DROP TABLE provider_circuits;
+        ALTER TABLE provider_circuits_v90 RENAME TO provider_circuits;
+        CREATE INDEX provider_circuits_availability ON provider_circuits(provider, credential, state_tag, retry_at);
+        PRAGMA user_version = 90;`)
+    }
+    else {
+      applyMigration(database, 'PRAGMA user_version = 90;')
+    }
+    version = 90
+  }
+  if (version === 90)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -13597,10 +13621,10 @@ export function openJournalStore(
     `).all() as unknown as ProviderCircuitRow[]).map(providerCircuitFromRow)
 
   const providerCanStart: JournalStore['providerCanStart'] = (input) => {
-    const modelClause = input.model === undefined ? '' : 'AND model = ?'
+    const modelClause = input.model === undefined ? '' : 'AND (model = ? OR (failure_class = \'usage_limit\' AND substr(model, 1, instr(model, \'/\')) = ?))'
     const parameters = input.model === undefined
       ? [input.provider, input.credential]
-      : [input.provider, input.credential, input.model]
+      : [input.provider, input.credential, input.model, input.model.slice(0, input.model.indexOf('/') + 1)]
     const rows = database.prepare(`
       SELECT * FROM provider_circuits
       WHERE provider = ? AND credential = ? ${modelClause}
@@ -13616,9 +13640,10 @@ export function openJournalStore(
     try {
       const readRows = (): ProviderCircuitRow[] => database.prepare(`
         SELECT * FROM provider_circuits
-        WHERE provider = ? AND credential = ? AND model = ?
+        WHERE provider = ? AND credential = ?
+          AND (model = ? OR (failure_class = 'usage_limit' AND substr(model, 1, instr(model, '/')) = ?))
         ORDER BY updated_at, id
-      `).all(input.provider, input.credential, input.model) as unknown as ProviderCircuitRow[]
+      `).all(input.provider, input.credential, input.model, input.model.slice(0, input.model.indexOf('/') + 1)) as unknown as ProviderCircuitRow[]
 
       for (const row of readRows()) {
         if (row.state_tag !== 'HalfOpen' || Date.parse(row.canary_lease_expires_at ?? input.at) > Date.parse(input.at))
@@ -13713,7 +13738,8 @@ export function openJournalStore(
 
   const recordProviderFailure: JournalStore['recordProviderFailure'] = (input) => {
     const id = input.canaryCircuitId ?? digest(`${input.provider}:${input.credential}:${input.model}:${input.failureClass}`)
-    const detail = `The Agent provider reported a ${input.failureClass.replace('_', ' ')} failure.`
+    const usageLimit = input.failureClass === 'usage_limit'
+    const detail = usageLimit ? 'The Agent provider reached its usage limit.' : `The Agent provider reported a ${input.failureClass.replace('_', ' ')} failure.`
     database.exec('BEGIN IMMEDIATE')
     try {
       const existing = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
@@ -13726,11 +13752,11 @@ export function openJournalStore(
             id, provider, credential, model, failure_class, state_tag, failures,
             retry_at, canary_worker_id, canary_fence, canary_lease_expires_at,
             last_detail, updated_at
-          ) VALUES (?, ?, ?, ?, ?, 'Closed', 1, NULL, NULL, 0, NULL, ?, ?)
-        `).run(id, input.provider, input.credential, input.model, input.failureClass, detail, input.at)
+          ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, 0, NULL, ?, ?)
+        `).run(id, input.provider, input.credential, input.model, input.failureClass, usageLimit ? 'Open' : 'Closed', usageLimit ? new Date(Date.parse(input.at) + 5 * 60 * 60_000).toISOString() : null, detail, input.at)
         const inserted = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
           .get(id) as unknown as ProviderCircuitRow
-        recordProviderCircuitEvent(database, inserted, 'FailureObserved', null, 'Closed', input.at, detail)
+        recordProviderCircuitEvent(database, inserted, 'FailureObserved', null, usageLimit ? 'Open' : 'Closed', input.at, detail)
         database.exec('COMMIT')
         return providerCircuitFromRow(inserted)
       }
@@ -13739,9 +13765,9 @@ export function openJournalStore(
       const canaryFailed = existing.state_tag === 'HalfOpen'
         && existing.canary_worker_id === input.workerId
         && existing.canary_fence === input.canaryFence
-      const shouldOpen = canaryFailed || (existing.state_tag === 'Closed' && failures >= providerFailureThreshold)
+      const shouldOpen = usageLimit || canaryFailed || (existing.state_tag === 'Closed' && failures >= providerFailureThreshold)
       const retryAt = shouldOpen
-        ? new Date(Date.parse(input.at) + providerCircuitCooldownMilliseconds).toISOString()
+        ? new Date(Date.parse(input.at) + (usageLimit ? 5 * 60 * 60_000 : providerCircuitCooldownMilliseconds)).toISOString()
         : existing.retry_at
       database.prepare(`
         UPDATE provider_circuits
@@ -13785,12 +13811,14 @@ export function openJournalStore(
     try {
       const rows = database.prepare(`
         SELECT * FROM provider_circuits
-        WHERE provider = ? AND credential = ? AND model = ?
+        WHERE provider = ? AND credential = ?
+          AND (model = ? OR (failure_class = 'usage_limit' AND substr(model, 1, instr(model, '/')) = ?))
           ${input.canaryCircuitId === undefined ? '' : 'AND id = ?'}
       `).all(
         input.provider,
         input.credential,
         input.model,
+        input.model.slice(0, input.model.indexOf('/') + 1),
         ...(input.canaryCircuitId === undefined ? [] : [input.canaryCircuitId]),
       ) as unknown as ProviderCircuitRow[]
       const ownsCanary = rows.some(row => row.state_tag === 'HalfOpen'
@@ -14118,6 +14146,11 @@ export function openJournalStore(
         SELECT latest.id FROM routine_runs AS latest
         WHERE latest.routine_id = routine_runs.routine_id
         ORDER BY latest.scheduled_for DESC LIMIT 1
+      ) OR routine_runs.id = (
+        SELECT settled.id FROM routine_runs AS settled
+        WHERE settled.routine_id = routine_runs.routine_id
+          AND settled.state_tag IN ('Completed', 'Failed')
+        ORDER BY settled.scheduled_for DESC LIMIT 1
       )
       ORDER BY routine_runs.scheduled_for DESC
     `).all() as unknown as RoutineRunRow[]).map(readRoutineRun)
@@ -15474,6 +15507,7 @@ export function openJournalStore(
     scheduled_for: string
     spec_sha: string
     mode: string
+    agent_selection_json: string | null
     state_tag: string
     reason: string | null
     evidence: string | null
@@ -15516,6 +15550,7 @@ export function openJournalStore(
     scheduledFor: row.scheduled_for,
     specSha: row.spec_sha,
     mode: row.mode as RoutineRun['mode'],
+    ...(row.agent_selection_json === null ? {} : { agentSelection: JSON.parse(row.agent_selection_json) as PinnedAgentSelection }),
     state: readRoutineRunState(row),
     fence: row.fence,
     attempts: row.attempts,
@@ -15550,6 +15585,7 @@ export function openJournalStore(
     at: string
     state: 'Queued' | 'Skipped'
     reason: string | null
+    agentSelection?: PinnedAgentSelection
   }): RoutineRun | null => {
     const id = `${input.routineId}:${input.scheduledFor}`
     database.exec('BEGIN IMMEDIATE')
@@ -15562,10 +15598,10 @@ export function openJournalStore(
         return null
       }
       const inserted = database.prepare(`
-        INSERT INTO routine_runs (id, routine_id, scheduled_for, spec_sha, mode, state_tag, reason, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO routine_runs (id, routine_id, scheduled_for, spec_sha, mode, state_tag, reason, created_at, updated_at, agent_selection_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (routine_id, scheduled_for) DO NOTHING
-      `).run(id, input.routineId, input.scheduledFor, authority.spec_sha, authority.mode, input.state, input.reason, input.at, input.at).changes === 1
+      `).run(id, input.routineId, input.scheduledFor, authority.spec_sha, authority.mode, input.state, input.reason, input.at, input.at, input.agentSelection === undefined ? null : JSON.stringify(input.agentSelection)).changes === 1
       if (!inserted) {
         database.exec('COMMIT')
         return null
@@ -15809,17 +15845,18 @@ export function openJournalStore(
     })
   }
 
-  const claimNextRoutineRun: JournalStore['claimNextRoutineRun'] = (workerId, now, leaseMilliseconds) => {
+  const claimNextRoutineRun: JournalStore['claimNextRoutineRun'] = (workerId, now, leaseMilliseconds, canStart) => {
     database.exec('BEGIN IMMEDIATE')
     try {
       recoverExpiredRoutineRuns(now)
-      const row = database.prepare(`
+      const rows = database.prepare(`
         SELECT
           routine_runs.id,
           routine_runs.routine_id,
           routine_runs.scheduled_for,
           routine_runs.spec_sha,
           routine_runs.mode,
+          routine_runs.agent_selection_json,
           routine_runs.fence,
           routine_runs.attempts,
           routines.repository,
@@ -15832,9 +15869,8 @@ export function openJournalStore(
           AND routines.enabled = 1
           AND routines.retired_at IS NULL
           AND repositories.enabled = 1
-        ORDER BY routine_runs.scheduled_for
-        LIMIT 1
-      `).get() as unknown as {
+        ORDER BY routine_runs.agent_selection_json IS NULL, routine_runs.scheduled_for
+      `).all() as unknown as Array<{
         id: string
         routine_id: string
         scheduled_for: string
@@ -15844,8 +15880,10 @@ export function openJournalStore(
         repository: string
         name: string
         mode: string
+        agent_selection_json: string | null
         policy_json: string
-      } | undefined
+      }>
+      const row = rows.find(candidate => canStart?.(candidate.agent_selection_json === null ? undefined : JSON.parse(candidate.agent_selection_json) as PinnedAgentSelection) !== false)
       if (row === undefined) {
         database.exec('COMMIT')
         return null
@@ -15879,6 +15917,7 @@ export function openJournalStore(
         repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping,
         name: row.name as ClaimedRoutineRun['name'],
         mode: row.mode as ClaimedRoutineRun['mode'],
+        ...(row.agent_selection_json === null ? {} : { agentSelection: JSON.parse(row.agent_selection_json) as PinnedAgentSelection }),
         scheduledFor: row.scheduled_for,
         specSha: row.spec_sha,
         attempts: row.attempts + 1,
@@ -16287,10 +16326,8 @@ export function openJournalStore(
   }
 
   /**
-   * Writes one pending report command, once per run.
-   *
-   * The run's identity owns the command, so restaging a report a retry already
-   * staged changes nothing.
+   * Keeps one report command per run. A retry replaces pending content.
+   * Publication owns Running and Completed reports, so restaging leaves those alone.
    */
   const insertRoutineReportCommand = (command: RoutineReportCommand, at: string): boolean => {
     const inserted = database.prepare(`
@@ -16298,7 +16335,9 @@ export function openJournalStore(
         id, routine_id, run_id, repository, routine_name, body, verdict_json, state_tag, created_at, updated_at
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
-      ON CONFLICT (run_id) DO NOTHING
+      ON CONFLICT (run_id) DO UPDATE SET body = excluded.body, verdict_json = excluded.verdict_json, updated_at = excluded.updated_at
+      WHERE routine_report_commands.state_tag = 'Pending'
+        AND (routine_report_commands.body <> excluded.body OR routine_report_commands.verdict_json IS NOT excluded.verdict_json)
     `).run(
       command.id,
       command.routineId,

@@ -206,3 +206,25 @@ describe('incident resolution client boundary', () => {
     expect(await created.value.resolveIncident(input)).toMatchObject({ _tag: 'Err', error: { _tag: 'InvalidResponse' } })
   })
 })
+
+describe('review reads', () => {
+  it('reads authenticated Review history and filters by the exact head', async () => {
+    const requests: Request[] = []
+    const run = { id: 'review-a', repository: 'harlan-zw/example', pullRequestNumber: 12, headSha: 'a'.repeat(40), outcome: { _tag: 'Ready' }, gates: { merge: { _tag: 'Passed', evidence: [] }, review: { _tag: 'Passed', evidence: [] }, ci: { _tag: 'Passed', evidence: [] } }, findings: [], startedAt: '2026-10-12T01:00:00Z', completedAt: '2026-10-12T01:01:00Z' }
+    const created = clientWith([Response.json({ runs: [run, { ...run, id: 'review-b', headSha: 'b'.repeat(40) }] })], requests)
+    if (created._tag === 'Err')
+      throw new Error(created.error.message)
+    expect(await created.value.reviews({ repository: run.repository, number: 12, head: run.headSha })).toEqual({ _tag: 'Ok', value: { runs: [run] } })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/reviews?repository=harlan-zw%2Fexample&pull_request=12`)
+    expect(requests[0]?.headers.get('authorization')).toBe(`Basic ${Buffer.from(`agent:${password}`).toString('base64')}`)
+  })
+  it('rejects invalid targets before requesting and malformed Review responses after requesting', async () => {
+    const requests: Request[] = []
+    const created = clientWith([Response.json({ runs: [{ headSha: 'latest' }] })], requests)
+    if (created._tag === 'Err')
+      throw new Error(created.error.message)
+    expect(await created.value.reviews({ repository: 'harlan-zw/example', number: 12, head: 'latest' })).toMatchObject({ _tag: 'Err', error: { _tag: 'InvalidResponse' } })
+    expect(requests).toEqual([])
+    expect(await created.value.reviews({ repository: 'harlan-zw/example', number: 12 })).toMatchObject({ _tag: 'Err', error: { _tag: 'InvalidResponse' } })
+  })
+})

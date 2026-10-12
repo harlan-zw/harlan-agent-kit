@@ -15,6 +15,7 @@ export type SessionMarkdownBlock
     | { kind: 'list', ordered: boolean, start: number, items: Array<{ checked: boolean | null, blocks: SessionMarkdownBlock[] }> }
     | { kind: 'table', header: SessionInline[][], rows: SessionInline[][][] }
     | { kind: 'rule' }
+    | { kind: 'details', summary: string, blocks: SessionMarkdownBlock[] }
 
 export function sessionSafeHref(href: string): string | null {
   const clean = href.trim()
@@ -41,26 +42,47 @@ function inline(tokens: Token[], depth: number): SessionInline[] {
   })
 }
 
-function blocks(tokens: Token[], depth = 0): SessionMarkdownBlock[] {
-  return tokens.flatMap((token): SessionMarkdownBlock[] => {
-    if (depth > 24)
-      return [{ kind: 'paragraph', content: [{ kind: 'text', text: token.raw }] }]
-    switch (token.type) {
-      case 'space': return []
-      case 'heading': return [{ kind: 'heading', level: token.depth, content: inline(token.tokens ?? [], depth) }]
-      case 'paragraph':
-      case 'text': return [{ kind: 'paragraph', content: inline(token.tokens ?? [token], depth) }]
-      case 'code': return [{ kind: 'code', language: (token.lang ?? '').split(/\s/)[0] ?? '', text: token.text }]
-      case 'blockquote': return [{ kind: 'quote', blocks: blocks(token.tokens ?? [], depth + 1) }]
-      case 'list': return [{ kind: 'list', ordered: token.ordered, start: typeof token.start === 'number' ? token.start : 1, items: token.items.map((item: Tokens.ListItem) => ({ checked: typeof item.checked === 'boolean' ? item.checked : null, blocks: blocks(item.tokens, depth + 1) })) }]
-      case 'table': return [{ kind: 'table', header: token.header.map((cell: Tokens.TableCell) => inline(cell.tokens, depth)), rows: token.rows.map((row: Tokens.TableCell[]) => row.map(cell => inline(cell.tokens, depth))) }]
-      case 'hr': return [{ kind: 'rule' }]
-      default: return [{ kind: 'paragraph', content: [{ kind: 'text', text: token.raw }] }]
+function blocks(tokens: Token[], depth = 0, report = false): SessionMarkdownBlock[] {
+  const result: SessionMarkdownBlock[] = []
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!
+    if (report && token.type === 'html' && /^\s*<!--[\s\S]*?-->\s*$/.test(token.raw))
+      continue
+    if (report && depth <= 24 && token.type === 'html' && /^\s*<details(?:\s+open)?>/i.test(token.raw)) {
+      let raw = token.raw
+      let end = index
+      while (!/<\/details>/i.test(raw) && end + 1 < tokens.length)
+        raw += tokens[++end]!.raw
+      const disclosure = /^\s*<details(?:\s+open)?>\s*<summary>([^<]*)<\/summary>([\s\S]*?)<\/details>\s*$/i.exec(raw)
+      if (disclosure !== null) {
+        result.push({ kind: 'details', summary: disclosure[1]!, blocks: blocks(lexer(disclosure[2]!, { gfm: true }), depth + 1, report) })
+        index = end
+        continue
+      }
     }
-  })
+    result.push(...block(token, depth, report))
+  }
+  return result
+}
+
+function block(token: Token, depth: number, report: boolean): SessionMarkdownBlock[] {
+  if (depth > 24)
+    return [{ kind: 'paragraph', content: [{ kind: 'text', text: token.raw }] }]
+  switch (token.type) {
+    case 'space': return []
+    case 'heading': return [{ kind: 'heading', level: token.depth, content: inline(token.tokens ?? [], depth) }]
+    case 'paragraph':
+    case 'text': return [{ kind: 'paragraph', content: inline(token.tokens ?? [token], depth) }]
+    case 'code': return [{ kind: 'code', language: (token.lang ?? '').split(/\s/)[0] ?? '', text: token.text }]
+    case 'blockquote': return [{ kind: 'quote', blocks: blocks(token.tokens ?? [], depth + 1, report) }]
+    case 'list': return [{ kind: 'list', ordered: token.ordered, start: typeof token.start === 'number' ? token.start : 1, items: token.items.map((item: Tokens.ListItem) => ({ checked: typeof item.checked === 'boolean' ? item.checked : null, blocks: blocks(item.tokens, depth + 1, report) })) }]
+    case 'table': return [{ kind: 'table', header: token.header.map((cell: Tokens.TableCell) => inline(cell.tokens, depth)), rows: token.rows.map((row: Tokens.TableCell[]) => row.map(cell => inline(cell.tokens, depth))) }]
+    case 'hr': return [{ kind: 'rule' }]
+    default: return [{ kind: 'paragraph', content: [{ kind: 'text', text: token.raw }] }]
+  }
 }
 
 /** Render a parser-owned tree as Vue text and semantic elements. Raw HTML never becomes DOM. */
-export function sessionMarkdown(text: string): SessionMarkdownBlock[] {
-  return blocks(lexer(text, { gfm: true }))
+export function sessionMarkdown(text: string, options: { report?: boolean } = {}): SessionMarkdownBlock[] {
+  return blocks(lexer(text, { gfm: true }), 0, options.report ?? false)
 }

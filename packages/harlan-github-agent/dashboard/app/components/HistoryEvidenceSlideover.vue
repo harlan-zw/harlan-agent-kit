@@ -3,6 +3,7 @@ import type { AgentActivityItem, AgentFeedbackInput } from '../../../src/types.t
 import type { FeedbackVerdict, HistoryRow } from '../utils/history.ts'
 import type { DetailItem } from './DetailList.vue'
 import { useClipboard } from '@vueuse/core'
+import SessionMarkdown from '../pages/_SessionMarkdown.vue'
 import {
   gateTone,
   reviewOutcomeDetail,
@@ -162,6 +163,13 @@ const details = computed<DetailItem[]>(() => {
     { term: 'Repository', value: run.repository, href: `https://github.com/${run.repository}` },
     { term: 'Scheduled', value: relativeTime(run.scheduledFor) },
     { term: 'Mode', value: run.mode },
+    ...(run.agentSelection === undefined
+      ? []
+      : [
+          { term: 'Agent provider', value: run.agentSelection.provider },
+          { term: 'Model', value: run.agentSelection.model ?? 'Provider default' },
+          { term: 'Reasoning effort', value: run.agentSelection.reasoningEffort ?? 'Provider default' },
+        ]),
     { term: 'Report', value: run.reportState ?? 'None' },
     { term: ['Queued', 'Running'].includes(run.state._tag) ? 'Updated' : 'Finished', value: relativeTime(run.updatedAt) },
     { term: 'Took', value: duration(run.createdAt, run.updatedAt), mono: true },
@@ -227,7 +235,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
               · {{ row.run.report.verdict.severity }} · {{ row.run.report.verdict.coverage }} coverage
             </template>
           </p>
-          <pre class="whitespace-pre-wrap break-words font-sans text-sm text-default">{{ row.run.report.body }}</pre>
+          <SessionMarkdown :text="row.run.report.body" report />
         </div>
 
         <section v-if="review">

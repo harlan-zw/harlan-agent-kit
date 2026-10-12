@@ -1,4 +1,5 @@
 import type { AddressInfo } from 'node:net'
+import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -254,4 +255,25 @@ describe('incident resolution Control CLI', () => {
     expect(requests).toEqual(valid ? [{ path: '/api/incidents/resolve', body: input }] : [])
     expect(JSON.parse(valid ? result.stdout : result.stderr)._tag).toBe(valid ? 'Resolved' : 'InvalidIncidentResolution')
   })
+})
+
+it('prints one Review history object filtered to the requested head', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'harlan-review-cli-'))
+  temporaryDirectories.push(directory)
+  const passwordFile = join(directory, 'password')
+  await writeFile(passwordFile, 'test-password-with-at-least-32-bytes\n', { mode: 0o600 })
+  const run = { id: 'review-a', repository: 'harlan-zw/example', pullRequestNumber: 12, headSha: 'a'.repeat(40), outcome: { _tag: 'Ready' }, gates: { merge: { _tag: 'Passed', evidence: [] }, review: { _tag: 'Passed', evidence: [] }, ci: { _tag: 'Passed', evidence: [] } }, findings: [], startedAt: '2026-10-12T01:00:00Z', completedAt: '2026-10-12T01:01:00Z' }
+  const requests: unknown[] = []
+  const server = createServer((request, response) => {
+    requests.push({ path: request.url, authorization: request.headers.authorization })
+    response.setHeader('content-type', 'application/json')
+    response.end(JSON.stringify({ runs: [run, { ...run, id: 'review-b', headSha: 'b'.repeat(40) }] }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address() as AddressInfo
+  const result = await runControlCli(['control', 'reviews', '--repository', run.repository, '--number', '12', '--head', run.headSha, '--url', `http://127.0.0.1:${address.port}`, '--password-file', passwordFile])
+    .finally(() => new Promise<void>((resolve, reject) => server.close(error => error === undefined ? resolve() : reject(error))))
+  expect(result.code).toBe(0)
+  expect(JSON.parse(result.stdout)).toEqual({ runs: [run] })
+  expect(requests).toEqual([{ path: '/api/reviews?repository=harlan-zw%2Fexample&pull_request=12', authorization: `Basic ${Buffer.from('agent:test-password-with-at-least-32-bytes').toString('base64')}` }])
 })
