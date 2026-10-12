@@ -920,14 +920,20 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (target._tag === 'Err')
       throw createError({ status: 400, message: target.error })
     const { repository, number } = target.value
-    let initial = watch.state(repository, number)
+    const readState = (): PullRequestWatchState | null => {
+      const state = watch.state(repository, number)
+      if (state?._tag !== 'Open' || !state.tasks.some(task => task.state._tag === 'Queued'))
+        return state
+      return { ...state, agentStart: options.store.getDashboardSnapshot(options.now().toISOString()).agentStart }
+    }
+    let initial = readState()
     if (initial === null)
       throw createError({ status: 404, message: 'The repository is not enabled in this service.' })
     if (initial._tag === 'NotObserved' || initial._tag === 'PendingClosure') {
       const observed = await watch.observe(target.value, AbortSignal.any([event.req.signal, AbortSignal.timeout(60_000)]))
       if (observed._tag === 'Err')
         throw createError({ status: 502, message: observed.error })
-      initial = watch.state(repository, number)
+      initial = readState()
       if (initial === null || initial._tag === 'NotObserved')
         throw createError({ status: 404, message: 'The service cannot observe this pull request.' })
     }
@@ -939,7 +945,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
         shutdown()
         return
       }
-      const next = watch.state(repository, number)
+      const next = readState()
       if (next === null) {
         stop()
         void stream.close()
