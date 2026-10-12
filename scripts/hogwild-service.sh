@@ -31,6 +31,17 @@ REMOTE_REPOSITORY_ENV_TOOL="$REMOTE_HOME/.local/bin/harlan-repository-env"
 REMOTE_REPOSITORY_ENV_MANIFEST="$REMOTE_HOME/.config/harlan-agent-kit/repository-env-files"
 REMOTE_REPOSITORY_ENV_STAGE=''
 
+# Hold one descriptor through Hogwild restart, desktop preparation, and cleanup.
+acquire_service_lock() {
+  local directory="${XDG_STATE_HOME:-$HOME/.local/state}/harlan-agent-kit"
+  mkdir -p "$directory"
+  exec 9>"$directory/hogwild-service.lock"
+  if ! flock --nonblock 9; then
+    echo "Another Hogwild update or restart is running. Wait for it to finish." >&2
+    return 1
+  fi
+}
+
 require_inputs() {
   if [[ ! "$HOGWILD_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
     echo "The Hogwild host name contains unsupported characters." >&2
@@ -139,18 +150,45 @@ controller_supports_restart() {
 
 wait_for_restart() {
   local restart_id=$1
-  local attempt state tag reason
+  local attempt state tag reason progress elapsed
+  local started=$SECONDS last_reported=-30 last_progress=''
   for attempt in $(seq 1 $((MAXIMUM_RESTART_SECONDS / RESTART_POLL_SECONDS))); do
     state=$(controller_request "$HOGWILD_ORIGIN/api/state" 2>/dev/null || true)
     if [ -z "$state" ]; then
+      if [ "$last_progress" != 'Waiting for Service response.' ] || ((SECONDS - last_reported >= 30)); then
+        echo "Waiting for Service response. Elapsed: $((SECONDS - started))s."
+        last_progress='Waiting for Service response.'
+        last_reported=$SECONDS
+      fi
       sleep "$RESTART_POLL_SECONDS"
       continue
     fi
     tag=$(jq --exit-status --raw-output --arg id "$restart_id" \
       'if .restartRequest.id == $id then .restartRequest._tag else "Unknown" end' <<< "$state")
     case "$tag" in
-      Completed) return ;;
-      Requested|Restarting) ;;
+      Completed)
+        echo "Hogwild restarted. Elapsed: $((SECONDS - started))s."
+        return
+        ;;
+      Requested|Restarting)
+        progress=$(jq --raw-output --arg tag "$tag" '
+          if $tag == "Restarting" then "Restarting Hogwild."
+          else
+            (if (.tasks | type) == "array" then
+              [.tasks[] | select(.state._tag == "Running" or .state._tag == "Publishing")] | length
+            else "unknown" end) as $tasks |
+            (if (.hostCapacity.localActive | type) == "number" and (.hostCapacity.desktopActive | type) == "number" then
+              .hostCapacity.localActive + .hostCapacity.desktopActive
+            else "unknown" end) as $slots |
+            "Waiting for Restart: \($tasks) active Tasks, \($slots) occupied Agent slots."
+          end' <<< "$state")
+        if [ "$progress" != "$last_progress" ] || ((SECONDS - last_reported >= 30)); then
+          elapsed=$((SECONDS - started))
+          echo "$progress Elapsed: ${elapsed}s."
+          last_progress=$progress
+          last_reported=$SECONDS
+        fi
+        ;;
       ActionRequired)
         reason=$(jq --raw-output '.restartRequest.reason' <<< "$state")
         echo "Hogwild requires action before restart: $reason" >&2
@@ -410,6 +448,9 @@ remote_service() {
 require_inputs
 
 command="${1:-update}"
+case "$command" in
+  update|restart) acquire_service_lock ;;
+esac
 case "$command" in
   update)
     ref="${2:-origin/main}"

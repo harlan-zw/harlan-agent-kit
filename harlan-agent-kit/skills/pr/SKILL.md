@@ -274,7 +274,9 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
 
 1. Read the current head SHA with `gh pr view NUMBER --json headRefOid --jq .headRefOid`.
 2. Wait for GitHub Actions check runs. Use `gh run list --commit HEAD_SHA --limit 100` to find this head's runs.
-   Use `gh run watch RUN_ID` for each pending run, then confirm every applicable run passed.
+   For public repositories, use `agent-gh run watch RUN_ID --repo OWNER/REPO --exit-status` for each pending run.
+   Then confirm every applicable run passed.
+   For verified private repositories, scope each `gh run watch` with `HARLAN_AGENT_GITHUB_PRIVATE=OWNER/REPO`.
    Do not use `gh pr checks --watch` while Review is queued; the service's own check run can keep it waiting.
    A Markdown-only pull request may have no check runs. Confirm that its workflows exclude the changed paths.
 3. Read the trusted `harlan-github-agent` marked comment and matching Review outcome label.
