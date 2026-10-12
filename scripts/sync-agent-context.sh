@@ -25,6 +25,8 @@ plugin_install_suffix='.config/opencode/plugins/harlan-hooks.ts'
 github_wrapper="$script_dir/github-public.sh"
 github_install_suffix='.local/share/harlan-agent-kit/github-bin/gh'
 github_cli_suffix='.local/bin/agent-gh'
+tools_sync="$script_dir/agent-tools.ts"
+tools_sync_suffix='.local/share/harlan-agent-kit/agent-tools.ts'
 check_runner="$script_dir/agent-check.ts"
 check_install_suffix='.local/share/harlan-agent-kit/github-bin/agent-check.ts'
 check_cli_suffix='.local/bin/agent-check.ts'
@@ -79,6 +81,7 @@ require_sources() {
   [ -f "$template_codex" ] || fail "Codex template is missing: $template_codex"
   [ -f "$commit_hook" ] || fail "The commit-msg hook is missing: $commit_hook"
   [ -f "$github_wrapper" ] || fail "The public GitHub CLI is missing: $github_wrapper"
+  [ -f "$tools_sync" ] || fail "The Agent tool sync is missing: $tools_sync"
   [ -f "$check_runner" ] || fail "The check command is missing: $check_runner"
   [ -f "$shared_check" ] || fail "Check is missing: $shared_check"
   for source in "$agent_cli" "$agent_cli_plan" "$hogwild_scripts/hw.ts" "$hogwild_scripts/plan.ts"; do
@@ -157,6 +160,7 @@ sync_local() {
   mkdir -p "$target_home/$(dirname "$github_install_suffix")" "$target_home/.local/bin"
   install -m 755 "$github_wrapper" "$target_home/$github_install_suffix"
   install -m 755 "$github_wrapper" "$target_home/$github_cli_suffix"
+  install -m 644 "$tools_sync" "$target_home/$tools_sync_suffix"
   install -m 755 "$check_runner" "$target_home/$check_install_suffix"
   install -m 755 "$check_runner" "$target_home/$check_cli_suffix"
   install -m 755 "$shared_check" "$target_home/$shared_check_install_suffix"
@@ -178,6 +182,11 @@ sync_local() {
     mkdir -p "$target_home/$(dirname "$sites_install_suffix")"
     install -m 644 "$sites_inventory" "$target_home/$sites_install_suffix"
   fi
+  # Rendering into a temporary HOME must never upgrade the real host's tools.
+  if [ "$target_home" = "$HOME" ] && [ -f "$target_home/.config/harlan-github-agent/worker.json" ] \
+    && [ "${HARLAN_AGENT_TOOLS_UPDATE:-1}" = 1 ]; then
+    (umask 077; flock -w 180 "$target_home/.local/share/harlan-agent-kit/tools.lock" node --experimental-strip-types "$target_home/$tools_sync_suffix")
+  fi
   printf '%s\n' 'Synced local Agent instructions.'
 }
 
@@ -191,6 +200,7 @@ opencode_remote_targets() {
   printf '%s\n' "$hogwild_home/$plugin_install_suffix"
   printf '%s\n' "$hogwild_home/$github_install_suffix"
   printf '%s\n' "$hogwild_home/$github_cli_suffix"
+  printf '%s\n' "$hogwild_home/$tools_sync_suffix"
   printf '%s\n' "$hogwild_home/$check_install_suffix"
   printf '%s\n' "$hogwild_home/$check_cli_suffix"
   printf '%s\n' "$hogwild_home/$shared_check_install_suffix"
@@ -209,6 +219,7 @@ opencode_local_sources() {
   printf '%s\n' "$opencode_plugin"
   printf '%s\n' "$github_wrapper"
   printf '%s\n' "$github_wrapper"
+  printf '%s\n' "$tools_sync"
   printf '%s\n' "$check_runner"
   printf '%s\n' "$check_runner"
   printf '%s\n' "$shared_check"
@@ -280,6 +291,9 @@ sync_hogwild() {
   # Activation moved every staged file to its final name, so there is nothing
   # left for the EXIT trap to reclaim.
   staged_remote=''
+  if [ "${HARLAN_AGENT_TOOLS_UPDATE:-1}" = 1 ]; then
+    ssh -o BatchMode=yes "$hogwild_host" "if [ -f '$hogwild_home/.config/harlan-github-agent/worker.json' ]; then export PATH='$hogwild_home/.local/bin':\$PATH; umask 077; flock -w 180 '$hogwild_home/.local/share/harlan-agent-kit/tools.lock' node --experimental-strip-types '$hogwild_home/$tools_sync_suffix'; fi"
+  fi
   printf '%s\n' 'Synced Hogwild Agent instructions.'
 }
 

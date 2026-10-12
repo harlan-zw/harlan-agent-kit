@@ -37,6 +37,8 @@ it('blocks controller credentials, Git helpers, and parent process reads while p
   await writeFile(join(workspace, '.env'), `TOOLING_TOKEN=fake-repository-token\nHOME=${join(root, 'attacker')}\nOPENCODE_CONFIG_CONTENT={"instructions":[${JSON.stringify(secret)}]}\nOPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=0\n`)
   const toolDirectory = join(root, 'bin')
   await mkdir(toolDirectory)
+  await mkdir(join(home, '.local/bin'), { recursive: true })
+  await writeFile(join(home, '.local/bin/gh'), '#!/bin/sh\nprintf "current-host-cli\\n"\n', { mode: 0o755 })
   const fakeProvider = join(toolDirectory, 'provider.ts')
   await writeFile(fakeProvider, `#!/run/agent/node --experimental-strip-types
 import { createServer } from 'node:http'
@@ -96,6 +98,14 @@ if (process.argv[2] === 'serve') {
   expect((await stat(worker)).mode & 0o777).toBe(0o700)
   expect(JSON.parse(await readFile(join(worker, '.config/opencode/opencode.json'), 'utf8'))).toEqual({ provider: { 'zai-coding-plan': { options: { apiKey: 'fake-provider-key' } } } })
   await checkAgentWorker({ HOME: home }, profile)
+  const toolSandbox = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, readOnly: true })
+  try {
+    const result = await execute(toolSandbox.binary, [...toolSandbox.args, '/run/agent/host-tools/gh', '--version'], { env: toolSandbox.environment })
+    expect(result.stdout.trim()).toBe('current-host-cli')
+  }
+  finally {
+    await toolSandbox.release()
+  }
   const unsafeProfile = join(root, 'unsafe-worker.json')
   await writeFile(unsafeProfile, JSON.stringify({ home: worker, codex: fakeProvider, opencode: fakeProvider, tools: [home], readOnlyPaths: [] }))
   await expect(checkAgentWorker({ HOME: home }, unsafeProfile)).rejects.toThrow('exposes controller credentials')

@@ -37,6 +37,26 @@ Mount exact installation directories; never mount a complete home, configuration
 Host mounts are read only, except the worker home, worktree files, and selected temporary evidence directories.
 Do not place controller credentials in the worker home or tool directories.
 
+## Keep Agent tools current
+
+On provisioned hosts, context sync installs stable Agent tools.
+These tools include GitHub CLI, Codex, OpenCode, Bun, Worktrunk, ripgrep, and fd.
+Each host downloads its own Linux archive and checks GitHub's SHA-256 digest.
+The installer checks the executable before replacing its previous version.
+An unchanged release skips the download.
+A failed download or check fails sync and preserves that tool's previous executable.
+
+Run `pnpm sync:context:all` to update both hosts.
+Run `pnpm sync:tools` to update local Agent tools alone.
+Set `HARLAN_AGENT_TOOLS_UPDATE=0` when only instructions should change.
+Node, pnpm, and repository dependencies keep their existing pins.
+
+Managed executables live in `~/.local/share/harlan-agent-kit/tools/bin`.
+Each new Agent turn resolves these files again and mounts them read only.
+The public GitHub wrapper uses the mounted GitHub CLI before the system CLI.
+Running turns keep their existing mounts until they finish.
+Provider logins and the controller's credentials remain separate.
+
 ## Verify before restart
 
 Run the fake-credential smoke in the new checkout.
