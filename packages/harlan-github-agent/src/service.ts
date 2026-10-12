@@ -47,6 +47,7 @@ import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserToke
 import { createGitHubMediaSource } from './github-media.ts'
 import { createGitHubPullRequestDiff } from './github-pull-request-diff.ts'
 import { createGitHubRateLimitGate, readAfterGitHubRateLimit } from './github-rate-limit.ts'
+import { createGitHubRequestCounts } from './github-request-counts.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
 import { createUserAssetUploader } from './github-user-assets.ts'
@@ -334,8 +335,8 @@ export async function resolveUserLogin(
 }
 
 /** Whether a Routine run may take a free Agent permit. */
-export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask' | 'hasOverdueRoutineRun'>, now: string): boolean {
-  return canClaim && (!triggers.includes('github') || store.hasOverdueRoutineRun(now) || !store.hasPriorityAgentTask(now))
+export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask' | 'hasOverdueRoutineRun'>, now: string, mayUseGitHub = true): boolean {
+  return mayUseGitHub && canClaim && (!triggers.includes('github') || store.hasOverdueRoutineRun(now) || !store.hasPriorityAgentTask(now))
 }
 
 export interface ExternalWatchReloadOptions {
@@ -622,21 +623,26 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // A rate limited quota refuses its credentials until GitHub resets it, so a
   // held installation spends no request and the System pane names it.
   const rateLimits = createGitHubRateLimitGate({ now })
+  const requestCounts = createGitHubRequestCounts({
+    now,
+    report: report => options.logger.info(`GitHub requests: ${JSON.stringify(report)}`),
+  })
   const userQuota = (): GitHubQuota => ({ _tag: 'User', login: userLogin })
-  const userTokens = rateLimits.guard(rawUserTokens, userQuota)
+  const userTokens = requestCounts.tokens(rateLimits.guard(rawUserTokens, userQuota), userQuota)
   const accountFor = (name: string) => config.repositories.find(repository => repository.github.toLowerCase() === name.toLowerCase())?.githubAccount
-  const routedTokens = rateLimits.guard(createGitHubAccountTokenProvider({
+  const repositoryQuota = (repository: string): GitHubQuota => {
+    const account = accountFor(repository)
+    return account !== undefined
+      ? { _tag: 'User', login: account.login }
+      : usesUserToken(repository) ? userQuota() : { _tag: 'Installation', owner: repository.split('/')[0] ?? repository }
+  }
+  const routedTokens = requestCounts.tokens(rateLimits.guard(createGitHubAccountTokenProvider({
     fallback: createRoutedTokenProvider({ app: appTokens, user: rawUserTokens, usesUserToken }),
     account: accountFor,
     readToken: readGitHubAccountToken,
     readLogin: readGitHubAccountLogin,
     now,
-  }), (repository): GitHubQuota => {
-    const account = accountFor(repository)
-    return account !== undefined
-      ? { _tag: 'User', login: account.login }
-      : usesUserToken(repository) ? userQuota() : { _tag: 'Installation', owner: repository.split('/')[0] ?? repository }
-  })
+  }), repositoryQuota), repositoryQuota)
   // Write authority belongs at the credential boundary. Every current and
   // future mutation needs one of these write credentials before it can leave.
   const gatedTokens = (source: GitHubTokenProvider): GitHubTokenProvider => createGitHubWriteGate({
@@ -979,7 +985,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         // A manual choice checks its own provider. It cannot reopen the global Queue.
         canClaim: () => store.getAgentControl()._tag === 'Running' && restartAllowsTaskClaims(store.getRestartRequest()),
         claim: (workerId, at, leaseMilliseconds) => store.claimNextRoutineRun(workerId, at, leaseMilliseconds, selection => selection === undefined
-          ? canClaimRoutineRun(canClaim(), config.triggers, store, at)
+          ? canClaimRoutineRun(canClaim(), config.triggers, store, at, rateLimits.read().length === 0)
           : hasSpendableCapacity(capacity.read(selection.provider, selection.model ?? agentProfile(selection.provider).roles.routine_scan.model), config.agent.reservePercent[selection.provider])
             && store.providerCanStart({ provider: selection.provider, credential: agentProfile(selection.provider).authentication, model: selection.model ?? agentProfile(selection.provider).roles.routine_scan.model, at })),
         complete: store.completeRoutineRun,
@@ -1205,6 +1211,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     workerId: randomUUID(),
   })
   const routineReports = createRoutineReportController({
+    canPublish: () => rateLimits.read().length === 0,
     github: createGitHubIssuePublisher({ tokens: routedTokens }),
     now,
     store,
@@ -1720,6 +1727,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       pauseAgents: store.pauseAgents,
       recordAgentFeedback: store.recordAgentFeedback,
       requestRestart: store.requestRestart,
+      finishUpdatePreparation: store.finishUpdatePreparation,
       requestReviewRerun: store.requestReviewRerun,
       requestIssueTriageRerun: store.requestIssueTriageRerun,
       resumeAgents: store.resumeAgents,
@@ -1847,6 +1855,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       })
 
   releaseWebhookReady = webhookServer !== null
+  requestCounts.start()
 
   // A process that died mid-Task left the Running label saying an Agent is on
   // an Item nothing is on. The journal answers that, so it is settled once here
@@ -1927,6 +1936,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       dashboardShutdown.abort()
       await terminals?.close()
       await Promise.all([server.close(), webhookServer?.close() ?? Promise.resolve()])
+      requestCounts.stop()
       store.close()
     },
   }

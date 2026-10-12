@@ -3,7 +3,7 @@ import type { PullRequestWatchOptions, PullRequestWatchState, PullRequestWatchTa
 import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 import type { Result } from './result.ts'
 import type { CancelTaskResult } from './store.ts'
-import type { AgentActivityItem, DashboardSnapshot, DashboardTask, Incident, IssueTriageRerunResult, RestartRequest, RoutineRun, StoredAgentControl, WorkflowEvent, WorkflowEventStream } from './types.ts'
+import type { AgentActivityItem, DashboardSnapshot, DashboardTask, Incident, IssueTriageRerunResult, RestartRequest, ReviewRun, RoutineRun, StoredAgentControl, WorkflowEvent, WorkflowEventStream } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { parseIncidentResolutionReceipt, parseIncidentResolutionRequest } from './incident-resolution.ts'
 import { parsePullRequestWatchTarget, watchPullRequestStream } from './pull-request-watch.ts'
@@ -49,11 +49,20 @@ export interface WorkflowEventQuery {
   limit?: number
 }
 
+export type ControlReviewRun = Pick<ReviewRun, 'id' | 'repository' | 'pullRequestNumber' | 'headSha' | 'startedAt' | 'completedAt' | 'outcome' | 'gates' | 'findings'>
+
+export interface ReviewQuery {
+  repository: string
+  number: number
+  head?: string
+}
+
 type TaskCancellation = Extract<CancelTaskResult, { _tag: 'Cancelled' | 'AlreadyCancelled' }>
 type Parsed<Value> = Result<Value, string>
 type ResponseParser<Value> = (value: unknown) => Parsed<Value>
 
 export interface ControlClient {
+  reviews: (query: ReviewQuery) => Promise<Result<{ runs: ControlReviewRun[] }, ControlApiError>>
   recoverRepair: (request: RepairRecoveryRequest) => Promise<Result<RepairRecoveryResponse, ControlApiError>>
   watchPullRequest: (target: PullRequestWatchTarget, options?: PullRequestWatchOptions) => Promise<Result<PullRequestWatchState, ControlApiError>>
   health: () => Promise<Result<ControlHealth, ControlApiError>>
@@ -68,7 +77,7 @@ export interface ControlClient {
   resume: () => Promise<Result<StoredAgentControl, ControlApiError>>
   restart: () => Promise<Result<RestartRequest, ControlApiError>>
   reloadExternalWatches: () => Promise<Result<{ repositories: number, issues: number }, ControlApiError>>
-  update: () => Promise<Result<RestartRequest, ControlApiError>>
+  update: (targetCommit?: string) => Promise<Result<RestartRequest, ControlApiError>>
   cancelTask: (taskId: string) => Promise<Result<TaskCancellation, ControlApiError>>
   stopReview: (repository: string, pullRequestNumber: number, headSha: string) => Promise<Result<{ _tag: 'Stopped' | 'AlreadyStopped' }, ControlApiError>>
   rerunIssueTriage: (repository: string, issueNumber: number, revisionId: string) => Promise<Result<Exclude<IssueTriageRerunResult, { _tag: 'Rejected' }>, ControlApiError>>
@@ -85,6 +94,41 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function integer(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0
+}
+
+function parseReviews(value: unknown): Parsed<{ runs: ControlReviewRun[] }> {
+  const input = record(value)
+  if (!Array.isArray(input?.runs))
+    return err('The service returned invalid Review runs.')
+  for (const value of input.runs) {
+    const run = record(value)
+    const gates = record(run?.gates)
+    const outcome = record(run?.outcome)
+    if (run === undefined || typeof run.id !== 'string' || typeof run.repository !== 'string'
+      || !integer(run.pullRequestNumber) || run.pullRequestNumber < 1
+      || typeof run.headSha !== 'string' || !/^[a-f\d]{40}$/.test(run.headSha)
+      || typeof run.startedAt !== 'string' || typeof run.completedAt !== 'string'
+      || !['Ready', 'Pending', 'Blocked'].includes(String(outcome?._tag))
+      || !Array.isArray(run.findings) || gates === undefined) {
+      return err('The service returned an invalid Review run.')
+    }
+    for (const name of ['merge', 'review', 'ci']) {
+      const gate = record(gates[name])
+      if (!['Passed', 'Pending', 'Failed'].includes(String(gate?._tag)) || !Array.isArray(gate?.evidence)
+        || (gate._tag !== 'Passed' && typeof gate.reason !== 'string')) {
+        return err('The service returned invalid Review gates.')
+      }
+    }
+    for (const value of run.findings) {
+      const finding = record(value)
+      if (!['Fixed', 'Logged', 'Open'].includes(String(finding?._tag)) || typeof finding?.summary !== 'string'
+        || (finding._tag === 'Open' && typeof finding.nextAction !== 'string')
+        || (finding._tag === 'Logged' && typeof finding.impact !== 'number')) {
+        return err('The service returned invalid Review findings.')
+      }
+    }
+  }
+  return ok({ runs: input.runs as ControlReviewRun[] })
 }
 
 function parseHealth(value: unknown): Parsed<ControlHealth> {
@@ -144,7 +188,7 @@ function parseRestartRequest(value: unknown): Parsed<RestartRequest> {
   const input = record(value)
   const operation = record(input?.operation)
   const validOperation = operation?._tag === 'Restart'
-    || (operation?._tag === 'Update' && typeof operation.targetCommit === 'string')
+    || (operation?._tag === 'Update' && typeof operation.targetCommit === 'string' && (operation.preparation === 'Pending' || operation.preparation === 'Ready'))
   if (input === undefined
     || !['Requested', 'Restarting', 'Completed', 'ActionRequired'].includes(String(input._tag))
     || typeof input.id !== 'string'
@@ -286,6 +330,14 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
   const state = () => request({ method: 'GET', path: 'api/state', parse: parseState })
 
   return ok({
+    async reviews(query) {
+      const target = parsePullRequestWatchTarget(query)
+      if (target._tag === 'Err' || (query.head !== undefined && !/^[a-f\d]{40}$/.test(query.head)))
+        return err({ _tag: 'InvalidResponse', message: target._tag === 'Err' ? target.error : 'Set head to one full head SHA.' })
+      const search = new URLSearchParams({ repository: query.repository, pull_request: String(query.number) })
+      const result = await request({ method: 'GET', path: `api/reviews?${search}`, parse: parseReviews })
+      return result._tag === 'Err' ? result : ok({ runs: result.value.runs.filter(run => query.head === undefined || run.headSha === query.head) })
+    },
     recoverRepair: body => request({ method: 'POST', path: 'api/tasks/recover-repair', body, acceptedStatuses: [200, 202], parse: parseRepairRecoveryResponse }),
     watchPullRequest(target, watchOptions = {}) {
       const parsed = parsePullRequestWatchTarget(target)
@@ -342,7 +394,7 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
     resume: () => request({ method: 'POST', path: 'api/agents/resume', parse: parseAgentControl }),
     restart: () => request({ method: 'POST', path: 'api/service/restart', body: { source: 'helper' }, parse: parseRestartRequest, acceptedStatuses: [202] }),
     reloadExternalWatches: () => request({ method: 'POST', path: 'api/external-watches/reload', parse: parseExternalWatchReload }),
-    update: () => request({ method: 'POST', path: 'api/service/update', body: { source: 'helper' }, parse: parseRestartRequest, acceptedStatuses: [202] }),
+    update: targetCommit => request({ method: 'POST', path: 'api/service/update', body: { source: 'helper', ...(targetCommit === undefined ? {} : { targetCommit }) }, parse: parseRestartRequest, acceptedStatuses: [202] }),
     cancelTask: taskId => request({ method: 'POST', path: 'api/tasks/cancel', body: { taskId }, parse: parseCancellation }),
     stopReview: (repository, pullRequestNumber, headSha) => request({ method: 'POST', path: 'api/reviews/stop', body: { repository, pullRequestNumber, headSha }, parse: parseStoppedReview }),
     rerunIssueTriage: (repository, issueNumber, revisionId) => request({ method: 'POST', path: 'api/issues/rerun-triage', body: { repository, issueNumber, revisionId }, parse: parseIssueTriageRerun, acceptedStatuses: [202] }),

@@ -1,5 +1,5 @@
 {
-  "description": "Require the PR skill for pull request creation and description changes.",
+  "description": "Require the PR skill and route public GitHub reads through the agent account.",
   "hooks": {
     "PreToolUse": [
       {
@@ -10,6 +10,12 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pr-skill-only.sh",
             "timeout": 10,
             "statusMessage": "Checking pull request command"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/github-read-routing.sh",
+            "timeout": 10,
+            "statusMessage": "Checking GitHub read account"
           }
         ]
       }

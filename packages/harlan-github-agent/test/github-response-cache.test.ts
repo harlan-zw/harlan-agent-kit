@@ -1,3 +1,4 @@
+import type { GitHubRepositoryAccess } from '../src/types.ts'
 import { Octokit } from 'octokit'
 import { describe, expect, it } from 'vitest'
 import { createAuthenticatedClient } from '../src/github-auth.ts'
@@ -7,7 +8,7 @@ import { ok } from '../src/result.ts'
 function setup(cache = createGitHubResponseCache()) {
   const seen: Array<{ url: string, headers: Record<string, string> }> = []
   const responses: Response[] = []
-  const client = (token = 'first', access: 'read' | 'item_write' = 'read') => createAuthenticatedClient({
+  const client = (token = 'first', access: GitHubRepositoryAccess = 'read') => createAuthenticatedClient({
     access,
     repository: 'harlan-zw/example',
     token,
@@ -36,6 +37,17 @@ function json(data: unknown, etag?: string, extra: Record<string, string> = {}) 
 const route = 'GET /repos/harlan-zw/example/issues'
 
 describe('authenticated conditional reads', () => {
+  it.each(['checks_read', 'deployments_read'] as const)('revalidates %s across clients and observes changed data', async (access) => {
+    const { responses, client, seen } = setup()
+    responses.push(json({ status: 'queued' }, '"queued"'), new Response(null, { status: 304 }), json({ status: 'completed' }, '"completed"'))
+    const endpoint = access === 'checks_read'
+      ? 'GET /repos/harlan-zw/example/commits/main/check-runs'
+      : 'GET /repos/harlan-zw/example/deployments'
+    expect((await client('first', access).request(endpoint)).data).toEqual({ status: 'queued' })
+    expect((await client('first', access).request(endpoint)).data).toEqual({ status: 'queued' })
+    expect((await client('first', access).request(endpoint)).data).toEqual({ status: 'completed' })
+    expect(seen.map(call => call.headers['if-none-match'])).toEqual([undefined, '"queued"', '"queued"'])
+  })
   it('revalidates across clients and returns isolated data with fresh response headers', async () => {
     const { responses, client, seen } = setup()
     responses.push(json([{ number: 1 }], '"v1"'), new Response(null, { status: 304, headers: { 'x-ratelimit-remaining': '4000' } }))

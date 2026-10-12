@@ -84,14 +84,9 @@ controller_request() {
 # service checkout under a pending restart and files a second request. Two
 # Claude Code sessions in this repository did that on 2026-09-16.
 #
-# A controller that does not answer cannot report a pending restart, and a deploy
-# is how Hogwild recovers, so that case never blocks. Neither does a controller
-# too old to report Restart requests.
+# The capability check below rejects controllers that cannot hold preparation.
 refuse_while_restart_pending() {
   local state tag
-  if [ "${HOGWILD_DEPLOY_DESPITE_PENDING_RESTART:-}" = 1 ]; then
-    return 0
-  fi
   if ! state=$(controller_request "$HOGWILD_ORIGIN/api/state" 2>/dev/null); then
     return 0
   fi
@@ -100,7 +95,6 @@ refuse_while_restart_pending() {
     Requested|Restarting)
       echo "Hogwild already has a Restart request that is $tag, so another deploy is still draining." >&2
       echo "Wait for it to complete, then deploy again." >&2
-      echo "If that restart is stuck, set HOGWILD_DEPLOY_DESPITE_PENDING_RESTART=1 to deploy anyway." >&2
       exit 1
       ;;
   esac
@@ -113,6 +107,22 @@ request_restart() {
     --data '{"source":"helper"}' \
     "$HOGWILD_ORIGIN/api/service/restart" \
     | jq --exit-status --raw-output '.id'
+}
+
+request_update() {
+  local target_commit=$1 request
+  request=$(controller_request --header 'Content-Type: application/json' --request POST \
+    --data "$(jq --null-input --arg commit "$target_commit" '{source:"helper",targetCommit:$commit,preparation:"Pending"}')" \
+    "$HOGWILD_ORIGIN/api/service/update")
+  jq --exit-status --raw-output --arg commit "$target_commit" \
+    'if .operation._tag == "Update" and .operation.targetCommit == $commit and .operation.preparation == "Pending" then .id else error("Another Restart request owns the Service.") end' <<< "$request"
+}
+
+finish_update_preparation() {
+  local request_id=$1 outcome=$2
+  controller_request --header 'Content-Type: application/json' --request POST \
+    --data "$(jq --null-input --arg id "$request_id" --arg outcome "$outcome" '{id:$id,_tag:$outcome,reason:"The update helper failed during file sync."}')" \
+    "$HOGWILD_ORIGIN/api/service/update/preparation" >/dev/null
 }
 
 controller_supports_restart() {
@@ -247,8 +257,15 @@ staged_file=''
 # The local copy of the repository environment, with Hogwild overrides applied.
 # It holds secrets, so every exit path removes it.
 outgoing_env_stage=''
+pending_update_id=''
 
 cleanup_staged_file() {
+  if [ -n "$pending_update_id" ]; then
+    if ! finish_update_preparation "$pending_update_id" Failed; then
+      echo "Update preparation cleanup failed. Inspect request $pending_update_id." >&2
+    fi
+    pending_update_id=''
+  fi
   if [ -n "$staged_file" ]; then
     ssh -o BatchMode=yes "$HOGWILD_HOST" "rm -f '$staged_file'" >/dev/null 2>&1 || true
     staged_file=''
@@ -259,6 +276,8 @@ cleanup_staged_file() {
   fi
 }
 trap cleanup_staged_file EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 sync_verified_file() {
   local source=$1
@@ -399,20 +418,31 @@ case "$command" in
       exit 1
     fi
     refuse_while_restart_pending
+    if ! controller_request "$HOGWILD_ORIGIN/api/service/update/preparation" | jq --exit-status '.supported == true' >/dev/null; then
+      echo "The Service cannot hold Update preparation. Update it with its installed helper first." >&2
+      exit 1
+    fi
+    deployed_revision=$(remote_service resolve-update "$ref" | tr -d '[:space:]')
+    if [[ ! "$deployed_revision" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "Hogwild did not resolve a full commit SHA." >&2
+      exit 1
+    fi
+    pending_update_id=$(request_update "$deployed_revision")
+    restart_id=$pending_update_id
     sync_context
     sync_service_override
     sync_worktrunk
     sync_repository_environment
-    remote_service prepare-update "$ref"
-    # Hogwild resolved the ref minutes ago. Reading back the commit it landed
-    # on keeps the desktop on that one, because a merge that lands during the
-    # deploy moves origin/main and would leave the two halves a commit apart.
-    deployed_revision=$(remote_service revision | tr -d '[:space:]')
-    if [[ ! "$deployed_revision" =~ ^[0-9a-f]{40}$ ]]; then
-      echo "Hogwild did not report the commit it deployed." >&2
+    # The durable Update blocks claims, drains work, then prepares this commit.
+    # Preparing first lets fresh Tasks start during dependency and build work.
+    finish_update_preparation "$pending_update_id" Ready
+    pending_update_id=''
+    wait_for_restart "$restart_id"
+    actual_revision=$(remote_service revision | tr -d '[:space:]')
+    if [ "$actual_revision" != "$deployed_revision" ]; then
+      echo "Hogwild started a different commit. Inspect the Update request." >&2
       exit 1
     fi
-    safe_restart
     remote_service status
     # After Hogwild, because a desktop ahead of the controller stands itself
     # down and the work simply stays on Hogwild until this finishes.

@@ -180,6 +180,7 @@ interface RestartRequestRow {
   source_tag: RestartRequestSource
   operation_tag: RestartOperation['_tag']
   target_commit: string | null
+  preparation_tag: 'Pending' | 'Ready'
   state_tag: RestartRequest['_tag']
   requested_at: string
   restarting_at: string | null
@@ -1181,6 +1182,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   countOpenPullRequests: () => number
   needsAttentionTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string, evidence: string, usage?: AgentTokenUsage }) => boolean
   requestRestart: (input: { id: string, source: RestartRequestSource, operation: RestartOperation, at: string }) => RestartRequest
+  finishUpdatePreparation: (input: { id: string, at: string } & ({ _tag: 'Ready' } | { _tag: 'Failed', reason: string })) => RestartRequest | null
   getRestartRequest: () => RestartRequest | null
   beginRestart: (input: { id: string, processId: string, at: string }) => RestartRequest | null
   completeRestart: (at: string) => RestartRequest | null
@@ -7077,7 +7079,13 @@ function installSchema(database: DatabaseSync): void {
     }
     version = 90
   }
-  if (version === 90)
+  if (version === 90) {
+    const columns = database.prepare('PRAGMA table_info(restart_requests)').all() as Array<{ name: string }>
+    applyMigration(database, `${columns.some(column => column.name === 'preparation_tag') ? '' : 'ALTER TABLE restart_requests ADD COLUMN preparation_tag TEXT NOT NULL DEFAULT \'Ready\' CHECK (preparation_tag IN (\'Pending\', \'Ready\'));'}
+      PRAGMA user_version = 91;`)
+    version = 91
+  }
+  if (version === 91)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -13254,7 +13262,7 @@ export function openJournalStore(
     const operation: RestartOperation = row.operation_tag === 'Restart'
       ? { _tag: 'Restart' }
       : row.target_commit !== null
-        ? { _tag: 'Update', targetCommit: row.target_commit }
+        ? { _tag: 'Update', targetCommit: row.target_commit, preparation: row.preparation_tag }
         : (() => { throw new Error('An Update request needs its target commit.') })()
     const base = { id: row.id, source: row.source_tag, operation, requestedAt: row.requested_at }
     switch (row.state_tag) {
@@ -13277,7 +13285,7 @@ export function openJournalStore(
 
   const restartRequestById = (id: string): RestartRequest | null => {
     const row = database.prepare(`
-      SELECT id, source_tag, operation_tag, target_commit, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
+      SELECT id, source_tag, operation_tag, target_commit, preparation_tag, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
       FROM restart_requests WHERE id = ?
     `).get(id) as RestartRequestRow | undefined
     return row === undefined ? null : restartRequestFromRow(row)
@@ -13285,7 +13293,7 @@ export function openJournalStore(
 
   const getRestartRequest = (): RestartRequest | null => {
     const row = database.prepare(`
-      SELECT id, source_tag, operation_tag, target_commit, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
+      SELECT id, source_tag, operation_tag, target_commit, preparation_tag, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
       FROM restart_requests ORDER BY rowid DESC LIMIT 1
     `).get() as RestartRequestRow | undefined
     return row === undefined ? null : restartRequestFromRow(row)
@@ -13293,7 +13301,7 @@ export function openJournalStore(
 
   const activeRestartRequest = (): RestartRequest | null => {
     const row = database.prepare(`
-      SELECT id, source_tag, operation_tag, target_commit, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
+      SELECT id, source_tag, operation_tag, target_commit, preparation_tag, state_tag, requested_at, restarting_at, completed_at, action_required_at, reason
       FROM restart_requests WHERE state_tag IN ('Requested', 'Restarting') LIMIT 1
     `).get() as RestartRequestRow | undefined
     return row === undefined ? null : restartRequestFromRow(row)
@@ -13308,13 +13316,14 @@ export function openJournalStore(
         return active
       }
       database.prepare(`
-        INSERT INTO restart_requests (id, source_tag, operation_tag, target_commit, state_tag, requested_at)
-        VALUES (?, ?, ?, ?, 'Requested', ?)
+        INSERT INTO restart_requests (id, source_tag, operation_tag, target_commit, preparation_tag, state_tag, requested_at)
+        VALUES (?, ?, ?, ?, ?, 'Requested', ?)
       `).run(
         input.id,
         input.source,
         input.operation._tag,
         input.operation._tag === 'Update' ? input.operation.targetCommit : null,
+        input.operation._tag === 'Update' ? input.operation.preparation : 'Ready',
         input.at,
       )
       const created = restartRequestById(input.id)
@@ -13329,11 +13338,26 @@ export function openJournalStore(
     }
   }
 
+  const finishUpdatePreparation: JournalStore['finishUpdatePreparation'] = (input) => {
+    const result = input._tag === 'Ready'
+      ? database.prepare(`UPDATE restart_requests SET preparation_tag = 'Ready'
+          WHERE id = ? AND operation_tag = 'Update' AND preparation_tag = 'Pending' AND state_tag = 'Requested'`).run(input.id)
+      : database.prepare(`UPDATE restart_requests SET state_tag = 'ActionRequired', action_required_at = ?, reason = ?
+          WHERE id = ? AND operation_tag = 'Update' AND preparation_tag = 'Pending' AND state_tag = 'Requested'`).run(input.at, input.reason, input.id)
+    const request = restartRequestById(input.id)
+    if (result.changes !== 0)
+      return request
+    return input._tag === 'Ready' && request?.operation._tag === 'Update' && request.operation.preparation === 'Ready'
+      && request._tag !== 'ActionRequired'
+      ? request
+      : null
+  }
+
   const beginRestart: JournalStore['beginRestart'] = (input) => {
     const result = database.prepare(`
       UPDATE restart_requests
       SET state_tag = 'Restarting', restarting_at = ?, process_id = ?
-      WHERE id = ? AND state_tag = 'Requested'
+      WHERE id = ? AND state_tag = 'Requested' AND (operation_tag = 'Restart' OR preparation_tag = 'Ready')
     `).run(input.at, input.processId, input.id)
     return result.changes === 0 ? null : restartRequestById(input.id)
   }
@@ -16763,6 +16787,7 @@ export function openJournalStore(
     recordAgentFeedback,
     needsAttentionTask,
     requestRestart,
+    finishUpdatePreparation,
     getRestartRequest,
     beginRestart,
     completeRestart,

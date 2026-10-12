@@ -180,7 +180,20 @@ harlan-github-agent control tasks --config /absolute/path/to/harlan-github-agent
 harlan-github-agent control incidents --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control activity --task TASK_ID --config /absolute/path/to/harlan-github-agent.yml
 harlan-github-agent control events --limit 50 --config /absolute/path/to/harlan-github-agent.yml
+harlan-github-agent control reviews --repository OWNER/REPO --number NUMBER --head FULL_HEAD_SHA
 ```
+
+Context sync installs `harlan-github-agent` and `hw` into `~/.local/bin` on both hosts.
+The launcher uses the Service checkout and its pinned Node runtime.
+It defaults to `~/.config/harlan-github-agent/config.yml` and the password file beside it.
+Desktop reads `~/.config/harlan-github-agent/control-url`.
+Context sync creates it with the Hogwild URL if missing.
+It preserves an existing target. Hogwild uses loopback.
+Explicit connection arguments override these defaults.
+
+Review reads return `{ runs }`, including findings and gates.
+The optional head filter requires one full head SHA.
+An empty array means no stored Review matches. It does not mean Review passed.
 
 Rerun Issue triage after a controller fix without editing the issue:
 

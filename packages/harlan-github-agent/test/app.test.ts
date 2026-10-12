@@ -39,6 +39,7 @@ function statsSnapshot(range: StatsRange, generatedAt: string): StatsSnapshot {
   }
 }
 const agentControls = {
+  finishUpdatePreparation: () => null,
   resolveIncident: () => ({ _tag: 'Ok' as const, value: { _tag: 'Resolved' as const } }),
   getOpenIssueStatus: () => null,
   requestIssueTriageRerun: () => ({ _tag: 'Rejected' as const, reason: { _tag: 'ItemNotFound' as const } }),
@@ -68,7 +69,7 @@ const agentControls = {
 
 afterEach(() => vi.useRealTimers())
 
-function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof createDesktopBroker>, repairRecovery?: AgentAppOptions['repairRecovery'], root = dashboardRoot, pullRequestDiff?: AgentAppOptions['pullRequestDiff']) {
+function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof createDesktopBroker>, repairRecovery?: AgentAppOptions['repairRecovery'], root = dashboardRoot, overrides: Partial<AgentAppOptions['store']> = {}, pullRequestDiff?: AgentAppOptions['pullRequestDiff']) {
   return createAgentApp({
     ...(desktop === undefined ? {} : { desktop }),
     ...(repairRecovery === undefined ? {} : { repairRecovery }),
@@ -77,7 +78,7 @@ function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof c
     dashboardPassword,
     dashboardRoot: root,
     now,
-    store: { ...agentControls, approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) },
+    store: { ...agentControls, approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => snapshot, listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }), ...overrides },
   })
 }
 
@@ -88,7 +89,7 @@ describe('dashboard HTTP app', () => {
     const list = vi.fn(async () => ({ _tag: 'Err' as const, error: 'Unavailable' as const }))
     const file = vi.fn(async () => ({ _tag: 'Err' as const, error: 'Changed' as const }))
     const snapshot = dashboardSnapshot({ items: [{ ...pullRequestItem({ baseSha: base, headSha: head }), revisionId: 'revision', observedAt: now().toISOString(), dismissed: false, approval: { _tag: 'ReviewRequired' } }] })
-    const app = createApp(snapshot, undefined, undefined, dashboardRoot, { list, file })
+    const app = createApp(snapshot, undefined, undefined, dashboardRoot, {}, { list, file })
     const url = `${allowedOrigin}/api/items/pull-request-diff?repository=harlan-zw/example&number=24&base=${base}&head=${head}`
     const headers = { authorization, host: allowedHost }
     const response = await app.request(url, { headers })
@@ -718,7 +719,7 @@ describe('dashboard HTTP app', () => {
     expect(response.status).toBe(202)
     expect(requests).toEqual([expect.objectContaining({
       source: 'dashboard',
-      operation: { _tag: 'Update', targetCommit: latestCommit },
+      operation: { _tag: 'Update', targetCommit: latestCommit, preparation: 'Ready' },
     })])
   })
 
@@ -761,8 +762,62 @@ describe('dashboard HTTP app', () => {
     expect(response.status).toBe(202)
     expect(requests).toEqual([expect.objectContaining({
       source: 'helper',
-      operation: { _tag: 'Update', targetCommit: latestCommit },
+      operation: { _tag: 'Update', targetCommit: latestCommit, preparation: 'Ready' },
     })])
+  })
+
+  it('pins an explicit helper Update even before the latest-commit check finishes', async () => {
+    const targetCommit = 'c'.repeat(40)
+    const response = await createApp().request(`http://${allowedHost}/api/service/update`, {
+      method: 'POST',
+      headers: { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'helper', targetCommit }),
+    })
+    expect(response.status).toBe(202)
+    expect(await response.json()).toMatchObject({ operation: { _tag: 'Update', targetCommit } })
+  })
+
+  it.each(['main', '', 'A'.repeat(40), 123])('rejects an invalid helper Update commit: %s', async (targetCommit) => {
+    const response = await createApp().request(`http://${allowedHost}/api/service/update`, {
+      method: 'POST',
+      headers: { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'helper', targetCommit }),
+    })
+    expect(response.status).toBe(400)
+  })
+
+  it('does not give a competing helper ownership of existing preparation', async () => {
+    const targetCommit = 'c'.repeat(40)
+    const app = createApp(undefined, undefined, undefined, undefined, {
+      requestRestart: input => ({ _tag: 'Requested', ...input, id: 'another-helper', requestedAt: input.at }),
+    })
+    const response = await app.request(`http://${allowedHost}/api/service/update`, {
+      method: 'POST',
+      headers: { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'helper', targetCommit, preparation: 'Pending' }),
+    })
+    expect(response.status).toBe(409)
+  })
+
+  it.each(['null', '{', '{"id":"x","_tag":"Unknown"}'])('rejects malformed preparation receipts: %s', async (body) => {
+    const response = await createApp().request(`http://${allowedHost}/api/service/update/preparation`, {
+      method: 'POST',
+      headers: { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
+      body,
+    })
+    expect(response.status).toBe(400)
+  })
+
+  it('passes the exact preparation receipt to the Journal', async () => {
+    const finishUpdatePreparation = vi.fn(() => null)
+    const app = createApp(undefined, undefined, undefined, undefined, { finishUpdatePreparation })
+    const response = await app.request(`http://${allowedHost}/api/service/update/preparation`, {
+      method: 'POST',
+      headers: { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'update-1', _tag: 'Failed', reason: 'Sync failed.' }),
+    })
+    expect(response.status).toBe(409)
+    expect(finishUpdatePreparation).toHaveBeenCalledWith({ id: 'update-1', _tag: 'Failed', reason: 'Sync failed.', at: now().toISOString() })
   })
 
   it('reports read-only health', async () => {

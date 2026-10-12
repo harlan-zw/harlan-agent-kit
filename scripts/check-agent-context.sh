@@ -68,6 +68,8 @@ for installed in "$TARGET_HOME/.local/share/harlan-agent-kit/github-bin/gh" "$TA
     || bad "The public GitHub CLI differs. Run pnpm sync:context."
   [ -x "$installed" ] || bad "The public GitHub CLI is not executable. Run pnpm sync:context."
 done
+cmp -s "$REPO_ROOT/scripts/agent-tools.ts" "$TARGET_HOME/.local/share/harlan-agent-kit/agent-tools.ts" \
+  || bad "The Agent tool sync differs. Run pnpm sync:context."
 # The check command shares the worker PATH with the public GitHub CLI.
 for installed in "$TARGET_HOME/.local/share/harlan-agent-kit/github-bin/agent-check.ts" "$TARGET_HOME/.local/bin/agent-check.ts"; do
   cmp -s "$REPO_ROOT/scripts/agent-check.ts" "$installed" \
@@ -82,6 +84,18 @@ for installed in "$TARGET_HOME/.local/share/harlan-agent-kit/github-bin/check" "
 done
 
 # The opencode plugin reads its hook list from the installed manifest.
+for command in harlan-github-agent hw; do
+  cmp -s "$REPO_ROOT/scripts/agent-cli.ts" "$TARGET_HOME/.local/bin/$command" \
+    || bad "$command differs. Run pnpm sync:context."
+  [ -x "$TARGET_HOME/.local/bin/$command" ] || bad "$command is not executable. Run pnpm sync:context."
+done
+cmp -s "$REPO_ROOT/scripts/agent-cli-plan.ts" "$TARGET_HOME/.local/bin/agent-cli-plan.ts" \
+  || bad "The Agent command planner differs. Run pnpm sync:context."
+for script in hw.ts plan.ts; do
+  cmp -s "$REPO_ROOT/harlan-agent-kit/skills/hogwild/scripts/$script" "$TARGET_HOME/.local/share/harlan-agent-kit/hogwild/scripts/$script" \
+    || bad "The Hogwild command differs: $script. Run pnpm sync:context."
+done
+
 if [ ! -f "$INSTALLED_MANIFEST" ]; then
   bad "The plugin manifest is not installed. Run pnpm sync:context."
 else

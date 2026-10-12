@@ -42,7 +42,7 @@ export interface AgentAppOptions {
   agentSlots?: AgentSlotLimits
   setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity | Promise<HostCapacity>
   hostSlotPolicy?: () => { hogwild: number, desktop: number }
-  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
+  store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'finishUpdatePreparation' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
   allowedOrigin: string
   /**
    * The service's own listen address, such as `http://127.0.0.1:3210`. The
@@ -551,19 +551,49 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const body = await event.req.json().catch(() => {
       // Validation below reports malformed JSON as a bad request.
       return undefined
-    }) as { source?: unknown } | undefined
+    }) as { source?: unknown, targetCommit?: unknown, preparation?: unknown } | undefined
     if (body?.source !== 'dashboard' && body?.source !== 'helper')
       throw createError({ status: 400, statusText: 'Bad Request', message: 'Update source must be dashboard or helper.' })
+    if (body.targetCommit !== undefined && (body.source !== 'helper' || typeof body.targetCommit !== 'string' || !/^[0-9a-f]{40}$/.test(body.targetCommit)))
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'A helper Update requires a full lowercase commit SHA.' })
+    if (body.preparation !== undefined && (body.source !== 'helper' || body.targetCommit === undefined || body.preparation !== 'Pending'))
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'Pending preparation requires a helper Update and target commit.' })
     const update = options.store.getDashboardSnapshot(options.now().toISOString()).serviceUpdate
-    if (update._tag !== 'Available')
+    if (body.targetCommit === undefined && update._tag !== 'Available')
       throw createError({ status: 409, statusText: 'Conflict', message: 'No service update is available.' })
+    const targetCommit = typeof body.targetCommit === 'string' ? body.targetCommit : update._tag === 'Available' ? update.latestCommit : undefined
+    if (targetCommit === undefined)
+      throw new Error('The Update target was not resolved.')
+    const requestId = randomUUID()
     const request = options.store.requestRestart({
-      id: randomUUID(),
+      id: requestId,
       source: body.source,
-      operation: { _tag: 'Update', targetCommit: update.latestCommit },
+      operation: { _tag: 'Update', targetCommit, preparation: body.preparation === 'Pending' ? 'Pending' : 'Ready' },
       at: options.now().toISOString(),
     })
+    if (body.preparation === 'Pending' && request.id !== requestId)
+      throw createError({ status: 409, statusText: 'Conflict', message: 'Another Restart request owns the Service.' })
     setResponseStatus(event, 202)
+    return request
+  })
+
+  app.get('/api/service/update/preparation', () => ({ supported: true }))
+
+  app.post('/api/service/update/preparation', async (event) => {
+    const body = await event.req.json().catch(() => {
+      // The parser below reports malformed JSON as a bad request.
+      return undefined
+    }) as { id?: unknown, _tag?: unknown, reason?: unknown } | undefined
+    if (body === undefined || body === null || typeof body.id !== 'string' || !body.id || (body._tag !== 'Ready' && body._tag !== 'Failed')
+      || (body._tag === 'Failed' && (typeof body.reason !== 'string' || !body.reason))) {
+      throw createError({ status: 400, statusText: 'Bad Request', message: 'An Update preparation receipt requires its request ID and outcome.' })
+    }
+    const at = options.now().toISOString()
+    const request = options.store.finishUpdatePreparation(body._tag === 'Ready'
+      ? { id: body.id, _tag: 'Ready', at }
+      : { id: body.id, _tag: 'Failed', reason: body.reason as string, at })
+    if (request === null)
+      throw createError({ status: 409, statusText: 'Conflict', message: 'This Update no longer owns preparation.' })
     return request
   })
 

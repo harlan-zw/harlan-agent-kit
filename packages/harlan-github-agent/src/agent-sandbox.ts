@@ -10,6 +10,7 @@ import { promisify } from 'node:util'
 import { createAgentEgress } from './agent-egress.ts'
 import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
+import { resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
@@ -157,6 +158,27 @@ function configuration(value: unknown): WorkerConfiguration {
   return record as unknown as WorkerConfiguration
 }
 
+async function currentWorkerConfiguration(home: string, profilePath: string) {
+  const profile = configuration(JSON.parse(await readFile(profilePath, 'utf8')))
+  const hostTools = await resolveWorkerHostTools(home, profile.tools)
+  const obsoleteProviderDirectories: string[] = []
+  for (const provider of ['codex', 'opencode'] as const) {
+    const current = hostTools[provider]
+    if (current === undefined)
+      continue
+    const previous = dirname(profile[provider])
+    // Versioned Codex vendor directories must not keep a pruned package mandatory.
+    if (previous.includes('/vendor/') || previous.includes('/releases/'))
+      obsoleteProviderDirectories.push(previous)
+    profile[provider] = current
+  }
+  profile.tools = [...new Set([
+    ...profile.tools.filter(path => !obsoleteProviderDirectories.includes(path)),
+    ...['codex', 'opencode'].flatMap(provider => hostTools[provider] === undefined ? [] : [dirname(hostTools[provider])]),
+  ])]
+  return { profile, hostTools }
+}
+
 function within(path: string, root: string): boolean {
   return path === root || path.startsWith(`${root}/`)
 }
@@ -192,7 +214,7 @@ export function opencodeSandboxPaths(environment: NodeJS.ProcessEnv): string[] {
 /** Refuse an update before restarting a host that cannot isolate its Agents. */
 export async function checkAgentWorker(environment: NodeJS.ProcessEnv, profilePath?: string): Promise<void> {
   const controllerHome = resolve(environment.HOME ?? '/home/harlan')
-  const profile = configuration(JSON.parse(await readFile(profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json'), 'utf8')))
+  const { profile } = await currentWorkerConfiguration(controllerHome, profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json'))
   for (const path of [profile.home, ...profile.tools, ...profile.readOnlyPaths, profile.codex, profile.opencode])
     await permittedPath(path, controllerHome)
   for (const path of [profile.codex, profile.opencode]) {
@@ -225,7 +247,7 @@ export async function prepareAgentSandbox(input: {
 }): Promise<AgentSandbox> {
   const controllerHome = resolve(input.environment.HOME ?? '/home/harlan')
   const profilePath = input.profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json')
-  const profile = configuration(JSON.parse(await readFile(profilePath, 'utf8')))
+  const { profile, hostTools } = await currentWorkerConfiguration(controllerHome, profilePath)
   const readOnly = input.readOnly === true || input.reviewHome !== undefined
   const isolatedHome = await permittedPath(input.reviewHome ?? profile.home, controllerHome)
   if (within(controllerHome, isolatedHome) || isolatedHome === '/home' || isolatedHome === '/')
@@ -263,6 +285,19 @@ export async function prepareAgentSandbox(input: {
     for (const path of [...profile.tools, ...profile.readOnlyPaths]) {
       const canonical = await permittedPath(path, controllerHome)
       args.push('--ro-bind', canonical, path)
+    }
+    for (const [name, path] of Object.entries(hostTools)) {
+      const canonical = await permittedPath(path, controllerHome)
+      // Preserve installation paths for scripts that resolve adjacent package files.
+      args.push('--ro-bind', canonical, canonical, '--ro-bind', canonical, `/run/agent/host-tools/${name}`)
+    }
+    const publicWrapper = join(controllerHome, '.local/share/harlan-agent-kit/github-bin/gh')
+    if (await stat(publicWrapper).then(() => true).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT')
+        return false
+      throw error
+    })) {
+      args.push('--ro-bind', await permittedPath(publicWrapper, controllerHome), `${workerHome}/.local/share/harlan-agent-kit/github-bin/gh`)
     }
     for (const path of input.readOnlyPaths ?? []) {
       const metadata = await stat(path)
@@ -345,7 +380,7 @@ export async function prepareAgentSandbox(input: {
     args.push('--chdir', workspace, '--', '/run/agent/node', '--experimental-strip-types', '/run/agent/runtime.ts', input.networkMode ?? 'command')
     const baseEnvironment: NodeJS.ProcessEnv = {
       HOME: workerHome,
-      PATH: `${workerHome}/.local/share/harlan-agent-kit/github-bin:${profile.tools.join(':')}:/usr/local/bin:/usr/bin:/bin`,
+      PATH: `${workerHome}/.local/share/harlan-agent-kit/github-bin:/run/agent/host-tools:${profile.tools.join(':')}:/usr/local/bin:/usr/bin:/bin`,
       LANG: input.environment.LANG ?? 'C.UTF-8',
       ...(input.environment.CI === undefined ? {} : { CI: input.environment.CI }),
       XDG_CONFIG_HOME: `${workerHome}/.config`,
@@ -400,7 +435,7 @@ export async function prepareAgentSandbox(input: {
     }
     const memory = input.memoryPerAgentGiB === undefined ? undefined : await workerMemoryCommand({ binary: '/usr/bin/bwrap', args, memoryGiB: input.memoryPerAgentGiB, ...(input.taskId === undefined ? {} : { taskId: input.taskId }) })
     const launchEnvironment = { PATH: '/usr/bin:/bin', ...(memory === undefined ? {} : { XDG_RUNTIME_DIR: input.environment.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: input.environment.DBUS_SESSION_BUS_ADDRESS }) }
-    return { binary: memory?.binary ?? '/usr/bin/bwrap', args: memory?.args ?? args, environment: launchEnvironment, workerStateHome, adapterPath, providerBinary: profile[input.provider], memoryExceeded: memory?.memoryExceeded ?? (async () => false), release: () => {
+    return { binary: memory?.binary ?? '/usr/bin/bwrap', args: memory?.args ?? args, environment: launchEnvironment, workerStateHome, adapterPath, providerBinary: hostTools[input.provider] === undefined ? profile[input.provider] : `/run/agent/host-tools/${input.provider}`, memoryExceeded: memory?.memoryExceeded ?? (async () => false), release: () => {
       released ??= (async () => {
         try {
           if (!readOnly)
