@@ -12,7 +12,7 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
   const root = join(homedir(), 'scratch')
   await mkdir(root, { recursive: true })
   const directory = await mkdtemp(join(root, 'terminal-server-test-'))
-  await writeFile(join(directory, 'index.html'), '<!doctype html><title>Terminal proof</title>')
+  await writeFile(join(directory, 'index.html'), '<!doctype html><title>Terminal proof</title><script>window.bootstrap=true</script>')
   const manager = await createTerminalManager({
     directory,
     bootId: 'boot',
@@ -70,7 +70,11 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
   })
   const home = await fetch(origin)
   expect(home.headers.get('content-type')).toBe('text/html; charset=utf-8')
-  expect(await home.text()).toContain('<title>Terminal proof</title>')
+  const html = await home.text()
+  expect(html).toContain('<title>Terminal proof</title>')
+  const nonce = /<script nonce="([^"]+)"/.exec(html)?.[1]
+  expect(nonce).toBeTruthy()
+  expect(home.headers.get('content-security-policy')).toContain(`'nonce-${nonce}'`)
   expect((await fetch(`${origin}/api/terminal/capabilities`)).status).toBe(401)
   expect(
     (

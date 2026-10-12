@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import type { TerminalManager } from './terminal-manager.ts'
 import type { TerminalIntent } from './terminal-storage.ts'
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, relative } from 'node:path'
@@ -108,9 +108,10 @@ export function createTerminalServer(options: {
       return
     }
     response.setHeader('X-Content-Type-Options', 'nosniff')
+    const nonce = randomBytes(18).toString('base64')
     response.setHeader(
       'Content-Security-Policy',
-      'default-src \'self\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; connect-src \'self\'; font-src \'self\'; img-src \'self\' data:; object-src \'none\'; base-uri \'none\'; frame-ancestors \'none\'',
+      `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`,
     )
     const url = new URL(request.url ?? '/', options.origin)
     if (options.active && !options.active()) {
@@ -248,11 +249,15 @@ export function createTerminalServer(options: {
       '.png': 'image/png',
       '.woff2': 'font/woff2',
     }
+    const bytes = await readFile(file)
+    const asset = extname(file) === '.html' ? bytes.toString('utf8').replace(/<script(?=[\s>])/g, `<script nonce="${nonce}"`) : bytes
+    if (extname(file) === '.html')
+      response.setHeader('Cache-Control', 'no-store')
     response
       .writeHead(200, {
         'Content-Type': mime[extname(file)] ?? 'application/octet-stream',
       })
-      .end(await readFile(file))
+      .end(asset)
   }
   const sockets = new WebSocketServer({
     noServer: true,
