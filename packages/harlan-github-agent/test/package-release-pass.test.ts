@@ -1,28 +1,36 @@
 import { expect, it } from 'vitest'
-import { runPassStep } from '../src/poll-pass.ts'
+import { runPassStepResult } from '../src/poll-pass.ts'
 import { createPassIncidentRecorder, reconcilePackageReleasePass } from '../src/service.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
-it('keeps a failed release repository when a later repository succeeds', async () => {
+it.each([
+  { reason: 'No server is currently available to service your request.', kind: 'github_unavailable', severity: 'warning', recovery: 'OnNextOperation' },
+  { reason: 'The GitHub account harlan-zw hit the primary GitHub rate limit. Requests pause until 2026-10-12T05:42:05.000Z.', kind: 'rate_limit', severity: 'warning', recovery: 'OnNextOperation' },
+  { reason: 'The release plan is invalid.', kind: 'unknown', severity: 'error', recovery: 'ActionRequired' },
+])('preserves $kind release failures when a later repository succeeds', async ({ reason, kind, severity, recovery }) => {
   const store = openJournalStore(':memory:')
   const signal = new AbortController().signal
   const repositories = ['harlan-zw/failed', 'harlan-zw/healthy'].map(github => ({ ...repositoryMapping(), github }))
   const record = createPassIncidentRecorder({ store, signal, now: () => new Date('2026-10-10T15:00:00Z') })
+  record('package_release', ['harlan-zw/failed: package release reconciliation failed.'])
   try {
     await reconcilePackageReleasePass({
       repositories,
       mayPublish: () => true,
       reconcile: async (repository) => {
         if (repository.github.endsWith('/failed'))
-          throw new Error('GitHub returned 502.')
+          throw new Error(reason)
       },
-      guarded: (step, run, fallback) => runPassStep(step, run, fallback, { signal, onDefect: () => {} }),
+      guarded: (step, run) => runPassStepResult(step, run, { signal, onDefect: () => {} }),
       record,
     })
     expect(store.listIncidents()).toMatchObject([{
       operation: 'package_release',
-      message: 'harlan-zw/failed: package release reconciliation failed.',
+      message: `harlan-zw/failed: ${reason}`,
+      kind,
+      severity,
+      recovery: { _tag: recovery },
     }])
   }
   finally {
@@ -43,7 +51,7 @@ it.each(['recovered', 'no repositories', 'all paused'])('clears earlier release 
         if (scenario === 'all paused')
           throw new Error('A paused repository must not reconcile.')
       },
-      guarded: (step, run, fallback) => runPassStep(step, run, fallback, { signal, onDefect: () => {} }),
+      guarded: (step, run) => runPassStepResult(step, run, { signal, onDefect: () => {} }),
       record,
     })
     expect(store.listIncidents()).toEqual([])
@@ -67,7 +75,7 @@ it('preserves earlier release failures when shutdown aborts a pass', async () =>
         controller.abort()
         throw new Error('This operation was aborted.')
       },
-      guarded: (step, run, fallback) => runPassStep(step, run, fallback, { signal, onDefect: () => {} }),
+      guarded: (step, run) => runPassStepResult(step, run, { signal, onDefect: () => {} }),
       record,
     })
     expect(store.listIncidents().map(incident => incident.message)).toEqual([
