@@ -123,6 +123,9 @@ jobs:
       - name: Agent instructions
         run: pnpm test:context
 
+      - name: Installed Agent commands
+        run: pnpm test:agent-cli
+
       - name: Git hook
         run: pnpm test:commit-hook
 

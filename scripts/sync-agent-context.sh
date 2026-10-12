@@ -31,6 +31,9 @@ check_cli_suffix='.local/bin/agent-check.ts'
 shared_check="$repo_root/bin/check"
 shared_check_install_suffix='.local/share/harlan-agent-kit/github-bin/check'
 shared_check_cli_suffix='.local/bin/check'
+agent_cli="$script_dir/agent-cli.ts"
+agent_cli_plan="$script_dir/agent-cli-plan.ts"
+hogwild_scripts="$repo_root/harlan-agent-kit/skills/hogwild/scripts"
 # The site inventory the sentry-checkin skill reads first. The desktop owns it;
 # a worker on Hogwild starts without one and every routine run reports that.
 sites_inventory="${HARLAN_AGENT_CONTEXT_SITES_FILE:-$HOME/sites/SITES.md}"
@@ -78,6 +81,9 @@ require_sources() {
   [ -f "$github_wrapper" ] || fail "The public GitHub CLI is missing: $github_wrapper"
   [ -f "$check_runner" ] || fail "The check command is missing: $check_runner"
   [ -f "$shared_check" ] || fail "Check is missing: $shared_check"
+  for source in "$agent_cli" "$agent_cli_plan" "$hogwild_scripts/hw.ts" "$hogwild_scripts/plan.ts"; do
+    [ -f "$source" ] || fail "An Agent command source is missing: $source"
+  done
   [ -f "$opencode_plugin" ] || fail "The opencode plugin is missing: $opencode_plugin"
   [ -f "$plugin_manifest" ] || fail "The plugin manifest is missing: $plugin_manifest"
   mapfile -t installed_hook_files < <(agent_context_installed_hooks "$plugin_hooks_dir" "$plugin_manifest")
@@ -155,6 +161,19 @@ sync_local() {
   install -m 755 "$check_runner" "$target_home/$check_cli_suffix"
   install -m 755 "$shared_check" "$target_home/$shared_check_install_suffix"
   install -m 755 "$shared_check" "$target_home/$shared_check_cli_suffix"
+  mkdir -p "$target_home/.local/share/harlan-agent-kit/hogwild/scripts"
+  install -m 755 "$agent_cli" "$target_home/.local/bin/harlan-github-agent"
+  install -m 755 "$agent_cli" "$target_home/.local/bin/hw"
+  install -m 644 "$agent_cli_plan" "$target_home/.local/bin/agent-cli-plan.ts"
+  install -m 644 "$hogwild_scripts/hw.ts" "$target_home/.local/share/harlan-agent-kit/hogwild/scripts/hw.ts"
+  install -m 644 "$hogwild_scripts/plan.ts" "$target_home/.local/share/harlan-agent-kit/hogwild/scripts/plan.ts"
+  # The desktop is a client. Its old server.allowed_origin may name a stopped
+  # local controller, so keep the Control API target separate from that policy.
+  mkdir -p "$target_home/.config/harlan-github-agent"
+  if [ ! -e "$target_home/.config/harlan-github-agent/control-url" ]; then
+    printf '%s\n' "${HARLAN_GITHUB_AGENT_HOGWILD_ORIGIN:-https://hogwild.tailcad325.ts.net}" > "$target_home/.config/harlan-github-agent/control-url"
+    chmod 644 "$target_home/.config/harlan-github-agent/control-url"
+  fi
   if [ -f "$sites_inventory" ] && [ "$sites_inventory" != "$target_home/$sites_install_suffix" ]; then
     mkdir -p "$target_home/$(dirname "$sites_install_suffix")"
     install -m 644 "$sites_inventory" "$target_home/$sites_install_suffix"
@@ -176,6 +195,8 @@ opencode_remote_targets() {
   printf '%s\n' "$hogwild_home/$check_cli_suffix"
   printf '%s\n' "$hogwild_home/$shared_check_install_suffix"
   printf '%s\n' "$hogwild_home/$shared_check_cli_suffix"
+  printf '%s\n' "$hogwild_home/.local/bin/harlan-github-agent" "$hogwild_home/.local/bin/hw" "$hogwild_home/.local/bin/agent-cli-plan.ts" \
+    "$hogwild_home/.local/share/harlan-agent-kit/hogwild/scripts/hw.ts" "$hogwild_home/.local/share/harlan-agent-kit/hogwild/scripts/plan.ts"
 }
 
 # Local sources in the same order, so the two hash lists line up.
@@ -192,6 +213,7 @@ opencode_local_sources() {
   printf '%s\n' "$check_runner"
   printf '%s\n' "$shared_check"
   printf '%s\n' "$shared_check"
+  printf '%s\n' "$agent_cli" "$agent_cli" "$agent_cli_plan" "$hogwild_scripts/hw.ts" "$hogwild_scripts/plan.ts"
 }
 
 sync_hogwild() {
@@ -205,7 +227,7 @@ sync_hogwild() {
   hook_hash=$(sha256sum "$commit_hook" | cut -d' ' -f1)
 
   ssh -o BatchMode=yes "$hogwild_host" \
-    "mkdir -p '$hogwild_home/.claude' '$hogwild_home/.codex' '$hogwild_home/.config/git/hooks' '$hogwild_home/$hooks_install_suffix' '$hogwild_home/$(dirname "$manifest_install_suffix")' '$hogwild_home/$(dirname "$plugin_install_suffix")' '$hogwild_home/$(dirname "$github_install_suffix")' '$hogwild_home/.local/bin'"
+    "mkdir -p '$hogwild_home/.claude' '$hogwild_home/.codex' '$hogwild_home/.config/git/hooks' '$hogwild_home/$hooks_install_suffix' '$hogwild_home/$(dirname "$manifest_install_suffix")' '$hogwild_home/$(dirname "$plugin_install_suffix")' '$hogwild_home/$(dirname "$github_install_suffix")' '$hogwild_home/.local/bin' '$hogwild_home/.local/share/harlan-agent-kit/hogwild/scripts'"
   record_staged "$hogwild_home/.claude/CLAUDE.md.$stage_token"
   if ! scp "$local_staging/CLAUDE.md" "$hogwild_host:$hogwild_home/.claude/CLAUDE.md.$stage_token"; then
     fail 'Hogwild did not receive Claude instructions.'
@@ -227,7 +249,7 @@ sync_hogwild() {
       fail "Hogwild did not receive $(basename "$source")."
     fi
     case "$target" in
-      "$hogwild_home/$manifest_install_suffix" | "$hogwild_home/$plugin_install_suffix") mode=644 ;;
+      "$hogwild_home/$manifest_install_suffix" | "$hogwild_home/$plugin_install_suffix" | "$hogwild_home/.local/bin/agent-cli-plan.ts" | "$hogwild_home/.local/share/harlan-agent-kit/hogwild/scripts/"*) mode=644 ;;
       *) mode=755 ;;
     esac
     staged_list="$staged_list '$target.$stage_token'"
