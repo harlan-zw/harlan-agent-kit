@@ -43,6 +43,19 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('requires an explicit public origin when its browser password login is disabled', () => {
+    const withoutOrigin = parseConfigText(configText.replace('server:', 'server:\n  public_browser_password_login: false'))
+    expect(withoutOrigin._tag === 'Err' && withoutOrigin.error.map(issue => issue.path)).toContain('$.server.public_browser_password_login')
+    const configured = parseConfigText(configText.replace('server:', 'server:\n  public_browser_password_login: false\n  browser_origins: [https://agent.example.com]'))
+    expect(configured._tag === 'Ok' && configured.value.server.publicBrowserPasswordLogin).toBe(false)
+    for (const text of [
+      configText.replace('allowed_origin: https://harlan-github-agent.localhost', 'allowed_origin: http://127.0.0.1:3210'),
+      configText.replace(`path: ${homedir()}/.local/share/harlan-github-agent/state.sqlite`, 'path: ":memory:"'),
+    ]) {
+      const unsafe = parseConfigText(text.replace('server:', 'server:\n  public_browser_password_login: false\n  browser_origins: [https://agent.example.com]'))
+      expect(unsafe._tag === 'Err' && unsafe.error.map(issue => issue.path)).toContain('$.server.public_browser_password_login')
+    }
+  })
   it('accepts one explicit public Passkey origin and rejects ambiguous or insecure authorities', () => {
     const configured = (origins: string) => parseConfigText(configText.replace('server:', `server:\n  browser_origins: ${origins}`))
     const valid = configured('[https://agent.example.com]')

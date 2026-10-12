@@ -40,7 +40,7 @@ export function createBrowserAuth(options: {
   now: () => number
   webauthn?: typeof webauthn
   bootstrap: (body: Record<string, unknown>) => boolean | Promise<boolean>
-  bootstrapKind: 'pairing' | 'password'
+  bootstrapKind: 'pairing' | 'password' | 'passkey'
   surface: { _tag: 'Dashboard' } | { _tag: 'TerminalHost' }
 }) {
   const origin = new URL(options.origin)
@@ -73,6 +73,7 @@ export function createBrowserAuth(options: {
   const refused = (status = 401) => response({ _tag: 'Err', reason: 'AuthenticationRequired' }, status)
   return {
     origin: origin.origin,
+    bootstrapKind: options.bootstrapKind,
     session,
     issueSession,
     onSessionRevocation(notify: (hash: string) => void) {
@@ -105,7 +106,7 @@ export function createBrowserAuth(options: {
       if (!body)
         return refused(400)
       if (action === 'bootstrap') {
-        if (!await options.bootstrap(body))
+        if (options.bootstrapKind === 'passkey' || !await options.bootstrap(body))
           return refused()
         return response({ authenticated: true }, 200, [issueSession(null)])
       }
@@ -120,7 +121,8 @@ export function createBrowserAuth(options: {
         if (typeof body.id !== 'string' || body.id.length > 2048)
           return refused(400)
         const hashes = options.store.sessionsForCredential(body.id)
-        options.store.removeCredential(body.id)
+        if (!options.store.removeCredential(body.id, options.bootstrapKind === 'passkey' ? 1 : 0))
+          return refused(409)
         for (const hash of hashes) {
           for (const notify of revocations) notify(hash)
         }

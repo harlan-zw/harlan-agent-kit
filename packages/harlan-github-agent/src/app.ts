@@ -362,8 +362,13 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     .filter(origin => origin !== undefined)
     .map(origin => [new URL(origin).host, new URL(origin).origin]))
   const framing = framingHeaders(options.frameAncestors ?? [])
+  function machineDashboardAccess(request: Request) {
+    if (request.headers.get('x-harlan-agent-ingress') === 'public' && options.browserAuth?.public?.bootstrapKind === 'passkey')
+      return false
+    return hasDashboardAccess(request, options.dashboardPassword)
+  }
   function browserStream(request: Request, revoked: () => void) {
-    if (hasDashboardAccess(request, options.dashboardPassword))
+    if (machineDashboardAccess(request))
       return { valid: () => true, close: () => {} }
     const authority = request.headers.get('x-harlan-agent-ingress') === 'public' ? options.browserAuth?.public : options.browserAuth?.private
     const session = authority?.session(request.headers)
@@ -398,7 +403,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       if (authority && path.startsWith('/api/browser-auth/'))
         return
       const browserShell = options.browserAuth && (event.req.method === 'GET' || event.req.method === 'HEAD') && !path.startsWith('/api/') && path !== '/health'
-      if (!browserShell && !hasDashboardAccess(event.req, options.dashboardPassword) && !authority?.session(event.req.headers)) {
+      if (!browserShell && !machineDashboardAccess(event.req) && !authority?.session(event.req.headers)) {
         throw createError({
           status: 401,
           statusText: 'Unauthorized',
