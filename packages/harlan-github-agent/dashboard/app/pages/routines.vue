@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { HistoryRow } from '../utils/history.ts'
 import { routineRunPresentation } from '../utils/dashboard.ts'
-import { recentRoutineRuns, routineRows, routineRunDetail } from '../utils/routines.ts'
+import { filterRoutineRows, filterRoutineRuns, recentRoutineRuns, routineQueueBlocks, routineRows, routineRunDetail } from '../utils/routines.ts'
 import RoutineRunModal from './_RoutineRunModal.vue'
 
 /**
@@ -9,12 +9,35 @@ import RoutineRunModal from './_RoutineRunModal.vue'
  * check", soonest first; the log below answers "what did the last ones find".
  */
 const { snapshot, loading, controlsUnavailable, now, relativeTime } = useDashboard()
+const { show: showSystem } = useSystemPane()
+const route = useRoute()
+const router = useRouter()
+function queryFilter(key: string) {
+  return computed({
+    get: () => typeof route.query[key] === 'string' ? route.query[key] as string : 'all',
+    set: (value: string) => { void router.replace({ query: { ...route.query, [key]: value === 'all' ? undefined : value } }) },
+  })
+}
+const repositoryFilter = queryFilter('repository')
+const routineFilter = queryFilter('routine')
+const resultFilter = queryFilter('result')
+const filters = computed(() => ({ repository: repositoryFilter.value, routine: routineFilter.value, result: resultFilter.value }))
+const filtered = computed(() => Object.values(filters.value).some(value => value !== 'all'))
+const repositories = computed(() => [{ label: 'All repositories', value: 'all' }, ...[...new Set(snapshot.value.routines.map(routine => routine.repository))].sort().map(value => ({ label: value, value }))])
+const routineNames = computed(() => [{ label: 'All Routines', value: 'all' }, ...[...new Set(snapshot.value.routines.map(routine => routine.name))].sort().map(value => ({ label: value, value }))])
+const results = ['Clear', 'Action required', 'Blocked', 'Failed', 'Completed', 'Queued', 'Running', 'Skipped', 'Superseded']
+const historyLink = computed(() => ({ path: '/history', query: { work: 'routine_scan', repository: filters.value.repository === 'all' ? undefined : filters.value.repository, routine: filters.value.routine === 'all' ? undefined : filters.value.routine } }))
+function clearFilters(): void {
+  void router.replace({ query: {} })
+}
 
 const minute = computed(() => Math.floor(now.value.getTime() / 60_000))
-const rows = computed(() => routineRows(snapshot.value.routines, snapshot.value.routineRuns, new Date(minute.value * 60_000)))
-const runs = computed(() => recentRoutineRuns(snapshot.value.routineRuns))
-const attention = computed(() => rows.value.filter(row => row.latestRun && (row.tone === 'warning' || row.tone === 'error'))
-  .sort((left, right) => Number(right.label === 'Blocked' || right.tone === 'error') - Number(left.label === 'Blocked' || left.tone === 'error')))
+const rows = computed(() => filterRoutineRows(routineRows(snapshot.value.routines, snapshot.value.routineRuns, new Date(minute.value * 60_000)), filters.value))
+const matchingRuns = computed(() => filterRoutineRuns(snapshot.value.routineRuns, filters.value))
+const runs = computed(() => recentRoutineRuns(matchingRuns.value))
+const blocks = computed(() => controlsUnavailable.value ? [] : routineQueueBlocks(snapshot.value, matchingRuns.value, now.value))
+const attention = computed(() => rows.value.filter(row => row.resultRun && (row.resultTone === 'warning' || row.resultTone === 'error'))
+  .sort((left, right) => Number(right.resultLabel === 'Blocked' || right.resultTone === 'error') - Number(left.resultLabel === 'Blocked' || left.resultTone === 'error')))
 const allAttention = ref(false)
 const visibleAttention = computed(() => allAttention.value ? attention.value : attention.value.slice(0, 6))
 const selectedRunId = ref<string>()
@@ -53,6 +76,35 @@ useHead({
       Routines
     </h1>
 
+    <div class="flex flex-wrap gap-3" role="group" aria-label="Routine filters">
+      <USelect v-model="repositoryFilter" :items="repositories" aria-label="Repository" class="min-h-11 w-full sm:w-64" />
+      <USelect v-model="routineFilter" :items="routineNames" aria-label="Routine" class="min-h-11 w-full sm:w-56" />
+      <USelect v-model="resultFilter" :items="[{ label: 'All results', value: 'all' }, ...results.map(value => ({ label: value, value }))]" aria-label="Result" class="min-h-11 w-full sm:w-48" />
+      <UButton v-if="filtered" color="neutral" variant="outline" class="min-h-11" @click="clearFilters">
+        Clear filters
+      </UButton>
+    </div>
+
+    <section v-if="blocks.length" class="border-y border-default py-4" aria-label="Queued scans" aria-live="polite">
+      <UiSectionHeader title="Queued scans">
+        <template #actions>
+          <UButton color="neutral" variant="outline" class="min-h-11" @click="showSystem()">
+            System
+          </UButton>
+        </template>
+      </UiSectionHeader>
+      <ul class="space-y-3">
+        <li v-for="block in blocks" :key="`${block.provider}:${block.model}:${block.reason}`" class="flex flex-col gap-1">
+          <p class="status-warning">
+            {{ block.count }} queued · {{ block.reason }}
+          </p>
+          <p class="break-words text-sm text-muted">
+            {{ block.provider }} · {{ block.model }}<span v-if="block.retryAt"> · retry {{ relativeTime(block.retryAt) }}</span>
+          </p>
+        </li>
+      </ul>
+    </section>
+
     <section v-if="attention.length" aria-label="Action required">
       <UiSectionHeader title="Action required">
         <template #after-title>
@@ -64,11 +116,12 @@ useHead({
       </UiSectionHeader>
       <ul class="divide-y divide-default border-y border-default">
         <li v-for="row in visibleAttention" :key="row.routine.id">
-          <button type="button" class="flex min-h-11 w-full flex-wrap items-center gap-3 px-2 py-2 text-start hover:bg-muted" aria-haspopup="dialog" @click="showRun(row.latestRun!.id)">
-            <StateBadge :tone="row.tone" :label="row.label" />
+          <button type="button" class="flex min-h-11 w-full flex-wrap items-center gap-3 px-2 py-2 text-start hover:bg-muted" aria-haspopup="dialog" @click="showRun(row.resultRun!.id)">
+            <StateBadge :tone="row.resultTone" :label="row.resultLabel" />
             <RepositoryIdentity :repository="row.routine.repository" />
             <span>{{ row.routine.name }}</span>
-            <span class="text-sm text-muted">{{ row.detail }}</span>
+            <span class="text-sm text-muted">{{ row.resultDetail }}</span>
+            <span v-if="row.latestRun?.id !== row.resultRun?.id" class="text-sm text-muted">{{ row.label }}</span>
           </button>
         </li>
       </ul>
@@ -94,6 +147,7 @@ useHead({
           </UiTableTh>
           <UiTableTh>Next</UiTableTh>
           <UiTableTh>Last run</UiTableTh>
+          <UiTableTh>Last result</UiTableTh>
           <UiTableTh><span class="sr-only">Actions</span></UiTableTh>
         </template>
         <tr v-for="row in rows" :key="row.routine.id">
@@ -116,10 +170,18 @@ useHead({
             <span v-else class="text-sm text-dimmed">Not scheduled</span>
           </UiTableTd>
           <UiTableTd size="sm">
-            <span class="flex items-center gap-2 whitespace-nowrap">
+            <button v-if="row.latestRun" type="button" class="flex min-h-11 items-center gap-2 whitespace-nowrap hover:underline" :aria-label="`Open last run of ${row.routine.name} on ${row.routine.repository}`" aria-haspopup="dialog" @click="showRun(row.latestRun.id)">
               <StateBadge :tone="row.tone" :label="row.label" />
-              <span v-if="row.routine.lastRunAt" class="font-mono text-sm text-dimmed">{{ relativeTime(row.routine.lastRunAt) }}</span>
-            </span>
+              <time :datetime="row.latestRun.scheduledFor" class="font-mono text-sm text-dimmed">{{ relativeTime(row.latestRun.scheduledFor) }}</time>
+            </button>
+            <span v-else class="text-sm text-muted">Never run</span>
+          </UiTableTd>
+          <UiTableTd size="sm">
+            <button v-if="row.resultRun" type="button" class="flex min-h-11 items-center gap-2 whitespace-nowrap hover:underline" :aria-label="`Open last result of ${row.routine.name} on ${row.routine.repository}`" aria-haspopup="dialog" @click="showRun(row.resultRun.id)">
+              <StateBadge :tone="row.resultTone" :label="row.resultLabel" />
+              <time :datetime="row.resultRun.scheduledFor" class="font-mono text-sm text-dimmed">{{ relativeTime(row.resultRun.scheduledFor) }}</time>
+            </button>
+            <span v-else class="text-sm text-muted">Never run</span>
           </UiTableTd>
           <UiTableTd size="sm">
             <UButton color="neutral" variant="outline" size="sm" class="min-h-11 whitespace-nowrap" :disabled="controlsUnavailable || !row.routine.enabled" :aria-label="`Run ${row.routine.name} on ${row.routine.repository} now`" @click="chooseRun(row.routine)">
@@ -129,13 +191,18 @@ useHead({
         </tr>
       </UiTableShell>
 
-      <UiEmptyState v-else compact icon="calendar" title="No Routines" description="No repository declares a Routine yet." />
+      <UiEmptyState v-else compact icon="calendar" title="No Routines" :description="filtered ? 'No Routines match the filters.' : 'No repository declares a Routine yet.'" />
     </section>
 
     <section v-if="runs.length > 0" class="min-w-0" aria-label="Recent runs">
       <UiSectionHeader title="Recent runs">
         <template #after-title>
           <span class="font-mono text-sm font-normal text-muted">{{ runs.length }}</span>
+        </template>
+        <template #actions>
+          <UButton :to="historyLink" color="neutral" variant="outline" class="min-h-11">
+            View History
+          </UButton>
         </template>
       </UiSectionHeader>
       <ul class="divide-y divide-default border-y border-default" role="list">
@@ -159,6 +226,9 @@ useHead({
         </li>
       </ul>
     </section>
+    <UButton v-if="runs.length === 0" :to="historyLink" color="neutral" variant="outline" class="min-h-11 self-start">
+      View History
+    </UButton>
     <HistoryEvidenceSlideover v-model:open="evidenceOpen" :row="selectedRun" />
     <RoutineRunModal v-model:open="runOpen" :routine="chosenRoutine" @queued="showRun" />
   </div>

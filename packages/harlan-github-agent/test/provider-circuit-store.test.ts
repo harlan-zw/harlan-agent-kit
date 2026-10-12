@@ -27,6 +27,14 @@ const circuit = {
   failureClass: 'network' as const,
 }
 
+it('holds an exhausted model after one failure without blocking OpenCode Go', () => {
+  const journal = store()
+  journal.recordProviderFailure({ ...circuit, failureClass: 'usage_limit', detail: 'Weekly/Monthly Limit Exhausted', at: '2026-10-12T01:00:00.000Z' })
+  expect(journal.providerCanStart({ ...circuit, at: '2026-10-12T01:01:00.000Z' })).toBe(false)
+  expect(journal.providerCanStart({ ...circuit, model: 'zai-coding-plan/glm-5.3', at: '2026-10-12T01:01:00.000Z' })).toBe(false)
+  expect(journal.providerCanStart({ ...circuit, model: 'opencode-go/glm-5.3-flash', at: '2026-10-12T01:01:00.000Z' })).toBe(true)
+})
+
 describe('persistent Agent provider circuits', () => {
   it('releases a cancelled canary without changing health and rejects its stale fence', () => {
     const journal = store()

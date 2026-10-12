@@ -224,7 +224,53 @@ function scenario(base: DashboardSnapshot): DashboardSnapshot {
           { provider: 'codex', reservePercent: 20, capacity: { _tag: 'Available', usedPercent: 5, resetsAt: daysAhead(6) } },
           { provider: 'opencode', reservePercent: 0, capacity: { _tag: 'Available', usedPercent: 100, resetsAt: daysAhead(2) } },
         ],
+        agentModelCapacities: { opencodeGo: { _tag: 'Unpublished' }, zaiCodingPlan: { _tag: 'Available', usedPercent: 100, resetsAt: daysAhead(2) } },
       }
+    case 'routine-ux': {
+      const routine = base.routines[0]!
+      const template = base.routineRuns[0]!
+      const other = { ...routine, id: 'unjs/unhead:daily-checkin', repository: 'unjs/unhead', name: 'daily-checkin' as const, trackingIssueNumber: 200 }
+      const report = `<!-- routine-run:internal-marker -->
+# [BLOCKED] Routine report
+
+Coverage is incomplete. [Existing issue](https://github.com/harlan-zw/nuxt-seo/issues/380).
+
+| Check | Result |
+| --- | --- |
+| Deployment | Passed |
+| Provider | Usage limit reached |
+
+<details>
+<summary>Evidence</summary>
+
+The deployment answered. The provider did not complete the scan.
+
+\`\`\`text
+Weekly/Monthly Limit Exhausted
+\`\`\`
+
+</details>
+
+<img src=x onerror="window.reportUnsafe=true">
+`
+      return {
+        ...base,
+        agentProfile: OPENCODE_AGENT_PROFILE,
+        agentSelection: { _tag: 'Pinned', provider: 'opencode', model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+        agentStart: { _tag: 'ReserveReached' },
+        providerCircuits: [],
+        providerCapacities: [{ provider: 'codex', reservePercent: 20, capacity: { _tag: 'Available', usedPercent: 8, resetsAt: daysAhead(6) } }, { provider: 'opencode', reservePercent: 0, capacity: { _tag: 'Available', usedPercent: 100, resetsAt: daysAhead(2) } }],
+        agentModelCapacities: { opencodeGo: { _tag: 'Unpublished' }, zaiCodingPlan: { _tag: 'Available', usedPercent: 100, resetsAt: daysAhead(2) } },
+        routines: [routine, other],
+        routineRuns: [
+          { ...template, id: 'latest-queued', state: { _tag: 'Queued' }, report: null, scheduledFor: minutesAgo(5) },
+          { ...template, id: 'last-blocked', state: { _tag: 'Completed', evidence: 'Coverage incomplete.' }, report: { body: report, verdict: { severity: 'AMBER', coverage: 'incomplete' } }, scheduledFor: minutesAgo(60) },
+          { ...template, id: 'other-queued', routineId: other.id, repository: other.repository, name: other.name, state: { _tag: 'Queued' }, agentSelection: { provider: 'opencode', model: 'opencode-go/glm-5.3-flash', reasoningEffort: 'high' }, report: null, scheduledFor: minutesAgo(10) },
+          { ...template, id: 'other-failed', routineId: other.id, repository: other.repository, name: other.name, state: { _tag: 'Failed', reason: 'The deployment did not answer.' }, report: null, scheduledFor: minutesAgo(120) },
+          ...Array.from({ length: 24 }, (_, index) => ({ ...template, id: `older-${index}`, scheduledFor: minutesAgo(180 + index * 60), updatedAt: minutesAgo(178 + index * 60), state: { _tag: 'Completed' as const, evidence: 'Checks passed.' }, report: { body: '# Clear\n\nAll checks passed.', verdict: { severity: 'GREEN' as const, coverage: 'complete' as const } } })),
+        ],
+      }
+    }
     case 'paused':
       return { ...base, agentControl: { _tag: 'Paused', pausedAt: minutesAgo(5), safeToRestart: false }, agentStart: { _tag: 'Paused' } }
     case 'calm':

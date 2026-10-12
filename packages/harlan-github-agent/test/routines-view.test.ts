@@ -1,6 +1,7 @@
 import type { DashboardRoutineRun, Routine } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { describeCron, recentRoutineRuns, routineRows, routineRunDetail, routineSchedule } from '../dashboard/app/utils/routines.ts'
+import { describeCron, filterRoutineRows, filterRoutineRuns, recentRoutineRuns, routineQueueBlocks, routineRows, routineRunDetail, routineSchedule } from '../dashboard/app/utils/routines.ts'
+import { dashboardSnapshot } from './fixtures.ts'
 
 function routine(overrides: Partial<Routine> = {}): Routine {
   return {
@@ -63,6 +64,30 @@ describe('describeCron', () => {
 
 describe('routineRows', () => {
   const now = new Date('2026-08-28T06:00:00.000Z')
+
+  it('filters previous results without hiding a newer queued scan', () => {
+    const failure = run({ state: { _tag: 'Failed', reason: 'Usage exhausted.' } })
+    const queued = run({ id: 'next', scheduledFor: '2026-08-28T07:00:00.000Z', state: { _tag: 'Queued' } })
+    const filters = { repository: 'harlan-zw/example', routine: 'sentry-checkin', result: 'Failed' }
+    expect(filterRoutineRows(routineRows([routine()], [failure, queued], now), filters).map(row => row.routine.id)).toEqual([routine().id])
+    expect(filterRoutineRuns([queued, failure], filters).map(run => run.id)).toEqual([failure.id])
+  })
+
+  it('names the exhausted plan while a manual OpenCode Go scan remains eligible', () => {
+    const snapshot = dashboardSnapshot()
+    snapshot.mutationsEnabled = true
+    const queued = run({ state: { _tag: 'Queued' }, agentSelection: { provider: 'opencode', model: 'zai-coding-plan/glm-5.3', reasoningEffort: 'high' } })
+    const go = run({ id: 'go', state: { _tag: 'Queued' }, agentSelection: { provider: 'opencode', model: 'opencode-go/glm-5.3-flash', reasoningEffort: 'high' } })
+    snapshot.agentModelCapacities = { opencodeGo: { _tag: 'Unpublished' }, zaiCodingPlan: { _tag: 'Available', usedPercent: 100, resetsAt: '2026-10-14T05:44:29.983Z' } }
+    expect(routineQueueBlocks(snapshot, [queued, go], now)).toEqual([{ provider: 'opencode', model: 'zai-coding-plan/glm-5.3', reason: 'Usage limit reached.', retryAt: '2026-10-14T05:44:29.983Z', count: 1 }])
+  })
+
+  it('keeps the previous failure when a new scan waits or runs', () => {
+    const failure = run({ state: { _tag: 'Failed', reason: 'Weekly/Monthly Limit Exhausted' } })
+    const queued = run({ id: 'next', scheduledFor: '2026-08-28T07:00:00.000Z', state: { _tag: 'Queued' } })
+    const [row] = routineRows([routine()], [queued, failure], now)
+    expect(row).toMatchObject({ latestRun: queued, resultRun: failure, resultLabel: 'Failed', resultTone: 'error' })
+  })
 
   it('sorts soonest first and sends disabled Routines to the end', () => {
     const later = routine({ id: 'b', name: 'daily-checkin', crons: ['0 9 * * *'] })

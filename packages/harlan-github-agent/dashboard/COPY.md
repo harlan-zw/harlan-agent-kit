@@ -39,6 +39,13 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Routine manual unavailable | The selected provider cannot start a scan now. | Routine run dialog |
 | Routine manual unpublished usage | Usage is not published. | Routine run dialog |
 | Routine manual failure | Could not queue the Routine run. Retry. | Routine run dialog |
+| Routine result | Last result | Last completed or failed scan |
+| Routine filter empty | No Routines match the filters. | Filtered schedule |
+| Routine filters reset | Clear filters | Restore all Routines |
+| Routine older runs | View History | Open stored runs with the same repository and Routine filters |
+| Routine waiting | Queued scans | Shared start blockers |
+| Routine exhausted | Usage limit reached. | Capacity blocker |
+| Routine Reserve | Reserve reached. | Capacity blocker |
 | Desktop incompatible | Update required | Desktop state when protocols differ |
 | Desktop warning | Desktop update required | System chip and pane summary |
 | Operation recovery | The next Controller operation checks recovery. | Incident with no scheduled retry |

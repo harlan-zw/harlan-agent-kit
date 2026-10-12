@@ -37,7 +37,7 @@ import { createBaselineRepairWorker, inspectWorkspaceFiles } from './baseline-re
 import { createBatchScheduler } from './batch-scheduler.ts'
 import { createBatchWorker } from './batch-worker.ts'
 import { createCandidateIssueController } from './candidate-issue-controller.ts'
-import { agentStartBlockedReason, resolveAgentStartState } from './capacity.ts'
+import { agentStartBlockedReason, hasSpendableCapacity, resolveAgentStartState } from './capacity.ts'
 import { createClassificationSource } from './classification.ts'
 import { createCodexProvider } from './codex-provider.ts'
 import { loadConfig, validateRepositoryMappings } from './config.ts'
@@ -493,13 +493,21 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const capacity = createProviderCapacitySource({
     onError: error => options.logger.error(error),
   })
+  const automaticSelection = (provider: AgentProviderName) => {
+    const profile = agentProfile(provider)
+    const defaultModel = profile.roles.routine_scan.model
+    const canStart = (model: string): boolean => hasSpendableCapacity(capacity.read(provider, model), config.agent.reservePercent[provider])
+      && store.providerCanStart({ provider, credential: profile.authentication, model, at: now().toISOString() })
+    return { provider, model: provider === 'opencode' && !canStart(defaultModel) && canStart('opencode-go/glm-5.3-flash') ? 'opencode-go/glm-5.3-flash' as const : null, reasoningEffort: null }
+  }
   const chooseProvider = (order: readonly AgentProviderName[]): AgentProviderName | null => chooseAgentProvider({
-    capacity: capacity.read,
+    capacity: provider => capacity.read(provider, automaticSelection(provider).model ?? agentProfile(provider).roles.routine_scan.model),
     order: order.filter((provider) => {
       const profile = agentProfile(provider)
       return store.providerCanStart({
         provider,
         credential: profile.authentication,
+        ...(provider === 'opencode' ? { model: automaticSelection(provider).model ?? profile.roles.routine_scan.model } : {}),
         at: now().toISOString(),
       })
     }),
@@ -538,6 +546,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     wait: signal => waitForHost(500, undefined, { signal }),
   })
   const runtime = createAgentRuntimeSource({
+    automaticSelection,
     chooseProvider,
     configuredProvider: configuredProfile.provider,
     // Schedulers are sized for the ceiling, so raising Agent slots takes effect
@@ -726,9 +735,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       if (selection._tag === 'Automatic')
         return chooseProvider(selection.order) !== null
       const current = runtime().profile
-      return store.providerCanStart({
+      return hasSpendableCapacity(capacity.read(current.provider, current.roles.routine_scan.model), config.agent.reservePercent[current.provider]) && store.providerCanStart({
         provider: current.provider,
         credential: current.authentication,
+        ...(current.provider === 'opencode' || (selection._tag === 'Pinned' && selection.model !== null) ? { model: current.roles.routine_scan.model } : {}),
         at: now().toISOString(),
       })
     }
@@ -959,7 +969,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         canClaim: () => store.getAgentControl()._tag === 'Running' && restartAllowsTaskClaims(store.getRestartRequest()),
         claim: (workerId, at, leaseMilliseconds) => store.claimNextRoutineRun(workerId, at, leaseMilliseconds, selection => selection === undefined
           ? canClaimRoutineRun(canClaim(), config.triggers, store, at)
-          : chooseProvider([selection.provider]) === selection.provider),
+          : hasSpendableCapacity(capacity.read(selection.provider, selection.model ?? agentProfile(selection.provider).roles.routine_scan.model), config.agent.reservePercent[selection.provider])
+            && store.providerCanStart({ provider: selection.provider, credential: agentProfile(selection.provider).authentication, model: selection.model ?? agentProfile(selection.provider).roles.routine_scan.model, at })),
         complete: store.completeRoutineRun,
         fail: store.failRoutineRun,
         heartbeat: store.heartbeatRoutineRun,
@@ -1688,13 +1699,16 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       listRoutines: store.listRoutines,
       openRoutineRun: store.openRoutineRun,
       getDashboardSnapshot: (at) => {
-        const snapshot = dashboardSnapshotForTriggers(
+        const stored = dashboardSnapshotForTriggers(
           pullRequestStatuses.apply(mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot())),
           config.triggers,
         )
+        const snapshot = { ...stored, agentProfile: runtime().profile }
         const providerCapacities = AGENT_PROVIDER_NAMES.map(provider => ({
           provider,
-          capacity: capacity.read(provider),
+          capacity: capacity.read(provider, snapshot.agentSelection._tag === 'Automatic'
+            ? automaticSelection(provider).model ?? agentProfile(provider).roles.routine_scan.model
+            : snapshot.agentProfile.provider === provider ? snapshot.agentProfile.roles.routine_scan.model : agentProfile(provider).roles.routine_scan.model),
           reservePercent: config.agent.reservePercent[provider],
         }))
         const classification = options.classification === undefined
@@ -1704,6 +1718,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           ...snapshot,
           agentProviderOrder: config.agent.order,
           providerCapacities,
+          agentModelCapacities: { opencodeGo: capacity.read('opencode', 'opencode-go/glm-5.3-flash'), zaiCodingPlan: capacity.read('opencode', 'zai-coding-plan/glm-5.3-flash') },
           githubRateLimits: rateLimits.read(),
           ...(classification === undefined ? {} : { classification }),
         }

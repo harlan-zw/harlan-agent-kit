@@ -51,7 +51,7 @@ const slideoverOpen = computed({
 const emptyLine = computed(() => {
   if (allRows.value.length === 0)
     return 'Nothing has finished yet.'
-  return outcomeFilter.value === 'all' ? 'Nothing finished in the Stats range.' : 'Nothing matches the filter.'
+  return outcomeFilter.value === 'all' && range.value._tag === 'All' ? 'Nothing has finished yet.' : 'Nothing matches the filter.'
 })
 
 function rowName(row: HistoryRow): string {
@@ -132,8 +132,9 @@ useHead({
     </UiSectionHeader>
 
     <div v-if="range._tag === 'Stats'" class="flex flex-wrap items-center justify-between gap-3 text-sm">
-      <span class="text-muted">Showing the Stats range.</span>
-      <UButton to="/history" size="xs" color="neutral" variant="outline" icon="i-octicon-x-16">
+      <span v-if="range.repository || range.routine || range.work === 'routine_scan'" class="text-muted">Routine runs<span v-if="range.repository"> · {{ range.repository }}</span><span v-if="range.routine"> · {{ range.routine }}</span></span>
+      <span v-else class="text-muted">Showing the Stats range.</span>
+      <UButton to="/history" size="xs" color="neutral" variant="outline" icon="i-octicon-x-16" class="min-h-11">
         Clear
       </UButton>
     </div>

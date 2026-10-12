@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AgentProviderName } from '../../../src/agent-provider.ts'
 import type { AgentModel, CodexReasoningEffort, Routine } from '../../../src/types.ts'
-import { hasSpendableCapacity } from '../../../src/capacity.ts'
+import { hasSpendableCapacity, selectedModelCapacity } from '../../../src/capacity.ts'
 
 const { routine } = defineProps<{ routine: Routine | undefined }>()
 const emit = defineEmits<{ queued: [id: string] }>()
@@ -13,7 +13,7 @@ const reasoningEffort = ref<CodexReasoningEffort>('medium')
 const pending = ref(false)
 const error = ref<string>()
 const models = computed(() => [...snapshot.value.agentModels[provider.value]])
-const capacity = computed(() => snapshot.value.providerCapacities?.find(entry => entry.provider === provider.value))
+const capacity = computed(() => ({ capacity: selectedModelCapacity(snapshot.value, provider.value, model.value), reservePercent: snapshot.value.providerCapacities.find(entry => entry.provider === provider.value)?.reservePercent ?? 0 }))
 const canSpend = computed(() => capacity.value !== undefined && hasSpendableCapacity(capacity.value.capacity, capacity.value.reservePercent))
 const canSubmit = computed(() => routine?.enabled && model.value !== undefined && canSpend.value && !controlsUnavailable.value && !pending.value)
 
@@ -26,6 +26,8 @@ watch([provider, open], ([, value]) => {
   if (!value)
     return
   model.value = models.value.find(value => value === 'gpt-6.1-sol') ?? models.value.find(value => value === snapshot.value.agentProfile.roles.routine_scan.model) ?? models.value[0]
+  if (provider.value === 'opencode' && !hasSpendableCapacity(selectedModelCapacity(snapshot.value, 'opencode', model.value), capacity.value.reservePercent) && snapshot.value.agentModelCapacities?.opencodeGo._tag === 'Unpublished')
+    model.value = models.value.find(value => value === 'opencode-go/glm-5.3-flash') ?? model.value
   reasoningEffort.value = provider.value === 'codex' ? 'medium' : 'high'
   error.value = undefined
 })
