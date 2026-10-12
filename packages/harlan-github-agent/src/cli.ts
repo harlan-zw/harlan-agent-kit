@@ -13,6 +13,7 @@ import { invokesSubCommand } from './cli-subcommand.ts'
 import { loadClassificationToken, loadConfig } from './config.ts'
 import { createControlClient } from './control-client.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
+import { parseIncidentResolutionRequest } from './incident-resolution.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
 import { err } from './result.ts'
@@ -65,6 +66,7 @@ type ControlCommandError
     | { _tag: 'InvalidTaskId', message: string }
     | { _tag: 'InvalidEventLimit', message: string }
     | { _tag: 'InvalidStream', message: string }
+    | { _tag: 'InvalidIncidentResolution', message: string }
     | { _tag: 'InvalidReviewTarget', message: string }
     | { _tag: 'InvalidIssueTarget', message: string }
     | { _tag: 'InvalidWatchTarget', message: string }
@@ -83,6 +85,7 @@ const workflowEventStreams = [
   'candidate_issue',
   'routine_report',
   'provider_circuit',
+  'incident',
 ] as const
 
 async function loadControlClient(args: ControlConnectionArguments): Promise<Result<ControlClient, ControlCommandError>> {
@@ -307,6 +310,24 @@ const controlCommand = defineCommand({
       run: ({ args }) => runControl(args, client => client.recoverRepair(args.apply
         ? { _tag: 'Apply', taskId: args.task, commitSha: args.commit, expectedBase: args['expected-base'] ?? '' }
         : { _tag: 'Plan', taskId: args.task, commitSha: args.commit })),
+    }),
+    'resolve-incident': defineCommand({
+      meta: { name: 'resolve-incident', description: 'Resolve one exact incident with verified evidence.' },
+      args: {
+        ...controlConnectionArguments,
+        'incident': { type: 'string', description: 'Exact incident ID.' },
+        'last-seen-at': { type: 'string', description: 'Exact UTC lastSeenAt from the incident.' },
+        'evidence': { type: 'string', description: 'Verified recovery evidence.' },
+      },
+      async run({ args }) {
+        const parsed = parseIncidentResolutionRequest({ incidentId: args.incident, lastSeenAt: args['last-seen-at'], evidence: args.evidence })
+        if (parsed._tag === 'Err') {
+          writeJson({ _tag: 'InvalidIncidentResolution', message: parsed.error } satisfies ControlCommandError, process.stderr)
+          process.exitCode = 1
+          return
+        }
+        await runControl(args, client => client.resolveIncident(parsed.value))
+      },
     }),
     'stop-review': defineCommand({
       meta: { name: 'stop-review', description: 'Stop Service Review for one pull request head.' },

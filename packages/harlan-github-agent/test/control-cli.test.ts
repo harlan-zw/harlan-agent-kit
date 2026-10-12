@@ -230,3 +230,28 @@ describe('harlan GitHub Agent control CLI', () => {
     expect(result.stderr).toBe('')
   })
 })
+
+describe('incident resolution Control CLI', () => {
+  it.each([true, false])('sends evidence only after exact target validation: %s', async (valid) => {
+    const directory = await mkdtemp(join(tmpdir(), 'incident-cli-'))
+    temporaryDirectories.push(directory)
+    const passwordFile = join(directory, 'password')
+    await writeFile(passwordFile, 'test-password-with-at-least-32-bytes\n', { mode: 0o600 })
+    const input = { incidentId: 'a'.repeat(64), lastSeenAt: '2026-10-12T00:00:00.000Z', evidence: valid ? 'Merged fix verified.' : '' }
+    const requests: unknown[] = []
+    const server = createServer(async (request, response) => {
+      let body = ''
+      for await (const chunk of request) body += chunk
+      requests.push({ path: request.url, body: JSON.parse(body) })
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({ _tag: 'Resolved' }))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address() as AddressInfo
+    const result = await runControlCli(['control', 'resolve-incident', '--incident', input.incidentId, '--last-seen-at', input.lastSeenAt, '--evidence', input.evidence, '--url', `http://127.0.0.1:${address.port}`, '--password-file', passwordFile])
+      .finally(() => new Promise<void>((resolve, reject) => server.close(error => error === undefined ? resolve() : reject(error))))
+    expect(result.code).toBe(valid ? 0 : 1)
+    expect(requests).toEqual(valid ? [{ path: '/api/incidents/resolve', body: input }] : [])
+    expect(JSON.parse(valid ? result.stdout : result.stderr)._tag).toBe(valid ? 'Resolved' : 'InvalidIncidentResolution')
+  })
+})

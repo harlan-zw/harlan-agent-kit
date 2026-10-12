@@ -1682,6 +1682,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       approvePullRequest: store.approvePullRequest,
       cancelTask: store.cancelTask,
       stopReviewForHead: store.stopReviewForHead,
+      resolveIncident: store.resolveIncident,
       listRoutines: store.listRoutines,
       openRoutineRun: store.openRoutineRun,
       getDashboardSnapshot: (at) => {

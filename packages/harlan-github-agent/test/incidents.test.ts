@@ -1050,3 +1050,65 @@ describe('stale task incidents', () => {
     expect(store.listIncidents()).toEqual([])
   })
 })
+
+describe('explicit Incident resolution', () => {
+  it('records evidence once and rejects stale or different requests', () => {
+    const store = createStore()
+    const input = { scope: { _tag: 'Service' as const }, kind: 'unknown' as const, severity: 'warning' as const, operation: 'probe', message: 'Old warning', recovery: { _tag: 'ActionRequired' as const }, at: '2026-10-12T00:00:00.000Z' }
+    const incident = store.recordIncident(input)
+    const request = { incidentId: incident.id, lastSeenAt: incident.lastSeenAt, evidence: 'Verified merged fix abc123.', at: '2026-10-12T01:00:00.000Z' }
+    expect(store.resolveIncident({ ...request, incidentId: 'a'.repeat(64) })).toEqual({ _tag: 'Err', error: { _tag: 'NotFound' } })
+    expect(store.resolveIncident({ ...request, lastSeenAt: '2026-10-11T00:00:00.000Z' })).toEqual({ _tag: 'Err', error: { _tag: 'Changed' } })
+    expect(store.resolveIncident(request)).toEqual({ _tag: 'Ok', value: { _tag: 'Resolved' } })
+    expect(store.resolveIncident(request)).toEqual({ _tag: 'Ok', value: { _tag: 'AlreadyResolved' } })
+    expect(store.resolveIncident({ ...request, evidence: 'Different evidence.' })).toEqual({ _tag: 'Err', error: { _tag: 'Changed' } })
+    expect(store.listIncidents()).toEqual([])
+    expect(store.listWorkflowEvents({ stream: 'incident' })).toMatchObject([{ entityId: incident.id, event: 'resolved', reason: request.evidence }])
+    store.recordIncident({ ...input, at: '2026-10-12T02:00:00.000Z' })
+    expect(store.resolveIncident(request)).toEqual({ _tag: 'Err', error: { _tag: 'Changed' } })
+    expect(store.listIncidents()[0]?.occurrences).toBe(2)
+    store.close()
+  })
+
+  it('refuses a Running owning Task without changing its history', () => {
+    const store = createStore()
+    const at = '2026-10-12T00:00:00.000Z'
+    store.syncRepositories([repositoryMapping()], at)
+    store.recordObservation({ externalId: 'resolution-task', observedAt: at, source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
+    const task = store.claimNextAdversarialReviewTask('worker', at, 10000)
+    if (task === null)
+      throw new Error('Expected Review Task.')
+    const incident = store.recordIncident({ scope: { _tag: 'Task', taskId: task.id, repository: 'harlan-zw/example', itemNumber: 24 }, kind: 'unknown', severity: 'error', operation: 'adversarial_review', message: 'Retained failure', recovery: { _tag: 'ActionRequired' }, at })
+    const before = store.getDashboardSnapshot(at).tasks
+    expect(store.resolveIncident({ incidentId: incident.id, lastSeenAt: incident.lastSeenAt, evidence: 'Verified fix.', at })).toEqual({ _tag: 'Err', error: { _tag: 'TaskActive' } })
+    expect(store.getDashboardSnapshot(at).tasks).toEqual(before)
+    expect(store.listIncidents()).toEqual([incident])
+    store.close()
+  })
+})
+
+describe('resolved Incident recovery history', () => {
+  it('keeps a verified Failed Task unchanged without recreating its incident', () => {
+    const store = createStore()
+    const at = '2026-10-12T00:00:00.000Z'
+    store.syncRepositories([repositoryMapping()], at)
+    store.recordObservation({ externalId: 'failed-resolution', observedAt: at, source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
+    for (const attempt of [1, 2, 3]) {
+      const task = store.claimNextAdversarialReviewTask(`worker-${attempt}`, at, 10000)
+      if (task === null)
+        throw new Error('Expected Review Task.')
+      store.failWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, reason: 'The old repair failed.' })
+    }
+    const incident = store.listIncidents()[0]
+    if (incident === undefined)
+      throw new Error('Expected failed Task Incident.')
+    const before = store.getDashboardSnapshot(at).tasks
+    const request = { incidentId: incident.id, lastSeenAt: incident.lastSeenAt, evidence: 'Verified merged fix.', at: '2026-10-12T01:00:00.000Z' }
+    expect(store.resolveIncident(request)).toEqual({ _tag: 'Ok', value: { _tag: 'Resolved' } })
+    store.resolveStaleTaskIncidents('2026-10-12T02:00:00.000Z')
+    expect(store.listIncidents()).toEqual([])
+    expect(store.getDashboardSnapshot(at).tasks).toEqual(before)
+    expect(store.listWorkflowEvents({ stream: 'incident' }).map(event => event.reason)).toEqual([request.evidence])
+    store.close()
+  })
+})

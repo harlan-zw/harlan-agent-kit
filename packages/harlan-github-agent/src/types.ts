@@ -1086,6 +1086,7 @@ export type WorkflowEventStream
     | 'candidate_issue'
     | 'routine_report'
     | 'provider_circuit'
+    | 'incident'
 
 export interface WorkflowEvent {
   id: number
