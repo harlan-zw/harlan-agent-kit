@@ -11,7 +11,10 @@ Hogwild is one Ubuntu host on the LAN and the tailnet. It runs the Harlan GitHub
 
 ## The `hw` CLI
 
-`scripts/hw.ts` in this skill runs the routine tasks below and picks the right account each time. Run it with bun; it has no dependencies. The desktop alias `hw` points at it.
+Context sync installs `hw` in `~/.local/bin` for noninteractive shells.
+It runs the installed planner and picks the correct account.
+Run `pnpm sync:context` if the command is missing.
+If sync is unavailable, run `node --experimental-strip-types scripts/hw.ts` from this Skill directory.
 
 ```bash
 hw status                                  # host, services, containers, Agent unit
@@ -63,7 +66,7 @@ Public routes go internet, Cloudflare tunnel, Caddy `:8080`, then the loopback p
 | --- | --- | --- | --- |
 | Agent service code | `harlan-zw/harlan-agent-kit` `packages/harlan-github-agent` | `~/pkg/harlan-agent-kit` | `pnpm service:hogwild:update` from the repo root |
 | Agent context, worktrunk, env files | same repo, `scripts/` | same | `pnpm sync:context:hogwild`, `pnpm service:hogwild:sync-env`, `pnpm service:hogwild:sync-worktrunk` |
-| Agent config | not in git | `hogwild:~/.config/harlan-github-agent/config.yml` | edit, then restart the user unit |
+| Agent config | not in git | `hogwild:~/.config/harlan-github-agent/config.yml` | edit, then request durable Restart |
 | Agent state | not in git | `hogwild:~/.local/share/harlan-github-agent/state.sqlite`, `journal.sqlite`, `worktrees/` | back up before a migration |
 | Runner supervisor, runners.conf, Dockerfile, host hardening | `harlan-zw/hogwild-gh-runner` (private) `github-runner/` | `~/pkg/hogwild-gh-runner` | install steps in its README |
 | Host security layout, Docker rules, pending items | same repo, `hogwild/` | same | `hogwild/README.md` |
@@ -80,7 +83,7 @@ The live `runners.conf` is `/var/lib/github-runner/config/runners.conf`. Change 
 
 Not every checkout is mapped. `config.yml` lists the active `repositories` and the observe-only `external_repositories`. Read the file for the current list: `ssh hogwild 'rg -n "^  - github:" ~/.config/harlan-github-agent/config.yml'`.
 
-If a new repository joins, clone it as `harlan` into the matching directory, then add a `repositories` entry and restart the Agent.
+If a new repository joins, clone it as `harlan` into the matching directory, then add a `repositories` entry and request durable Restart.
 
 ## Email and browser identities
 
@@ -114,7 +117,16 @@ If a change needs the process to pick up new groups or a new Node, restart the u
 ssh hogwild-admin 'sudo systemctl restart user@1000.service'
 ```
 
-Logs: `ssh hogwild 'journalctl --user -u harlan-github-agent -n 200'`.
+Use `hw logs agent -n 200` for unit logs.
+
+The launcher reads the default configuration and password file.
+Desktop reads `~/.config/harlan-github-agent/control-url`.
+Context sync creates it with the Hogwild URL if missing.
+It preserves an existing target. Hogwild uses loopback.
+Explicit connection arguments win.
+Use the Service Skill for [connection recovery and Review reads](../harlan-github-agent/SKILL.md).
+For routine configuration changes, request durable Restart.
+Never restart the user unit directly while Agents run.
 
 ## Docker and firewall
 
