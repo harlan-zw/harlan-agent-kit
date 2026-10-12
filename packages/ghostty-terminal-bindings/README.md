@@ -48,6 +48,14 @@ Keep paste separate and apply bracketed paste only when the terminal requests it
 Drain native terminal responses to the PTY even when no browser is attached.
 Close the encoder and terminal after the host ends their Session.
 
+`createTerminal` accepts `scrollbackLimit` in bytes, rather than rows.
+Zero selects unlimited native history.
+Ghostty keeps enough pages for the active screen and its page algorithms.
+This minimum can retain thousands of rows in a narrow terminal.
+The native byte limit is a heuristic. Active graphemes and styles can require more space.
+Apply a separate row limit when exposing history through the host protocol.
+Count and offset those visible rows from the latest retained native history.
+
 ## Browser
 
 ```ts
