@@ -331,6 +331,8 @@ export interface AuthenticatedClientOptions {
   token: string
   userAgent: string
   signal?: AbortSignal | undefined
+  /** Checks the caller's permission before each request, including authentication retries. */
+  assertRequest?: () => void
   /** Injected for tests. Receives the same options the real client is built with. */
   createClient?: (options: { authStrategy: () => unknown, auth: unknown, userAgent: string, throttle: typeof failFastThrottle }) => Octokit
 }
@@ -374,19 +376,24 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
   let retried = false
 
   octokit.hook.wrap('request', async (request, requestOptions) => {
+    const send = () => {
+      options.signal?.throwIfAborted()
+      options.assertRequest?.()
+      return request(requestOptions)
+    }
     const read = () => (options.access === 'read' || options.access === 'checks_read' || options.access === 'deployments_read') && options.responseCache !== undefined
       ? options.responseCache.request(async (endpoint) => {
           // Octokit's inner hooks bind the original options object.
           const headers = requestOptions.headers
           requestOptions.headers = { ...headers, ...endpoint.headers }
           try {
-            return await request(requestOptions)
+            return await send()
           }
           finally {
             requestOptions.headers = headers
           }
         }, octokit.request.endpoint(requestOptions), credential.token)
-      : request(requestOptions)
+      : send()
     try {
       return await read()
     }
