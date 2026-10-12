@@ -295,7 +295,7 @@ export async function createTerminalManager(options: {
       directory: options.directory,
       intent,
       executable: provider.executable,
-      argv: request.provider === 'codex' ? [...provider.argv, '--no-daemon'] : [...provider.argv],
+      argv: [...provider.argv],
       project,
       wasm: options.artifact.wasm,
       wasmDigest: options.artifact.wasmDigest,
