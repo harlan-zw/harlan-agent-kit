@@ -6,7 +6,7 @@
 
 <h1>wolfstar-agent-kit</h1>
 
-> 🤖 Wolfstar Project's agent kit for Nuxt and TypeScript work. 30 Skills, 8 hooks, and a service that works on [GitHub](https://github.com) repositories autonomously.
+> 🤖 Wolfstar Project's agent kit for Nuxt and TypeScript work. 35 Skills, 8 hooks, and a service that works on [GitHub](https://github.com) repositories autonomously.
 
 It installs as a [Claude Code](https://claude.com/code) plugin. Codex reads the
 same directory and picks up the Skills.
@@ -123,6 +123,7 @@ Every Skill lives in [`wolfstar-agent-kit/skills/`](./wolfstar-agent-kit/skills)
 | [`pr-lens`](./wolfstar-agent-kit/skills/pr-lens/SKILL.md)                                                       | Draw a change as animated architecture and data-flow diagrams with [PR Lens](https://prlens.dev) |
 | [`pr-triage`](./wolfstar-agent-kit/skills/pr-triage/SKILL.md)                                                   | Repair, rank, and order the owned PR backlog                                                     |
 | [`release-notes`](./wolfstar-agent-kit/skills/release-notes/SKILL.md)                                           | Draft changelogs, release notes, and upgrade guides                                              |
+| [`wolfstar-announcements`](./wolfstar-agent-kit/skills/wolfstar-announcements/SKILL.md)                         | Write release, stage, and hotfix announcements for Discord and the website                       |
 | [`ripast`](./wolfstar-agent-kit/skills/ripast/SKILL.md)                                                         | Run AST-aware refactors with [Ripast](https://github.com/wolfstar-project/ripast)                |
 | [`daily-checkin`](./wolfstar-agent-kit/skills/daily-checkin/SKILL.md)                                           | Run nuxt-checkin and interpret site prompt items                                                 |
 | [`dependency-updates`](./wolfstar-agent-kit/skills/dependency-updates/SKILL.md)                                 | Attempt weekly dependency updates, including majors, in one pull request                         |
