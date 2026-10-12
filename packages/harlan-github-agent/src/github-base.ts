@@ -36,6 +36,10 @@ export const BASE_CHECKS_HISTORY = 10
  * future CI result able to resolve it. A commit that ran no CI changed no
  * tested file, so the last CI verdict on the branch still describes it.
  *
+ * A workflow that skips its jobs through `if:` reports skipped check runs
+ * instead, so the read stops at that commit. The base then reads as GitHub
+ * reads it: a skipped check passes, and an earlier red verdict stays behind.
+ *
  * `commits` lists the branch from its head, newest first. The read stops at
  * the first commit with a check run, and returns the head snapshot unchanged
  * when it is unreadable or when nothing in the window ran CI.

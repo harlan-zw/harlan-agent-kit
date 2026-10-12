@@ -49,6 +49,7 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
     admission: {
       completedReceipt: async () => ({ _tag: 'Missing' }),
       status: async () => ({ _tag: 'Unavailable', reason: 'Fixture' }),
+      capacity: async () => ({ _tag: 'Unavailable', reason: 'Fixture' }),
       reserve: async () => ({ _tag: 'Unavailable', reason: 'Fixture' }),
       bind: async () => ({ _tag: 'Missing' }),
       reconcile: async () => ({ _tag: 'Empty' }),
@@ -116,6 +117,13 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
   })
   expect(await paired.json()).toEqual({ _tag: 'Ok', value: true })
   const cookie = paired.headers.get('set-cookie')!.split(';')[0]!
+  const forcedBrowser = await request(`${origin}/api/terminal/sessions`, {
+    method: 'POST',
+    headers: { origin, cookie },
+    body: JSON.stringify({ requestId: 'forced-browser', projectId: 'project', provider: 'codex', mode: 'Force' }),
+  })
+  expect(forcedBrowser.status).toBe(200)
+  expect(await forcedBrowser.json()).toEqual({ _tag: 'Err', reason: 'ProjectUnavailable' })
   expect(
     (
       await request(`${origin}/api/terminal/pair`, {
@@ -166,4 +174,26 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
       delay(500).then(() => false),
     ]),
   ).toBe(true)
+  api = createTerminalServer({ ...options, authorize: request => request.headers.authorization === 'Basic machine-fixture' })
+  await new Promise<void>(resolve => api.server.listen(43627, '127.0.0.1', resolve))
+  const forcedMachine = await request(`${origin}/api/terminal/sessions`, {
+    method: 'POST',
+    headers: { origin, authorization: 'Basic machine-fixture' },
+    body: JSON.stringify({ requestId: 'forced-machine', projectId: 'project', provider: 'codex', mode: 'Force' }),
+  })
+  expect(forcedMachine.status).toBe(401)
+  expect(await forcedMachine.json()).toEqual({ _tag: 'Err', reason: 'AuthenticationRequired' })
+  const forcedQueuedMachine = await request(`${origin}/api/terminal/sessions/123456789012345678901234/force`, {
+    method: 'POST',
+    headers: { origin, authorization: 'Basic machine-fixture' },
+    body: JSON.stringify({ requestId: 'queued-machine' }),
+  })
+  expect(forcedQueuedMachine.status).toBe(401)
+  const normalMachine = await request(`${origin}/api/terminal/sessions`, {
+    method: 'POST',
+    headers: { origin, authorization: 'Basic machine-fixture' },
+    body: JSON.stringify({ requestId: 'normal-machine', projectId: 'project', provider: 'codex', mode: 'Regular' }),
+  })
+  expect(normalMachine.status).toBe(200)
+  expect(await normalMachine.json()).toEqual({ _tag: 'Err', reason: 'ProjectUnavailable' })
 })

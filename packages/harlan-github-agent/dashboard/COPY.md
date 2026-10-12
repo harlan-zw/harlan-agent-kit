@@ -18,6 +18,14 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Final Passkey | Add another Passkey before removing the last Passkey. | Passkey management without password login |
 | Public terminals | Public terminals require private Agent sessions and public Passkey-only login. | Configuration and startup error |
 | Start control | New session | Navigation and session sidebar |
+| Terminal host memory | Host memory | Terminal host memory and session admission |
+| Terminal waiting | Waiting to start | Session waiting for host admission |
+| Terminal cancellation | Cancel session | Cancel a session waiting to start |
+| Terminal cancelled | Session cancelled. | Cancelled session |
+| Terminal force new | Force new session | Explicit manual host admission |
+| Terminal force waiting | Force start | Explicit manual admission for the same waiting session |
+| Terminal force warning | This session reserves 8 GiB of host memory. Total reserved: {total} GiB. Force can still be refused. | Manual host admission confirmation |
+| Terminal initial prompt | Initial prompt | Optional initial provider prompt |
 | Host control | Run on | Project sidebar and mobile composer |
 | Session setup | Enable Agent sessions after installing the private ingress. | Refused session requests and setup guidance |
 | Terminal empty | Choose a project to start. | Sessions with no selected Agent session |
