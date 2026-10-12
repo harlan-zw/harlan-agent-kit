@@ -18,7 +18,7 @@ async function fixture(machine = false, race = false) {
   const store = openBrowserAuthStore(join(directory, 'auth.sqlite'))
   let now = 1000
   const origin = 'http://localhost:43829'
-  const auth = createBrowserAuth({ origin, rpId: 'localhost', store, now: () => now, bootstrapKind: 'pairing', bootstrap: () => false })
+  const auth = createBrowserAuth({ origin, rpId: 'localhost', store, now: () => now, surface: { _tag: 'TerminalHost' }, bootstrapKind: 'pairing', bootstrap: () => false })
   store.addCredential({ id: 'credential', label: 'Fixture', created: now, credential: { id: 'credential', publicKey: new Uint8Array([1]), counter: 0 } })
   const cookie = auth.issueSession('credential').split(';')[0]!
   const forwarded: string[] = []

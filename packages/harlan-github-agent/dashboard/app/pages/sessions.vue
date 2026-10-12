@@ -3,7 +3,7 @@ const route = useRoute()
 const terminalHost = useTerminalHost()
 const TerminalWorkspace = defineAsyncComponent(() => import('./_TerminalWorkspace.vue'))
 const SessionHistory = defineAsyncComponent(() => import('./_SessionHistory.vue'))
-const historyView = computed(() => terminalHost.state.value._tag === 'Legacy'
+const historyView = computed(() => terminalHost.state.value._tag === 'Dashboard' || terminalHost.state.value._tag === 'Legacy'
   || (terminalHost.controller.value && (typeof route.query.session === 'string' || typeof route.query.task === 'string' || route.query.view === 'history')))
 usePageTitle('Sessions')
 </script>

@@ -77,7 +77,7 @@ export function createTerminalServer(options: {
     pairConsumed = true
     return true
   }
-  const browserAuth = options.browserAuth ?? createBrowserAuth({ origin: canonical.origin, rpId: canonical.hostname, store: authStore!, now: options.now, bootstrapKind: 'pairing', bootstrap: body => consumePair(body.token ?? body.code) })
+  const browserAuth = options.browserAuth ?? createBrowserAuth({ origin: canonical.origin, rpId: canonical.hostname, store: authStore!, now: options.now, surface: { _tag: 'TerminalHost' }, bootstrapKind: 'pairing', bootstrap: body => consumePair(body.token ?? body.code) })
   function requestHeaders(request: IncomingMessage) {
     return new Headers(Object.entries(request.headers).flatMap(([name, value]) => value === undefined ? [] : [[name, Array.isArray(value) ? value.join(', ') : value]]))
   }

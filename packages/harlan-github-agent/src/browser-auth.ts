@@ -41,6 +41,7 @@ export function createBrowserAuth(options: {
   webauthn?: typeof webauthn
   bootstrap: (body: Record<string, unknown>) => boolean | Promise<boolean>
   bootstrapKind: 'pairing' | 'password'
+  surface: { _tag: 'Dashboard' } | { _tag: 'TerminalHost' }
 }) {
   const origin = new URL(options.origin)
   if (origin.origin !== options.origin || options.rpId !== origin.hostname || (origin.protocol !== 'https:' && !(origin.protocol === 'http:' && origin.hostname === 'localhost')))
@@ -89,7 +90,7 @@ export function createBrowserAuth(options: {
       const current = session(request.headers)
       const action = path.slice(prefix.length)
       if (request.method === 'GET' && action === 'session')
-        return response({ authenticated: Boolean(current), bootstrapKind: options.bootstrapKind, passkeys: options.store.credentials().length > 0 })
+        return response({ authenticated: Boolean(current), bootstrapKind: options.bootstrapKind, surface: options.surface, passkeys: options.store.credentials().length > 0 })
       if (request.method === 'GET' && action === 'credentials')
         return current ? response(options.store.credentials().map(({ id, label, created }) => ({ id, label, created }))) : refused()
       if (request.method !== 'POST')

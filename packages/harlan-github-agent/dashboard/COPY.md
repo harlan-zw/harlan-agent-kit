@@ -161,6 +161,12 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Browser sign-out failure | Could not sign out. Retry. |
 | Passkey request failure | The Passkey request failed. Retry. |
 | Browser pairing failure | The pairing link is invalid. Open a new pairing link. |
+| Passkey preparing | Preparing the Passkey request. |
+| Passkey browser waiting | Waiting for the browser Passkey prompt. |
+| Passkey verifying | Verifying the Passkey response. |
+| Passkey cancel | Cancel |
+| Passkey request timeout | The Passkey request timed out. Retry. |
+| Passkey browser timeout | The browser Passkey prompt did not finish. Retry or check your password manager. |
 
 ## Open questions
 
