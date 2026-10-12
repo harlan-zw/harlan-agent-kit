@@ -55,8 +55,10 @@ Never treat a timeout or connection error as an empty Queue or successful Review
 
 ## Wait for merge
 
-After readiness, the PR Skill hands the pull request back and ends the turn by default.
-Use a foreground merge watch only when Harlan requests an active wait.
+After readiness, resolve the merge path under the PR Skill's [Auto merge contract](../../../references/auto-merge.md).
+If the current head qualifies for automatic merge, keep a foreground watch through merge and Completion.
+If only Harlan's merge decision remains, hand the pull request back and end the turn.
+If Harlan requests an active wait for that decision, use a foreground merge watch.
 Retain the exact target and delivery evidence for the next turn.
 Never start a background watch or promise an automatic chat wake-up.
 

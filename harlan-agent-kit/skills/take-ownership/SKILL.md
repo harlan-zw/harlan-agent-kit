@@ -103,9 +103,10 @@ Name its exact state and next action. Never edit while its Repair Task is active
 
 When authority permits, land the exact ready head through the repository's normal merge path.
 
-Otherwise follow the PR Skill's ready pull request handoff and end the turn.
+If the current head qualifies for automatic merge, follow the PR Skill's foreground watch through merge and Completion.
+If only Harlan's merge decision remains, follow the PR Skill's ready pull request handoff and end the turn.
 Retain the exact target and delivery evidence. Resume when Harlan reports a merge or requests follow-up.
-Use a foreground merge watch only when Harlan requests an active wait.
+If Harlan requests an active wait for that decision, use a foreground merge watch.
 
 Follow the exact commit through every applicable delivery stage. Do not infer delivery success from unrelated green checks.
 
@@ -139,5 +140,5 @@ Update the existing marked comment or durable record. Preserve delivery and smok
 After smoke, follow [completion](references/completion.md) to finish loose ends, reconcile records, and clean task-owned state.
 Close only as `VERIFIED`, `BLOCKED`, or `CANCELLED`.
 
-Continue while authorized CI, deployment, release, or smoke work can progress.
+Continue while authorized CI, automatic merge, deployment, release, or smoke work can progress.
 If only Harlan's merge decision remains, use the PR Skill's handoff instead of keeping the turn active.
