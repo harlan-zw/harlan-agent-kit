@@ -44,18 +44,69 @@ describe('maintenance scope provider', () => {
     expect(calls[0]?.args.slice(0, 3)).toEqual(['run', expect.stringMatching(/^maintenance:/), '3'])
     expect(events).toEqual([{ _tag: 'Message', text: 'done' }, { _tag: 'TurnCompleted' }])
   })
-  it('reports refused admission without inventing a completed turn', async () => {
-    const worker = child()
-    const provider = createMaintenanceScopeProvider({ name: 'codex', capacityCommand: '/capacity', memoryGiB: 3, status: async () => status, spawn: () => {
+  it('waits for admission without failing or completing the refused turn', async () => {
+    let starts = 0
+    let waits = 0
+    const provider = createMaintenanceScopeProvider({ name: 'codex', capacityCommand: '/capacity', memoryGiB: 3, status: async () => status, wait: async () => {
+      waits++
+    }, spawn: () => {
+      const worker = child()
+      const attempt = ++starts
       setImmediate(() => {
-        (worker.stdout as PassThrough).end('{"_tag":"AtCapacity","reason":"MaintenanceReserve"}\n')
-        worker.emit('close', 75)
+        (worker.stdout as PassThrough).end(attempt === 1
+          ? '{"_tag":"AtCapacity","reason":"Memory","memoryGiB":8,"reservedGiB":8}\n'
+          : '{"_tag":"Message","text":"done"}\n{"_tag":"TurnCompleted"}\n')
+        worker.emit('close', attempt === 1 ? 75 : 0)
       })
       return worker
     } })
     const events = []
     for await (const event of provider.runTurn(request)) events.push(event)
-    expect(events).toEqual([expect.objectContaining({ _tag: 'Failed', cause: 'resource-limit' })])
+    expect(events).toEqual([{ _tag: 'Message', text: 'done' }, { _tag: 'TurnCompleted' }])
+    expect(starts).toBe(2)
+    expect(waits).toBe(1)
+  })
+  it('cancels a waiting admission without starting another worker', async () => {
+    const controller = new AbortController()
+    let starts = 0
+    const provider = createMaintenanceScopeProvider({ name: 'codex', capacityCommand: '/capacity', memoryGiB: 3, status: async () => status, wait: async () => {
+      controller.abort()
+    }, spawn: () => {
+      starts++
+      const worker = child()
+      setImmediate(() => {
+        (worker.stdout as PassThrough).end('{"_tag":"AtCapacity","reason":"Slots","memoryGiB":8,"reservedGiB":8}\n')
+        worker.emit('close', 75)
+      })
+      return worker
+    } })
+    const events = []
+    for await (const event of provider.runTurn({ ...request, signal: controller.signal })) events.push(event)
+    expect(events).toEqual([expect.objectContaining({ _tag: 'Failed', cause: 'host-cancelled' })])
+    expect(starts).toBe(1)
+  })
+  it.each([
+    ['provider events', '{"_tag":"Message","text":"started"}\n', 75],
+    ['missing refusal', '', 75],
+    ['invalid refusal', '{"_tag":"AtCapacity","reason":"anything"}\n', 75],
+    ['wrong exit code', '{"_tag":"AtCapacity","reason":"Memory","memoryGiB":8,"reservedGiB":8}\n', 0],
+    ['mixed response', '{"_tag":"Message","text":"started"}\n{"_tag":"AtCapacity","reason":"Memory","memoryGiB":8,"reservedGiB":8}\n', 75],
+  ])('does not retry %s', async (_name, output, code) => {
+    let waits = 0
+    const worker = child()
+    const provider = createMaintenanceScopeProvider({ name: 'codex', capacityCommand: '/capacity', memoryGiB: 3, status: async () => status, wait: async () => {
+      waits++
+    }, spawn: () => {
+      setImmediate(() => {
+        (worker.stdout as PassThrough).end(String(output))
+        worker.emit('close', Number(code))
+      })
+      return worker
+    } })
+    const events = []
+    for await (const event of provider.runTurn(request)) events.push(event)
+    expect(events.at(-1)).toEqual(expect.objectContaining({ _tag: 'Failed', cause: 'resource-limit' }))
+    expect(waits).toBe(0)
   })
   it('keeps Review callbacks bound to the captured worker fence', async () => {
     const worker = child()
@@ -92,6 +143,22 @@ describe('maintenance scope provider', () => {
 })
 
 describe('maintenance recovery admission', () => {
+  it('waits for capacity before running a recovery check', async () => {
+    let starts = 0
+    const run = createMaintenanceCheckCommand({ capacityCommand: '/capacity', memoryGiB: 3, status: async () => status, wait: async () => {}, spawn: () => {
+      const worker = child()
+      const attempt = ++starts
+      setImmediate(() => {
+        (worker.stdout as PassThrough).end(attempt === 1
+          ? '{"_tag":"AtCapacity","reason":"MemoryPressure","memoryGiB":8,"reservedGiB":8}\n'
+          : '{"_tag":"CheckResult","exitCode":1,"stdout":"assertion failed","stderr":""}\n')
+        worker.emit('close', attempt === 1 ? 75 : 0)
+      })
+      return worker
+    } })
+    expect(await run({ workspace: '/tmp/test', command: 'pnpm', args: ['test'], signal: request.signal })).toEqual({ exitCode: 1, stdout: 'assertion failed', stderr: '' })
+    expect(starts).toBe(2)
+  })
   it('requires explicit admission for recovery instead of launching a direct sandbox', async () => {
     const root = await mkdtemp(join(tmpdir(), 'maintenance-recovery-'))
     try {

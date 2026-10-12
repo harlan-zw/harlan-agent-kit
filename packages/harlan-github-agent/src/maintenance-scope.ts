@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
+import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { parseDesktopEvents } from './desktop-protocol.ts'
@@ -22,6 +23,7 @@ export interface MaintenanceScopeOptions {
   status?: () => Promise<unknown>
   spawn?: (command: string, args: string[], environment: NodeJS.ProcessEnv) => ChildProcessWithoutNullStreams
   executable?: string
+  wait?: (signal: AbortSignal) => Promise<void>
 }
 export interface MaintenanceCheckInput {
   workspace: string
@@ -58,7 +60,8 @@ async function proofAnswer(authority: ReviewProofAuthority | undefined, action: 
   return { _tag: 'Recorded' }
 }
 
-async function* execute(options: MaintenanceScopeOptions, key: string, input: MaintenanceExecution, signal: AbortSignal, authority?: ReviewProofAuthority): AsyncGenerator<unknown> {
+type AdmissionPhase = { _tag: 'Awaiting' } | { _tag: 'Started' } | { _tag: 'AtCapacity' }
+async function* executeAttempt(options: MaintenanceScopeOptions, key: string, input: MaintenanceExecution, signal: AbortSignal, authority?: ReviewProofAuthority): AsyncGenerator<unknown, { _tag: 'Completed' } | { _tag: 'AtCapacity' }> {
   if (signal.aborted)
     throw new Error('The maintenance Task was cancelled.')
   const environment = options.environment ?? process.env
@@ -106,10 +109,23 @@ async function* execute(options: MaintenanceScopeOptions, key: string, input: Ma
     signal.addEventListener('abort', stop, { once: true })
     if (signal.aborted)
       stop()
+    let admission: AdmissionPhase = { _tag: 'Awaiting' }
     for await (const line of createInterface({ input: worker.stdout })) {
       if (Buffer.byteLength(line) > 2_000_000)
         throw new Error('The maintenance worker event exceeds its size limit.')
       const value: unknown = JSON.parse(line)
+      if (typeof value === 'object' && value !== null && '_tag' in value && value._tag === 'AtCapacity') {
+        if (admission._tag !== 'Awaiting' || !('reason' in value) || !['Memory', 'MemoryPressure', 'Slots', 'MaintenanceReserve'].includes(String(value.reason))
+          || !('memoryGiB' in value) || typeof value.memoryGiB !== 'number' || !Number.isFinite(value.memoryGiB) || value.memoryGiB < 0 || value.memoryGiB > 65536
+          || !('reservedGiB' in value) || typeof value.reservedGiB !== 'number' || !Number.isFinite(value.reservedGiB) || value.reservedGiB < 0 || value.reservedGiB > 65536) {
+          throw new Error('The maintenance admission response is invalid.')
+        }
+        admission = { _tag: 'AtCapacity' }
+        continue
+      }
+      if (admission._tag === 'AtCapacity')
+        throw new Error('The maintenance worker sent a mixed admission response.')
+      admission = { _tag: 'Started' }
       const callback = parseReviewProofCallback(value)
       if (callback !== null) {
         const answer = await proofAnswer(authority, callback.action, callback.input)
@@ -117,18 +133,33 @@ async function* execute(options: MaintenanceScopeOptions, key: string, input: Ma
           .catch((error: unknown) => ({ id: callback.id, error: error instanceof Error ? error.message.slice(0, 500) : 'The Review proof callback failed.' }))
         worker.stdin.write(`${JSON.stringify(answer)}\n`)
       }
-      else if (!(typeof value === 'object' && value !== null && '_tag' in value && value._tag === 'AtCapacity')) {
+      else {
         yield value
       }
     }
     const code = await completion
+    if (code === 75 && admission._tag === 'AtCapacity')
+      return { _tag: 'AtCapacity' }
+    if (admission._tag === 'AtCapacity')
+      throw new Error('The maintenance admission exit code is invalid.')
     if (code !== 0)
       throw new Error(`The admitted maintenance worker exited with code ${code}. ${stderr.trim()}`)
+    return { _tag: 'Completed' }
   }
   finally {
     signal.removeEventListener('abort', stop)
     stop()
     await rm(directory, { recursive: true, force: true })
+  }
+}
+
+async function* execute(options: MaintenanceScopeOptions, key: string, input: MaintenanceExecution, signal: AbortSignal, authority?: ReviewProofAuthority): AsyncGenerator<unknown> {
+  while (true) {
+    const result = yield* executeAttempt(options, key, input, signal, authority)
+    if (result._tag === 'Completed')
+      return
+    // The broker refused before provider execution. Its next admission remains authoritative.
+    await (options.wait?.(signal) ?? delay(5000, undefined, { signal }))
   }
 }
 
