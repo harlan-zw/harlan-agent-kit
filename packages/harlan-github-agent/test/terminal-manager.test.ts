@@ -1,5 +1,6 @@
 import type { TerminalAdmission, TerminalAdmissionResult } from '../src/terminal-admission.ts'
 import type { TerminalHelperConfig } from '../src/terminal-manager.ts'
+import type { TerminalProvider } from '../src/terminal-protocol.ts'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -20,7 +21,7 @@ afterEach(async () => {
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true })
 })
-async function fixture() {
+async function fixture(providerArguments: Partial<Record<TerminalProvider, string[]>> = {}) {
   const root = join(homedir(), 'scratch')
   await mkdir(root, { recursive: true })
   const directory = await mkdtemp(join(root, 'terminal-manager-test-'))
@@ -54,9 +55,9 @@ async function fixture() {
     controller: false,
     projects: [{ id: 'project', name: 'Project', path: directory }],
     providers: {
-      codex: { executable: '/bin/fixture', argv: [], available: true },
-      claude: { executable: '/bin/fixture', argv: [], available: true },
-      opencode: { executable: '/bin/fixture', argv: [], available: true },
+      codex: { executable: '/bin/fixture', argv: providerArguments.codex ?? [], available: true },
+      claude: { executable: '/bin/fixture', argv: providerArguments.claude ?? [], available: true },
+      opencode: { executable: '/bin/fixture', argv: providerArguments.opencode ?? [], available: true },
     },
     artifact: {
       entry: '/artifact',
@@ -291,12 +292,12 @@ describe('durable terminal launch and ownership', () => {
     expect(f.releases).toEqual([])
     expect(f.reserveCount()).toBe(1)
   })
-  it('runs Codex without the shared daemon and keeps other provider arguments', async () => {
-    const fixture_ = await fixture()
+  it.each(['codex', 'claude', 'opencode'] as const)('launches %s with only its configured provider arguments', async (provider) => {
+    const arguments_ = provider === 'codex' ? ['--ask-for-approval', 'on-request', '--sandbox', 'workspace-write'] : []
+    const fixture_ = await fixture({ [provider]: arguments_ })
     const manager = await fixture_.manager()
-    await manager.launch(launch)
-    await manager.launch({ ...launch, requestId: 'claude', provider: 'claude' })
-    expect(fixture_.arguments_).toEqual([['--no-daemon'], []])
+    await manager.launch({ ...launch, provider })
+    expect(fixture_.arguments_).toEqual([arguments_])
   })
   it('drains accepted Stop writes and refuses operations after close', async () => {
     const fixture_ = await fixture()
@@ -430,7 +431,7 @@ describe('durable terminal launch and ownership', () => {
     const manager = await f.manager()
     const initialPrompt = '--help; $(touch secret)\nKeep this exact text.'
     await manager.launch({ ...launch, provider, initialPrompt })
-    expect(f.arguments_[0]).toEqual(provider === 'opencode' ? [`--prompt=${initialPrompt}`] : [...(provider === 'codex' ? ['--no-daemon'] : []), '--', initialPrompt])
+    expect(f.arguments_[0]).toEqual(provider === 'opencode' ? [`--prompt=${initialPrompt}`] : ['--', initialPrompt])
     expect(await manager.launch({ ...launch, provider, initialPrompt: 'Different work' })).toEqual({ _tag: 'Err', reason: 'LaunchConflict' })
     expect(f.starts).toHaveLength(1)
   })

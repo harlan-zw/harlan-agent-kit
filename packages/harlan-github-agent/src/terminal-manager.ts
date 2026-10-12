@@ -340,7 +340,6 @@ export async function createTerminalManager(options: {
       executable: provider.executable,
       argv: [
         ...provider.argv,
-        ...(request.provider === 'codex' ? ['--no-daemon'] : []),
         ...(request.initialPrompt === undefined ? [] : request.provider === 'opencode' ? [`--prompt=${request.initialPrompt}`] : ['--', request.initialPrompt]),
       ],
       project,
