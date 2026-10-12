@@ -94,6 +94,7 @@ export async function prepareTerminalSandbox(options: {
     ...(options.denied ?? []),
     join(home, '.ssh'),
     ...(options.environment.SSH_AUTH_SOCK ? [options.environment.SSH_AUTH_SOCK] : []),
+    join(home, '.codex/app-server-daemon'),
     join(home, '.config/harlan-github-agent'),
     join(home, '.local/share/harlan-github-agent'),
     join(home, '.local/state/harlan-desktop-capacity'),
