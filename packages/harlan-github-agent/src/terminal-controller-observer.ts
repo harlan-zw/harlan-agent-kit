@@ -67,7 +67,7 @@ export function createTerminalControllerObserver(options: {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
     try {
       const upstream = await fetch(`${options.origin}/api${target.slice(prefix.length)}`, {
-        method: request.method,
+        method: request.method ?? 'GET',
         redirect: 'manual',
         signal: controller.signal,
         headers: {
