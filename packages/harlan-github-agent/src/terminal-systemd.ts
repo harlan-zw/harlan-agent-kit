@@ -51,11 +51,14 @@ export async function verifyTerminalArtifact(artifact: TerminalArtifact) {
 }
 export function createTerminalSystemdHost(
   nodePath: string,
+  path = process.env.PATH ?? '',
+  run: typeof execute = execute,
 ): TerminalProcessHost {
+  const helperPath = [...new Set([dirname(nodePath), ...path.split(':').filter(isAbsolute), '/usr/local/bin', '/usr/bin', '/bin'])].join(':')
   async function inspect(unit: string): Promise<TerminalScope> {
     if (!/^harlan-terminal-[a-f\d]{24}\.service$/.test(unit))
       throw new Error('Invalid terminal unit')
-    const { stdout } = await execute(
+    const { stdout } = await run(
       'systemctl',
       [
         '--user',
@@ -86,7 +89,7 @@ export function createTerminalSystemdHost(
     inspect,
     async start(options) {
       await verifyTerminalArtifact(options.artifact)
-      await execute(
+      await run(
         'systemd-run',
         [
           '--user',
@@ -100,6 +103,7 @@ export function createTerminalSystemdHost(
           `--property=MemoryMax=${options.memoryGiB}G`,
           '--property=MemorySwapMax=0',
           '--property=CollectMode=inactive-or-failed',
+          `--setenv=PATH=${helperPath}`,
           `--setenv=HARLAN_HOST_RESERVATION=${options.reservationId}`,
           nodePath,
           options.artifact.entry,
@@ -112,7 +116,7 @@ export function createTerminalSystemdHost(
       const before = await inspect(unit)
       if (!invocationId || before.invocationId !== invocationId)
         return 'Unknown'
-      await execute('systemctl', ['--user', 'stop', unit], { timeout: 15000 })
+      await run('systemctl', ['--user', 'stop', unit], { timeout: 15000 })
       const after = await inspect(unit)
       if (after.invocationId && after.invocationId !== invocationId)
         return 'Unknown'
