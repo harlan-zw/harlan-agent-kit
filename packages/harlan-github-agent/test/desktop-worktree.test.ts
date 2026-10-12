@@ -649,3 +649,13 @@ it('delivers portable pixel evidence to the desktop provider and removes local f
   expect(attachmentPath.startsWith(providerWorkspace)).toBe(false)
   await expect(readFile(attachmentPath)).rejects.toMatchObject({ code: 'ENOENT' })
 })
+it('reports when the controller last received a desktop report', () => {
+  let now = 100
+  const broker = createDesktopBroker({ now: () => now })
+  expect(broker.read().seenAt).toBeNull()
+  broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
+  now = 200
+  expect(broker.read().seenAt).toBe(100)
+  broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
+  expect(broker.read().seenAt).toBe(200)
+})

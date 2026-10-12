@@ -419,6 +419,51 @@ DESKTOP_UNIT="${HARLAN_GITHUB_AGENT_DESKTOP_UNIT:-harlan-desktop-agent}"
 DESKTOP_SERVICE_SCRIPT="${HARLAN_GITHUB_AGENT_SERVICE_SCRIPT:-$SCRIPT_DIR/service.sh}"
 DESKTOP_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
+wait_for_desktop() {
+  local attempt state seen remaining request_timeout
+  local started=$SECONDS baseline='' reason='The Service did not answer.'
+  echo "Waiting for a fresh desktop report with the current protocol."
+  for attempt in $(seq 1 60); do
+    remaining=$((120 - SECONDS + started))
+    if [ "$remaining" -le 0 ]; then break; fi
+    request_timeout=$((remaining < 10 ? remaining : 10))
+    if ! systemctl --user is-active --quiet "$DESKTOP_UNIT"; then
+      echo "Desktop client stopped after restart. Inspect its user unit." >&2
+      return 1
+    fi
+    state=$(controller_request --connect-timeout "$request_timeout" --max-time "$request_timeout" "$HOGWILD_ORIGIN/api/state" 2>/dev/null || true)
+    if [ -z "$state" ]; then
+      reason='The Service did not answer.'
+    elif ! seen=$(jq --exit-status --raw-output '
+      .desktop | if type == "object" and has("seenAt") then
+        if .seenAt == null then 0
+        elif (.seenAt | type) == "number" and .seenAt >= 0 then .seenAt
+        else error("Invalid report time.") end
+      else error("Missing report time.") end' <<< "$state" 2>/dev/null); then
+      reason='The Service returned no valid desktop report time.'
+    else
+      # Capture the controller clock after systemd has stopped the previous client.
+      # A later report proves the replacement can communicate, without host clock comparisons.
+      if [ -z "$baseline" ]; then baseline=$seen; fi
+      if jq --exit-status --argjson baseline "$baseline" \
+        '.desktop.connected == true and .desktop.current == true and .desktop.seenAt > $baseline' \
+        <<< "$state" >/dev/null && systemctl --user is-active --quiet "$DESKTOP_UNIT"; then
+        echo "Desktop client connected with the current protocol."
+        return 0
+      fi
+      reason=$(jq --raw-output '
+        if .desktop.connected != true then "The desktop is disconnected."
+        elif .desktop.current != true then "The desktop protocol does not match the Service."
+        else "The desktop sent no fresh report." end' <<< "$state")
+    fi
+    remaining=$((120 - SECONDS + started))
+    if [ "$remaining" -le 0 ]; then break; fi
+    if [ "$attempt" -lt 60 ]; then sleep "$((remaining < 2 ? remaining : 2))"; fi
+  done
+  echo "Desktop client connection check failed: $reason" >&2
+  return 1
+}
+
 update_desktop_client() {
   local ref=$1
   if ! systemctl --user list-unit-files "$DESKTOP_UNIT.service" >/dev/null 2>&1 \
@@ -434,6 +479,7 @@ update_desktop_client() {
   install -Dm644 "$SCRIPT_DIR/desktop-agent.service" "$DESKTOP_UNIT_DIR/$DESKTOP_UNIT.service"
   systemctl --user daemon-reload
   systemctl --user restart "$DESKTOP_UNIT"
+  wait_for_desktop
   echo "Desktop client: $(git -C "${HARLAN_GITHUB_AGENT_CHECKOUT:-$HOME/.local/share/harlan-github-agent/service}" log --oneline -1)"
 }
 

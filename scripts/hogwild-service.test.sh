@@ -44,6 +44,8 @@ export HARLAN_GITHUB_AGENT_DESKTOP_UNIT=harlan-desktop-agent-fixture
 export HARLAN_GITHUB_AGENT_SERVICE_SCRIPT="$test_root/bin/service-fixture.sh"
 export XDG_CONFIG_HOME="$test_home/.config"
 export XDG_STATE_HOME="$test_home/.local/state"
+export HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED="$test_root/desktop-restarted"
+export HOGWILD_SERVICE_TEST_DESKTOP_POLLS="$test_root/desktop-polls"
 
 mkdir -p "$test_home/.config/harlan-github-agent" "$test_home/sites/example" "$test_root/bin"
 printf '%s\n' 'password' > "$HARLAN_GITHUB_AGENT_PASSWORD_FILE"
@@ -114,6 +116,20 @@ printf '%s\n' \
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf '\''curl %s\n'\'' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"' \
+  'if [[ "$*" == *api/state* && -e "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED" && -n "${HOGWILD_SERVICE_TEST_DESKTOP_MODE:-}" ]]; then' \
+  '  polls=$(($(cat "$HOGWILD_SERVICE_TEST_DESKTOP_POLLS") + 1)); printf '\''%s\n'\'' "$polls" > "$HOGWILD_SERVICE_TEST_DESKTOP_POLLS"' \
+  '  case "${HOGWILD_SERVICE_TEST_DESKTOP_MODE:-ready}" in' \
+  '    unavailable) exit 42 ;;' \
+  '    missing) printf '\''{}\n'\''; exit ;;' \
+  '    malformed) printf '\''invalid JSON\n'\''; exit ;;' \
+  '    invalid-time) printf '\''{"desktop":{"connected":true,"current":true,"seenAt":"now"}}\n'\''; exit ;;' \
+  '    disconnected) printf '\''{"desktop":{"connected":false,"current":true,"seenAt":%s}}\n'\'' "$polls"; exit ;;' \
+  '    incompatible) printf '\''{"desktop":{"connected":true,"current":false,"seenAt":%s}}\n'\'' "$polls"; exit ;;' \
+  '    stale) printf '\''{"desktop":{"connected":true,"current":true,"seenAt":1}}\n'\''; exit ;;' \
+  '  esac' \
+  '  seen=1; if ((polls >= 3)); then seen=2; fi' \
+  '  printf '\''{"desktop":{"connected":true,"current":true,"seenAt":%s}}\n'\'' "$seen"; exit' \
+  'fi' \
   'if [ "$HOGWILD_SERVICE_TEST_LEGACY" = true ]; then' \
   '  if [[ "$*" == *api/agents/pause* ]]; then printf '\''Paused\n'\'' > "$HOGWILD_SERVICE_TEST_LEGACY_STATE"; printf '\''{"_tag":"Paused"}\n'\''; exit; fi' \
   '  if [[ "$*" == *api/agents/resume* ]]; then printf '\''Running\n'\'' > "$HOGWILD_SERVICE_TEST_LEGACY_STATE"; printf '\''{"_tag":"Running"}\n'\''; exit; fi' \
@@ -146,7 +162,7 @@ printf '%s\n' \
   '  status=Requested' \
   '  if ((polls >= HOGWILD_SERVICE_TEST_RESTART_AFTER)); then status=Completed; fi' \
   '  if [ "$status" = Completed ] && [ -e "$HOGWILD_SERVICE_TEST_UPDATE_READY" ]; then printf '\''controller prepare-update\n'\'' >> "$HOGWILD_SERVICE_TEST_CALLS"; rm -f "$HOGWILD_SERVICE_TEST_UPDATE_READY" "$HOGWILD_SERVICE_TEST_UPDATE_PENDING"; fi' \
-  '  printf '\''{"agentControl":{"_tag":"Running"},"hostCapacity":{"localActive":2,"desktopActive":1},"tasks":[{"state":{"_tag":"Running"}},{"state":{"_tag":"Publishing"}},{"state":{"_tag":"Queued"}}],"restartRequest":{"_tag":"%s","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}}\n'\'' "$status"' \
+  '  printf '\''{"desktop":{"connected":true,"current":true,"seenAt":%s},"agentControl":{"_tag":"Running"},"hostCapacity":{"localActive":2,"desktopActive":1},"tasks":[{"state":{"_tag":"Running"}},{"state":{"_tag":"Publishing"}},{"state":{"_tag":"Queued"}}],"restartRequest":{"_tag":"%s","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}}\n'\'' "$polls" "$status"' \
   'fi' \
   > "$test_root/bin/curl"
 printf '%s\n' '#!/usr/bin/env bash' \
@@ -158,6 +174,11 @@ printf 'systemctl %s\n' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"
 if [[ "$*" == *list-unit-files* ]]; then
   printf '%s.service enabled enabled\n' "$HARLAN_GITHUB_AGENT_DESKTOP_UNIT"
 fi
+if [[ "$*" == *"restart $HARLAN_GITHUB_AGENT_DESKTOP_UNIT"* ]]; then
+  : > "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED"
+  printf '%s\n' 0 > "$HOGWILD_SERVICE_TEST_DESKTOP_POLLS"
+fi
+if [[ "$*" == *is-active* && "${HOGWILD_SERVICE_TEST_DESKTOP_MODE:-}" == inactive ]]; then exit 3; fi
 FAKE_SYSTEMCTL
 cat > "$test_root/bin/service-fixture.sh" <<'FAKE_SERVICE'
 #!/usr/bin/env bash
@@ -472,4 +493,36 @@ fi
 
 [ "$regression_failures" = 0 ] || exit 1
 
+# A successful unit restart must not hide a disconnected, old, or incompatible client.
+export HOGWILD_SERVICE_TEST_RESTART_AFTER=1
+for mode in disconnected incompatible stale missing malformed invalid-time unavailable inactive; do
+  rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED" "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED"
+  printf '%s\n' 0 > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+  if HOGWILD_SERVICE_TEST_DESKTOP_MODE="$mode" PATH="$test_root/bin:/usr/bin:/bin" \
+    bash "$script_dir/hogwild-service.sh" update > "$test_root/desktop-$mode.log" 2>&1; then
+    printf '%s\n' "Update reported success with a $mode desktop client." >&2
+    exit 1
+  fi
+  case "$mode" in
+    disconnected) reason='The desktop is disconnected.' ;;
+    incompatible) reason='The desktop protocol does not match the Service.' ;;
+    stale) reason='The desktop sent no fresh report.' ;;
+    unavailable) reason='The Service did not answer.' ;;
+    inactive) reason='Desktop client stopped after restart.' ;;
+    *) reason='The Service returned no valid desktop report time.' ;;
+  esac
+  if ! grep -F "$reason" "$test_root/desktop-$mode.log" >/dev/null; then
+    printf '%s\n' "Update did not explain the $mode desktop failure." >&2
+    exit 1
+  fi
+done
+rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED" "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED"
+printf '%s\n' 0 > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+HOGWILD_SERVICE_TEST_DESKTOP_MODE=ready PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update > "$test_root/desktop-ready.log"
+if [ "$(cat "$HOGWILD_SERVICE_TEST_DESKTOP_POLLS")" -lt 3 ] \
+  || ! grep -F 'Desktop client connected with the current protocol.' "$test_root/desktop-ready.log" >/dev/null; then
+  printf '%s\n' 'Update did not wait for a fresh desktop report.' >&2
+  exit 1
+fi
+printf '%s\n' 'Desktop connection tests passed'
 printf '%s\n' 'Hogwild service tests passed'

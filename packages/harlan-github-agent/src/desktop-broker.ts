@@ -52,7 +52,7 @@ export function createDesktopBroker(options: { now: () => number, reviewProofAut
   const ownsTurn = (entry: PendingTurn | undefined): entry is PendingTurn => entry?.state === 'running' && !entry.signal.aborted && options.now() < entry.leaseExpiresAt
   return {
     available: () => connected() && current() && report !== null && report.memoryGiB - report.reservedGiB >= DESKTOP_MEMORY_PER_AGENT_GIB,
-    read: () => ({ connected: connected(), current: current(), protocol: DESKTOP_PROTOCOL, report }),
+    read: () => ({ connected: connected(), current: current(), protocol: DESKTOP_PROTOCOL, report, seenAt: report === null ? null : seenAt }),
     report: (value: DesktopReport) => {
       report = value
       seenAt = options.now()

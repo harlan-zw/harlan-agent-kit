@@ -95,6 +95,8 @@ The helper holds one local lock through the desktop update.
 Another update or restart on that host fails before it reaches the Service.
 During drain, the helper reports active Tasks, occupied Agent slots, and elapsed seconds.
 It reports changed counts and a heartbeat every 30 seconds.
+After desktop restart, it requires a fresh report with the current protocol.
+If that check fails, inspect the desktop unit and Service connection.
 Its durable Update blocks new Tasks before file sync.
 The helper marks preparation Ready after sync, then waits for existing work.
 Failed preparation releases its hold without changing manual Pause.

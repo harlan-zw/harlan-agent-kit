@@ -18,7 +18,7 @@ import {
 import { dashboardSnapshot } from './fixtures.ts'
 
 it('withholds desktop activity when its connected protocol cannot accept work', () => {
-  const desktop = { connected: true, current: false, protocol: 11, report: { protocol: 10, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 } }
+  const desktop = { connected: true, current: false, protocol: 11, seenAt: 0, report: { protocol: 10, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 } }
   expect(desktopPresentation(desktop, true)).toMatchObject({ label: 'Update required', tone: 'warning', report: null })
   expect(desktopPresentation({ ...desktop, current: true }, false)).toMatchObject({ label: 'Unavailable', report: null })
   expect(desktopPresentation({ ...desktop, current: true }, true)).toMatchObject({ label: 'Idle', report: desktop.report })
@@ -27,7 +27,7 @@ it('withholds desktop activity when its connected protocol cannot accept work', 
 it('warns about an incompatible desktop while Hogwild can still start work', () => {
   const snapshot = dashboardSnapshot({
     agentStart: { _tag: 'Available' },
-    desktop: { connected: true, current: false, protocol: 11, report: { protocol: 10, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 } },
+    desktop: { connected: true, current: false, protocol: 11, seenAt: 0, report: { protocol: 10, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 } },
   })
   expect(systemChipState(snapshot, new Date(snapshot.generatedAt))).toMatchObject({ _tag: 'DesktopUpdateRequired' })
 })
