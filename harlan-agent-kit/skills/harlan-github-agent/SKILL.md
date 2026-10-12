@@ -91,6 +91,10 @@ After configuration changes, use a durable Restart request.
 It lets active Agents and controller writes finish before systemd starts the next process.
 Never use Pause or raw unit restart to coordinate a routine restart.
 For paired Service updates, run `pnpm service:hogwild:update`.
+The helper holds one local lock through the desktop update.
+Another update or restart on that host fails before it reaches the Service.
+During drain, the helper reports active Tasks, occupied Agent slots, and elapsed seconds.
+It reports changed counts and a heartbeat every 30 seconds.
 Its durable Update blocks new Tasks before file sync.
 The helper marks preparation Ready after sync, then waits for existing work.
 Failed preparation releases its hold without changing manual Pause.

@@ -43,6 +43,7 @@ export HARLAN_AGENT_CONTEXT_SITES_FILE="$test_root/SITES.md"
 export HARLAN_GITHUB_AGENT_DESKTOP_UNIT=harlan-desktop-agent-fixture
 export HARLAN_GITHUB_AGENT_SERVICE_SCRIPT="$test_root/bin/service-fixture.sh"
 export XDG_CONFIG_HOME="$test_home/.config"
+export XDG_STATE_HOME="$test_home/.local/state"
 
 mkdir -p "$test_home/.config/harlan-github-agent" "$test_home/sites/example" "$test_root/bin"
 printf '%s\n' 'password' > "$HARLAN_GITHUB_AGENT_PASSWORD_FILE"
@@ -145,10 +146,12 @@ printf '%s\n' \
   '  status=Requested' \
   '  if ((polls >= HOGWILD_SERVICE_TEST_RESTART_AFTER)); then status=Completed; fi' \
   '  if [ "$status" = Completed ] && [ -e "$HOGWILD_SERVICE_TEST_UPDATE_READY" ]; then printf '\''controller prepare-update\n'\'' >> "$HOGWILD_SERVICE_TEST_CALLS"; rm -f "$HOGWILD_SERVICE_TEST_UPDATE_READY" "$HOGWILD_SERVICE_TEST_UPDATE_PENDING"; fi' \
-  '  printf '\''{"agentControl":{"_tag":"Running"},"restartRequest":{"_tag":"%s","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}}\n'\'' "$status"' \
+  '  printf '\''{"agentControl":{"_tag":"Running"},"hostCapacity":{"localActive":2,"desktopActive":1},"tasks":[{"state":{"_tag":"Running"}},{"state":{"_tag":"Publishing"}},{"state":{"_tag":"Queued"}}],"restartRequest":{"_tag":"%s","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}}\n'\'' "$status"' \
   'fi' \
   > "$test_root/bin/curl"
-printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$test_root/bin/sleep"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'if [ -n "${HOGWILD_SERVICE_TEST_SLEEP_SECONDS:-}" ]; then /usr/bin/sleep "$HOGWILD_SERVICE_TEST_SLEEP_SECONDS"; fi' \
+  'exit 0' > "$test_root/bin/sleep"
 cat > "$test_root/bin/systemctl" <<'FAKE_SYSTEMCTL'
 #!/usr/bin/env bash
 printf 'systemctl %s\n' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"
@@ -159,6 +162,10 @@ FAKE_SYSTEMCTL
 cat > "$test_root/bin/service-fixture.sh" <<'FAKE_SERVICE'
 #!/usr/bin/env bash
 printf 'service %s\n' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"
+if [ -n "${HOGWILD_SERVICE_TEST_DESKTOP_GATE:-}" ]; then
+  : > "$HOGWILD_SERVICE_TEST_DESKTOP_ENTERED"
+  read -r release < "$HOGWILD_SERVICE_TEST_DESKTOP_GATE"
+fi
 FAKE_SERVICE
 chmod +x "$test_root/bin/systemctl" "$test_root/bin/service-fixture.sh"
 chmod +x "$test_root/bin/ssh" "$test_root/bin/scp" "$test_root/bin/rsync" "$test_root/bin/curl" "$test_root/bin/sleep"
@@ -395,5 +402,74 @@ if HOGWILD_SERVICE_TEST_PRIOR_RESTART=Restarting HOGWILD_DEPLOY_DESPITE_PENDING_
   printf '%s\n' 'The retired override bypassed durable Update ownership.' >&2
   exit 1
 fi
+
+# Hold the desktop after Hogwild reports Completed. A second update must fail
+# before it reaches a network or checkout boundary.
+rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED"
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+export HOGWILD_SERVICE_TEST_RESTART_AFTER=1
+export HOGWILD_SERVICE_TEST_DESKTOP_GATE="$test_root/desktop-gate"
+export HOGWILD_SERVICE_TEST_DESKTOP_ENTERED="$test_root/desktop-entered"
+mkfifo "$HOGWILD_SERVICE_TEST_DESKTOP_GATE"
+PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update > "$test_root/first-update.log" 2>&1 &
+first_update=$!
+for attempt in $(seq 1 1000); do
+  [ -e "$HOGWILD_SERVICE_TEST_DESKTOP_ENTERED" ] && break
+  if ! kill -0 "$first_update" 2>/dev/null; then
+    wait "$first_update"
+    printf '%s\n' 'The first update did not reach desktop preparation.' >&2
+    exit 1
+  fi
+  /usr/bin/sleep 0.01
+done
+if [ ! -e "$HOGWILD_SERVICE_TEST_DESKTOP_ENTERED" ]; then
+  kill "$first_update"
+  wait "$first_update" || true
+  printf '%s\n' 'The first update did not reach its desktop gate.' >&2
+  exit 1
+fi
+regression_failures=0
+for command in update restart; do
+  second_status=0
+  HOGWILD_SERVICE_TEST_DESKTOP_GATE='' HOGWILD_SERVICE_TEST_CALLS="$test_root/second-$command-calls" \
+    PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" "$command" > "$test_root/second-$command.log" 2>&1 || second_status=$?
+  if [ "$second_status" = 0 ] || [ -s "$test_root/second-$command-calls" ]; then
+    printf '%s\n' "A second $command reached the Service while the desktop still updated." >&2
+    regression_failures=$((regression_failures + 1))
+  fi
+  if ! grep -F 'Another Hogwild update or restart is running.' "$test_root/second-$command.log" >/dev/null; then
+    printf '%s\n' "The second $command did not explain its lock refusal." >&2
+    regression_failures=$((regression_failures + 1))
+  fi
+done
+printf '%s\n' 'finish' > "$HOGWILD_SERVICE_TEST_DESKTOP_GATE"
+wait "$first_update"
+unset HOGWILD_SERVICE_TEST_DESKTOP_GATE HOGWILD_SERVICE_TEST_DESKTOP_ENTERED
+# Process exit must release the lock for the next update.
+PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null
+
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+export HOGWILD_SERVICE_TEST_RESTART_AFTER=3
+PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" restart > "$test_root/progress.log"
+if ! grep -E '2 active Tasks.*3 occupied Agent slots.*Elapsed: [0-9]+s' "$test_root/progress.log" >/dev/null; then
+  printf '%s\n' 'Restart did not report active work and elapsed time.' >&2
+  regression_failures=$((regression_failures + 1))
+fi
+if [ "$(grep -c 'Waiting for Restart' "$test_root/progress.log")" != 1 ]; then
+  printf '%s\n' 'Restart repeated unchanged progress on every poll.' >&2
+  regression_failures=$((regression_failures + 1))
+fi
+
+# Keep counts unchanged for over 30 seconds to exercise the real heartbeat.
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+export HOGWILD_SERVICE_TEST_RESTART_AFTER=8
+HOGWILD_SERVICE_TEST_SLEEP_SECONDS=6 PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/hogwild-service.sh" restart > "$test_root/heartbeat.log"
+if [ "$(grep -c 'Waiting for Restart' "$test_root/heartbeat.log")" -lt 2 ]; then
+  printf '%s\n' 'Restart did not send a heartbeat during an unchanged drain.' >&2
+  regression_failures=$((regression_failures + 1))
+fi
+
+[ "$regression_failures" = 0 ] || exit 1
 
 printf '%s\n' 'Hogwild service tests passed'

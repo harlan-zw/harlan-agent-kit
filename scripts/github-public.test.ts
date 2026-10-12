@@ -48,6 +48,13 @@ describe('public GitHub CLI access', () => {
     expect(readFileSync(f.recorded, 'utf8')).toContain('--method\nGET\n')
   })
 
+  it('watches CI using the agent credential and preserves the exit status', () => {
+    const f = fixture()
+    const args = ['run', 'watch', '123', '--repo', 'owner/repo', '--exit-status']
+    expect(f.run(args, { RESULT: '1' }).status).toBe(1)
+    expect(readFileSync(f.recorded, 'utf8')).toBe(`${args.join('\n')}\n`)
+  })
+
   it.each([
     ['pr', 'create'],
     ['pr', 'merge', '123'],

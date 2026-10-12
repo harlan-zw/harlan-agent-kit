@@ -33,7 +33,7 @@ case "${1:-} ${2:-}" in
   'pr view'|'pr list'|'pr checks'|'pr diff'|\
   'issue view'|'issue list'|'repo view'|'repo list'|\
   'search code'|'search commits'|'search issues'|'search prs'|'search repos'|\
-  'run view'|'run list'|'run download'|'release view'|'release list'|'release download') ;;
+  'run view'|'run list'|'run watch'|'run download'|'release view'|'release list'|'release download') ;;
   *) fail 'Agents may only read public GitHub data. The controller owns GitHub writes.' ;;
 esac
 for arg in "$@"; do
