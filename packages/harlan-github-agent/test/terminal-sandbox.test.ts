@@ -10,6 +10,32 @@ import { createTerminalPreparationRunner, prepareTerminalSandbox } from '../src/
 
 const execute = promisify(execFile)
 
+it('installs and runs a provider update inside isolated package manager state', async () => {
+  const root = await mkdtemp(join(homedir(), 'scratch/terminal-provider-update-test-'))
+  const home = join(root, 'home')
+  const project = join(root, 'project')
+  const fixture = join(project, 'provider')
+  try {
+    await Promise.all([mkdir(join(home, '.local/bin'), { recursive: true }), mkdir(fixture, { recursive: true })])
+    const host = join(home, '.local/bin/codex')
+    await writeFile(host, '#!/bin/sh\necho host-provider\n', { mode: 0o755 })
+    await writeFile(join(fixture, 'package.json'), JSON.stringify({ name: 'terminal-provider-update-fixture', version: '1.0.0', bin: { codex: 'cli.js' } }))
+    await writeFile(join(fixture, 'cli.js'), '#!/usr/bin/env node\nconsole.log("updated-provider")\n', { mode: 0o755 })
+    const environment = { ...process.env, HOME: home, npm_config_manage_package_manager_versions: 'false', npm_config_store_dir: join(home, '.cache/harlan-terminal/pnpm/store') }
+    const original = await prepareTerminalSandbox({ cwd: project, executable: host, provider: 'codex', argv: [], environment, home })
+    expect((await execute(original.executable, original.argv, { env: original.environment })).stdout.trim()).toBe('host-provider')
+    const sandbox = await prepareTerminalSandbox({ cwd: project, executable: '/usr/bin/env', argv: ['pnpm', 'add', '-g', fixture, '--offline', '--ignore-scripts'], environment, home })
+    await execute(sandbox.executable, sandbox.argv, { env: sandbox.environment })
+    const updated = await prepareTerminalSandbox({ cwd: project, executable: host, provider: 'codex', argv: [], environment, home })
+    const result = await execute(updated.executable, updated.argv, { env: updated.environment })
+    expect(result.stdout.trim()).toBe('updated-provider')
+    expect((await execute(host)).stdout.trim()).toBe('host-provider')
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 it('runs the deployed claim tool while keeping its private Service parent hidden', async () => {
   const root = await mkdtemp(join(homedir(), 'scratch/terminal-deployed-claim-test-'))
   const home = join(root, 'home')
