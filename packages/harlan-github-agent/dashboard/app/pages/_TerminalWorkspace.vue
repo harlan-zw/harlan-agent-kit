@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import type { TerminalCapabilities, TerminalProject, TerminalProvider, TerminalSession } from '../../../src/terminal-protocol.ts'
 import type { TerminalCapacity } from '../utils/terminal-capacity.ts'
+import type { TerminalLaunchIntent } from '../utils/terminal-launch.ts'
 import { useDocumentVisibility, useIntervalFn, useMediaQuery, useStorage } from '@vueuse/core'
 import { parseTerminalCapacity } from '../utils/terminal-capacity.ts'
 import { terminalFailureCopy } from '../utils/terminal-copy.ts'
+import { terminalLaunchIntent } from '../utils/terminal-launch.ts'
 import { activeTerminalSession, emptyTerminalLayout, emptyTerminalProjectLayout, parseTerminalLayout, reconcileTerminalLayout, terminalDisplayProjects, updateTerminalProjectLayout } from '../utils/terminal-layout.ts'
 import { parseTerminalProjects, parseTerminalSessionResult, parseTerminalSessions } from '../utils/terminal-protocol.ts'
 import TerminalView from './_TerminalView.vue'
@@ -41,7 +43,7 @@ const loading = ref(true)
 const refreshing = ref(false)
 const visibility = useDocumentVisibility()
 const diffOpen = ref(false)
-const launchIntent = shallowRef<{ requestId: string, projectId: string, provider: TerminalProvider, initialPrompt?: string, mode: 'Regular' | 'Force' }>()
+const launchIntent = shallowRef<TerminalLaunchIntent>()
 const selectedId = computed(() => activeTerminalSession(projectLayout.value))
 const selected = computed(() => sessions.value.find(session => session.id === selectedId.value))
 const tabSessions = computed(() => projectLayout.value.tabs.map(id => sessions.value.find(session => session.id === id)).filter((session): session is TerminalSession => session !== undefined))
@@ -148,9 +150,7 @@ async function launch(mode: 'Regular' | 'Force' = 'Regular') {
   failure.value = ''
   const previous = launchIntent.value
   const prompt = initialPrompt.value.trim() || undefined
-  const intent = previous?.projectId === projectId.value && previous.provider === provider.value && previous.initialPrompt === prompt
-    ? previous
-    : { requestId: crypto.randomUUID(), projectId: projectId.value, provider: provider.value, ...(prompt ? { initialPrompt: prompt } : {}), mode }
+  const intent = terminalLaunchIntent(previous, { projectId: projectId.value, provider: provider.value, ...(prompt ? { initialPrompt: prompt } : {}) }, crypto.randomUUID(), mode)
   launchIntent.value = intent
   await $fetch<unknown>('/api/terminal/sessions', { method: 'POST', body: intent }).then(parseTerminalSessionResult).then(async (result) => {
     if (result._tag === 'Err') {
@@ -313,6 +313,9 @@ watch(visibility, (value) => {
           <span v-if="tabSessions.length === 0" class="flex items-center px-3 text-xs text-muted">Sessions</span>
         </div>
         <div class="flex shrink-0 items-center gap-1 px-1">
+          <UButton v-if="canForce && selected?.state === 'Unknown'" color="warning" variant="ghost" size="xs" @click="forceConfirmation = { _tag: 'Waiting', id: selected.id }">
+            Force start
+          </UButton>
           <UButton v-if="selected && !narrow" icon="i-octicon-columns-16" :aria-label="projectLayout.view._tag === 'Split' ? 'Show one terminal' : 'Split terminal'" variant="ghost" size="xs" :disabled="tabSessions.length < 2" :aria-pressed="projectLayout.view._tag === 'Split'" @click="split" />
           <UButton v-if="selected" :icon="diffOpen ? 'i-octicon-terminal-16' : 'i-octicon-diff-16'" :aria-label="diffOpen ? 'Show terminal' : 'Show diff'" variant="ghost" size="xs" :aria-pressed="diffOpen" @click="diffOpen = !diffOpen" />
           <UButton v-if="selected && ['Starting', 'Running', 'Unknown'].includes(selected.state)" variant="ghost" size="xs" color="error" :loading="pending" @click="stop()">

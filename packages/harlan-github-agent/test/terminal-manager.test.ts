@@ -171,6 +171,7 @@ async function fixture() {
   }
   return {
     manager,
+    admission: options.admission,
     deferStop() {
       const gate = Promise.withResolvers<void>()
       const entered = Promise.withResolvers<void>()
@@ -220,7 +221,7 @@ const launch = {
   provider: 'codex' as const,
 }
 describe('durable terminal launch and ownership', () => {
-  it('keeps a definitively unavailable manual attempt eligible for Regular retry', async () => {
+  it('fences ambiguous manual outcomes across restart without replacing the admission request', async () => {
     const f = await fixture()
     const manager = await f.manager()
     f.refuse()
@@ -228,10 +229,39 @@ describe('durable terminal launch and ownership', () => {
     if (queued._tag !== 'Ok')
       throw new Error('Fixture queue failed')
     f.unavailableManual()
-    expect(await manager.forceQueued(queued.value.id, 'unverified-memory')).toMatchObject({ _tag: 'Ok', value: { id: queued.value.id, state: 'Queued' } })
+    const requests: Parameters<TerminalAdmission['reserve']>[0][] = []
+    const originalReserve = f.admission.reserve
+    let responseLost = true
+    f.admission.reserve = async (value) => {
+      await originalReserve(value)
+      requests.push(structuredClone(value))
+      return responseLost ? { _tag: 'Unavailable', reason: 'Connection ended after committed admission' } : { _tag: 'Admitted', disposition: 'Existing', reservationId: 'reservation', unit: value.unit, hostId: 'host', bootId: 'boot' }
+    }
+    f.admission.reconcile = async () => ({ _tag: 'Unknown', reason: 'Committed Starting charge has no verified scope' })
+    const cancellations: Parameters<TerminalAdmission['cancel']>[0][] = []
+    f.admission.cancel = async (value) => {
+      cancellations.push(value)
+      return { _tag: 'Unknown' }
+    }
+    expect(await manager.forceQueued(queued.value.id, 'unverified-memory')).toEqual({ _tag: 'Err', reason: 'DeliveryUnknown' })
+    expect(manager.intent(queued.value.id)?.admission).toEqual({ _tag: 'ManualOverride', requestId: 'manual:unverified-memory' })
     f.allow()
     await manager.retryQueued()
-    expect(f.starts).toHaveLength(1)
+    expect(f.starts).toHaveLength(0)
+    expect(await manager.stop(queued.value.id)).toEqual({ _tag: 'Err', reason: 'DeliveryUnknown' })
+    expect(cancellations).toEqual([])
+    await manager.close()
+    const recovered = await f.manager()
+    expect(await recovered.forceQueued(queued.value.id, 'new-browser-attempt')).toEqual({ _tag: 'Err', reason: 'DeliveryUnknown' })
+    await recovered.retryQueued()
+    expect(f.reserveCount()).toBe(3)
+    responseLost = false
+    expect(await recovered.forceQueued(queued.value.id, 'another-browser-attempt')).toMatchObject({ _tag: 'Ok', value: { id: queued.value.id, state: 'Unknown' } })
+    expect(requests).toHaveLength(3)
+    expect(requests.every(value => value.requestId === 'manual:unverified-memory' && value.admission === 'ManualOverride')).toBe(true)
+    expect(f.starts).toHaveLength(0)
+    expect(await recovered.stop(queued.value.id)).toEqual({ _tag: 'Err', reason: 'OwnershipUnknown' })
+    expect(cancellations).toEqual([{ key: `terminal:${queued.value.id}`, reservationId: 'reservation' }])
   })
   it('releases an adopted Worktree after another client sweeps the proven-empty charge', async () => {
     const f = await fixture()

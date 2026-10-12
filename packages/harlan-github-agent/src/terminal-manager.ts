@@ -211,7 +211,7 @@ export async function createTerminalManager(options: {
       if (existing.decision._tag === 'Rejected')
         return { _tag: 'Err', reason: existing.decision.reason }
       if (existing.decision._tag === 'Pending')
-        return { _tag: 'Err', reason: 'OwnershipUnknown' }
+        return manual && existing.admission._tag === 'ManualOverride' ? forceIntent(existing, existing.admission.requestId) : { _tag: 'Err', reason: 'OwnershipUnknown' }
       await reconcile(existing)
       return { _tag: 'Ok', value: session(existing) }
     }
@@ -294,7 +294,7 @@ export async function createTerminalManager(options: {
         return { _tag: 'Unknown' } as const
       })
     if (admission._tag !== 'Admitted') {
-      if (admission._tag === 'AtCapacity' || (admission._tag === 'Unavailable' && intent.admission._tag === 'ManualOverride')) {
+      if (admission._tag === 'AtCapacity') {
         if (intent.admission._tag === 'ManualOverride') {
           intent.manualAttempts[intent.admission.requestId] = { _tag: 'Refused', reason: admission.reason }
           // A refused manual attempt has no root receipt. Keep this same intent eligible for Regular retry.
@@ -320,7 +320,7 @@ export async function createTerminalManager(options: {
       await persist(intent)
       return {
         _tag: 'Err',
-        reason: 'CapacityUnavailable',
+        reason: intent.admission._tag === 'ManualOverride' ? 'DeliveryUnknown' : 'CapacityUnavailable',
       }
     }
     intent.reservationId = admission.reservationId
@@ -374,9 +374,12 @@ export async function createTerminalManager(options: {
     return { _tag: 'Ok', value: session(intent) }
   }
   async function forceIntent(intent: TerminalIntent, requestId: string): Promise<TerminalResult<TerminalSession>> {
+    // An explicit retry resolves the exact root request. It never replaces an uncertain charge.
+    if (intent.decision._tag === 'Pending' && intent.admission._tag === 'ManualOverride')
+      return admit(intent)
     const previous = Object.hasOwn(intent.manualAttempts, requestId) ? intent.manualAttempts[requestId] : undefined
     if (previous)
-      return previous._tag === 'Pending' ? { _tag: 'Err', reason: 'OwnershipUnknown' } : { _tag: 'Ok', value: session(intent) }
+      return previous._tag === 'Pending' ? { _tag: 'Err', reason: 'DeliveryUnknown' } : { _tag: 'Ok', value: session(intent) }
     if (intent.decision._tag !== 'Queued')
       return { _tag: 'Err', reason: 'LaunchConflict' }
     if (Object.keys(intent.manualAttempts).length >= 128)
@@ -552,6 +555,8 @@ export async function createTerminalManager(options: {
         ) {
           return { _tag: 'Ok', value: session(intent) }
         }
+        if (intent.decision._tag === 'Pending' && intent.admission._tag === 'ManualOverride' && !intent.reservationId && !intent.invocationId)
+          return { _tag: 'Err', reason: 'DeliveryUnknown' }
         if (!intent.invocationId && intent.reservationId) {
           const cancelled = await options.admission.cancel({
             key: `terminal:${id}`,
