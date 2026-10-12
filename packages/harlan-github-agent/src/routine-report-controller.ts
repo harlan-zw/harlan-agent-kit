@@ -177,6 +177,8 @@ ${command.body}${candidateDetails(command.candidates)}`
 }
 
 export interface RoutineReportControllerOptions {
+  /** Pending reports wait until the held GitHub quota becomes available. */
+  canPublish?: () => boolean
   github: Pick<GitHubIssuePublisher, 'createComment' | 'createIssue' | 'updateIssue' | 'findIssueCommentByMarker' | 'findRoutineTrackingIssue'>
   leaseMilliseconds?: number
   now: () => Date
@@ -198,13 +200,14 @@ export interface RoutineReportController {
  */
 export function createRoutineReportController(options: RoutineReportControllerOptions): RoutineReportController {
   const leaseMilliseconds = options.leaseMilliseconds ?? 60_000
+  const canPublish = options.canPublish ?? (() => true)
 
   return {
     publishPending: async (signal, limit = 3) => {
       const results: Array<Result<{ repository: string, issueNumber: number }, string>> = []
       const attemptedCommandIds: string[] = []
       for (let written = 0; written < limit; written += 1) {
-        if (signal.aborted)
+        if (signal.aborted || !canPublish())
           return results
         const command = options.store.claimNextRoutineReport(
           options.workerId,

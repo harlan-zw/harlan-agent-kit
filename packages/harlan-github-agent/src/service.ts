@@ -337,8 +337,8 @@ export async function resolveUserLogin(
 }
 
 /** Whether a Routine run may take a free Agent permit. */
-export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask' | 'hasOverdueRoutineRun'>, now: string): boolean {
-  return canClaim && (!triggers.includes('github') || store.hasOverdueRoutineRun(now) || !store.hasPriorityAgentTask(now))
+export function canClaimRoutineRun(canClaim: boolean, triggers: readonly ServiceTrigger[], store: Pick<JournalStore, 'hasPriorityAgentTask' | 'hasOverdueRoutineRun'>, now: string, mayUseGitHub = true): boolean {
+  return mayUseGitHub && canClaim && (!triggers.includes('github') || store.hasOverdueRoutineRun(now) || !store.hasPriorityAgentTask(now))
 }
 
 export interface ExternalWatchReloadOptions {
@@ -977,7 +977,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         // A manual choice checks its own provider. It cannot reopen the global Queue.
         canClaim: () => store.getAgentControl()._tag === 'Running' && restartAllowsTaskClaims(store.getRestartRequest()),
         claim: (workerId, at, leaseMilliseconds) => store.claimNextRoutineRun(workerId, at, leaseMilliseconds, selection => selection === undefined
-          ? canClaimRoutineRun(canClaim(), config.triggers, store, at)
+          ? canClaimRoutineRun(canClaim(), config.triggers, store, at, rateLimits.read().length === 0)
           : hasSpendableCapacity(capacity.read(selection.provider, selection.model ?? agentProfile(selection.provider).roles.routine_scan.model), config.agent.reservePercent[selection.provider])
             && store.providerCanStart({ provider: selection.provider, credential: agentProfile(selection.provider).authentication, model: selection.model ?? agentProfile(selection.provider).roles.routine_scan.model, at })),
         complete: store.completeRoutineRun,
@@ -1203,6 +1203,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     workerId: randomUUID(),
   })
   const routineReports = createRoutineReportController({
+    canPublish: () => rateLimits.read().length === 0,
     github: createGitHubIssuePublisher({ tokens: routedTokens }),
     now,
     store,
