@@ -1,5 +1,6 @@
 import type { AddressInfo } from 'node:net'
 import type { GitHubTokenProvider } from '../src/github-auth.ts'
+import { channel } from 'node:diagnostics_channel'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { Octokit } from 'octokit'
@@ -8,6 +9,56 @@ import { createAuthenticatedClient } from '../src/github-auth.ts'
 import { createGitHubRequestCounts } from '../src/github-request-counts.ts'
 import { createGitHubResponseCache } from '../src/github-response-cache.ts'
 import { ok } from '../src/result.ts'
+
+const rateHeaders = { 'x-ratelimit-resource': 'core', 'x-ratelimit-remaining': '4998', 'x-ratelimit-used': '2', 'x-ratelimit-reset': '1791784800' }
+it.each([
+  rateHeaders,
+  Object.entries(rateHeaders).flat(),
+  Object.entries(rateHeaders).flat().map(value => new Uint8Array(Buffer.from(value))),
+])('reads rate limits across transport header formats', (headers) => {
+  const reports: unknown[] = []
+  const counts = createGitHubRequestCounts({ now: () => new Date(), report: value => reports.push(value) })
+  counts.start()
+  try {
+    channel('undici:request:headers').publish({
+      request: { origin: 'https://api.github.com', path: '/user', method: 'GET', headers: [] },
+      response: { statusCode: 200, headers },
+    })
+    counts.flush()
+    expect(reports).toEqual([expect.objectContaining({ rows: [expect.objectContaining({ rateLimit: { _tag: 'Available', resource: 'core', remaining: 4998, used: 2, resetAt: 1791784800 } })] })])
+  }
+  finally { counts.stop() }
+})
+
+it('retains oversized rows in overflow totals without writing an oversized report', () => {
+  const reports: { completed: number, overflow: number, rows: unknown[] }[] = []
+  const counts = createGitHubRequestCounts({ now: () => new Date(), report: value => reports.push(value) })
+  counts.start()
+  try {
+    channel('undici:request:headers').publish({ request: { origin: 'https://api.github.com', path: `/user${'/issues'.repeat(3000)}`, method: 'GET', headers: [] }, response: { statusCode: 200, headers: [] } })
+    counts.stop()
+    expect(reports).toEqual([expect.objectContaining({ completed: 1, overflow: 1, rows: [] })])
+    expect(Buffer.byteLength(JSON.stringify(reports[0]))).toBeLessThan(16_384)
+  }
+  finally { counts.stop() }
+})
+
+it('keeps every request in complete reports below the journal line limit', () => {
+  const reports: { completed: number, overflow: number, rows: unknown[] }[] = []
+  const counts = createGitHubRequestCounts({ now: () => new Date(), report: value => reports.push(value) })
+  counts.start()
+  try {
+    for (let index = 0; index < 512; index++) {
+      channel('undici:request:headers').publish({ request: { origin: 'https://api.github.com', path: `/repos/owner/repository-${index}/issues`, method: 'GET', headers: [] }, response: { statusCode: 200, headers: [] } })
+    }
+    counts.flush()
+    expect(reports.reduce((sum, report) => sum + report.completed, 0)).toBe(512)
+    expect(reports.reduce((sum, report) => sum + report.rows.length, 0)).toBe(512)
+    expect(reports.every(report => Buffer.byteLength(JSON.stringify(report)) <= 16_384)).toBe(true)
+    expect(reports.reduce((sum, report) => sum + report.overflow, 0)).toBe(0)
+  }
+  finally { counts.stop() }
+})
 
 it('counts actual HTTP responses and 304 reuse across clients sharing one credential', async () => {
   const secret = 'secret-controller-token-that-must-never-appear'
