@@ -1,14 +1,7 @@
-import type { TerminalCapabilities } from '../../../src/terminal-protocol.ts'
+import type { HostState } from '../utils/terminal-host-discovery.ts'
 import { createSharedComposable, useEventListener } from '@vueuse/core'
+import { discoverTerminalHost } from '../utils/terminal-host-discovery.ts'
 import { createTerminalPairingDiscovery, takeTerminalPairing } from '../utils/terminal-pairing.ts'
-import { parseTerminalCapabilities } from '../utils/terminal-protocol.ts'
-
-type HostState
-  = | { _tag: 'Checking' }
-    | { _tag: 'Available', capabilities: TerminalCapabilities }
-    | { _tag: 'Legacy' }
-    | { _tag: 'PairingRequired' }
-    | { _tag: 'Unavailable' }
 
 function status(error: unknown): number | undefined {
   if (typeof error !== 'object' || error === null)
@@ -21,6 +14,7 @@ function createTerminalHost() {
   const state = shallowRef<HostState>({ _tag: 'Checking' })
   const route = useRoute()
   const router = useRouter()
+  const auth = useBrowserAuth()
   const discovery = createTerminalPairingDiscovery({
     take: () => takeTerminalPairing(window.location, (url) => {
       window.history.replaceState(window.history.state, document.title, url)
@@ -32,6 +26,15 @@ function createTerminalHost() {
     }, route.hash || router.currentRoute.value.hash),
     discover: code => (async () => {
       state.value = { _tag: 'Checking' }
+      const surface = auth.session.value?.surface
+      if (!surface) {
+        state.value = { _tag: 'Unavailable' }
+        return
+      }
+      if (surface._tag === 'Dashboard') {
+        state.value = await discoverTerminalHost(surface, () => $fetch('/api/terminal/capabilities'))
+        return
+      }
       if (code) {
         const result = await $fetch<{ _tag: 'Ok' | 'Err' }>('/api/terminal/pair', { method: 'POST', body: { code } })
         if (result._tag !== 'Ok') {
@@ -39,12 +42,7 @@ function createTerminalHost() {
           return
         }
       }
-      const capabilities = parseTerminalCapabilities(await $fetch<unknown>('/api/terminal/capabilities'))
-      if (capabilities._tag === 'Err') {
-        state.value = { _tag: 'Unavailable' }
-        return
-      }
-      state.value = { _tag: 'Available', capabilities: capabilities.value }
+      state.value = await discoverTerminalHost(surface, () => $fetch('/api/terminal/capabilities'))
     })().catch((error: unknown) => {
       const code = status(error)
       state.value = code === 404 ? { _tag: 'Legacy' } : code === 401 || code === 403 ? { _tag: 'PairingRequired' } : { _tag: 'Unavailable' }
@@ -61,7 +59,7 @@ function createTerminalHost() {
     return discovery.start()
   }
 
-  const controller = computed(() => state.value._tag === 'Legacy' || (state.value._tag === 'Available' && state.value.capabilities.controller))
+  const controller = computed(() => state.value._tag === 'Dashboard' || state.value._tag === 'Legacy' || (state.value._tag === 'Available' && state.value.capabilities.controller))
   const readOnly = computed(() => state.value._tag === 'Available' && state.value.capabilities.controllerReadOnly)
   function controllerPath(path: string): string {
     return readOnly.value ? `/api/maintenance${path.slice('/api'.length)}` : path

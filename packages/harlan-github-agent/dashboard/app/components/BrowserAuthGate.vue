@@ -36,6 +36,7 @@ onMounted(() => {
         </p>
         <UButton v-if="!auth.session.value" label="Retry" color="neutral" variant="outline" class="min-h-11" :disabled="auth.pending.value !== null" @click="auth.initialize" />
       </div>
+      <PasskeyProgress />
       <p v-if="auth.error.value" role="alert" class="mt-4 text-sm text-error">
         {{ auth.error.value }}
       </p>

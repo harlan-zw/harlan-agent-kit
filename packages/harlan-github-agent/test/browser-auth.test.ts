@@ -40,7 +40,7 @@ it('refuses wrong origins, malformed bodies and oversized unauthenticated ceremo
   const directory = mkdtempSync(join(tmpdir(), 'browser-auth-'))
   directories.push(directory)
   const store = openBrowserAuthStore(join(directory, 'auth.sqlite'))
-  const auth = createBrowserAuth({ origin: 'http://localhost:43177', rpId: 'localhost', store, now: () => 1000, bootstrapKind: 'password', bootstrap: body => body.password === 'fixture' })
+  const auth = createBrowserAuth({ origin: 'http://localhost:43177', rpId: 'localhost', store, now: () => 1000, surface: { _tag: 'TerminalHost' }, bootstrapKind: 'password', bootstrap: body => body.password === 'fixture' })
   const request = (body: string, origin = auth.origin) => new Request(`${auth.origin}/api/browser-auth/bootstrap`, { method: 'POST', headers: { host: 'localhost:43177', origin }, body })
   expect((await auth.handle(request('{"password":"fixture"}', 'https://foreign.example')))?.status).toBe(403)
   expect((await auth.handle(request('{broken')))?.status).toBe(400)

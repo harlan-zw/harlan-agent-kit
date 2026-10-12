@@ -1636,7 +1636,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       })
     : undefined
   const browserAuth = config.storage.path !== ':memory:' && new URL(config.server.allowedOrigin).protocol === 'https:'
-    ? createBrowserAuthorities({ directory: join(dirname(config.storage.path), 'browser-auth'), origin: config.server.allowedOrigin, ...(config.server.browserOrigins?.[0] ? { publicOrigin: config.server.browserOrigins[0] } : {}), password: options.dashboardPassword, now: () => now().getTime() })
+    ? createBrowserAuthorities({ directory: join(dirname(config.storage.path), 'browser-auth'), origin: config.server.allowedOrigin, privateTerminalHost: config.server.agentSessions === true, ...(config.server.browserOrigins?.[0] ? { publicOrigin: config.server.browserOrigins[0] } : {}), password: options.dashboardPassword, now: () => now().getTime() })
     : undefined
   const app = createAgentApp({
     ...(browserAuth ? { browserAuth } : {}),

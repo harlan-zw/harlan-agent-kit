@@ -1,8 +1,11 @@
-import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
+import type { PasskeyPhase } from '../utils/passkey-ceremony.ts'
+import type { BrowserSurface } from '../utils/terminal-host-discovery.ts'
+import { startAuthentication, startRegistration, WebAuthnAbortService } from '@simplewebauthn/browser'
 import { createSharedComposable, until } from '@vueuse/core'
+import { runPasskeyOperation } from '../utils/passkey-ceremony.ts'
 import { createTerminalPairingDiscovery, takeTerminalPairing } from '../utils/terminal-pairing.ts'
 
-interface Session { authenticated: boolean, bootstrapKind: 'pairing' | 'password', passkeys: boolean }
+interface Session { authenticated: boolean, bootstrapKind: 'pairing' | 'password', surface: BrowserSurface, passkeys: boolean }
 interface Credential { id: string, label: string, created: number }
 type Operation = 'check' | 'password' | 'login' | 'add' | 'remove' | 'logout' | 'list'
 
@@ -12,6 +15,8 @@ export const useBrowserAuth = createSharedComposable(() => {
   const error = ref('')
   const credentials = shallowRef<Credential[]>([])
   const managing = ref(false)
+  const passkeyPhase = shallowRef<PasskeyPhase | null>(null)
+  let cancelPasskey = () => {}
   const route = useRoute()
   const endpoint = '/api/browser-auth/'
   async function refresh() {
@@ -68,10 +73,13 @@ export const useBrowserAuth = createSharedComposable(() => {
   }
   async function passkeyLogin() {
     await perform('login', async () => {
-      const optionsJSON = await $fetch<Parameters<typeof startAuthentication>[0]['optionsJSON']>(`${endpoint}authentication/options`, { method: 'POST', body: {} })
-      const response = await startAuthentication({ optionsJSON })
-      await $fetch(`${endpoint}authentication/verify`, { method: 'POST', body: { response } })
-      await refresh()
+      const verified = await ceremony({
+        prepare: signal => $fetch<Parameters<typeof startAuthentication>[0]['optionsJSON']>(`${endpoint}authentication/options`, { method: 'POST', body: {}, signal }),
+        browser: optionsJSON => startAuthentication({ optionsJSON }),
+        verify: (response, signal) => $fetch(`${endpoint}authentication/verify`, { method: 'POST', body: { response }, signal }),
+      })
+      if (verified)
+        await refresh()
     })
   }
   async function list() {
@@ -83,11 +91,15 @@ export const useBrowserAuth = createSharedComposable(() => {
   }
   async function add(label: string) {
     await perform('add', async () => {
-      const optionsJSON = await $fetch<Parameters<typeof startRegistration>[0]['optionsJSON']>(`${endpoint}registration/options`, { method: 'POST', body: {} })
-      const response = await startRegistration({ optionsJSON })
-      await $fetch(`${endpoint}registration/verify`, { method: 'POST', body: { response, label: label.trim() || 'Passkey' } })
-      await list()
-      await refresh()
+      const verified = await ceremony({
+        prepare: signal => $fetch<Parameters<typeof startRegistration>[0]['optionsJSON']>(`${endpoint}registration/options`, { method: 'POST', body: {}, signal }),
+        browser: optionsJSON => startRegistration({ optionsJSON }),
+        verify: (response, signal) => $fetch(`${endpoint}registration/verify`, { method: 'POST', body: { response, label: label.trim() || 'Passkey' }, signal }),
+      })
+      if (verified) {
+        await list()
+        await refresh()
+      }
     })
   }
   async function remove(id: string) {
@@ -112,5 +124,27 @@ export const useBrowserAuth = createSharedComposable(() => {
       await refresh()
     })
   }
-  return { session, pending, error, credentials, managing, initialize, passwordLogin, passkeyLogin, manage, add, remove, logout }
+  async function ceremony<Options, Credential>(dependencies: {
+    prepare: (signal: AbortSignal) => Promise<Options>
+    browser: (options: Options) => Promise<Credential>
+    verify: (credential: Credential, signal: AbortSignal) => Promise<unknown>
+  }) {
+    const operation = runPasskeyOperation({ ...dependencies, abortBrowser: () => WebAuthnAbortService.cancelCeremony(), phase: phase => passkeyPhase.value = phase })
+    cancelPasskey = operation.cancel
+    const result = await operation.result
+    cancelPasskey = () => {}
+    if (result._tag === 'Failed')
+      throw result.cause
+    if (result._tag === 'Cancelled')
+      error.value = 'Passkey request was cancelled. Retry.'
+    if (result._tag === 'TimedOut')
+      error.value = result.phase === 'WaitingForBrowser' ? 'The browser Passkey prompt did not finish. Retry or check your password manager.' : 'The Passkey request timed out. Retry.'
+    return result._tag === 'Ok'
+  }
+  watch(managing, (open) => {
+    if (!open)
+      cancelPasskey()
+  })
+  onScopeDispose(() => cancelPasskey())
+  return { session, pending, error, credentials, managing, passkeyPhase, cancelPasskey: () => cancelPasskey(), initialize, passwordLogin, passkeyLogin, manage, add, remove, logout }
 })

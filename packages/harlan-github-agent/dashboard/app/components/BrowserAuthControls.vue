@@ -31,6 +31,7 @@ const browserSupported = computed(() => import.meta.client && !!window.PublicKey
             This browser does not support Passkeys.
           </p>
         </form>
+        <PasskeyProgress />
         <p class="text-sm text-muted">
           Use the password or pairing link if you lose a Passkey.
         </p>
