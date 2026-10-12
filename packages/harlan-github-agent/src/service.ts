@@ -32,6 +32,7 @@ import { retireObsoleteBaselineRepairs } from './baseline-repair-sweep.ts'
 import { createBaselineRepairWorker, inspectWorkspaceFiles } from './baseline-repair-worker.ts'
 import { createBatchScheduler } from './batch-scheduler.ts'
 import { createBatchWorker } from './batch-worker.ts'
+import { createBrowserAuthorities } from './browser-auth-authorities.ts'
 import { createCandidateIssueController } from './candidate-issue-controller.ts'
 import { agentStartBlockedReason, hasSpendableCapacity, resolveAgentStartState } from './capacity.ts'
 import { createClassificationSource } from './classification.ts'
@@ -1634,7 +1635,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         },
       })
     : undefined
+  const browserAuth = config.storage.path !== ':memory:' && new URL(config.server.allowedOrigin).protocol === 'https:'
+    ? createBrowserAuthorities({ directory: join(dirname(config.storage.path), 'browser-auth'), origin: config.server.allowedOrigin, ...(config.server.browserOrigins?.[0] ? { publicOrigin: config.server.browserOrigins[0] } : {}), password: options.dashboardPassword, now: () => now().getTime() })
+    : undefined
   const app = createAgentApp({
+    ...(browserAuth ? { browserAuth } : {}),
     pullRequestDiff: createGitHubPullRequestDiff({ tokens: routedTokens, now: () => now().getTime(), log: message => options.logger.error(message) }),
     ...(sessions === undefined ? {} : { sessions }),
     ...(mutationSchedulers === undefined ? {} : { repairRecovery: mutationSchedulers.repairRecovery.run }),
@@ -1753,6 +1758,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         origin: config.server.allowedOrigin,
         listenOrigin,
         password: options.dashboardPassword,
+        ...(browserAuth ? { browserAuth: browserAuth.private } : {}),
         memoryGiB: config.agent.memoryPerAgentGiB,
         admissionCli: maintenanceAdmission.capacityCommand,
         protectedPaths: [
@@ -1771,6 +1777,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     ...(terminals === undefined ? {} : { terminals: terminals.routes }),
   }).catch((error) => {
     void terminals?.close()
+    browserAuth?.close()
     store.close()
     throw error
   })
@@ -1937,6 +1944,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       dashboardShutdown.abort()
       await terminals?.close()
       await Promise.all([server.close(), webhookServer?.close() ?? Promise.resolve()])
+      browserAuth?.close()
       requestCounts.stop()
       store.close()
     },

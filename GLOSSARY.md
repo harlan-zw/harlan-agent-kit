@@ -20,6 +20,7 @@ Where the two files disagree about a service word, the package glossary wins.
 | Term | Lives in | Read by | Relationship | Customer word |
 | --- | --- | --- | --- | --- |
 | Harlan Agent Kit | this repository | Claude Code, Codex, git, `wt` | 1 Plugin, 1 Service | "agent kit" |
+| Passkey | browser authentication, private credential storage | local Workspace, hosted Dashboard | N per browser authority; signs in without the recovery password | "Passkey" |
 | Plugin | `harlan-agent-kit/`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` | Claude Code, Codex | 1 to N Skills, 1 to N Hooks | "plugin" |
 | Marketplace | `.claude-plugin/marketplace.json` | Claude Code | 1 Marketplace, 1 Plugin | "marketplace" |
 | Skill | `harlan-agent-kit/skills/<name>/SKILL.md` | Claude Code, Codex | 1 to N References, 1 to N templates | "Skill" |

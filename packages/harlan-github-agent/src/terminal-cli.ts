@@ -48,7 +48,7 @@ export function parseTerminalLocalConfig(value: unknown): TerminalLocalConfig {
   const origin = new URL(input.origin)
   if (
     origin.protocol !== 'http:'
-    || origin.hostname !== '127.0.0.1'
+    || !['localhost', '127.0.0.1'].includes(origin.hostname)
     || !origin.port
     || origin.pathname !== '/'
     || origin.search
@@ -58,6 +58,7 @@ export function parseTerminalLocalConfig(value: unknown): TerminalLocalConfig {
   ) {
     throw new Error('Standalone terminal requires an exact loopback origin')
   }
+  origin.hostname = 'localhost'
   if (
     !Number.isSafeInteger(input.memoryGiB)
     || Number(input.memoryGiB) < 1

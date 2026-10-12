@@ -806,6 +806,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   if (port === undefined)
     issues.push({ path: '$.server.port', message: 'Expected an integer from 1 to 65535.' })
   const allowedOrigin = server === undefined ? undefined : requiredString(server, 'allowed_origin', '$.server', issues)
+  const browserOrigins = server === undefined || server.browser_origins === undefined ? [] : stringArray(server, 'browser_origins', '$.server', issues)
   const agentSessions = server?.agent_sessions === undefined ? false : requiredBoolean(server, 'agent_sessions', '$.server', issues)
   if (server?.desktop_sessions !== undefined)
     issues.push({ path: '$.server.desktop_sessions', message: 'Replace desktop_sessions with agent_sessions.' })
@@ -894,6 +895,12 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     issues.push({ path: '$.server.host', message: 'Expected a loopback address.' })
   if (allowedOrigin !== undefined && !isDashboardOrigin(allowedOrigin))
     issues.push({ path: '$.server.allowed_origin', message: 'Expected the local dashboard or an HTTPS Tailscale origin.' })
+  if (browserOrigins === undefined || browserOrigins.length > 1 || browserOrigins.some((value) => {
+    const origin = URL.canParse(value) ? new URL(value) : null
+    return !origin || origin.protocol !== 'https:' || origin.origin !== value || value === allowedOrigin
+  })) {
+    issues.push({ path: '$.server.browser_origins', message: 'Expected one distinct HTTPS browser origin without a path.' })
+  }
   if (frameAncestors?.some(origin => !isFrameAncestorOrigin(origin)))
     issues.push({ path: '$.server.frame_ancestors', message: 'Expected HTTPS or loopback HTTP origins without a path.' })
   if (storagePath !== undefined && storagePath !== ':memory:' && !isAbsolute(storagePath))
@@ -934,7 +941,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   return ok({
     agent,
     github: { appId, privateKeyPath, allowedOwners },
-    server: { host, port, allowedOrigin, frameAncestors, agentSessions },
+    server: { host, port, allowedOrigin, frameAncestors, agentSessions, browserOrigins: browserOrigins ?? [] },
     webhook,
     classification,
     triggers,

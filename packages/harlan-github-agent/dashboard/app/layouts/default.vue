@@ -87,14 +87,14 @@ onMounted(() => {
         <div class="flex h-full min-w-0 items-center gap-2 pr-2">
           <NuxtLink to="/sessions" class="flex shrink-0 items-center gap-2 text-sm font-medium text-highlighted md:hidden">
             <UIcon name="i-octicon-hubot-16" class="size-4" aria-hidden="true" />
-            Agent
+            <span class="sr-only sm:not-sr-only">Agent</span>
           </NuxtLink>
 
-          <span class="flex h-full shrink-0 items-center border-r border-default border-t-2 border-t-accented bg-default px-4 text-sm font-medium text-highlighted">{{ tabs.find(tab => tab.to === route.path)?.label ?? 'Agent' }}</span>
+          <span class="flex h-full shrink-0 items-center border-r border-default border-t-2 border-t-accented bg-default px-2 text-sm font-medium text-highlighted sm:px-4">{{ tabs.find(tab => tab.to === route.path)?.label ?? 'Agent' }}</span>
 
           <div class="ms-auto flex items-center gap-1.5">
-            <span v-if="terminalHost.readOnly.value" class="rounded border border-default px-2 py-1 text-xs text-muted" role="status">Read-only Service connection.</span>
-            <SystemChip v-if="terminalHost.controller.value" />
+            <span v-if="terminalHost.readOnly.value" class="sr-only rounded border border-default text-xs text-muted sm:not-sr-only sm:px-2 sm:py-1" role="status">Read-only Service connection.</span>
+            <SystemChip v-if="terminalHost.controller.value" class="max-sm:max-w-28 max-sm:overflow-hidden" />
             <div v-if="terminalHost.controller.value && !sessionPage" class="hidden items-center gap-1.5 lg:flex">
               <AgentSelectionMenu />
               <UButton
@@ -109,6 +109,7 @@ onMounted(() => {
               </UButton>
             </div>
             <OverflowMenu v-if="terminalHost.controller.value" @keyboard="keyboardOpen = true" />
+            <BrowserAuthControls />
           </div>
         </div>
       </header>

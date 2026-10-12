@@ -70,6 +70,23 @@ The dashboard denies framing. If another page must frame it, list its origin in 
 
 Save the dashboard password in `dashboard-password` beside the config file. Use at least 32 bytes and restrict the file to mode `600`.
 
+Sign in with that password, then select `Manage Passkeys` and `Add Passkey`.
+Use `Sign in with Passkey` on later visits. The password remains available for recovery and machine clients.
+Removing a Passkey revokes its signed-in sessions. Signing out closes authenticated browser streams.
+The Service stores Passkeys and opaque sessions in private SQLite files beside its configured database.
+Passkeys remain available after a restart.
+
+If a public proxy rewrites the private address, configure its exact browser address explicitly:
+
+```yaml
+server:
+  browser_origins: [https://agent.example.com]
+```
+
+Configure one public address. Its Passkeys remain separate from the private address.
+The public proxy must set `X-Harlan-Agent-Ingress: public` and preserve the existing trusted Host and Origin mapping.
+The public address still refuses terminal and diff access.
+
 Configure your normal global Git profile before starting. The controller uses its identity and commit-signing settings for every commit it creates.
 
 Install the configured GitHub App only on selected repositories. `github.allowed_owners` is the first remote boundary. The service ignores public installations from every other GitHub owner. It then matches allowed repositories to trusted checkouts under `~/pkg` and `~/sites`. Optional repository entries override default policy.

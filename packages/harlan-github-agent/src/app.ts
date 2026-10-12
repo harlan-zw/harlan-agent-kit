@@ -1,4 +1,5 @@
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { BrowserAuth } from './browser-auth.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
 import type { AgentHost, AgentSlotLimits, HostAgentPool, HostCapacity } from './host-capacity.ts'
 import type { createPullRequestDiffSource } from './pull-request-diff.ts'
@@ -51,6 +52,7 @@ export interface AgentAppOptions {
    */
   listenOrigin?: string
   dashboardPassword: string
+  browserAuth?: { private: BrowserAuth, public?: BrowserAuth }
   /** Origins allowed to frame the dashboard, such as a talk deck. Empty denies framing. */
   frameAncestors?: readonly string[]
   dashboardRoot?: string
@@ -360,22 +362,50 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     .filter(origin => origin !== undefined)
     .map(origin => [new URL(origin).host, new URL(origin).origin]))
   const framing = framingHeaders(options.frameAncestors ?? [])
+  function browserStream(request: Request, revoked: () => void) {
+    if (hasDashboardAccess(request, options.dashboardPassword))
+      return { valid: () => true, close: () => {} }
+    const authority = request.headers.get('x-harlan-agent-ingress') === 'public' ? options.browserAuth?.public : options.browserAuth?.private
+    const session = authority?.session(request.headers)
+    const valid = () => Boolean(authority?.session(request.headers))
+    if (!session || !authority)
+      return { valid, close: () => {} }
+    const unsubscribe = authority.onSessionRevocation((hash) => {
+      if (hash === session.hash)
+        revoked()
+    })
+    const interval = setInterval(() => {
+      if (!valid())
+        revoked()
+    }, 1000)
+    interval.unref()
+    return { valid, close() {
+      unsubscribe()
+      clearInterval(interval)
+    } }
+  }
   const app = new H3({
     onRequest(event) {
       const expectedOrigin = originByHost.get(event.req.headers.get('host') ?? '')
       if (expectedOrigin === undefined)
         throw createError({ status: 421, statusText: 'Misdirected Request', message: 'Host is not allowed.' })
-      if (!hasDashboardAccess(event.req, options.dashboardPassword)) {
+      event.context.dashboardNonce = randomBytes(18).toString('base64')
+      if (event.req.method !== 'GET' && event.req.method !== 'HEAD' && event.req.headers.get('origin') !== expectedOrigin)
+        throw createError({ status: 403, statusText: 'Forbidden', message: 'Request origin is not allowed.' })
+      const publicIngress = event.req.headers.get('x-harlan-agent-ingress') === 'public'
+      const authority = publicIngress ? options.browserAuth?.public : options.browserAuth?.private
+      const path = new URL(event.req.url).pathname
+      if (authority && path.startsWith('/api/browser-auth/'))
+        return
+      const browserShell = options.browserAuth && (event.req.method === 'GET' || event.req.method === 'HEAD') && !path.startsWith('/api/') && path !== '/health'
+      if (!browserShell && !hasDashboardAccess(event.req, options.dashboardPassword) && !authority?.session(event.req.headers)) {
         throw createError({
           status: 401,
           statusText: 'Unauthorized',
           message: 'Dashboard credentials are required.',
-          headers: { 'www-authenticate': 'Basic realm="harlan-github-agent", charset="UTF-8"' },
+          ...(options.browserAuth ? {} : { headers: { 'www-authenticate': 'Basic realm="harlan-github-agent", charset="UTF-8"' } }),
         })
       }
-      if (event.req.method !== 'GET' && event.req.method !== 'HEAD' && event.req.headers.get('origin') !== expectedOrigin)
-        throw createError({ status: 403, statusText: 'Forbidden', message: 'Request origin is not allowed.' })
-      event.context.dashboardNonce = randomBytes(18).toString('base64')
     },
     onResponse(response, event) {
       Object.entries(framing.securityHeaders).forEach(([name, value]) => response.headers.set(name, value))
@@ -383,6 +413,12 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       // GitHub avatars come from github.com and redirect to avatars.githubusercontent.com.
       response.headers.set('content-security-policy', `default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; frame-ancestors ${framing.frameAncestors}; img-src 'self' data: https://github.com https://avatars.githubusercontent.com; object-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'`)
     },
+  })
+  app.all('/api/browser-auth/**', (event) => {
+    const publicIngress = event.req.headers.get('x-harlan-agent-ingress') === 'public'
+    const authority = publicIngress ? options.browserAuth?.public : options.browserAuth?.private
+    return authority?.handle(event.req, publicIngress ? options.allowedOrigin : undefined)
+      ?? new Response(JSON.stringify({ _tag: 'Err', reason: 'AuthenticationRequired' }), { status: 401 })
   })
 
   if (options.sessions !== undefined) {
@@ -899,6 +935,10 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     let previous = JSON.stringify(initial)
     let stopped = false
     const interval = setInterval(() => {
+      if (!authorization.valid()) {
+        shutdown()
+        return
+      }
       const next = watch.state(repository, number)
       if (next === null) {
         stop()
@@ -920,15 +960,17 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       stopped = true
       clearInterval(interval)
       clearInterval(heartbeat)
+      authorization.close()
       options.shutdownSignal?.removeEventListener('abort', shutdown)
     }
     function shutdown(): void {
       stop()
       void stream.close()
     }
+    const authorization = browserStream(event.req, shutdown)
     stream.onClosed(stop)
     options.shutdownSignal?.addEventListener('abort', shutdown, { once: true })
-    if (options.shutdownSignal?.aborted)
+    if (options.shutdownSignal?.aborted || !authorization.valid())
       shutdown()
     else
       void stream.push({ event: 'pull-request', data: previous }).catch(stop)
@@ -941,6 +983,10 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const stream = createEventStream(event)
     let previous = dashboardEvent(options).observable
     const update = (sample: ReturnType<typeof dashboardEvent>): void => {
+      if (!authorization.valid()) {
+        shutdown()
+        return
+      }
       if (sample.observable === previous)
         return
       previous = sample.observable
@@ -948,6 +994,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       void stream.push({ event: 'state', data: sample.serialize() }).catch(stop)
     }
     const stop = (): void => {
+      authorization.close()
       dashboardSubscribers.delete(update)
       if (dashboardSubscribers.size === 0 && dashboardInterval !== undefined) {
         clearInterval(dashboardInterval)
@@ -959,8 +1006,9 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       stop()
       void stream.close()
     }
+    const authorization = browserStream(event.req, shutdown)
     stream.onClosed(stop)
-    if (options.shutdownSignal?.aborted) {
+    if (options.shutdownSignal?.aborted || !authorization.valid()) {
       shutdown()
     }
     else {

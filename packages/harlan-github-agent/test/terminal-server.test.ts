@@ -69,7 +69,7 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
     now: () => new Date(),
     log: () => {},
   })
-  const origin = 'http://127.0.0.1:43627'
+  const origin = 'http://localhost:43627'
   const options = {
     manager,
     origin,
