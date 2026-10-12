@@ -213,6 +213,37 @@ export function parseTerminalServerMessage(value: unknown): TerminalResult<Termi
     const result = screen(value.screen)
     return result._tag === 'Err' ? result : ok({ type: 'Screen', generation: value.generation, screen: result.value })
   }
+  if (value.type === 'Rows' && text(value.generation)) {
+    if (!integer(value.baseRevision) || !integer(value.revision, value.baseRevision + 1)
+      || !integer(value.scrollbackLength, 0, 1000) || !Array.isArray(value.rows)
+      || !record(value.cursor) || !integer(value.cursor.x, 0, 499) || !integer(value.cursor.y, 0, 199)
+      || typeof value.cursor.visible !== 'boolean' || !record(value.modes)
+      || !['alternate', 'paste', 'focus', 'mouse'].every(key => record(value.modes) && typeof value.modes[key] === 'boolean')
+      || !integer(value.modes.keyboard, 0, 31)) {
+      return invalid()
+    }
+    if (value.rows.length > 200)
+      return limit()
+    const indices = new Set<number>()
+    const rows: Extract<TerminalServerMessage, { type: 'Rows' }>['rows'] = []
+    let cells = 0
+    for (const row of value.rows) {
+      if (!record(row) || !integer(row.index, 0, 199) || indices.has(row.index) || typeof row.wrapped !== 'boolean')
+        return invalid()
+      const result = grid([row.cells], [row.graphemes])
+      if (result._tag === 'Err')
+        return result
+      const line = result.value.lines[0]!
+      if (line.length < 2)
+        return invalid()
+      cells += line.length
+      if (cells > MAX_CELLS)
+        return limit()
+      indices.add(row.index)
+      rows.push({ index: row.index, cells: line, graphemes: result.value.graphemes[0]!, wrapped: row.wrapped })
+    }
+    return ok({ type: 'Rows', generation: value.generation, baseRevision: value.baseRevision, revision: value.revision, rows, cursor: { x: value.cursor.x, y: value.cursor.y, visible: value.cursor.visible }, modes: { alternate: value.modes.alternate as boolean, paste: value.modes.paste as boolean, focus: value.modes.focus as boolean, mouse: value.modes.mouse as boolean, keyboard: value.modes.keyboard }, scrollbackLength: value.scrollbackLength })
+  }
   if (value.type === 'Scrollback' && text(value.generation) && integer(value.total, 0, 1000) && integer(value.offset, 0, value.total)) {
     const result = grid(value.lines, value.graphemes)
     if (result._tag === 'Err')
