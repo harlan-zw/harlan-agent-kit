@@ -1399,6 +1399,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               await reconcilePackageReleases({
                 repository,
                 webhookReady: releaseWebhookReady,
+                mayPublish: () => store.getAgentControl()._tag !== 'Paused' && store.mayPublishPackageRelease(repository.github),
                 store,
                 now: () => now().getTime(),
                 signal,
@@ -1422,11 +1423,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                     const review = store.storedReviewForHead(repository.github, number, sha)
                     return eligible !== undefined && review._tag === 'Current' && eligible.reviewRunId === review.run.id ? review : { _tag: 'None' }
                   },
-                  assertLease: () => {
-                    if (store.getAgentControl()._tag === 'Paused' || !store.mayPublishPackageRelease(repository.github))
-                      throw new Error('Package releases are paused for this repository.')
-                    assertLease()
-                  },
+                  assertLease,
                 }),
               })
             },
