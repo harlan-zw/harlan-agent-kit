@@ -139,6 +139,17 @@ async function fixture() {
   }
   return {
     manager,
+    deferStop() {
+      const gate = Promise.withResolvers<void>()
+      const entered = Promise.withResolvers<void>()
+      const original = options.processHost.stop
+      options.processHost.stop = async (...args) => {
+        entered.resolve()
+        await gate.promise
+        return original(...args)
+      }
+      return { entered: entered.promise, release: gate.resolve }
+    },
     starts,
     releases,
     empty: () => {
@@ -170,6 +181,29 @@ const launch = {
   provider: 'codex' as const,
 }
 describe('durable terminal launch and ownership', () => {
+  it('drains accepted Stop writes and refuses operations after close', async () => {
+    const fixture_ = await fixture()
+    const manager = await fixture_.manager()
+    const created = await manager.launch(launch)
+    if (created._tag !== 'Ok')
+      throw new Error('Fixture launch failed')
+    const gate = fixture_.deferStop()
+    const stopping = manager.stop(created.value.id)
+    await gate.entered
+    let closed = false
+    const closing = Promise.resolve(manager.close()).then(() => {
+      closed = true
+    })
+    await delay(10)
+    expect(closed).toBe(false)
+    expect(await manager.launch({ ...launch, requestId: 'after-close' })).toEqual({ _tag: 'Err', reason: 'OwnershipUnknown' })
+    expect(await manager.stop(created.value.id)).toEqual({ _tag: 'Err', reason: 'OwnershipUnknown' })
+    gate.release()
+    await stopping
+    await closing
+    expect((await manager.sessions())[0]?.state).toBe('Exited')
+    expect(fixture_.starts).toHaveLength(1)
+  })
   it('keeps released ownership final when concurrent discovery observes Missing', async () => {
     const fixture_ = await fixture()
     const manager = await fixture_.manager()

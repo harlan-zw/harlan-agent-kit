@@ -127,7 +127,7 @@ export async function createTerminalRuntime(
         ),
     })
     ownershipLost = () => {
-      manager.close()
+      void manager.close().catch(cause => console.error('Terminal manager close failed', cause))
       void routes
         .close()
         .catch(cause => console.error('Terminal API close failed', cause))
@@ -141,8 +141,7 @@ export async function createTerminalRuntime(
       routes,
       async close() {
         active = false
-        manager.close()
-        await routes.close()
+        await Promise.all([manager.close(), routes.close()])
         const released
           = child.exitCode !== null
             ? Promise.resolve()

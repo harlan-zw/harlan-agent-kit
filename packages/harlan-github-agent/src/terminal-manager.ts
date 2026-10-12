@@ -79,6 +79,8 @@ export async function createTerminalManager(options: {
   )
   const launches = new Map<string, Promise<TerminalResult<TerminalSession>>>()
   const operations = new Map<string, Promise<unknown>>()
+  let closed = false
+  let closing: Promise<void> | undefined
   function owned<T>(id: string, task: () => Promise<T>): Promise<T> {
     const previous = operations.get(id)
     // Each caller receives its own error. Later independent work can reconcile that session.
@@ -372,7 +374,14 @@ export async function createTerminalManager(options: {
         reservedGiB: status.reservedGiB,
       }
     },
-    close: () => clearInterval(housekeeping),
+    close() {
+      if (!closing) {
+        closed = true
+        clearInterval(housekeeping)
+        closing = Promise.allSettled([...operations.values()]).then(() => {})
+      }
+      return closing
+    },
     host,
     directory: options.directory,
     capabilities(): TerminalCapabilities {
@@ -400,6 +409,8 @@ export async function createTerminalManager(options: {
     },
     projects: () => options.projects.map(project => ({ ...project })),
     async sessions() {
+      if (closed)
+        return [...intents.values()].map(session)
       await Promise.all(
         [...intents.values()].map(intent =>
           owned(intent.session.id, () => reconcile(intent)),
@@ -411,6 +422,8 @@ export async function createTerminalManager(options: {
       return intents.get(id)
     },
     launch(request: TerminalLaunch) {
+      if (closed)
+        return Promise.resolve({ _tag: 'Err', reason: 'OwnershipUnknown' } as const)
       const identity = terminalIdentity(host.hostId, request)
       const pending = launches.get(identity.id)
       if (pending) {
@@ -428,6 +441,8 @@ export async function createTerminalManager(options: {
       return promise
     },
     async stop(id: string): Promise<TerminalResult<TerminalSession>> {
+      if (closed)
+        return { _tag: 'Err', reason: 'OwnershipUnknown' }
       return owned(id, async () => {
         const intent = intents.get(id)
         if (!intent)
