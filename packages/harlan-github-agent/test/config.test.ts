@@ -43,6 +43,15 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('requires private Agent sessions and public Passkey-only login before enabling public terminals', () => {
+    const configured = configText.replace('server:', 'server:\n  public_terminal_sessions: true\n  public_browser_password_login: false\n  agent_sessions: true\n  browser_origins: [https://agent.example.com]')
+    const valid = parseConfigText(configured)
+    expect(valid._tag === 'Ok' && valid.value.server.publicTerminalSessions).toBe(true)
+    for (const text of [configured.replace('agent_sessions: true', 'agent_sessions: false'), configured.replace('public_browser_password_login: false', 'public_browser_password_login: true'), configured.replace('  browser_origins: [https://agent.example.com]', ''), configured.replace(`path: ${homedir()}/.local/share/harlan-github-agent/state.sqlite`, 'path: ":memory:"')]) {
+      const result = parseConfigText(text)
+      expect(result._tag === 'Err' && result.error.map(issue => issue.path)).toContain('$.server.public_terminal_sessions')
+    }
+  })
   it('requires an explicit public origin when its browser password login is disabled', () => {
     const withoutOrigin = parseConfigText(configText.replace('server:', 'server:\n  public_browser_password_login: false'))
     expect(withoutOrigin._tag === 'Err' && withoutOrigin.error.map(issue => issue.path)).toContain('$.server.public_browser_password_login')

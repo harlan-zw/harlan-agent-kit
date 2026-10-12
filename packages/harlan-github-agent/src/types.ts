@@ -177,6 +177,7 @@ export interface AgentConfig {
     /** One explicitly configured public browser authority behind the trusted ingress. */
     browserOrigins?: readonly string[]
     publicBrowserPasswordLogin?: boolean
+    publicTerminalSessions?: boolean
     /** Enable only after the public ingress denies desktop session routes. */
     agentSessions?: boolean
     /** HTTPS or loopback HTTP origins allowed to frame the dashboard. Empty keeps framing denied. */

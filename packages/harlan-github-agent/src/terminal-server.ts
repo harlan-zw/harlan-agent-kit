@@ -38,6 +38,7 @@ export function createTerminalServer(options: {
   staticDirectory?: string
   authorize?: (request: IncomingMessage) => boolean | Promise<boolean>
   browserAuth?: BrowserAuth
+  publicBrowserAuth?: BrowserAuth
   diff?: (intent: TerminalIntent, url: URL) => Promise<unknown>
   now: () => number
   log: (message: string, cause: unknown) => void
@@ -78,13 +79,27 @@ export function createTerminalServer(options: {
     return true
   }
   const browserAuth = options.browserAuth ?? createBrowserAuth({ origin: canonical.origin, rpId: canonical.hostname, store: authStore!, now: options.now, surface: { _tag: 'TerminalHost' }, bootstrapKind: 'pairing', bootstrap: body => consumePair(body.token ?? body.code) })
+  if (options.publicBrowserAuth && (!options.authorize || options.publicBrowserAuth.bootstrapKind !== 'passkey'))
+    throw new Error('Public terminals require private Agent sessions and public Passkey-only login.')
+  function authority(request: IncomingMessage) {
+    return request.headers['x-harlan-agent-ingress'] === 'public' ? options.publicBrowserAuth : browserAuth
+  }
+  function browserSession(request: IncomingMessage) {
+    const session = authority(request)?.session(requestHeaders(request))
+    return request.headers['x-harlan-agent-ingress'] === 'public' && session?.credentialId === null ? null : session
+  }
   function requestHeaders(request: IncomingMessage) {
     return new Headers(Object.entries(request.headers).flatMap(([name, value]) => value === undefined ? [] : [[name, Array.isArray(value) ? value.join(', ') : value]]))
   }
   async function authenticated(request: IncomingMessage) {
     if (request.headers['x-harlan-agent-ingress'] === 'public')
-      return false
+      return Boolean(browserSession(request))
     return Boolean(browserAuth.session(requestHeaders(request))) || Boolean(await options.authorize?.(request))
+  }
+  function publicTransportRefused(request: IncomingMessage) {
+    return request.headers['x-harlan-agent-ingress'] === 'public'
+      && (request.headers.host !== canonical.host
+        || (request.headers.origin !== undefined && request.headers.origin !== canonical.origin))
   }
   function json(response: ServerResponse, value: unknown, status = 200) {
     response
@@ -124,6 +139,7 @@ export function createTerminalServer(options: {
     }
     if (
       !request.headers.host
+      || publicTransportRefused(request)
       || !hosts.has(request.headers.host)
       || (request.headers.origin !== undefined
         && !origins.has(request.headers.origin))
@@ -319,18 +335,20 @@ export function createTerminalServer(options: {
     type Principal = { _tag: 'Machine' } | { _tag: 'Browser', hash: string }
     const machine = request.headers['x-harlan-agent-ingress'] !== 'public'
       && Boolean(await options.authorize?.(request))
-    const session = browserAuth.session(requestHeaders(request))
+    const auth = authority(request)
+    const session = browserSession(request)
     const principal: Principal | null = machine
       ? { _tag: 'Machine' }
-      : session && request.headers['x-harlan-agent-ingress'] !== 'public'
+      : session
         ? { _tag: 'Browser', hash: session.hash }
         : null
     const browserAccess = () => principal?._tag === 'Machine'
-      || (principal?._tag === 'Browser' && browserAuth.session(requestHeaders(request))?.hash === principal.hash)
+      || (principal?._tag === 'Browser' && browserSession(request)?.hash === principal.hash)
     if (
       closed
       || (options.active && !options.active())
       || !request.headers.host
+      || publicTransportRefused(request)
       || !hosts.has(request.headers.host)
       || !request.headers.origin
       || !origins.has(request.headers.origin)
@@ -361,7 +379,7 @@ export function createTerminalServer(options: {
         helper.close()
         websocket.close(1008, 'Authentication required')
       }
-      const revoke = browserAuth.onSessionRevocation((hash) => {
+      const revoke = auth?.onSessionRevocation((hash) => {
         if (principal._tag === 'Browser' && hash === principal.hash)
           expired()
       })
@@ -420,7 +438,7 @@ export function createTerminalServer(options: {
       websocket.on('error', cause =>
         options.log('Terminal stream failed', cause))
       websocket.on('close', () => {
-        revoke()
+        revoke?.()
         if (expiry)
           clearInterval(expiry)
       })

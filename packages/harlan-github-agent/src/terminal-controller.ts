@@ -78,7 +78,7 @@ export function createTerminalDiffRequests(now: () => number) {
   }
 }
 
-export async function createControllerTerminals(options: { directory: string, origin: string, listenOrigin: string, password: string, memoryGiB: number, admissionCli: string, protectedPaths: string[], browserAuth?: BrowserAuth }) {
+export async function createControllerTerminals(options: { directory: string, origin: string, listenOrigin: string, password: string, memoryGiB: number, admissionCli: string, protectedPaths: string[], browserAuth?: BrowserAuth, publicBrowserAuth?: BrowserAuth }) {
   const [codex, claude, opencode, projects] = await Promise.all([
     executable('codex'),
     executable('claude'),
@@ -102,6 +102,7 @@ export async function createControllerTerminals(options: { directory: string, or
     memoryGiB: options.memoryGiB,
     authorize: request => terminalDashboardAccess(request, options.password),
     ...(options.browserAuth ? { browserAuth: options.browserAuth } : {}),
+    ...(options.publicBrowserAuth ? { publicBrowserAuth: options.publicBrowserAuth } : {}),
     diff: createTerminalDiffRequests(Date.now),
   })
 }
