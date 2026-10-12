@@ -335,6 +335,16 @@ Do not post replies to other reviewers without approval. Draft a reply for a que
 
 ### Hand back the ready pull request
 
+An active Service implementation Task returns to its controller instead of waiting here.
+After current-head CI and Review pass, resolve the merge path using the [Auto merge contract](../../references/auto-merge.md).
+Check enabled policy, labels, and the current-head Merge risk verdict against that contract.
+If the current head qualifies for automatic merge, use [pull request watching](references/pull-request-watch.md) in the foreground.
+Keep the turn active until merge, actionable work, closure, or Dismissal.
+On `Merged`, apply `../take-ownership/SKILL.md` in Completion mode for the returned target and merge commit.
+Verify required delivery and smoke stages before cleanup.
+On `ActionRequired`, follow existing repair authority, then reassess the current head and merge path.
+If automatic merge cannot progress, report the exact blocker. Preserve the target and unintegrated work.
+
 After current-head CI and Review pass, check whether only Harlan's merge decision remains.
 If so, hand the pull request back.
 Record the repository, number, URL, head SHA, branch, and absolute worktree path in the session scratchpad.
@@ -343,7 +353,6 @@ Report readiness and the pull request link, then end the turn.
 Preserve unintegrated work. Release this task's live worktree claim while no mutation is active.
 Ownership of later delivery remains with the submitting Agent.
 Do not start a background watch or promise an automatic chat wake-up.
-An active Service implementation Task returns to its controller instead of waiting here.
 
 If Harlan requests an active merge wait, use [pull request watching](references/pull-request-watch.md) in the foreground.
 Keep that turn active while the watch runs. Stop the watch if Harlan ends the wait.
