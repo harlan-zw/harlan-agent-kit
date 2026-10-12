@@ -333,19 +333,28 @@ For a repository the service does not track, use CI and the available reviewers;
 
 Do not post replies to other reviewers without approval. Draft a reply for a question or non-actionable comment and show it to the user.
 
-### Wait for Harlan's merge
+### Hand back the ready pull request
 
-After current-head CI and Review pass, keep the submitting Agent responsible for the human merge decision.
-Run `control watch-pr` using [pull request watching](references/pull-request-watch.md).
-Run it in the foreground and keep the Agent turn active while it waits.
-Do not background the command and end the turn. A finished chat cannot receive its tool result.
+After current-head CI and Review pass, check whether only Harlan's merge decision remains.
+If so, hand the pull request back.
+Record the repository, number, URL, head SHA, branch, and absolute worktree path in the session scratchpad.
+Retain current-head CI and Review evidence, remaining findings, and required delivery stages with that target.
+Report readiness and the pull request link, then end the turn.
+Preserve unintegrated work. Release this task's live worktree claim while no mutation is active.
+Ownership of later delivery remains with the submitting Agent.
+Do not start a background watch or promise an automatic chat wake-up.
 An active Service implementation Task returns to its controller instead of waiting here.
 
-On `Merged`, apply `../take-ownership/SKILL.md` in Completion mode for this exact pull request.
+If Harlan requests an active merge wait, use [pull request watching](references/pull-request-watch.md) in the foreground.
+Keep that turn active while the watch runs. Stop the watch if Harlan ends the wait.
+
+When Harlan reports a merge or requests follow-up, resume the recorded target and read its current remote state.
+Confirm the merge commit before applying `../take-ownership/SKILL.md` in Completion mode for this exact pull request.
 Verify required delivery, reconcile records, clean task-owned Git state, and report remaining work.
-On `ActionRequired`, use the existing repair and publication rules, then resume the watch.
-On `Closed` or `Dismissed`, report that outcome and preserve unintegrated work.
-If Harlan explicitly ends the wait, stop the watch and retain the pull request target for the next turn.
+If it remains open, compare the current head with the recorded head before reusing evidence.
+If the head changed, restart Step 6. Acquire the worktree claim before any mutation.
+If actionable work remains, use the existing repair and publication rules.
+If it is closed or dismissed, report that outcome and preserve unintegrated work.
 
 ## Step 7: Cleanup (after merge or user says "finish")
 
