@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
@@ -12,6 +12,7 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
   const root = join(homedir(), 'scratch')
   await mkdir(root, { recursive: true })
   const directory = await mkdtemp(join(root, 'terminal-server-test-'))
+  await writeFile(join(directory, 'index.html'), '<!doctype html><title>Terminal proof</title>')
   const manager = await createTerminalManager({
     directory,
     bootId: 'boot',
@@ -57,7 +58,7 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
     log: () => {},
   })
   const origin = 'http://127.0.0.1:43627'
-  const options = { manager, origin, now: Date.now, log: () => {} }
+  const options = { manager, origin, staticDirectory: directory, now: Date.now, log: () => {} }
   let api = createTerminalServer(options)
   await new Promise<void>(resolve =>
     api.server.listen(43627, '127.0.0.1', resolve),
@@ -67,6 +68,9 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
     manager.close()
     await rm(directory, { recursive: true })
   })
+  const home = await fetch(origin)
+  expect(home.headers.get('content-type')).toBe('text/html; charset=utf-8')
+  expect(await home.text()).toContain('<title>Terminal proof</title>')
   expect((await fetch(`${origin}/api/terminal/capabilities`)).status).toBe(401)
   expect(
     (

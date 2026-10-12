@@ -3,7 +3,7 @@ import type { Duplex } from 'node:stream'
 import type { TerminalManager } from './terminal-manager.ts'
 import type { TerminalIntent } from './terminal-storage.ts'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
-import { readFile, realpath } from 'node:fs/promises'
+import { readFile, realpath, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, relative } from 'node:path'
 import { WebSocketServer } from 'ws'
@@ -224,20 +224,22 @@ export function createTerminalServer(options: {
       return
     }
     const root = await realpath(options.staticDirectory)
-    const file = await realpath(
+    let file = await realpath(
       join(root, decodeURIComponent(url.pathname)),
     ).catch((cause: NodeJS.ErrnoException) => {
       if (cause.code === 'ENOENT' || cause.code === 'ENOTDIR')
         return join(root, 'index.html')
       throw cause
     })
+    if ((await stat(file)).isDirectory())
+      file = await realpath(join(file, 'index.html'))
     const path = relative(root, file)
     if (path.startsWith('..') || path.startsWith('/')) {
       response.writeHead(403).end()
       return
     }
     const mime: Record<string, string> = {
-      '.html': 'text/html',
+      '.html': 'text/html; charset=utf-8',
       '.js': 'text/javascript',
       '.css': 'text/css',
       '.json': 'application/json',
