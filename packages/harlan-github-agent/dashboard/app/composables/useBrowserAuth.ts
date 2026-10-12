@@ -1,7 +1,7 @@
 import type { PasskeyPhase } from '../utils/passkey-ceremony.ts'
 import type { BrowserSurface } from '../utils/terminal-host-discovery.ts'
 import { startAuthentication, startRegistration, WebAuthnAbortService } from '@simplewebauthn/browser'
-import { createSharedComposable, until } from '@vueuse/core'
+import { createSharedComposable, until, useEventListener } from '@vueuse/core'
 import { runPasskeyOperation } from '../utils/passkey-ceremony.ts'
 import { createTerminalPairingDiscovery, takeTerminalPairing } from '../utils/terminal-pairing.ts'
 
@@ -18,6 +18,7 @@ export const useBrowserAuth = createSharedComposable(() => {
   const passkeyPhase = shallowRef<PasskeyPhase | null>(null)
   let cancelPasskey = () => {}
   const route = useRoute()
+  const router = useRouter()
   const endpoint = '/api/browser-auth/'
   const authFetch = $fetch.create({ timeout: 15000 })
   async function refresh() {
@@ -44,12 +45,16 @@ export const useBrowserAuth = createSharedComposable(() => {
   const discovery = createTerminalPairingDiscovery({
     take: () => takeTerminalPairing(window.location, (url) => {
       window.history.replaceState(window.history.state, document.title, url)
-    }, route.hash),
+      // Replace the router URL too, including an already consumed fragment restored during startup.
+      void router.replace(url).catch(() => {
+        // Router errors can contain the original URL. Never expose its pairing secret.
+        error.value = 'The pairing link is invalid. Open a new pairing link.'
+      })
+    }, route.hash || router.currentRoute.value.hash),
     discover: async (token) => {
       await until(pending).toBeNull()
       await perform('check', async () => {
         if (token) {
-          await navigateTo(window.location.pathname + window.location.search + window.location.hash, { replace: true })
           await authFetch(`${endpoint}bootstrap`, { method: 'POST', body: { token } }).catch(() => {
             error.value = 'The pairing link is invalid. Open a new pairing link.'
           })
@@ -58,10 +63,12 @@ export const useBrowserAuth = createSharedComposable(() => {
       })
     },
   })
-  watch(() => route.hash, () => {
+  function observePairing() {
     if (import.meta.client)
       void discovery.observe()
-  })
+  }
+  watch([() => route.hash, () => router.currentRoute.value.hash], observePairing, { flush: 'post' })
+  useEventListener('hashchange', observePairing)
   onScopeDispose(() => discovery.dispose())
   function initialize() {
     return discovery.start()
