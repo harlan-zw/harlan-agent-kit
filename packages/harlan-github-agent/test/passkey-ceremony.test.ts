@@ -69,7 +69,24 @@ it('verifies only a completed browser response and clears the visible phase', as
   const phases: unknown[] = []
   const verify = vi.fn(async (_credential: string, _signal: AbortSignal) => ({}))
   const operation = runPasskeyOperation({ prepare: async () => 'options', browser: async options => `${options}-credential`, verify, abortBrowser: vi.fn(), phase: phase => phases.push(phase) })
-  expect(await operation.result).toEqual({ _tag: 'Ok' })
+  expect(await operation.result).toEqual({ _tag: 'Ok', value: {} })
   expect(verify.mock.calls[0]?.[0]).toBe('options-credential')
   expect(phases).toEqual(['Preparing', 'WaitingForBrowser', 'Verifying', null])
+})
+it('keeps post-verification synchronization bounded and refuses a late session result', async () => {
+  vi.useFakeTimers()
+  let resolve!: (value: { authenticated: boolean }) => void
+  let signal!: AbortSignal
+  const operation = runPasskeyOperation({ prepare: async () => ({}), browser: async () => 'credential', verify: async (_, request) => {
+    signal = request
+    return new Promise<{ authenticated: boolean }>((done) => {
+      resolve = done
+    })
+  }, abortBrowser: vi.fn(), phase: vi.fn() })
+  await vi.advanceTimersByTimeAsync(15001)
+  expect(await operation.result).toEqual({ _tag: 'TimedOut', phase: 'Verifying' })
+  expect(signal.aborted).toBe(true)
+  resolve({ authenticated: true })
+  await Promise.resolve()
+  expect(await operation.result).toEqual({ _tag: 'TimedOut', phase: 'Verifying' })
 })
