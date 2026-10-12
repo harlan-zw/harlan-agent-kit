@@ -18,6 +18,32 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+it('upgrades version 89 provider circuits without losing observed failures', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  const input = { provider: 'opencode' as const, credential: 'opencode-go', model: 'zai-coding-plan/glm-5.3-flash', at: '2026-10-12T01:00:00.000Z' }
+  before.recordProviderFailure({ ...input, failureClass: 'network', detail: 'Network failed.' })
+  before.close()
+  const legacy = new DatabaseSync(path)
+  const schema = legacy.prepare('SELECT sql FROM sqlite_master WHERE name = \'provider_circuits\'').get() as { sql: string }
+  legacy.exec(`PRAGMA foreign_keys = OFF;
+    ${schema.sql.replace(/^CREATE TABLE[^(]+/, 'CREATE TABLE legacy_circuits ').replace(', \'usage_limit\'', '')};
+    INSERT INTO legacy_circuits SELECT * FROM provider_circuits;
+    DROP TABLE provider_circuits;
+    ALTER TABLE legacy_circuits RENAME TO provider_circuits;
+    PRAGMA user_version = 89;`)
+  legacy.close()
+  const migrated = openJournalStore(path)
+  try {
+    expect(migrated.listProviderCircuits()).toContainEqual(expect.objectContaining({ failureClass: 'network', failures: 1 }))
+    migrated.recordProviderFailure({ ...input, failureClass: 'usage_limit', detail: 'Weekly limit exhausted.' })
+    expect(migrated.providerCanStart(input)).toBe(false)
+  }
+  finally {
+    migrated.close()
+  }
+})
+
 it('upgrades version 88 Routine runs for manual Agent selection', () => {
   const path = join(directory, 'state.sqlite')
   const before = openJournalStore(path, true, CODEX_AGENT_PROFILE)

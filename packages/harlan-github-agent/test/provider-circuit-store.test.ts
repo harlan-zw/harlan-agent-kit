@@ -33,6 +33,12 @@ it('holds an exhausted model after one failure without blocking OpenCode Go', ()
   expect(journal.providerCanStart({ ...circuit, at: '2026-10-12T01:01:00.000Z' })).toBe(false)
   expect(journal.providerCanStart({ ...circuit, model: 'zai-coding-plan/glm-5.3', at: '2026-10-12T01:01:00.000Z' })).toBe(false)
   expect(journal.providerCanStart({ ...circuit, model: 'opencode-go/glm-5.3-flash', at: '2026-10-12T01:01:00.000Z' })).toBe(true)
+  const model = 'zai-coding-plan/glm-5.3'
+  const canary = journal.reserveProviderStart({ ...circuit, model, workerId: 'quota-canary', at: '2026-10-12T06:01:00.000Z', leaseMilliseconds: 60_000 })
+  if (canary._tag !== 'Allowed' || canary.canary === null)
+    throw new Error('Expected a shared plan canary.')
+  expect(journal.recordProviderSuccess({ ...circuit, model, workerId: canary.canary.workerId, canaryCircuitId: canary.canary.circuitId, canaryFence: canary.canary.fence, at: '2026-10-12T06:01:10.000Z' })).toBe(1)
+  expect(journal.providerCanStart({ ...circuit, at: '2026-10-12T06:02:00.000Z' })).toBe(true)
 })
 
 describe('persistent Agent provider circuits', () => {
