@@ -175,16 +175,27 @@ wait_for_restart() {
           if $tag == "Restarting" then "Restarting Hogwild."
           else
             (if (.tasks | type) == "array" then
-              [.tasks[] | select(.state._tag == "Running" or .state._tag == "Publishing")] | length
-            else "unknown" end) as $tasks |
+              [.tasks[] | select(.state._tag == "Running" or .state._tag == "Publishing")] | sort_by(.id)
+            else null end) as $active |
+            (if $active == null then "unknown" else $active | length end) as $tasks |
             (if (.hostCapacity.localActive | type) == "number" and (.hostCapacity.desktopActive | type) == "number" then
               .hostCapacity.localActive + .hostCapacity.desktopActive
             else "unknown" end) as $slots |
-            "Waiting for Restart: \($tasks) active Tasks, \($slots) occupied Agent slots."
+            ["Waiting for Restart: \($tasks) active Tasks, \($slots) occupied Agent slots.",
+              (($active // [])[] |
+                (if .pullRequestNumber != null then " pull request #\(.pullRequestNumber)"
+                 elif .issueNumber != null then " issue #\(.issueNumber)"
+                 else "" end) as $subject |
+                ((.progress.label // "") | gsub("[[:cntrl:]]"; " ")) as $label |
+                "  Task \(.id): \(.repository)\($subject), \(.state._tag)" +
+                (if $label == "" then "" else ", \($label)" end))] | join("\n")
           end' <<< "$state")
         if [ "$progress" != "$last_progress" ] || ((SECONDS - last_reported >= 30)); then
           elapsed=$((SECONDS - started))
-          echo "$progress Elapsed: ${elapsed}s."
+          echo "${progress%%$'\n'*} Elapsed: ${elapsed}s."
+          if [[ "$progress" == *$'\n'* ]]; then
+            printf '%s\n' "${progress#*$'\n'}"
+          fi
           last_progress=$progress
           last_reported=$SECONDS
         fi
