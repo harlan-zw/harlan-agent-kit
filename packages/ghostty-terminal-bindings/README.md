@@ -1,6 +1,6 @@
 # Ghostty terminal bindings
 
-This private package builds pinned Ghostty sources for Agent terminals.
+This private package provides verified Ghostty bindings for Agent terminals.
 The host owns parsing and key encoding.
 The browser renders immutable screens and forwards key events.
 
@@ -12,18 +12,19 @@ pnpm --filter ghostty-terminal-bindings typecheck
 pnpm --filter ghostty-terminal-bindings test:run
 ```
 
-Build on Linux x64 with Node 24 or newer.
-The generated WASM runs on other hosts.
-The builder needs `agent-gh`, `curl`, `tar`, and `patch`.
+Build verifies checked artifacts offline with Node 24 or newer.
+It checks source pins, patch digests, artifact digests, and license notices.
+CI needs no GitHub token or Zig download.
+Eight artifact files inside `.generated` are tracked.
+
+To reproduce these artifacts, run `pnpm --filter ghostty-terminal-bindings build:source` on Linux x64.
+The source builder needs `agent-gh`, `curl`, `tar`, and `patch`.
 It downloads Zig 0.15.2 and verifies every source archive.
 Public GitHub downloads use the dedicated Agent identity.
-
-Downloads stay in `~/scratch/ghostty-bindings-source`.
+Downloads and unique build directories stay in `~/scratch/ghostty-bindings-source`.
 Set `GHOSTTY_BINDINGS_SOURCE_CACHE` to use another source cache.
-Generated files stay inside `.generated` and Git ignores them.
-The builder verifies the compiled WASM against its known checksum.
-It also writes a manifest for the wrapper, renderer, types, and licenses.
-If source patches change, remove `.generated` and build again.
+The builder checks every regenerated artifact against reviewed checksums before replacing tracked files.
+If patches change, review the regenerated checksums and update their pins together.
 
 ## Host
 

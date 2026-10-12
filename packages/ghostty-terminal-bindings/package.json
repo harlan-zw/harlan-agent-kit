@@ -12,7 +12,8 @@
     "./wasm": "./.generated/ghostty-vt.wasm"
   },
   "scripts": {
-    "build": "node scripts/build.ts",
+    "build": "node scripts/verify.ts",
+    "build:source": "node scripts/build.ts",
     "typecheck": "tsc --noEmit",
     "test:run": "vitest run",
     "lint": "eslint src scripts test"
