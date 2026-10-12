@@ -1,11 +1,13 @@
 import type { Octokit } from 'octokit'
 import type { GitHubTokenProvider } from './github-auth.ts'
+import type { GitHubResponseCache } from './github-response-cache.ts'
 import type { PackageReleaseSource } from './package-release-controller.ts'
 import type { PackageReleaseOffer } from './package-release.ts'
 import type { GitHubRepositoryAccess, RepositoryMapping, StoredReviewForHead } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { parse } from 'yaml'
 import { createAuthenticatedClient } from './github-auth.ts'
+import { createGitHubResponseCache } from './github-response-cache.ts'
 import { PACKAGE_RELEASE_MARKER, planPackageRelease, planPackageReleaseBeforeMerge, stableVersion } from './package-release.ts'
 
 interface Manifest { name?: string, version: string, private?: boolean, [key: string]: unknown }
@@ -40,6 +42,7 @@ export function createPackageReleaseSource(options: {
   now: () => Date
   fetch?: typeof globalThis.fetch
   createClient?: Parameters<typeof createAuthenticatedClient>[0]['createClient']
+  responseCache?: GitHubResponseCache
 }): PackageReleaseSource {
   const { repository, signal, assertLease } = options
   const config = repository.release
@@ -49,6 +52,7 @@ export function createPackageReleaseSource(options: {
   const [owner = '', repo = ''] = repository.github.split('/')
   const scope = { owner, repo }
   const request = { signal, timeout: 30_000 }
+  const responseCache = options.responseCache ?? createGitHubResponseCache()
   const client = async (access: GitHubRepositoryAccess): Promise<Octokit> => {
     assertLease()
     const result = await actor.tokens.getToken(repository.github, access, signal)
@@ -61,6 +65,7 @@ export function createPackageReleaseSource(options: {
       token: result.value.token,
       userAgent: 'harlan-github-agent',
       signal,
+      responseCache,
       ...(options.createClient === undefined ? {} : { createClient: options.createClient }),
     })
     octokit.hook.before('request', (requestOptions) => {
