@@ -8,10 +8,15 @@ import { mkdir, open, readdir, readFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export interface TerminalIntent {
+  admission: { _tag: 'Regular', requestId: string } | { _tag: 'ManualOverride', requestId: string }
+  queueOrder: number
+  manualAttempts: Record<string, { _tag: 'Pending' } | { _tag: 'Refused', reason: string } | { _tag: 'Accepted' }>
   decision:
     | { _tag: 'Pending' }
+    | { _tag: 'Queued', reason: string }
     | { _tag: 'Rejected', reason: TerminalFailure }
     | { _tag: 'Accepted' }
+    | { _tag: 'Cancelled' }
   protocol: 1
   fingerprint: string
   launch: TerminalLaunch
@@ -75,6 +80,7 @@ export function terminalIdentity(hostId: string, launch: TerminalLaunch) {
       JSON.stringify({
         projectId: launch.projectId,
         provider: launch.provider,
+        ...(launch.initialPrompt === undefined ? {} : { initialPrompt: launch.initialPrompt }),
       }),
     )
     .digest('hex')
@@ -101,10 +107,23 @@ export async function readTerminalIntents(
     if (content === null)
       continue
     const intent = JSON.parse(content) as TerminalIntent
+    // Existing durable sessions predate manual admission. They always used their original Regular request.
+    if (intent.admission === undefined)
+      intent.admission = { _tag: 'Regular', requestId: intent.launch.requestId }
+    if (intent.manualAttempts === undefined)
+      intent.manualAttempts = {}
+    if (intent.queueOrder === undefined)
+      intent.queueOrder = 0
     if (
       intent.protocol !== 1
       || intent.session.id !== entry.name
       || intent.unit !== `harlan-terminal-${entry.name}.service`
+      || !['Regular', 'ManualOverride'].includes(intent.admission._tag)
+      || typeof intent.admission.requestId !== 'string'
+      || intent.admission.requestId.length === 0
+      || intent.admission.requestId.length > 256
+      || !Number.isSafeInteger(intent.queueOrder)
+      || intent.queueOrder < 0
     ) {
       throw new Error('Invalid terminal session storage')
     }

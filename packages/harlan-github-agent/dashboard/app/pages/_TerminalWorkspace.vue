@@ -32,13 +32,16 @@ const narrow = useMediaQuery('(max-width: 767px)')
 const tabList = useTemplateRef<HTMLElement>('tabList')
 const terminalArea = useTemplateRef<HTMLElement>('terminalArea')
 const provider = ref<TerminalProvider>('codex')
+const initialPrompt = ref('')
+const forceConfirmation = shallowRef<{ _tag: 'New' } | { _tag: 'Waiting', id: string }>()
+const forceAttempts = new Map<string, string>()
 const failure = ref('')
 const pending = ref(false)
 const loading = ref(true)
 const refreshing = ref(false)
 const visibility = useDocumentVisibility()
 const diffOpen = ref(false)
-const launchIntent = shallowRef<{ requestId: string, projectId: string, provider: TerminalProvider }>()
+const launchIntent = shallowRef<{ requestId: string, projectId: string, provider: TerminalProvider, initialPrompt?: string, mode: 'Regular' | 'Force' }>()
 const selectedId = computed(() => activeTerminalSession(projectLayout.value))
 const selected = computed(() => sessions.value.find(session => session.id === selectedId.value))
 const tabSessions = computed(() => projectLayout.value.tabs.map(id => sessions.value.find(session => session.id === id)).filter((session): session is TerminalSession => session !== undefined))
@@ -51,13 +54,15 @@ const visibleProjects = computed(() => displayProjects.value.filter(project => p
 const selectedProjectUnavailable = computed(() => Boolean(projectId.value) && !projects.value.some(project => project.id === projectId.value))
 const providers = computed(() => (['codex', 'claude', 'opencode'] as const).filter(value => capabilities.providers[value]))
 const providerNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode' }
-const canStart = computed(() => !pending.value && capacity.value._tag === 'Available' && capacity.value.interactiveFree > 0
+const canStart = computed(() => !pending.value && capacity.value._tag === 'Available' && capacity.value.regular._tag !== 'Unavailable'
   && projects.value.some(project => project.id === projectId.value) && capabilities.providers[provider.value])
+const canForce = computed(() => !pending.value && capacity.value._tag === 'Available' && capacity.value.manualPolicy._tag === 'Enabled')
+const forceTotal = computed(() => capacity.value._tag === 'Available' ? capacity.value.reservedGiB + 8 : 8)
 const capacityReason = computed(() => loading.value
   ? 'Connecting to the terminal host.'
   : capacity.value._tag === 'Unavailable'
     ? terminalFailureCopy.CapacityUnavailable
-    : capacity.value.interactiveFree === 0 ? terminalFailureCopy.CapacityRefused : '')
+    : capacity.value.regular._tag === 'AtCapacity' ? 'Waiting to start' : '')
 
 async function refresh() {
   if (refreshing.value)
@@ -136,15 +141,16 @@ watch([() => route.query.terminal, sessions], () => {
     void select(session)
 })
 
-async function launch() {
+async function launch(mode: 'Regular' | 'Force' = 'Regular') {
   if (!canStart.value)
     return
   pending.value = true
   failure.value = ''
   const previous = launchIntent.value
-  const intent = previous?.projectId === projectId.value && previous.provider === provider.value
+  const prompt = initialPrompt.value.trim() || undefined
+  const intent = previous?.projectId === projectId.value && previous.provider === provider.value && previous.initialPrompt === prompt
     ? previous
-    : { requestId: crypto.randomUUID(), projectId: projectId.value, provider: provider.value }
+    : { requestId: crypto.randomUUID(), projectId: projectId.value, provider: provider.value, ...(prompt ? { initialPrompt: prompt } : {}), mode }
   launchIntent.value = intent
   await $fetch<unknown>('/api/terminal/sessions', { method: 'POST', body: intent }).then(parseTerminalSessionResult).then(async (result) => {
     if (result._tag === 'Err') {
@@ -154,6 +160,8 @@ async function launch() {
       return
     }
     launchIntent.value = undefined
+    initialPrompt.value = ''
+    forceConfirmation.value = undefined
     sessions.value = [...sessions.value.filter(session => session.id !== result.value.id), result.value]
     await select(result.value)
   }).catch(() => {
@@ -161,11 +169,44 @@ async function launch() {
   }).finally(() => { pending.value = false })
 }
 
-async function stop() {
-  if (!selected.value || pending.value)
+async function forceWaiting(id: string) {
+  if (!canForce.value)
     return
   pending.value = true
-  await $fetch<unknown>(`/api/terminal/sessions/${encodeURIComponent(selected.value.id)}/stop`, { method: 'POST' }).then(parseTerminalSessionResult).then((result) => {
+  failure.value = ''
+  const requestId = forceAttempts.get(id) ?? crypto.randomUUID()
+  forceAttempts.set(id, requestId)
+  await $fetch<unknown>(`/api/terminal/sessions/${encodeURIComponent(id)}/force`, { method: 'POST', body: { requestId } }).then(parseTerminalSessionResult).then((result) => {
+    if (result._tag === 'Err') {
+      failure.value = terminalFailureCopy[result.reason]
+      if (!['OwnershipUnknown', 'DeliveryUnknown'].includes(result.reason))
+        forceAttempts.delete(id)
+    }
+    else {
+      forceAttempts.delete(id)
+      sessions.value = sessions.value.map(session => session.id === result.value.id ? result.value : session)
+      if (result.value.state === 'Queued')
+        failure.value = terminalFailureCopy.CapacityRefused
+      forceConfirmation.value = undefined
+    }
+  }).catch(() => {
+    failure.value = 'Could not start the Agent session. Retry.'
+  }).finally(() => { pending.value = false })
+}
+
+async function confirmForce() {
+  const confirmation = forceConfirmation.value
+  if (confirmation?._tag === 'New')
+    await launch('Force')
+  else if (confirmation?._tag === 'Waiting')
+    await forceWaiting(confirmation.id)
+}
+
+async function stop(id = selected.value?.id) {
+  if (!id || pending.value)
+    return
+  pending.value = true
+  await $fetch<unknown>(`/api/terminal/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }).then(parseTerminalSessionResult).then((result) => {
     if (result._tag === 'Err')
       failure.value = terminalFailureCopy[result.reason]
     else
@@ -211,23 +252,40 @@ watch(visibility, (value) => {
           <button v-for="session in sessions.filter(value => value.projectId === project.id)" :key="session.id" class="flex w-full items-center gap-2 py-1.5 pr-3 pl-8 text-left text-xs hover:bg-elevated" :class="selectedId === session.id ? 'bg-accented text-highlighted' : 'text-muted'" :aria-current="selectedId === session.id ? 'page' : undefined" @click="select(session)">
             <span class="size-1.5 shrink-0 rounded-full" :class="session.state === 'Running' ? 'bg-success' : 'bg-neutral-500'" />
             <span class="flex-1 truncate">{{ providerNames[session.provider] }}</span>
-            <span class="text-[10px]">{{ session.state }}</span>
+            <span class="text-[10px]">{{ session.state === 'Queued' ? 'Waiting to start' : session.state === 'Cancelled' ? 'Session cancelled.' : session.state }}</span>
           </button>
         </div>
       </div>
       <p v-if="capacityReason" role="status" class="shrink-0 border-t border-default px-3 py-2 text-xs text-muted">
         {{ capacityReason }}
       </p>
+      <div v-if="capacity._tag === 'Available'" class="shrink-0 border-t border-default px-3 py-2 text-xs text-muted" aria-label="Host memory">
+        <div class="flex justify-between gap-2">
+          <span>Host memory</span><span>{{ capacity.reservedGiB }} / {{ capacity.memoryGiB }} GiB</span>
+        </div>
+        <div class="flex justify-between gap-2">
+          <span>Agent sessions</span><span>{{ capacity.agentSlotsUsed }} / {{ capacity.agentSlots }}</span>
+        </div>
+        <p v-if="capacity.forcedGiB > 0" class="mt-1 text-warning">
+          Force: {{ capacity.forcedGiB }} GiB
+        </p>
+      </div>
+      <div class="shrink-0 border-t border-default p-2">
+        <UTextarea v-model="initialPrompt" aria-label="Initial prompt" placeholder="Initial prompt" :maxlength="8192" :rows="2" class="w-full" :disabled="pending" />
+      </div>
       <div class="flex shrink-0 gap-2 border-t border-default p-2">
         <select v-model="provider" aria-label="Agent provider" class="min-w-0 flex-1 rounded border border-default bg-default px-2 text-xs">
           <option v-for="value in providers" :key="value" :value="value">
             {{ providerNames[value] }}
           </option>
         </select>
-        <UButton icon="i-octicon-plus-16" size="sm" :disabled="!canStart" :loading="pending" @click="launch">
+        <UButton icon="i-octicon-plus-16" size="sm" :disabled="!canStart" :loading="pending" @click="launch()">
           New session
         </UButton>
       </div>
+      <UButton v-if="canForce && canStart" class="mx-2 mb-2 shrink-0 justify-center" color="warning" variant="outline" size="sm" @click="forceConfirmation = { _tag: 'New' }">
+        Force new session
+      </UButton>
     </aside>
     <section class="flex min-h-0 min-w-0 flex-col">
       <p v-if="selectedProjectUnavailable" role="status" class="shrink-0 border-b border-default px-3 py-2 text-xs text-muted">
@@ -257,7 +315,7 @@ watch(visibility, (value) => {
         <div class="flex shrink-0 items-center gap-1 px-1">
           <UButton v-if="selected && !narrow" icon="i-octicon-columns-16" :aria-label="projectLayout.view._tag === 'Split' ? 'Show one terminal' : 'Split terminal'" variant="ghost" size="xs" :disabled="tabSessions.length < 2" :aria-pressed="projectLayout.view._tag === 'Split'" @click="split" />
           <UButton v-if="selected" :icon="diffOpen ? 'i-octicon-terminal-16' : 'i-octicon-diff-16'" :aria-label="diffOpen ? 'Show terminal' : 'Show diff'" variant="ghost" size="xs" :aria-pressed="diffOpen" @click="diffOpen = !diffOpen" />
-          <UButton v-if="selected && ['Starting', 'Running', 'Unknown'].includes(selected.state)" variant="ghost" size="xs" color="error" :loading="pending" @click="stop">
+          <UButton v-if="selected && ['Starting', 'Running', 'Unknown'].includes(selected.state)" variant="ghost" size="xs" color="error" :loading="pending" @click="stop()">
             Stop Agent
           </UButton>
         </div>
@@ -265,6 +323,17 @@ watch(visibility, (value) => {
       <p v-if="failure" role="alert" class="shrink-0 border-b border-error/30 px-3 py-2 text-xs text-error">
         {{ failure }}
       </p>
+      <div v-if="forceConfirmation" role="alert" class="shrink-0 border-b border-warning/30 bg-warning/5 p-3 text-xs">
+        <p>This session reserves 8 GiB of host memory. Total reserved: {{ forceTotal }} GiB. Force can still be refused.</p>
+        <div class="mt-2 flex gap-2">
+          <UButton color="warning" size="sm" :loading="pending" :disabled="!canForce" @click="confirmForce">
+            {{ forceConfirmation._tag === 'New' ? 'Force new session' : 'Force start' }}
+          </UButton>
+          <UButton color="neutral" variant="ghost" size="sm" :disabled="pending" @click="forceConfirmation = undefined">
+            Cancel
+          </UButton>
+        </div>
+      </div>
       <div v-if="selected" ref="terminalArea" class="relative min-h-0 flex-1">
         <!-- Visibility preserves renderer dimensions and attachments while Diff is open. -->
         <div class="absolute inset-0 grid min-h-0 min-w-0" :class="[visibleSessions.length === 2 ? 'grid-cols-2' : 'grid-cols-1', diffOpen ? 'invisible' : '']" :inert="diffOpen">
@@ -272,7 +341,18 @@ watch(visibility, (value) => {
             <div v-if="visibleSessions.length === 2" class="flex h-7 shrink-0 items-center justify-between gap-2 border-b border-default bg-muted px-2 text-[10px] text-muted">
               <span class="truncate">{{ providerNames[session.provider] }}</span><span class="truncate">{{ capabilities.hostLabel }}</span>
             </div>
-            <TerminalView :session="session" class="min-h-0 min-w-0 flex-1" />
+            <div v-if="session.state === 'Queued' || session.state === 'Cancelled'" role="status" class="flex flex-1 flex-col items-center justify-center gap-3 p-4 text-sm text-muted">
+              <p>{{ session.state === 'Queued' ? 'Waiting to start' : 'Session cancelled.' }}</p>
+              <div v-if="session.state === 'Queued'" class="flex gap-2">
+                <UButton color="neutral" variant="outline" size="sm" :loading="pending" @click="stop(session.id)">
+                  Cancel session
+                </UButton>
+                <UButton v-if="canForce" color="warning" variant="outline" size="sm" @click="forceConfirmation = { _tag: 'Waiting', id: session.id }">
+                  Force start
+                </UButton>
+              </div>
+            </div>
+            <TerminalView v-else :session="session" class="min-h-0 min-w-0 flex-1" />
           </div>
         </div>
         <TerminalDiff v-if="diffOpen" id="terminal-diff" :key="selected.id" role="tabpanel" aria-label="Diff" :target="{ _tag: 'Session', sessionId: selected.id }" class="relative z-10 h-full min-h-0 min-w-0 bg-default" @close="diffOpen = false" />

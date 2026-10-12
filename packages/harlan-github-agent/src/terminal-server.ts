@@ -18,8 +18,9 @@ import { createBrowserAuth } from './browser-auth.ts'
 import { connectTerminalHelper } from './terminal-helper-client.ts'
 import {
   parseTerminalClientMessage,
+  parseTerminalForce,
   parseTerminalJson,
-  parseTerminalLaunch,
+  parseTerminalStart,
 } from './terminal-protocol.ts'
 
 export function createTerminalServer(options: {
@@ -231,13 +232,32 @@ export function createTerminalServer(options: {
       if (request.method === 'POST' && url.pathname === `${prefix}/sessions`) {
         const decoded = await body(request)
         const launch
-          = decoded._tag === 'Ok' ? parseTerminalLaunch(decoded.value) : decoded
+          = decoded._tag === 'Ok' ? parseTerminalStart(decoded.value) : decoded
+        if (launch._tag === 'Ok' && launch.value._tag === 'ManualOverride' && !browserSession(request)) {
+          json(response, { _tag: 'Err', reason: 'AuthenticationRequired' }, 401)
+          return
+        }
         json(
           response,
           launch._tag === 'Ok'
-            ? await options.manager.launch(launch.value)
+            ? launch.value._tag === 'ManualOverride' ? await options.manager.launchForce(launch.value.launch) : await options.manager.launch(launch.value.launch)
             : launch,
         )
+        return
+      }
+      const force = /^\/api\/terminal\/sessions\/([a-f\d]{24})\/force$/.exec(url.pathname)
+      if (request.method === 'POST' && force?.[1]) {
+        if (!browserSession(request)) {
+          json(response, { _tag: 'Err', reason: 'AuthenticationRequired' }, 401)
+          return
+        }
+        const decoded = await body(request)
+        const parsed = decoded._tag === 'Ok' ? parseTerminalForce(decoded.value) : decoded
+        if (!browserSession(request)) {
+          json(response, { _tag: 'Err', reason: 'AuthenticationRequired' }, 401)
+          return
+        }
+        json(response, parsed._tag === 'Ok' ? await options.manager.forceQueued(force[1], parsed.value.requestId) : parsed)
         return
       }
       const stop = /^\/api\/terminal\/sessions\/([a-f\d]{24})\/stop$/.exec(
