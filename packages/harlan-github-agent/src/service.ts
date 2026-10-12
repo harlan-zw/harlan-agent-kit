@@ -1633,8 +1633,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       })
     : undefined
   const browserAuth = config.storage.path !== ':memory:' && new URL(config.server.allowedOrigin).protocol === 'https:'
-    ? createBrowserAuthorities({ directory: join(dirname(config.storage.path), 'browser-auth'), origin: config.server.allowedOrigin, privateTerminalHost: config.server.agentSessions === true, ...(config.server.browserOrigins?.[0] ? { publicOrigin: config.server.browserOrigins[0] } : {}), password: options.dashboardPassword, now: () => now().getTime() })
+    ? createBrowserAuthorities({ directory: join(dirname(config.storage.path), 'browser-auth'), origin: config.server.allowedOrigin, privateTerminalHost: config.server.agentSessions === true, ...(config.server.browserOrigins?.[0] ? { publicOrigin: config.server.browserOrigins[0] } : {}), publicPasswordLogin: config.server.publicBrowserPasswordLogin !== false, password: options.dashboardPassword, now: () => now().getTime() })
     : undefined
+  if (config.server.publicBrowserPasswordLogin === false && !browserAuth?.public)
+    throw new Error('Public Passkey login requires persistent storage and an HTTPS private origin.')
   const app = createAgentApp({
     ...(browserAuth ? { browserAuth } : {}),
     pullRequestDiff: createGitHubPullRequestDiff({ tokens: routedTokens, now: () => now().getTime(), log: message => options.logger.error(message) }),

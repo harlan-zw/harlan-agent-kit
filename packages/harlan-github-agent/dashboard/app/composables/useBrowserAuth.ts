@@ -5,7 +5,7 @@ import { createSharedComposable, until, useEventListener } from '@vueuse/core'
 import { runPasskeyOperation } from '../utils/passkey-ceremony.ts'
 import { createTerminalPairingDiscovery, takeTerminalPairing } from '../utils/terminal-pairing.ts'
 
-interface Session { authenticated: boolean, bootstrapKind: 'pairing' | 'password', surface: BrowserSurface, passkeys: boolean }
+interface Session { authenticated: boolean, bootstrapKind: 'pairing' | 'password' | 'passkey', surface: BrowserSurface, passkeys: boolean }
 interface Credential { id: string, label: string, created: number }
 type Operation = 'check' | 'password' | 'login' | 'add' | 'remove' | 'logout' | 'list'
 

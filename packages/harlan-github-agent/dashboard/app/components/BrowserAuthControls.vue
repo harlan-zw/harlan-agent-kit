@@ -17,7 +17,7 @@ const browserSupported = computed(() => import.meta.client && !!window.PublicKey
         <ul v-else-if="auth.credentials.value.length" class="divide-y divide-default">
           <li v-for="credential in auth.credentials.value" :key="credential.id" class="flex items-center justify-between gap-3 py-3">
             <span class="min-w-0 break-words text-sm text-highlighted">{{ credential.label }}</span>
-            <UButton label="Remove" :aria-label="`Remove Passkey: ${credential.label}`" color="error" variant="ghost" class="min-h-11 shrink-0" :disabled="auth.pending.value !== null" @click="auth.remove(credential.id)" />
+            <UButton label="Remove" :aria-label="`Remove Passkey: ${credential.label}`" color="error" variant="ghost" class="min-h-11 shrink-0" :disabled="auth.pending.value !== null || (auth.session.value?.bootstrapKind === 'passkey' && auth.credentials.value.length <= 1)" @click="auth.remove(credential.id)" />
           </li>
         </ul>
         <p v-else class="text-sm text-muted">
@@ -32,7 +32,10 @@ const browserSupported = computed(() => import.meta.client && !!window.PublicKey
           </p>
         </form>
         <PasskeyProgress />
-        <p class="text-sm text-muted">
+        <p v-if="auth.session.value?.bootstrapKind === 'passkey'" class="text-sm text-muted">
+          Add another Passkey before removing the last Passkey.
+        </p>
+        <p v-else class="text-sm text-muted">
           Use the password or pairing link if you lose a Passkey.
         </p>
         <UButton label="Sign out" icon="i-octicon-sign-out-16" color="neutral" variant="outline" class="min-h-11" :loading="auth.pending.value === 'logout'" :disabled="auth.pending.value !== null" @click="auth.logout" />

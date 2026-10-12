@@ -12,6 +12,10 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Asset | String | Where |
 | --- | --- | --- |
 | Name | Agent | Navigation and document title |
+| Public password policy | Configure one public browser origin before disabling password login. | Configuration error |
+| Public Passkey setup | Public Passkey login requires an enrolled Passkey | Startup error |
+| Public Passkey storage | Public Passkey login requires persistent storage and an HTTPS private origin. | Configuration and startup error |
+| Final Passkey | Add another Passkey before removing the last Passkey. | Passkey management without password login |
 | Start control | New session | Navigation and session sidebar |
 | Host control | Run on | Project sidebar and mobile composer |
 | Session setup | Enable Agent sessions after installing the private ingress. | Refused session requests and setup guidance |

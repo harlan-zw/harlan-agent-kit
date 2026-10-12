@@ -43,9 +43,13 @@ export function openBrowserAuthStore(path: string) {
         return false
       return database.prepare('UPDATE credentials SET credential=? WHERE id=? AND credential=?').run(JSON.stringify({ ...value.credential, counter: after, publicKey: Buffer.from(value.credential.publicKey).toString('base64url') }), id, JSON.stringify({ ...value.credential, publicKey: Buffer.from(value.credential.publicKey).toString('base64url') })).changes === 1
     },
-    removeCredential(id: string) {
+    removeCredential(id: string, minimumRemaining = 0) {
       database.exec('BEGIN IMMEDIATE')
       try {
+        if (!database.prepare('SELECT id FROM credentials WHERE id=?').get(id) || Number(database.prepare('SELECT count(*) AS count FROM credentials').get()!.count) <= minimumRemaining) {
+          database.exec('ROLLBACK')
+          return false
+        }
         database.prepare('DELETE FROM sessions WHERE credential_id=?').run(id)
         const removed = database.prepare('DELETE FROM credentials WHERE id=?').run(id).changes === 1
         database.exec('COMMIT')
