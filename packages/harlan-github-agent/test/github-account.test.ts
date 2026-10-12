@@ -113,3 +113,22 @@ it('creates an account-owned issue comment after migration and updates it on the
   expect(updateComment).toHaveBeenCalledWith(expect.objectContaining({ comment_id: 2, body: githubAccountBody(updated, account) }))
   expect(old.body).toBe(AUTOMATED_ISSUE_TRIAGE_MARKER)
 })
+
+it('uses the account attribution for inline review findings', async () => {
+  const createReviewComment = vi.fn(async () => ({ data: { id: 3 } }))
+  const source = createGitHubAgentSource({
+    actorLogin: () => account.login,
+    ownAppId: 123,
+    tokens: { getToken: async () => ok({ token: 'account-token', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined },
+    createClient: () => ({ rest: { pulls: { createReviewComment } } } as unknown as Octokit),
+  })
+  const mapping = repositoryMapping({ github: repository, authentication: 'user', githubAccount: account })
+  const body = `Inspect the failing condition.\n${automatedDisclosure({ kind: 'review' })}`
+  expect(await source.postReviewFindingComment(mapping, 44, {
+    headSha: 'a'.repeat(40),
+    path: 'src/example.ts',
+    line: 10,
+    body,
+  }, new AbortController().signal, () => ok(undefined))).toEqual(ok({ _tag: 'Posted' }))
+  expect(createReviewComment).toHaveBeenCalledWith(expect.objectContaining({ body: githubAccountBody(body, account) }))
+})

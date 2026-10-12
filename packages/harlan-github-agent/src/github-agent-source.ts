@@ -1342,7 +1342,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(repository.github)
-      const request = { owner, repo, pull_number: pullRequestNumber, commit_id: comment.headSha, path: comment.path, body: comment.body, request: { signal } }
+      const request = { owner, repo, pull_number: pullRequestNumber, commit_id: comment.headSha, path: comment.path, body: githubAccountBody(comment.body, repository.githubAccount), request: { signal } }
       // GitHub refuses a line outside the diff with 422, and a file outside
       // the diff the same way. A line it refuses falls back to the file.
       const post = (line: number | null): Promise<Result<'Posted' | 'Refused', string>> => {
