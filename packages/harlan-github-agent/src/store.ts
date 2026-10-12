@@ -888,7 +888,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   /** Retires every active Routine of one repository and supersedes its Queued runs with `reason`. Returns the retired names. */
   retireRoutines: (input: { repository: string, reason: string, at: string }) => string[]
   /** Inserts one run for one exact cron instant. Answers null when it already exists. */
-  openRoutineRun: (input: { routineId: string, scheduledFor: string, specSha: string, at: string }) => RoutineRun | null
+  openRoutineRun: (input: { routineId: string, scheduledFor: string, specSha: string, at: string, agentSelection?: PinnedAgentSelection }) => RoutineRun | null
   /** Records an instant that fell outside the catch-up window, so a missed run stays visible. */
   skipRoutineRun: (input: { routineId: string, scheduledFor: string, specSha: string, reason: string, at: string }) => RoutineRun | null
   getRoutineRun: (runId: string) => RoutineRun | null
@@ -916,7 +916,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   completeRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, trackingIssueNumber: number }) => boolean
   recordRoutineReportReceipt: (input: { commandId: string, workerId: string, fence: number, at: string, sink: 'tracking_issue' | 'run_comment' }) => boolean
   failRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
-  claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedRoutineRun | null
+  claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number, canStart?: (selection: PinnedAgentSelection | undefined) => boolean) => ClaimedRoutineRun | null
   hasOverdueRoutineRun: (now: string) => boolean
   heartbeatRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   updateRoutineRunProgress: (input: { taskId: string, workerId: string, fence: number, progress: AgentProgress, at: string }) => boolean
@@ -7008,7 +7008,15 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 87;`)
     version = 87
   }
-  if (version === 87)
+  if (version === 87) {
+    const columns = database.prepare('PRAGMA table_info(routine_runs)').all() as Array<{ name: string }>
+    applyMigration(database, `
+      ${columns.some(column => column.name === 'agent_selection_json') ? '' : 'ALTER TABLE routine_runs ADD COLUMN agent_selection_json TEXT CHECK (agent_selection_json IS NULL OR json_valid(agent_selection_json));'}
+      PRAGMA user_version = 88;
+    `)
+    version = 88
+  }
+  if (version === 88)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -15371,6 +15379,7 @@ export function openJournalStore(
     scheduled_for: string
     spec_sha: string
     mode: string
+    agent_selection_json: string | null
     state_tag: string
     reason: string | null
     evidence: string | null
@@ -15413,6 +15422,7 @@ export function openJournalStore(
     scheduledFor: row.scheduled_for,
     specSha: row.spec_sha,
     mode: row.mode as RoutineRun['mode'],
+    ...(row.agent_selection_json === null ? {} : { agentSelection: JSON.parse(row.agent_selection_json) as PinnedAgentSelection }),
     state: readRoutineRunState(row),
     fence: row.fence,
     attempts: row.attempts,
@@ -15447,6 +15457,7 @@ export function openJournalStore(
     at: string
     state: 'Queued' | 'Skipped'
     reason: string | null
+    agentSelection?: PinnedAgentSelection
   }): RoutineRun | null => {
     const id = `${input.routineId}:${input.scheduledFor}`
     database.exec('BEGIN IMMEDIATE')
@@ -15459,10 +15470,10 @@ export function openJournalStore(
         return null
       }
       const inserted = database.prepare(`
-        INSERT INTO routine_runs (id, routine_id, scheduled_for, spec_sha, mode, state_tag, reason, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO routine_runs (id, routine_id, scheduled_for, spec_sha, mode, state_tag, reason, created_at, updated_at, agent_selection_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (routine_id, scheduled_for) DO NOTHING
-      `).run(id, input.routineId, input.scheduledFor, authority.spec_sha, authority.mode, input.state, input.reason, input.at, input.at).changes === 1
+      `).run(id, input.routineId, input.scheduledFor, authority.spec_sha, authority.mode, input.state, input.reason, input.at, input.at, input.agentSelection === undefined ? null : JSON.stringify(input.agentSelection)).changes === 1
       if (!inserted) {
         database.exec('COMMIT')
         return null
@@ -15706,17 +15717,18 @@ export function openJournalStore(
     })
   }
 
-  const claimNextRoutineRun: JournalStore['claimNextRoutineRun'] = (workerId, now, leaseMilliseconds) => {
+  const claimNextRoutineRun: JournalStore['claimNextRoutineRun'] = (workerId, now, leaseMilliseconds, canStart) => {
     database.exec('BEGIN IMMEDIATE')
     try {
       recoverExpiredRoutineRuns(now)
-      const row = database.prepare(`
+      const rows = database.prepare(`
         SELECT
           routine_runs.id,
           routine_runs.routine_id,
           routine_runs.scheduled_for,
           routine_runs.spec_sha,
           routine_runs.mode,
+          routine_runs.agent_selection_json,
           routine_runs.fence,
           routine_runs.attempts,
           routines.repository,
@@ -15729,9 +15741,8 @@ export function openJournalStore(
           AND routines.enabled = 1
           AND routines.retired_at IS NULL
           AND repositories.enabled = 1
-        ORDER BY routine_runs.scheduled_for
-        LIMIT 1
-      `).get() as unknown as {
+        ORDER BY routine_runs.agent_selection_json IS NULL, routine_runs.scheduled_for
+      `).all() as unknown as Array<{
         id: string
         routine_id: string
         scheduled_for: string
@@ -15741,8 +15752,10 @@ export function openJournalStore(
         repository: string
         name: string
         mode: string
+        agent_selection_json: string | null
         policy_json: string
-      } | undefined
+      }>
+      const row = rows.find(candidate => canStart?.(candidate.agent_selection_json === null ? undefined : JSON.parse(candidate.agent_selection_json) as PinnedAgentSelection) !== false)
       if (row === undefined) {
         database.exec('COMMIT')
         return null
@@ -15776,6 +15789,7 @@ export function openJournalStore(
         repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping,
         name: row.name as ClaimedRoutineRun['name'],
         mode: row.mode as ClaimedRoutineRun['mode'],
+        ...(row.agent_selection_json === null ? {} : { agentSelection: JSON.parse(row.agent_selection_json) as PinnedAgentSelection }),
         scheduledFor: row.scheduled_for,
         specSha: row.spec_sha,
         attempts: row.attempts + 1,

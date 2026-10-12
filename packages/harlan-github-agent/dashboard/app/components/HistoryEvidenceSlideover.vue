@@ -162,6 +162,13 @@ const details = computed<DetailItem[]>(() => {
     { term: 'Repository', value: run.repository, href: `https://github.com/${run.repository}` },
     { term: 'Scheduled', value: relativeTime(run.scheduledFor) },
     { term: 'Mode', value: run.mode },
+    ...(run.agentSelection === undefined
+      ? []
+      : [
+          { term: 'Agent provider', value: run.agentSelection.provider },
+          { term: 'Model', value: run.agentSelection.model ?? 'Provider default' },
+          { term: 'Reasoning effort', value: run.agentSelection.reasoningEffort ?? 'Provider default' },
+        ]),
     { term: 'Report', value: run.reportState ?? 'None' },
     { term: ['Queued', 'Running'].includes(run.state._tag) ? 'Updated' : 'Finished', value: relativeTime(run.updatedAt) },
     { term: 'Took', value: duration(run.createdAt, run.updatedAt), mono: true },

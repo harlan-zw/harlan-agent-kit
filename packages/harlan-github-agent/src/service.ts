@@ -955,8 +955,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         workerId: randomUUID(),
       })),
       routines: createWorkerTaskScheduler({
-        canClaim: () => canClaimRoutineRun(canClaim(), config.triggers, store, now().toISOString()),
-        claim: store.claimNextRoutineRun,
+        // A manual choice checks its own provider. It cannot reopen the global Queue.
+        canClaim: () => store.getAgentControl()._tag === 'Running' && restartAllowsTaskClaims(store.getRestartRequest()),
+        claim: (workerId, at, leaseMilliseconds) => store.claimNextRoutineRun(workerId, at, leaseMilliseconds, selection => selection === undefined
+          ? canClaimRoutineRun(canClaim(), config.triggers, store, at)
+          : chooseProvider([selection.provider]) === selection.provider),
         complete: store.completeRoutineRun,
         fail: store.failRoutineRun,
         heartbeat: store.heartbeatRoutineRun,

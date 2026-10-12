@@ -126,7 +126,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         {
           ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),
           now: options.now,
-          runtime: options.runtime,
+          runtime: repository => options.runtime(repository, task.agentSelection),
           store: sessionlessStore,
         },
         {

@@ -5,8 +5,10 @@ import type {
   AgentTask,
   DashboardSnapshot,
   ItemSummary,
+  PinnedAgentSelection,
   QueueEntry,
   ReviewAgent,
+  RoutineRun,
   SelectionMode,
 } from '../../../src/types.ts'
 import { createSharedComposable, formatTimeAgo, useDocumentVisibility, useEventSource, useNow } from '@vueuse/core'
@@ -189,6 +191,14 @@ function createDashboard() {
   /** A switch starts the next agent turn. Work already running keeps its model. */
   const selectAgent = (selection: AgentSelection): Promise<void> =>
     control(() => $fetch('/api/agents/select', { method: 'POST', body: selection }))
+
+  async function runRoutine(routineId: string, agentSelection: PinnedAgentSelection): Promise<RoutineRun | undefined> {
+    if (refuseUnavailableControl())
+      return undefined
+    const run = await $fetch<RoutineRun>('/api/routines/run', { method: 'POST', body: { routineId, agentSelection } })
+    await loadState()
+    return run
+  }
 
   /** Agent slots apply to the next turn. Running Agents finish. */
   const setAgentSlots = (host: 'hogwild' | 'desktop', slots: number): Promise<void> =>
@@ -452,6 +462,7 @@ function createDashboard() {
     requestUpdate,
     setSelectionMode,
     selectAgent,
+    runRoutine,
     setAgentSlots,
     setRepositoryPaused,
     setRepositoryWritesEnabled,
