@@ -71,6 +71,14 @@ function projectWithRecordingEslint(): { directory: string, log: string } {
 
 describe('tool.execute.before', () => {
   it.each([
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh run watch 123 --repo owner/private',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh -R owner/private run watch 123 -i 3',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh pr checks 1 --watch --repo owner/private',
+  ])('blocks rapid private CI watches: %s', async (command) => {
+    await expect(runShellHook(command)).rejects.toThrow(/60/)
+  })
+
+  it.each([
     'gh api repos/owner/public/issues',
     'gh api "repos/owner/public/issues"',
     '"/usr/bin/gh" api repos/owner/public/issues',
@@ -97,6 +105,8 @@ describe('tool.execute.before', () => {
     'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh api /repos/owner/private/actions/runs',
     'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh pr view 1 --repo=owner/private',
     'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh pr view 1 --repo "owner/private"',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh -R owner/private run watch 123 --interval 60',
+    'HARLAN_AGENT_GITHUB_PRIVATE=owner/private gh pr checks 1 --watch --repo owner/private --interval 60',
     'gh api user --jq .login',
     'gh auth status',
     'gh api repos/owner/public/issues/1 -X PATCH --input body.json',
