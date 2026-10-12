@@ -5,6 +5,12 @@ import { afterEach, expect, it } from 'vitest'
 import { createTerminalManager, createTerminalServer } from '../src/terminal.ts'
 
 const cleanup: (() => Promise<void>)[] = []
+// Each restart probe opens a fresh client connection. Existing transports may close during an API restart.
+function request(url: string, options?: Parameters<typeof fetch>[1]) {
+  const headers = new Headers(options?.headers)
+  headers.set('connection', 'close')
+  return fetch(url, { ...options, headers })
+}
 afterEach(async () => {
   for (const close of cleanup.splice(0)) await close()
 })
@@ -68,24 +74,24 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
     manager.close()
     await rm(directory, { recursive: true })
   })
-  const home = await fetch(origin)
+  const home = await request(origin)
   expect(home.headers.get('content-type')).toBe('text/html; charset=utf-8')
   const html = await home.text()
   expect(html).toContain('<title>Terminal proof</title>')
   const nonce = /<script nonce="([^"]+)"/.exec(html)?.[1]
   expect(nonce).toBeTruthy()
   expect(home.headers.get('content-security-policy')).toContain(`'nonce-${nonce}'`)
-  expect((await fetch(`${origin}/api/terminal/capabilities`)).status).toBe(401)
+  expect((await request(`${origin}/api/terminal/capabilities`)).status).toBe(401)
   expect(
     (
-      await fetch(`${origin}/api/terminal/pair`, {
+      await request(`${origin}/api/terminal/pair`, {
         method: 'POST',
         headers: { origin: 'https://wrong.example' },
         body: JSON.stringify({ code: api.pairCode }),
       })
     ).status,
   ).toBe(403)
-  const paired = await fetch(`${origin}/api/terminal/pair`, {
+  const paired = await request(`${origin}/api/terminal/pair`, {
     method: 'POST',
     headers: { origin },
     body: JSON.stringify({ code: api.pairCode }),
@@ -94,7 +100,7 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
   const cookie = paired.headers.get('set-cookie')!.split(';')[0]!
   expect(
     (
-      await fetch(`${origin}/api/terminal/pair`, {
+      await request(`${origin}/api/terminal/pair`, {
         method: 'POST',
         headers: { origin },
         body: JSON.stringify({ code: api.pairCode }),
@@ -103,7 +109,7 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
   ).toBe(401)
   expect(
     await (
-      await fetch(`${origin}/api/terminal/capabilities`, {
+      await request(`${origin}/api/terminal/capabilities`, {
         headers: { cookie },
       })
     ).json(),
@@ -115,7 +121,7 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
   )
   expect(
     (
-      await fetch(`${origin}/api/terminal/capabilities`, {
+      await request(`${origin}/api/terminal/capabilities`, {
         headers: { cookie, connection: 'close' },
       })
     ).status,
