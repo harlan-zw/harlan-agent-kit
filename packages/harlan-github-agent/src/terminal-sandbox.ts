@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { lstat, realpath } from 'node:fs/promises'
+import { lstat, mkdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -27,6 +27,21 @@ const isolation = [
   '--tmpfs',
   '/sys/fs/cgroup',
 ]
+
+async function preparePackageManagerHome(home: string) {
+  let path = home
+  for (const name of ['.cache', 'harlan-terminal', 'pnpm']) {
+    path = join(path, name)
+    await mkdir(path).catch((cause: NodeJS.ErrnoException) => {
+      if (cause.code !== 'EEXIST')
+        throw cause
+    })
+    if (!(await lstat(path)).isDirectory() || await realpath(path) !== path)
+      throw new Error('Terminal provider state requires ordinary host directories')
+  }
+  return path
+}
+
 export async function prepareTerminalSandbox(options: {
   cwd: string
   executable: string
@@ -43,7 +58,8 @@ export async function prepareTerminalSandbox(options: {
   })
   const cwd = await realpath(options.cwd)
   const home = options.home ?? homedir()
-  const args = [...isolation, '--bind', cwd, cwd]
+  const packageManagerHome = await preparePackageManagerHome(home)
+  const args = [...isolation, '--bind', cwd, cwd, '--bind', packageManagerHome, packageManagerHome]
   // Host resolver symlinks commonly enter /run. Preserve only their read-only file, never its directory.
   const resolver = await realpath('/etc/resolv.conf')
   if (resolver.startsWith('/run/') || resolver.startsWith('/tmp/'))
@@ -121,6 +137,7 @@ export async function prepareTerminalSandbox(options: {
     ...options.environment,
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
+    PNPM_HOME: packageManagerHome,
   }
   for (const name of [
     'DBUS_SESSION_BUS_ADDRESS',

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -8,6 +8,41 @@ import { expect, it } from 'vitest'
 import { createTerminalPreparationRunner, prepareTerminalSandbox } from '../src/terminal-sandbox.ts'
 
 const execute = promisify(execFile)
+
+it('gives provider tools writable package manager state without changing host launchers', async () => {
+  const root = await mkdtemp(join(homedir(), 'scratch/terminal-tool-state-test-'))
+  const home = join(root, 'home')
+  const project = join(root, 'project')
+  try {
+    await Promise.all([mkdir(join(home, '.local/share/pnpm'), { recursive: true }), mkdir(project)])
+    const probe = join(project, 'probe.ts')
+    await writeFile(probe, `import { mkdirSync, writeFileSync } from 'node:fs'\nconst state = process.env.PNPM_HOME\nmkdirSync(state, { recursive: true })\nwriteFileSync(state + '/fixture-state', 'package-manager-state')\ntry { writeFileSync(${JSON.stringify(join(home, '.local/share/pnpm/host-launcher'))}, 'modified') } catch (error) { console.log(error.code) }\n`)
+    const sandbox = await prepareTerminalSandbox({ cwd: project, executable: process.execPath, argv: [probe], environment: { ...process.env, PNPM_HOME: join(home, '.local/share/pnpm') }, home })
+    const result = await execute(sandbox.executable, sandbox.argv, { env: sandbox.environment })
+    expect(result.stdout.trim()).toBe('EROFS')
+    expect(await readFile(join(home, '.cache/harlan-terminal/pnpm/fixture-state'), 'utf8')).toBe('package-manager-state')
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it.each(['.cache', '.cache/harlan-terminal'])('rejects package manager state through a symlink at %s', async (link) => {
+  const root = await mkdtemp(join(homedir(), 'scratch/terminal-tool-state-link-'))
+  const home = join(root, 'home')
+  const project = join(root, 'project')
+  const target = join(root, 'target')
+  try {
+    await Promise.all([mkdir(home), mkdir(project), mkdir(target)])
+    if (link !== '.cache')
+      await mkdir(join(home, '.cache'))
+    await symlink(target, join(home, link))
+    await expect(prepareTerminalSandbox({ cwd: project, executable: '/usr/bin/true', argv: [], environment: process.env, home })).rejects.toThrow('ordinary host directories')
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 it('uses HTTPS for GitHub preparation without changing stored remotes or unrelated transports', async () => {
   const root = await mkdtemp(join(homedir(), 'scratch/terminal-git-test-'))
