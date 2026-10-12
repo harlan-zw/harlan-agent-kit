@@ -14,6 +14,18 @@ interface Manifest { name?: string, version: string, private?: boolean, [key: st
 
 const releaseTitle = /^(?:feat|fix|perf)(?:\([^\n]*\))?:|^[a-z]+(?:\([^\n]*\))?!:/i
 
+function stableVersionAtLeast(value: string | undefined, required: string): boolean {
+  const current = stableVersion(value ?? '')
+  const minimum = stableVersion(required)
+  if (current === null || minimum === null)
+    return false
+  for (const index of [0, 1, 2] as const) {
+    if (current[index] !== minimum[index])
+      return current[index] > minimum[index]
+  }
+  return true
+}
+
 function hasReleasePatch(file: { filename: string, patch?: string }): boolean {
   // GitHub omits large generated lockfile patches. Classification uses commit
   // messages, and the public API removal check needs source patches only.
@@ -385,7 +397,9 @@ export function createPackageReleaseSource(options: {
         if (typeof pkg.name !== 'string')
           throw new Error('A public release package has no npm name.')
         const npm = await registry(pkg.name)
-        if (npm === null || npm.versions[record.plan.version]?.version !== record.plan.version || npm['dist-tags'].latest !== record.plan.version)
+        // A later release can move latest before this receipt reconciles.
+        // Verify the pinned version without moving any npm tag backwards.
+        if (npm === null || npm.versions[record.plan.version]?.version !== record.plan.version || !stableVersionAtLeast(npm['dist-tags'].latest, record.plan.version))
           return null
       }
       const github = await client('read')
