@@ -161,7 +161,11 @@ Self-hosted runners run on Hogwild (`hogwild-github-runner.service`) and on the 
 
 Every change opens a pull request. A Markdown-only change is no exception.
 Never push to `origin/main` directly.
-Test, build, and deploy workflow events ignore `**/*.md` by default.
+Test, build, and deploy workflows skip Markdown-only changes by default.
+If the default branch requires checks, skip at the job level, never at the event.
+A `changes` job decides, and each other job skips through `if:`. GitHub passes a skipped required check.
+An event-level filter starts no run, so a required check never reports and the pull request blocks.
+If the default branch requires no checks, an event-level `paths-ignore` for `**/*.md` is fine.
 A workflow opts in only when its `paths` list includes Markdown.
 Never combine `paths` and `paths-ignore` on one event.
 
