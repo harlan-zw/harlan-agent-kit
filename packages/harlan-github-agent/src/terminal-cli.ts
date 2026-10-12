@@ -7,6 +7,7 @@ import {
   createTerminalControllerObserver,
   parseTerminalControllerObserverConfig,
 } from './terminal-controller-observer.ts'
+import { createTerminalDiffRequests } from './terminal-controller.ts'
 import { createTerminalRuntime } from './terminal-runtime.ts'
 
 export interface TerminalLocalConfig {
@@ -161,6 +162,7 @@ export async function serveLocalTerminals(config: TerminalLocalConfig) {
     controller: Boolean(observer),
     controllerReadOnly: Boolean(observer),
     observer,
+    diff: createTerminalDiffRequests(Date.now),
     protectedPaths: [
       ...(config.protectedPaths ?? []),
       ...(config.controller ? [config.controller.passwordFile] : []),
@@ -179,6 +181,10 @@ export async function serveLocalTerminals(config: TerminalLocalConfig) {
 }
 async function main() {
   const configPath = process.argv[2]
+  if (configPath === '--help' || configPath === '-h') {
+    process.stdout.write('Usage: harlan-terminal <configuration.json>\n\nOpen Projects and Agent terminals in your browser.\nUse the pairing link printed at startup.\nClose this command to disconnect. Running Agents remain alive.\nStop an Agent through the terminal UI.\n')
+    return
+  }
   if (!configPath)
     throw new Error('Pass the local terminal configuration path')
   const service = await serveLocalTerminals(

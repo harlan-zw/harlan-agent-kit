@@ -5,7 +5,7 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
 const prefix = '/api/maintenance'
-const paths = new Set(['/state', '/events', '/reviews', '/stats', '/workflow-events', '/items/pull-request-status', '/items/issue-status', '/items/pull-request-events', '/sessions'])
+const paths = new Set(['/state', '/events', '/reviews', '/stats', '/workflow-events', '/items/pull-request-status', '/items/issue-status', '/items/pull-request-events', '/items/pull-request-diff', '/sessions'])
 const maximum = 8 * 1024 * 1024
 interface Config { origin: string, passwordFile: string }
 type ConfigResult = { _tag: 'Ok', value: Config } | { _tag: 'Err', error: 'InvalidRequest' }

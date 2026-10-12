@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentApp } from '../src/app.ts'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
 import { readDesktopResponse } from '../src/desktop-protocol.ts'
-import { dashboardSnapshot } from './fixtures.ts'
+import { dashboardSnapshot, pullRequestItem } from './fixtures.ts'
 
 const allowedOrigin = 'https://harlan-github-agent.localhost'
 const allowedHost = new URL(allowedOrigin).host
@@ -68,10 +68,11 @@ const agentControls = {
 
 afterEach(() => vi.useRealTimers())
 
-function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof createDesktopBroker>, repairRecovery?: AgentAppOptions['repairRecovery'], root = dashboardRoot) {
+function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof createDesktopBroker>, repairRecovery?: AgentAppOptions['repairRecovery'], root = dashboardRoot, pullRequestDiff?: AgentAppOptions['pullRequestDiff']) {
   return createAgentApp({
     ...(desktop === undefined ? {} : { desktop }),
     ...(repairRecovery === undefined ? {} : { repairRecovery }),
+    ...(pullRequestDiff === undefined ? {} : { pullRequestDiff }),
     allowedOrigin,
     dashboardPassword,
     dashboardRoot: root,
@@ -81,6 +82,27 @@ function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof c
 }
 
 describe('dashboard HTTP app', () => {
+  it('serves only tracked exact Revision diffs and refuses public ingress', async () => {
+    const base = 'a'.repeat(40)
+    const head = 'b'.repeat(40)
+    const list = vi.fn(async () => ({ _tag: 'Err' as const, error: 'Unavailable' as const }))
+    const file = vi.fn(async () => ({ _tag: 'Err' as const, error: 'Changed' as const }))
+    const snapshot = dashboardSnapshot({ items: [{ ...pullRequestItem({ baseSha: base, headSha: head }), revisionId: 'revision', observedAt: now().toISOString(), dismissed: false, approval: { _tag: 'ReviewRequired' } }] })
+    const app = createApp(snapshot, undefined, undefined, dashboardRoot, { list, file })
+    const url = `${allowedOrigin}/api/items/pull-request-diff?repository=harlan-zw/example&number=24&base=${base}&head=${head}`
+    const headers = { authorization, host: allowedHost }
+    const response = await app.request(url, { headers })
+    expect(await response.json()).toEqual({ _tag: 'Err', error: 'Unavailable' })
+    expect(list.mock.calls).toHaveLength(1)
+    const changed = await app.request(url.replace(head, 'c'.repeat(40)), { headers })
+    expect(await changed.json()).toEqual({ _tag: 'Err', error: 'Changed' })
+    const unmapped = await app.request(url.replace('harlan-zw/example', 'other/private'), { headers })
+    expect(await unmapped.json()).toEqual({ _tag: 'Err', error: 'Unavailable' })
+    const publicResponse = await app.request(url, { headers: { ...headers, 'x-harlan-agent-ingress': 'public' } })
+    expect(publicResponse.status).toBe(403)
+    expect(list.mock.calls).toHaveLength(1)
+    expect(file.mock.calls).toHaveLength(0)
+  })
   it('serves a direct Session page and its hydration payload through the Service', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agent-session-page-'))
     mkdirSync(join(root, 'sessions'))
@@ -1313,18 +1335,20 @@ describe('desktop capacity HTTP boundary', () => {
     await expect(readDesktopResponse(response)).resolves.toBeNull()
   })
 
-  it('saves a valid memory setting and refuses malformed input', async () => {
+  it('rejects Agent writes to the root-owned budget without changing reported capacity', async () => {
     const desktop = createDesktopBroker({ now: () => now().getTime() })
+    desktop.report({ protocol: 12, memoryGiB: 16, reservedGiB: 8, agents: 1, actions: 0 })
     const app = createApp(dashboardSnapshot(), desktop)
     const send = (body: unknown) => app.request(`http://${allowedHost}/api/desktop/capacity`, {
       method: 'POST',
       headers: { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
-    expect((await send({ memoryGiB: 20 })).status).toBe(200)
-    expect(desktop.read().requestedMemoryGiB).toBe(20)
-    expect((await send({ memoryGiB: 0 })).status).toBe(400)
-    expect(desktop.read().requestedMemoryGiB).toBe(20)
+    const refused = await send({ memoryGiB: 20 })
+    expect(refused.status).toBe(403)
+    expect(await refused.text()).toContain('Change Desktop memory in the host configuration.')
+    expect((await send({ memoryGiB: 0 })).status).toBe(403)
+    expect(desktop.read().report?.memoryGiB).toBe(16)
   })
 })
 

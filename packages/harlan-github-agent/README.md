@@ -35,6 +35,10 @@ Still to build: Claude reviews, PR conformance, and deployment ownership.
 
 ## Run
 
+For native Codex, Claude Code, and opencode terminals, follow [Local Agent terminals](../../docs/agent-terminal.md).
+That guide covers local builds, pairing, shared host capacity, and safe removal.
+The configuration below starts the GitHub maintenance Service.
+
 Copy `config.example.yml` outside a repository, then restrict it:
 
 ```bash
@@ -331,24 +335,21 @@ The dashboard shows `Review and repair` for outside contributors, and for every 
 Use `Watch logs` on a running Agent to open its live activity in Sessions. Task and Routine logs remain read only.
 The desktop tray has separate Agent and GitHub Actions icons.
 
-The Dashboard's Sessions page starts interactive Agents on Hogwild or the desktop.
-Select where to run, then choose that host's Project, Agent provider, model, and Reasoning effort.
-Projects come from the selected host's `~/pkg` and `~/sites` directories.
-Follow-up messages resume the same native conversation and persistent Worktree.
-The selected host must be connected and have free Agent capacity.
-Hogwild sessions work while the desktop is offline.
-Only immediate Git control checkouts appear in the Project list.
+The Sessions page opens native Codex, Claude Code, and opencode terminals from configured Projects.
+Choose a Project and Agent provider, then select `New session`.
+Each Agent session uses its host's credentials, tools, instructions, and persistent Worktree.
+Tabs and split terminals control browser views. Closing them keeps the Agent running.
+Use `Stop Agent` to stop its process. The Worktree remains available for inspection.
+Provider prompts, approvals, and model selection stay in the native terminal.
+Follow [Local Agent terminals](../../docs/agent-terminal.md) for installation, pairing, and safe removal.
 
-Agent sessions use the selected host's local credentials, tools, and Agent instructions.
-Each Agent session stays on its original host.
-Maintenance Workers retain their existing isolation and controller publication rules.
-Session Worktrees stay available after browser disconnects and between turns.
-Stop Agent waits for process termination on that host before another turn can start.
-If a session is interrupted, reconnect its host and confirm Stop Agent before resuming.
+History preserves older Agent sessions as read-only records.
+`Watch logs` opens read-only maintenance Agent activity.
+Watching opens read-only pull request diffs for the selected base and head commits.
+An optional remote Service connection shows maintenance activity without enabling remote Service controls.
+Local terminal input stays independent of that connection.
+Maintenance Agents retain their existing isolation and controller publication rules.
 
-Agent sessions require explicit `server.agent_sessions: true` configuration.
-Install the private ingress first, following [Agent sessions](../../scripts/public-dashboard.md#agent-sessions).
-The public Dashboard retains monitoring access while Session APIs require the private ingress.
 The Agent menu groups current Agent tasks under Hogwild and Desktop.
 Tasks without a current provider turn stay outside those groups.
 The menu also shows the desktop's shared memory use and limit.

@@ -34,6 +34,7 @@ export async function prepareTerminalSandbox(options: {
   environment: NodeJS.ProcessEnv
   writable?: string[]
   denied?: string[]
+  home?: string
 }) {
   // node-pty establishes the controlling session. Nested setsid would break interactive terminal ownership.
   await execute('/usr/bin/bwrap', [...isolation, '/usr/bin/true'], {
@@ -41,7 +42,7 @@ export async function prepareTerminalSandbox(options: {
     env: { PATH: '/usr/bin:/bin' },
   })
   const cwd = await realpath(options.cwd)
-  const home = homedir()
+  const home = options.home ?? homedir()
   const args = [...isolation, '--bind', cwd, cwd]
   for (const path of options.writable ?? []) {
     const canonical = await realpath(path)
@@ -87,6 +88,8 @@ export async function prepareTerminalSandbox(options: {
   }
   for (const path of [
     ...(options.denied ?? []),
+    join(home, '.ssh'),
+    ...(options.environment.SSH_AUTH_SOCK ? [options.environment.SSH_AUTH_SOCK] : []),
     join(home, '.config/harlan-github-agent'),
     join(home, '.local/share/harlan-github-agent'),
     join(home, '.local/state/harlan-desktop-capacity'),
@@ -99,8 +102,12 @@ export async function prepareTerminalSandbox(options: {
     if (!metadata)
       continue
     const canonical = await realpath(path)
+    // Private runtime directories are already empty. Their parents cannot host a bind target.
+    if (canonical.startsWith('/run/') || canonical.startsWith('/tmp/'))
+      continue
+    const target = await lstat(canonical)
     args.push(
-      ...(metadata.isDirectory()
+      ...(target.isDirectory()
         ? ['--tmpfs', canonical]
         : ['--ro-bind', '/dev/null', canonical]),
     )
@@ -131,6 +138,7 @@ export async function createTerminalPreparationRunner(
   project: string,
   claimScript: string,
   denied: string[],
+  home = homedir(),
 ): Promise<typeof execute> {
   const parent = dirname(await realpath(project))
   const common = await execute(
@@ -141,8 +149,8 @@ export async function createTerminalPreparationRunner(
   const writable = [
     parent,
     common.stdout.trim(),
-    join(homedir(), '.local/state'),
-    join(homedir(), '.cache'),
+    join(home, '.local/state'),
+    join(home, '.cache'),
   ]
   // The claim store belongs to this user. No hook can reach the user manager through /run or DBus.
   const claimDirectory = dirname(claimScript)
@@ -159,6 +167,7 @@ export async function createTerminalPreparationRunner(
       environment: process.env,
       writable,
       denied,
+      home,
     })
     return execute(sandbox.executable, sandbox.argv, {
       ...settings,

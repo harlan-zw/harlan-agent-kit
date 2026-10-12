@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DESKTOP_PROTOCOL, parseDesktopEvents, parseDesktopMemory, parseDesktopReport, parseDesktopWorktree, readDesktopResponse } from '../src/desktop-protocol.ts'
+import { DESKTOP_PROTOCOL, parseDesktopEvents, parseDesktopReport, parseDesktopWorktree, readDesktopResponse } from '../src/desktop-protocol.ts'
 import { DESKTOP_WORKTREE_LIMITS } from '../src/desktop-worktree.ts'
 
 describe('desktop boundaries', () => {
@@ -7,11 +7,6 @@ describe('desktop boundaries', () => {
     const event = { _tag: 'Failed', reason: 'The host stopped the turn.', cause }
     expect(parseDesktopEvents([event])).toEqual([event])
     expect(() => parseDesktopEvents([{ ...event, cause: 'unknown' }])).toThrow('failure cause is invalid')
-  })
-  it('accepts a whole memory limit and refuses malformed settings', () => {
-    expect(parseDesktopMemory({ memoryGiB: 16 })).toBe(16)
-    for (const value of [null, {}, { memoryGiB: 0 }, { memoryGiB: 1.5 }, { memoryGiB: '16' }, { memoryGiB: 257 }])
-      expect(() => parseDesktopMemory(value)).toThrow('Desktop memory must be')
   })
   it('reads a desktop that names no protocol as the revision before the field', () => {
     expect(parseDesktopReport({ memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 }).protocol).toBe(1)

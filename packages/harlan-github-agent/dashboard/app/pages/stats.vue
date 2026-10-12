@@ -12,6 +12,7 @@ import StatsWorkTable from './_StatsWorkTable.vue'
  * and every change of it refetches. The page never scores or ranks.
  */
 const route = useRoute()
+const terminalHost = useTerminalHost()
 const from = ref('')
 const to = ref('')
 const timeZone = ref('UTC')
@@ -34,6 +35,8 @@ function queryDate(value: unknown): string | undefined {
 }
 
 async function loadStats(): Promise<void> {
+  if (terminalHost.state.value._tag === 'Checking')
+    await terminalHost.start()
   rangeMessage.value = undefined
   loadMessage.value = undefined
   const range = statsRequestRange({ from: from.value, to: to.value }, timeZone.value)
@@ -43,7 +46,7 @@ async function loadStats(): Promise<void> {
     return
   }
   pending.value = true
-  await $fetch<StatsSnapshot>('/api/stats', {
+  await $fetch<StatsSnapshot>(terminalHost.controllerPath('/api/stats'), {
     query: {
       from: range.range.from,
       to: range.range.to,

@@ -29,7 +29,7 @@ function failure(value: Record<string, unknown>): TerminalDiffResult<never> | un
     ? { _tag: 'Err', error: value.error as TerminalDiffError }
     : invalid()
 }
-export function parseTerminalDiffInventory(input: unknown): TerminalDiffResult<TerminalDiffInventory> {
+function parseInventory(input: unknown, maximum: number): TerminalDiffResult<TerminalDiffInventory> {
   if (!record(input))
     return invalid()
   const error = failure(input)
@@ -40,7 +40,7 @@ export function parseTerminalDiffInventory(input: unknown): TerminalDiffResult<T
   const value = input.value
   if (!generation(value.id) || !sha(value.base) || !record(value.source) || !Array.isArray(value.files))
     return invalid()
-  if (value.files.length > 500)
+  if (value.files.length > maximum)
     return tooLarge()
   let source: TerminalDiffSource
   if (value.source._tag === 'Working' || value.source._tag === 'Staged')
@@ -50,13 +50,32 @@ export function parseTerminalDiffInventory(input: unknown): TerminalDiffResult<T
   else return invalid()
   const files: TerminalDiffInventory['files'] = []
   const paths = new Set<string>()
+  let metadataBytes = 0
   for (const item of value.files) {
     if (!record(item) || !text(item.path, 4096) || !text(item.status, 3) || paths.has(item.path))
       return invalid()
+    metadataBytes += new TextEncoder().encode(item.path).byteLength
+    if (metadataBytes > 1024 * 1024)
+      return tooLarge()
     paths.add(item.path)
     files.push({ path: item.path, status: item.status })
   }
   return { _tag: 'Ok', value: { id: value.id, base: value.base, source, files } }
+}
+export const parseTerminalDiffInventory = (input: unknown) => parseInventory(input, 500)
+export type PullRequestDiffInventory = TerminalDiffInventory & { coverage: { _tag: 'Complete' } | { _tag: 'Incomplete', reason: 'GitHubFileLimit' } }
+export function parsePullRequestDiffInventory(input: unknown): TerminalDiffResult<PullRequestDiffInventory> {
+  const result = parseInventory(input, 3000)
+  if (result._tag === 'Err')
+    return result
+  if (!record(input) || !record(input.value) || !record(input.value.coverage) || result.value.source._tag !== 'Comparison')
+    return invalid()
+  const coverage = input.value.coverage
+  if (coverage._tag === 'Complete')
+    return { _tag: 'Ok', value: { ...result.value, coverage: { _tag: 'Complete' } } }
+  if (coverage._tag === 'Incomplete' && coverage.reason === 'GitHubFileLimit')
+    return { _tag: 'Ok', value: { ...result.value, coverage: { _tag: 'Incomplete', reason: 'GitHubFileLimit' } } }
+  return invalid()
 }
 export function parseTerminalDiffContent(input: unknown, expectedPath: string): TerminalDiffResult<TerminalDiffContent> {
   if (!record(input))

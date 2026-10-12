@@ -273,14 +273,12 @@ it('revokes cancelled desktop work before accepting another result', async () =>
   expect(broker.complete(claimed.id, claimed.worktree, null)).toBe(false)
 })
 
-it('keeps pending memory settings across controller restarts', async () => {
-  const f = await fixture()
-  const settingsPath = join(f.root, 'capacity.json')
-  createDesktopBroker({ now: () => 0, settingsPath }).setMemory(20)
-  const next = createDesktopBroker({ now: () => 0, settingsPath })
-  expect(next.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })).toEqual({ memoryGiB: 20 })
-  next.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 20, reservedGiB: 0, agents: 0, actions: 0 })
-  expect(createDesktopBroker({ now: () => 0, settingsPath }).read().requestedMemoryGiB).toBeNull()
+it('reports only the actual authority budget across controller restarts', async () => {
+  const broker = createDesktopBroker({ now: () => 0 })
+  expect(broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 8, agents: 1, actions: 0 })).toEqual({ memoryGiB: 16 })
+  expect(broker.read().report?.memoryGiB).toBe(16)
+  const restarted = createDesktopBroker({ now: () => 0 })
+  expect(restarted.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 20, reservedGiB: 0, agents: 0, actions: 0 })).toEqual({ memoryGiB: 20 })
 })
 
 it('executes desktop work and maps returned paths back to the controller', async () => {

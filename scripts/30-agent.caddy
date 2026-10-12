@@ -5,7 +5,7 @@ handle @agent {
 	redir @agentHttp https://agent.harlanzw.com{uri} 308
 
 	# Interactive desktop sessions are reachable only through Tailscale.
-	@desktopSessions path /api/sessions /api/sessions/* /api/desktop/sessions /api/desktop/sessions/*
+	@desktopSessions path /api/sessions /api/sessions/* /api/desktop/sessions /api/desktop/sessions/* /api/terminal /api/terminal/* /api/items/pull-request-diff
 	handle @desktopSessions {
 		respond "Connect through Tailscale to use desktop sessions." 403
 	}

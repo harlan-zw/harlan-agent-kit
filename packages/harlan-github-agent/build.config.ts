@@ -10,6 +10,7 @@ export default defineBuildConfig({
         './src/cli.ts',
         './src/desktop-client.ts',
         './src/desktop-execute.ts',
+        './src/maintenance-execute.ts',
         './src/desktop-session-execute.ts',
         './src/terminal-cli.ts',
         './src/terminal-helper.ts',

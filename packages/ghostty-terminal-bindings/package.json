@@ -1,10 +1,10 @@
 {
   "name": "ghostty-terminal-bindings",
+  "type": "module",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
-  "license": "MIT",
   "description": "Pinned Ghostty terminal bindings with native keyboard negotiation.",
+  "license": "MIT",
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",

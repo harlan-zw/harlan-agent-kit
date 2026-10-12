@@ -11,6 +11,8 @@ import SessionActivity from './_SessionActivity.vue'
 import SessionMessage from './_SessionMessage.vue'
 
 const route = useRoute()
+const terminalHost = useTerminalHost()
+const { readOnly, controllerPath } = terminalHost
 const { snapshot } = useDashboard()
 const selectedLogId = computed(() => typeof route.query.task === 'string' ? route.query.task : undefined)
 const logSelection = shallowRef<AgentLogSelection>({ _tag: 'Unselected' })
@@ -96,7 +98,9 @@ async function refresh(): Promise<void> {
   if (refreshPending)
     return
   refreshPending = true
-  await $fetch<SessionViewSnapshot>('/api/sessions').then((value) => {
+  if (terminalHost.state.value._tag === 'Checking')
+    await terminalHost.start()
+  await $fetch<SessionViewSnapshot>(controllerPath('/api/sessions')).then((value) => {
     data.value = value
     loadFailure.value = ''
   }).catch((error: unknown) => {
@@ -135,6 +139,10 @@ function remember(session: DesktopSession): void {
 }
 
 async function stop(): Promise<void> {
+  if (readOnly.value) {
+    failure.value = { message: 'Read-only Service connection.' }
+    return
+  }
   if (!selected.value || pending.value)
     return
   const sessionId = selected.value.id
@@ -219,7 +227,7 @@ usePageTitle('History')
             {{ selected.project.name }} <span class="mx-1">/</span> {{ sessionHostLabels[selected.host] }} <span class="mx-1">/</span> {{ selected.status }}
           </p>
         </div>
-        <UButton v-if="running || selected?.status === 'interrupted'" color="neutral" variant="outline" :loading="pending" :disabled="selected?.status === 'stopping'" icon="i-octicon-square-fill-16" @click="stop">
+        <UButton v-if="!readOnly && (running || selected?.status === 'interrupted')" color="neutral" variant="outline" :loading="pending" :disabled="selected?.status === 'stopping'" icon="i-octicon-square-fill-16" @click="stop">
           {{ selected?.status === 'stopping' ? 'Stopping' : 'Stop Agent' }}
         </UButton>
       </header>

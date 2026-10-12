@@ -9,7 +9,7 @@ import {
 } from '../dashboard/app/utils/terminal-protocol.ts'
 
 const session = { id: 'session', generation: 'generation', projectId: 'project', provider: 'codex', hostId: 'host', bootId: 'boot', state: 'Running', createdAt: '2026-10-12T03:54:17.000Z', worktree: null }
-const capabilities = { protocol: 1, hostId: 'host', bootId: 'boot', hostLabel: 'Desktop', controller: true, providers: { codex: true, claude: false, opencode: true }, supports: { terminal: true, stop: true, writer: true, resize: true, mouse: true, focus: true } }
+const capabilities = { protocol: 1, hostId: 'host', bootId: 'boot', hostLabel: 'Desktop', controller: true, controllerReadOnly: false, providers: { codex: true, claude: false, opencode: true }, supports: { terminal: true, stop: true, writer: true, resize: true, mouse: true, focus: true } }
 const cell = { codepoint: 0x4E2D, fg_r: 255, fg_g: 0, fg_b: 10, bg_r: 0, bg_g: 10, bg_b: 20, flags: 1, width: 2, hyperlink_id: 0, grapheme_len: 0 }
 function screen() {
   return { revision: 1, scrollbackLength: 2, dimensions: { cols: 2, rows: 2 }, cursor: { x: 1, y: 0, visible: true }, lines: [[{ ...cell }, { ...cell, codepoint: 0, width: 0 }], [{ ...cell }, { ...cell, codepoint: 0, width: 0 }]], graphemes: [['中', ' '], ['👩‍💻', ' ']], wrapped: [true, false], modes: { alternate: false, paste: true, focus: true, mouse: false, keyboard: 11 } }
@@ -23,6 +23,8 @@ describe('terminal browser boundary', () => {
     expect(parseTerminalCapabilities({ ...capabilities, protocol: '1' })).toEqual(error)
     expect(parseTerminalCapabilities({ ...capabilities, supports: { ...capabilities.supports, resize: false } })).toEqual(error)
     expect(parseTerminalCapabilities({ ...capabilities, providers: { ...capabilities.providers, codex: 'true' } })).toEqual(error)
+    expect(parseTerminalCapabilities({ ...capabilities, controllerReadOnly: true })).toEqual({ _tag: 'Ok', value: { ...capabilities, controllerReadOnly: true } })
+    expect(parseTerminalCapabilities({ ...capabilities, controller: false, controllerReadOnly: true })).toEqual(error)
   })
   it('projects inventory fields into fresh values and rejects duplicate identities', () => {
     const project = { id: 'p', name: 'Project', path: '/home/project' }

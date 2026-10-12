@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import type { ControlClient } from './control-client.ts'
 import type { Result } from './result.ts'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
 import { jev } from 'advocaat'
 import { defineCommand, runMain } from 'citty'
@@ -636,7 +636,11 @@ const command = defineCommand({
       now: () => new Date(),
       onError: error => consola.error(error),
     })
+    const capacityCommand = process.env.HARLAN_HOST_CAPACITY_COMMAND
+    if (capacityCommand !== undefined && (!isAbsolute(capacityCommand) || capacityCommand.includes('\0') || capacityCommand.length > 4096))
+      throw new Error('The host capacity command requires an absolute path.')
     const service = await startAgentService({
+      ...(capacityCommand === undefined ? {} : { capacityCommand }),
       ...(classification._tag === 'Enabled' && classificationToken !== null
         ? { classification: { accountId: classification.accountId, apiToken: classificationToken, ...(classification.gatewayId === undefined ? {} : { gatewayId: classification.gatewayId }), model: classification.model } }
         : {}),

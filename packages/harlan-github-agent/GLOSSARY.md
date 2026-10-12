@@ -10,7 +10,7 @@ did not cover it.
 
 | Term | Storage | Owner | Relationship | Customer word |
 | --- | --- | --- | --- | --- |
-| Agent session | `desktop-sessions.json` | Selected host and Controller | N to 1 Project, one persistent Worktree | Agent session |
+| Agent session | terminal host records; `desktop-sessions.json` for History | Selected host and Controller | N to 1 Project, one persistent Worktree | Agent session |
 | Project | host inventories | Selected host | 1 to N Agent sessions | Project |
 | Agent provider | `agent.provider` | Configuration | 1 to N Agents | agent provider |
 | Agent selection | `agent_selection` | Controller | One per service | Agent selection |

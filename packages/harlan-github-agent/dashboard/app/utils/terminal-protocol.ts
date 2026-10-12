@@ -79,12 +79,13 @@ function writer(value: unknown): TerminalResult<TerminalWriter> {
 export function parseTerminalCapabilities(value: unknown): TerminalResult<TerminalCapabilities> {
   if (!record(value) || value.protocol !== 1 || !text(value.hostId) || !text(value.bootId)
     || !text(value.hostLabel, 256) || typeof value.controller !== 'boolean' || !record(value.providers)
+    || typeof value.controllerReadOnly !== 'boolean' || (value.controllerReadOnly && !value.controller)
     || typeof value.providers.codex !== 'boolean' || typeof value.providers.claude !== 'boolean'
     || typeof value.providers.opencode !== 'boolean' || !record(value.supports)
     || !['terminal', 'stop', 'writer', 'resize', 'mouse', 'focus'].every(key => value.supports && record(value.supports) && value.supports[key] === true)) {
     return invalid()
   }
-  return ok({ protocol: 1, hostId: value.hostId, bootId: value.bootId, hostLabel: value.hostLabel, controller: value.controller, providers: { codex: value.providers.codex, claude: value.providers.claude, opencode: value.providers.opencode }, supports: { terminal: true, stop: true, writer: true, resize: true, mouse: true, focus: true } })
+  return ok({ protocol: 1, hostId: value.hostId, bootId: value.bootId, hostLabel: value.hostLabel, controller: value.controller, controllerReadOnly: value.controllerReadOnly, providers: { codex: value.providers.codex, claude: value.providers.claude, opencode: value.providers.opencode }, supports: { terminal: true, stop: true, writer: true, resize: true, mouse: true, focus: true } })
 }
 export function parseTerminalProjects(value: unknown): TerminalResult<TerminalProject[]> {
   if (!Array.isArray(value))

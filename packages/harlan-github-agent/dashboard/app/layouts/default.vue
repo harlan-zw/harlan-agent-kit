@@ -3,7 +3,7 @@ import { useEventListener } from '@vueuse/core'
 import { isTypingTarget } from '../utils/keyboard.ts'
 
 /**
- * One header, one row, 48px, on every page. No status bar, no footer.
+ * The activity rail and view tabs stay mounted across every page.
  *
  * The layout is also the one subscriber that keeps the shared snapshot alive,
  * so changing page never costs a reconnect.
@@ -16,9 +16,10 @@ const toast = useToast()
 const keyboardOpen = ref(false)
 const route = useRoute()
 const sessionPage = computed(() => route.path === '/sessions')
+const terminalHost = useTerminalHost()
 
 const tabs = [
-  { label: 'Sessions', to: '/sessions', icon: 'i-octicon-comment-discussion-16' },
+  { label: 'Sessions', to: '/sessions', icon: 'i-octicon-terminal-16' },
   { label: 'Board', to: '/', icon: 'i-octicon-columns-16' },
   { label: 'History', to: '/history', icon: 'i-octicon-history-16' },
   { label: 'Watching', to: '/watching', icon: 'i-octicon-broadcast-16' },
@@ -43,66 +44,83 @@ useEventListener('keydown', (event: KeyboardEvent) => {
 /** The board's Incident row asks for the pane by event, so it never imports layout state. */
 useEventListener(window, 'open-system', showSystem)
 
-onMounted(start)
+watch(terminalHost.controller, (enabled) => {
+  if (enabled)
+    start()
+})
+
+onMounted(() => {
+  void terminalHost.start().then(async () => {
+    if (terminalHost.controller.value)
+      start()
+    else if (terminalHost.state.value._tag === 'Available' && !sessionPage.value)
+      await navigateTo('/sessions')
+  })
+})
 </script>
 
 <template>
-  <div class="min-h-screen md:pl-44">
+  <div class="flex h-dvh min-h-0 overflow-hidden">
     <a href="#main" class="skip-link">Skip to content</a>
-    <aside class="fixed inset-y-0 left-0 z-40 hidden w-44 flex-col border-r border-default bg-muted md:flex">
-      <NuxtLink to="/sessions" class="flex h-14 items-center gap-2 px-4 text-base font-semibold text-highlighted">
-        <UIcon name="i-octicon-hubot-16" class="size-5" aria-hidden="true" />Agent
+    <aside class="z-40 hidden w-12 shrink-0 flex-col border-r border-default bg-muted md:flex">
+      <NuxtLink to="/sessions" aria-label="Agent" class="flex h-11 shrink-0 items-center justify-center text-highlighted">
+        <UIcon name="i-octicon-hubot-16" class="size-5" aria-hidden="true" />
       </NuxtLink>
-      <nav aria-label="Pages" class="space-y-1 px-2">
-        <UButton v-for="tab in tabs" :key="tab.to" :to="tab.to" :icon="tab.icon" exact color="neutral" variant="ghost" class="min-h-11 w-full" active-class="bg-accented text-highlighted" inactive-class="text-muted">
-          {{ tab.label }}
-          <UBadge v-if="tab.to === '/watching' && unhealthyRepositories > 0" color="error" variant="subtle" class="ml-auto">
-            <span class="font-mono">{{ unhealthyRepositories }}</span>
-          </UBadge>
-        </UButton>
+      <nav aria-label="Pages" class="space-y-1">
+        <UTooltip v-for="tab in tabs.filter(tab => terminalHost.controller.value || tab.to === '/sessions')" :key="tab.to" :text="tab.label" :content="{ side: 'right' }">
+          <div class="relative">
+            <UButton :to="tab.to" :icon="tab.icon" :aria-label="tab.label" exact color="neutral" variant="ghost" class="flex min-h-11 w-full justify-center rounded-none" active-class="bg-accented text-highlighted border-l-2 border-accented" inactive-class="text-muted">
+              <span class="sr-only">{{ tab.label }}</span>
+            </UButton>
+            <span v-if="tab.to === '/watching' && unhealthyRepositories > 0" class="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-error" aria-hidden="true" />
+          </div>
+        </UTooltip>
       </nav>
-      <div class="mt-auto border-t border-default p-3">
-        <UButton to="/flow" icon="i-octicon-workflow-16" color="neutral" variant="ghost" class="min-h-11 w-full">
-          How it works
-        </UButton>
+      <div v-if="terminalHost.controller.value" class="mt-auto border-t border-default">
+        <UTooltip text="How it works" :content="{ side: 'right' }">
+          <UButton to="/flow" icon="i-octicon-workflow-16" aria-label="How it works" color="neutral" variant="ghost" class="min-h-11 w-full justify-center rounded-none" />
+        </UTooltip>
       </div>
     </aside>
-    <header class="sticky top-0 z-40 h-12 border-b border-default bg-default">
-      <div class="mx-auto flex h-full max-w-[100rem] items-center gap-4 px-6 xl:px-10">
-        <NuxtLink to="/sessions" class="flex shrink-0 items-center gap-2 text-sm font-medium text-highlighted md:hidden">
-          <UIcon name="i-octicon-hubot-16" class="size-4" aria-hidden="true" />
-          Agent
-        </NuxtLink>
+    <div class="flex min-w-0 flex-1 flex-col">
+      <header class="workspace-header z-40 shrink-0 border-b border-default bg-muted">
+        <div class="flex h-full min-w-0 items-center gap-2 pr-2">
+          <NuxtLink to="/sessions" class="flex shrink-0 items-center gap-2 text-sm font-medium text-highlighted md:hidden">
+            <UIcon name="i-octicon-hubot-16" class="size-4" aria-hidden="true" />
+            Agent
+          </NuxtLink>
 
-        <span class="hidden text-sm font-medium text-muted md:block">{{ tabs.find(tab => tab.to === route.path)?.label ?? 'Agent' }}</span>
+          <span class="flex h-full shrink-0 items-center border-r border-default border-t-2 border-t-accented bg-default px-4 text-sm font-medium text-highlighted">{{ tabs.find(tab => tab.to === route.path)?.label ?? 'Agent' }}</span>
 
-        <div class="ms-auto flex items-center gap-1.5">
-          <SystemChip />
-          <div v-if="!sessionPage" class="hidden items-center gap-1.5 lg:flex">
-            <AgentSelectionMenu />
-            <UButton
-              :color="paused ? 'primary' : 'neutral'"
-              :variant="paused ? 'solid' : 'outline'"
-              size="sm"
-              :loading="controlPending"
-              :disabled="controlPending || controlsUnavailable"
-              @click="setAgentControl(paused ? 'resume' : 'pause')"
-            >
-              {{ paused ? 'Resume' : 'Pause' }}
-            </UButton>
+          <div class="ms-auto flex items-center gap-1.5">
+            <span v-if="terminalHost.readOnly.value" class="rounded border border-default px-2 py-1 text-xs text-muted" role="status">Read-only Service connection.</span>
+            <SystemChip v-if="terminalHost.controller.value" />
+            <div v-if="terminalHost.controller.value && !sessionPage" class="hidden items-center gap-1.5 lg:flex">
+              <AgentSelectionMenu />
+              <UButton
+                :color="paused ? 'primary' : 'neutral'"
+                :variant="paused ? 'solid' : 'outline'"
+                size="sm"
+                :loading="controlPending"
+                :disabled="controlPending || controlsUnavailable"
+                @click="setAgentControl(paused ? 'resume' : 'pause')"
+              >
+                {{ paused ? 'Resume' : 'Pause' }}
+              </UButton>
+            </div>
+            <OverflowMenu v-if="terminalHost.controller.value" @keyboard="keyboardOpen = true" />
           </div>
-          <OverflowMenu @keyboard="keyboardOpen = true" />
         </div>
-      </div>
-    </header>
+      </header>
 
-    <AppBanners />
+      <AppBanners v-if="terminalHost.controller.value" />
 
-    <main id="main" :class="sessionPage ? '' : 'mx-auto max-w-[100rem] px-6 py-6 xl:px-10 xl:py-10'">
-      <div :class="isStale && !sessionPage ? 'stale' : undefined">
-        <slot />
-      </div>
-    </main>
+      <main id="main" class="min-h-0 min-w-0 flex-1" :class="sessionPage ? 'overflow-hidden' : 'overflow-auto p-4 lg:p-6'">
+        <div class="h-full min-h-0" :class="isStale && !sessionPage ? 'stale' : undefined">
+          <slot />
+        </div>
+      </main>
+    </div>
 
     <SystemSlideover />
     <KeyboardModal v-model:open="keyboardOpen" />
