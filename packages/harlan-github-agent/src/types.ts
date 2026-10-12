@@ -970,6 +970,8 @@ export interface RoutineRun {
   specSha: string
   /** The Publication authority stored when this Run opened. */
   mode: RoutineMode
+  /** The choice for this scan alone. Scheduled runs use the Service selection. */
+  agentSelection?: PinnedAgentSelection
   state: RoutineRunState
   fence: number
   attempts: number
@@ -1018,6 +1020,7 @@ export interface ClaimedRoutineRun {
   repositoryMapping: RepositoryMapping
   name: RoutineName
   mode: RoutineMode
+  agentSelection?: PinnedAgentSelection
   scheduledFor: string
   specSha: string
   attempts: number
@@ -1360,7 +1363,7 @@ export interface ReviewAgent extends ReviewRun {
 
 export type DashboardAgent = ActiveAgent | ReviewAgent
 
-export type CodexAgentModel = 'gpt-5.6-sol' | 'gpt-5.6-terra' | 'gpt-5.6-luna'
+export type CodexAgentModel = 'gpt-5.6-sol' | 'gpt-5.6-terra' | 'gpt-5.6-luna' | 'gpt-6.1-sol'
 /**
  * Models opencode can answer with.
  *

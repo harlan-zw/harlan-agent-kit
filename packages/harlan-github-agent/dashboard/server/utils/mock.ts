@@ -2,6 +2,7 @@ import type { H3Event } from 'h3'
 import type { DashboardSnapshot } from '../../../src/types.ts'
 import { randomBytes } from 'node:crypto'
 import { createError } from 'h3'
+import { AGENT_MODELS, OPENCODE_AGENT_PROFILE } from '../../../src/agent-profile.ts'
 import { DESKTOP_PROTOCOL } from '../../../src/desktop-protocol.ts'
 import { dashboardSnapshot, pullRequestItem } from '../../../test/fixtures.ts'
 
@@ -50,6 +51,7 @@ function fixture(): DashboardSnapshot {
     mergeState: 'clean',
   })
   return dashboardSnapshot({
+    agentModels: AGENT_MODELS,
     hostCapacity: { localActive: 1, localMaximum: 2, desktopActive: 1, desktopMaximum: 1, desktopAvailable: true },
     agentSlots: { hogwildCeiling: 4, hogwildMemoryMaximum: 2, desktopCeiling: 2, memoryPerAgentGiB: 8 },
     hostTasks: [{ taskId: hex('1'), host: 'desktop' }, { taskId: 'run-1', host: 'hogwild' }],
@@ -213,6 +215,16 @@ function scenario(base: DashboardSnapshot): DashboardSnapshot {
         { quota: { _tag: 'User', login: 'harlan-zw' }, kind: 'Secondary', retryAt: new Date(Date.now() + 30_000).toISOString() },
       ],
     }
+    case 'routine-choice':
+      return {
+        ...base,
+        agentProfile: OPENCODE_AGENT_PROFILE,
+        agentSelection: { _tag: 'Pinned', provider: 'opencode', model: 'zai-coding-plan/glm-5.3-flash', reasoningEffort: 'high' },
+        providerCapacities: [
+          { provider: 'codex', reservePercent: 20, capacity: { _tag: 'Available', usedPercent: 5, resetsAt: daysAhead(6) } },
+          { provider: 'opencode', reservePercent: 0, capacity: { _tag: 'Available', usedPercent: 100, resetsAt: daysAhead(2) } },
+        ],
+      }
     case 'paused':
       return { ...base, agentControl: { _tag: 'Paused', pausedAt: minutesAgo(5), safeToRestart: false }, agentStart: { _tag: 'Paused' } }
     case 'calm':

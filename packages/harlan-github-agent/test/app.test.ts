@@ -586,6 +586,15 @@ describe('dashboard HTTP app', () => {
     expect(await response.json()).toMatchObject({ scheduledFor: '2026-09-03T04:10:00.000Z', state: { _tag: 'Queued' } })
     expect(opened).toEqual([{ routineId: routine.id, scheduledFor: '2026-09-03T04:10:00.000Z', specSha: 'abc123', at: '2026-09-03T04:10:42.000Z' }])
     expect(unknown.status).toBe(404)
+
+    const agentSelection = { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'medium' }
+    const chosen = await app.request(`http://${allowedHost}/api/routines/run`, { method: 'POST', headers, body: JSON.stringify({ routineId: routine.id, agentSelection }) })
+    expect(chosen.status).toBe(202)
+    expect(opened.at(-1)).toMatchObject({ agentSelection })
+
+    const invalid = await app.request(`http://${allowedHost}/api/routines/run`, { method: 'POST', headers, body: JSON.stringify({ routineId: routine.id, agentSelection: { ...agentSelection, model: 'zai-coding-plan/glm-5.3' } }) })
+    expect(invalid.status).toBe(400)
+    expect(opened).toHaveLength(2)
   })
 
   it('stores a dashboard Restart request', async () => {

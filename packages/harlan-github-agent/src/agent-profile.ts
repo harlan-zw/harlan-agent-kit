@@ -62,7 +62,7 @@ export const AGENT_ROLES = [
 
 /** Every model an Agent provider answers with, in the order the controls list them. */
 export const AGENT_MODELS = {
-  codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+  codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6.1-sol'],
   opencode: [
     'zai-coding-plan/glm-5.3-flash',
     'zai-coding-plan/glm-5.3',
@@ -111,7 +111,7 @@ export interface AgentRuntime {
 }
 
 /** Reads the Agent runtime that answers the next agent turn. */
-export type AgentRuntimeSource = (repository?: string) => AgentRuntime
+export type AgentRuntimeSource = (repository?: string, selection?: PinnedAgentSelection) => AgentRuntime
 
 export function agentProfile(provider: AgentProviderName): AgentProfile {
   return profiles[provider]
@@ -261,8 +261,8 @@ export interface AgentRuntimeSourceOptions {
  */
 export function createAgentRuntimeSource(options: AgentRuntimeSourceOptions): AgentRuntimeSource {
   const configured = providerAgentSelection(options.configuredProvider)
-  return (repository) => {
-    const selection = resolveAgentSelection(options.selection(), configured, options.chooseProvider)
+  return (repository, runSelection) => {
+    const selection = runSelection ?? resolveAgentSelection(options.selection(), configured, options.chooseProvider)
     return {
       profile: resolveAgentProfile(selection, options.maximumActiveAgents, options.roleReasoningEfforts, repository === undefined ? undefined : options.repositoryReasoningEfforts?.get(repository)),
       provider: options.providers[selection.provider],

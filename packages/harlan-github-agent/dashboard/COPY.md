@@ -33,6 +33,12 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Routine coverage detail | Coverage incomplete. | Routine result detail |
 | Routine collapsed attention | More | Shows the remaining Routine actions |
 | Routine expanded attention | Show less | Returns to the first six Routine actions |
+| Routine manual control | Run now | Opens the choice for one Routine scan |
+| Routine manual scope | Applies to this scan only. | Routine run dialog |
+| Routine manual usage | This scan uses the selected provider's usage. Reserve applies before it starts. | Routine run dialog |
+| Routine manual unavailable | The selected provider cannot start a scan now. | Routine run dialog |
+| Routine manual unpublished usage | Usage is not published. | Routine run dialog |
+| Routine manual failure | Could not queue the Routine run. Retry. | Routine run dialog |
 | Desktop incompatible | Update required | Desktop state when protocols differ |
 | Desktop warning | Desktop update required | System chip and pane summary |
 | Operation recovery | The next Controller operation checks recovery. | Incident with no scheduled retry |

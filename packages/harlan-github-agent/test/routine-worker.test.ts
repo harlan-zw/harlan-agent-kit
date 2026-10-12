@@ -1,3 +1,4 @@
+import type { AgentRuntimeSource } from '../src/agent-profile.ts'
 import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
 import type { writeCheckinGitHubEvidence } from '../src/checkin-github-evidence.ts'
 import type { GitHubIssuePublisher } from '../src/github.ts'
@@ -5,7 +6,7 @@ import type { RoutineScanInput } from '../src/routines/contract.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { createAgentActivityLog } from '../src/agent-activity.ts'
-import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { CODEX_AGENT_PROFILE, createAgentRuntimeSource } from '../src/agent-profile.ts'
 import { ok } from '../src/result.ts'
 import { createRoutineReportController } from '../src/routine-report-controller.ts'
 import { createRoutineScanWorker } from '../src/routine-worker.ts'
@@ -24,11 +25,12 @@ function claimStoredRun(store: ReturnType<typeof openJournalStore>, at = now().t
   return task
 }
 
-function scanning(answer: unknown, capture?: { prompts: string[] }) {
+function scanning(answer: unknown, capture?: { prompts: string[], requests?: AgentTurnRequest[] }) {
   return {
     name: 'codex' as const,
     runTurn: (request: AgentTurnRequest) => {
       capture?.prompts.push(request.prompt)
+      capture?.requests?.push(request)
       return (async function* (): AsyncIterable<AgentEvent> {
         // Codex rejects the whole turn when an object property is not required.
         const pending: unknown[] = [request.outputSchema]
@@ -61,6 +63,7 @@ function workerFor(
   maximumChangedFiles?: number,
   activityLog?: ReturnType<typeof createAgentActivityLog>,
   writtenEvidence?: Array<Parameters<typeof writeCheckinGitHubEvidence>[0]>,
+  runtime?: AgentRuntimeSource,
 ) {
   return createRoutineScanWorker({
     serviceEvidence: store,
@@ -70,7 +73,7 @@ function workerFor(
     logger: { error: () => undefined, info: () => undefined },
     ...(maximumChangedFiles === undefined ? {} : { maximumChangedFiles }),
     now,
-    runtime: () => ({ profile: CODEX_AGENT_PROFILE, provider }),
+    runtime: runtime ?? (() => ({ profile: CODEX_AGENT_PROFILE, provider })),
     store,
     workspaces: { prepareRoutine: async () => ok({ path: '/tmp/routine', baseSha: 'abc123', headSha: 'abc123', defaultBranchSha: 'abc123' }) },
   })
@@ -103,6 +106,30 @@ const candidate = {
 }
 
 describe('building the scan prompt', () => {
+  it('executes only the selected scan on Codex while the Service stays on OpenCode', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'ci-review')
+      const capture = { prompts: [] as string[], requests: [] as AgentTurnRequest[] }
+      const provider = scanning({ report: 'No findings.', candidates: [] }, capture)
+      const runtime = createAgentRuntimeSource({
+        configuredProvider: 'opencode',
+        maximumActiveAgents: 1,
+        providers: { codex: provider, opencode: { name: 'opencode', async* runTurn() { yield { _tag: 'Failed', reason: 'OpenCode is exhausted.' } } } },
+        selection: () => ({ _tag: 'Pinned', provider: 'opencode', model: 'zai-coding-plan/glm-5.3', reasoningEffort: 'high' }),
+      })
+      const task = { ...claimStoredRun(store), agentSelection: { provider: 'codex' as const, model: 'gpt-6.1-sol' as const, reasoningEffort: 'medium' as const } }
+      const result = await workerFor(store, provider, undefined, undefined, undefined, runtime).run(task, new AbortController().signal)
+
+      expect(result._tag).toBe('Ok')
+      expect(capture.requests[0]).toMatchObject({ model: 'gpt-6.1-sol', reasoningEffort: 'medium' })
+      expect(runtime().provider.name).toBe('opencode')
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('labels a Candidate the ledger already holds as already known', async () => {
     const store = openJournalStore(':memory:')
     try {

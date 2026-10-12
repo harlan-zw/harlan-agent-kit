@@ -2,12 +2,13 @@
 import type { HistoryRow } from '../utils/history.ts'
 import { routineRunPresentation } from '../utils/dashboard.ts'
 import { recentRoutineRuns, routineRows, routineRunDetail } from '../utils/routines.ts'
+import RoutineRunModal from './_RoutineRunModal.vue'
 
 /**
  * What is coming on the clock. The schedule table answers "when is the next
  * check", soonest first; the log below answers "what did the last ones find".
  */
-const { snapshot, loading, now, relativeTime } = useDashboard()
+const { snapshot, loading, controlsUnavailable, now, relativeTime } = useDashboard()
 
 const minute = computed(() => Math.floor(now.value.getTime() / 60_000))
 const rows = computed(() => routineRows(snapshot.value.routines, snapshot.value.routineRuns, new Date(minute.value * 60_000)))
@@ -18,6 +19,8 @@ const allAttention = ref(false)
 const visibleAttention = computed(() => allAttention.value ? attention.value : attention.value.slice(0, 6))
 const selectedRunId = ref<string>()
 const evidenceOpen = ref(false)
+const runOpen = ref(false)
+const chosenRoutine = ref<(typeof rows.value)[number]['routine']>()
 const selectedRun = computed<HistoryRow | undefined>(() => {
   const run = snapshot.value.routineRuns.find(run => run.id === selectedRunId.value)
   return run === undefined ? undefined : { _tag: 'Routine', key: run.id, at: run.updatedAt, run }
@@ -26,6 +29,11 @@ const selectedRun = computed<HistoryRow | undefined>(() => {
 function showRun(id: string): void {
   selectedRunId.value = id
   evidenceOpen.value = true
+}
+
+function chooseRun(routine: (typeof rows.value)[number]['routine']): void {
+  chosenRoutine.value = routine
+  runOpen.value = true
 }
 
 const absolute = new Intl.DateTimeFormat('en', { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
@@ -86,6 +94,7 @@ useHead({
           </UiTableTh>
           <UiTableTh>Next</UiTableTh>
           <UiTableTh>Last run</UiTableTh>
+          <UiTableTh><span class="sr-only">Actions</span></UiTableTh>
         </template>
         <tr v-for="row in rows" :key="row.routine.id">
           <UiTableTd row-header size="sm">
@@ -111,6 +120,11 @@ useHead({
               <StateBadge :tone="row.tone" :label="row.label" />
               <span v-if="row.routine.lastRunAt" class="font-mono text-sm text-dimmed">{{ relativeTime(row.routine.lastRunAt) }}</span>
             </span>
+          </UiTableTd>
+          <UiTableTd size="sm">
+            <UButton color="neutral" variant="outline" size="sm" class="min-h-11 whitespace-nowrap" :disabled="controlsUnavailable || !row.routine.enabled" :aria-label="`Run ${row.routine.name} on ${row.routine.repository} now`" @click="chooseRun(row.routine)">
+              Run now
+            </UButton>
           </UiTableTd>
         </tr>
       </UiTableShell>
@@ -146,5 +160,6 @@ useHead({
       </ul>
     </section>
     <HistoryEvidenceSlideover v-model:open="evidenceOpen" :row="selectedRun" />
+    <RoutineRunModal v-model:open="runOpen" :routine="chosenRoutine" @queued="showRun" />
   </div>
 </template>

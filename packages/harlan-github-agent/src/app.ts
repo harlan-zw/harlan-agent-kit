@@ -7,7 +7,7 @@ import type { Result } from './result.ts'
 import type { SessionController } from './session-controller.ts'
 import type { StatsRangeError } from './stats.ts'
 import type { JournalStore } from './store.ts'
-import type { DashboardSnapshot, WorkflowEventStream } from './types.ts'
+import type { DashboardSnapshot, PinnedAgentSelection, WorkflowEventStream } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -542,9 +542,22 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const body = await event.req.json().catch(() => {
       // Validation below reports malformed JSON as a bad request.
       return undefined
-    }) as { routineId?: unknown } | undefined
+    }) as { routineId?: unknown, agentSelection?: unknown } | undefined
     if (typeof body?.routineId !== 'string' || body.routineId === '')
       throw createError({ status: 400, statusText: 'Bad Request', message: 'A Routine ID is required.' })
+    let agentSelection: PinnedAgentSelection | undefined
+    if (body.agentSelection !== undefined) {
+      const requested = body.agentSelection
+      if (typeof requested !== 'object' || requested === null || Array.isArray(requested))
+        throw createError({ status: 400, statusText: 'Bad Request', message: 'Choose an Agent provider and model for this run.' })
+      const parsed = parseAgentSelection({ ...requested, _tag: 'Pinned' })
+      if (parsed._tag === 'Err')
+        throw createError({ status: 400, statusText: 'Bad Request', message: parsed.error })
+      if (parsed.value._tag !== 'Pinned')
+        throw new Error('Expected a pinned Routine Agent selection.')
+      const { provider, model, reasoningEffort } = parsed.value
+      agentSelection = { provider, model, reasoningEffort }
+    }
     const routine = options.store.listRoutines().find(candidate => candidate.id === body.routineId)
     if (routine === undefined)
       throw createError({ status: 404, statusText: 'Not Found', message: 'The Routine was not found.' })
@@ -554,7 +567,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     // A manual run answers the current minute. The cron instant that follows it
     // today is newer, so it still opens on its own.
     const scheduledFor = new Date(Math.floor(at.getTime() / 60_000) * 60_000).toISOString()
-    const run = options.store.openRoutineRun({ routineId: routine.id, scheduledFor, specSha: routine.specSha, at: at.toISOString() })
+    const run = options.store.openRoutineRun({ routineId: routine.id, scheduledFor, specSha: routine.specSha, at: at.toISOString(), ...(agentSelection === undefined ? {} : { agentSelection }) })
     if (run === null)
       throw createError({ status: 409, statusText: 'Conflict', message: 'A run already exists for this minute. Try again in a minute.' })
     setResponseStatus(event, 202)
