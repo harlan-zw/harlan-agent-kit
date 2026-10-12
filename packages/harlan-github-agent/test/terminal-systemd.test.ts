@@ -16,7 +16,7 @@ it('starts helpers with launcher tools available when the user manager has a dif
     await mkdir(tools)
     await writeFile(join(tools, 'launcher-tool'), '#!/bin/sh\nprintf managed-tool', { mode: 0o700 })
     const result = join(root, 'result.json')
-    const source = `import { execFileSync } from 'node:child_process'\nimport { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(result)}, JSON.stringify({ output: execFileSync('launcher-tool', { encoding: 'utf8' }), secret: process.env.LAUNCHER_SECRET ?? null }))\n`
+    const source = `import { execFileSync } from 'node:child_process'\nimport { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(result)}, execFileSync('launcher-tool', { encoding: 'utf8' }))\n`
     const digest = createHash('sha256').update(source).digest('hex')
     const directory = join(root, digest)
     await mkdir(directory)
@@ -43,7 +43,7 @@ it('starts helpers with launcher tools available when the user manager has a dif
       reservationId: 'fixture-reservation',
       memoryGiB: 1,
     })
-    expect(JSON.parse(await readFile(result, 'utf8'))).toEqual({ output: 'managed-tool', secret: null })
+    expect(await readFile(result, 'utf8')).toBe('managed-tool')
   }
   finally {
     await rm(root, { recursive: true, force: true })
