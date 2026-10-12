@@ -43,6 +43,24 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('reads a dedicated GitHub account for one repository', () => {
+    const text = configText.replace('    enabled: true', `    enabled: true
+    github_account:
+      login: im-brundlefly
+      token_path: /home/harlan/.config/harlan-github-agent/brundlefly-token
+      name: Brundlefly
+      url: https://github.com/harlan-zw/brundlefly
+      instructions: Use short, clear sentences.`)
+    const result = parseConfigText(text)
+    expect(result._tag === 'Ok' && result.value.repositories[0]?.githubAccount).toEqual({
+      login: 'im-brundlefly',
+      tokenPath: '/home/harlan/.config/harlan-github-agent/brundlefly-token',
+      name: 'Brundlefly',
+      url: 'https://github.com/harlan-zw/brundlefly',
+      instructions: 'Use short, clear sentences.',
+    })
+  })
+
   it('requires an explicit opt-in before Agent sessions can use host credentials', () => {
     const disabled = parseConfigText(configText)
     expect(disabled._tag === 'Ok' && disabled.value.server.agentSessions === true).toBe(false)

@@ -294,11 +294,9 @@ export function buildRepositoryMappings(
       ...override,
       github: repository.github,
       checkout,
-      // How the controller reaches a repository is discovered, never declared.
-      // A configuration file cannot know whether the App is installed, and one
-      // that claimed an installation the organization refused sent every write
-      // to a token that does not exist.
-      authentication: repository.authentication,
+      // Discover App access unless the owner selects a dedicated automation account.
+      // Configuration alone cannot establish an App installation.
+      authentication: override?.githubAccount === undefined ? repository.authentication : 'user',
       defaultBranch: repository.defaultBranch,
       enabled: !repository.archived && (override?.enabled ?? true),
     }]
