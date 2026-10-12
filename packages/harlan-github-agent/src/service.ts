@@ -69,7 +69,7 @@ import { publishLoggedFindingPickups } from './logged-finding-sweep.ts'
 import { createOpencodeProvider } from './opencode-provider.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
 import { createPackageReleaseSource } from './package-release-github.ts'
-import { runPassStep } from './poll-pass.ts'
+import { runPassStep, runPassStepResult } from './poll-pass.ts'
 import { createIndependentPollers, createPoller } from './poller.ts'
 import { chooseAgentProvider, createProviderCapacitySource } from './provider-capacity.ts'
 import { createCircuitProtectedProvider } from './provider-circuit.ts'
@@ -277,18 +277,16 @@ export async function reconcilePackageReleasePass(options: {
   repositories: readonly RepositoryMapping[]
   mayPublish: (repository: string) => boolean
   reconcile: (repository: RepositoryMapping) => Promise<void>
-  guarded: <T>(step: string, run: () => T | Promise<T>, fallback: T) => Promise<T>
+  guarded: <T>(step: string, run: () => T | Promise<T>) => Promise<Result<T, string>>
   record: (operation: string, messages: readonly string[]) => void
 }): Promise<void> {
   const failures: string[] = []
   for (const repository of options.repositories) {
     if (!options.mayPublish(repository.github))
       continue
-    const errors = await options.guarded('Package releases', async () => {
-      await options.reconcile(repository)
-      return [] as string[]
-    }, [`${repository.github}: package release reconciliation failed.`])
-    failures.push(...errors)
+    const result = await options.guarded('Package releases', () => options.reconcile(repository))
+    if (result._tag === 'Err')
+      failures.push(`${repository.github}: ${result.error}`)
   }
   options.record('package_release', failures)
 }
@@ -1270,15 +1268,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       recordPassIncidents('poll_pass', [])
       recordPassIncidents('github_rate_limit', rateLimits.active())
       const passDefects: string[] = []
+      const passStepOptions = {
+        signal,
+        onDefect: (name: string, reason: string) => {
+          options.logger.error(`${name}: ${reason}`)
+          passDefects.push(`${name}: ${reason}`)
+          recordPassIncidents('poll_pass', passDefects)
+        },
+      }
       const guarded = <T>(step: string, run: () => T | Promise<T>, fallback: T): Promise<T> =>
-        runPassStep(step, run, fallback, {
-          signal,
-          onDefect: (name, reason) => {
-            options.logger.error(`${name}: ${reason}`)
-            passDefects.push(`${name}: ${reason}`)
-            recordPassIncidents('poll_pass', passDefects)
-          },
-        })
+        runPassStep(step, run, fallback, passStepOptions)
+      const guardedResult = <T>(step: string, run: () => T | Promise<T>): Promise<Result<T, string>> =>
+        runPassStepResult(step, run, passStepOptions)
       // A Failed Task recovers on every pass, not only at start. Waiting for a
       // restart is what kept a transient GitHub reject holding a review down
       // for a whole day.
@@ -1389,7 +1390,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           await reconcilePackageReleasePass({
             repositories: config.repositories.filter(repository => releaseActorLogin(repository) !== null),
             mayPublish: repository => store.mayPublishPackageRelease(repository),
-            guarded,
+            guarded: guardedResult,
             record: recordPassIncidents,
             reconcile: async (repository) => {
               await reconcilePackageReleases({
