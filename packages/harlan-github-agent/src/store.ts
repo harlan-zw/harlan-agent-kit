@@ -7055,7 +7055,13 @@ function installSchema(database: DatabaseSync): void {
     `)
     version = 88
   }
-  if (version === 88)
+  if (version === 88) {
+    const columns = database.prepare('PRAGMA table_info(routine_runs)').all() as Array<{ name: string }>
+    applyMigration(database, `${columns.some(column => column.name === 'agent_selection_json') ? '' : 'ALTER TABLE routine_runs ADD COLUMN agent_selection_json TEXT CHECK (agent_selection_json IS NULL OR json_valid(agent_selection_json));'}
+      PRAGMA user_version = 89;`)
+    version = 89
+  }
+  if (version === 89)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }

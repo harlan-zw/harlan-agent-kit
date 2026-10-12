@@ -18,6 +18,48 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+it('upgrades version 88 Routine runs for manual Agent selection', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+  const at = '2026-10-12T01:00:00.000Z'
+  before.syncRepositories([repositoryMapping()], at)
+  const [routine] = before.syncRoutines({
+    repository: 'harlan-zw/example',
+    specSha: 'head',
+    entries: [{ name: 'ci-review', crons: ['0 1 * * *'], timeZone: 'UTC', mode: 'report', enabled: true }],
+    at,
+  })
+  if (routine === undefined)
+    throw new Error('Expected a Routine.')
+  const existing = before.openRoutineRun({ routineId: routine.id, scheduledFor: at, specSha: 'head', at })
+  if (existing === null)
+    throw new Error('Expected an existing Routine run.')
+  before.close()
+
+  const version88 = new DatabaseSync(path)
+  version88.exec('ALTER TABLE routine_runs DROP COLUMN agent_selection_json; PRAGMA user_version = 88;')
+  version88.close()
+
+  const migrated = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+  try {
+    expect(migrated.getRoutineRun(existing.id)).toMatchObject({ id: existing.id, state: { _tag: 'Queued' } })
+    const selected = migrated.openRoutineRun({
+      routineId: routine.id,
+      scheduledFor: '2026-10-12T01:01:00.000Z',
+      specSha: 'head',
+      agentSelection: { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+      at,
+    })
+    if (selected === null)
+      throw new Error('Expected a selected Routine run.')
+    expect(migrated.claimNextRoutineRun('worker', '2026-10-12T01:02:00.000Z', 60_000))
+      .toMatchObject({ id: selected.id, agentSelection: { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'medium' } })
+  }
+  finally {
+    migrated.close()
+  }
+})
+
 it('preserves current and cancelled Review authority when upgrading Task lookups', () => {
   const path = join(directory, 'state.sqlite')
   const before = openJournalStore(path)
