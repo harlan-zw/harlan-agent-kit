@@ -46,7 +46,17 @@ export type RepositoryAutoMergeScope
      */
     | { _tag: 'Contained', minimumConfidence: number, policy: MergeRiskPolicy, labelOverridesRisk: boolean }
 
+export interface GitHubAccount {
+  login: string
+  tokenPath: string
+  name: string
+  url: string
+  instructions: string
+}
+
 export interface RepositoryMapping {
+  /** A dedicated controller account. Its credential never falls back to the App or owner. */
+  githubAccount?: GitHubAccount
   /** Explicit authority for stable patch and minor package releases. */
   /** Explicit undefined disables inherited release defaults. */
   release?: PackageReleaseConfig | undefined
@@ -1089,6 +1099,7 @@ export type WorkflowEventStream
     | 'candidate_issue'
     | 'routine_report'
     | 'provider_circuit'
+    | 'incident'
 
 export interface WorkflowEvent {
   id: number

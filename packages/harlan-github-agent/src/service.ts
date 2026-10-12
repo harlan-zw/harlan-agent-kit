@@ -47,10 +47,12 @@ import { DESKTOP_AGENT_SLOT_CEILING } from './desktop-protocol.ts'
 import { createDesktopSessionClient } from './desktop-session-client.ts'
 import { createReloadableExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
 import { classifyFailure, isSubjectMovedReason } from './failure.ts'
+import { createGitHubAccountTokenProvider, readGitHubAccountLogin, readGitHubAccountToken } from './github-account.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
 import { createGitHubMediaSource } from './github-media.ts'
 import { createGitHubRateLimitGate, readAfterGitHubRateLimit } from './github-rate-limit.ts'
+import { createGitHubResponseCache } from './github-response-cache.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
 import { createUserAssetUploader } from './github-user-assets.ts'
 import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitHubWriteAccess, withGitHubWritePreflight } from './github-write-gate.ts'
@@ -587,7 +589,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       options.logger.info(`Retried ${retried} tasks after recoverable controller failures were repaired.`)
   }
   // A repository the App cannot reach is answered with Harlan's own account.
-  const actorLogin = (repository: RepositoryMapping): string => repository.authentication === 'user' ? userLogin : AGENT_ACTOR_LOGIN
+  const actorLogin = (repository: RepositoryMapping): string => repository.githubAccount?.login ?? (repository.authentication === 'user' ? userLogin : AGENT_ACTOR_LOGIN)
   // The release policy picks the release author, never discovery. See createPackageReleaseSource.
   const releaseActorLogin = (repository: RepositoryMapping): string | null => {
     if (!userLoginKnown || !canReleasePackages(repository))
@@ -604,6 +606,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       return installedRepositories.find(installed => installed.github.toLowerCase() === resolved?.github.toLowerCase())?.github
     },
   })
+  const releaseResponseCache = createGitHubResponseCache()
   const usesUserToken = (repository: string): boolean => userRepositoryNames.has(repository.toLowerCase())
   const rawUserTokens = createUserTokenProvider({ readToken: signal => userAccess.token(signal) })
   // A rate limited quota refuses its credentials until GitHub resets it, so a
@@ -611,13 +614,19 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const rateLimits = createGitHubRateLimitGate({ now })
   const userQuota = (): GitHubQuota => ({ _tag: 'User', login: userLogin })
   const userTokens = rateLimits.guard(rawUserTokens, userQuota)
-  const routedTokens = rateLimits.guard(createRoutedTokenProvider({
-    app: appTokens,
-    user: rawUserTokens,
-    usesUserToken,
-  }), repository => usesUserToken(repository)
-    ? userQuota()
-    : { _tag: 'Installation', owner: repository.split('/')[0] ?? repository })
+  const accountFor = (name: string) => config.repositories.find(repository => repository.github.toLowerCase() === name.toLowerCase())?.githubAccount
+  const routedTokens = rateLimits.guard(createGitHubAccountTokenProvider({
+    fallback: createRoutedTokenProvider({ app: appTokens, user: rawUserTokens, usesUserToken }),
+    account: accountFor,
+    readToken: readGitHubAccountToken,
+    readLogin: readGitHubAccountLogin,
+    now,
+  }), (repository): GitHubQuota => {
+    const account = accountFor(repository)
+    return account !== undefined
+      ? { _tag: 'User', login: account.login }
+      : usesUserToken(repository) ? userQuota() : { _tag: 'Installation', owner: repository.split('/')[0] ?? repository }
+  })
   // Write authority belongs at the credential boundary. Every current and
   // future mutation needs one of these write credentials before it can leave.
   const gatedTokens = (source: GitHubTokenProvider): GitHubTokenProvider => createGitHubWriteGate({
@@ -1373,6 +1382,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                 signal,
                 source: assertLease => createPackageReleaseSource({
                   repository,
+                  responseCache: releaseResponseCache,
                   actors: {
                     repository: { login: actorLogin(repository), tokens },
                     user: { login: userLogin, tokens: legacyUserTokens },
@@ -1685,6 +1695,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       approvePullRequest: store.approvePullRequest,
       cancelTask: store.cancelTask,
       stopReviewForHead: store.stopReviewForHead,
+      resolveIncident: store.resolveIncident,
       listRoutines: store.listRoutines,
       openRoutineRun: store.openRoutineRun,
       getDashboardSnapshot: (at) => {

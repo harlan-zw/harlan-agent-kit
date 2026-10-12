@@ -150,6 +150,17 @@ Open `https://harlan-github-agent.localhost/`. Use `agent` as the dashboard user
 
 ## Control API and CLI
 
+For a dedicated automation account, set `github_account` in its Repository mapping.
+Use `login`, `token_path`, `name`, `url`, and `instructions` from `config.example.yml`.
+Store its token in an owned regular file with mode `0600`.
+The controller verifies the login before using that credential.
+If verification fails, publication stops. The controller never selects another account for that repository.
+Other repositories keep their existing authentication.
+
+Account instructions shape Issue triage, Review, and Routine writing.
+Automated attribution uses the configured name and URL. Evidence and commands keep their original text.
+Native reviews use the dedicated account. Review check runs still require the GitHub App.
+
 The dashboard and CLI use the same authenticated Control API.
 Every CLI command prints one JSON value.
 Expected failures print one tagged JSON error and exit with status 1.

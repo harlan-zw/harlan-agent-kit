@@ -1,9 +1,11 @@
+import type { IncidentResolutionReceipt, IncidentResolutionRequest } from './incident-resolution.ts'
 import type { PullRequestWatchOptions, PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
 import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 import type { Result } from './result.ts'
 import type { CancelTaskResult } from './store.ts'
 import type { AgentActivityItem, DashboardSnapshot, DashboardTask, Incident, IssueTriageRerunResult, RestartRequest, RoutineRun, StoredAgentControl, WorkflowEvent, WorkflowEventStream } from './types.ts'
 import { Buffer } from 'node:buffer'
+import { parseIncidentResolutionReceipt, parseIncidentResolutionRequest } from './incident-resolution.ts'
 import { parsePullRequestWatchTarget, watchPullRequestStream } from './pull-request-watch.ts'
 import { parseRepairRecoveryCandidate, parseRepairRecoveryResponse } from './repair-recovery.ts'
 import { err, ok } from './result.ts'
@@ -58,6 +60,7 @@ export interface ControlClient {
   state: () => Promise<Result<DashboardSnapshot, ControlApiError>>
   status: () => Promise<Result<ControlStatus, ControlApiError>>
   tasks: () => Promise<Result<DashboardTask[], ControlApiError>>
+  resolveIncident: (request: IncidentResolutionRequest) => Promise<Result<IncidentResolutionReceipt, ControlApiError>>
   incidents: () => Promise<Result<Incident[], ControlApiError>>
   activity: (taskId: string) => Promise<Result<AgentActivityItem[], ControlClientError>>
   workflowEvents: (query?: WorkflowEventQuery) => Promise<Result<WorkflowEvent[], ControlApiError>>
@@ -306,6 +309,12 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
     async tasks() {
       const result = await state()
       return result._tag === 'Err' ? result : ok(result.value.tasks)
+    },
+    async resolveIncident(input) {
+      const parsed = parseIncidentResolutionRequest(input)
+      if (parsed._tag === 'Err')
+        return err({ _tag: 'InvalidResponse', message: parsed.error })
+      return request({ method: 'POST', path: 'api/incidents/resolve', body: parsed.value, parse: parseIncidentResolutionReceipt })
     },
     async incidents() {
       const result = await state()

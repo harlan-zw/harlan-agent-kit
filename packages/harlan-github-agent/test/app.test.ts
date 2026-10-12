@@ -39,6 +39,7 @@ function statsSnapshot(range: StatsRange, generatedAt: string): StatsSnapshot {
   }
 }
 const agentControls = {
+  resolveIncident: () => ({ _tag: 'Ok' as const, value: { _tag: 'Resolved' as const } }),
   getOpenIssueStatus: () => null,
   requestIssueTriageRerun: () => ({ _tag: 'Rejected' as const, reason: { _tag: 'ItemNotFound' as const } }),
   stopReviewForHead: () => ({ _tag: 'Stopped' as const }),
@@ -954,7 +955,7 @@ describe('dashboard HTTP app', () => {
     expect(await response.json()).toEqual(expect.objectContaining({ message: 'The end date must follow the start date.' }))
   })
 
-  it('returns filtered workflow events for reliability analysis', async () => {
+  it.each(['review_status', 'incident'])('returns filtered %s workflow events for reliability analysis', async (stream) => {
     const requests: unknown[] = []
     const app = createAgentApp({
       allowedOrigin,
@@ -978,13 +979,13 @@ describe('dashboard HTTP app', () => {
     })
 
     const response = await app.request(
-      `http://${allowedHost}/api/workflow-events?stream=review_status&limit=25`,
+      `http://${allowedHost}/api/workflow-events?stream=${stream}&limit=25`,
       { headers: { authorization, host: allowedHost } },
     )
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ events: [] })
-    expect(requests).toEqual([{ stream: 'review_status', limit: 25 }])
+    expect(requests).toEqual([{ stream, limit: 25 }])
   })
 
   it('records a local Review and repair approval for the exact Revision', async () => {
@@ -1324,5 +1325,25 @@ describe('desktop capacity HTTP boundary', () => {
     expect(desktop.read().requestedMemoryGiB).toBe(20)
     expect((await send({ memoryGiB: 0 })).status).toBe(400)
     expect(desktop.read().requestedMemoryGiB).toBe(20)
+  })
+})
+
+describe('authenticated incident resolution', () => {
+  it.each(['Resolved', 'AlreadyResolved', 'NotFound', 'Changed', 'TaskActive'] as const)('returns %s without accepting invalid or unauthenticated evidence', async (_tag) => {
+    const resolveIncident = vi.fn<AgentAppOptions['store']['resolveIncident']>(() => _tag === 'Resolved' || _tag === 'AlreadyResolved'
+      ? { _tag: 'Ok', value: { _tag } }
+      : { _tag: 'Err', error: { _tag } })
+    const app = createAgentApp({ allowedOrigin, dashboardPassword, dashboardRoot, now, store: { ...agentControls, resolveIncident, approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }), cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }), getDashboardSnapshot: () => dashboardSnapshot(), listReviewRuns: () => [], requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }) } })
+    const path = `http://${allowedHost}/api/incidents/resolve`
+    const input = { incidentId: 'a'.repeat(64), lastSeenAt: '2026-10-12T00:00:00.000Z', evidence: 'Verified merged fix.' }
+    const headers = { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' }
+    const response = await app.request(path, { method: 'POST', headers, body: JSON.stringify(input) })
+    expect(response.status).toBe(_tag === 'Resolved' || _tag === 'AlreadyResolved' ? 200 : _tag === 'NotFound' ? 404 : 409)
+    expect(resolveIncident).toHaveBeenCalledWith({ ...input, at: now().toISOString() })
+    expect((await app.request(path, { method: 'POST', headers: { ...headers, authorization: '' }, body: JSON.stringify(input) })).status).toBe(401)
+    expect((await app.request(path, { method: 'POST', headers: { ...headers, origin: 'https://other.example' }, body: JSON.stringify(input) })).status).toBe(403)
+    expect((await app.request(path, { method: 'POST', headers, body: '{' })).status).toBe(400)
+    expect((await app.request(path, { method: 'POST', headers, body: JSON.stringify({ ...input, evidence: ' ' }) })).status).toBe(400)
+    expect(resolveIncident).toHaveBeenCalledTimes(1)
   })
 })

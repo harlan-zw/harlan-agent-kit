@@ -183,3 +183,26 @@ describe('harlan GitHub Agent control client', () => {
     expect(await requests[0]?.json()).toEqual({ routineId: 'harlan-zw/example:daily-checkin' })
   })
 })
+
+describe('incident resolution client boundary', () => {
+  const input = { incidentId: 'a'.repeat(64), lastSeenAt: '2026-10-12T00:00:00.000Z', evidence: 'Merged fix verified.' }
+  it.each(['Resolved', 'AlreadyResolved'])('parses %s and sends the exact recovery evidence', async (_tag) => {
+    const requests: Request[] = []
+    const created = clientWith([Response.json({ _tag })], requests)
+    if (created._tag === 'Err')
+      throw new Error(created.error.message)
+    expect(await created.value.resolveIncident(input)).toEqual({ _tag: 'Ok', value: { _tag } })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/incidents/resolve`)
+    expect(await requests[0]?.json()).toEqual(input)
+    expect(requests[0]?.headers.get('origin')).toBe(baseUrl)
+  })
+  it('rejects malformed request before HTTP and malformed acceptance after HTTP', async () => {
+    const requests: Request[] = []
+    const created = clientWith([Response.json({ _tag: 'Accepted' })], requests)
+    if (created._tag === 'Err')
+      throw new Error(created.error.message)
+    expect(await created.value.resolveIncident({ ...input, evidence: '' })).toMatchObject({ _tag: 'Err' })
+    expect(requests).toEqual([])
+    expect(await created.value.resolveIncident(input)).toMatchObject({ _tag: 'Err', error: { _tag: 'InvalidResponse' } })
+  })
+})

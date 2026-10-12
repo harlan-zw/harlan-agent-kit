@@ -956,3 +956,29 @@ it('converges a sibling journal that carries no issue triage runs', () => {
     migrated.close()
   }
 })
+
+it('preserves incident resolution evidence and receipts across reopen and schema upgrade', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path, true)
+  const at = '2026-10-12T00:00:00.000Z'
+  before.syncRepositories([repositoryMapping()], at)
+  before.setRepositoryWritesEnabled('harlan-zw/example', true)
+  before.recordObservation({ externalId: 'resolution-migration', observedAt: at, source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
+  if (before.claimNextAdversarialReviewTask('worker', at, 10000) === null)
+    throw new Error('Expected Review Task with workflow history.')
+  const existingEvents = before.listWorkflowEvents()
+  const incident = before.recordIncident({ scope: { _tag: 'Service' }, kind: 'unknown', severity: 'warning', operation: 'probe', message: 'Resolved warning', recovery: { _tag: 'ActionRequired' }, at })
+  const request = { incidentId: incident.id, lastSeenAt: at, evidence: 'Merged fix verified.', at: '2026-10-12T01:00:00.000Z' }
+  expect(before.resolveIncident(request)).toEqual({ _tag: 'Ok', value: { _tag: 'Resolved' } })
+  before.close()
+  // Replaying an older schema version must retain every durable event and receipt.
+  const journal = new DatabaseSync(path)
+  journal.exec('PRAGMA user_version = 87')
+  journal.close()
+  const after = openJournalStore(path)
+  expect(after.resolveIncident(request)).toEqual({ _tag: 'Ok', value: { _tag: 'AlreadyResolved' } })
+  expect(after.listIncidents()).toEqual([])
+  expect(after.listWorkflowEvents().filter(event => event.stream !== 'incident')).toEqual(existingEvents)
+  expect(after.listWorkflowEvents({ stream: 'incident' }).map(event => event.reason)).toEqual([request.evidence])
+  after.close()
+})
