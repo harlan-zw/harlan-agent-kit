@@ -10,7 +10,7 @@ Create or update a pull request for the current branch. Idempotent -- safe to ru
 
 Every change opens a pull request. Markdown is no exception: a Skill or instruction file changes agent behaviour in every repository, and a README change still earns a review. Never push to `origin/main` directly.
 
-A Markdown-only pull request runs no CI unless a workflow event uses `paths` to include that Markdown. Its review is the whole gate, so treat the review outcome as the check.
+A Markdown-only pull request runs no CI where workflows filter Markdown at the event. Where a `changes` job skips the other jobs, it reports one passed `changes` check and skipped checks. A skipped check counts as passed. In both shapes the review is the whole gate, so treat the review outcome as the check.
 
 ## When to invoke
 
@@ -278,7 +278,7 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    Then confirm every applicable run passed.
    For verified private repositories, scope each `gh run watch` with `HARLAN_AGENT_GITHUB_PRIVATE=OWNER/REPO`.
    Do not use `gh pr checks --watch` while Review is queued; the service's own check run can keep it waiting.
-   A Markdown-only pull request may have no check runs. Confirm that its workflows exclude the changed paths.
+   A Markdown-only pull request may have no check runs, or only skipped ones beside `changes`. Confirm that its workflows exclude the changed paths. Count a skipped check as passed.
 3. Read the trusted `harlan-github-agent` marked comment and matching Review outcome label.
    Read issue comments with `gh api repos/OWNER/REPO/issues/NUMBER/comments --paginate`.
    Match `<!-- harlan-agent-kit:pr-triage -->` and `<!-- reviewed-sha: HEAD_SHA -->`.
