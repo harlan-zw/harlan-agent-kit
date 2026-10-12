@@ -82,6 +82,10 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 - If that token fails, stop. Never switch to Harlan's credentials to finish a public read.
 - The public CLI refuses writes and raw GraphQL. Use `pr view`, `issue view`, or `search` for GraphQL reads.
 - Authorized controller writes and private access keep their existing GitHub credentials.
+- Before a private read, verify the repository is private. Set `HARLAN_AGENT_GITHUB_PRIVATE=owner/repo` on that `gh` command.
+- Specify the matching repository with `--repo`, `-R`, a `repo view` argument, or a `repos/owner/repo` API path.
+- The exception applies to that command only. It never permits credential fallback after `agent-gh` fails.
+- Watch tracked pull requests through the Service Control API. Repeated GitHub polling spends quota.
 
 - Find and search files: ripgrep (`rg`).
 - Rename, move, or import update spanning 2+ files: use `ripide` through the launcher selected by its Skill. The retired `@ripast/cli` package stays stale. Dry run is the default; use `--apply` to write.

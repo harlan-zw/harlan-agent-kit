@@ -374,7 +374,7 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
   let retried = false
 
   octokit.hook.wrap('request', async (request, requestOptions) => {
-    const read = () => options.access === 'read' && options.responseCache !== undefined
+    const read = () => (options.access === 'read' || options.access === 'checks_read' || options.access === 'deployments_read') && options.responseCache !== undefined
       ? options.responseCache.request(async (endpoint) => {
           // Octokit's inner hooks bind the original options object.
           const headers = requestOptions.headers
