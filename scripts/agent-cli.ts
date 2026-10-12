@@ -12,7 +12,7 @@ const pinnedRuntime = join(home, '.local/lib/harlan-github-agent/node')
 const runtime = existsSync(pinnedRuntime) ? pinnedRuntime : process.execPath
 const urlFile = join(home, '.config/harlan-github-agent/control-url')
 const url = process.env.HARLAN_GITHUB_AGENT_URL ?? (existsSync(urlFile) ? readFileSync(urlFile, 'utf8').trim() : undefined)
-const plan = planAgentCli({ home, hostname: hostname(), executable: process.argv[1] ?? 'harlan-github-agent', runtime, checkout, args: process.argv.slice(2), url })
+const plan = planAgentCli({ home, hostname: hostname(), executable: process.argv[1] ?? 'harlan-github-agent', runtime, checkout, args: process.argv.slice(2), cwd: process.cwd(), url })
 const child = spawn(plan.file, plan.args, { cwd: plan.cwd, stdio: 'inherit' })
 child.on('error', (error) => {
   console.error(`Agent command failed: ${error.message}`)

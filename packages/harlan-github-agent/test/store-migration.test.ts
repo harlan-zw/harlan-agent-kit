@@ -18,6 +18,25 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+it('upgrades version 90 without blocking an accepted Update', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  const at = '2026-10-12T01:00:00.000Z'
+  before.requestRestart({ id: 'legacy-update', source: 'helper', operation: { _tag: 'Update', targetCommit: 'a'.repeat(40), preparation: 'Ready' }, at })
+  before.close()
+  const legacy = new DatabaseSync(path)
+  legacy.exec('ALTER TABLE restart_requests DROP COLUMN preparation_tag; PRAGMA user_version = 90;')
+  legacy.close()
+  const migrated = openJournalStore(path)
+  try {
+    expect(migrated.getRestartRequest()).toMatchObject({ id: 'legacy-update', operation: { preparation: 'Ready' } })
+    expect(migrated.beginRestart({ id: 'legacy-update', processId: 'next-process', at })).toMatchObject({ _tag: 'Restarting' })
+  }
+  finally {
+    migrated.close()
+  }
+})
+
 it('upgrades version 89 provider circuits without losing observed failures', () => {
   const path = join(directory, 'state.sqlite')
   const before = openJournalStore(path)

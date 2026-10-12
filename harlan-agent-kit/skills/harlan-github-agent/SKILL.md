@@ -90,6 +90,13 @@ Use `stop-review --repository OWNER/REPOSITORY --number NUMBER --head HEAD_SHA` 
 After configuration changes, use a durable Restart request.
 It lets active Agents and controller writes finish before systemd starts the next process.
 Never use Pause or raw unit restart to coordinate a routine restart.
+For paired Service updates, run `pnpm service:hogwild:update`.
+Its durable Update blocks new Tasks before file sync.
+The helper marks preparation Ready after sync, then waits for existing work.
+Failed preparation releases its hold without changing manual Pause.
+If the Service lacks preparation support, use its installed desktop helper first:
+`bash ~/.local/share/harlan-github-agent/service/scripts/hogwild-service.sh update`.
+After that upgrade, use the current repository helper.
 Use `reload-external-watches` only for external watches and their issue cutoff.
 Other configuration changes require Restart.
 

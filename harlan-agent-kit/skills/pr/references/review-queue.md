@@ -1,6 +1,6 @@
 # Review queue capacity
 
-Use the [service control command](../../harlan-github-agent/SKILL.md#run-and-inspect) to read `harlan-github-agent control status`.
+Use the [service control command](../../harlan-github-agent/SKILL.md#connect) to read `harlan-github-agent control status`.
 Run it on the Service host. On Hogwild, use the config path and loopback URL below.
 If that host lacks the control CLI, read its authenticated `/api/state` endpoint instead.
 The endpoint returns the same `state` object. Do not treat a failed command as an empty Queue.
