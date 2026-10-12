@@ -82,6 +82,8 @@ async function refresh() {
     projects.value = results[0].value.value
     sessions.value = results[1].value.value
     storedLayout.value = reconcileTerminalLayout(layout.value, displayProjects.value, sessions.value)
+    if (loading.value)
+      selectFromRoute()
     if (!capabilities.providers[provider.value])
       provider.value = providers.value[0] ?? 'codex'
     failure.value = ''
@@ -136,12 +138,14 @@ function focusPane(session: TerminalSession) {
     void select(session)
 }
 
-watch([() => route.query.terminal, sessions], () => {
+function selectFromRoute() {
   const id = typeof route.query.terminal === 'string' ? route.query.terminal : undefined
   const session = sessions.value.find(value => value.id === id)
   if (session && session.id !== selectedId.value)
     void select(session)
-})
+}
+// Inventory refresh must not replace a selection while its route navigation is still pending.
+watch(() => route.query.terminal, selectFromRoute, { immediate: true })
 
 async function launch(mode: 'Regular' | 'Force' = 'Regular') {
   if (!canStart.value)
