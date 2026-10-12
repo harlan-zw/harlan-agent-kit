@@ -718,6 +718,38 @@ describe('recovery budget after a GitHub outage', () => {
 })
 
 describe('stale task incidents', () => {
+  it('clears an older failure when the Task now needs a different action', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'changed-action-pr',
+      observedAt: '2026-08-18T00:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+    const task = store.claimNextConflictTask('worker', '2026-08-18T00:00:01.000Z', 10_000)
+    if (task === null)
+      throw new Error('Expected a conflict Task.')
+    const reason = 'The contributor must permit maintainer edits.'
+    store.needsAttentionTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: '2026-08-18T00:00:02.000Z', reason, evidence: 'Current permission check.' })
+    for (const message of ['fetch failed', reason]) {
+      store.recordIncident({
+        scope: { _tag: 'Task', taskId: task.id, repository: task.repository, itemNumber: task.pullRequestNumber },
+        kind: 'unknown',
+        severity: 'error',
+        operation: 'resolve_conflict',
+        message,
+        recovery: { _tag: 'ActionRequired' },
+        at: '2026-08-18T00:00:03.000Z',
+      })
+    }
+
+    expect(store.resolveStaleTaskIncidents('2026-08-18T00:00:04.000Z')).toBe(1)
+    expect(store.listIncidents()).toMatchObject([{ message: reason }])
+    expect(store.getDashboardSnapshot('2026-08-18T00:00:04.000Z').tasks.find(candidate => candidate.id === task.id)?.state).toEqual({ _tag: 'ActionRequired', reason })
+    store.close()
+  })
+
   it.each(['removed', 'disabled'] as const)('closes incidents after a Repository mapping is %s', (change) => {
     const store = createStore()
     const retired = repositoryMapping()

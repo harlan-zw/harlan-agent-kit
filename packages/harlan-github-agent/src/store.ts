@@ -8728,7 +8728,7 @@ export function openJournalStore(
         JOIN subjects ON subjects.id = ${table}.subject_id
         WHERE (${table}.state_tag IN ('Completed', 'Superseded')
           OR ${table}.revision_id != subjects.current_revision_id
-          OR (${table}.state_tag = 'Failed' AND incidents.message != ${table}.reason)
+          OR (${table}.state_tag IN ('Failed', 'ActionRequired') AND incidents.message != ${table}.reason)
           OR incidents.kind = 'agent_provider')
       )
     `
