@@ -1,6 +1,8 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { connect } from 'node:net'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, expect, it } from 'vitest'
 import { createTerminalManager, createTerminalServer } from '../src/terminal.ts'
 
@@ -18,7 +20,10 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
   const root = join(homedir(), 'scratch')
   await mkdir(root, { recursive: true })
   const directory = await mkdtemp(join(root, 'terminal-server-test-'))
-  await writeFile(join(directory, 'index.html'), '<!doctype html><title>Terminal proof</title><script>window.bootstrap=true</script>')
+  await writeFile(
+    join(directory, 'index.html'),
+    '<!doctype html><title>Terminal proof</title><script>window.bootstrap=true</script>',
+  )
   const manager = await createTerminalManager({
     directory,
     bootId: 'boot',
@@ -64,7 +69,13 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
     log: () => {},
   })
   const origin = 'http://127.0.0.1:43627'
-  const options = { manager, origin, staticDirectory: directory, now: Date.now, log: () => {} }
+  const options = {
+    manager,
+    origin,
+    staticDirectory: directory,
+    now: Date.now,
+    log: () => {},
+  }
   let api = createTerminalServer(options)
   await new Promise<void>(resolve =>
     api.server.listen(43627, '127.0.0.1', resolve),
@@ -80,8 +91,12 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
   expect(html).toContain('<title>Terminal proof</title>')
   const nonce = /<script nonce="([^"]+)"/.exec(html)?.[1]
   expect(nonce).toBeTruthy()
-  expect(home.headers.get('content-security-policy')).toContain(`'nonce-${nonce}'`)
-  expect((await request(`${origin}/api/terminal/capabilities`)).status).toBe(401)
+  expect(home.headers.get('content-security-policy')).toContain(
+    `'nonce-${nonce}'`,
+  )
+  expect((await request(`${origin}/api/terminal/capabilities`)).status).toBe(
+    401,
+  )
   expect(
     (
       await request(`${origin}/api/terminal/pair`, {
@@ -126,4 +141,26 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
       })
     ).status,
   ).toBe(200)
+  const stranded = connect({
+    host: '127.0.0.1',
+    port: 43627,
+    allowHalfOpen: true,
+  })
+  cleanup.unshift(async () => {
+    stranded.destroy()
+  })
+  await new Promise<void>((resolve, reject) => {
+    stranded.once('error', reject)
+    stranded.once('data', () => resolve())
+    stranded.once('connect', () =>
+      stranded.write(
+        `GET /unknown-upgrade HTTP/1.1\r\nHost: 127.0.0.1:43627\r\nOrigin: ${origin}\r\nCookie: ${cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`,
+      ))
+  })
+  expect(
+    await Promise.race([
+      api.close().then(() => true),
+      delay(500).then(() => false),
+    ]),
+  ).toBe(true)
 })

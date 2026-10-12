@@ -1,8 +1,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import type { TerminalManager } from './terminal-manager.ts'
 import type { TerminalIntent } from './terminal-storage.ts'
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import {
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, relative } from 'node:path'
@@ -19,6 +25,7 @@ export function createTerminalServer(options: {
   origin: string
   origins?: string[]
   active?: () => boolean
+  shutdownGraceMs?: number
   observer?: {
     handles: (path: string) => boolean
     handle: (
@@ -37,6 +44,12 @@ export function createTerminalServer(options: {
   const pairCode = randomUUID() + randomUUID()
   const pairExpires = options.now() + 300000
   let pairConsumed = false
+  let closed = false
+  let closing: Promise<void> | undefined
+  const transports = new Set<Socket>()
+  const grace = options.shutdownGraceMs ?? 100
+  if (!Number.isSafeInteger(grace) || grace < 0 || grace > 5000)
+    throw new Error('Invalid terminal shutdown interval')
   function sign(value: string) {
     return createHmac('sha256', options.manager.host.authSecret)
       .update(value)
@@ -95,6 +108,10 @@ export function createTerminalServer(options: {
       else response.destroy()
     })
   })
+  server.on('connection', (socket) => {
+    transports.add(socket)
+    socket.once('close', () => transports.delete(socket))
+  })
   async function handle(request: IncomingMessage, response: ServerResponse) {
     if (
       !request.headers.host
@@ -114,7 +131,7 @@ export function createTerminalServer(options: {
       `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`,
     )
     const url = new URL(request.url ?? '/', options.origin)
-    if (options.active && !options.active()) {
+    if (closed || (options.active && !options.active())) {
       json(response, { _tag: 'Err', reason: 'OwnershipUnknown' }, 503)
       return
     }
@@ -250,7 +267,12 @@ export function createTerminalServer(options: {
       '.woff2': 'font/woff2',
     }
     const bytes = await readFile(file)
-    const asset = extname(file) === '.html' ? bytes.toString('utf8').replace(/<script(?=[\s>])/g, `<script nonce="${nonce}"`) : bytes
+    const asset
+      = extname(file) === '.html'
+        ? bytes
+            .toString('utf8')
+            .replace(/<script(?=[\s>])/g, `<script nonce="${nonce}"`)
+        : bytes
     if (extname(file) === '.html')
       response.setHeader('Cache-Control', 'no-store')
     response
@@ -276,14 +298,15 @@ export function createTerminalServer(options: {
     head: Buffer,
   ) {
     if (
-      (options.active && !options.active())
+      closed
+      || (options.active && !options.active())
       || !request.headers.host
       || !hosts.has(request.headers.host)
       || !request.headers.origin
       || !origins.has(request.headers.origin)
       || !(await authenticated(request))
     ) {
-      socket.end('HTTP/1.1 403 Forbidden\r\n\r\n')
+      socket.end('HTTP/1.1 403 Forbidden\r\n\r\n', () => socket.destroy())
       return
     }
     const match = /^\/api\/terminal\/sessions\/([a-f\d]{24})\/stream$/.exec(
@@ -295,7 +318,7 @@ export function createTerminalServer(options: {
       || intent.session.state !== 'Running'
       || sockets.clients.size >= 32
     ) {
-      socket.end('HTTP/1.1 409 Conflict\r\n\r\n')
+      socket.end('HTTP/1.1 409 Conflict\r\n\r\n', () => socket.destroy())
       return
     }
     sockets.handleUpgrade(request, socket, head, (websocket) => {
@@ -315,6 +338,11 @@ export function createTerminalServer(options: {
         },
       })
       websocket.on('message', (bytes) => {
+        if (closed || (options.active && !options.active())) {
+          helper.close()
+          websocket.terminate()
+          return
+        }
         const decoded = parseTerminalJson(bytes.toString())
         const parsed
           = decoded._tag === 'Ok'
@@ -348,10 +376,36 @@ export function createTerminalServer(options: {
     pairingUrl: `${options.origin}/#pair=${pairCode}`,
     sockets,
     close() {
-      for (const client of sockets.clients)
-        client.close(1001, 'Terminal API restarting')
-      sockets.close()
-      return new Promise<void>(resolve => server.close(() => resolve()))
+      if (closing)
+        return closing
+      closed = true
+      closing = new Promise<void>((resolve) => {
+        let httpClosed = false
+        let streamsClosed = false
+        const force = () => {
+          for (const client of sockets.clients) client.terminate()
+          for (const transport of transports) transport.destroy()
+        }
+        const timer = setTimeout(force, grace)
+        timer.unref()
+        const finish = () => {
+          if (!httpClosed || !streamsClosed)
+            return
+          clearTimeout(timer)
+          resolve()
+        }
+        for (const client of sockets.clients)
+          client.close(1001, 'Terminal API restarting')
+        sockets.close(() => {
+          streamsClosed = true
+          finish()
+        })
+        server.close(() => {
+          httpClosed = true
+          finish()
+        })
+      })
+      return closing
     },
   }
 }
