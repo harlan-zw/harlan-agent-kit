@@ -732,7 +732,11 @@ describe('stale task incidents', () => {
       throw new Error('Expected a conflict Task.')
     const reason = 'The contributor must permit maintainer edits.'
     store.needsAttentionTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: '2026-08-18T00:00:02.000Z', reason, evidence: 'Current permission check.' })
-    for (const message of ['fetch failed', reason]) {
+    for (const [message, at] of [
+      ['fetch failed', '2026-08-18T00:00:01.000Z'],
+      [reason, '2026-08-18T00:00:03.000Z'],
+      ['A new upload failed.', '2026-08-18T00:00:03.000Z'],
+    ] as const) {
       store.recordIncident({
         scope: { _tag: 'Task', taskId: task.id, repository: task.repository, itemNumber: task.pullRequestNumber },
         kind: 'unknown',
@@ -740,12 +744,12 @@ describe('stale task incidents', () => {
         operation: 'resolve_conflict',
         message,
         recovery: { _tag: 'ActionRequired' },
-        at: '2026-08-18T00:00:03.000Z',
+        at,
       })
     }
 
     expect(store.resolveStaleTaskIncidents('2026-08-18T00:00:04.000Z')).toBe(1)
-    expect(store.listIncidents()).toMatchObject([{ message: reason }])
+    expect(store.listIncidents()).toMatchObject([{ message: reason }, { message: 'A new upload failed.' }])
     expect(store.getDashboardSnapshot('2026-08-18T00:00:04.000Z').tasks.find(candidate => candidate.id === task.id)?.state).toEqual({ _tag: 'ActionRequired', reason })
     store.close()
   })
