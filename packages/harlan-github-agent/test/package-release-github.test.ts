@@ -83,6 +83,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
   let merged = false
   let changedTree = false
   let published = false
+  let latestVersion: string | undefined
   let workflowConclusion: string | null = null
   let rangeSha = mergeSha
   let commentBody = ''
@@ -200,7 +201,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
     Object.defineProperty(response, 'url', { value: req.url })
     return response
   }
-  const source = createPackageReleaseSource({ repository, actors: { repository: { login: 'harlan-github-agent[bot]', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} } }, user: { login: 'harlan-zw', tokens: { getToken: async () => ({ _tag: 'Err', error: { repository: mapping.github, message: 'The user credential is not used here.' } }), invalidate: () => {} } } }, template: async () => '### 📚 Description', assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: clientOptions => new Octokit({ ...clientOptions, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: published ? '1.0.1' : '1.0.0' } }) })
+  const source = createPackageReleaseSource({ repository, actors: { repository: { login: 'harlan-github-agent[bot]', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} } }, user: { login: 'harlan-zw', tokens: { getToken: async () => ({ _tag: 'Err', error: { repository: mapping.github, message: 'The user credential is not used here.' } }), invalidate: () => {} } } }, template: async () => '### 📚 Description', assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: clientOptions => new Octokit({ ...clientOptions, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: latestVersion ?? (published ? '1.0.1' : '1.0.0') } }) })
   return { source, writes, refs, sources, openSource: (title = 'fix: handle input') => {
     sourceOpen = true
     sourceTitle = title
@@ -220,6 +221,8 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
     changedTree = true
   }, publish: () => {
     published = true
+  }, setLatestVersion: (version: string) => {
+    latestVersion = version
   }, workflowDone: (conclusion = 'success') => {
     workflowConclusion = conclusion
   }, removeSource: () => {
@@ -276,6 +279,38 @@ it('waits for both the tag workflow and npm, and never creates the tag twice', a
   task.publish()
   expect(await task.source.publish(input)).toBe('https://github.com/release/v1.0.1')
   expect(task.writes.filter(write => write.path === '/git/refs')).toHaveLength(1)
+})
+
+it.each(['1.0.2', '1.1.0', '2.0.0'])('completes a published release after latest advances to %s', async (latest) => {
+  const task = fixture()
+  task.refs.set('tags/v1.0.1', sha)
+  task.workflowDone()
+  task.publish()
+  task.setLatestVersion(latest)
+
+  expect(await task.source.publish({ ...record, state: { _tag: 'Publishing', tag: 'v1.0.1', sha } })).toBe('https://github.com/release/v1.0.1')
+  expect(task.writes).toEqual([])
+})
+
+it.each(['1.0.0', '2.0.0-beta.1', 'invalid'])('waits when latest is %s instead of an equal or newer stable release', async (latest) => {
+  const task = fixture()
+  task.refs.set('tags/v1.0.1', sha)
+  task.workflowDone()
+  task.publish()
+  task.setLatestVersion(latest)
+
+  expect(await task.source.publish({ ...record, state: { _tag: 'Publishing', tag: 'v1.0.1', sha } })).toBeNull()
+  expect(task.writes).toEqual([])
+})
+
+it('waits for the pinned npm version even when latest advances', async () => {
+  const task = fixture()
+  task.refs.set('tags/v1.0.1', sha)
+  task.workflowDone()
+  task.setLatestVersion('2.0.0')
+
+  expect(await task.source.publish({ ...record, state: { _tag: 'Publishing', tag: 'v1.0.1', sha } })).toBeNull()
+  expect(task.writes).toEqual([])
 })
 
 it('refuses a tag collision without writing or republishing', async () => {
