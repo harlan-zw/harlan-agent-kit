@@ -24,7 +24,7 @@ it('blocks controller credentials, Git helpers, and parent process reads while p
   await mkdir(join(home, '.codex'), { recursive: true })
   await writeFile(join(home, '.codex/auth.json'), 'fake-provider-login')
   await mkdir(join(home, '.config/opencode'), { recursive: true })
-  await writeFile(join(home, '.config/opencode/opencode.json'), JSON.stringify({ provider: { 'zai-coding-plan': { options: { apiKey: 'fake-provider-key' } } }, mcp: { unsafe: { command: ['cat', secret] } } }))
+  await writeFile(join(home, '.config/opencode/opencode.json'), JSON.stringify({ providers: { 'zai-coding-plan': { settings: { apiKey: 'fake-provider-key' } } }, mcp: { unsafe: { command: ['cat', secret] } } }))
   await execute('git', ['init', primary])
   await execute('git', ['-C', primary, 'remote', 'add', 'origin', 'https://github.com/owner/site.git'])
   await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
@@ -34,7 +34,7 @@ it('blocks controller credentials, Git helpers, and parent process reads while p
   await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'sandbox', '--base', 'HEAD', '--yes'])
   const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
   const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'sandbox').worktree.path as string
-  await writeFile(join(workspace, '.env'), `TOOLING_TOKEN=fake-repository-token\nHOME=${join(root, 'attacker')}\nOPENCODE_CONFIG_CONTENT={"instructions":[${JSON.stringify(secret)}]}\nOPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=0\n`)
+  await writeFile(join(workspace, '.env'), `TOOLING_TOKEN=fake-repository-token\nHOME=${join(root, 'attacker')}\nOPENCODE_CONFIG_CONTENT={"instructions":[${JSON.stringify(secret)}]}\nOPENCODE_FILEWATCHER_DISABLE=0\n`)
   const toolDirectory = join(root, 'bin')
   await mkdir(toolDirectory)
   await mkdir(join(home, '.local/bin'), { recursive: true })
@@ -45,22 +45,22 @@ import { createServer } from 'node:http'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import process from 'node:process'
 if (existsSync(${JSON.stringify(secret)}) || process.env.GH_TOKEN || process.env.CONTROLLER_TOKEN) process.exit(30)
-if (['serve', 'run'].includes(process.argv[2]) && process.env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER !== 'true') process.exit(34)
+if (['serve', 'run'].includes(process.argv[2]) && process.env.OPENCODE_FILEWATCHER_DISABLE !== 'true') process.exit(34)
 if (process.argv[2] === 'serve') {
   const server = createServer((request, response) => {
     const expected = 'Basic ' + Buffer.from('opencode:' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64')
     if (request.headers.authorization !== expected) { response.writeHead(401); response.end(); return }
     response.setHeader('content-type', 'application/json')
-    if (request.method === 'POST' && request.url.startsWith('/session?')) {
+    if (request.method === 'POST' && request.url === '/api/session') {
       let body = ''
       request.on('data', chunk => body += chunk)
       request.on('end', () => {
-        const allowed = JSON.parse(body).permission.filter(rule => rule.action === 'allow')
-        const expected = [{ permission: 'external_directory', pattern: process.env.DAILY_CHECKIN_DIR + '/*', action: 'allow' }]
+        const allowed = JSON.parse(body).permissions.filter(rule => rule.effect === 'allow')
+        const expected = [{ action: 'external_directory', resource: process.env.DAILY_CHECKIN_DIR + '/*', effect: 'allow' }]
         if (JSON.stringify(allowed) !== JSON.stringify(expected)) { response.writeHead(400); response.end('{}'); return }
         mkdirSync(process.env.DAILY_CHECKIN_DIR, { recursive: true })
         writeFileSync(process.env.DAILY_CHECKIN_DIR + '/session-proof.txt', 'assigned permission')
-        response.end(JSON.stringify({ id: 'ses_fixture' }))
+        response.end(JSON.stringify({ data: { id: 'ses_fixture' } }))
       })
       return
     }
@@ -72,7 +72,7 @@ if (process.argv[2] === 'serve') {
     let prompt = ''
     for await (const chunk of process.stdin) prompt += chunk.toString()
     if (!prompt.startsWith('Return protected.'.repeat(16_000))) process.exit(35)
-    const target = process.argv[process.argv.indexOf('--attach') + 1]
+    const target = process.argv[process.argv.indexOf('--server') + 1]
     const response = await fetch(target + '/fixture', { headers: { authorization: 'Basic ' + Buffer.from('opencode:' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64') } })
     if (!response.ok || !(await response.json()).protected) process.exit(31)
     console.log(JSON.stringify({ type: 'text', sessionID: 'ses_fixture', part: { type: 'text', text: '{"protected":true}' } }))
@@ -96,7 +96,7 @@ if (process.argv[2] === 'serve') {
   const profile = join(home, '.config/harlan-github-agent/worker.json')
   await execute(process.execPath, ['--experimental-strip-types', fileURLToPath(new URL('../../../scripts/agent-worker.ts', import.meta.url)), '--source-home', home, '--worker-home', worker, '--config', profile, '--codex', fakeProvider, '--opencode', fakeProvider])
   expect((await stat(worker)).mode & 0o777).toBe(0o700)
-  expect(JSON.parse(await readFile(join(worker, '.config/opencode/opencode.json'), 'utf8'))).toEqual({ provider: { 'zai-coding-plan': { options: { apiKey: 'fake-provider-key' } } } })
+  expect(JSON.parse(await readFile(join(worker, '.config/opencode/opencode.json'), 'utf8'))).toEqual({ providers: { 'zai-coding-plan': { settings: { apiKey: 'fake-provider-key' } } }, plugins: ['./plugins/harlan-hooks.ts'] })
   await checkAgentWorker({ HOME: home }, profile)
   const managedTools = join(home, '.local/share/harlan-agent-kit/tools/bin')
   await mkdir(managedTools, { recursive: true })
@@ -151,7 +151,7 @@ if (process.argv[2] === 'serve') {
       test -z "$GH_TOKEN$CONTROLLER_TOKEN" || exit 12
       test "$(cat "$HOME/.codex/auth.json")" = fake-provider-login || exit 13
       test "$TOOLING_TOKEN" = fake-repository-token || exit 14
-      test "$OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER" = true || exit 23
+      test "$OPENCODE_FILEWATCHER_DISABLE" = true || exit 23
       printf 'protocol=https\\nhost=github.com\\n\\n' | git -c credential.interactive=never credential fill >/dev/null 2>&1 && exit 15
       curl --noproxy '*' --silent --max-time 1 'http://127.0.0.1:${hostPort}' >/dev/null 2>&1 && exit 18
       curl --noproxy '*' --silent --max-time 1 'http://10.0.0.1' >/dev/null 2>&1 && exit 19
@@ -204,7 +204,7 @@ if (process.argv[2] === 'serve') {
       expect(independent.stdout.trim()).toBe('ses_task_b')
       const client = await prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'opencode', taskId: 'task-a', networkMode: 'opencode-client' })
       try {
-        const proof = await execute(client.binary, [...client.args, '/run/agent/node', '--input-type=module', '-e', `${databaseScript}\n database.prepare('INSERT INTO session(id) VALUES(?)').run('ses_client'); console.log(database.prepare('SELECT id FROM session').get().id)`, '--', '--attach', 'http://fixture'], { env: client.environment, timeout: 15000 })
+        const proof = await execute(client.binary, [...client.args, '/run/agent/node', '--input-type=module', '-e', `${databaseScript}\n database.prepare('INSERT INTO session(id) VALUES(?)').run('ses_client'); console.log(database.prepare('SELECT id FROM session').get().id)`, '--', '--server', 'http://fixture'], { env: client.environment, timeout: 15000 })
         expect(proof.stdout.trim()).toBe('ses_client')
       }
       finally {
@@ -301,7 +301,7 @@ it('keeps Git administrative settings immutable while preserving atomic index wr
     await writeFile(profile, JSON.stringify({ home: worker, tools: ['/usr/bin'], readOnlyPaths: [], codex: '/usr/bin/true', opencode: '/usr/bin/true' }))
     sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex' })
     await execute(sandbox.binary, [...sandbox.args, '/usr/bin/bash', '-c', `
-      test -z "$OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER" || exit 16
+      test -z "$OPENCODE_FILEWATCHER_DISABLE" || exit 16
       if printf '[core]\\n hooksPath = /tmp/untrusted\\n' > '${taskDirectory}/config.worktree'; then exit 10; fi
       if printf '/tmp/untrusted\\n' > '${taskDirectory}/commondir'; then exit 11; fi
       if printf 'gitdir: /tmp/untrusted\\n' > '${workspace}/.git'; then exit 12; fi

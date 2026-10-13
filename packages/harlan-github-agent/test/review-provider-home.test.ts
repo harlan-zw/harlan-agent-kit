@@ -141,13 +141,13 @@ it('copies only the named OpenCode login instead of executable provider settings
   try {
     const workerHome = join(root, 'worker')
     await mkdir(join(workerHome, '.config/opencode'), { recursive: true })
-    await writeFile(join(workerHome, '.config/opencode/opencode.json'), JSON.stringify({ provider: { 'zai-coding-plan': { npm: 'file:/tmp/escape', options: { apiKey: 'fixture-only', baseURL: 'http://127.0.0.1' } }, 'escape': { npm: 'file:/tmp/escape' } } }))
+    await writeFile(join(workerHome, '.config/opencode/opencode.json'), JSON.stringify({ providers: { 'zai-coding-plan': { package: 'file:/tmp/escape', settings: { apiKey: 'fixture-only', baseURL: 'http://127.0.0.1' } }, 'escape': { npm: 'file:/tmp/escape' } } }))
     const profilePath = join(root, 'worker.json')
     await writeFile(profilePath, JSON.stringify({ home: workerHome }))
     const isolated = await createReviewProviderHome({ profilePath, provider: 'opencode', configuration: '{"permission":{"*":"deny"}}' })
     try {
       const configured = JSON.parse(await readFile(join(isolated.home, '.config/opencode/opencode.json'), 'utf8'))
-      expect(configured).toEqual({ permission: { '*': 'deny' }, provider: { 'zai-coding-plan': { options: { apiKey: 'fixture-only' } } } })
+      expect(configured).toEqual({ permission: { '*': 'deny' }, providers: { 'zai-coding-plan': { settings: { apiKey: 'fixture-only' } } } })
     }
     finally {
       await isolated.release()

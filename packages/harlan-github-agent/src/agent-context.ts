@@ -189,20 +189,14 @@ function mergedConfiguration(input: {
   const instructions = stringList(configuration.instructions, 'instructions')
   if (instructions._tag === 'Err')
     return instructions
-  if (configuration.skills !== undefined && !isRecord(configuration.skills))
-    return err('OPENCODE_CONFIG_CONTENT skills must contain one JSON object.')
-  const skills = (configuration.skills ?? {}) as Record<string, unknown>
-  const paths = stringList(skills.paths, 'skills.paths')
-  if (paths._tag === 'Err')
-    return paths
+  const skills = stringList(configuration.skills, 'skills')
+  if (skills._tag === 'Err')
+    return skills
 
   return ok(JSON.stringify({
     ...configuration,
     instructions: unique([...instructions.value, ...input.instructionPaths]),
-    skills: {
-      ...skills,
-      paths: unique([...paths.value, ...input.skillDirectories]),
-    },
+    skills: unique([...skills.value, ...input.skillDirectories]),
   }))
 }
 

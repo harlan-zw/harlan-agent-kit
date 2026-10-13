@@ -3,6 +3,12 @@ minimumReleaseAgeExclude:
   - '@iconify-json/octicon@1.2.37'
   - '@iconify-json/simple-icons@1.2.98'
   - '@harlan-zw/jev@0.2.4'
+  - '@opencode/ai@2.0.27'
+  - '@opencode/client@2.0.27'
+  - '@opencode/plugin@2.0.27'
+  - '@opencode/protocol@2.0.27'
+  - '@opencode/schema@2.0.27'
+  - '@opencode/util@2.0.27'
 
 trustPolicy: no-downgrade
 trustPolicyIgnoreAfter: 262800
@@ -77,6 +83,7 @@ catalog:
   '@nuxt/icon': ^2.5.1
   '@nuxt/ui': ^4.11.3
   '@openai/codex-sdk': ^0.160.0
+  '@opencode/plugin': 2.0.27
   '@pierre/diffs': 1.2.0
   '@resvg/resvg-js': ^2.6.2
   '@simplewebauthn/browser': ^14.0.0

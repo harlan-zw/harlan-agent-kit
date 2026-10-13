@@ -35,6 +35,8 @@ printf '%s\n' '#!/usr/bin/env bash' 'printf '\''context %s\n'\'' "$*" >> "$SERVI
   > "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts/sync-agent-context.sh"
 printf '%s\n' '#!/usr/bin/env bash' 'printf '\''worktrunk %s\n'\'' "$*" >> "$SERVICE_TEST_SYNC_CALLS"' \
   > "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts/worktrunk-config.sh"
+printf '%s\n' 'process.stdout.write("worker configuration refreshed\n")' \
+  > "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts/opencode-v2-migrate.ts"
 # Stands in for the deployed CLI. Its exit code is the configuration verdict.
 printf '%s\n' \
   'process.exit(Number(process.env.SERVICE_TEST_CLI_EXIT || 0))' \

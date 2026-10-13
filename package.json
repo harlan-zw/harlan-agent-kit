@@ -54,6 +54,7 @@
     "eslint-plugin-harlanzw": "catalog:"
   },
   "devDependencies": {
+    "@opencode/plugin": "catalog:",
     "@types/node": "catalog:",
     "@types/semver": "catalog:",
     "semver": "catalog:",

@@ -84,3 +84,19 @@ it('installs the platform-named Codex executable from its official archive', asy
   expect(await syncAgentTool({ ...f, tool: managedTools[1], release, download: async () => bytes })).toBe('Updated')
   expect(execFileSync(join(f.home, '.local/share/harlan-agent-kit/tools/bin/codex'), ['--version'], { encoding: 'utf8' })).toContain('GNU coreutils')
 })
+
+it('installs OpenCode V2 from its integrity checked npm archive', async () => {
+  const f = fixture()
+  copyFileSync('/usr/bin/true', join(f.home, 'archive/bin/opencode'))
+  execFileSync('/usr/bin/tar', ['-czf', join(f.home, 'opencode.tgz'), '-C', join(f.home, 'archive'), 'bin/opencode'])
+  const bytes = readFileSync(join(f.home, 'opencode.tgz'))
+  const release = {
+    name: '@opencode/cli-linux-x64-baseline',
+    version: '2.0.27',
+    dist: { integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`, tarball: 'https://registry.npmjs.org/@opencode/cli-linux-x64-baseline/-/cli-linux-x64-baseline-2.0.27.tgz' },
+  }
+  expect(await syncAgentTool({ ...f, tool: managedTools[2], release, download: async () => bytes })).toBe('Updated')
+  expect(execFileSync(join(f.home, '.local/share/harlan-agent-kit/tools/bin/opencode'), ['--version'], { encoding: 'utf8' })).toContain('GNU coreutils')
+  await expect(syncAgentTool({ ...f, tool: managedTools[2], release: { ...release, version: '1.19.0' }, download: async () => bytes })).rejects.toThrow('V2')
+  await expect(syncAgentTool({ ...f, tool: managedTools[2], release: { ...release, dist: { ...release.dist, integrity: `sha512-${Buffer.alloc(64).toString('base64')}` } }, download: async () => bytes })).rejects.toThrow('checksum differs')
+})
