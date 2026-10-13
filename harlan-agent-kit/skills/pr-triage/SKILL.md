@@ -22,7 +22,7 @@ Read these completely before discovery:
 
 1. `../adversarial-review/SKILL.md`, the complete workflow for one PR.
 
-The `adversarial-review` Skill loads personal `pr`, Brundlefly `im-not-a-fly`, and `unit-tests` when required. Do not duplicate those rules here.
+The `adversarial-review` Skill loads personal `pr`, Brundlefly `im-part-human`, and `unit-tests` when required. Do not duplicate those rules here.
 
 ## Discover
 

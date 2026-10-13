@@ -10,14 +10,14 @@
     "skilld": {
       "source": "github:skilld-dev/skilld/skills/skilld#commit:395000f01f4bbe3a681c7dd29fdfced00d609b52"
     },
-    "im-not-a-fly": {
-      "source": "github:harlan-zw/brundlefly/skills/im-not-a-fly#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+    "im-part-human": {
+      "source": "github:harlan-zw/brundlefly/skills/im-part-human#commit:557a5ca1b9159751236e67d63b4156bb233115b4"
     },
     "technical-guide": {
       "source": "github:harlan-zw/brundlefly/skills/technical-guide#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
     },
-    "im-a-fly": {
-      "source": "github:harlan-zw/brundlefly/skills/im-a-fly#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+    "im-not-a-human": {
+      "source": "github:harlan-zw/brundlefly/skills/im-not-a-human#commit:557a5ca1b9159751236e67d63b4156bb233115b4"
     },
     "pull-request-summary": {
       "source": "github:harlan-zw/brundlefly/skills/pull-request-summary#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
@@ -30,11 +30,11 @@
     }
   },
   "requires": {
-    "pr": ["pull-request-summary", "im-not-a-fly"],
-    "adversarial-review": ["im-not-a-fly"],
-    "content-refresh": ["technical-guide", "im-not-a-fly", "glossary"],
-    "tweet": ["im-not-a-fly"],
-    "release-notes": ["im-not-a-fly"],
+    "pr": ["pull-request-summary", "im-part-human"],
+    "adversarial-review": ["im-part-human"],
+    "content-refresh": ["technical-guide", "im-part-human", "glossary"],
+    "tweet": ["im-part-human"],
+    "release-notes": ["im-part-human"],
     "improve-ts-pkg-architecture": ["glossary"],
     "nuxt-improve-codebase-architecture": ["glossary"],
     "nuxt-frontend-design": ["copywriting"]
