@@ -98,6 +98,13 @@ fi
 
 PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/service.sh" update >/dev/null
 
+# Desktop uses Node from PATH when the controller's dedicated runtime is absent.
+if ! HARLAN_GITHUB_AGENT_NODE="$test_root/missing-node" PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/service.sh" prepare-update >/dev/null 2>&1; then
+  printf '%s\n' 'service refused worker migration without a dedicated Node runtime' >&2
+  exit 1
+fi
+
 if ! grep -Fx -- 'sync:skills' "$SERVICE_TEST_PNPM_CALLS" >/dev/null; then
   printf '%s\n' 'service did not restore Brundlefly Skills before startup' >&2
   exit 1
