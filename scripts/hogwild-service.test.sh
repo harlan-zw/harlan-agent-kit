@@ -229,6 +229,10 @@ if grep -F "bash -s -- 'prepare-update'" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/nul
   printf '%s\n' 'The helper prepared Hogwild outside the durable Update.' >&2
   exit 1
 fi
+if grep -F 'tools.lock' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+  printf '%s\n' 'The update replaced Agent tools before the durable drain.' >&2
+  exit 1
+fi
 if grep -E '/api/agents/(pause|resume)' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
   printf '%s\n' 'Hogwild update changed manual Pause.' >&2
   exit 1

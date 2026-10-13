@@ -65,7 +65,8 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
         }
         return
       }
-      const args = ['run', '--format', 'json', '--auto', '--model', request.model, '--dir', request.workspace, ...(request.sessionId === null ? [] : ['--session', request.sessionId]), ...(request.reasoningEffort === undefined ? [] : ['--variant', request.reasoningEffort])]
+      const model = `${request.model}${request.reasoningEffort === undefined ? '' : `#${request.reasoningEffort}`}`
+      const args = ['run', '--standalone', '--format', 'json', '--auto', '--model', model, ...(request.sessionId === null ? [] : ['--session', request.sessionId])]
       // The desktop executor owns this process group and recovers it after crashes.
       const childOptions: SpawnOptionsWithoutStdio = { cwd: request.workspace, env: sessionEnvironment, stdio: ['pipe', 'pipe', 'pipe'] }
       const child = options.launchOpencode?.(args, childOptions) ?? spawn('opencode', args, childOptions)
@@ -105,6 +106,7 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
         stop()
       child.stdin?.end(request.prompt)
       let completed = false
+      let answered = false
       let failed = false
       let sessionId = request.sessionId
       try {
@@ -117,6 +119,7 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
           if (typeof raw !== 'object' || raw === null || !('type' in raw) || typeof raw.type !== 'string')
             throw new Error('The opencode session returned an invalid event.')
           const value = raw as Parameters<typeof opencodeAgentEvent>[0]
+          answered ||= value.type === 'text' && typeof value.part?.text === 'string' && value.part.text.trim() !== ''
           if (typeof value.sessionID === 'string' && value.sessionID !== sessionId) {
             if (sessionId !== null)
               throw new Error('The opencode session changed its conversation identity.')
@@ -140,7 +143,8 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
         const exit = await closed
         if (request.signal.aborted)
           request.signal.throwIfAborted()
-        if (exit.code !== 0 || pipeError !== undefined || !completed) {
+        // V2 reconciles text before a successful exit even when its final step event arrives late.
+        if (exit.code !== 0 || pipeError !== undefined || (!completed && !answered)) {
           if (!failed)
             yield { _tag: 'Failed', reason: agentProviderFailureReason('opencode', exit.error ?? pipeError ?? (stderr.trim() || `Exited with status ${exit.code ?? 'unknown'} before completing the turn.`)) }
         }
