@@ -527,7 +527,8 @@ case "$command" in
     fi
     pending_update_id=$(request_update "$deployed_revision")
     restart_id=$pending_update_id
-    sync_context
+    # Running Agents keep their current tools. Service preparation installs new tools after the drain.
+    HARLAN_AGENT_TOOLS_UPDATE=0 sync_context
     sync_service_override
     sync_worktrunk
     sync_repository_environment
