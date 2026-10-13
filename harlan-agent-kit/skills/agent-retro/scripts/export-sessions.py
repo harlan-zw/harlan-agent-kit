@@ -76,10 +76,10 @@ def open_readonly(path):
     return con
 
 
-con = open_readonly(OPENCODE_DB) if os.path.exists(OPENCODE_DB) else None
 journal = open_readonly(JOURNAL_DB) if os.path.exists(JOURNAL_DB) else None
 since = int((time.time() - days * 86400) * 1000)
 codex_reader = str(Path(__file__).with_name('codex-sessions.ts'))
+opencode_reader = str(Path(__file__).with_name('opencode-sessions.ts'))
 codex = json.loads(subprocess.run(
     [args.codex_node, '--experimental-strip-types', codex_reader, str(since), *args.codex_root],
     capture_output=True, text=True, check=True,
@@ -172,7 +172,7 @@ def trunc(s, n):
 
 
 def summarize_input(tool, inp):
-    if tool == 'bash':
+    if tool in ('bash', 'shell'):
         return inp.get('command', '')
     if tool == 'read':
         return f"{inp.get('filePath', '')} offset={inp.get('offset')} limit={inp.get('limit')}"
@@ -245,10 +245,14 @@ def render(goal, sess):
         parts = exported['session']['parts']
         sess['end_reason'] = exported['session']['end_reason']
     else:
-        parts = con.execute(
-            'select p.data, p.time_created, m.data as mdata from part p join message m on m.id=p.message_id where p.session_id=? order by p.time_created, p.id',
-            (sess['id'],),
-        ).fetchall()
+        exported = json.loads(subprocess.run(
+            [args.codex_node, '--experimental-strip-types', opencode_reader, '--database', OPENCODE_DB, '--session', sess['id']],
+            capture_output=True, text=True, check=True,
+        ).stdout)
+        if exported['session'] is None:
+            raise ValueError('The selected OpenCode session has no session metadata.')
+        parts = exported['session']['parts']
+        sess['end_reason'] = exported['session'].get('end_reason')
     lines = []
     dur = (sess['time_updated'] - sess['time_created']) / 1000
     outcome = journal_outcome(goal, sess)
@@ -340,7 +344,10 @@ def render(goal, sess):
     return redact('\n'.join(lines)), dict(tools=dict(tool_counts), tool_seconds={k: round(v) for k, v in tool_seconds.items()}, duration_min=round(dur / 60, 1), end_reason=end_reason, journal=outcome)
 
 
-sessions = [dict(row) for row in con.execute('select * from session where time_created > ? and parent_id is null order by time_created desc', (since,))] if con is not None else []
+sessions = json.loads(subprocess.run(
+    [args.codex_node, '--experimental-strip-types', opencode_reader, '--database', OPENCODE_DB, '--since', str(since)],
+    capture_output=True, text=True, check=True,
+).stdout)['sessions']
 sessions.extend(session for session in codex['sessions'] if session['parent_id'] is None)
 sessions.sort(key=lambda session: session['time_created'], reverse=True)
 os.makedirs(out, exist_ok=True)

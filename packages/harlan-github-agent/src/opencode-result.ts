@@ -1,4 +1,5 @@
 import type { Result } from './result.ts'
+import { setTimeout as delay } from 'node:timers/promises'
 import { MEDIA_LIMITS } from './github-media-limits.ts'
 import { err, ok } from './result.ts'
 
@@ -14,6 +15,32 @@ function record(value: unknown): value is Record<string, unknown> {
 
 /** Read only this turn's owned server. Never expose its auth or response in errors. */
 interface ServerRead { url: string, password: string, workspace: string, signal: AbortSignal, fetch?: typeof fetch }
+
+/** MCP discovery is asynchronous. Admit Review only after its isolated server connects. */
+export async function waitOpencodeReviewTools(input: ServerRead): Promise<Result<void, string>> {
+  const signal = AbortSignal.any([input.signal, AbortSignal.timeout(15_000)])
+  return (async (): Promise<Result<void, string>> => {
+    while (!signal.aborted) {
+      const result = await readOpencodeJson({ ...input, signal, path: `/api/mcp?location[directory]=${encodeURIComponent(input.workspace)}` })
+      if (result._tag === 'Err')
+        return result
+      if (!record(result.value) || !Array.isArray(result.value.data))
+        return err('The OpenCode Review tools returned an invalid catalog.')
+      const server = result.value.data.find((entry: unknown) => record(entry) && entry.name === 'controller_review')
+      if (record(server) && record(server.status)) {
+        if (server.status.status === 'connected') {
+          // V2 debounces MCP registry updates for 100 ms after discovery.
+          await delay(250, undefined, { signal })
+          return ok(undefined)
+        }
+        if (server.status.status !== 'pending')
+          return err('The OpenCode Review tools failed to start.')
+      }
+      await delay(100, undefined, { signal })
+    }
+    return err('The OpenCode Review tools did not start within 15 seconds.')
+  })().catch(() => err(input.signal.aborted ? 'The OpenCode Review tools were cancelled.' : 'The OpenCode Review tools did not start within 15 seconds.'))
+}
 
 async function readOpencodeJson(input: ServerRead & { path: string, method?: string, body?: string }): Promise<Result<unknown, string>> {
   const signal = AbortSignal.any([input.signal, AbortSignal.timeout(15_000)])
