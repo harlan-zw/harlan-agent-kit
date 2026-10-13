@@ -24,7 +24,7 @@ Where the two files disagree about a service word, the package glossary wins.
 | Plugin | `harlan-agent-kit/`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` | Claude Code, Codex | 1 to N Skills, 1 to N Hooks | "plugin" |
 | Marketplace | `.claude-plugin/marketplace.json` | Claude Code | 1 Marketplace, 1 Plugin | "marketplace" |
 | Skill | `harlan-agent-kit/skills/<name>/SKILL.md` | Claude Code, Codex | 1 to N References, 1 to N templates | "Skill" |
-| Brundlefly | `.skills/skilld.json` | `sync:skills`, Agent providers | 1 pinned source, selected portable Skills | "Brundlefly" |
+| Brundlefly | `.skills/skilld.json` | `sync:skills`, Agent providers | pinned sources, selected portable Skills | "Brundlefly" |
 | Reference | `skills/<name>/references/`, `harlan-agent-kit/references/` | one Skill, mid-task | N to 1 Skill, or shared across Skills | "reference" |
 | Hook | `harlan-agent-kit/hooks/*.sh` | Claude Code, Codex, per event | N per event, disabled by `.claude/hooks.json` | "hook" |
 | Git hook | `agent-context/git-hooks/commit-msg` | git, for every Agent provider | 1 per commit, under `~/pkg` and `~/sites` | "commit hook" |
@@ -90,7 +90,7 @@ more Skills share it.
 
 ### Brundlefly
 **Is:** the separate collection that owns portable Skills used by Harlan Agent Kit.
-**Use for:** portable Skills declared in `.skills/skilld.json` and their pinned sources.
+**Use for:** portable Skills whose declared sources in `.skills/skilld.json` point to `harlan-zw/brundlefly`.
 **Never:** a second personal Plugin or a copy of personal host policy.
 **Casing:** `Brundlefly` in prose, `brundlefly` in paths.
 
