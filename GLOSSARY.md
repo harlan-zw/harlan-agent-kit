@@ -90,7 +90,7 @@ more Skills share it.
 
 ### Brundlefly
 **Is:** the separate collection that owns portable Skills used by Harlan Agent Kit.
-**Use for:** `im-not-a-fly`, `technical-guide`, `im-a-fly`, `pull-request-summary`, `glossary`, `copywriting`, and their pinned sources in `.skills/skilld.json`.
+**Use for:** `im-part-human`, `technical-guide`, `im-not-a-human`, `pull-request-summary`, `glossary`, `copywriting`, and their pinned sources in `.skills/skilld.json`.
 **Never:** a second personal Plugin or a copy of personal host policy.
 **Casing:** `Brundlefly` in prose, `brundlefly` in paths.
 
