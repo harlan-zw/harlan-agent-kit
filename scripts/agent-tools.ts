@@ -13,7 +13,7 @@ const execute = promisify(execFile)
 export const managedTools = [
   { name: 'gh', repository: 'cli/cli', asset: (arch: string) => new RegExp(`^gh_[0-9.]+_linux_${arch === 'arm64' ? 'arm64' : 'amd64'}\\.tar\\.gz$`) },
   { name: 'codex', repository: 'openai/codex', asset: (arch: string) => new RegExp(`^codex-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-unknown-linux-musl\\.tar\\.gz$`) },
-  { name: 'opencode', repository: 'anomalyco/opencode', asset: (arch: string) => new RegExp(`^opencode-linux-${arch === 'arm64' ? 'arm64' : 'x64-baseline'}\\.tar\\.gz$`) },
+  { name: 'opencode' },
   { name: 'bun', repository: 'oven-sh/bun', asset: (arch: string) => new RegExp(`^bun-linux-${arch === 'arm64' ? 'aarch64' : 'x64-baseline'}\\.zip$`) },
   { name: 'wt', repository: 'max-sixty/worktrunk', asset: (arch: string) => new RegExp(`^worktrunk-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-unknown-linux-musl\\.tar\\.xz$`) },
   { name: 'rg', repository: 'BurntSushi/ripgrep', asset: (arch: string) => new RegExp(`^ripgrep-[0-9.]+-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-unknown-linux-musl\\.tar\\.gz$`) },
@@ -22,8 +22,28 @@ export const managedTools = [
 
 interface ReleaseAsset { name: string, digest: string, browser_download_url: string }
 
+/** V2 publishes native archives through npm, independently of the V1 GitHub releases. */
+export function opencodeToolRelease(value: unknown, arch: string): { tag: string, asset: ReleaseAsset } {
+  if (arch !== 'x64' && arch !== 'arm64')
+    throw new Error(`The Agent tool architecture is unsupported: ${arch}`)
+  if (typeof value !== 'object' || value === null)
+    throw new Error('The OpenCode release must contain an object.')
+  const release = value as { name?: unknown, version?: unknown, dist?: { integrity?: unknown, tarball?: unknown } }
+  const name = `@opencode/cli-linux-${arch === 'arm64' ? 'arm64' : 'x64-baseline'}`
+  if (release.name !== name || typeof release.version !== 'string' || !/^2\.\d+\.\d+$/.test(release.version)
+    || typeof release.dist?.integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(release.dist.integrity)) {
+    throw new Error('The OpenCode release must be a verified V2 native package.')
+  }
+  const archive = `${name.slice('@opencode/'.length)}-${release.version}.tgz`
+  if (release.dist.tarball !== `https://registry.npmjs.org/${name}/-/${archive}`)
+    throw new Error('The OpenCode release archive must use the official registry.')
+  return { tag: `v${release.version}`, asset: { name: archive, digest: `sha512:${Buffer.from(release.dist.integrity.slice(7), 'base64').toString('hex')}`, browser_download_url: release.dist.tarball } }
+}
+
 /** Parse stable release metadata before using its archive or download URL. */
 export function agentToolRelease(value: unknown, tool: typeof managedTools[number], arch: string): { tag: string, asset: ReleaseAsset } {
+  if (tool.name === 'opencode')
+    return opencodeToolRelease(value, arch)
   if (arch !== 'x64' && arch !== 'arm64')
     throw new Error(`The Agent tool architecture is unsupported: ${arch}`)
   if (typeof value !== 'object' || value === null)
@@ -77,7 +97,8 @@ export async function syncAgentTool(input: {
     }
   }
   const bytes = await input.download(release.asset.browser_download_url)
-  if (`sha256:${createHash('sha256').update(bytes).digest('hex')}` !== release.asset.digest)
+  const algorithm = input.tool.name === 'opencode' ? 'sha512' : 'sha256'
+  if (`${algorithm}:${createHash(algorithm).update(bytes).digest('hex')}` !== release.asset.digest)
     throw new Error(`The Agent tool archive checksum differs: ${input.tool.name}`)
   const scratch = await mkdtemp(join(tmpdir(), 'agent-tool-'))
   await mkdir(join(root, 'bin'), { recursive: true, mode: 0o700 })
@@ -118,8 +139,14 @@ async function main() {
     throw new Error('Agent tool sync requires Linux.')
   const home = resolve(process.env.HOME!)
   for (const tool of managedTools) {
-    const metadata = await execute(join(home, '.local/bin/agent-gh'), ['api', `repos/${tool.repository}/releases/latest`], { timeout: 30_000 })
-    const result = await syncAgentTool({ home, tool, release: JSON.parse(metadata.stdout), arch: process.arch, download: async (url) => {
+    const metadata: unknown = tool.name === 'opencode'
+      ? await fetch(`https://registry.npmjs.org/@opencode%2fcli-linux-${process.arch === 'arm64' ? 'arm64' : 'x64-baseline'}/latest`, { signal: AbortSignal.timeout(30_000) }).then((response) => {
+          if (!response.ok)
+            throw new Error(`The OpenCode release read failed: ${response.status}`)
+          return response.json()
+        })
+      : JSON.parse((await execute(join(home, '.local/bin/agent-gh'), ['api', `repos/${tool.repository}/releases/latest`], { timeout: 30_000 })).stdout)
+    const result = await syncAgentTool({ home, tool, release: metadata, arch: process.arch, download: async (url) => {
       const response = await fetch(url, { signal: AbortSignal.timeout(120_000) })
       if (!response.ok)
         throw new Error(`The Agent tool download failed: ${response.status}`)

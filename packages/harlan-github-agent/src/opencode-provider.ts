@@ -17,13 +17,13 @@ import { advanceContextBudget, agentProviderFailureReason, agentTextEvent, conte
 import { opencodeSandboxPaths, prepareAgentSandbox } from './agent-sandbox.ts'
 import { createAgentTransport } from './agent-transport.ts'
 import { materializeAgentMedia } from './github-media.ts'
-import { createOpencodeSession, readOpencodeMessages, recoverOpencodeResult } from './opencode-result.ts'
+import { createOpencodeSession, opencodeDeliveryKey, readOpencodeMessages, recoverOpencodeResult } from './opencode-result.ts'
 import { err, ok } from './result.ts'
 import { createReviewRuntime, REVIEW_TOOL_NAMES } from './review-runtime.ts'
 import { dailyCheckinDirectory } from './workspace-environment.ts'
 
 /** Tools that write files, so activity shows a file change instead of a command. */
-const fileTools = new Set(['edit', 'write', 'patch', 'multiedit'])
+const fileTools = new Set(['edit', 'write', 'apply_patch'])
 const searchTools = new Set(['webfetch', 'websearch'])
 /** Enough stderr to name the failure without storing a whole log. */
 const maximumErrorCharacters = 600
@@ -64,7 +64,7 @@ export type StartOpencodeServer = (workspace: string, environment: NodeJS.Proces
 const serverUsername = 'opencode'
 const serverStartMilliseconds = 60_000
 const steerMilliseconds = 15_000
-const serverListening = /opencode server listening on (http:\/\/\S+)/
+const serverListening = /server listening on (http:\/\/\S+)/
 
 /** Reads the address `opencode serve` prints once it listens. */
 export function opencodeServerUrl(output: string): string | undefined {
@@ -95,7 +95,7 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime, 
     }
     const sandbox = prepared.value
     return new Promise((resolve) => {
-      const child = spawn(sandbox.binary, [...sandbox.args, sandbox.providerBinary, 'serve', ...(review === undefined ? [] : ['--pure']), '--hostname', '127.0.0.1', '--port', '4097'], {
+      const child = spawn(sandbox.binary, [...sandbox.args, sandbox.providerBinary, 'serve', '--hostname', '127.0.0.1', '--port', '4097'], {
         cwd: workspace,
         env: sandbox.environment,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -174,10 +174,10 @@ function opencodeServer(url: string, password: string, workspace: string, child:
     password,
     createSession: signal => createOpencodeSession({ url, password, workspace, signal, ...session }),
     readMessages: (sessionId, signal) => readOpencodeMessages({ url, password, workspace, sessionId, signal }),
-    steer: (sessionId, text) => fetch(`${url}/session/${encodeURIComponent(sessionId)}/prompt_async?directory=${encodeURIComponent(workspace)}`, {
+    steer: (sessionId, text) => fetch(`${url}/api/session/${encodeURIComponent(sessionId)}/prompt`, {
       method: 'POST',
       headers: { 'authorization': authorization, 'content-type': 'application/json' },
-      body: JSON.stringify({ parts: [{ type: 'text', text }] }),
+      body: JSON.stringify({ text }),
       signal: AbortSignal.timeout(steerMilliseconds),
     })
       .then((response): Result<void, string> => response.ok ? ok(undefined) : err(`The opencode server answered ${response.status}.`))
@@ -210,7 +210,7 @@ interface OpencodeToolPart {
     input?: Record<string, unknown>
     output?: string
     error?: string
-    metadata?: { exit?: number, output?: string }
+    metadata?: { exit?: number, output?: string, metadata?: { exit?: number } }
   }
 }
 
@@ -308,14 +308,14 @@ export function opencodeAgentEvent(line: OpencodeLine): AgentEvent | undefined {
         _tag: 'CommandCompleted',
         command: toolCommand(part),
         output: text(part.state.error),
-        exitCode: part.state.metadata?.exit ?? 1,
+        exitCode: part.state.metadata?.metadata?.exit ?? part.state.metadata?.exit ?? 1,
       }
     }
     return {
       _tag: 'CommandCompleted',
       command: toolCommand(part),
       output: text(part.state.output) || text(part.state.metadata?.output),
-      exitCode: part.state.metadata?.exit ?? 0,
+      exitCode: part.state.metadata?.metadata?.exit ?? part.state.metadata?.exit ?? 0,
     }
   }
   return undefined
@@ -331,19 +331,15 @@ export function opencodeAgentEvent(line: OpencodeLine): AgentEvent | undefined {
 export function opencodeArguments(request: AgentTurnRequest, serverUrl: string, mediaPaths: readonly string[] = [], freshSessionId?: string): string[] {
   return [
     'run',
-    ...(request.toolPolicy?._tag === 'Review' ? ['--pure'] : []),
-    '--attach',
+    '--server',
     serverUrl,
     ...(freshSessionId === undefined ? [] : ['--session', freshSessionId]),
-    ...(mediaPaths.length === 0 ? [] : ['--file', ...mediaPaths]),
+    ...mediaPaths.flatMap(path => ['--file', path]),
     '--format',
     'json',
     '--auto',
     '--model',
-    request.model,
-    '--dir',
-    request.workspace,
-    ...(request.reasoningEffort === undefined ? [] : ['--variant', request.reasoningEffort]),
+    `${request.model}${request.reasoningEffort === undefined ? '' : `#${request.reasoningEffort}`}`,
   ]
 }
 
@@ -490,8 +486,8 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
         const stepUsage = opencodeAgentUsage(parsed)
         if (parsed.sessionID === sessionId && parsed.type === 'step_start' && typeof parsed.part?.messageID === 'string')
           assistantId ??= parsed.part.messageID
-        if (typeof parsed.part?.id === 'string' && (stepUsage !== undefined || opencodeAgentEvent(parsed) !== undefined))
-          deliveredParts.add(parsed.part.id)
+        if (parsed.part !== undefined && (stepUsage !== undefined || opencodeAgentEvent(parsed) !== undefined))
+          deliveredParts.add(opencodeDeliveryKey(parsed.type, parsed.part))
         if (stepUsage !== undefined) {
           usageAvailable = true
           usage = {

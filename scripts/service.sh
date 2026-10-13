@@ -152,6 +152,8 @@ prepare_update() {
   (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" install --frozen-lockfile >/dev/null)
   echo "Restoring Brundlefly Skills"
   (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" sync:skills)
+  echo "Refreshing OpenCode worker configuration"
+  "$SERVICE_NODE" --experimental-strip-types "$SERVICE_CHECKOUT/scripts/opencode-v2-migrate.ts" --worker
   echo "Syncing Agent instructions"
   bash "$SERVICE_CHECKOUT/scripts/sync-agent-context.sh" local >/dev/null
   echo "Installing Worktrunk settings"

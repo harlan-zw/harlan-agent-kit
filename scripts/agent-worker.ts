@@ -55,12 +55,15 @@ const providerConfig = await readFile(join(source, '.config/opencode/opencode.js
     return '{}'
   throw error
 })
-const provider = (JSON.parse(providerConfig) as { provider?: Record<string, { options?: { apiKey?: unknown } }> }).provider
-const apiKey = provider?.['zai-coding-plan']?.options?.apiKey
-if (typeof apiKey === 'string' && apiKey.trim() !== '') {
-  await mkdir(join(home, '.config/opencode'), { recursive: true, mode: 0o700 })
-  await writeFile(join(home, '.config/opencode/opencode.json'), JSON.stringify({ provider: { 'zai-coding-plan': { options: { apiKey } } } }), { mode: 0o600 })
+const configured = (JSON.parse(providerConfig) as { providers?: Record<string, { settings?: { apiKey?: unknown } }> }).providers
+const providers: Record<string, { settings: { apiKey: string } }> = {}
+for (const id of ['zai-coding-plan', 'opencode-go']) {
+  const apiKey = configured?.[id]?.settings?.apiKey
+  if (typeof apiKey === 'string' && apiKey.trim() !== '')
+    providers[id] = { settings: { apiKey } }
 }
+await mkdir(join(home, '.config/opencode'), { recursive: true, mode: 0o700 })
+await writeFile(join(home, '.config/opencode/opencode.json'), JSON.stringify({ providers, plugins: ['./plugins/harlan-hooks.ts'] }), { mode: 0o600 })
 await writeFile(join(home, '.gitconfig'), '[user]\n name = Harlan Agent Kit\n email = agent@harlanzw.com\n', { mode: 0o600 })
 const codex = await realpath(values.codex!)
 const opencode = await realpath(values.opencode!)

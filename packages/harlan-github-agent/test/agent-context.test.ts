@@ -88,7 +88,7 @@ describe('loadAgentContext', () => {
       expect(environment._tag).toBe('Ok')
       if (environment._tag === 'Err')
         return
-      expect(JSON.parse(environment.value.OPENCODE_CONFIG_CONTENT!).skills.paths).toEqual([join(paths.skillsRoot, 'pr'), ...paths.requiredSkillDirectories])
+      expect(JSON.parse(environment.value.OPENCODE_CONFIG_CONTENT!).skills).toEqual([join(paths.skillsRoot, 'pr'), ...paths.requiredSkillDirectories])
       await mkdir(join(paths.skillsRoot, 'im-part-human'), { recursive: true })
       await writeFile(join(paths.skillsRoot, 'im-part-human/SKILL.md'), 'Duplicate.\n')
       await expect(loadAgentContext(paths)).resolves.toMatchObject({ _tag: 'Err', error: expect.stringContaining('Duplicate Skill') })
@@ -169,7 +169,7 @@ describe('opencodeAgentEnvironment', () => {
         OPENCODE_CONFIG_CONTENT: JSON.stringify({
           instructions: ['/repo/CONTRIBUTING.md'],
           share: 'disabled',
-          skills: { paths: ['/custom/skill'], urls: ['https://example.com/skills/'] },
+          skills: ['/custom/skill', 'https://example.com/skills/'],
         }),
       },
     })
@@ -181,10 +181,7 @@ describe('opencodeAgentEnvironment', () => {
     expect(JSON.parse(result.value.OPENCODE_CONFIG_CONTENT ?? '')).toEqual({
       instructions: ['/repo/CONTRIBUTING.md', '/home/harlan/.codex/AGENTS.md'],
       share: 'disabled',
-      skills: {
-        paths: ['/custom/skill', '/kit/skills/pr', '/kit/skills/unit-tests'],
-        urls: ['https://example.com/skills/'],
-      },
+      skills: ['/custom/skill', 'https://example.com/skills/', '/kit/skills/pr', '/kit/skills/unit-tests'],
     })
   })
 
@@ -347,7 +344,7 @@ describe('opencodeTurnEnvironment', () => {
       environment: {
         OPENCODE_CONFIG_CONTENT: JSON.stringify({
           instructions: ['/home/harlan/.codex/AGENTS.md'],
-          skills: { paths: ['/kit/skills/pr'] },
+          skills: ['/kit/skills/pr'],
         }),
       },
       instructionPaths: ['/home/harlan/.claude/projects/-home-harlan-pkg-unhead/memory/MEMORY.md'],
@@ -361,7 +358,7 @@ describe('opencodeTurnEnvironment', () => {
         '/home/harlan/.codex/AGENTS.md',
         '/home/harlan/.claude/projects/-home-harlan-pkg-unhead/memory/MEMORY.md',
       ],
-      skills: { paths: ['/kit/skills/pr'] },
+      skills: ['/kit/skills/pr'],
     })
   })
 
