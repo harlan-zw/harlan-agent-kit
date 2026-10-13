@@ -17,7 +17,7 @@ import { advanceContextBudget, agentProviderFailureReason, agentTextEvent, conte
 import { opencodeSandboxPaths, prepareAgentSandbox } from './agent-sandbox.ts'
 import { createAgentTransport } from './agent-transport.ts'
 import { materializeAgentMedia } from './github-media.ts'
-import { createOpencodeSession, opencodeDeliveryKey, readOpencodeMessages, recoverOpencodeResult } from './opencode-result.ts'
+import { createOpencodeSession, opencodeDeliveryKey, readOpencodeMessages, recoverOpencodeResult, waitOpencodeReviewTools } from './opencode-result.ts'
 import { err, ok } from './result.ts'
 import { createReviewRuntime, REVIEW_TOOL_NAMES } from './review-runtime.ts'
 import { dailyCheckinDirectory } from './workspace-environment.ts'
@@ -172,7 +172,13 @@ function opencodeServer(url: string, password: string, workspace: string, child:
   return {
     url,
     password,
-    createSession: signal => createOpencodeSession({ url, password, workspace, signal, ...session }),
+    createSession: async (signal) => {
+      const created = await createOpencodeSession({ url, password, workspace, signal, ...session })
+      if (created._tag === 'Err' || session.reviewTools === undefined)
+        return created
+      const ready = await waitOpencodeReviewTools({ url, password, workspace, signal })
+      return ready._tag === 'Err' ? ready : created
+    },
     readMessages: (sessionId, signal) => readOpencodeMessages({ url, password, workspace, sessionId, signal }),
     steer: (sessionId, text) => fetch(`${url}/api/session/${encodeURIComponent(sessionId)}/prompt`, {
       method: 'POST',

@@ -1,5 +1,20 @@
 import { expect, it } from 'vitest'
-import { createOpencodeSession, opencodeDeliveryKey, readOpencodeMessages, recoverOpencodeResult } from '../src/opencode-result.ts'
+import { createOpencodeSession, opencodeDeliveryKey, readOpencodeMessages, recoverOpencodeResult, waitOpencodeReviewTools } from '../src/opencode-result.ts'
+
+it('waits for Review MCP discovery before admitting a prompt', async () => {
+  let reads = 0
+  const result = await waitOpencodeReviewTools({ ...input, fetch: async () => {
+    reads++
+    return Response.json({ data: reads === 1 ? [] : [{ name: 'controller_review', status: { status: 'connected' } }] })
+  } })
+  expect(result).toEqual({ _tag: 'Ok', value: undefined })
+  expect(reads).toBe(2)
+})
+
+it('refuses a failed Review MCP server', async () => {
+  const result = await waitOpencodeReviewTools({ ...input, fetch: async () => Response.json({ data: [{ name: 'controller_review', status: { status: 'failed', error: 'private details' } }] }) })
+  expect(result).toEqual({ _tag: 'Err', error: 'The OpenCode Review tools failed to start.' })
+})
 
 const input = { url: 'http://127.0.0.1:4097', password: 'fixture-password', workspace: '/tmp/worktree', sessionId: 'ses_one', signal: new AbortController().signal }
 const user = { id: 'msg_user', type: 'user', text: 'Check', time: { created: 0 } }
