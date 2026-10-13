@@ -3,6 +3,7 @@
   "type": "module",
   "packageManager": "pnpm@11.22.0",
   "scripts": {
+    "test:ci-changes": "vitest run scripts/ci-changes.test.ts",
     "build": "pnpm --filter harlan-github-agent build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
