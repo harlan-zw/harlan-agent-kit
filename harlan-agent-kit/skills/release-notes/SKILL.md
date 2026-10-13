@@ -140,11 +140,17 @@ Parse conventional commit prefixes into changelog sections. See [references/chan
 
 ### Identify Highlights
 
-Select 3-7 changes that deserve narrative treatment in the Highlights section (fewer if the release genuinely has fewer; do not pad). Criteria:
+Select the changes that matter most to the reader's upgrade decision. Do not fill a target number. Criteria:
 - New user-facing features (`feat:`)
 - Performance improvements with measurable impact (`perf:`)
 - Breaking changes that affect upgrade path
 - Changes with significant PR descriptions explaining motivation
+
+Allocate space before drafting. Give consequential capabilities, measured gains, and migration risks the most attention.
+Keep smaller improvements brief and link to their complete changelog or guide.
+Author effort and PR description length do not establish reader importance.
+Assume an initial scan unless the user supplies a different reading context.
+That scan should answer what changed, whether the project can upgrade, and what must change first.
 
 For each highlight, fetch the full PR body if not already available:
 ```bash
@@ -206,12 +212,18 @@ Structure:
 
 ### Writing Guidelines
 
-- Highlights are **narrative prose**, not bullet lists. Explain the "why" and "what it enables", not just "what".
+- Use short prose, bullets, tables, or examples according to what the reader needs to assess.
+- Explain important changes enough to show their effect. Smaller fixes need no repeated motivation or takeaway.
 - Code examples should be minimal, showing the new API or config change.
 - Changelog items are **one-line bullets** with PR links.
 - Skip empty categories (if no perf changes, omit 🔥 Performance).
 - Contributors: deduplicate, use GitHub usernames with profile links.
-- Before publishing, load the installed Brundlefly `im-part-human` Skill for the Highlights prose. Preserve versions, links, and measured figures.
+- Before publishing, load the installed Brundlefly `im-part-human` Skill for the complete release notes.
+  Review importance, reading order, repetition, and optional detail before polishing sentences.
+  Keep support requirements and consequential migration warnings on the main reading path.
+  Preserve versions, links, measured figures, test conditions, and migration actions.
+- Review each destination separately. A GitHub release may summarize a longer article and link to it.
+  Do not copy the complete article into every destination by default.
 
 ## Step 4: LLM Upgrade Prompt (Breaking Changes Only)
 
