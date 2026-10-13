@@ -40,7 +40,7 @@
     "test:sentry-checkin": "python3 -m unittest discover -s harlan-agent-kit/skills/sentry-checkin/scripts -p 'test_*.py'",
     "test:release": "vitest run scripts/release.test.ts",
     "release": "node --experimental-strip-types scripts/release.ts",
-    "test:opencode-hooks": "vitest run harlan-agent-kit/plugins/opencode",
+    "test:opencode-hooks": "vitest run harlan-agent-kit/plugins/opencode scripts/opencode-v2-migrate.test.ts",
     "test:hogwild": "vitest run harlan-agent-kit/skills/hogwild/scripts",
     "test:nuxt-4-minors-migration": "vitest run harlan-agent-kit/skills/nuxt-4-minors-migration/scripts",
     "test:skill-doc-paths": "vitest run scripts/skill-doc-paths.test.ts",

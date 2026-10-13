@@ -1,5 +1,5 @@
 #!/usr/bin/env -S node --experimental-strip-types
-import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -76,7 +76,9 @@ async function main() {
     }
     await mkdir(join(worker, '.config/opencode/plugins'), { recursive: true, mode: 0o700 })
     await copyFile(join(root, 'harlan-agent-kit/plugins/opencode/harlan-hooks.ts'), join(worker, '.config/opencode/plugins/harlan-hooks.ts'))
-    await writeFile(join(worker, '.config/opencode/opencode.json'), JSON.stringify({ providers, plugins: ['./plugins/harlan-hooks.ts'] }), { mode: 0o600 })
+    const workerConfiguration = join(worker, '.config/opencode/opencode.json')
+    await writeFile(workerConfiguration, JSON.stringify({ providers, plugins: ['./plugins/harlan-hooks.ts'] }), { mode: 0o600 })
+    await chmod(workerConfiguration, 0o600)
     process.stdout.write('OpenCode V2 worker configuration refreshed.\n')
     return
   }
@@ -109,8 +111,10 @@ async function main() {
     join(plugins, 'worktrunk.ts'),
   ])]
   primary.contents = `${JSON.stringify(configured, null, 2)}\n`
-  for (const entry of staged)
+  for (const entry of staged) {
     await writeFile(entry.path, entry.contents, { mode: 0o600 })
+    await chmod(entry.path, 0o600)
+  }
   const instructions = join(configuration, 'AGENTS.md')
   const exists = await stat(instructions).then(() => true).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT')
