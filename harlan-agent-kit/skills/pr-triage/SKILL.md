@@ -54,6 +54,9 @@ When required CI also fails on the current base of an owned repository, dispatch
 
 ## Return the merge queue
 
+Predict attention for this handoff. Lead with the consequential merge decision or blocker, with its required dependencies.
+Keep routine proof brief and link detailed evidence. Preserve the complete queue and every safety reason.
+
 List `READY` pull requests first, sorted by confidence. Then list `PENDING` and
 `BLOCKED` pull requests without confidence scores.
 

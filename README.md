@@ -114,7 +114,7 @@ The [Ripast skill](https://github.com/harlan-zw/ripast/blob/main/packages/cli/sk
 The declaration pins its source commit.
 Run `pnpm sync:skills` to install the declared Skills through skilld.
 Use a skilld CLI that supports `skilld sync`.
-Private Brundlefly delivery requires skilld authentication and GitHub App access.
+Brundlefly delivery uses verified skilld artifacts from its public repository.
 The command preserves unrelated installed Skills and refuses name conflicts.
 It adopts existing links only when their files match the pinned source.
 Run `pnpm check:skills` to check installed content, targets, and required Skills.
@@ -127,6 +127,7 @@ Service updates run the same restore before starting workers on either host.
 | --- | --- |
 | `im-part-human` | Edit prose while preserving facts and voice. Replaces `im-not-a-fly`, `write-human`, and `humanize-writing`. |
 | `technical-guide` | Research and verify individual technical articles. |
+| `release-notes` | Write release notes that help readers decide whether to upgrade and understand required changes. |
 | `im-not-a-human` | Compress agent text while preserving its meaning. Replaces `im-a-fly` and `agentify-text`. |
 | `pull-request-summary` | Check PR description text before personal `pr` publishes it. |
 | `glossary` | Create or audit GLOSSARY.md for names and vocabulary drift. |
@@ -136,6 +137,9 @@ Service updates run the same restore before starting workers on either host.
 Personal `pr` calls Brundlefly `pull-request-summary` for its description gate.
 Personal `pr` owns Hooks, publication, Review, and Service policy.
 `content-refresh` coordinates collections and uses `technical-guide` for each technical article.
+Brundlefly's [`release-notes`](https://skilld.dev/gh/harlan-zw/brundlefly/release-notes) owns release text and its evidence.
+The declaration installs it alongside the other portable writing Skills.
+The personal kit does not bundle this Skill in its marketplace package. Run `pnpm sync:skills` from this checkout.
 
 | Skill | Description |
 |-------|-------------|
@@ -159,7 +163,6 @@ Personal `pr` owns Hooks, publication, Review, and Service policy.
 | [`pr`](./harlan-agent-kit/skills/pr/SKILL.md) | Create or update a pull request from current work |
 | [`pr-lens`](./harlan-agent-kit/skills/pr-lens/SKILL.md) | Draw a change as animated architecture and data-flow diagrams with [PR Lens](https://prlens.dev) |
 | [`pr-triage`](./harlan-agent-kit/skills/pr-triage/SKILL.md) | Repair, rank, and order the owned PR backlog |
-| [`release-notes`](./harlan-agent-kit/skills/release-notes/SKILL.md) | Draft changelogs, release notes, and upgrade guides |
 | [`daily-checkin`](./harlan-agent-kit/skills/daily-checkin/SKILL.md) | Run nuxt-checkin and interpret site prompt items |
 | [`dependency-updates`](./harlan-agent-kit/skills/dependency-updates/SKILL.md) | Attempt weekly dependency updates, including majors, in one pull request |
 | [`ci-review`](./harlan-agent-kit/skills/ci-review/SKILL.md) | Review CI warnings and errors, then propose verified repairs |
