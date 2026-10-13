@@ -1,7 +1,11 @@
 {
   "version": 1,
   "name": "harlan-agent-kit",
-  "agents": ["codex", "claude-code", "opencode"],
+  "agents": [
+    "codex",
+    "claude-code",
+    "opencode"
+  ],
   "mode": "symlink",
   "skills": {
     "ripast": {
@@ -11,34 +15,51 @@
       "source": "github:skilld-dev/skilld/skills/skilld#commit:395000f01f4bbe3a681c7dd29fdfced00d609b52"
     },
     "im-part-human": {
-      "source": "github:harlan-zw/brundlefly/skills/im-part-human#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
+      "source": "github:harlan-zw/brundlefly/skills/im-part-human#commit:be0433f366198a156343b724c3179277167524be"
     },
     "technical-guide": {
-      "source": "github:harlan-zw/brundlefly/skills/technical-guide#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
+      "source": "github:harlan-zw/brundlefly/skills/technical-guide#commit:be0433f366198a156343b724c3179277167524be"
     },
     "im-not-a-human": {
-      "source": "github:harlan-zw/brundlefly/skills/im-not-a-human#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
+      "source": "github:harlan-zw/brundlefly/skills/im-not-a-human#commit:be0433f366198a156343b724c3179277167524be"
     },
     "pull-request-summary": {
-      "source": "github:harlan-zw/brundlefly/skills/pull-request-summary#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
+      "source": "github:harlan-zw/brundlefly/skills/pull-request-summary#commit:be0433f366198a156343b724c3179277167524be"
     },
     "glossary": {
-      "source": "github:harlan-zw/brundlefly/skills/glossary#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
+      "source": "github:harlan-zw/brundlefly/skills/glossary#commit:be0433f366198a156343b724c3179277167524be"
     },
     "copywriting": {
-      "source": "github:harlan-zw/brundlefly/skills/copywriting#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
+      "source": "github:harlan-zw/brundlefly/skills/copywriting#commit:be0433f366198a156343b724c3179277167524be"
     },
     "release-notes": {
-      "source": "github:harlan-zw/brundlefly/skills/release-notes#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
+      "source": "github:harlan-zw/brundlefly/skills/release-notes#commit:be0433f366198a156343b724c3179277167524be"
     }
   },
   "requires": {
-    "pr": ["pull-request-summary", "im-part-human"],
-    "adversarial-review": ["im-part-human"],
-    "content-refresh": ["technical-guide", "im-part-human", "glossary"],
-    "tweet": ["im-part-human"],
-    "improve-ts-pkg-architecture": ["glossary"],
-    "nuxt-improve-codebase-architecture": ["glossary"],
-    "nuxt-frontend-design": ["copywriting"]
+    "pr": [
+      "pull-request-summary",
+      "im-part-human"
+    ],
+    "adversarial-review": [
+      "im-part-human"
+    ],
+    "content-refresh": [
+      "technical-guide",
+      "im-part-human",
+      "glossary"
+    ],
+    "tweet": [
+      "im-part-human"
+    ],
+    "improve-ts-pkg-architecture": [
+      "glossary"
+    ],
+    "nuxt-improve-codebase-architecture": [
+      "glossary"
+    ],
+    "nuxt-frontend-design": [
+      "copywriting"
+    ]
   }
 }

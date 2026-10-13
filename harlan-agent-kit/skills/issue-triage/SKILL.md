@@ -70,7 +70,10 @@ On subsequent runs, read the log and highlight what changed since last triage.
    Demote any issue the verifier refutes. Skip this pass only when no issue clears the quick-win bar.
 
 6. **Plan the report for the reader's predicted attention.** Lead with the decisions that matter most.
-   Keep the complete triage evidence. If the full table would overwhelm the handoff, link it and show the strongest candidates.
+   Keep the complete triage evidence. If the full table would overwhelm the handoff, save a dated report and link that file.
+   Use the user's report directory. If none is supplied, use the plugin data directory.
+   Include every issue's scores, notes, blockers, and uncertainty in that report. Show the strongest candidates in the handoff.
+   If the report cannot be saved, include the full table inline.
    Preserve consequential blockers and uncertainty in the short view.
    Sort the table by: has repro (yes first), then impact/difficulty ratio (descending)
 
