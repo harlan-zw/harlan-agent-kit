@@ -74,7 +74,7 @@ below cover the plugin surface only.
 **Casing:** `Plugin` in prose, `plugin` in identifiers and paths.
 
 ### Skill
-**Is:** one `SKILL.md`, plus its References and templates. Personal Skills live under `harlan-agent-kit/skills/`. Selected portable Skills come from Brundlefly.
+**Is:** one `SKILL.md`, plus its References and templates. Personal Skills live under `harlan-agent-kit/skills/`. Portable Skills use the sources declared in `.skills/skilld.json`.
 **Use for:** the README Skill table, every skill directory name, prose about invoking one.
 **Never:** command, slash command, playbook, recipe, prompt, workflow, agent.
 **Casing:** `Skill` in prose, kebab-case in directory names, `SKILL.md` for the file.
@@ -89,7 +89,7 @@ more Skills share it.
 **Casing:** `Reference` in prose, `references/` as the directory.
 
 ### Brundlefly
-**Is:** the separate collection that owns portable Skills used by Harlan Agent Kit.
+**Is:** the separate collection at `harlan-zw/brundlefly`, which supplies selected portable Skills to Harlan Agent Kit.
 **Use for:** portable Skills whose declared sources in `.skills/skilld.json` point to `harlan-zw/brundlefly`.
 **Never:** a second personal Plugin or a copy of personal host policy.
 **Casing:** `Brundlefly` in prose, `brundlefly` in paths.
