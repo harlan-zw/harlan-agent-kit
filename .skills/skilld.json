@@ -11,22 +11,25 @@
       "source": "github:skilld-dev/skilld/skills/skilld#commit:395000f01f4bbe3a681c7dd29fdfced00d609b52"
     },
     "im-part-human": {
-      "source": "github:harlan-zw/brundlefly/skills/im-part-human#commit:1bf0b796072f019d3170f173fc9a6a712e749863"
+      "source": "github:harlan-zw/brundlefly/skills/im-part-human#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
     },
     "technical-guide": {
-      "source": "github:harlan-zw/brundlefly/skills/technical-guide#commit:1bf0b796072f019d3170f173fc9a6a712e749863"
+      "source": "github:harlan-zw/brundlefly/skills/technical-guide#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
     },
     "im-not-a-human": {
-      "source": "github:harlan-zw/brundlefly/skills/im-not-a-human#commit:1bf0b796072f019d3170f173fc9a6a712e749863"
+      "source": "github:harlan-zw/brundlefly/skills/im-not-a-human#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
     },
     "pull-request-summary": {
-      "source": "github:harlan-zw/brundlefly/skills/pull-request-summary#commit:1bf0b796072f019d3170f173fc9a6a712e749863"
+      "source": "github:harlan-zw/brundlefly/skills/pull-request-summary#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
     },
     "glossary": {
-      "source": "github:harlan-zw/brundlefly/skills/glossary#commit:1bf0b796072f019d3170f173fc9a6a712e749863"
+      "source": "github:harlan-zw/brundlefly/skills/glossary#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
     },
     "copywriting": {
-      "source": "github:harlan-zw/brundlefly/skills/copywriting#commit:1bf0b796072f019d3170f173fc9a6a712e749863"
+      "source": "github:harlan-zw/brundlefly/skills/copywriting#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
+    },
+    "release-notes": {
+      "source": "github:harlan-zw/brundlefly/skills/release-notes#commit:ad2bb00eeb25c7ec9e3262870555d23710928108"
     }
   },
   "requires": {
@@ -34,7 +37,6 @@
     "adversarial-review": ["im-part-human"],
     "content-refresh": ["technical-guide", "im-part-human", "glossary"],
     "tweet": ["im-part-human"],
-    "release-notes": ["im-part-human"],
     "improve-ts-pkg-architecture": ["glossary"],
     "nuxt-improve-codebase-architecture": ["glossary"],
     "nuxt-frontend-design": ["copywriting"]

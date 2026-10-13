@@ -21,10 +21,10 @@ Never invent metrics, engagement, personal experience, or product claims.
 - **Character count is tricky** -- URLs always count as 23 chars (t.co wrapping). Emojis count as 2. Newlines count as 1. Don't trust naive `length` checks.
 - **Twitter crops images at 16:9 in timeline** -- all templates output 1600x900 for this reason. Non-16:9 images get cropped unpredictably.
 - **Don't over-polish** -- tweets that sound too perfect feel like marketing. Preserve the user's natural voice, just fix obvious issues.
-- **Thread vs single tweet** -- if the user hasn't asked for a thread, don't suggest one. Single tweets perform better unless there's genuinely too much for 280 chars.
+- **Thread vs single tweet** -- default to one post. Use a thread when the user requests it or the meaning needs it.
 - **Screenshot dependencies** -- `sharp` and `@resvg/resvg-js` need to be installed. If they're not global, install to a temp dir, don't pollute the project.
 - **Hot takes can backfire** -- always flag the hot take variation as risky. The user should consciously opt in, not accidentally post something inflammatory.
-- **Always suggest a visual** -- text-only dev tweets get buried by the algorithm. Every finalized tweet should have a visual recommendation, even if the user didn't ask for one.
+- **Use a visual when it earns attention** -- suggest one when it helps the reader understand or assess the point.
 - Before finalizing, load the installed Brundlefly `im-part-human` Skill. Preserve supplied facts and voice.
 
 ## Data Storage
@@ -39,6 +39,10 @@ echo "$(date -I) | VISUAL_TYPE | FINAL_TWEET_TEXT" >> "${CLAUDE_PLUGIN_DATA}/twe
 On subsequent runs, read recent history to maintain consistent voice and avoid repeating hooks/angles.
 
 ## Input and mode
+
+Predict the reader's attention in the feed before choosing scope and depth.
+Lead with the most useful point. Keep secondary changes brief or link to them.
+Do not turn every release feature into another post or visual by default.
 
 Select the mode from the user's request:
 
@@ -199,14 +203,10 @@ Read the output image to verify it looks correct. Show the user the result. If s
 
 Present:
 - The final tweet text with character count
-- The generated visual (show the image)
-- Suggested accounts to tag (max 2, relevant to content)
+- The generated visual, when requested or useful
+- Suggested accounts to tag only when they serve the requested post (max 2)
 - Suggested posting time (if relevant), using the user's audience and timezone
 
 Log to `${CLAUDE_PLUGIN_DATA}/tweet-history.log`.
 
-Offer to:
-- Make further adjustments to text or visual
-- Generate an alternative visual style
-- Try a different theme
-- Create a follow-up tweet for the next day
+Keep the handoff brief. Do not append a routine menu of more variants, themes, or follow-up posts.

@@ -136,6 +136,8 @@ Service updates run the same restore before starting workers on either host.
 Personal `pr` calls Brundlefly `pull-request-summary` for its description gate.
 Personal `pr` owns Hooks, publication, Review, and Service policy.
 `content-refresh` coordinates collections and uses `technical-guide` for each technical article.
+Brundlefly's [`release-notes`](https://skilld.dev/gh/harlan-zw/brundlefly/release-notes) owns release text and its evidence.
+The declaration installs it alongside the other portable writing Skills.
 
 | Skill | Description |
 |-------|-------------|
@@ -159,7 +161,6 @@ Personal `pr` owns Hooks, publication, Review, and Service policy.
 | [`pr`](./harlan-agent-kit/skills/pr/SKILL.md) | Create or update a pull request from current work |
 | [`pr-lens`](./harlan-agent-kit/skills/pr-lens/SKILL.md) | Draw a change as animated architecture and data-flow diagrams with [PR Lens](https://prlens.dev) |
 | [`pr-triage`](./harlan-agent-kit/skills/pr-triage/SKILL.md) | Repair, rank, and order the owned PR backlog |
-| [`release-notes`](./harlan-agent-kit/skills/release-notes/SKILL.md) | Draft changelogs, release notes, and upgrade guides |
 | [`daily-checkin`](./harlan-agent-kit/skills/daily-checkin/SKILL.md) | Run nuxt-checkin and interpret site prompt items |
 | [`dependency-updates`](./harlan-agent-kit/skills/dependency-updates/SKILL.md) | Attempt weekly dependency updates, including majors, in one pull request |
 | [`ci-review`](./harlan-agent-kit/skills/ci-review/SKILL.md) | Review CI warnings and errors, then propose verified repairs |

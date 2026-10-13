@@ -181,6 +181,8 @@ Repeat `--ledger` for every site. `record` refuses a ledger with any empty dispo
 
 ## Return the run
 
+Predict attention for the handoff. Lead with consequential new errors, blocked repairs, and decisions the reader must make.
+Use concise rows for routine coverage. Keep complete investigation evidence in the run history.
 Report each site with its issue count, ledger coverage, PR URL, CI state, and confidence. List zero-issue sites and unmatched projects. Keep blocked rows explicit. Give the run's `new`, `recurring`, and `unclosed` counts, and name the history path.
 
 Name every issue this run resolved, with the release that closed it. Name every `fixed` row left unresolved because its PR is still open. The next run inherits those.

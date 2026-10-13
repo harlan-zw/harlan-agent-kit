@@ -69,7 +69,10 @@ On subsequent runs, read the log and highlight what changed since last triage.
    Ask it to refute the score: "Read issue #N. Does hidden scope invalidate this difficulty or impact score? Check migration, public API, and shared state. Downgrade uncertain scores."
    Demote any issue the verifier refutes. Skip this pass only when no issue clears the quick-win bar.
 
-6. **Display table** sorted by: has repro (yes first), then impact/difficulty ratio (descending)
+6. **Plan the report for the reader's predicted attention.** Lead with the decisions that matter most.
+   Keep the complete triage evidence. If the full table would overwhelm the handoff, link it and show the strongest candidates.
+   Preserve consequential blockers and uncertainty in the short view.
+   Sort the table by: has repro (yes first), then impact/difficulty ratio (descending)
 
    | # | Title | Labels | Repro | Diff | Impact | Assigned | Notes |
    |---|-------|--------|-------|------|--------|----------|-------|
