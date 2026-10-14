@@ -186,7 +186,8 @@ export function createGitHubMediaSource(options: { tokens: GitHubTokenProvider, 
       const deadline = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
       try {
         let url = initial
-        let authenticate = true
+        // Storage URLs carry their own signed grant. A Bearer header conflicts with it.
+        let authenticate = initial.origin === 'https://github.com'
         for (let redirects = 0; ; redirects++) {
           const response = await options.fetch(url.href, { redirect: 'manual', signal: deadline, headers: authenticate ? { Authorization: `Bearer ${token.value.token}` } : {} })
           if ([301, 302, 303, 307, 308].includes(response.status)) {
