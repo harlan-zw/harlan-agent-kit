@@ -270,6 +270,24 @@ export function createPassIncidentRecorder(options: {
   }
 }
 
+/** Reports live capacity. Reaching a Reserve is normal Service state. */
+export function reportAgentCapacity(snapshot: DashboardSnapshot, output: {
+  log: (message: string) => void
+  record: (messages: readonly string[]) => void
+}): void {
+  const startState = resolveAgentStartState(snapshot)
+  const blocked = agentStartBlockedReason({
+    startState,
+    queuedTasks: snapshot.tasks.filter(task => task.state._tag === 'Queued').length,
+    runningTasks: snapshot.tasks.filter(task => task.state._tag === 'Running' || task.state._tag === 'Publishing').length,
+    agentSelection: snapshot.agentSelection,
+    providerCapacities: snapshot.providerCapacities,
+  })
+  if (blocked !== null)
+    output.log(blocked)
+  output.record(startState._tag === 'CapacityUnavailable' && blocked !== null ? [blocked] : [])
+}
+
 /** Reconciles release repositories and records the pass's failures. */
 export async function reconcilePackageReleasePass(options: {
   repositories: readonly RepositoryMapping[]
@@ -1365,20 +1383,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }
       })
       recordPassIncidents('review_rerun', reruns.flatMap(result => result._tag === 'Err' ? [result.error] : []))
-      const snapshot = store.getDashboardSnapshot(now().toISOString())
-      // A Reserve or an unreadable provider stops every claim by design, and
-      // said so nowhere outside the Dashboard. Twenty seven Tasks waited seven
-      // hours behind one with no log line and no Incident to read.
-      const blocked = agentStartBlockedReason({
-        startState: resolveAgentStartState(snapshot),
-        queuedTasks: snapshot.tasks.filter(task => task.state._tag === 'Queued').length,
-        runningTasks: snapshot.tasks.filter(task => task.state._tag === 'Running' || task.state._tag === 'Publishing').length,
-        agentSelection: snapshot.agentSelection,
-        providerCapacities: snapshot.providerCapacities,
+      const snapshot = getDashboardSnapshot(now().toISOString())
+      reportAgentCapacity(snapshot, {
+        log: message => options.logger.info(message),
+        record: messages => recordPassIncidents('agent_capacity', messages),
       })
-      if (blocked !== null)
-        options.logger.info(blocked)
-      recordPassIncidents('agent_capacity', blocked === null ? [] : [blocked])
       const statusSync = await guarded(
         'Pull request status sync',
         () => pullRequestStatuses.sync(snapshot, signal),
@@ -1639,6 +1648,34 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     throw new Error('Public Passkey login requires persistent storage and an HTTPS private origin.')
   if (config.server.publicTerminalSessions === true && (config.server.agentSessions !== true || config.server.publicBrowserPasswordLogin !== false || !browserAuth?.public))
     throw new Error('Public terminals require private Agent sessions and public Passkey-only login.')
+  // The poll pass and Control API must read the same live provider capacity.
+  // Stored snapshots carry no provider readings.
+  function getDashboardSnapshot(at: string): DashboardSnapshot {
+    const stored = dashboardSnapshotForTriggers(
+      pullRequestStatuses.apply(mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot())),
+      config.triggers,
+    )
+    const snapshot = { ...stored, agentProfile: runtime().profile }
+    const providerCapacities = AGENT_PROVIDER_NAMES.map(provider => ({
+      provider,
+      capacity: capacity.read(provider, snapshot.agentSelection._tag === 'Automatic'
+        ? automaticSelection(provider).model ?? agentProfile(provider).roles.routine_scan.model
+        : snapshot.agentProfile.provider === provider ? snapshot.agentProfile.roles.routine_scan.model : agentProfile(provider).roles.routine_scan.model),
+      reservePercent: config.agent.reservePercent[provider],
+    }))
+    const classification = options.classification === undefined
+      ? undefined
+      : { model: options.classification.model, gatewayId: options.classification.gatewayId ?? 'default' }
+    const current = {
+      ...snapshot,
+      agentProviderOrder: config.agent.order,
+      providerCapacities,
+      agentModelCapacities: { opencodeGo: capacity.read('opencode', 'opencode-go/glm-5.3-flash'), zaiCodingPlan: capacity.read('opencode', 'zai-coding-plan/glm-5.3-flash') },
+      githubRateLimits: rateLimits.read(),
+      ...(classification === undefined ? {} : { classification }),
+    }
+    return { ...current, agentStart: resolveAgentStartState(current) }
+  }
   const app = createAgentApp({
     ...(browserAuth ? { browserAuth } : {}),
     pullRequestDiff: createGitHubPullRequestDiff({ tokens: routedTokens, now: () => now().getTime(), log: message => options.logger.error(message) }),
@@ -1700,32 +1737,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       resolveIncident: store.resolveIncident,
       listRoutines: store.listRoutines,
       openRoutineRun: store.openRoutineRun,
-      getDashboardSnapshot: (at) => {
-        const stored = dashboardSnapshotForTriggers(
-          pullRequestStatuses.apply(mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot())),
-          config.triggers,
-        )
-        const snapshot = { ...stored, agentProfile: runtime().profile }
-        const providerCapacities = AGENT_PROVIDER_NAMES.map(provider => ({
-          provider,
-          capacity: capacity.read(provider, snapshot.agentSelection._tag === 'Automatic'
-            ? automaticSelection(provider).model ?? agentProfile(provider).roles.routine_scan.model
-            : snapshot.agentProfile.provider === provider ? snapshot.agentProfile.roles.routine_scan.model : agentProfile(provider).roles.routine_scan.model),
-          reservePercent: config.agent.reservePercent[provider],
-        }))
-        const classification = options.classification === undefined
-          ? undefined
-          : { model: options.classification.model, gatewayId: options.classification.gatewayId ?? 'default' }
-        const current = {
-          ...snapshot,
-          agentProviderOrder: config.agent.order,
-          providerCapacities,
-          agentModelCapacities: { opencodeGo: capacity.read('opencode', 'opencode-go/glm-5.3-flash'), zaiCodingPlan: capacity.read('opencode', 'zai-coding-plan/glm-5.3-flash') },
-          githubRateLimits: rateLimits.read(),
-          ...(classification === undefined ? {} : { classification }),
-        }
-        return { ...current, agentStart: resolveAgentStartState(current) }
-      },
+      getDashboardSnapshot,
       getStats: store.getStats,
       getOpenPullRequestStatus: store.getOpenPullRequestStatus,
       getOpenPullRequest: store.getOpenPullRequest,
