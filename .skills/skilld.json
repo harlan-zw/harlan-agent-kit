@@ -34,6 +34,21 @@
     },
     "release-notes": {
       "source": "github:harlan-zw/brundlefly/skills/release-notes#commit:18bfab73ba56bb50d77203476b155d04323bb1b8"
+    },
+    "readme": {
+      "source": "github:harlan-zw/brundlefly/skills/readme#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
+    },
+    "clarity": {
+      "source": "github:harlan-zw/brundlefly/skills/clarity#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
+    },
+    "claim-fidelity": {
+      "source": "github:harlan-zw/brundlefly/skills/claim-fidelity#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
+    },
+    "verify-examples": {
+      "source": "github:harlan-zw/brundlefly/skills/verify-examples#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
+    },
+    "slop-naming-recovery": {
+      "source": "github:harlan-zw/brundlefly/skills/slop-naming-recovery#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
     }
   },
   "requires": {
