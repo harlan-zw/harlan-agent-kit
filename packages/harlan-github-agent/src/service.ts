@@ -42,6 +42,7 @@ import { createDesktopBroker } from './desktop-broker.ts'
 import { DESKTOP_AGENT_SLOT_CEILING } from './desktop-protocol.ts'
 import { createReloadableExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
 import { classifyFailure, isSubjectMovedReason } from './failure.ts'
+import { createFindingThreadSyncController } from './finding-thread-sync.ts'
 import { createGitHubAccountTokenProvider, readGitHubAccountLogin, readGitHubAccountToken } from './github-account.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
@@ -230,20 +231,22 @@ const REVIEW_CHECK_RUN_OPERATION = 'review_check_run'
 /**
  * Files every inline finding sync against its repository.
  *
- * A failure warns, and the next terminal publication on the pull request
- * syncs again. A sync that lands clears it.
+ * Failures remain queued. Clear the Incident after every pending sync in the repository finishes.
  */
 export function createReviewFindingThreadsReport(
-  store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents'>,
+  store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents' | 'hasPendingReviewFindingThreadSync'>,
   now: () => Date,
 ): ReviewFindingThreadMirror['report'] {
   return (repository, outcome) => {
     const at = now().toISOString()
     const scope: IncidentScope = { _tag: 'Repository', repository }
-    if (outcome._tag === 'Written')
-      store.resolveIncidents(scope, at, REVIEW_FINDING_THREADS_OPERATION)
-    else
+    if (outcome._tag === 'Written') {
+      if (!store.hasPendingReviewFindingThreadSync(repository))
+        store.resolveIncidents(scope, at, REVIEW_FINDING_THREADS_OPERATION)
+    }
+    else {
       recordServiceIncident(store, at, REVIEW_FINDING_THREADS_OPERATION, outcome.message, scope)
+    }
   }
 }
 
@@ -714,10 +717,15 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const reportCheckRun = createReviewCheckRunReport(store, now)
   const findingThreads: ReviewFindingThreadMirror = {
     source: workerGithub,
-    findings: (repository, pullRequestNumber, reviewRunId) =>
-      store.listReviewRuns(repository, pullRequestNumber).find(run => run.id === reviewRunId)?.findings ?? null,
     report: createReviewFindingThreadsReport(store, now),
   }
+  const findingThreadSync = createFindingThreadSyncController({
+    store,
+    readPullRequest: github.getPullRequest,
+    mirror: findingThreads,
+    now,
+    workerId: randomUUID(),
+  })
   const pullRequestTriage = createPullRequestTriageController({
     classification,
     github: workerGithub,
@@ -858,7 +866,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         },
       },
       checkRuns: { publisher: workerGithub, report: reportCheckRun },
-      findingThreads,
       commentControls: webhookControls.available,
       loggedFindings: store,
       loggedFindingControls: webhookControls.available,
@@ -1077,7 +1084,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           },
         },
         checkRuns: { publisher: workerGithub, report: reportCheckRun },
-        findingThreads,
         github: workerGithub,
         intervalMilliseconds: 2_000,
         leaseMilliseconds: 2 * 60_000,
@@ -1363,6 +1369,15 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       // machine skips it and never reads or writes another machine's work.
       if (!config.triggers.includes('github'))
         return
+      if (config.mutationsEnabled) {
+        const synced = await guarded('Finding thread sync', () => findingThreadSync.run(signal), [])
+        synced.forEach(({ repository, number, outcome }) => {
+          if (outcome._tag === 'Failed')
+            options.logger.error(`${repository}#${number}: finding thread sync failed: ${outcome.message}`)
+          else if (outcome.posted > 0 || outcome.resolved > 0)
+            options.logger.info(`${repository}#${number}: synced findings, ${outcome.posted} posted, ${outcome.resolved} resolved.`)
+        })
+      }
       if (config.mutationsEnabled && config.issueBatches) {
         const batches = await guarded('Batch planning', () => Promise.resolve(store.planBatches(now().toISOString())), [])
         batches.forEach(batch => options.logger.info(`${batch.repository}: opened a Batch for issues ${batch.issueNumbers.map(number => `#${number}`).join(', ')}.`))
