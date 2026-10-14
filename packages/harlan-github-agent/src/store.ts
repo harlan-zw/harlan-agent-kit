@@ -1,6 +1,7 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { BatchStore } from './batch-store.ts'
 import type { TransientKind } from './failure.ts'
+import type { FindingThreadSyncStore } from './finding-thread-sync-store.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { AgentHost, AgentSlotSetting } from './host-capacity.ts'
 import type { IncidentResolutionError, IncidentResolutionReceipt, IncidentResolutionRequest } from './incident-resolution.ts'
@@ -131,6 +132,7 @@ import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSele
 import { RESULT_PHASE_RANK } from './agent-progress.ts'
 import { createBatchStore } from './batch-store.ts'
 import { canRecoverFailure, classifyFailure, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
+import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
@@ -772,7 +774,7 @@ export type StoredIssueTriageRun
       decidedAt: string
     }
 
-export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore {
   getTask: (taskId: string) => DashboardTask | null
   listTasks: () => DashboardTask[]
   getOpenPullRequest: (repository: string, number: number) => GitHubPullRequestItem | null
@@ -7088,7 +7090,11 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 91;`)
     version = 91
   }
-  if (version === 91)
+  if (version === 91) {
+    applyMigration(database, `${findingThreadSyncSchema} PRAGMA user_version = 92;`)
+    version = 92
+  }
+  if (version === 92)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7378,6 +7384,7 @@ export function openJournalStore(
   const reviewProofStore = createReviewProofStore(database)
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
+  const findingThreadSyncStore = createFindingThreadSyncStore(database, repositoryWriteAuthoritySql)
   const loggedFindingStore = createLoggedFindingStore(database, {
     writeAuthoritySql: repositoryWriteAuthoritySql,
     digest,
@@ -12211,8 +12218,8 @@ export function openJournalStore(
       `).run(input.commentId, input.url, input.at, input.commandId, input.workerId, input.fence).changes === 1
       if (changed) {
         const command = database.prepare(`
-          SELECT review_run_id, body FROM review_status_commands WHERE id = ?
-        `).get(input.commandId) as { review_run_id: string | null, body: string }
+          SELECT review_run_id, body, phase, task_kind FROM review_status_commands WHERE id = ?
+        `).get(input.commandId) as { review_run_id: string | null, body: string, phase: string, task_kind: string }
         if (command.review_run_id !== null) {
           const publicationResult = { _tag: 'Published' as const, githubCommentId: input.commentId, url: input.url }
           // A drift repair republishes the same command id, so the row already
@@ -12245,6 +12252,8 @@ export function openJournalStore(
             })),
           )
         }
+        if (command.review_run_id !== null && command.phase === 'terminal' && command.task_kind === 'adversarial_review')
+          findingThreadSyncStore.queueReviewFindingThreadSync(command.review_run_id, input.at)
         recordReviewStatusEvent(database, {
           commandId: input.commandId,
           event: 'Published',
@@ -16674,6 +16683,7 @@ export function openJournalStore(
 
   return {
     ...takeOwnershipStore,
+    ...findingThreadSyncStore,
     ...reviewProofStore,
     ...loggedFindingStore,
     approveIssue,
