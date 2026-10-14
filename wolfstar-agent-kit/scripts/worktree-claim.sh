@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'usage: worktree-claim.sh <new-session|acquire|list|release> [--path PATH] [--session ID] [--lease SECONDS]' >&2
+  echo 'usage: worktree-claim.sh <new-session|acquire|list|release> [--path PATH] [--session ID] [--lease SECONDS] [--durable]' >&2
   exit 64
 }
 
@@ -14,6 +14,7 @@ shift
 claim_path=$PWD
 claim_session=${WOLFSTAR_AGENT_TASK_ID:-${CODEX_THREAD_ID:-}}
 claim_lease=900
+claim_durable=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -32,9 +33,15 @@ while [[ $# -gt 0 ]]; do
       claim_lease=$2
       shift 2
       ;;
+    --durable)
+      claim_durable=true
+      shift
+      ;;
     *) usage ;;
   esac
 done
+
+[[ "$claim_durable" == false || "$command_name" == acquire ]] || usage
 
 if [[ "$command_name" == 'new-session' ]]; then
   if command -v uuidgen >/dev/null 2>&1; then
@@ -78,6 +85,14 @@ flock -x 9
 
 shopt -s nullglob
 for candidate in "$claim_root"/*.json; do
+  # Durable owners release explicitly after their host authority proves empty.
+  # Time and unavailable ownership evidence never release these claims.
+  if ! jq -e 'type == "object"' "$candidate" >/dev/null 2>&1; then
+    continue
+  fi
+  if jq -e '.durable == true' "$candidate" >/dev/null; then
+    continue
+  fi
   expires_epoch=$(jq -r '.expires_epoch // 0' "$candidate" 2>/dev/null || echo 0)
   if ! [[ "$expires_epoch" =~ ^[0-9]+$ ]] || (( expires_epoch <= now_epoch )); then
     rm -f -- "$candidate"
@@ -117,6 +132,10 @@ if [[ -f "$claim_file" ]]; then
     jq -n --arg owner "$existing_session" --arg repository "$common_git_dir" --arg worktree "$repository_root" '{ claimed: false, reason: "checkout_claimed", owner: $owner, repository: $repository, worktree: $worktree }'
     exit 2
   fi
+  # An ordinary renewal cannot downgrade an existing durable owner.
+  if jq -e '.durable == true' "$claim_file" >/dev/null; then
+    claim_durable=true
+  fi
 fi
 
 other_active=false
@@ -129,6 +148,9 @@ for candidate in "$claim_root"/*.json; do
 done
 
 expires_epoch=$((now_epoch + claim_lease))
+if [[ "$claim_durable" == true ]]; then
+  expires_epoch=null
+fi
 claim_tmp="$claim_root/.$claim_key.$$.tmp"
 jq -n \
   --arg repository "$common_git_dir" \
@@ -136,7 +158,8 @@ jq -n \
   --arg session "$claim_session" \
   --argjson refreshed_epoch "$now_epoch" \
   --argjson expires_epoch "$expires_epoch" \
-  '{ repository: $repository, worktree: $worktree, session: $session, refreshed_epoch: $refreshed_epoch, expires_epoch: $expires_epoch }' > "$claim_tmp"
+  --argjson durable "$claim_durable" \
+  '{ repository: $repository, worktree: $worktree, session: $session, refreshed_epoch: $refreshed_epoch, expires_epoch: $expires_epoch, durable: $durable }' > "$claim_tmp"
 mv -f -- "$claim_tmp" "$claim_file"
 
 jq -n \
@@ -145,4 +168,5 @@ jq -n \
   --arg session "$claim_session" \
   --argjson other_active "$other_active" \
   --argjson expires_epoch "$expires_epoch" \
-  '{ claimed: true, repository: $repository, worktree: $worktree, session: $session, other_active: $other_active, expires_epoch: $expires_epoch }'
+  --argjson durable "$claim_durable" \
+  '{ claimed: true, repository: $repository, worktree: $worktree, session: $session, other_active: $other_active, expires_epoch: $expires_epoch, durable: $durable }'

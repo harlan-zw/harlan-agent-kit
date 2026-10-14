@@ -7,6 +7,9 @@ remove.
 
 ## .github/workflows/ci.yml (Package)
 
+This template filters Markdown at the event. Use it only when the default branch requires no checks.
+If the branch requires checks, use the job-level skip below instead. See [Markdown paths](#markdown-paths).
+
 ```yaml
 name: CI
 
@@ -75,6 +78,52 @@ jobs:
       - run: pnpm test --run
 ```
 
+### Required checks: job-level skip
+
+Remove the event filter. Add a `changes` job, and give every other job `needs: changes` and the same `if:`.
+A skipped job still reports its check, and GitHub passes a skipped required check.
+The Nuxt SEO packages call `wolfstar-project/nuxt-seo/.github/workflows/reusable-ci.yml@main`, which holds this job already.
+
+```yaml
+on:
+  # No event filter. The `changes` job skips the other jobs instead.
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # No usable base, such as a new branch: every job runs.
+          if [ -z "${BASE//0/}" ] || ! changed=$(git diff --no-renames --name-only "$BASE...$HEAD" -- . ':(exclude,glob)**/*.md'); then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "$changed" ]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  lint:
+    needs: changes
+    # `!cancelled()` replaces the implicit `success()`, so a failed `changes` job still runs this job.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+    # The lint steps from the template above.
+```
+
 ## .github/workflows/release.yml
 
 ### Single repo
@@ -107,7 +156,7 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - run: npx changelogithub
+      - run: pnpm dlx changelogithub
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
 
@@ -150,7 +199,7 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - run: npx changelogithub
+      - run: pnpm dlx changelogithub
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
 
@@ -164,6 +213,8 @@ jobs:
 ```
 
 ## .github/workflows/ci.yml (Site)
+
+This event filter suits a site whose default branch requires no checks. See [Markdown paths](#markdown-paths).
 
 ```yaml
 name: CI
@@ -228,7 +279,14 @@ jobs:
 
 ### Markdown paths
 
-- Test, build, and deploy workflows ignore `**/*.md` on `push` and `pull_request` by default.
+- Test, build, and deploy workflows skip Markdown-only changes by default.
+- Pick the shape from the required checks. Read rulesets with `gh api repos/OWNER/REPO/rules/branches/main`.
+  Classic branch protection shows in the repository settings.
+- If the branch requires no checks, filter at the event: `paths-ignore: ['**/*.md']` on `push` and `pull_request`.
+- If the branch requires checks, never filter at the event. An event filter starts no run, so a required check never reports and a docs-only pull request blocks forever.
+- Skip at the job level instead, as [Required checks: job-level skip](#required-checks-job-level-skip) shows. GitHub passes a skipped required check.
+- A docs-only change then reports one passed `changes` check and skipped checks. CI concludes `success`, so a `workflow_run` deploy starts.
+- A docs-only push to `main` also reads green when the commit before it failed. Read the last code commit for the real verdict.
 - Use `paths` when a workflow must run for named Markdown files or directories.
 - Never add `paths-ignore` to an event that already uses `paths`. GitHub rejects both on one event.
 - Tag, schedule, and manual events keep their existing behavior. GitHub does not apply path filters to tag pushes.

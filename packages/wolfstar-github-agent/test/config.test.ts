@@ -48,6 +48,130 @@ repositories:
 `
 
 describe('configuration boundary', () => {
+  it('requires private Agent sessions and public Passkey-only login before enabling public terminals', () => {
+    const configured = configText.replace(
+      'server:',
+      'server:\n  public_terminal_sessions: true\n  public_browser_password_login: false\n  agent_sessions: true\n  browser_origins: [https://agent.example.com]',
+    )
+    const valid = parseConfigText(configured)
+    expect(valid._tag === 'Ok' && valid.value.server.publicTerminalSessions).toBe(true)
+    for (const text of [
+      configured.replace('agent_sessions: true', 'agent_sessions: false'),
+      configured.replace('public_browser_password_login: false', 'public_browser_password_login: true'),
+      configured.replace('  browser_origins: [https://agent.example.com]', ''),
+      configured.replace(`path: ${homedir()}/.local/share/wolfstar-github-agent/state.sqlite`, 'path: ":memory:"'),
+    ]) {
+      const result = parseConfigText(text)
+      expect(result._tag === 'Err' && result.error.map((issue) => issue.path)).toContain(
+        '$.server.public_terminal_sessions',
+      )
+    }
+  })
+  it('requires an explicit public origin when its browser password login is disabled', () => {
+    const withoutOrigin = parseConfigText(
+      configText.replace('server:', 'server:\n  public_browser_password_login: false'),
+    )
+    expect(withoutOrigin._tag === 'Err' && withoutOrigin.error.map((issue) => issue.path)).toContain(
+      '$.server.public_browser_password_login',
+    )
+    const configured = parseConfigText(
+      configText.replace(
+        'server:',
+        'server:\n  public_browser_password_login: false\n  browser_origins: [https://agent.example.com]',
+      ),
+    )
+    expect(configured._tag === 'Ok' && configured.value.server.publicBrowserPasswordLogin).toBe(false)
+    for (const text of [
+      configText.replace(
+        'allowed_origin: https://wolfstar-github-agent.localhost',
+        'allowed_origin: http://127.0.0.1:3210',
+      ),
+      configText.replace(`path: ${homedir()}/.local/share/wolfstar-github-agent/state.sqlite`, 'path: ":memory:"'),
+    ]) {
+      const unsafe = parseConfigText(
+        text.replace(
+          'server:',
+          'server:\n  public_browser_password_login: false\n  browser_origins: [https://agent.example.com]',
+        ),
+      )
+      expect(unsafe._tag === 'Err' && unsafe.error.map((issue) => issue.path)).toContain(
+        '$.server.public_browser_password_login',
+      )
+    }
+  })
+  it('accepts one explicit public Passkey origin and rejects ambiguous or insecure authorities', () => {
+    const configured = (origins: string) =>
+      parseConfigText(configText.replace('server:', `server:\n  browser_origins: ${origins}`))
+    const valid = configured('[https://agent.example.com]')
+    expect(valid._tag === 'Ok' && valid.value.server.browserOrigins).toEqual(['https://agent.example.com'])
+    for (const origins of [
+      '[https://one.example, https://two.example]',
+      '[http://agent.example.com]',
+      '[https://agent.example.com/path]',
+      '[https://wolfstar-github-agent.localhost]',
+    ]) {
+      const result = configured(origins)
+      expect(result._tag === 'Err' && result.error.map((issue) => issue.path)).toContain('$.server.browser_origins')
+    }
+  })
+  it('reads a dedicated GitHub account for one repository', () => {
+    const text = configText.replace(
+      '    enabled: true',
+      `    enabled: true
+    github_account:
+      login: im-brundlefly
+      token_path: /home/wolfstar/.config/wolfstar-github-agent/brundlefly-token
+      name: Brundlefly
+      url: https://github.com/wolfstar-project/brundlefly
+      instructions: Use short, clear sentences.`,
+    )
+    const result = parseConfigText(text)
+    expect(result._tag === 'Ok' && result.value.repositories[0]?.githubAccount).toEqual({
+      login: 'im-brundlefly',
+      tokenPath: '/home/wolfstar/.config/wolfstar-github-agent/brundlefly-token',
+      name: 'Brundlefly',
+      url: 'https://github.com/wolfstar-project/brundlefly',
+      instructions: 'Use short, clear sentences.',
+    })
+  })
+
+  it('requires an explicit opt-in before Agent sessions can use host credentials', () => {
+    const disabled = parseConfigText(configText)
+    expect(disabled._tag === 'Ok' && disabled.value.server.agentSessions === true).toBe(false)
+    const enabled = parseConfigText(configText.replace('server:', 'server:\n  agent_sessions: true'))
+    expect(enabled._tag === 'Ok' && enabled.value.server.agentSessions).toBe(true)
+    const invalid = parseConfigText(configText.replace('server:', 'server:\n  agent_sessions: yes'))
+    expect(invalid._tag === 'Err' && invalid.error.map((issue) => issue.path)).toContain('$.server.agent_sessions')
+    const retired = parseConfigText(configText.replace('server:', 'server:\n  desktop_sessions: true'))
+    expect(retired._tag === 'Err' && retired.error.map((issue) => issue.path)).toContain('$.server.desktop_sessions')
+  })
+  it('scopes release defaults to an allowed owner and trusted checkout root', () => {
+    const block = `release_defaults:\n  owner: wolfstar-project\n  checkout_root: ${homedir()}/pkg\n  manifest: package.json\n  version_files: [package.json]\n  tag_prefix: v\n  workflow: release.yml\n  checks: all\n`
+    const parsed = parseConfigText(`${block}${configText}`)
+    expect(parsed._tag === 'Ok' && parsed.value.releaseDefaults).toEqual({
+      owner: 'wolfstar-project',
+      checkoutRoot: `${homedir()}/pkg`,
+      policy: {
+        manifest: 'package.json',
+        versionFiles: ['package.json'],
+        tagPrefix: 'v',
+        workflow: 'release.yml',
+        checks: 'all',
+        credential: { _tag: 'Repository' },
+      },
+    })
+    const outside = parseConfigText(`${block.replace(`${homedir()}/pkg`, '/tmp')}${configText}`)
+    expect(outside._tag === 'Err' && outside.error.map((issue) => issue.path)).toContain(
+      '$.release_defaults.checkout_root',
+    )
+  })
+
+  it('allows one repository to disable inherited release defaults', () => {
+    const parsed = parseConfigText(configText.replace('    enabled: true', '    enabled: true\n    release: false'))
+    expect(parsed._tag === 'Ok' && Object.hasOwn(parsed.value.repositories[0]!, 'release')).toBe(true)
+    expect(parsed._tag === 'Ok' && parsed.value.repositories[0]?.release).toBeUndefined()
+  })
+
   it('reads Reasoning effort for one repository without changing the global overrides', () => {
     const parsed = parseConfigText(
       configText.replace(
@@ -384,6 +508,41 @@ agent:
       },
     })
   })
+
+  it.each([
+    ['owned', ''],
+    ['maintained', '\n      credential: user'],
+    ['owned', '\n      credential: user'],
+  ])('accepts a package release policy on an %s repository', (ownership, credential) => {
+    const parsed = parseConfigText(
+      configText
+        .replace('ownership: owned', `ownership: ${ownership}`)
+        .replace(
+          '    take_ownership:',
+          `    release:\n      manifest: package.json\n      version_files: [package.json]\n      tag_prefix: v\n      workflow: release.yml\n      checks: [test]${credential}\n    take_ownership:`,
+        ),
+    )
+    expect(parsed._tag).toBe('Ok')
+  })
+
+  it.each([
+    ['maintained', '', 'Package releases in a maintained repository need the explicit opt in credential: user.'],
+    ['external', '\n      credential: user', 'Package releases require an owned or maintained repository.'],
+  ])(
+    'refuses a package release policy on a %s repository without the user credential opt in',
+    (ownership, credential, message) => {
+      const parsed = parseConfigText(
+        configText
+          .replace('ownership: owned', `ownership: ${ownership}`)
+          .replace('conflict_resolution: true', 'conflict_resolution: false')
+          .replace(
+            '    take_ownership:',
+            `    release:\n      manifest: package.json\n      version_files: [package.json]\n      tag_prefix: v\n      workflow: release.yml\n      checks: [test]${credential}\n    take_ownership:`,
+          ),
+      )
+      expect(parsed._tag === 'Err' && parsed.error).toContainEqual({ path: '$.repositories[0].release', message })
+    },
+  )
 
   it('refuses a contained scope on a repository the service does not own or review', () => {
     const maintained = parseConfigText(

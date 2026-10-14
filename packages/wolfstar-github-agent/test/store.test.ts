@@ -980,6 +980,43 @@ describe('journal store', () => {
     })
   })
 
+  it('does not requeue conflict work after branch authority is revoked', () => {
+    const store = createStore()
+    const mapping = repositoryMapping()
+    store.syncRepositories([mapping], '2026-08-13T00:00:00.000Z')
+    const subject = pullRequestItem()
+    store.recordObservation({ externalId: 'conflict', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject })
+    store.recordObservation({
+      externalId: 'clean',
+      observedAt: '2026-08-13T01:01:00.000Z',
+      source: 'poll',
+      subject: { ...subject, mergeState: 'clean' },
+    })
+    store.syncRepositories([{ ...mapping, writablePullRequestHeadPrefixes: ['feat/'] }], '2026-08-13T01:02:00.000Z')
+    store.recordObservation({ externalId: 'conflict', observedAt: '2026-08-13T01:03:00.000Z', source: 'poll', subject })
+
+    expect(store.claimNextConflictTask('worker', '2026-08-13T01:03:01.000Z', 60_000)).toBeNull()
+  })
+
+  it('does not claim queued conflict work after branch authority is revoked', () => {
+    const store = createStore()
+    const mapping = repositoryMapping()
+    store.syncRepositories([mapping], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({
+      externalId: 'conflict',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem(),
+    })
+    store.syncRepositories([{ ...mapping, writablePullRequestHeadPrefixes: ['feat/'] }], '2026-08-13T01:01:00.000Z')
+
+    expect(store.claimNextConflictTask('worker', '2026-08-13T01:01:01.000Z', 60_000)).toBeNull()
+    expect(store.getDashboardSnapshot('2026-08-13T01:01:02.000Z').tasks[0]?.state).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'The controller cannot write this pull request branch.',
+    })
+  })
+
   it('stops requeueing a conflict whose publication keeps losing the base branch race', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
@@ -1092,7 +1129,7 @@ describe('journal store', () => {
     expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
   })
 
-  it('does not requeue a conflict whose base merges cleanly until the head or the base changes', () => {
+  it('keeps completed clean merges settled until changed base inputs become stable', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const subject = pullRequestItem({ mergeState: 'conflicting', headSha: 'head-1', baseSha: 'base-1' })
@@ -1140,7 +1177,9 @@ describe('journal store', () => {
       source: 'poll',
       subject: { ...subject, baseSha: 'base-2' },
     })
-    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).not.toBeNull()
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)).toBeNull()
+    elapsed += 120_000
+    expect(store.claimNextConflictTask('worker-1', at(), 600_000)?.pullRequest.baseSha).toBe('base-2')
     expect(store.listIncidents()).toEqual([])
   })
 
@@ -2845,6 +2884,7 @@ describe('journal store', () => {
           },
         },
         now: () => new Date('2026-08-13T01:08:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           recordReviewClosure: (input) => {
@@ -3104,48 +3144,6 @@ describe('journal store', () => {
       }),
     ).toBe(true)
     expect(store.listStoppedReviews()).toEqual([])
-  })
-
-  it('stops a Baseline repair the next pull request Revision left behind', () => {
-    const store = createStore()
-    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
-    store.recordObservation({
-      externalId: 'stale-baseline-pr',
-      observedAt: '2026-08-13T01:00:00.000Z',
-      source: 'poll',
-      subject: pullRequestItem({ mergeState: 'clean' }),
-    })
-    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
-    if (review === null) throw new Error('Expected the review Task.')
-    const queued = store.queueBaselineRepairForReview({
-      taskId: review.id,
-      workerId: review.state.workerId,
-      fence: review.state.fence,
-      baseSha: review.pullRequest.baseSha,
-      at: '2026-08-13T01:02:00.000Z',
-    })
-    if (queued._tag === 'Rejected' || queued._tag === 'NotAuthorized') throw new Error(queued.reason)
-    const repair = store.claimNextBaselineRepairTask('baseline-agent', '2026-08-13T01:03:00.000Z', 600_000)
-    if (repair === null) throw new Error('Expected the Baseline repair Task.')
-
-    const moved = store.recordObservation({
-      externalId: 'stale-baseline-pr-moved',
-      observedAt: '2026-08-13T01:04:00.000Z',
-      source: 'poll',
-      subject: pullRequestItem({
-        mergeState: 'clean',
-        headSha: 'moved-head-commit',
-        updatedAt: '2026-08-13T01:04:00.000Z',
-      }),
-    })
-    if (moved._tag !== 'Inserted') throw new Error('Expected the head move to create a new Revision.')
-
-    expect(
-      store.getDashboardSnapshot('2026-08-13T01:05:00.000Z').tasks.find((task) => task.id === repair.id)?.state,
-    ).toEqual({
-      _tag: 'Superseded',
-      reason: 'A newer pull request Revision replaced this Baseline repair.',
-    })
   })
 
   it('lists the open pull requests this service opened, so a new one can stack on them', () => {
@@ -5170,6 +5168,7 @@ describe('journal store', () => {
 
   it.each([
     ['corrected publication staging becomes available', 'The task already has a different publication command.'],
+    ['the desktop reconnects', 'Desktop disconnected during the Agent turn.'],
     ['GitHub App permissions are granted', 'The permissions requested are not granted to this installation.'],
   ])('retries mutation work after %s', (_scenario, reason) => {
     const store = createStore()

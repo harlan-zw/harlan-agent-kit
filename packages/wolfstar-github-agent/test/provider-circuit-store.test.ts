@@ -27,7 +27,67 @@ const circuit = {
   failureClass: 'network' as const,
 }
 
+it('holds an exhausted model after one failure without blocking OpenCode Go', () => {
+  const journal = store()
+  journal.recordProviderFailure({
+    ...circuit,
+    failureClass: 'usage_limit',
+    detail: 'Weekly/Monthly Limit Exhausted',
+    at: '2026-10-12T01:00:00.000Z',
+  })
+  expect(journal.providerCanStart({ ...circuit, at: '2026-10-12T01:01:00.000Z' })).toBe(false)
+  expect(
+    journal.providerCanStart({ ...circuit, model: 'zai-coding-plan/glm-5.3', at: '2026-10-12T01:01:00.000Z' }),
+  ).toBe(false)
+  expect(
+    journal.providerCanStart({ ...circuit, model: 'opencode-go/glm-5.3-flash', at: '2026-10-12T01:01:00.000Z' }),
+  ).toBe(true)
+  const model = 'zai-coding-plan/glm-5.3'
+  const canary = journal.reserveProviderStart({
+    ...circuit,
+    model,
+    workerId: 'quota-canary',
+    at: '2026-10-12T06:01:00.000Z',
+    leaseMilliseconds: 60_000,
+  })
+  if (canary._tag !== 'Allowed' || canary.canary === null) throw new Error('Expected a shared plan canary.')
+  expect(
+    journal.recordProviderSuccess({
+      ...circuit,
+      model,
+      workerId: canary.canary.workerId,
+      canaryCircuitId: canary.canary.circuitId,
+      canaryFence: canary.canary.fence,
+      at: '2026-10-12T06:01:10.000Z',
+    }),
+  ).toBe(1)
+  expect(journal.providerCanStart({ ...circuit, at: '2026-10-12T06:02:00.000Z' })).toBe(true)
+  journal.recordProviderFailure({
+    ...circuit,
+    failureClass: 'usage_limit',
+    detail: 'Weekly limit exhausted.',
+    at: '2026-10-12T06:03:00.000Z',
+  })
+  expect(journal.providerCanStart({ ...circuit, at: '2026-10-12T06:04:00.000Z' })).toBe(false)
+})
+
 describe('persistent Agent provider circuits', () => {
+  it('releases a cancelled canary without changing health and rejects its stale fence', () => {
+    const journal = store()
+    for (const at of ['2026-08-13T01:00:00.000Z', '2026-08-13T01:00:01.000Z', '2026-08-13T01:00:02.000Z'])
+      journal.recordProviderFailure({ ...circuit, detail: 'Network failure.', at })
+    const claim = (workerId: string, at: string) =>
+      journal.reserveProviderStart({ ...circuit, workerId, at, leaseMilliseconds: 60_000 })
+    const first = claim('first', '2026-08-13T01:05:02.000Z')
+    if (first._tag !== 'Allowed' || first.canary === null) throw new Error('Expected a canary reservation.')
+    const health = journal.listProviderCircuits()[0]!
+    expect(journal.releaseProviderStart({ ...first.canary, at: '2026-08-13T01:05:03.000Z' })).toBe(true)
+    expect(journal.listProviderCircuits()[0]).toMatchObject({ failures: health.failures, state: { _tag: 'Open' } })
+    const second = claim('second', '2026-08-13T01:05:03.000Z')
+    expect(second._tag).toBe('Allowed')
+    expect(journal.releaseProviderStart({ ...first.canary, at: '2026-08-13T01:05:04.000Z' })).toBe(false)
+    expect(claim('third', '2026-08-13T01:05:04.000Z')._tag).toBe('Paused')
+  })
   it('does not spend a Task attempt while its provider circuit is open', () => {
     const journal = store()
     journal.syncRepositories([repositoryMapping()], '2026-08-13T01:00:00.000Z')

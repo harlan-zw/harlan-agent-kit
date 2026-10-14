@@ -28,6 +28,12 @@ export const stalledProgressSeconds = 120
 /** Past this the snapshot is old enough that acting on it could be wrong. */
 export const staleSnapshotSeconds = 90
 
+/** The HTTP Date keeps monitoring deadlines independent of the browser clock. */
+export function serviceClockOffset(serverDate: string | null, receivedAt: Date): number {
+  const at = serverDate === null ? Number.NaN : Date.parse(serverDate)
+  return Number.isFinite(at) ? at - receivedAt.getTime() : 0
+}
+
 export type StatusTone = 'error' | 'warning' | 'primary' | 'success'
 
 export type AgentProfileState =
@@ -56,6 +62,7 @@ export interface ProviderCapacityPresentation {
 export interface ScheduledRoutineRecord {
   routine: Routine
   latestRun: DashboardRoutineRun | undefined
+  resultRun: DashboardRoutineRun | undefined
 }
 
 export interface RoutineRunPresentation {
@@ -70,23 +77,41 @@ export function scheduledRoutineRecords(
   runs: readonly DashboardRoutineRun[],
 ): ScheduledRoutineRecord[] {
   const newest = new Map<string, DashboardRoutineRun>()
+  const results = new Map<string, DashboardRoutineRun>()
   runs.forEach((run) => {
     const current = newest.get(run.routineId)
     if (current === undefined || run.scheduledFor > current.scheduledFor) newest.set(run.routineId, run)
+    const result = results.get(run.routineId)
+    if (
+      (run.state._tag === 'Completed' || run.state._tag === 'Failed') &&
+      (result === undefined || run.scheduledFor > result.scheduledFor)
+    )
+      results.set(run.routineId, run)
   })
-  return routines.map((routine) => ({ routine, latestRun: newest.get(routine.id) }))
+  return routines.map((routine) => ({ routine, latestRun: newest.get(routine.id), resultRun: results.get(routine.id) }))
 }
 
 /** Gives one Routine run a label, semantic tone, and durable outcome detail. */
-export function routineRunPresentation(run: RoutineRun | undefined): RoutineRunPresentation {
+export function routineRunPresentation(run: RoutineRun | DashboardRoutineRun | undefined): RoutineRunPresentation {
   if (run === undefined) return { label: 'Never run', tone: 'neutral' }
   switch (run.state._tag) {
     case 'Queued':
       return { label: 'Queued', tone: 'neutral' }
     case 'Running':
       return { label: 'Running', tone: 'primary', detail: run.progress.label }
-    case 'Completed':
-      return { label: 'Completed', tone: 'success', detail: run.state.evidence }
+    case 'Completed': {
+      const report = 'report' in run ? run.report : null
+      if (report?.verdict?.coverage === 'incomplete')
+        return { label: 'Blocked', tone: 'warning', detail: 'Coverage incomplete.' }
+      if (report?.verdict?.severity === 'RED')
+        return { label: 'Action required', tone: 'error', detail: run.state.evidence }
+      if (report?.verdict?.severity === 'AMBER')
+        return { label: 'Action required', tone: 'warning', detail: run.state.evidence }
+      if ('candidates' in run && run.candidates.some((candidate) => candidate.result._tag === 'Proposed'))
+        return { label: 'Action required', tone: 'warning', detail: run.state.evidence }
+      if (report?.verdict?.severity === 'GREEN') return { label: 'Clear', tone: 'success', detail: run.state.evidence }
+      return { label: 'Completed', tone: 'neutral', detail: run.state.evidence }
+    }
     case 'Failed':
       return { label: 'Failed', tone: 'error', detail: run.state.reason }
     case 'Skipped':
@@ -151,7 +176,12 @@ export function providerCapacityPresentation(entry: ProviderCapacityStatus): Pro
 
 /** The highest priority System state visible at one glance. */
 export function systemState(snapshot: DashboardSnapshot): { label: string; tone: StatusTone } {
-  if (snapshot.incidents.some((incident) => incident.recovery._tag !== 'Retrying'))
+  if (
+    snapshot.incidents.some(
+      (incident) => incident.recovery._tag === 'Exhausted' || incident.recovery._tag === 'ActionRequired',
+    ) ||
+    snapshot.repairRecoveryCandidates.length > 0
+  )
     return { label: 'Action required', tone: 'error' }
   if (snapshot.incidents.length > 0 || snapshot.status === 'degraded') return { label: 'Retrying', tone: 'warning' }
   if (snapshot.status === 'starting') return { label: 'Starting', tone: 'warning' }
@@ -225,7 +255,12 @@ export function stalledLabel(agent: ActiveAgent, now: Date): string {
 
 export function isSnapshotStale(generatedAt: string, now: Date): boolean {
   if (generatedAt.length === 0) return false
-  return secondsSince(generatedAt, now) > staleSnapshotSeconds
+  const at = Date.parse(generatedAt)
+  return (
+    !Number.isFinite(at) ||
+    now.getTime() - at > staleSnapshotSeconds * 1000 ||
+    at > now.getTime() + staleSnapshotSeconds * 1000
+  )
 }
 
 export function repositoryState(repository: RepositoryStatus): {
@@ -478,7 +513,8 @@ function sentence(value: string): string {
 
 /** Explains a Review outcome without making Review findings read as agent failure. */
 export function reviewOutcomeDetail(agent: ReviewAgent): string {
-  if (agent.outcome._tag === 'Ready') return 'No issues found.'
+  if (agent.outcome._tag === 'Ready')
+    return agent.findings.some((finding) => finding._tag === 'Logged') ? 'No finding above 80/100.' : 'No issues found.'
 
   const openFindings = agent.findings.filter((finding) => finding._tag === 'Open')
   if (openFindings.length > 0) {
@@ -506,6 +542,7 @@ const incidentKindLabels: Record<IncidentKind, string> = {
   network: 'Network',
   policy: 'Repository policy',
   rate_limit: 'Rate limit',
+  resource_limit: 'Memory limit',
   runner_lost: 'Runner lost',
   subject_changed: 'Head commit moved',
   unknown: 'Unclassified',
@@ -526,9 +563,16 @@ export function incidentTone(incident: Incident): StatusTone {
 }
 
 /** Says what the controller will do next, so the pane answers "do I act on this?". */
-export function incidentRecoveryLabel(incident: Incident): string {
-  if (incident.recovery._tag === 'Retrying')
-    return incident.recovery.attempt > 0 ? `Retrying · retry ${incident.recovery.attempt}` : 'Retrying'
+export function incidentRecoveryLabel(incident: Incident, now: Date): string {
+  if (incident.recovery._tag === 'OnNextOperation') return 'The next Controller operation checks recovery.'
+  if (incident.recovery._tag === 'Retrying') {
+    const seconds = Math.max(0, Math.ceil((Date.parse(incident.recovery.nextAttemptAt) - now.getTime()) / 1000))
+    const label =
+      !Number.isFinite(seconds) || seconds === 0
+        ? 'Retry due'
+        : `Retry in ${Math.floor(seconds / 60)}m ${seconds % 60}s`
+    return incident.recovery.attempt > 0 ? `${label} · retry ${incident.recovery.attempt}` : label
+  }
   return incident.recovery._tag === 'Exhausted' ? 'Retries exhausted' : 'Action required'
 }
 

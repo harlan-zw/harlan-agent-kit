@@ -8,6 +8,8 @@ Agent plugin for Nuxt/Vue/TypeScript workflows. No build step: bash hooks plus m
 check              # Parallel lint + typecheck + test (installed to ~/.local/bin)
 pnpm lint:fix      # Oxlint autofix + Oxfmt
 pnpm check:context # Verify installed Agent instructions match agent-context/
+pnpm sync:skills   # Sync declared portable Skills through skilld
+pnpm check:skills  # Check installed Skills against .skills/skilld.json
 pnpm sync:context # Install tracked Claude and Codex instructions, the commit-msg hook, and the opencode plugin
 pnpm sync:context:hogwild # Install tracked instructions on Hogwild
 pnpm test:opencode-hooks # Run the opencode plugin against the real hook scripts
@@ -35,7 +37,7 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 
 **Disable hooks per-project**: `.claude/hooks.json` with `{"disabled": ["oxlint", "oxfmt", "pre-commit-push"]}`
 
-**Workflow** (`.github/workflows/test.yml`): four jobs on GitHub hosted runners, lint, typecheck, build, and test. The test job installs a pinned `wt`, because several suites drive the real binary. Every event ignores `**/*.md`, so a Markdown only push to `main` runs nothing.
+**Workflow** (`.github/workflows/test.yml`): select jobs from changed paths with `scripts/ci-changes.ts`. Executable Markdown runs tests. Code runs lint, typecheck, build, and tests. README, changelog, license, and plan prose skip these jobs. Keep path selection at the job level so required checks report. Use GitHub hosted runners. The test job installs a pinned `wt` for real worktree workflows.
 
 **Two service checkouts**: Hogwild runs the controller from its own clone, and the desktop runs `wolfstar-desktop-agent` from a clone of the same path on the desktop. Both halves of an offloaded turn must speak the same shape, so `pnpm service:hogwild:update` moves both and `DESKTOP_PROTOCOL` in `desktop-protocol.ts` guards the gap. A desktop reporting an older protocol is stood down, and the work stays on Hogwild. Raise that constant whenever the turn or report shape changes.
 
@@ -47,7 +49,7 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 
 **Hook**: `hooks/[name].sh`, registered in `plugin.json`. Source `check-config.sh` for disable support. Input arrives as stdin JSON (`tool_input.*`). Block with `{"decision":"block","reason":"..."}`. Continue (Stop only) with `{"decision":"followup_message","message":"..."}`.
 
-**Skill**: `skills/[name]/SKILL.md` with frontmatter (`description`, `user_invocable: true`). Keep SKILL.md to the decision-making core and push procedures, long bash blocks, and rubrics into `references/`. Add `templates/` for files the skill scaffolds, and only reference files that exist: dangling reference links cost a wasted turn mid-task.
+**Skill**: `skills/[name]/SKILL.md` with required `name` and `description` frontmatter. Use standard Agent Skills fields and documented Claude Code settings. Omit default invocation settings. Keep SKILL.md to the decision-making core and push procedures, long bash blocks, and rubrics into `references/`. Add `templates/` for files the skill scaffolds, and only reference files that exist: dangling reference links cost a wasted turn mid-task.
 
 **Root docs**: every repository Wolfstar owns carries the same root set and `docs/` lifecycle. The contract is `wolfstar-agent-kit/references/root-docs.md`; `pkg-conform` applies it by checklist, and nothing enforces it automatically yet.
 

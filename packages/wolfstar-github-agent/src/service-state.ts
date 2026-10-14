@@ -148,6 +148,36 @@ function mergeRoutineState(database: DatabaseSync): CombinedServiceState {
           ELSE max(incidents.resolved_at, excluded.resolved_at)
         END;
     `)
+    if (tableColumns(database, 'main', 'incident_resolutions').length > 0) {
+      const conflict = database
+        .prepare(`
+        SELECT 1 FROM incident_resolutions AS destination
+        JOIN routine_state.incident_resolutions AS source
+          ON source.incident_id = destination.incident_id AND source.last_seen_at = destination.last_seen_at
+        WHERE source.evidence_digest != destination.evidence_digest
+      `)
+        .get()
+      if (conflict !== undefined)
+        throw new Error('The two sources contain different evidence for the same incident resolution.')
+      database.exec(`
+        INSERT INTO incident_resolutions SELECT * FROM routine_state.incident_resolutions
+        WHERE true ON CONFLICT(incident_id, last_seen_at) DO NOTHING;
+      `)
+      const columns = tableColumns(database, 'main', 'workflow_events')
+        .filter((column) => column !== 'id')
+        .map(quoted)
+        .join(', ')
+      database.exec(`
+        INSERT INTO workflow_events (${columns})
+        SELECT ${columns} FROM routine_state.workflow_events AS source
+        WHERE source.stream = 'incident' AND NOT EXISTS (
+          SELECT 1 FROM workflow_events AS destination
+          WHERE destination.stream = source.stream AND destination.entity_id = source.entity_id
+            AND destination.event = source.event AND destination.reason IS source.reason
+            AND destination.occurred_at = source.occurred_at
+        );
+      `)
+    }
     const foreignKeyFailure = database.prepare('PRAGMA foreign_key_check').get()
     if (foreignKeyFailure !== undefined) throw new Error('The combined state has an invalid stored relationship.')
     const integrity = database.prepare('PRAGMA integrity_check').get() as { integrity_check: string } | undefined

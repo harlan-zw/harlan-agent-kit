@@ -405,7 +405,7 @@ Conformance includes title, template, linked issue, change type, description, an
 
 AI may draft or edit a PR description. Every affected description ends with this visible disclosure:
 
-> 🤖 AI disclosure: [Wolfstar Agent Kit](https://github.com/wolfstar-project/wolfstar-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).
+> 🤖 AI disclosure: [Wolfstar Agent Kit](https://github.com/wolfstar-project/wolfstar-agent-kit) modified this description. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).
 
 Never hide disclosure in an HTML comment. Preserve it during later edits and block publication when it is missing.
 

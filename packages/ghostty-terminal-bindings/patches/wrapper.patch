@@ -1,0 +1,144 @@
+--- a/lib/types.ts
++++ b/lib/types.ts
+@@ -405,6 +405,9 @@
+   ghostty_key_event_set_action(event: number, action: number): void;
+   ghostty_key_event_set_key(event: number, key: number): void;
+   ghostty_key_event_set_mods(event: number, mods: number): void;
++  ghostty_key_event_set_consumed_mods(event: number, mods: number): void;
++  ghostty_key_event_set_composing(event: number, composing: boolean): void;
++  ghostty_key_event_set_unshifted_codepoint(event: number, codepoint: number): void;
+   ghostty_key_event_set_utf8(event: number, ptr: number, len: number): void;
+ 
+   // Terminal lifecycle
+@@ -442,6 +445,8 @@
+   ghostty_terminal_is_alternate_screen(terminal: TerminalHandle): boolean;
+   ghostty_terminal_has_mouse_tracking(terminal: TerminalHandle): number;
+   ghostty_terminal_get_mode(terminal: TerminalHandle, mode: number, isAnsi: boolean): number;
++  ghostty_terminal_get_kitty_keyboard_flags(terminal: TerminalHandle): number;
++  ghostty_terminal_get_key_encoder_options(terminal: TerminalHandle): number;
+ 
+   // Scrollback API
+   ghostty_terminal_get_scrollback_length(terminal: TerminalHandle): number;
+--- a/lib/ghostty.ts
++++ b/lib/ghostty.ts
+@@ -187,52 +187,43 @@
+   encode(event: KeyEvent): Uint8Array {
+     const eventPtrPtr = this.exports.ghostty_wasm_alloc_opaque();
+     const createResult = this.exports.ghostty_key_event_new(0, eventPtrPtr);
+-    if (createResult !== 0) throw new Error(`Failed to create key event: ${createResult}`);
+-
+-    const view = new DataView(this.exports.memory.buffer);
+-    const eventPtr = view.getUint32(eventPtrPtr, true);
++    if (createResult !== 0) {
++      this.exports.ghostty_wasm_free_opaque(eventPtrPtr);
++      throw new Error(`Failed to create key event: ${createResult}`);
++    }
++    const eventPtr = new DataView(this.exports.memory.buffer).getUint32(eventPtrPtr, true);
+     this.exports.ghostty_wasm_free_opaque(eventPtrPtr);
+-
+-    this.exports.ghostty_key_event_set_action(eventPtr, event.action);
+-    this.exports.ghostty_key_event_set_key(eventPtr, event.key);
+-    this.exports.ghostty_key_event_set_mods(eventPtr, event.mods);
+-
+-    if (event.utf8) {
+-      const encoder = new TextEncoder();
+-      const utf8Bytes = encoder.encode(event.utf8);
+-      const utf8Ptr = this.exports.ghostty_wasm_alloc_u8_array(utf8Bytes.length);
+-      new Uint8Array(this.exports.memory.buffer).set(utf8Bytes, utf8Ptr);
+-      this.exports.ghostty_key_event_set_utf8(eventPtr, utf8Ptr, utf8Bytes.length);
+-      this.exports.ghostty_wasm_free_u8_array(utf8Ptr, utf8Bytes.length);
+-    }
+-
+-    const bufferSize = 32;
+-    const bufPtr = this.exports.ghostty_wasm_alloc_u8_array(bufferSize);
+-    const writtenPtr = this.exports.ghostty_wasm_alloc_usize();
+-
+-    const encodeResult = this.exports.ghostty_key_encoder_encode(
+-      this.encoder,
+-      eventPtr,
+-      bufPtr,
+-      bufferSize,
+-      writtenPtr
+-    );
+-
+-    if (encodeResult !== 0) {
+-      this.exports.ghostty_wasm_free_u8_array(bufPtr, bufferSize);
+-      this.exports.ghostty_wasm_free_usize(writtenPtr);
++    const utf8Bytes = new TextEncoder().encode(event.utf8 ?? '');
++    let utf8Ptr = 0;
++    let bufPtr = 0;
++    let writtenPtr = 0;
++    const bufferSize = utf8Bytes.length * 12 + 64;
++    try {
++      this.exports.ghostty_key_event_set_action(eventPtr, event.action);
++      this.exports.ghostty_key_event_set_key(eventPtr, event.key);
++      this.exports.ghostty_key_event_set_mods(eventPtr, event.mods);
++      this.exports.ghostty_key_event_set_consumed_mods(eventPtr, event.consumedMods ?? 0);
++      this.exports.ghostty_key_event_set_composing(eventPtr, event.composing ?? false);
++      this.exports.ghostty_key_event_set_unshifted_codepoint(eventPtr, event.unshiftedCodepoint ?? 0);
++      if (utf8Bytes.length > 0) {
++        utf8Ptr = this.exports.ghostty_wasm_alloc_u8_array(utf8Bytes.length);
++        new Uint8Array(this.exports.memory.buffer).set(utf8Bytes, utf8Ptr);
++        // The native event borrows this slice until encoding finishes.
++        this.exports.ghostty_key_event_set_utf8(eventPtr, utf8Ptr, utf8Bytes.length);
++      }
++      bufPtr = this.exports.ghostty_wasm_alloc_u8_array(bufferSize);
++      writtenPtr = this.exports.ghostty_wasm_alloc_usize();
++      const result = this.exports.ghostty_key_encoder_encode(this.encoder, eventPtr, bufPtr, bufferSize, writtenPtr);
++      if (result !== 0) throw new Error(`Failed to encode key: ${result}`);
++      // Allocations can grow memory and invalidate older DataViews.
++      const written = new DataView(this.exports.memory.buffer).getUint32(writtenPtr, true);
++      return new Uint8Array(this.exports.memory.buffer, bufPtr, written).slice();
++    } finally {
++      if (writtenPtr) this.exports.ghostty_wasm_free_usize(writtenPtr);
++      if (bufPtr) this.exports.ghostty_wasm_free_u8_array(bufPtr, bufferSize);
++      if (utf8Ptr) this.exports.ghostty_wasm_free_u8_array(utf8Ptr, utf8Bytes.length);
+       this.exports.ghostty_key_event_free(eventPtr);
+-      throw new Error(`Failed to encode key: ${encodeResult}`);
+     }
+-
+-    const bytesWritten = view.getUint32(writtenPtr, true);
+-    const encoded = new Uint8Array(this.exports.memory.buffer, bufPtr, bytesWritten).slice();
+-
+-    this.exports.ghostty_wasm_free_u8_array(bufPtr, bufferSize);
+-    this.exports.ghostty_wasm_free_usize(writtenPtr);
+-    this.exports.ghostty_key_event_free(eventPtr);
+-
+-    return encoded;
+   }
+ 
+   dispose(): void {
+@@ -738,6 +729,22 @@
+    * @param mode Mode number (e.g., 25 for cursor visibility, 2004 for bracketed paste)
+    * @param isAnsi True for ANSI modes, false for DEC modes (default: false)
+    */
++  /** Current negotiated flags from the authoritative native terminal state. */
++  getKittyKeyboardFlags(): KittyKeyFlags {
++    return this.exports.ghostty_terminal_get_kitty_keyboard_flags(this.handle) as KittyKeyFlags;
++  }
++
++  /** Synchronize all terminal-derived keyboard options immediately before encoding. */
++  configureKeyEncoder(encoder: KeyEncoder): void {
++    const state = this.exports.ghostty_terminal_get_key_encoder_options(this.handle);
++    encoder.setKittyFlags((state & 31) as KittyKeyFlags);
++    encoder.setOption(KeyEncoderOption.CURSOR_KEY_APPLICATION, (state & (1 << 8)) !== 0);
++    encoder.setOption(KeyEncoderOption.KEYPAD_KEY_APPLICATION, (state & (1 << 9)) !== 0);
++    encoder.setOption(KeyEncoderOption.IGNORE_KEYPAD_WITH_NUMLOCK, (state & (1 << 10)) !== 0);
++    encoder.setOption(KeyEncoderOption.ALT_ESC_PREFIX, (state & (1 << 11)) !== 0);
++    encoder.setOption(KeyEncoderOption.MODIFY_OTHER_KEYS_STATE_2, (state & (1 << 12)) !== 0);
++  }
++
+   getMode(mode: number, isAnsi: boolean = false): boolean {
+     return this.exports.ghostty_terminal_get_mode(this.handle, mode, isAnsi) !== 0;
+   }
+--- a/lib/input-handler.ts
++++ b/lib/input-handler.ts
+@@ -22,7 +22,7 @@
+  * Map KeyboardEvent.code values to USB HID Key enum values
+  * Based on: https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/code
+  */
+-const KEY_MAP: Record<string, Key> = {
++export const KEY_MAP: Record<string, Key> = {
+   // Letters
+   KeyA: Key.A,
+   KeyB: Key.B,

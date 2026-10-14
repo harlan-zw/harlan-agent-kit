@@ -41,7 +41,7 @@ export function createGitHubUserAccess(options: GitHubUserAccessOptions = {}): G
 
   return {
     async login() {
-      cachedLogin ??= await run(['api', 'user', '--jq', '.login'])
+      cachedLogin ??= await run(['api', 'graphql', '-f', 'query={viewer{login}}', '--jq', '.data.viewer.login'])
       return cachedLogin
     },
     token: (signal) => run(['auth', 'token'], signal),
@@ -50,12 +50,19 @@ export function createGitHubUserAccess(options: GitHubUserAccessOptions = {}): G
       if (owner === undefined || repo === undefined) return undefined
       return run([
         'api',
-        `repos/${owner}/${repo}`,
+        'graphql',
+        '-f',
+        'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){nameWithOwner defaultBranchRef{name} isArchived isFork repositoryTopics(first:100){nodes{topic{name}}} owner{login __typename}}}',
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `name=${repo}`,
         '--jq',
-        '{github: .full_name, defaultBranch: .default_branch, archived: .archived, fork: .fork, topics: .topics, owner: {login: .owner.login, type: .owner.type}}',
+        '.data.repository | if . == null then null else {github: .nameWithOwner, defaultBranch: (.defaultBranchRef.name // "main"), archived: .isArchived, fork: .isFork, topics: [.repositoryTopics.nodes[].topic.name], owner: {login: .owner.login, type: .owner.__typename}} end',
       ])
         .then((output) => {
-          const repository = JSON.parse(output) as Omit<InstalledRepository, 'authentication'>
+          const repository = JSON.parse(output) as Omit<InstalledRepository, 'authentication'> | null
+          if (repository === null) return undefined
           return repository.owner.type === 'User' || repository.owner.type === 'Organization'
             ? { ...repository, topics: repository.topics ?? [] }
             : undefined

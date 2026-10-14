@@ -1,11 +1,11 @@
 ---
 name: plan-ceo
 description: 'Challenge product scope and strategy before implementation. Use for feature planning, architecture choices, premise review, ambition, and silent-failure analysis.'
-user_invocable: true
 context: fork
 agent: Plan
 effort: high
 argument-hint: '[feature-name]'
+license: MIT
 ---
 
 # /plan-ceo -- Strategic Product & Scope Review
@@ -22,7 +22,10 @@ Challenge the premise of the plan before looking at code.
 
 ## Step 2: Mode Selection & Ambition Mapping
 
-Present the user with the four ambition modes and obtain their selection before proceeding.
+Infer the mode from the user's explicit scope and task.
+Use Hold Scope for bug fixes and refactors unless the user requests a different mode.
+State the selected mode and proceed when the scope is clear.
+Ask only when different modes materially change the work. Recommend one mode and explain its effect.
 
 - **SCOPE EXPANSION (Cathedral Mode):** The "10-star" vision. Propose the ambitious version that delivers 10x value for 2x effort. Present 3-5 "Expansion Proposals" for opt-in. Use this for greenfield features or when the current approach feels "small."
 - **SELECTIVE EXPANSION (Cherry-pick Mode):** Core scope + 3 delight items. Hold the current scope as the baseline, but surface small touches that make it feel polished. Use this for feature enhancements.
@@ -38,14 +41,17 @@ Audit the plan for trust and reliability.
 
 ## Step 4: Strategic Report
 
-Generate the final report using the **Gold Standard Template** in `templates/ceo-report.md`.
+Use the applicable sections of `templates/ceo-report.md` for the final report.
+If the mode is Hold Scope or Scope Reduction, omit expansion proposals and delight items.
 
-- **10x Version:** One sentence on what the most ambitious version looks like.
+- **10x Version:** Include the ambitious version only in an expansion mode.
 - **Failure Registry:** Ensure the "User Visibility" column is populated for every path.
 - **Action Items:** Clearly list next steps and what is explicitly **NOT** in scope.
 
 ## Important Rules
 
 - **Do not proceed to implementation** during this skill. This is a planning-only "fork."
-- **Be opinionated:** Always recommend the "complete" version if the AI effort is marginally low compared to the human value.
-- **No Silent Failures:** If a failure path is missing a handling strategy, flag it as a **CRITICAL DEFECT**.
+- **Respect scope:** Recommend the best approach within the selected mode. Present expansion only when that mode permits it.
+- **No Silent Failures:** Record missing handling strategies and their likely user impact.
+  Assign severity from evidence, reach, and recoverability. Use critical severity only for demonstrated severe harm.
+  If evidence is missing, name the assumption and the check needed to resolve it.

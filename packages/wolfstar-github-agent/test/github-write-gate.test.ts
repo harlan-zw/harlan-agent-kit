@@ -34,13 +34,14 @@ describe('gitHub write gate', () => {
 
     const results = await Promise.all([
       gate.getToken('wolfstar-project/example', 'item_write'),
+      gate.getToken('wolfstar-project/example', 'review_thread_write'),
       gate.getToken('wolfstar-project/example', 'contents_write'),
       gate.getToken('wolfstar-project/example', 'pull_request_merge'),
       gate.getToken('wolfstar-project/example', 'workflows_write'),
     ])
 
     expect(results).toEqual(
-      Array.from({ length: 4 }, () => ({
+      Array.from({ length: 5 }, () => ({
         _tag: 'Err',
         error: {
           repository: 'wolfstar-project/example',

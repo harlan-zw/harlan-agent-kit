@@ -1,0 +1,47 @@
+{
+  "pins": {
+    "web": {
+      "repository": "coder/ghostty-web",
+      "commit": "1858a5947767a3e1c9e98dbf53b2ff87fedb2aab",
+      "archive": "ghostty-web.tar.gz",
+      "sha256": "bfa2a5b2ee5a1941a00dd93ba30c2ea3031286e519e588f1661e5a9fc8f8359b"
+    },
+    "native": {
+      "repository": "ghostty-org/ghostty",
+      "commit": "5714ed07a1012573261b7b7e3ed2add9c1504496",
+      "archive": "ghostty.tar.gz",
+      "sha256": "fabdc07412f5fb39835c875c1d07b5d41b724d84364bd5aff70e5fceda5c5f95"
+    },
+    "zig": {
+      "version": "0.15.2",
+      "archive": "zig.tar.xz",
+      "sha256": "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
+    },
+    "declarations": {
+      "package": "ghostty-web",
+      "version": "0.4.0"
+    },
+    "bundler": {
+      "package": "esbuild",
+      "version": "0.28.2"
+    }
+  },
+  "sources": {
+    "patches/native.patch": "697e5fb43a125f4fba4d2bf0513311f0b6f5067e22f438304361c5be3a8d8df1",
+    "patches/wrapper.patch": "6e5ed1268bbb35ad13c02f8bb8232ba7f5da3864de34936a7e27cfca6fc6a4d1",
+    "scripts/build.ts": "91c0a1439d841b6360e763695a3944553d207a78aac35e96bb353d4a7fc20395",
+    "scripts/verify.ts": "e0f586bcf854cd4c056bb71e437e6e3bf868622274ff3559e92bf9dc4d3592e9",
+    "scripts/provenance.ts": "67d30d617b9cca735413780047627f3732277174cf9f5b10b5635c5949b9328b",
+    "LICENSE.ghostty": "386211873e5b7a02f663ae4d7adf96285999f91608f8f9f31fecfd0f4095e6f1",
+    "LICENSE.ghostty-web": "5eccd0eeca906db6d661b64dd05e1d4a4b2e49d37d43bbcfd2c8cce4d7832920"
+  },
+  "files": {
+    "ghostty-vt.wasm": "b2801977cbd62ac802d781efcc52c3872bb3816491ffa5d3922fabcf9959e939",
+    "ghostty-web.js": "8c4f45074704527a9d70e464529c51eff368312181997b5a7c2f6afff308ecf2",
+    "browser.js": "1953b8c25d5c1012b7e2306a565a0d788641cfd9e868e4a4a45aa27675e049db",
+    "ghostty-web.d.ts": "861d99221a3c306d2ff326e0697d17d82b2284716ec57c4805cd0ec2264f9648",
+    "browser.d.ts": "41bc532f45143dcf1b42bb76da627dd17f74065fed123ca734f83889ca11c63c",
+    "LICENSE.ghostty": "386211873e5b7a02f663ae4d7adf96285999f91608f8f9f31fecfd0f4095e6f1",
+    "LICENSE.ghostty-web": "5eccd0eeca906db6d661b64dd05e1d4a4b2e49d37d43bbcfd2c8cce4d7832920"
+  }
+}

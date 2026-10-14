@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   DESKTOP_PROTOCOL,
   parseDesktopEvents,
-  parseDesktopMemory,
   parseDesktopReport,
   parseDesktopWorktree,
   readDesktopResponse,
@@ -10,10 +9,10 @@ import {
 import { DESKTOP_WORKTREE_LIMITS } from '../src/desktop-worktree.ts'
 
 describe('desktop boundaries', () => {
-  it('accepts a whole memory limit and refuses malformed settings', () => {
-    expect(parseDesktopMemory({ memoryGiB: 16 })).toBe(16)
-    for (const value of [null, {}, { memoryGiB: 0 }, { memoryGiB: 1.5 }, { memoryGiB: '16' }, { memoryGiB: 257 }])
-      expect(() => parseDesktopMemory(value)).toThrow('Desktop memory must be')
+  it.each(['host-cancelled', 'sandbox-setup', 'resource-limit'])('preserves %s attribution across hosts', (cause) => {
+    const event = { _tag: 'Failed', reason: 'The host stopped the turn.', cause }
+    expect(parseDesktopEvents([event])).toEqual([event])
+    expect(() => parseDesktopEvents([{ ...event, cause: 'unknown' }])).toThrow('failure cause is invalid')
   })
   it('reads a desktop that names no protocol as the revision before the field', () => {
     expect(parseDesktopReport({ memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 }).protocol).toBe(1)
@@ -50,6 +49,23 @@ describe('desktop boundaries', () => {
         files: [],
       }),
     ).toThrow('origin is not a GitHub repository')
+  })
+
+  it.each([
+    { _tag: 'ContextBudgetWarned', cachedTokensRead: 15_000_000, delivery: { _tag: 'Sent' } },
+    {
+      _tag: 'ContextBudgetWarned',
+      cachedTokensRead: 15_000_000,
+      delivery: { _tag: 'Failed', reason: 'The opencode server answered 500.' },
+    },
+  ])('carries a Context budget warning from the desktop', (event) => {
+    expect(parseDesktopEvents([event])).toEqual([event])
+  })
+
+  it('refuses a Context budget warning without a delivery', () => {
+    expect(() => parseDesktopEvents([{ _tag: 'ContextBudgetWarned', cachedTokensRead: 15_000_000 }])).toThrow(
+      'unsupported',
+    )
   })
 
   it('names the part of a Worktree it refuses', () => {

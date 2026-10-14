@@ -2,8 +2,9 @@ import type { GitHubIssuePublisher } from './github.ts'
 import type { Result } from './result.ts'
 import type { CheckinVerdict } from './routines/contract.ts'
 import type { JournalStore } from './store.ts'
-import type { Candidate, RoutineName, RoutineReportCommand, RoutineRun } from './types.ts'
+import type { Candidate, GitHubAccount, RoutineName, RoutineReportCommand, RoutineRun } from './types.ts'
 import { routineIssueLabel } from './candidate-issue-controller.ts'
+import { githubAccountBody } from './github-account.ts'
 import { err, ok } from './result.ts'
 import { MAXIMUM_REPORT_DETAIL_LENGTH } from './routines/contract.ts'
 
@@ -32,13 +33,19 @@ export function routineRunMarker(runId: string): string {
 /** Recognises a run log even when another controller filed it. */
 export function isRoutineTrackingIssue(input: {
   repository: string
+  account?: GitHubAccount | undefined
   title: string
   body: string | null | undefined
   labels: readonly string[]
 }): boolean {
   if (input.labels.includes('routine:daily-checkin')) {
+    if (input.body?.startsWith(`<!-- routine-log: ${input.repository}:daily-checkin -->\n`)) return true
     const runId = input.body?.match(/^<!-- routine-run: (.+) -->\n/)?.[1]
-    if (runId?.startsWith(`${input.repository}:daily-checkin:`) && input.body === dailyCheckinIssueBody(runId))
+    if (
+      runId?.startsWith(`${input.repository}:daily-checkin:`) &&
+      (input.body === dailyCheckinIssueBody(runId) ||
+        input.body === githubAccountBody(dailyCheckinIssueBody(runId), input.account))
+    )
       return true
   }
   const prefix = 'routine:'
@@ -48,7 +55,8 @@ export function isRoutineTrackingIssue(input: {
     return (
       routineName.length > 0 &&
       input.title.toLowerCase() === `${routineName}: run log for ${input.repository}`.toLowerCase() &&
-      input.body === trackingIssueBodyText(routineName)
+      (input.body === trackingIssueBodyText(routineName) ||
+        input.body === githubAccountBody(trackingIssueBodyText(routineName), input.account))
     )
   })
 }
@@ -160,6 +168,7 @@ export function routineReportCommand(input: {
     runId: input.run.id,
     repository: input.repository,
     routineName: input.routineName,
+    verdict: input.report._tag === 'Completed' ? (input.report.verdict ?? null) : null,
     body: `${routineRunMarker(input.run.id)}\n${
       input.routineName === 'daily-checkin'
         ? `# [${dailyCheckinStatus(input.report)}] Daily check-in: ${input.run.scheduledFor.slice(0, 10)}\n\n`
@@ -168,10 +177,24 @@ export function routineReportCommand(input: {
   }
 }
 
+function dailyReportTitle(command: RoutineReportCommand): string {
+  const status = command.body.match(/^# \[([^\]]+)\] Daily check-in:/m)?.[1] ?? 'BLOCKED'
+  return `[${status}] Daily check-in: ${command.repository}`
+}
+
+function dailyReportBody(command: RoutineReportCommand & { candidates: Candidate[] }): string {
+  return `<!-- routine-log: ${command.routineId} -->
+Wolfstar Agent Kit maintains this report automatically. Each run remains in the private archive.
+
+${command.body}${candidateDetails(command.candidates)}`
+}
+
 export interface RoutineReportControllerOptions {
+  /** Pending reports wait until the held GitHub quota becomes available. */
+  canPublish?: () => boolean
   github: Pick<
     GitHubIssuePublisher,
-    'createComment' | 'createIssue' | 'findIssueCommentByMarker' | 'findRoutineTrackingIssue'
+    'createComment' | 'createIssue' | 'updateIssue' | 'findIssueCommentByMarker' | 'findRoutineTrackingIssue'
   >
   leaseMilliseconds?: number
   now: () => Date
@@ -199,13 +222,14 @@ export interface RoutineReportController {
  */
 export function createRoutineReportController(options: RoutineReportControllerOptions): RoutineReportController {
   const leaseMilliseconds = options.leaseMilliseconds ?? 60_000
+  const canPublish = options.canPublish ?? (() => true)
 
   return {
     publishPending: async (signal, limit = 3) => {
       const results: Array<Result<{ repository: string; issueNumber: number }, string>> = []
       const attemptedCommandIds: string[] = []
       for (let written = 0; written < limit; written += 1) {
-        if (signal.aborted) return results
+        if (signal.aborted || !canPublish()) return results
         const command = options.store.claimNextRoutineReport(
           options.workerId,
           options.now().toISOString(),
@@ -234,7 +258,6 @@ export function createRoutineReportController(options: RoutineReportControllerOp
             {
               repository: command.repositoryMapping,
               routineName: command.routineName,
-              ...(daily ? { runId: command.runId } : {}),
             },
             signal,
           )
@@ -250,12 +273,8 @@ export function createRoutineReportController(options: RoutineReportControllerOp
                 repository: command.repositoryMapping,
                 // The staged heading already folds the run's Candidates in, so
                 // the title reads the very status the comment heading carries.
-                title: daily
-                  ? (command.body.match(
-                      /^# (\[(?:CLEAR|ACTION NEEDED|BLOCKED)\] Daily check-in: \d{4}-\d{2}-\d{2})$/m,
-                    )?.[1] ?? `[BLOCKED] Daily check-in: ${command.runId.slice(-24, -14)}`)
-                  : trackingIssueTitle(command.routineName, command.repository),
-                body: daily ? dailyCheckinIssueBody(command.runId) : trackingIssueBody(command.routineName),
+                title: daily ? dailyReportTitle(command) : trackingIssueTitle(command.routineName, command.repository),
+                body: daily ? dailyReportBody(command) : trackingIssueBody(command.routineName),
                 labels: [routineIssueLabel(command.routineName)],
               },
               signal,
@@ -282,7 +301,22 @@ export function createRoutineReportController(options: RoutineReportControllerOp
           continue
         }
 
-        const marker = routineRunMarker(command.runId)
+        if (daily) {
+          const updated = await options.github.updateIssue(
+            {
+              repository: command.repositoryMapping,
+              issueNumber,
+              title: dailyReportTitle(command),
+              body: dailyReportBody(command),
+            },
+            signal,
+          )
+          if (updated._tag === 'Err') {
+            fail(updated.error.message)
+            continue
+          }
+        }
+        const marker = daily ? `<!-- routine-report-index: ${command.routineId} -->` : routineRunMarker(command.runId)
         const existingComment = await options.github.findIssueCommentByMarker(
           {
             repository: command.repositoryMapping,
@@ -325,7 +359,9 @@ export function createRoutineReportController(options: RoutineReportControllerOp
           {
             repository: command.repositoryMapping,
             issueNumber,
-            body: `${command.body}${candidateDetails(command.candidates)}`,
+            body: daily
+              ? `${marker}\nWolfstar Agent Kit updates the latest report in this issue body. Each run remains in the private archive and Dashboard history.`
+              : `${command.body}${candidateDetails(command.candidates)}`,
           },
           signal,
         )

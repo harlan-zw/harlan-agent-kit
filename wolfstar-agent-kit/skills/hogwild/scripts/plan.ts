@@ -206,5 +206,6 @@ export function plan(argv: string[]): Plan {
  */
 export function stepArgv(step: Step): string[] {
   if (step.host === 'local') return ['bash', '-o', 'pipefail', '-c', step.command]
-  return ['ssh', '-o', 'BatchMode=yes', SSH_HOST[step.host], step.command]
+  const command = step.host === 'agent' ? `export PATH="$HOME/.local/bin:$PATH"; ${step.command}` : step.command
+  return ['ssh', '-o', 'BatchMode=yes', SSH_HOST[step.host], command]
 }

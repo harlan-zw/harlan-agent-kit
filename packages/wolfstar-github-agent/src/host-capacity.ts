@@ -1,11 +1,13 @@
 import type { AgentProvider, AgentTurnRequest } from './agent-provider.ts'
+import { desktopTurnMayMove } from './desktop-protocol.ts'
 
 export interface HostCapacity {
   localActive: number
   localMaximum: number
   desktopActive: number
   desktopMaximum: number
-  desktopConnected: boolean
+  /** Protocol and free memory permit Agent work. state.desktop.connected reports the connection. */
+  desktopAvailable: boolean
 }
 
 export type AgentHost = 'hogwild' | 'desktop'
@@ -49,12 +51,14 @@ export function parseAgentSlots(value: unknown, limits: AgentSlotLimits): { host
 /** The desktop helps only after Hogwild fills every local Agent slot. */
 export function agentHost(capacity: HostCapacity, refused: ReadonlySet<AgentHost> = new Set()): AgentHost | null {
   if (!refused.has('hogwild') && capacity.localActive < capacity.localMaximum) return 'hogwild'
-  if (!refused.has('desktop') && capacity.desktopConnected && capacity.desktopActive < capacity.desktopMaximum)
+  if (!refused.has('desktop') && capacity.desktopAvailable && capacity.desktopActive < capacity.desktopMaximum)
     return 'desktop'
   return null
 }
 
 export interface HostAgentPool {
+  /** Controller checks own a local slot without starting an implementation Agent. */
+  tryAcquireLocal: (taskId: string) => { release: () => void } | null
   read: () => HostCapacity
   tasks: () => Array<{ taskId: string | null; host: AgentHost }>
   provider: (local: AgentProvider, desktop: AgentProvider) => AgentProvider
@@ -73,7 +77,7 @@ function hostLimit(limit: HostAgentLimit): number {
 export function createHostAgentPool(options: {
   localMaximum: HostAgentLimit
   desktopMaximum: HostAgentLimit
-  desktopConnected: () => boolean
+  desktopAvailable: () => boolean
   wait: (signal: AbortSignal) => Promise<void>
 }): HostAgentPool {
   // A function limit is read at every admission, so Agent slots set from the
@@ -87,17 +91,32 @@ export function createHostAgentPool(options: {
     localMaximum: hostLimit(options.localMaximum),
     desktopActive,
     desktopMaximum: hostLimit(options.desktopMaximum),
-    desktopConnected: options.desktopConnected(),
+    desktopAvailable: options.desktopAvailable(),
   })
   return {
+    tryAcquireLocal(taskId) {
+      if (localActive >= hostLimit(options.localMaximum)) return null
+      const key = Symbol(taskId)
+      localActive += 1
+      tasks.set(key, { taskId, host: 'hogwild' })
+      return {
+        release: () => {
+          if (!tasks.delete(key)) return
+          localActive -= 1
+        },
+      }
+    },
     read,
     tasks: () => [...tasks.values()],
     provider: (local, desktop) => ({
       name: local.name,
       runTurn: (request: AgentTurnRequest) =>
         (async function* () {
-          const pinned: AgentHost | null =
-            request.sessionId?.startsWith('desktop:') === true
+          // Check-in credentials, controller snapshots, and durable archives belong to Hogwild.
+          const controllerCheckin = /^[^:]+:daily-checkin:/.test(request.taskId ?? '')
+          const pinned: AgentHost | null = controllerCheckin
+            ? 'hogwild'
+            : request.sessionId?.startsWith('desktop:') === true
               ? 'desktop'
               : request.sessionId !== null
                 ? 'hogwild'
@@ -110,7 +129,7 @@ export function createHostAgentPool(options: {
             const state = read()
             if (pinned !== null && refused.has(pinned)) return null
             if (pinned === 'desktop')
-              return state.desktopConnected && state.desktopActive < state.desktopMaximum ? 'desktop' : null
+              return state.desktopAvailable && state.desktopActive < state.desktopMaximum ? 'desktop' : null
             if (pinned === 'hogwild') return state.localActive < state.localMaximum ? 'hogwild' : null
             return agentHost(state, refused)
           }
@@ -144,7 +163,7 @@ export function createHostAgentPool(options: {
             } catch (error) {
               // Nothing reached the caller yet, so the other host may still run
               // this turn from the start.
-              if (!started && error instanceof Error && error.cause === 'desktop-unsupported') {
+              if (!started && error instanceof Error && desktopTurnMayMove(error)) {
                 refused.add(host)
                 refusal = error
                 continue

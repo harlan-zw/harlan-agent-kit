@@ -1,23 +1,31 @@
 ---
 name: tweet
-description: 'Draft and polish tweets with optional code cards, stat cards, or screenshot wraps. Use when the user wants a tweet or X post.'
-user_invocable: true
+description: 'Find tweet ideas, plan launch posts, and draft or polish tweets with code cards, stat cards, or screenshot wraps. Use for content strategy, what to post, when to post, or an X post.'
+argument-hint: '[draft, topic, release notes, screenshot, or ideas]'
+license: MIT
 ---
 
 # Tweet Skill
 
-Help the user draft, refine, and finalize tweets with compelling visuals. Automatically selects the right visual format based on content.
+Find content opportunities, plan launch posts, and draft tweets. Add a visual when it helps the reader.
+Keep planning and polishing in this Skill.
+
+## Authority
+
+Drafting does not authorize posting, replying, scheduling, or tagging accounts in a published post.
+Show the exact text and wait for publication approval.
+Never invent metrics, engagement, personal experience, or product claims.
 
 ## Gotchas
 
 - **Character count is tricky** -- URLs always count as 23 chars (t.co wrapping). Emojis count as 2. Newlines count as 1. Don't trust naive `length` checks.
 - **Twitter crops images at 16:9 in timeline** -- all templates output 1600x900 for this reason. Non-16:9 images get cropped unpredictably.
 - **Don't over-polish** -- tweets that sound too perfect feel like marketing. Preserve the user's natural voice, just fix obvious issues.
-- **Thread vs single tweet** -- if the user hasn't asked for a thread, don't suggest one. Single tweets perform better unless there's genuinely too much for 280 chars.
+- **Thread vs single tweet** -- default to one post. Use a thread when the user requests it or the meaning needs it.
 - **Screenshot dependencies** -- `sharp` and `@resvg/resvg-js` need to be installed. If they're not global, install to a temp dir, don't pollute the project.
 - **Hot takes can backfire** -- always flag the hot take variation as risky. The user should consciously opt in, not accidentally post something inflammatory.
-- **Always suggest a visual** -- text-only dev tweets get buried by the algorithm. Every finalized tweet should have a visual recommendation, even if the user didn't ask for one.
-- **Strip AI tells** -- before finalizing, run copy through `/humanize-writing`. No em-dashes, no "it's not X, it's Y", name specific tools/numbers over vague claims. AI-sounding tweets read as marketing and get ignored.
+- **Use a visual when it earns attention** -- suggest one when it helps the reader understand or assess the point.
+- Before finalizing, load the installed Brundlefly `im-part-human` Skill. Preserve supplied facts and voice.
 
 ## Data Storage
 
@@ -30,32 +38,48 @@ echo "$(date -I) | VISUAL_TYPE | FINAL_TWEET_TEXT" >> "${CLAUDE_PLUGIN_DATA}/twe
 
 On subsequent runs, read recent history to maintain consistent voice and avoid repeating hooks/angles.
 
-## Input
+## Input and mode
 
-`$ARGUMENTS` may contain:
+Predict the reader's attention in the feed before choosing scope and depth.
+Lead with the most useful point. Keep secondary changes brief or link to them.
+Do not turn every release feature into another post or visual by default.
 
-- Raw tweet text to refine
-- A file path to a screenshot to wrap
-- A code snippet to visualize
-- Release notes or changelog to turn into a launch tweet
-- Nothing (interactive mode)
+Select the mode from the user's request:
+
+| Request                                              | Mode      | Next step                                                                                           |
+| ---------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------- |
+| Ideas, content strategy, what to post, or no input   | Discovery | Read [planning](references/planning.md), then offer ranked ideas.                                   |
+| A launch, release notes, changelog, or a new project | Launch    | Read [planning](references/planning.md), then offer launch approaches.                              |
+| A draft, topic, screenshot, or code snippet          | Draft     | Start Step 1.                                                                                       |
+| Posting time or cadence only                         | Planning  | Read [planning](references/planning.md) and [playbook](references/playbook.md). Answer the request. |
+
+An explicit request wins over inferred input type.
+If the user asks to polish a release tweet, use Draft mode.
+If the user supplies an image without planning context, use Draft mode.
+
+Read both References when the user asks for a content plan.
+After a Discovery or Launch choice, continue at Step 1 with the chosen angle.
+Keep that angle. Do not repeat research or produce another set of initial approaches.
+If the user already selected exact copy, skip Step 2. Generate a visual only when requested or useful.
 
 ## Step 1: Analyze Input & Select Visual Strategy
 
-Determine what the user provided and select the appropriate visual:
+Choose a visual only when requested or when it helps the reader understand or assess the point.
+Otherwise select **No visual**. Do not ask for an image merely because the input is text.
 
-| Input type                      | Visual template       | When to use                                             |
-| ------------------------------- | --------------------- | ------------------------------------------------------- |
-| Screenshot/image path           | `wrap-screenshot.mjs` | User has an existing screenshot to polish               |
-| Code snippet or mentions code   | `code-card.mjs`       | Showing a specific API, config, or code example         |
-| Release/launch with metrics     | `stat-card.mjs`       | GitHub stars, downloads, benchmarks, version milestones |
-| General text, no obvious visual | Suggest one           | Ask: "What's the most visual part of this?"             |
+| Input type                     | Visual template       | When to use                                             |
+| ------------------------------ | --------------------- | ------------------------------------------------------- |
+| Screenshot/image path          | `wrap-screenshot.mjs` | User has an existing screenshot to polish               |
+| Code snippet or mentions code  | `code-card.mjs`       | Showing a specific API, config, or code example         |
+| Release/launch with metrics    | `stat-card.mjs`       | GitHub stars, downloads, benchmarks, version milestones |
+| General text, no useful visual | No visual             | The text conveys the point without an image             |
 
-If the input clearly maps to one visual, proceed directly. If more than one fits, briefly suggest the best fit and why.
+An explicit request for a visual wins. For a useful visual, choose the best fit from the table.
+If more than one fits, briefly suggest the best fit and why.
 
 ### Theme Selection
 
-All templates share 6 color themes. Pick based on context:
+If a visual is selected, pick its theme. All templates share 6 color themes:
 
 | Theme      | Vibe                        | Best for                                    |
 | ---------- | --------------------------- | ------------------------------------------- |
@@ -91,7 +115,8 @@ Read the draft and identify:
 
 ### Generate Variations
 
-Produce **3 variations** plus the fixed original:
+Default to one polished draft. Offer alternatives when requested or when the user needs to choose an angle.
+Keep the set small. These are available approaches, not a required checklist:
 
 1. **Fixed original** -- same voice/intent, fix obvious issues
 2. **Value-first** -- reframe around what the reader gets. "Free tool that does X" over "I built X"
@@ -103,7 +128,7 @@ For each variation show:
 - The tweet text
 - Character count
 - What changed and why
-- Which visual template + theme pairs best with this angle
+- A visual template and theme only when they help explain this angle; otherwise **No visual**
 
 ### Rules for Good Tweets
 
@@ -115,10 +140,11 @@ For each variation show:
 
 ### Iterate
 
-After showing variations, ask which direction they prefer or if they want to mix elements. Keep iterating until they're happy.
+If alternatives are needed, ask which direction they prefer. Keep iterating until they're happy.
 
 ## Step 3: Generate Visual
 
+If **No visual** is selected, skip this step and continue to Step 4.
 Based on the selected template, create a temporary script in scratchpad.
 
 ### 3a. Screenshot Wrapping (`wrap-screenshot.mjs`)
@@ -163,7 +189,7 @@ For milestones, releases with impressive numbers, benchmarks. Customize:
 
 Tips for good stat cards:
 
-- Round numbers up ("1,200+" not "1,187")
+- Use verified numbers. Never round up metrics to make them look better.
 - Use human-readable units ("45k" not "44,892")
 - Lead with the most impressive stat
 - Pair with a tweet that gives context the card doesn't
@@ -189,15 +215,11 @@ Read the output image to verify it looks correct. Show the user the result. If s
 Present:
 
 - The final tweet text with character count
-- The generated visual (show the image)
-- Suggested accounts to tag (max 2, relevant to content)
-- Suggested posting time (if relevant)
+- The generated visual, when requested or useful
+- Suggested accounts to tag only when they serve the requested post (max 2)
+- Suggested posting time (if relevant), using the user's audience and timezone
 
 Log to `${CLAUDE_PLUGIN_DATA}/tweet-history.log`.
+Use `none` as `VISUAL_TYPE` when no visual was generated.
 
-Offer to:
-
-- Make further adjustments to text or visual
-- Generate an alternative visual style
-- Try a different theme
-- Create a follow-up tweet for the next day
+Keep the handoff brief. Do not append a routine menu of more variants, themes, or follow-up posts.

@@ -36,7 +36,7 @@ describe('discoverUserRepositories', () => {
 
   it('adds a maintained repository the App cannot reach', async () => {
     const read: string[] = []
-    const repositories = await discoverUserRepositories({
+    const { repositories } = await discoverUserRepositories({
       allowedOwners: ['wolfstar-project', 'nuxt-modules'],
       checkouts,
       installed: [installed],
@@ -51,68 +51,100 @@ describe('discoverUserRepositories', () => {
     expect(repositories).toEqual([expect.objectContaining({ github: 'nuxt-modules/sitemap', authentication: 'user' })])
   })
 
-  it('leaves out a checkout whose remote points at a renamed repository', async () => {
+  it('names a checkout whose remote points at a renamed repository, and maps nothing for it', async () => {
     // GitHub redirects the old name, so the read answers with the current one.
-    expect(
-      await discoverUserRepositories({
-        allowedOwners: ['wolfstar-project', 'nuxt-modules'],
-        checkouts: [
-          { github: 'wolfstar-project/massivemonster.co', checkout: '/home/wolfstar/sites/massivemonster.co' },
-        ],
-        installed: [],
-        readRepository: () => Promise.resolve(organizationRepository('wolfstar-project/massivemonster.com')),
-      }),
-    ).toEqual([])
+    const discovery = await discoverUserRepositories({
+      allowedOwners: ['wolfstar-project', 'nuxt-modules'],
+      checkouts: [{ github: 'wolfstar-project/massivemonster.co', checkout: '/home/wolfstar/sites/massivemonster.co' }],
+      installed: [],
+      readRepository: () => Promise.resolve(organizationRepository('wolfstar-project/massivemonster.com')),
+    })
+
+    expect(discovery.repositories).toEqual([])
+    expect(discovery.renamed).toEqual([
+      {
+        checkout: '/home/wolfstar/sites/massivemonster.co',
+        origin: 'wolfstar-project/massivemonster.co',
+        current: 'wolfstar-project/massivemonster.com',
+      },
+    ])
+    expect(discovery.unresolved).toEqual([])
+  })
+
+  it.each([
+    ['rejects', () => Promise.reject(new Error('HTTP 502'))],
+    // The CLI answers every failure, an outage included, with no repository.
+    ['answers nothing', () => Promise.resolve(undefined)],
+  ])('names a repository as unresolved when the read %s', async (_, readRepository) => {
+    const discovery = await discoverUserRepositories({
+      allowedOwners: ['nuxt-modules'],
+      checkouts,
+      installed: [],
+      readRepository,
+    })
+
+    expect(discovery.repositories).toEqual([])
+    expect(discovery.unresolved).toEqual(['nuxt-modules/sitemap'])
   })
 
   it('leaves the App in charge when it already reaches the current repository', async () => {
     expect(
-      await discoverUserRepositories({
-        allowedOwners: ['wolfstar-project'],
-        checkouts: [{ github: 'wolfstar-project/example', checkout: '/home/wolfstar/pkg/example' }],
-        installed: [],
-        readRepository: (github) => Promise.resolve(organizationRepository(github)),
-      }),
+      (
+        await discoverUserRepositories({
+          allowedOwners: ['wolfstar-project'],
+          checkouts: [{ github: 'wolfstar-project/example', checkout: '/home/wolfstar/pkg/example' }],
+          installed: [],
+          readRepository: (github) => Promise.resolve(organizationRepository(github)),
+        })
+      ).repositories,
     ).toEqual([expect.objectContaining({ github: 'wolfstar-project/example' })])
 
     expect(
-      await discoverUserRepositories({
-        allowedOwners: ['wolfstar-project'],
-        checkouts: [{ github: 'wolfstar-project/example', checkout: '/home/wolfstar/pkg/example' }],
-        installed: [installed],
-        readRepository: (github) => Promise.resolve(organizationRepository(github)),
-      }),
+      (
+        await discoverUserRepositories({
+          allowedOwners: ['wolfstar-project'],
+          checkouts: [{ github: 'wolfstar-project/example', checkout: '/home/wolfstar/pkg/example' }],
+          installed: [installed],
+          readRepository: (github) => Promise.resolve(organizationRepository(github)),
+        })
+      ).repositories,
     ).toEqual([])
   })
 
   it('leaves out a repository Wolfstar cannot read or that is archived', async () => {
     expect(
-      await discoverUserRepositories({
-        allowedOwners: ['nuxt-modules'],
-        checkouts,
-        installed: [],
-        readRepository: () => Promise.resolve(undefined),
-      }),
+      (
+        await discoverUserRepositories({
+          allowedOwners: ['nuxt-modules'],
+          checkouts,
+          installed: [],
+          readRepository: () => Promise.resolve(undefined),
+        })
+      ).repositories,
     ).toEqual([])
 
     expect(
-      await discoverUserRepositories({
-        allowedOwners: ['nuxt-modules'],
-        checkouts,
-        installed: [],
-        readRepository: (github) => Promise.resolve(organizationRepository(github, true)),
-      }),
+      (
+        await discoverUserRepositories({
+          allowedOwners: ['nuxt-modules'],
+          checkouts,
+          installed: [],
+          readRepository: (github) => Promise.resolve(organizationRepository(github, true)),
+        })
+      ).repositories,
     ).toEqual([])
   })
 
   it('leaves out a fork', async () => {
     expect(
-      await discoverUserRepositories({
-        allowedOwners: ['nuxt-modules'],
-        checkouts,
-        installed: [],
-        readRepository: (github) => Promise.resolve(organizationRepository(github, false, true)),
-      }),
+      (
+        await discoverUserRepositories({
+          allowedOwners: ['nuxt-modules'],
+          checkouts,
+          installed: [],
+          readRepository: (github) => Promise.resolve(organizationRepository(github, false, true)),
+        })
+      ).repositories,
     ).toEqual([])
   })
 
@@ -203,11 +235,19 @@ describe('createUserTokenProvider', () => {
 })
 
 describe('createGitHubUserAccess', () => {
-  it('reads one repository through the GitHub CLI', async () => {
-    const commands: string[][] = []
+  it('identifies the account when its REST quota is exhausted', async () => {
+    const access = createGitHubUserAccess({
+      run: (args) =>
+        args[1] === 'graphql' ? Promise.resolve('h-z') : Promise.reject(new Error('REST API rate limit exceeded')),
+    })
+
+    expect(await access.login()).toBe('h-z')
+  })
+
+  it('reads a repository when its REST quota is exhausted', async () => {
     const access = createGitHubUserAccess({
       run: (args) => {
-        commands.push(args)
+        if (args[1] !== 'graphql') return Promise.reject(new Error('REST API rate limit exceeded'))
         return Promise.resolve(
           JSON.stringify({
             github: 'nuxt-modules/sitemap',
@@ -228,6 +268,11 @@ describe('createGitHubUserAccess', () => {
         fork: false,
       }),
     )
-    expect(commands[0]?.slice(0, 2)).toEqual(['api', 'repos/nuxt-modules/sitemap'])
+  })
+
+  it('leaves an inaccessible repository untracked', async () => {
+    const access = createGitHubUserAccess({ run: () => Promise.resolve('null') })
+
+    expect(await access.readRepository('nuxt-modules/missing')).toBeUndefined()
   })
 })

@@ -202,9 +202,9 @@ export function readZaiApiKey(configPath: string = OPENCODE_CONFIG_PATH): string
   try {
     const raw = readFileSync(configPath, 'utf8')
     const config = JSON.parse(raw) as {
-      provider?: Record<string, { options?: { apiKey?: unknown } }>
+      providers?: Record<string, { settings?: { apiKey?: unknown } }>
     }
-    const key = config.provider?.['zai-coding-plan']?.options?.apiKey
+    const key = config.providers?.['zai-coding-plan']?.settings?.apiKey
     return typeof key === 'string' && key.trim() !== '' ? key.trim() : null
   } catch {
     // No opencode configuration means the plan is not set up here. Not a fault.
@@ -264,7 +264,7 @@ export { chooseAgentProvider, hasSpendableCapacity } from './capacity.ts'
 
 export interface ProviderCapacitySource {
   /** The last reading. Never blocks an agent turn on a subprocess. */
-  read: (provider: AgentProviderName) => ProviderCapacity
+  read: (provider: AgentProviderName, model?: string) => ProviderCapacity
   refresh: () => Promise<void>
   start: () => void
   stop: () => Promise<void>
@@ -276,6 +276,24 @@ export interface ProviderCapacitySourceOptions {
   readClaude?: () => Promise<ProviderCapacity>
   readCodex?: () => Promise<ProviderCapacity>
   readOpencode?: () => Promise<ProviderCapacity>
+  readOpencodeGo?: () => Promise<ProviderCapacity>
+}
+
+/** Go has no supported limit-reading endpoint. Check its existing credential without exposing it. */
+export function readOpencodeGoCapacity(configPath = OPENCODE_CONFIG_PATH): ProviderCapacity {
+  let raw: string
+  try {
+    raw = readFileSync(configPath, 'utf8')
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')
+      return { _tag: 'Unavailable', reason: 'Connect OpenCode Go before starting a scan.' }
+    throw error
+  }
+  const config = JSON.parse(raw) as { providers?: Record<string, { settings?: { apiKey?: unknown } }> }
+  const key = config.providers?.['opencode-go']?.settings?.apiKey
+  return typeof key === 'string' && key.trim() !== ''
+    ? { _tag: 'Unpublished' }
+    : { _tag: 'Unavailable', reason: 'Connect OpenCode Go before starting a scan.' }
 }
 
 /**
@@ -292,8 +310,10 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
   const readCodex = options.readCodex ?? (() => readCodexCapacity())
   const readOpencode = options.readOpencode ?? (() => readZaiCapacity())
   let claude: ProviderCapacity = { _tag: 'Unpublished' }
+  const readGo = options.readOpencodeGo ?? (async () => readOpencodeGoCapacity())
   let codex: ProviderCapacity = { _tag: 'Unavailable', reason: 'The Codex weekly window has not been read yet.' }
   let opencode: ProviderCapacity = { _tag: 'Unavailable', reason: 'The GLM Coding Plan quota has not been read yet.' }
+  let go: ProviderCapacity = { _tag: 'Unavailable', reason: 'OpenCode Go credentials have not been read yet.' }
   let timer: NodeJS.Timeout | undefined
   let stopped = true
   let active: Promise<void> = Promise.resolve()
@@ -303,7 +323,7 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
       .then(async () => {
         // One failing provider must not stop the other being read, or a Codex
         // outage would make opencode look exhausted and stop the fleet.
-        const [nextClaude, nextCodex, nextOpencode] = await Promise.all([
+        const [nextClaude, nextCodex, nextOpencode, nextGo] = await Promise.all([
           readClaude().catch(
             () => ({ _tag: 'Unavailable', reason: 'The Claude limit could not be read.' }) as ProviderCapacity,
           ),
@@ -313,10 +333,14 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
           readOpencode().catch(
             () => ({ _tag: 'Unavailable', reason: 'The GLM Coding Plan quota could not be read.' }) as ProviderCapacity,
           ),
+          readGo().catch(
+            () => ({ _tag: 'Unavailable', reason: 'OpenCode Go credentials could not be read.' }) as ProviderCapacity,
+          ),
         ])
         claude = nextClaude
         codex = nextCodex
         opencode = nextOpencode
+        go = nextGo
       })
       .catch(options.onError)
     return active
@@ -329,7 +353,16 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
   }
 
   return {
-    read: (provider) => (provider === 'claude' ? claude : provider === 'codex' ? codex : opencode),
+    read: (provider, model) =>
+      provider === 'claude'
+        ? claude
+        : provider === 'codex'
+          ? codex
+          : model?.startsWith('opencode-go/')
+            ? go
+            : model === undefined || model.startsWith('zai-coding-plan/')
+              ? opencode
+              : { _tag: 'Unpublished' },
     refresh,
     start: () => {
       if (!stopped) return

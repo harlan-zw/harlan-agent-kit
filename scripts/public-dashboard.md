@@ -71,6 +71,45 @@ The nonexistent POST route tests Origin handling without changing Service state.
 The Tailscale address retains its existing access.
 The Dashboard's live Hogwild metrics remain available through Tailscale only.
 
+## Agent sessions
+
+The Sessions page lists Projects and terminal Agent sessions on its connected host.
+Select a Project and an installed Agent provider to start a terminal.
+Codex, Claude Code, and OpenCode keep their own terminal interface.
+Each Agent session owns one Worktree and an independent process scope.
+The scope shares the host's admission authority with maintenance and GitHub Actions.
+The Agent uses that host's local credentials, tools, and Agent instructions.
+Use the standalone terminal host for local Projects.
+Stored structured Agent sessions remain available through History and Stop.
+
+Install the updated `scripts/30-agent.caddy` route before enabling Agent sessions.
+The route denies public `/api/sessions`, `/api/desktop/sessions`, and `/api/terminal` requests, including child paths.
+It also stamps public proxy requests with `X-Wolfstar-Agent-Ingress: public`.
+The Service refuses that marker on every Agent session route.
+
+After installing and reloading Caddy, set this key in the existing Service configuration:
+
+```yaml
+server:
+  agent_sessions: true
+```
+
+Keep the other `server` keys. The default is `false`.
+If the configuration contains `desktop_sessions`, replace that key with `agent_sessions`.
+Update both Service checkouts with `pnpm service:hogwild:update`.
+Open `https://hogwild.tailcad325.ts.net/sessions` through Tailscale.
+
+Browser disconnects preserve the Agent process and its Worktree.
+API restarts reconnect to the independent process scope.
+Only the terminal writer may send input or resize the process.
+Other viewers receive the same terminal screen without input authority.
+Select Stop to end the entire owned process scope.
+The host releases the Worktree claim only after it proves the scope is empty.
+
+Verify public Session and terminal APIs return 403, including authenticated requests with the correct public Origin.
+Then verify Project selection, terminal input, reconnect, and Stop through the Tailscale address.
+Disabling `server.agent_sessions` preserves stored Agent sessions and leaves maintenance offload available.
+
 ## Rollback
 
 Remove the `agent.harlanzw.com` DNS record.
@@ -125,7 +164,7 @@ Under Permissions and events, subscribe to:
 - Check run and Check suite
 - Commit status
 - Issue comment and Issues
-- Pull request and Pull request review
+- Pull request, Pull request review, and Pull request review comment
 - Push
 
 Use Recent deliveries to redeliver an event. Require a 204 response and a matching `Webhook:` Service log.

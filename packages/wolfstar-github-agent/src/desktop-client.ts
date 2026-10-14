@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import type { DesktopTurn } from './desktop-broker.ts'
+import type { DesktopFailure } from './desktop-protocol.ts'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -9,16 +10,23 @@ import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { checkAgentWorker } from './agent-sandbox.ts'
 import {
   DESKTOP_AGENT_SLOT_CEILING,
   DESKTOP_MEMORY_PER_AGENT_GIB,
   DESKTOP_PROTOCOL,
   readDesktopResponse,
 } from './desktop-protocol.ts'
+import { createDesktopSessionClient, createSessionHttpTransport } from './desktop-session-client.ts'
+import { createDesktopTurnLease } from './desktop-turn-client.ts'
 import { desktopCommand } from './desktop-worktree.ts'
+import { setHostSlotPolicy } from './host-slot-policy.ts'
+import { parseMaintenanceAuthority } from './maintenance-scope.ts'
+import { parseReviewProofCallback } from './review-proof-duplex.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
 
 async function main(): Promise<void> {
+  await checkAgentWorker(process.env)
   const origin = process.env.WOLFSTAR_GITHUB_AGENT_CONTROLLER_URL
   if (origin === undefined || !origin.startsWith('https://')) throw new Error('An HTTPS controller URL is required.')
   const password = (
@@ -28,8 +36,7 @@ async function main(): Promise<void> {
       'utf8',
     )
   ).trim()
-  const capacity =
-    process.env.WOLFSTAR_DESKTOP_CAPACITY_COMMAND ?? join(homedir(), '.local/bin/wolfstar-desktop-capacity')
+  const capacity = process.env.WOLFSTAR_HOST_CAPACITY_COMMAND ?? '/usr/local/bin/wolfstar-host-capacity'
   const root = process.env.WOLFSTAR_DESKTOP_AGENT_ROOT ?? join(homedir(), '.local/share/wolfstar-github-agent/desktop')
   await mkdir(root, { recursive: true, mode: 0o700 })
   const shutdown = new AbortController()
@@ -53,6 +60,7 @@ async function main(): Promise<void> {
 
   async function report(): Promise<boolean> {
     const state = JSON.parse(await desktopCommand(capacity, ['status'], root))
+    parseMaintenanceAuthority(state)
     const entries = Object.values(state.reservations) as Array<{ kind: string }>
     const statusPath =
       process.env.WOLFSTAR_DESKTOP_RUNNER_STATUS_FILE ??
@@ -68,27 +76,39 @@ async function main(): Promise<void> {
           console.error('GitHub Actions status is unavailable.', error)
         return { _tag: 'Unavailable' as const }
       })
-    const requested = await api<{ memoryGiB: number | null }>('/api/desktop/report', {
-      protocol: DESKTOP_PROTOCOL,
-      memoryGiB: state.memoryGiB,
-      reservedGiB: state.reservedGiB,
-      agents: entries.filter((entry) => entry.kind === 'agent').length,
-      actions: entries.filter((entry) => entry.kind === 'actions').length,
-      jobs,
-    })
+    const requested = await api<{ memoryGiB: number; agentSlots: number; maintenanceReserve: number }>(
+      '/api/desktop/report',
+      {
+        protocol: DESKTOP_PROTOCOL,
+        memoryGiB: state.memoryGiB,
+        reservedGiB: state.reservedGiB,
+        agents: entries.filter((entry) => entry.kind === 'agent').length,
+        actions: entries.filter((entry) => entry.kind === 'actions').length,
+        jobs,
+      },
+    )
     if (requested === null) throw new Error('Controller returned no desktop memory status.')
-    if (requested.memoryGiB !== null) await desktopCommand(capacity, ['set', String(requested.memoryGiB)], root)
+    if (requested.memoryGiB !== state.memoryGiB)
+      throw new Error('The Controller returned a different host memory budget.')
+    if (
+      !Number.isSafeInteger(requested.agentSlots) ||
+      requested.agentSlots < 0 ||
+      requested.agentSlots > DESKTOP_AGENT_SLOT_CEILING ||
+      requested.maintenanceReserve !== Math.min(1, requested.agentSlots)
+    ) {
+      throw new Error('The Controller returned no shared Agent slot policy.')
+    }
+    if (
+      state.policy.agentSlots !== requested.agentSlots ||
+      state.policy.maintenanceReserve !== requested.maintenanceReserve
+    )
+      await setHostSlotPolicy(capacity, requested.agentSlots)
     return state.memoryGiB - state.reservedGiB >= DESKTOP_MEMORY_PER_AGENT_GIB
   }
 
   async function run(turn: DesktopTurn): Promise<void> {
     if (!/^[a-f0-9-]{36}$/.test(turn.id)) throw new Error('Desktop turn identity is invalid.')
-    const directory = join(
-      root,
-      createHash('sha256')
-        .update(turn.request.taskId ?? turn.id)
-        .digest('hex'),
-    )
+    const directory = join(root, createHash('sha256').update(turn.id).digest('hex'))
     await mkdir(directory, { recursive: true, mode: 0o700 })
     const input = join(directory, 'turn.json')
     await writeFile(input, JSON.stringify(turn), { mode: 0o600 })
@@ -106,7 +126,7 @@ async function main(): Promise<void> {
         executable,
         input,
       ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      { stdio: ['pipe', 'pipe', 'pipe'] },
     )
     let stderr = ''
     child.stderr.on('data', (chunk) => {
@@ -115,43 +135,71 @@ async function main(): Promise<void> {
     const stop = () => {
       child.kill('SIGTERM')
     }
+    child.stdin.on('error', (error) => {
+      console.error('The desktop proof callback disconnected.', error)
+      stop()
+    })
     shutdown.signal.addEventListener('abort', stop, { once: true })
     const heartbeat = new AbortController()
+    const lease = createDesktopTurnLease({ signal: shutdown.signal, stop, now: () => performance.now() })
     const watching = (async () => {
-      while (!heartbeat.signal.aborted) {
-        await delay(3000, undefined, { signal: heartbeat.signal }).catch((error: unknown) => {
-          if (!heartbeat.signal.aborted) throw error
-        })
-        if (heartbeat.signal.aborted) return
-        try {
-          await report()
-          const state = await api<{ active: boolean }>('/api/desktop/heartbeat', { id: turn.id })
-          if (!state?.active) {
-            stop()
-            return
-          }
-        } catch (error) {
-          console.error(error)
-          stop()
-          return
-        }
+      while (!heartbeat.signal.aborted && !lease.signal.aborted) {
+        await lease.heartbeat(() => api<{ active: boolean }>('/api/desktop/heartbeat', { id: turn.id }))
+        if (lease.signal.aborted) return
+        await delay(3000, undefined, { signal: AbortSignal.any([heartbeat.signal, lease.signal]) }).catch(
+          (error: unknown) => {
+            if (!heartbeat.signal.aborted && !lease.signal.aborted) throw error
+          },
+        )
       }
     })()
     const completion = new Promise<number>((resolve, reject) => {
       child.once('error', reject)
       child.once('close', (code) => resolve(code ?? 1))
     })
+    let setup: DesktopFailure | null = null
+    let sequence = 0
     try {
       for await (const line of createInterface({ input: child.stdout })) {
         const event: unknown = JSON.parse(line)
+        const proof = parseReviewProofCallback(event)
+        if (proof !== null) {
+          const answer = await api<unknown>('/api/desktop/proof', {
+            id: turn.id,
+            action: proof.action,
+            input: proof.input,
+          })
+            .then((result) => ({ id: proof.id, result }))
+            .catch((error: unknown) => ({
+              id: proof.id,
+              error: error instanceof Error ? error.message.slice(0, 500) : 'The controller proof callback failed.',
+            }))
+          child.stdin.write(`${JSON.stringify(answer)}\n`)
+          continue
+        }
         // Capacity refusal is handled after exit, before any provider starts.
         if (typeof event === 'object' && event !== null && '_tag' in event && event._tag === 'AtCapacity') continue
-        const answer = await api<{ accepted: boolean }>('/api/desktop/events', { id: turn.id, events: [event] })
+        // No provider started, so the controller may run this turn on Hogwild.
+        if (
+          typeof event === 'object' &&
+          event !== null &&
+          '_tag' in event &&
+          event._tag === 'SetupFailed' &&
+          'reason' in event &&
+          typeof event.reason === 'string'
+        ) {
+          setup = { _tag: 'SetupFailed', reason: event.reason }
+          continue
+        }
+        const answer = await lease.request(() =>
+          api<{ accepted: boolean }>('/api/desktop/events', { id: turn.id, events: [event], sequence }),
+        )
         if (!answer?.accepted) stop()
+        sequence += 1
       }
       const code = await completion
       if (code === 75) {
-        await api('/api/desktop/defer', { id: turn.id })
+        await lease.request(() => api('/api/desktop/defer', { id: turn.id }))
         return
       }
       const result = await readFile(join(directory, 'result.json'), 'utf8')
@@ -160,15 +208,17 @@ async function main(): Promise<void> {
           if (code !== 0 && error.code === 'ENOENT') return null
           throw error
         })
-      await api('/api/desktop/complete', {
-        id: turn.id,
-        result,
-        failure: code === 0 ? null : `Desktop Agent stopped with status ${code}. ${stderr}`,
-      })
+      const failure: DesktopFailure | null =
+        code === 0
+          ? null
+          : (setup ?? { _tag: 'AgentFailed', reason: `Desktop Agent stopped with status ${code}. ${stderr}` })
+      await lease.request(() => api('/api/desktop/complete', { id: turn.id, result, failure }))
     } finally {
+      heartbeat.abort()
+      lease.close()
+      await rm(input, { force: true })
       stop()
       await completion
-      heartbeat.abort()
       await watching
       shutdown.signal.removeEventListener('abort', stop)
     }
@@ -178,12 +228,24 @@ async function main(): Promise<void> {
   // queues that many turns. This loop claims each one and runs them together,
   // so an Agent slot count above one is real work rather than a queue.
   const running = new Set<Promise<void>>()
+  const historyReport = createDesktopSessionClient({
+    transport: createSessionHttpTransport(api),
+    host: 'desktop',
+    root,
+    capacity,
+    signal: shutdown.signal,
+  })
   while (!shutdown.signal.aborted) {
     try {
+      try {
+        await historyReport.report()
+      } catch (error) {
+        console.error('Session history report failed.', error)
+      }
       if (running.size < DESKTOP_AGENT_SLOT_CEILING && (await report())) {
         const turn = await api<DesktopTurn | null>('/api/desktop/claim', {})
         if (turn !== null) {
-          // `wolfstar-desktop-capacity` refuses a turn memory cannot hold, and
+          // The shared authority refuses a turn memory cannot hold, and
           // the controller queues it again, so claiming never overcommits.
           const work = run(turn)
             .catch((error: unknown) => {

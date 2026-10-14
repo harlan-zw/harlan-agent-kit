@@ -5,10 +5,16 @@
   },
   "plugins": ["import", "oxc", "typescript", "vue"],
   "rules": {
-    "eqeqeq": "error",
+    "eqeqeq": ["error", "smart"],
     "no-debugger": "error",
     "no-unused-vars": "error",
-    "prefer-const": "error",
+    "prefer-const": [
+      "error",
+      {
+        "ignoreReadBeforeAssign": true
+      }
+    ],
     "require-yield": "off"
-  }
+  },
+  "ignorePatterns": ["**/.generated/**"]
 }

@@ -31,17 +31,22 @@ export function parsePackageReleaseConfig(value: unknown): Result<PackageRelease
   if (typeof workflow !== 'string' || !/^[\w-]+\.ya?ml$/.test(workflow))
     return err('Release workflow must name one workflow file.')
   if (
-    !Array.isArray(checks) ||
-    checks.length === 0 ||
-    !checks.every((check) => typeof check === 'string' && check.trim().length > 0)
+    checks !== 'all' &&
+    (!Array.isArray(checks) ||
+      checks.length === 0 ||
+      !checks.every((check) => typeof check === 'string' && check.trim().length > 0))
   )
-    return err('Release checks must name the required check runs.')
+    return err('Release checks must name check runs or use all.')
+  const { credential } = input
+  if (credential !== undefined && credential !== 'user')
+    return err('Release credential must be user, or omitted to use the repository credential.')
   return ok({
     manifest,
     ...(typeof changelog === 'string' ? { changelog } : {}),
     versionFiles: files,
     tagPrefix: prefix,
     workflow,
-    checks: checks as string[],
+    checks: checks as string[] | 'all',
+    credential: credential === 'user' ? { _tag: 'User' } : { _tag: 'Repository' },
   })
 }

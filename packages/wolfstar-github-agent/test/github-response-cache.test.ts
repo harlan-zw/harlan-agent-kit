@@ -1,3 +1,4 @@
+import type { GitHubRepositoryAccess } from '../src/types.ts'
 import { Octokit } from 'octokit'
 import { describe, expect, it } from 'vitest'
 import { createAuthenticatedClient } from '../src/github-auth.ts'
@@ -7,7 +8,7 @@ import { ok } from '../src/result.ts'
 function setup(cache = createGitHubResponseCache()) {
   const seen: Array<{ url: string; headers: Record<string, string> }> = []
   const responses: Response[] = []
-  const client = (token = 'first', access: 'read' | 'item_write' = 'read') =>
+  const client = (token = 'first', access: GitHubRepositoryAccess = 'read') =>
     createAuthenticatedClient({
       access,
       repository: 'wolfstar-project/example',
@@ -44,6 +45,25 @@ function json(data: unknown, etag?: string, extra: Record<string, string> = {}) 
 const route = 'GET /repos/wolfstar-project/example/issues'
 
 describe('authenticated conditional reads', () => {
+  it.each(['checks_read', 'deployments_read'] as const)(
+    'revalidates %s across clients and observes changed data',
+    async (access) => {
+      const { responses, client, seen } = setup()
+      responses.push(
+        json({ status: 'queued' }, '"queued"'),
+        new Response(null, { status: 304 }),
+        json({ status: 'completed' }, '"completed"'),
+      )
+      const endpoint =
+        access === 'checks_read'
+          ? 'GET /repos/wolfstar-project/example/commits/main/check-runs'
+          : 'GET /repos/wolfstar-project/example/deployments'
+      expect((await client('first', access).request(endpoint)).data).toEqual({ status: 'queued' })
+      expect((await client('first', access).request(endpoint)).data).toEqual({ status: 'queued' })
+      expect((await client('first', access).request(endpoint)).data).toEqual({ status: 'completed' })
+      expect(seen.map((call) => call.headers['if-none-match'])).toEqual([undefined, '"queued"', '"queued"'])
+    },
+  )
   it('revalidates across clients and returns isolated data with fresh response headers', async () => {
     const { responses, client, seen } = setup()
     responses.push(
@@ -57,6 +77,18 @@ describe('authenticated conditional reads', () => {
     expect(second.headers['x-ratelimit-remaining']).toBe('4000')
     expect(seen.map((call) => call.headers['if-none-match'])).toEqual([undefined, '"v1"'])
     expect(seen.every((call) => call.headers.authorization === 'token first')).toBe(true)
+  })
+
+  it('requests fresh rendered HTML so signed image URLs cannot outlive their read grant', async () => {
+    const { responses, client, seen } = setup()
+    responses.push(
+      json({ body_html: 'first signed URL' }, '"unchanged-body"'),
+      json({ body_html: 'fresh signed URL' }, '"unchanged-body"'),
+    )
+    const headers = { accept: 'application/vnd.github.full+json' }
+    await client().request(route, { headers })
+    expect((await client().request(route, { headers })).data).toEqual({ body_html: 'fresh signed URL' })
+    expect(seen.map((call) => call.headers['if-none-match'])).toEqual([undefined, undefined])
   })
 
   it('refreshes changed data and stops reusing a response without an ETag', async () => {

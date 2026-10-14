@@ -1,0 +1,800 @@
+{
+  "data": {
+    "scans": [
+      {
+        "id": "158b1df9-dcd2-4abe-852f-7bd070c62977",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 62,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 6901,
+        "tbt": 96,
+        "cls": 0,
+        "completedAt": "2026-09-22T21:14:11.000Z",
+        "error": null
+      },
+      {
+        "id": "f33d55c8-0173-4097-9b7d-da7cb8fa10e6",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 92,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1121,
+        "tbt": 163.5,
+        "cls": 0,
+        "completedAt": "2026-09-20T13:09:28.000Z",
+        "error": null
+      },
+      {
+        "id": "f7557a81-87b7-4559-aab2-802f0509716e",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 62,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 6901,
+        "tbt": 97,
+        "cls": 0,
+        "completedAt": "2026-09-15T21:09:25.000Z",
+        "error": null
+      },
+      {
+        "id": "d779be56-5070-46ca-98a2-5e2eef394284",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 70,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1321,
+        "tbt": 548,
+        "cls": 0.018,
+        "completedAt": "2026-09-15T06:08:55.000Z",
+        "error": null
+      },
+      {
+        "id": "ba08b840-4003-4f3c-8338-4eca7d02d617",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 53,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8101,
+        "tbt": 331,
+        "cls": 0,
+        "completedAt": "2026-09-15T06:09:08.000Z",
+        "error": null
+      },
+      {
+        "id": "3c0d4114-d222-40e3-b135-2309816d76d3",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 96,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1141,
+        "tbt": 30,
+        "cls": 0.001,
+        "completedAt": "2026-09-13T13:02:18.000Z",
+        "error": null
+      },
+      {
+        "id": "2b1bf3c9-f4f2-46f1-9221-6edc850c1a98",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 63,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 6526,
+        "tbt": 67,
+        "cls": 0,
+        "completedAt": "2026-09-08T21:04:06.000Z",
+        "error": null
+      },
+      {
+        "id": "341389ee-e091-4a55-9cd8-aac321509d1a",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 63,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1084,
+        "tbt": 1093,
+        "cls": 0.001,
+        "completedAt": "2026-09-06T12:54:26.000Z",
+        "error": null
+      },
+      {
+        "id": "f8a394ce-4a2d-4c62-8ddd-b958c3a16946",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 86,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1321,
+        "tbt": 213.5,
+        "cls": 0.02,
+        "completedAt": "2026-09-02T06:07:17.000Z",
+        "error": null
+      },
+      {
+        "id": "7bcd2b7f-596a-4fbc-bedd-efee42644249",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 60,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8026,
+        "tbt": 0,
+        "cls": 0,
+        "completedAt": "2026-09-02T06:06:40.000Z",
+        "error": null
+      },
+      {
+        "id": "47b326ac-9ed5-43d9-94bd-6bdf1cab02b5",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 64,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 6376,
+        "tbt": 86,
+        "cls": 0,
+        "completedAt": "2026-09-01T20:54:15.000Z",
+        "error": null
+      },
+      {
+        "id": "deaa8c0d-4843-485d-a65e-f05d3b5621e2",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 80,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1061,
+        "tbt": 378.5,
+        "cls": 0.001,
+        "completedAt": "2026-08-30T07:13:56.000Z",
+        "error": null
+      },
+      {
+        "id": "c592d282-6420-41ea-80ec-dea24aa64097",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 64,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 6526,
+        "tbt": 77.5,
+        "cls": 0,
+        "completedAt": "2026-08-25T20:45:00.000Z",
+        "error": null
+      },
+      {
+        "id": "b6568a30-2365-46a6-a07e-abe075458cfb",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 86,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1061,
+        "tbt": 278,
+        "cls": 0.001,
+        "completedAt": "2026-08-23T07:09:16.000Z",
+        "error": null
+      },
+      {
+        "id": "4995e455-46d0-44b6-af7a-64cf2e917422",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 87,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1121,
+        "tbt": 249,
+        "cls": 0.019,
+        "completedAt": "2026-08-20T13:35:31.000Z",
+        "error": null
+      },
+      {
+        "id": "d5ebb0a8-2ccd-4ff4-9b73-aa6c77ddce5c",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 57,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8176,
+        "tbt": 139,
+        "cls": 0,
+        "completedAt": "2026-08-20T13:35:17.000Z",
+        "error": null
+      },
+      {
+        "id": "b0e5d529-d5a0-49f4-9ed6-744bf2d7f310",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 85,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1341,
+        "tbt": 226,
+        "cls": 0.02,
+        "completedAt": "2026-08-20T13:14:07.000Z",
+        "error": null
+      },
+      {
+        "id": "d8a5ec85-6d28-4522-a6ce-e44251db92f2",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 58,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8101,
+        "tbt": 175,
+        "cls": 0,
+        "completedAt": "2026-08-20T13:15:32.000Z",
+        "error": null
+      },
+      {
+        "id": "2c89d737-a4a6-481d-8e2d-64869f4d8978",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 89,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1341,
+        "tbt": 167,
+        "cls": 0.02,
+        "completedAt": "2026-08-20T12:53:11.000Z",
+        "error": null
+      },
+      {
+        "id": "7d011010-b265-4541-af25-5ccb7a64ca49",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 47,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8026,
+        "tbt": 133,
+        "cls": 0.229,
+        "completedAt": "2026-08-20T12:53:03.000Z",
+        "error": null
+      },
+      {
+        "id": "c391800c-f410-41be-93d9-cf7eca496f2f",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 66,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1321,
+        "tbt": 801.5,
+        "cls": 0.019,
+        "completedAt": "2026-08-20T12:31:42.000Z",
+        "error": null
+      },
+      {
+        "id": "73e55631-654f-4cb7-a0de-07e8071e30d7",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 57,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8101,
+        "tbt": 208,
+        "cls": 0,
+        "completedAt": "2026-08-20T12:31:08.000Z",
+        "error": null
+      },
+      {
+        "id": "da987bfd-d4ac-405b-aaba-84f772c362df",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 74,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1341,
+        "tbt": 423,
+        "cls": 0.02,
+        "completedAt": "2026-08-20T12:09:36.000Z",
+        "error": null
+      },
+      {
+        "id": "a595fb08-91bd-40a5-9195-9439d4212acf",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 45,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8101,
+        "tbt": 602,
+        "cls": 0,
+        "completedAt": "2026-08-20T12:09:29.000Z",
+        "error": null
+      },
+      {
+        "id": "bb356108-fd51-445e-b373-5c52c0f5a4b5",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 91,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1321,
+        "tbt": 143,
+        "cls": 0.02,
+        "completedAt": "2026-08-20T11:56:19.000Z",
+        "error": null
+      },
+      {
+        "id": "d5f6d4a9-a207-4a3e-b965-f980ed506ed7",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 60,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8101,
+        "tbt": 66,
+        "cls": 0,
+        "completedAt": "2026-08-20T11:56:14.000Z",
+        "error": null
+      },
+      {
+        "id": "f99b0f0a-6f89-4617-9797-124fdba89c64",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 63,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1321,
+        "tbt": 1129,
+        "cls": 0.019,
+        "completedAt": "2026-08-20T11:40:49.000Z",
+        "error": null
+      },
+      {
+        "id": "74e3327c-f490-4bb5-ad28-a85bcaafbe0f",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 50,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8176,
+        "tbt": 423,
+        "cls": 0,
+        "completedAt": "2026-08-20T11:40:31.000Z",
+        "error": null
+      },
+      {
+        "id": "afdc7028-dfdb-4c0f-a8b9-9f554b0893cd",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 87,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1341,
+        "tbt": 204,
+        "cls": 0.02,
+        "completedAt": "2026-08-20T11:15:18.000Z",
+        "error": null
+      },
+      {
+        "id": "751ce5a5-e3d5-4a73-b991-6827f76c51a4",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "failed",
+        "trigger": "manual",
+        "scores": {
+          "perf": null,
+          "a11y": null,
+          "bestPractices": null,
+          "seo": null
+        },
+        "lcp": null,
+        "tbt": null,
+        "cls": null,
+        "completedAt": "2026-08-20T11:13:37.000Z",
+        "error": "Failed query: update \"lh_scans\" set \"lhr_r2_key\" = ?, \"lighthouse_version\" = ?, "
+      },
+      {
+        "id": "eb8596d0-4e8a-4d86-a697-a1ab1d3729a1",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 86,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1322,
+        "tbt": 212,
+        "cls": 0.02,
+        "completedAt": "2026-08-20T10:04:20.000Z",
+        "error": null
+      },
+      {
+        "id": "9e6ad352-15f8-4744-b84b-ac9250f36730",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 54,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8101,
+        "tbt": 283,
+        "cls": 0,
+        "completedAt": "2026-08-20T10:02:49.000Z",
+        "error": null
+      },
+      {
+        "id": "3fe468b7-3b78-43cc-8078-178f664f8885",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 66,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1322,
+        "tbt": 763.5,
+        "cls": 0.019,
+        "completedAt": "2026-08-20T09:03:59.000Z",
+        "error": null
+      },
+      {
+        "id": "b080ba63-4e68-467f-844b-2cfcd42f6d3c",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "manual",
+        "scores": {
+          "perf": 53,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8251,
+        "tbt": 304,
+        "cls": 0,
+        "completedAt": "2026-08-20T09:02:33.000Z",
+        "error": null
+      },
+      {
+        "id": "dfc1a2c1-c961-44c7-80f0-167b2eee7919",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "failed",
+        "trigger": "manual",
+        "scores": {
+          "perf": null,
+          "a11y": null,
+          "bestPractices": null,
+          "seo": null
+        },
+        "lcp": null,
+        "tbt": null,
+        "cls": null,
+        "completedAt": "2026-08-20T08:51:10.000Z",
+        "error": "Lighthouse scan was abandoned before completion."
+      },
+      {
+        "id": "c6b113f5-eef5-44b7-8a35-2dab1b53cd6b",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "failed",
+        "trigger": "manual",
+        "scores": {
+          "perf": null,
+          "a11y": null,
+          "bestPractices": null,
+          "seo": null
+        },
+        "lcp": null,
+        "tbt": null,
+        "cls": null,
+        "completedAt": "2026-08-20T08:51:08.000Z",
+        "error": "Lighthouse scan was abandoned before completion."
+      },
+      {
+        "id": "328a56f6-b3a2-4470-b586-dc00ab1b7a85",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "failed",
+        "trigger": "manual",
+        "scores": {
+          "perf": null,
+          "a11y": null,
+          "bestPractices": null,
+          "seo": null
+        },
+        "lcp": null,
+        "tbt": null,
+        "cls": null,
+        "completedAt": "2026-08-20T06:29:55.000Z",
+        "error": "Failed query: update \"lh_scans\" set \"lhr_r2_key\" = ?, \"lighthouse_version\" = ?, "
+      },
+      {
+        "id": "c6655449-055d-4282-b097-bdc0c2a154f3",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "failed",
+        "trigger": "manual",
+        "scores": {
+          "perf": null,
+          "a11y": null,
+          "bestPractices": null,
+          "seo": null
+        },
+        "lcp": null,
+        "tbt": null,
+        "cls": null,
+        "completedAt": "2026-08-20T06:29:55.000Z",
+        "error": "Failed query: update \"lh_scans\" set \"lhr_r2_key\" = ?, \"lighthouse_version\" = ?, "
+      },
+      {
+        "id": "dbd4ba2d-8263-41a5-8e40-807b008f47a0",
+        "url": "https://nuxtseo.com",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 77,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1341,
+        "tbt": 361,
+        "cls": 0.02,
+        "completedAt": "2026-08-20T06:05:54.000Z",
+        "error": null
+      },
+      {
+        "id": "635fb10f-8a83-45e9-be87-4d5924d77362",
+        "url": "https://nuxtseo.com",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 49,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 8101,
+        "tbt": 0,
+        "cls": 0.229,
+        "completedAt": "2026-08-20T06:05:38.000Z",
+        "error": null
+      },
+      {
+        "id": "06aadc8b-8963-4a80-812d-b8118deb7e6b",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 60,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 6601,
+        "tbt": 202.5,
+        "cls": 0,
+        "completedAt": "2026-08-18T20:40:44.000Z",
+        "error": null
+      },
+      {
+        "id": "53187388-03e7-49e4-a6df-eae4f3da9987",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 95,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1141,
+        "tbt": 99,
+        "cls": 0.002,
+        "completedAt": "2026-08-16T06:58:56.000Z",
+        "error": null
+      },
+      {
+        "id": "7afebdf7-fd47-4394-9b04-9427def7c137",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "mobile",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 60,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 9001,
+        "tbt": 84,
+        "cls": 0,
+        "completedAt": "2026-08-11T20:34:41.000Z",
+        "error": null
+      },
+      {
+        "id": "f07871a3-5575-4ea4-a597-143ce35c57b2",
+        "url": "https://nuxtseo.com/tools/schema-validator",
+        "strategy": "desktop",
+        "status": "complete",
+        "trigger": "scheduled",
+        "scores": {
+          "perf": 83,
+          "a11y": 100,
+          "bestPractices": 100,
+          "seo": 100
+        },
+        "lcp": 1341,
+        "tbt": 283.5,
+        "cls": 0.002,
+        "completedAt": "2026-08-09T06:53:56.000Z",
+        "error": null
+      }
+    ],
+    "total": 100,
+    "limit": 100
+  }
+}

@@ -23,11 +23,62 @@ function provider(name: 'codex' | 'opencode', started: () => void): AgentProvide
 }
 
 describe('host admission', () => {
+  it('waits for Hogwild capacity when a check-in needs its controller evidence and archive', async () => {
+    let maximum = 0
+    let waits = 0
+    const starts: string[] = []
+    const pool = createHostAgentPool({
+      localMaximum: () => maximum,
+      desktopMaximum: 1,
+      desktopAvailable: () => true,
+      wait: async () => {
+        waits += 1
+        maximum = 1
+      },
+    })
+    const turn = pool
+      .provider(
+        provider('codex', () => starts.push('hogwild')),
+        provider('codex', () => starts.push('desktop')),
+      )
+      .runTurn({ ...request, taskId: 'wolfstar-project/gscdump.com:daily-checkin:2026-10-10T07:00:00Z' })
+    for await (const _event of turn) {
+      expect(pool.tasks()).toEqual([
+        { taskId: 'wolfstar-project/gscdump.com:daily-checkin:2026-10-10T07:00:00Z', host: 'hogwild' },
+      ])
+    }
+    expect(starts).toEqual(['hogwild'])
+    expect(waits).toBe(1)
+  })
+  it('accounts for controller checks in the existing local host capacity', async () => {
+    const pool = createHostAgentPool({
+      localMaximum: 1,
+      desktopMaximum: 1,
+      desktopAvailable: () => true,
+      wait: async () => {},
+    })
+    const lease = pool.tryAcquireLocal('recovery')
+    expect(lease).not.toBeNull()
+    expect(pool.tryAcquireLocal('duplicate')).toBeNull()
+    expect(pool.tasks()).toEqual([{ taskId: 'recovery', host: 'hogwild' }])
+    const events = pool
+      .provider(
+        provider('codex', () => {}),
+        provider('codex', () => {}),
+      )
+      .runTurn(request)
+    for await (const _event of events) {
+      expect(pool.read().desktopActive).toBe(1)
+    }
+    lease?.release()
+    lease?.release()
+    expect(pool.read().localActive).toBe(0)
+  })
   it('removes a host assignment when its provider fails', async () => {
     const pool = createHostAgentPool({
       localMaximum: 1,
       desktopMaximum: 1,
-      desktopConnected: () => true,
+      desktopAvailable: () => true,
       wait: async () => {},
     })
     const failing: AgentProvider = {
@@ -48,14 +99,14 @@ describe('host admission', () => {
   })
   it('keeps the desktop idle while Hogwild has capacity', () => {
     expect(
-      agentHost({ localActive: 1, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }),
+      agentHost({ localActive: 1, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopAvailable: true }),
     ).toBe('hogwild')
   })
 
   it('uses the desktop only when Hogwild is full and the desktop can answer', () => {
-    const capacity = { localActive: 2, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }
+    const capacity = { localActive: 2, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopAvailable: true }
     expect(agentHost(capacity)).toBe('desktop')
-    expect(agentHost({ ...capacity, desktopConnected: false })).toBeNull()
+    expect(agentHost({ ...capacity, desktopAvailable: false })).toBeNull()
     expect(agentHost({ ...capacity, desktopActive: 1 })).toBeNull()
   })
 
@@ -64,7 +115,7 @@ describe('host admission', () => {
     const pool = createHostAgentPool({
       localMaximum: 1,
       desktopMaximum: 1,
-      desktopConnected: () => true,
+      desktopAvailable: () => true,
       wait: async () => {},
     })
     const first = pool
@@ -116,7 +167,7 @@ describe('a Worktree the desktop cannot carry', () => {
     const pool = createHostAgentPool({
       localMaximum: 1,
       desktopMaximum: 1,
-      desktopConnected: () => true,
+      desktopAvailable: () => true,
       wait: async () => {},
     })
     const local: AgentProvider = {
@@ -165,7 +216,7 @@ describe('a Worktree the desktop cannot carry', () => {
     const pool = createHostAgentPool({
       localMaximum: 1,
       desktopMaximum: 1,
-      desktopConnected: () => true,
+      desktopAvailable: () => true,
       wait: async () => {},
     })
     const local: AgentProvider = {
@@ -194,7 +245,7 @@ describe('a Worktree the desktop cannot carry', () => {
   })
 
   it('keeps a refused host out of the next selection', () => {
-    const capacity = { localActive: 2, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }
+    const capacity = { localActive: 2, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopAvailable: true }
     expect(agentHost(capacity)).toBe('desktop')
     expect(agentHost(capacity, new Set(['desktop']))).toBeNull()
   })
@@ -208,7 +259,7 @@ describe('agent slots', () => {
     const pool = createHostAgentPool({
       localMaximum: () => hogwild,
       desktopMaximum: 0,
-      desktopConnected: () => false,
+      desktopAvailable: () => false,
       wait: async () => {},
     })
     const local = provider('codex', () => {})
@@ -229,7 +280,7 @@ describe('agent slots', () => {
     const pool = createHostAgentPool({
       localMaximum: 0,
       desktopMaximum: () => 2,
-      desktopConnected: () => true,
+      desktopAvailable: () => true,
       wait: async () => {},
     })
     const first = pool

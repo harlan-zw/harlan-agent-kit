@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { useClipboard } from '@vueuse/core'
 import { restartNotice } from '../utils/system.ts'
 
 /**
@@ -12,14 +11,11 @@ const {
   loadState,
   isStale,
   relativeTime,
-  ejectedSession,
-  clearEjectedSession,
   requestRestart,
   requestUpdate,
   controlPending,
+  controlsUnavailable,
 } = useDashboard()
-
-const { copy, copied } = useClipboard()
 
 const restart = computed(() => restartNotice(snapshot.value.restartRequest))
 </script>
@@ -41,7 +37,7 @@ const restart = computed(() => restartNotice(snapshot.value.restartRequest))
       class="mx-auto flex max-w-[100rem] flex-wrap items-center gap-x-4 gap-y-2 px-6 py-2 text-sm xl:px-10"
     >
       <span class="status-warning"
-        >Last update {{ relativeTime(snapshot.generatedAt) }}. The board may have moved on.</span
+        >Last update {{ relativeTime(snapshot.generatedAt) }}. Service data is unavailable.</span
       >
       <UButton size="xs" color="neutral" variant="outline" @click="loadState"> Reload </UButton>
     </div>
@@ -57,36 +53,10 @@ const restart = computed(() => restartNotice(snapshot.value.restartRequest))
         size="xs"
         color="neutral"
         variant="outline"
-        :disabled="controlPending"
+        :disabled="controlPending || controlsUnavailable"
         @click="snapshot.restartRequest?.operation._tag === 'Update' ? requestUpdate() : requestRestart()"
       >
         {{ snapshot.restartRequest?.operation._tag === 'Update' ? 'Update after current work' : 'Restart again' }}
-      </UButton>
-    </div>
-
-    <div
-      v-if="ejectedSession"
-      role="status"
-      class="mx-auto flex max-w-[100rem] flex-wrap items-center gap-x-4 gap-y-2 px-6 py-2 text-sm xl:px-10"
-    >
-      <span v-if="ejectedSession._tag === 'Ejected'"
-        >Agent stopped. Resume {{ ejectedSession.repository }}#{{ ejectedSession.itemNumber }} in your terminal.</span
-      >
-      <span v-else class="status-warning">{{ ejectedSession.nextAction }}</span>
-      <code class="min-w-0 flex-1 basis-full break-all font-mono text-sm text-muted sm:basis-auto">{{
-        ejectedSession.command
-      }}</code>
-      <UButton
-        size="xs"
-        color="neutral"
-        variant="outline"
-        icon="i-octicon-copy-16"
-        @click="copy(ejectedSession.command)"
-      >
-        {{ copied ? 'Copied' : 'Copy' }}
-      </UButton>
-      <UButton size="xs" color="neutral" variant="ghost" aria-label="Close this notice" @click="clearEjectedSession">
-        Close
       </UButton>
     </div>
   </div>

@@ -152,3 +152,13 @@ function runnersDiff(live: string | false, repo: string | false | undefined) {
     rmSync(dir, { recursive: true, force: true })
   }
 }
+
+it('makes installed Agent commands visible in noninteractive SSH sessions', () => {
+  expect(stepArgv({ host: 'agent', command: 'wolfstar-github-agent control status' })).toEqual([
+    'ssh',
+    '-o',
+    'BatchMode=yes',
+    'hogwild',
+    'export PATH="$HOME/.local/bin:$PATH"; wolfstar-github-agent control status',
+  ])
+})

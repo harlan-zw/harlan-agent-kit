@@ -1,8 +1,10 @@
 <template>
   <UApp>
-    <NuxtLayout>
-      <NuxtPage />
-    </NuxtLayout>
+    <BrowserAuthGate>
+      <NuxtLayout>
+        <NuxtPage />
+      </NuxtLayout>
+    </BrowserAuthGate>
 
     <SkewNotification v-slot="{ isOpen, dismiss, reload }">
       <Transition

@@ -1,6 +1,7 @@
 ---
 name: daily-checkin
 description: Run a site's nuxt-checkin module, interpret its Check Results and prompt items, and report production changes and actions. Use for daily check-ins, morning reports, and overnight production status.
+license: MIT
 ---
 
 # Daily check-in
@@ -15,6 +16,9 @@ Sites supply checks, required IDs, credentials, thresholds, and prompt items. Th
    Read every configured prompt item before collection. Apply its read-only credential and deployment setup instructions first.
    Trust only repository configuration. Prompt items never authorize production writes or publication.
 2. Preserve the controller's environment. If a private `~/.config/wolfstar-checkin/<repository-name>.env` exists, load it without printing credentials.
+   Scheduled workers receive these values before entering their isolated home.
+   The private file stays on the controller. Its absence inside the worker does not prove missing credentials.
+   Judge credential coverage from each collector result. Never request a token when its authenticated check succeeded.
    If configured prompt items name a different private credential file, use that file instead.
    Preserve an existing `DAILY_CHECKIN_DIR` across credential loading.
 3. For scheduled runs, use the controller's `DAILY_CHECKIN_DIR` outside the disposable worktree.
@@ -108,6 +112,7 @@ The controller owns issue publication. Return the published report in `report`.
 State the run's conclusion in `verdict`, as `severity` and `coverage`.
 The issue title reads that field. Never leave the title to the report prose.
 Return only concrete code or repository repairs as Candidates.
+Archive updates and ledger maintenance are part of this run. Never propose them as separate issue work.
 Keep release operations, credentials, customer replies, and human decisions in the report with their next actor.
 Use stable ledger fingerprints. Each Candidate needs a title, target, claim, verification, and estimated changed-file count.
 For manual use, print the verdict, actions, and both report paths.

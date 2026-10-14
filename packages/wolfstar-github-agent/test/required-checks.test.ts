@@ -54,6 +54,7 @@ function reviewWith(input: { headChecks: GitHubCheck[]; requiredChecks: Required
   const snapshot: PullRequestReviewSnapshot = {
     baseChecks: { _tag: 'Available', checks: [passingBaseCheck] },
     body: 'Fixes the bug.',
+    findingDiscussions: [],
     checks: { _tag: 'Available', checks: input.headChecks },
     comments: [],
     priorAutomatedReview: { _tag: 'None' },
@@ -98,6 +99,7 @@ function reviewWith(input: { headChecks: GitHubCheck[]; requiredChecks: Required
       },
       getRepairedHeadFindings: () => [],
       listReviewRuns: () => [],
+      repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
       getWorkerSession: () => null,
       storedReviewForHead: () => ({ _tag: 'None' }),
       getRevisionFiles: () => null,
@@ -221,6 +223,28 @@ describe('required checks and the CI Review gate', () => {
     expect(requiredCheckContexts([{ type: 'deletion', ruleset_id: 1 }])).toEqual([])
     expect(requiredCheckContexts([])).toEqual([])
     expect(requiredCheckContexts({ message: 'Not Found' })).toEqual([])
+  })
+
+  // The Nuxt SEO reusable workflow skips its jobs on a docs-only change. GitHub
+  // then reports `ci / changes` passed and every required job skipped.
+  it.each<RequiredChecks>([
+    { _tag: 'Declared', contexts: ['ci / build', 'ci / lint', 'ci / test', 'ci / typecheck'] },
+    { _tag: 'None' },
+  ])('passes a docs-only head whose jobs skipped, required checks $_tag', async (requiredChecks) => {
+    const test = reviewWith({
+      headChecks: [
+        check(1, 'ci / changes', 'success'),
+        ...['ci / build', 'ci / lint', 'ci / test', 'ci / typecheck'].map((name, index) =>
+          check(index + 2, name, 'skipped'),
+        ),
+      ],
+      requiredChecks,
+    })
+
+    await test.run()
+
+    expect(terminal(test.comments)).toContain('READY')
+    expect(test.runs[0]?.gates.ci._tag).toBe('Passed')
   })
 
   it('waits when a required check has not reported', async () => {

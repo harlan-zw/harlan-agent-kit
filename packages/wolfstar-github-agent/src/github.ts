@@ -17,13 +17,15 @@ import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { candidateFingerprintMarker, hasRoutineIssueLabel } from './candidate-issue-controller.ts'
+import { githubAccountBody } from './github-account.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
-import { isReviewRerunCommand } from './review-rerun.ts'
+import { findingDiscussions, inlineReviewComment } from './review-finding-threads.ts'
+import { parsePullRequestCommand } from './review-rerun.ts'
 import { isRoutineTrackingIssue } from './routine-report-controller.ts'
 import { ROUTINE_SPEC_PATH } from './routine-spec.ts'
 
@@ -33,12 +35,16 @@ export interface GitHubReadError {
   status?: number
 }
 
-export interface GitHubReviewRerunRequest {
+interface GitHubPullRequestComment {
   author: string
   commentId: number
+  /** A rerun command on the conversation, or a reply on a finding thread beside the code. */
   pullRequestNumber: number
   updatedAt: string
 }
+
+export type GitHubReviewRerunRequest = GitHubPullRequestComment &
+  ({ origin: 'Command' | 'FindingReply' } | { origin: 'ChangeRequest'; instruction: string })
 
 export interface GitHubSource {
   isBranchProtected: (
@@ -212,6 +218,15 @@ function issueItem(
   const controllerLogin = actorLogin.toLowerCase()
   return {
     kind: 'issue',
+    closureReason: issue.state_reason ?? null,
+    closureDetail:
+      comments
+        .filter(
+          (comment) =>
+            comment.user?.login.toLowerCase() !== controllerLogin &&
+            repository.writablePullRequestAuthors.includes(comment.user?.login ?? ''),
+        )
+        .at(-1)?.body ?? null,
     approvalLabels: approvalLabels(labels),
     contentDigest: issueContentDigest({
       title: issue.title,
@@ -261,7 +276,9 @@ function pullRequestItem(
     number: pull.number,
     state: pull.state === 'closed' ? 'closed' : 'open',
     mergedAt: pull.merged_at,
+    mergeCommitSha: pull.merge_commit_sha,
     title: pull.title,
+    body: pull.body ?? '',
     author: pull.user?.login ?? 'ghost',
     url: pull.html_url,
     createdAt: pull.created_at,
@@ -436,6 +453,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
               hasRoutineIssueLabel(labels),
               isRoutineTrackingIssue({
                 repository: repository.github,
+                account: repository.githubAccount,
                 title: response.data.title,
                 body: response.data.body,
                 labels,
@@ -480,26 +498,59 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
       const { owner, repo } = repositoryParts(repository.github)
       const octokit = await client(repository.github, signal)
       if (octokit._tag === 'Err') return octokit
-      return octokit.value.rest.issues
-        .listCommentsForRepo({
-          owner,
-          repo,
-          sort: 'updated',
-          direction: 'desc',
-          per_page: 100,
-          ...(signal === undefined ? {} : { request: { signal } }),
-        })
-        .then((response) =>
-          ok(
-            response.data.flatMap((comment): GitHubReviewRerunRequest[] => {
+      const request = {
+        owner,
+        repo,
+        sort: 'updated' as const,
+        direction: 'desc' as const,
+        per_page: 100,
+        ...(signal === undefined ? {} : { request: { signal } }),
+      }
+      return Promise.all([
+        octokit.value.rest.issues.listCommentsForRepo(request),
+        octokit.value.rest.pulls.listReviewCommentsForRepo(request),
+      ])
+        .then(([issueComments, reviewComments]) =>
+          ok([
+            ...issueComments.data.flatMap((comment): GitHubReviewRerunRequest[] => {
               const body = comment.body ?? ''
               const author = comment.user?.login
+              const command = parsePullRequestCommand(body)
               const pullRequestNumber = Number(comment.issue_url.split('/').at(-1))
-              return author === undefined || !Number.isSafeInteger(pullRequestNumber) || !isReviewRerunCommand(body)
+              return author === undefined || !Number.isSafeInteger(pullRequestNumber) || command === null
                 ? []
-                : [{ author, commentId: comment.id, pullRequestNumber, updatedAt: comment.updated_at }]
+                : [
+                    {
+                      author,
+                      commentId: comment.id,
+                      ...(command._tag === 'Change'
+                        ? { origin: 'ChangeRequest' as const, instruction: command.instruction }
+                        : { origin: 'Command' as const }),
+                      pullRequestNumber,
+                      updatedAt: comment.updated_at,
+                    },
+                  ]
             }),
-          ),
+            // A reply whose thread root fell off this page is missed until the
+            // root reappears; the next Review still reads it from its snapshot.
+            ...Object.values(Object.groupBy(reviewComments.data, (comment) => comment.pull_request_url)).flatMap(
+              (comments) => {
+                const pullRequestNumber = Number(comments?.[0]?.pull_request_url.split('/').at(-1))
+                return comments === undefined || !Number.isSafeInteger(pullRequestNumber)
+                  ? []
+                  : findingDiscussions(comments.map(inlineReviewComment), options.actorLogin(repository)).flatMap(
+                      (discussion) =>
+                        discussion.replies.map((reply): GitHubReviewRerunRequest => ({
+                          author: reply.author,
+                          commentId: reply.commentId,
+                          origin: 'FindingReply',
+                          pullRequestNumber,
+                          updatedAt: reply.updatedAt,
+                        })),
+                    )
+              },
+            ),
+          ]),
         )
         .catch((error: unknown): Result<GitHubReviewRerunRequest[], GitHubReadError> => {
           const status = errorStatus(error)
@@ -548,6 +599,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             const labels = labelNames(issue.labels)
             const routineFiled = hasRoutineIssueLabel(labels)
             const routineTracking = isRoutineTrackingIssue({
+              account: repository.githubAccount,
               repository: repository.github,
               title: issue.title,
               body: issue.body,
@@ -654,6 +706,10 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
 
 /** Files the issue one Candidate proposes, so the Item pipeline can act on it. */
 export interface GitHubIssuePublisher {
+  updateIssue: (
+    input: { repository: RepositoryMapping; issueNumber: number; title: string; body: string },
+    signal?: AbortSignal,
+  ) => Promise<Result<void, GitHubReadError>>
   createIssue: (
     input: {
       repository: RepositoryMapping
@@ -723,6 +779,29 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
   }
 
   return {
+    async updateIssue(input, signal) {
+      const { owner, repo } = repositoryParts(input.repository.github)
+      const client = await itemWriteClient(input.repository.github, signal)
+      if (client._tag === 'Err') return client
+      return client.value.rest.issues
+        .update({
+          owner,
+          repo,
+          issue_number: input.issueNumber,
+          title: input.title,
+          body: githubAccountBody(input.body, input.repository.githubAccount),
+          ...(signal === undefined ? {} : { request: { signal } }),
+        })
+        .then(() => ok(undefined))
+        .catch((error: unknown): Result<void, GitHubReadError> => {
+          const status = errorStatus(error)
+          return err({
+            repository: input.repository.github,
+            message: error instanceof Error ? error.message : 'GitHub refused the report update.',
+            ...(status === undefined ? {} : { status }),
+          })
+        })
+    },
     async createIssue(input, signal) {
       const { owner, repo } = repositoryParts(input.repository.github)
       const octokit = await itemWriteClient(input.repository.github, signal)
@@ -733,7 +812,7 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
           owner,
           repo,
           title: input.title,
-          body: input.body,
+          body: githubAccountBody(input.body, input.repository.githubAccount),
           ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
           ...request,
         })
@@ -756,7 +835,7 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
           owner,
           repo,
           issue_number: input.issueNumber,
-          body: input.body,
+          body: githubAccountBody(input.body, input.repository.githubAccount),
           ...(signal === undefined ? {} : { request: { signal } }),
         })
         .then((response) => ok({ id: response.data.id }))
@@ -821,6 +900,7 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
             (row) =>
               row.pull_request === undefined &&
               isRoutineTrackingIssue({
+                account: input.repository.githubAccount,
                 repository: input.repository.github,
                 title: row.title,
                 body: row.body,

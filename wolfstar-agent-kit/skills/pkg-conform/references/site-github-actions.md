@@ -47,6 +47,13 @@ The caller ignores Markdown-only changes. If site content needs a build, replace
 `paths-ignore` with `paths` and name the Markdown paths. GitHub forbids both filters
 on one event.
 
+This event filter suits a site whose default branch requires no checks. If a branch
+rule requires `wolfstar-desktop / lint` or another gate check, remove `paths-ignore`.
+An event filter starts no run, so the required check never reports and a docs-only
+pull request blocks forever. Without a `changes` job in the shared workflow, a
+docs-only pull request then runs the full gate. To skip that work, add the job-level
+skip from `references/github-actions.md` there.
+
 Inputs worth knowing:
 
 | Input                                               | When to change it                                                                                                                                         |
@@ -97,8 +104,9 @@ jobs:
       - uses: wolfstar-project/wolfstar-nuxt/.github/actions/wolfstar-desktop-setup@main
 ```
 
-A Markdown-only change does not start this `workflow_run` path because CI did not
-run. `workflow_dispatch` remains the explicit deployment opt-in.
+Under the event filter, a Markdown-only change does not start this `workflow_run`
+path because CI did not run. Under a job-level skip, CI concludes `success` on that
+change, so this deploy runs. `workflow_dispatch` remains the explicit deployment opt-in.
 
 Never compare `head_sha` against `github.sha`. On a `workflow_run` event
 `github.sha` is the default branch tip at dispatch time, not the commit the run

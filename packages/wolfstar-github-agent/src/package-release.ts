@@ -1,4 +1,15 @@
+import ts from 'typescript'
 import { automatedDisclosure } from './review-comment.ts'
+
+/**
+ * Which GitHub credential writes a package release.
+ *
+ * `Repository` uses the credential discovery chose for the repository.
+ * `User` always uses Wolfstar's own token, even where the App is installed.
+ * A maintained repository must opt in with `User`, because a release there
+ * speaks for Wolfstar and never for the App.
+ */
+export type PackageReleaseCredential = { _tag: 'Repository' } | { _tag: 'User' }
 
 /** One explicitly configured, jointly versioned npm package group. */
 export interface PackageReleaseConfig {
@@ -7,7 +18,15 @@ export interface PackageReleaseConfig {
   versionFiles: string[]
   tagPrefix: string
   workflow: string
-  checks: string[]
+  checks: string[] | 'all'
+  credential: PackageReleaseCredential
+}
+
+/** Owned repositories under one checkout root may inherit this policy. */
+export interface PackageReleaseDefaults {
+  owner: string
+  checkoutRoot: string
+  policy: PackageReleaseConfig
 }
 
 export interface PackageReleaseInput {
@@ -23,7 +42,7 @@ export interface PackageReleaseInput {
   currentVersion: string
   packageName: string
   commits: string[]
-  files: Array<{ filename: string; patch: string }>
+  files: Array<{ filename: string; patch: string; source?: { before: string; after: string } }>
   complete: boolean
 }
 
@@ -39,7 +58,10 @@ interface PackageReleaseVersion {
 export type PackageReleasePlan = PackageReleaseVersion &
   ({ _tag: 'Available'; sourceSha: string; mergeSha: string } | { _tag: 'BeforeMerge' })
 
-export type PackageReleaseOffer = PackageReleasePlan | { _tag: 'Unavailable'; reason: string }
+export type PackageReleaseOffer =
+  | PackageReleasePlan
+  | { _tag: 'Unavailable'; reason: string }
+  | { _tag: 'ManualMajor'; reason: string; previousTag: string; headSha: string }
 
 export function stableVersion(value: string): [number, number, number] | null {
   if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(value)) return null
@@ -61,6 +83,77 @@ export function planPackageReleaseBeforeMerge(
   return classifyPackageRelease(input, { _tag: 'BeforeMerge' })
 }
 
+function hasIncompatibleDeclaration(file: PackageReleaseInput['files'][number]): boolean {
+  if (!/^-(?!-).*\b(?:export|defineProps|defineEmits)\b/m.test(file.patch)) return false
+  // Complete, pinned files preserve declaration scope and inferred return behavior.
+  if (file.source === undefined || /\.vue$/.test(file.filename) || /\b(?:defineProps|defineEmits)\b/.test(file.patch))
+    return true
+  const printer = ts.createPrinter()
+  if (
+    [file.source.before, file.source.after].some((source) =>
+      ts
+        .transpileModule(source, { fileName: file.filename, reportDiagnostics: true })
+        .diagnostics?.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error),
+    )
+  )
+    return true
+  const before = ts.createSourceFile(file.filename, file.source.before, ts.ScriptTarget.Latest, true)
+  const after = ts.createSourceFile(file.filename, file.source.after, ts.ScriptTarget.Latest, true)
+  const exported = (source: ts.SourceFile) =>
+    source.statements.filter(
+      (node) =>
+        ts.isExportDeclaration(node) ||
+        ts.isExportAssignment(node) ||
+        (ts.canHaveModifiers(node) &&
+          ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)),
+    )
+  const print = (node: ts.Node, source: ts.SourceFile) => printer.printNode(ts.EmitHint.Unspecified, node, source)
+  const returnsVoid = (body: ts.Block) => {
+    let voidOnly = true
+    const visit = (node: ts.Node): void => {
+      if (ts.isFunctionLike(node)) return
+      if ((ts.isReturnStatement(node) && node.expression !== undefined) || ts.isYieldExpression(node)) voidOnly = false
+      ts.forEachChild(node, visit)
+    }
+    visit(body)
+    return voidOnly
+  }
+  if (exported(before).length === 0) return true
+  return exported(before).some((old) => {
+    if (!ts.isFunctionDeclaration(old) || old.name === undefined)
+      return !exported(after).some((node) => print(node, after) === print(old, before))
+    const identity = (node: ts.FunctionDeclaration, source: ts.SourceFile) =>
+      JSON.stringify([
+        node.name?.text,
+        node.asteriskToken?.kind,
+        node.modifiers?.map((modifier) => print(modifier, source)),
+        node.typeParameters?.map((parameter) => print(parameter, source)),
+        node.type === undefined ? null : print(node.type, source),
+      ])
+    return !exported(after).some((node) => {
+      if (
+        !ts.isFunctionDeclaration(node) ||
+        identity(old, before) !== identity(node, after) ||
+        node.parameters.length < old.parameters.length ||
+        !old.parameters.every(
+          (parameter, index) => print(parameter, before) === print(node.parameters[index]!, after),
+        ) ||
+        !node.parameters
+          .slice(old.parameters.length)
+          .every((parameter) => parameter.questionToken !== undefined || parameter.initializer !== undefined)
+      ) {
+        return false
+      }
+      if (old.body === undefined || node.body === undefined) return old.body === node.body
+      return (
+        old.type !== undefined ||
+        (old.parameters.length === node.parameters.length && print(old.body, before) === print(node.body, after)) ||
+        (returnsVoid(old.body) && returnsVoid(node.body))
+      )
+    })
+  })
+}
+
 function classifyPackageRelease(
   input: Omit<PackageReleaseInput, 'merged' | 'sourceIncluded' | 'sourceSha' | 'mergeSha'>,
   phase: { _tag: 'BeforeMerge' } | { _tag: 'Available'; sourceSha: string; mergeSha: string },
@@ -71,16 +164,17 @@ function classifyPackageRelease(
   if (previous === null || stableVersion(input.currentVersion) === null)
     return unavailable('Only existing stable releases are supported.')
   const breaking = /^[a-z]+(?:\([^\n]*\))?!:|BREAKING[ -]CHANGE:/im
-  if ([input.title, input.body, ...input.commits].some((text) => breaking.test(text)))
-    return unavailable('Breaking changes require a manual release.')
+  if ([input.title, input.body, ...input.commits].some((text) => breaking.test(text))) {
+    return {
+      _tag: 'ManualMajor',
+      reason:
+        'This release includes breaking changes. Run a manual major release. Automatic releases support patch and minor only.',
+      previousTag: input.previousTag,
+      headSha: input.headSha,
+    }
+  }
   // Missing annotations must not hide an obvious public API removal.
-  if (
-    input.files.some(
-      (file) =>
-        /\.(?:[cm]?[jt]sx?|vue)$/.test(file.filename) &&
-        /^-(?!-).*\b(?:export|defineProps|defineEmits)\b/m.test(file.patch),
-    )
-  ) {
+  if (input.files.some((file) => /\.(?:[cm]?[jt]sx?|vue)$/.test(file.filename) && hasIncompatibleDeclaration(file))) {
     return unavailable('A public API changed. Check compatibility before releasing.')
   }
   const type = /^(feat|fix|perf)(?:\([^\n]*\))?:/i.exec(input.title)?.[1]?.toLowerCase()
@@ -113,6 +207,10 @@ function classifyPackageRelease(
 }
 
 export const PACKAGE_RELEASE_MARKER = '<!-- wolfstar-agent-kit:package-release -->'
+
+export function renderManualMajorRelease(plan: Extract<PackageReleaseOffer, { _tag: 'ManualMajor' }>): string {
+  return `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\n${plan.reason}\nIncludes all unreleased changes since \`${plan.previousTag}\`.\nChecked head \`${plan.headSha}\`.\n`
+}
 
 export function renderPackageRelease(plan: PackageReleasePlan, selected = false): string {
   if (plan._tag === 'BeforeMerge') {

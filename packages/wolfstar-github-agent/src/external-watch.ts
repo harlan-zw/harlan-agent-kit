@@ -1,3 +1,4 @@
+import type { Result } from './result.ts'
 import type {
   DashboardSnapshot,
   ExternalRepositoryWatch,
@@ -7,7 +8,9 @@ import type {
 } from './types.ts'
 import { createHash } from 'node:crypto'
 import { Octokit } from 'octokit'
+import { failFastThrottle } from './github-rate-limit.ts'
 import { isAutomatedGitHubActor, isIssueAtOrAfterCutoff } from './github.ts'
+import { err, ok } from './result.ts'
 
 export interface PublicIssueSnapshot {
   number: number
@@ -31,6 +34,10 @@ export interface ExternalWatchController {
   snapshot: () => ExternalWatchSnapshot
 }
 
+export interface ReloadableExternalWatchController extends ExternalWatchController {
+  reload: (options: ExternalWatchControllerOptions) => Promise<Result<{ repositories: number; issues: number }, string>>
+}
+
 export interface ExternalWatchControllerOptions {
   watches: ExternalRepositoryWatch[]
   issueCutoff: string
@@ -47,7 +54,7 @@ function repositoryParts(repository: string): { owner: string; repo: string } {
 
 function defaultIssueRequest(repository: string, number: number, signal?: AbortSignal): Promise<PublicIssueSnapshot> {
   const { owner, repo } = repositoryParts(repository)
-  const octokit = new Octokit({ userAgent: 'wolfstar-github-agent/0.0.0' })
+  const octokit = new Octokit({ userAgent: 'wolfstar-github-agent/0.0.0', throttle: failFastThrottle })
   return octokit.rest.issues
     .get({
       owner,
@@ -70,7 +77,7 @@ function defaultIssueRequest(repository: string, number: number, signal?: AbortS
 
 function defaultIssueListRequest(repository: string, signal?: AbortSignal): Promise<PublicIssueSnapshot[]> {
   const { owner, repo } = repositoryParts(repository)
-  const octokit = new Octokit({ userAgent: 'wolfstar-github-agent/0.0.0' })
+  const octokit = new Octokit({ userAgent: 'wolfstar-github-agent/0.0.0', throttle: failFastThrottle })
   return octokit
     .paginate(octokit.rest.issues.listForRepo, {
       owner,
@@ -188,11 +195,49 @@ export function createExternalWatchController(options: ExternalWatchControllerOp
   }
 }
 
+export function createReloadableExternalWatchController(
+  options: ExternalWatchControllerOptions,
+): ReloadableExternalWatchController {
+  let active = createExternalWatchController(options)
+  let pending: ReturnType<ReloadableExternalWatchController['reload']> | null = null
+
+  const reload: ReloadableExternalWatchController['reload'] = (next) => {
+    // A reload validates and applies only its own argument, so an overlapping
+    // call queues behind the in-flight one instead of returning its result.
+    const run = async (): Promise<Result<{ repositories: number; issues: number }, string>> => {
+      const candidate = createExternalWatchController(next)
+      const results = await candidate.poll()
+      const failed = results.find((result) => result.error !== undefined)
+      if (failed?.error !== undefined) return err(`${failed.repository}: ${failed.error}`)
+      active = candidate
+      return ok({ repositories: results.length, issues: results.reduce((count, result) => count + result.subjects, 0) })
+    }
+    const prior = pending
+    const result = prior === null ? run() : prior.then(run, run)
+    const tail = result.finally(() => {
+      if (pending === tail) pending = null
+    })
+    pending = tail
+    return result
+  }
+
+  return {
+    poll: (signal) => active.poll(signal),
+    snapshot: () => active.snapshot(),
+    reload,
+  }
+}
+
 export function mergeExternalWatchSnapshot(
   snapshot: DashboardSnapshot,
   external: ExternalWatchSnapshot,
 ): DashboardSnapshot {
   const repositories = new Set(snapshot.repositories.map((repository) => repository.github.toLowerCase()))
+  const watchErrors = new Map(
+    external.repositories
+      .filter((repository): repository is RepositoryStatus & { lastError: string } => repository.lastError !== null)
+      .map((repository) => [repository.github.toLowerCase(), repository.lastError]),
+  )
   const externalRepositories = external.repositories.filter(
     (repository) => !repositories.has(repository.github.toLowerCase()),
   )
@@ -202,13 +247,21 @@ export function mergeExternalWatchSnapshot(
   const externalItems = external.items.filter(
     (subject) => !subjects.has(`${subject.repository.toLowerCase()}:${subject.kind}:${subject.number}`),
   )
+  // A maintained repository has no row of its own in the watch snapshot, so its
+  // failed watch would otherwise vanish with the dropped external row.
+  const maintainedWithWatchErrors = snapshot.repositories.map((repository) => {
+    const watchError = watchErrors.get(repository.github.toLowerCase())
+    return watchError === undefined || repository.lastError !== null
+      ? repository
+      : { ...repository, lastError: watchError }
+  })
   return {
     ...snapshot,
     status:
-      snapshot.status === 'ready' && externalRepositories.some((repository) => repository.lastError !== null)
+      snapshot.status === 'ready' && external.repositories.some((repository) => repository.lastError !== null)
         ? 'degraded'
         : snapshot.status,
-    repositories: [...snapshot.repositories, ...externalRepositories].sort((left, right) =>
+    repositories: [...maintainedWithWatchErrors, ...externalRepositories].sort((left, right) =>
       left.github.localeCompare(right.github),
     ),
     items: [...snapshot.items, ...externalItems],

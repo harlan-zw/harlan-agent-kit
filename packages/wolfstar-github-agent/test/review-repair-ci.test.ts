@@ -98,6 +98,7 @@ function setup(findings: ReviewFinding[] = [finding]) {
     body: '',
     comments: [],
     reviews: [],
+    findingDiscussions: [],
     requiredChecks: { _tag: 'None' },
     priorAutomatedReview: { _tag: 'None' },
   }

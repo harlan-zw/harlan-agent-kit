@@ -3,7 +3,7 @@
 set -uo pipefail
 
 apply=false
-stale_days=7
+stale_days=1
 scan_root=$HOME
 
 usage() {
@@ -45,9 +45,12 @@ done
 worktrunk_bin=${WORKTREE_SWEEP_WT:-$(command -v wt 2>/dev/null || true)}
 jq_bin=${WORKTREE_SWEEP_JQ:-$(command -v jq 2>/dev/null || true)}
 realpath_bin=$(command -v realpath 2>/dev/null || true)
+readlink_bin=$(command -v readlink 2>/dev/null || true)
+gh_bin=$(command -v gh 2>/dev/null || true)
 [[ -x $worktrunk_bin ]] || fail 'Worktrunk is not installed.'
 [[ -x $jq_bin ]] || fail 'jq is not installed.'
 [[ -x $realpath_bin ]] || fail 'realpath is not installed.'
+[[ -x $readlink_bin ]] || fail 'readlink is not installed.'
 
 now=$(date +%s)
 repo_count=0
@@ -58,6 +61,81 @@ removed_count=0
 kept_count=0
 error_count=0
 declare -A seen_repositories=()
+declare -A target_patch_ids=()
+
+# Fetches must not wait for an interactive credential prompt in the daily service.
+fetch_origin() {
+  GIT_TERMINAL_PROMPT=0 timeout --signal=TERM --kill-after=5s 60s \
+    git -C "$1" -c credential.interactive=never fetch --quiet --no-write-fetch-head origin "${@:2}"
+}
+
+github_repository_for() {
+  local url
+  url=$(git -C "$1" remote get-url origin 2>/dev/null) || return 1
+  if [[ $url =~ ^(https://github.com/|git@github.com:|ssh://git@github.com/)([^/]+/[^/]+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[2]%.git}"
+  else
+    return 1
+  fi
+}
+
+# Git cannot recognise an old squash merge after later edits touch the same files.
+# A merged pull request supplies the missing link between source and destination.
+is_github_integrated() {
+  local repository=$1 head=$2 branch=$3 slug=$4 response entries canonical number pr_head merge base destination
+  [[ -n $slug ]] || return 1
+  if [[ ! -x $gh_bin ]]; then
+    record_error "$repository" github-unavailable
+    return 1
+  fi
+  if ! response=$(timeout --signal=TERM --kill-after=5s 60s "$gh_bin" api --hostname github.com graphql \
+    -F owner="${slug%/*}" -F name="${slug#*/}" -F branch="$branch" \
+    -f query='query($owner:String!,$name:String!,$branch:String!) {
+      repository(owner:$owner,name:$name) {
+        nameWithOwner
+        pullRequests(headRefName:$branch,first:100,orderBy:{field:UPDATED_AT,direction:DESC}) {
+          pageInfo { hasNextPage }
+          nodes { number state headRefOid headRepository { nameWithOwner }
+            baseRepository { nameWithOwner } baseRefName mergeCommit { oid } }
+        }
+      }
+    }'); then
+    record_error "$repository" github-query-failed
+    return 1
+  fi
+  # Incomplete history must never hide an open pull request using this branch.
+  if ! "$jq_bin" -e '.errors == null and
+    .data.repository.pullRequests.pageInfo.hasNextPage == false and
+    (.data.repository.pullRequests.nodes | type == "array")' <<< "$response" >/dev/null; then
+    record_error "$repository" github-history-incomplete
+    return 1
+  fi
+  if "$jq_bin" -e '.data.repository.pullRequests.nodes[] |
+    select(.state == "OPEN")' <<< "$response" >/dev/null; then
+    return 1
+  fi
+  # The origin URL can carry an old or differently cased name. GitHub still
+  # resolves it, and the canonical name in the response decides the match.
+  canonical=$("$jq_bin" -r '.data.repository.nameWithOwner' <<< "$response") || return 1
+  entries=$("$jq_bin" -r --arg slug "$canonical" '.data.repository.pullRequests.nodes[] |
+    select(.state == "MERGED" and (.baseRepository.nameWithOwner | ascii_downcase) == ($slug | ascii_downcase) and .mergeCommit.oid != null) |
+    [.number, .headRefOid, .mergeCommit.oid, .baseRefName] | @tsv' <<< "$response") || return 1
+  while IFS=$'\t' read -r number pr_head merge base; do
+    [[ $number =~ ^[0-9]+$ && $pr_head =~ ^[0-9a-f]{40}$ && $merge =~ ^[0-9a-f]{40}$ ]] || continue
+    git check-ref-format "refs/heads/$base" >/dev/null 2>&1 || continue
+    [[ $branch != "$base" ]] || continue
+    if ! git -C "$repository" cat-file -e "$pr_head^{commit}" 2>/dev/null; then
+      fetch_origin "$repository" "refs/pull/$number/head" || continue
+    fi
+    git -C "$repository" merge-base --is-ancestor "$head" "$pr_head" 2>/dev/null || continue
+    # All origin heads were fetched and pruned before inspection. Never fall back
+    # to a local branch when the pull request's destination has been deleted.
+    destination="refs/remotes/origin/$base"
+    git -C "$repository" merge-base --is-ancestor "$merge" "$destination" 2>/dev/null || continue
+    return 0
+  done <<< "$entries"
+  return 1
+}
 
 created_time_for() {
   local path=$1 created
@@ -88,7 +166,7 @@ default_target_for() {
 }
 
 is_integrated() {
-  local repository=$1 head=$2 target=$3 head_tree target_tree merged_tree
+  local repository=$1 head=$2 target=$3 head_tree target_tree merged_tree patch_id cache_key
   if git -C "$repository" merge-base --is-ancestor "$head" "$target" 2>/dev/null; then
     return 0
   fi
@@ -100,8 +178,21 @@ is_integrated() {
   if [[ $head_tree == "$target_tree" ]]; then
     return 0
   fi
-  merged_tree=$(git -C "$repository" merge-tree --write-tree "$target" "$head" 2>/dev/null) || return 1
-  [[ $merged_tree == "$target_tree" ]]
+  if merged_tree=$(git -C "$repository" merge-tree --write-tree "$target" "$head" 2>/dev/null) &&
+    [[ $merged_tree == "$target_tree" ]]; then
+    return 0
+  fi
+  # Later edits can make an already integrated squash merge conflict.
+  # Match the complete branch patch against recent destination commits.
+  patch_id=$(git -C "$repository" diff "$target...$head" -- |
+    git patch-id --stable | awk '{print $1}') || return 1
+  [[ -n $patch_id ]] || return 1
+  cache_key="$repository:$target_tree"
+  if [[ -z ${target_patch_ids[$cache_key]+present} ]]; then
+    target_patch_ids[$cache_key]=$(git -C "$repository" log --max-count=256 --no-merges --format=medium -p "$target" -- |
+      git patch-id --stable | awk '{print $1}') || return 1
+  fi
+  [[ $'\n'${target_patch_ids[$cache_key]}$'\n' == *$'\n'"$patch_id"$'\n'* ]]
 }
 
 has_live_claim() {
@@ -110,10 +201,19 @@ has_live_claim() {
   for claim in "$common_git_dir"/wolfstar-agent-kit/worktree-claims/*.json; do
     [[ -f $claim ]] || continue
     if "$jq_bin" -e --arg path "$("$realpath_bin" "$path")" --argjson now "$now" \
-      '.worktree == $path and (.expires_epoch // 0) > $now' "$claim" >/dev/null 2>&1; then
+      '.worktree == $path and (.durable == true or (.expires_epoch // 0) > $now)' "$claim" >/dev/null 2>&1; then
       return 0
     fi
   done
+  return 1
+}
+
+has_live_process() {
+  local path=$1 cwd
+  while IFS= read -r cwd; do
+    [[ $cwd == "$path" || $cwd == "$path/"* ]] && return 0
+  # Processes can exit during this scan. Ignore vanished or inaccessible entries.
+  done < <("$readlink_bin" /proc/[0-9]*/cwd 2>/dev/null || true)
   return 1
 }
 
@@ -131,7 +231,7 @@ record_error() {
 
 inspect_repository() {
   local repository=$1 field path='' head='' branch='' locked=false primary=true
-  local target created age status current_head removal i
+  local target created age status current_head removal i slug proof
   local -a paths=() heads=() branches=() locked_flags=()
 
   ((repo_count += 1))
@@ -162,6 +262,18 @@ inspect_repository() {
   done < <(git -C "$repository" worktree list --porcelain -z 2>/dev/null)
 
   ((${#paths[@]})) || return
+  # Local-only repositories have no remote integration evidence to refresh.
+  if ! git -C "$repository" remote get-url origin >/dev/null 2>&1; then
+    for path in "${paths[@]}"; do
+      keep "$path" no-origin
+    done
+    return
+  fi
+  if ! fetch_origin "$repository" --prune '+refs/heads/*:refs/remotes/origin/*'; then
+    record_error "$repository" fetch-failed
+    return
+  fi
+  slug=$(github_repository_for "$repository") || slug=''
   target=$(default_target_for "$repository") || {
     record_error "$repository" default-branch-missing
     return
@@ -181,6 +293,12 @@ inspect_repository() {
     ((age >= stale_days)) || continue
     ((old_count += 1))
 
+    # Interactive sessions retain their exact Worktree between turns.
+    if [[ $branch =~ ^agent/session-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
+      keep "$path" desktop-session
+      continue
+    fi
+
     if ! status=$(git -C "$path" status --porcelain=v1 --untracked-files=all 2>/dev/null); then
       record_error "$path" status-failed
       continue
@@ -193,6 +311,10 @@ inspect_repository() {
       keep "$path" claimed
       continue
     fi
+    if has_live_process "$path"; then
+      keep "$path" active-process
+      continue
+    fi
     if [[ $locked == true ]]; then
       keep "$path" locked
       continue
@@ -201,7 +323,11 @@ inspect_repository() {
       keep "$path" detached
       continue
     fi
+    proof=git
     if ! is_integrated "$repository" "$head" "$target"; then
+      proof=github
+    fi
+    if [[ $proof == github ]] && ! is_github_integrated "$repository" "$head" "$branch" "$slug"; then
       keep "$path" not-integrated
       continue
     fi
@@ -229,12 +355,41 @@ inspect_repository() {
       keep "$path" claimed
       continue
     fi
-    if ! is_integrated "$repository" "$head" "$target"; then
+    if [[ $proof == git ]] && ! is_integrated "$repository" "$head" "$target"; then
+      keep "$path" changed
+      continue
+    fi
+    if [[ $proof == github ]] && ! is_github_integrated "$repository" "$head" "$branch" "$slug"; then
       keep "$path" changed
       continue
     fi
 
-    if removal=$("$worktrunk_bin" -C "$repository" remove --foreground --format=json "$path"); then
+    # Remote checks can take time. Recheck the local head, status, and claim at
+    # removal, because writes may have landed during the remote call.
+    if [[ $(git -C "$path" rev-parse HEAD 2>/dev/null) != "$head" ||
+      $(git -C "$path" symbolic-ref --quiet --short HEAD 2>/dev/null) != "$branch" ]]; then
+      keep "$path" changed
+      continue
+    fi
+    if ! status=$(git -C "$path" status --porcelain=v1 --untracked-files=all 2>/dev/null); then
+      record_error "$path" status-failed
+      continue
+    fi
+    if [[ -n $status ]]; then
+      keep "$path" dirty
+      continue
+    fi
+    if has_live_claim "$path"; then
+      keep "$path" claimed
+      continue
+    fi
+
+    if has_live_process "$path"; then
+      keep "$path" active-process
+      continue
+    fi
+
+    if removal=$("$worktrunk_bin" -C "$repository" remove --foreground --format=json "$branch"); then
       ((removed_count += 1))
       printf 'removed\t%s\tbranch=%s\n' "$path" "$branch"
     else

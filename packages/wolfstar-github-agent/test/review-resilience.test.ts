@@ -1,5 +1,6 @@
 import type { PullRequestReviewSnapshot } from '../src/github-agent-source.ts'
 import type { ReviewWorkerOptions } from '../src/item-agent.ts'
+import type { RepairRoundPlan } from '../src/repair-rounds.ts'
 import type {
   ClaimedAdversarialReviewTask,
   GitHubPullRequestItem,
@@ -28,6 +29,7 @@ const soundPremise = { verdict: 'sound' as const, reason: 'The change can be rep
 function materialFinding() {
   return {
     identity: 'unsafe-parser-boundary',
+    impact: 90,
     path: 'src/parser.ts',
     line: 42,
     proof: 'Malformed input reaches the unsafe parser branch.',
@@ -53,6 +55,7 @@ function reviewSnapshot(pullRequest: GitHubPullRequestItem, comments: string[] =
     comments,
     priorAutomatedReview: { _tag: 'None' as const },
     pullRequest,
+    findingDiscussions: [],
     requiredChecks: { _tag: 'None' as const },
     reviews: [],
   }
@@ -91,6 +94,7 @@ function harness(input: {
   publish?: () => ReturnType<ReviewWorkerOptions['status']['publish']>
   preflightRepair?: ReviewWorkerOptions['preflightRepair']
   queueRepair?: () => ReviewFixQueueResult
+  repairRounds?: RepairRoundPlan
   reviewRuns?: ReviewRun[]
   verifyReview?: () => ReturnType<ReviewWorkerOptions['workspaces']['verifyReview']>
 }): Harness {
@@ -155,6 +159,7 @@ function harness(input: {
         }),
       getRepairedHeadFindings: () => [],
       listReviewRuns: () => [],
+      repairRoundPlan: () => input.repairRounds ?? { _tag: 'Allowed', number: 1 },
       storedReviewForHead: (_repository, _pullRequestNumber, headSha) => {
         const run = (input.reviewRuns ?? []).find((candidate) => candidate.headSha === headSha)
         return run === undefined ? { _tag: 'None' } : { _tag: 'Current', run }
@@ -247,6 +252,14 @@ describe('review resilience', () => {
     const controller = createReviewStatusController({
       github: {
         ...test.options.github,
+        getPullRequestStatusIdentity: () =>
+          Promise.resolve(
+            ok({
+              state: pullRequest.state,
+              headSha: pullRequest.headSha,
+              ...(pullRequest.baseRef === undefined ? {} : { baseRef: pullRequest.baseRef }),
+            }),
+          ),
         readExistingReviewLabel: () => Promise.reject(new Error('Unexpected existing review.')),
       },
       store,
@@ -518,9 +531,6 @@ describe('review resilience', () => {
     await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
 
     expect(test.provider.requests[0]?.prompt).toContain('The controller already applied the review workflow')
-    expect(test.provider.requests[0]?.prompt).toContain(
-      'Fetch the full GitHub conversation only if omitted history matters',
-    )
     expect(test.provider.requests[0]?.prompt).not.toContain('Apply the adversarial-review skill completely')
   })
 
@@ -687,7 +697,11 @@ describe('review resilience', () => {
 
     const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
 
-    expect(result).toEqual(err('The agent returned an invalid adversarial review result.'))
+    expect(result).toEqual(
+      err(
+        'The agent repeated a rejected result after one named correction. The agent returned an invalid adversarial review result: confidence must be an integer from 0 to 100.',
+      ),
+    )
     expect(test.attempts).toEqual([])
   })
   it('queues exact findings for a fresh Repair Agent', async () => {
@@ -801,6 +815,29 @@ describe('review resilience', () => {
     expect(test.comments.at(-1)).toContain('The base branch must pass CI before Repair starts.')
   })
 
+  it('names every spent Repair round instead of the unreadable base CI', async () => {
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    const snapshot = reviewSnapshot(pullRequest)
+    snapshot.baseChecks = { _tag: 'Unavailable', reason: 'GitHub checks timed out.' }
+    const reason =
+      'Repair used 3 of 3 rounds and the finding remains. Round 1 (`1111111`): a. Round 2 (`2222222`): b. Round 3 (`3333333`): c. A person decides the next step.'
+    const test = harness({
+      pullRequest,
+      snapshots: [snapshot],
+      repairRounds: { _tag: 'Exhausted', reason },
+      response: {
+        findings: [materialFinding()],
+        confidence: 90,
+      },
+    })
+
+    await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
+
+    expect(test.queued).toBe(0)
+    expect(test.comments.at(-1)).toContain(reason)
+    expect(test.comments.at(-1)).not.toContain('The base branch must pass CI before Repair starts.')
+  })
+
   it('does not queue Repair when GitHub refuses write access', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const reason = 'The GitHub App needs Contents write permission.'
@@ -859,24 +896,6 @@ describe('review resilience', () => {
     expect(result._tag).toBe('Ok')
     expect(test.queued).toBe(0)
     expect(test.comments.at(-1)).toContain(refusal)
-  })
-
-  it('rejects a wrong premise that still asks for Repair', async () => {
-    const pullRequest = pullRequestItem({ mergeState: 'clean' })
-    const test = harness({
-      pullRequest,
-      response: {
-        premise: { verdict: 'wrong', reason: 'Safe repair would reverse the pull request intent.' },
-        findings: [materialFinding()],
-        confidence: 90,
-      },
-    })
-
-    const result = await createReviewWorker(test.options).run(reviewTask(pullRequest), new AbortController().signal)
-
-    expect(result).toEqual(err('The agent returned an invalid adversarial review result.'))
-    expect(test.queued).toBe(0)
-    expect(test.attempts).toEqual([])
   })
 
   it('recommends Dismissal instead of repairing a wrong premise', async () => {

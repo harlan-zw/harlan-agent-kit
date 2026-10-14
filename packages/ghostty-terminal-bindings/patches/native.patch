@@ -1,0 +1,83 @@
+--- a/src/terminal/c/terminal.zig
++++ b/src/terminal/c/terminal.zig
+@@ -59,6 +59,13 @@
+             // Device status reports - these need responses
+             .device_status => try self.handleDeviceStatus(value.request),
+             .device_attributes => try self.handleDeviceAttributes(value),
++            .kitty_keyboard_query => {
++                var data: [32]u8 = undefined;
++                const response = try std.fmt.bufPrint(&data, "\x1b[?{}u", .{
++                    self.terminal.screens.active.kitty_keyboard.current().int(),
++                });
++                try self.response_buffer.appendSlice(self.alloc, response);
++            },
+ 
+             // All the terminal state modifications (same as stream_readonly.zig)
+             .print => try self.terminal.print(value.cp),
+@@ -192,7 +199,6 @@
+             .request_mode_unknown,
+             .size_report,
+             .xtversion,
+-            .kitty_keyboard_query,
+             .window_title,
+             .report_pwd,
+             .show_desktop_notification,
+@@ -1121,3 +1127,22 @@
+     try std.testing.expectEqual(@as(u32, 'l'), cells[3].codepoint);
+     try std.testing.expectEqual(@as(u32, 'o'), cells[4].codepoint);
+ }
++
++/// Return flags from the authoritative active-screen keyboard stack.
++pub fn getKittyKeyboardFlags(ptr: ?*anyopaque) callconv(.c) u8 {
++    const wrapper: *const TerminalWrapper = @ptrCast(@alignCast(ptr orelse return 0));
++    return @intCast(wrapper.terminal.screens.active.kitty_keyboard.current().int());
++}
++
++/// Packed keyboard options. Bits 0..4 are Kitty flags; bits 8..12 are modes.
++pub fn getKeyEncoderOptions(ptr: ?*anyopaque) callconv(.c) u32 {
++    const wrapper: *const TerminalWrapper = @ptrCast(@alignCast(ptr orelse return 0));
++    const opts = @import("../../input/key_encode.zig").Options.fromTerminal(&wrapper.terminal);
++    var value: u32 = opts.kitty_flags.int();
++    if (opts.cursor_key_application) value |= 1 << 8;
++    if (opts.keypad_key_application) value |= 1 << 9;
++    if (opts.ignore_keypad_with_numlock) value |= 1 << 10;
++    if (opts.alt_esc_prefix) value |= 1 << 11;
++    if (opts.modify_other_keys_state_2) value |= 1 << 12;
++    return value;
++}
+--- a/src/terminal/c/main.zig
++++ b/src/terminal/c/main.zig
+@@ -78,6 +78,8 @@
+ pub const terminal_is_alternate_screen = terminal.isAlternateScreen;
+ pub const terminal_has_mouse_tracking = terminal.hasMouseTracking;
+ pub const terminal_get_mode = terminal.getMode;
++pub const terminal_get_kitty_keyboard_flags = terminal.getKittyKeyboardFlags;
++pub const terminal_get_key_encoder_options = terminal.getKeyEncoderOptions;
+ 
+ // Scrollback API
+ pub const terminal_get_scrollback_length = terminal.getScrollbackLength;
+--- a/src/lib_vt.zig
++++ b/src/lib_vt.zig
+@@ -165,6 +165,8 @@
+         @export(&c.terminal_is_alternate_screen, .{ .name = "ghostty_terminal_is_alternate_screen" });
+         @export(&c.terminal_has_mouse_tracking, .{ .name = "ghostty_terminal_has_mouse_tracking" });
+         @export(&c.terminal_get_mode, .{ .name = "ghostty_terminal_get_mode" });
++        @export(&c.terminal_get_kitty_keyboard_flags, .{ .name = "ghostty_terminal_get_kitty_keyboard_flags" });
++        @export(&c.terminal_get_key_encoder_options, .{ .name = "ghostty_terminal_get_key_encoder_options" });
+ 
+         // Scrollback API
+         @export(&c.terminal_get_scrollback_length, .{ .name = "ghostty_terminal_get_scrollback_length" });
+--- a/include/ghostty/vt/terminal.h
++++ b/include/ghostty/vt/terminal.h
+@@ -278,6 +278,11 @@
+     size_t buffer_size
+ );
+ 
++/** Current Kitty flags from the active screen keyboard stack. */
++uint8_t ghostty_terminal_get_kitty_keyboard_flags(GhosttyTerminal term);
++/** Packed keyboard state: Kitty bits 0..4, cursor/keypad/Numlock/Alt/other-keys bits 8..12. */
++uint32_t ghostty_terminal_get_key_encoder_options(GhosttyTerminal term);
++
+ #ifdef __cplusplus
+ }
+ #endif

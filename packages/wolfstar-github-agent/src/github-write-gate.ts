@@ -24,6 +24,7 @@ export function isRepositoryWriteQuarantineReason(message: string): boolean {
 const writeAccess = new Set<GitHubRepositoryAccess>([
   'contents_write',
   'item_write',
+  'review_thread_write',
   'pull_request_merge',
   'workflows_write',
 ])
@@ -48,6 +49,7 @@ export function createGitHubWriteGate(options: GitHubWriteGateOptions): GitHubTo
       )
     },
     invalidate: (repository, access) => options.source.invalidate(repository, access),
+    rateLimited: (repository, limit) => options.source.rateLimited?.(repository, limit),
   }
 }
 

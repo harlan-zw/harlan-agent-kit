@@ -67,6 +67,7 @@ function reviewWith(input: { headChecks: GitHubCheck[]; baseChecks?: GitHubCheck
     body: 'Fixes the bug.',
     checks: { _tag: 'Available', checks: input.headChecks },
     comments: [],
+    findingDiscussions: [],
     priorAutomatedReview: { _tag: 'None' },
     pullRequest,
     requiredChecks: { _tag: 'Declared', contexts: ['ci / test'] },
@@ -108,6 +109,7 @@ function reviewWith(input: { headChecks: GitHubCheck[]; baseChecks?: GitHubCheck
         throw new Error('Unexpected Repair queue.')
       },
       getRepairedHeadFindings: () => [],
+      repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
       getWorkerSession: () => null,
       listReviewRuns: () => [],
       storedReviewForHead: () => ({ _tag: 'None' }),
@@ -242,7 +244,7 @@ describe('a required check that lost its runner', () => {
         severity: 'warning',
         operation: 'read_checks',
         message: RUNNER_LOST_INCIDENT_MESSAGE,
-        recovery: { _tag: 'Retrying', attempt: 0, nextAttemptAt: '2026-08-19T01:00:00.000Z' },
+        recovery: { _tag: 'OnNextOperation' },
         at: '2026-08-19T01:00:00.000Z',
       },
     ])

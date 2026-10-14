@@ -103,6 +103,9 @@ describe('composables', async () => {
 
 ### .github/workflows/test.yml
 
+This event filter suits a repository whose default branch requires no checks.
+If the branch requires `test`, drop `paths-ignore` and use the job-level skip in `github-actions.md`.
+
 ```yaml
 name: Test
 

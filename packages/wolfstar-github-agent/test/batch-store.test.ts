@@ -4,13 +4,14 @@ import { normalizeBatchPlan } from '../src/batch-store.ts'
 import { candidateIssueCommands, createCandidateIssueController } from '../src/candidate-issue-controller.ts'
 import { ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
-import { issueItem, repositoryMapping } from './fixtures.ts'
+import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const at = (minute: number): string => `2026-09-04T01:${String(minute).padStart(2, '0')}:00.000Z`
 const routineId = 'wolfstar-project/example:sentry-checkin'
 const runId = `${routineId}:2026-09-04T01:00:00.000Z`
 
 const publisher: GitHubIssuePublisher = {
+  updateIssue: async () => ok(undefined),
   findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
   findRoutineTrackingIssue: () => Promise.resolve(ok(null)),
   findIssueCommentByMarker: () => Promise.resolve(ok(null)),
@@ -358,6 +359,20 @@ describe('batches in the journal', () => {
           pullRequestNumber: 7,
         }),
       ).toBe(true)
+      store.recordObservation({
+        externalId: 'merged-7',
+        observedAt: at(13),
+        source: 'poll',
+        subject: pullRequestItem({ number: 7, state: 'closed', mergedAt: at(13), headRef: 'fix/issue-101' }),
+      })
+      store.reconcileRoutineCandidates(at(13))
+      expect(
+        store
+          .listCandidates(routineId)
+          .filter((candidate) => candidate.result._tag === 'Merged')
+          .map((candidate) => candidate.fingerprint),
+      ).toEqual(['src/file-101.ts', 'src/file-102.ts'])
+      expect(store.reconcileRoutineCandidates(at(14))).toBe(0)
       expect(store.getDashboardSnapshot(at(13)).tasks.find((task) => task.id === combinedTaskId)?.state).toEqual({
         _tag: 'Completed',
         evidence: 'Opened pull request #7.',

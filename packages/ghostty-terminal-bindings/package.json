@@ -1,0 +1,30 @@
+{
+  "name": "ghostty-terminal-bindings",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pinned Ghostty terminal bindings with native keyboard negotiation.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./browser": "./src/browser.ts",
+    "./wasm": "./.generated/ghostty-vt.wasm"
+  },
+  "scripts": {
+    "build": "node scripts/verify.ts",
+    "build:source": "node scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test:run": "vitest run",
+    "lint": "eslint src scripts test"
+  },
+  "dependencies": {
+    "ghostty-web": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

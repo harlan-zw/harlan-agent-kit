@@ -31,6 +31,9 @@ it('requires fresh Review before publishing a READY label for an unscoped commen
   const labels: string[] = []
   const scheduler = createReviewStatusScheduler({
     github: {
+      getPullRequestStatusIdentity: () => {
+        throw new Error('Unexpected progress identity read.')
+      },
       getPullRequestReviewSnapshot: () =>
         Promise.resolve(
           ok({
@@ -40,6 +43,7 @@ it('requires fresh Review before publishing a READY label for an unscoped commen
             comments: [],
             priorAutomatedReview: pullRequest.priorAutomatedReview,
             pullRequest,
+            findingDiscussions: [],
             requiredChecks: { _tag: 'None' },
             reviews: [],
           }),
@@ -152,6 +156,9 @@ it.each(['kept', 'revoked', 'rerun', 'Pause', 'labels', 'create label', 'add lab
         store: reopened,
         now: () => new Date('2026-08-13T01:00:05.000Z'),
         github: {
+          getPullRequestStatusIdentity: () => {
+            throw new Error('Unexpected progress identity read.')
+          },
           getPullRequestReviewSnapshot: () => {
             throw new Error('Unexpected snapshot.')
           },

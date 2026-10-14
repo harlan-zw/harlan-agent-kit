@@ -61,7 +61,10 @@ describe('worker workspace', () => {
       AbortSignal.timeout(10_000),
     )
 
-    expect(prepared).toMatchObject({ _tag: 'Ok', value: { baseSha: sourceSha, headSha: sourceSha } })
+    expect(prepared).toMatchObject({
+      _tag: 'Ok',
+      value: { baseSha: sourceSha, headSha: sourceSha, defaultBranchSha: git(checkout, 'rev-parse', 'main') },
+    })
   })
 
   it('reviews the exact pull request base commit after the default branch advances', async () => {

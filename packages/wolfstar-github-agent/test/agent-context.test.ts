@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -16,16 +16,124 @@ import {
 } from '../src/agent-context.ts'
 
 describe('defaultAgentContextPaths', () => {
-  it('resolves the copied service context from its working directory', () => {
-    expect(defaultAgentContextPaths({ CODEX_HOME: '/agent-home', HOME: '/agent-home' }, '/service')).toEqual({
-      claudeHome: '/agent-home/.claude',
-      instructionsPath: '/agent-home/AGENTS.md',
-      skillsRoot: '/service/wolfstar-agent-kit/skills',
-    })
+  it('uses the supplied service directory and Agent home for context paths', () => {
+    const paths = defaultAgentContextPaths({ CODEX_HOME: '/agent-home', HOME: '/agent-home' }, '/service')
+    expect(paths.claudeHome).toBe('/agent-home/.claude')
+    expect(paths.instructionsPath).toBe('/agent-home/AGENTS.md')
+    expect(paths.skillsRoot).toBe('/service/wolfstar-agent-kit/skills')
+    expect(paths.requiredSkillDirectories).toContain(
+      '/agent-home/.local/share/wolfstar-agent-kit/skilld/skills/im-part-human',
+    )
   })
 })
 
 describe('loadAgentContext', () => {
+  it.each([0, 1, 2])('uses the configured skilld binary during startup, received %s', async (status) => {
+    const root = await mkdtemp(join(tmpdir(), 'configured-skilld-'))
+    try {
+      const binary = join(root, 'custom-skilld')
+      await writeFile(binary, `#!/bin/sh\n[ "$1" = sync ] && [ "$5" = --check ] || exit 99\nexit ${status}\n`)
+      await chmod(binary, 0o755)
+      const paths = defaultAgentContextPaths(
+        {
+          HOME: root,
+          CODEX_HOME: root,
+          PATH: join(root, 'empty-path'),
+          WOLFSTAR_AGENT_SKILLD_BINARY: binary,
+        },
+        root,
+      )
+      await writeFile(paths.instructionsPath, '# Instructions\n')
+      await mkdir(join(paths.skillsRoot, 'pr'), { recursive: true })
+      await writeFile(join(paths.skillsRoot, 'pr/SKILL.md'), 'Personal policy.\n')
+      for (const directory of paths.requiredSkillDirectories) {
+        await mkdir(directory, { recursive: true })
+        await writeFile(join(directory, 'SKILL.md'), 'Declared policy.\n')
+      }
+      const result = await loadAgentContext(paths)
+      if (status === 0)
+        expect(result).toMatchObject({
+          _tag: 'Ok',
+          value: { skillDirectories: [join(paths.skillsRoot, 'pr'), ...paths.requiredSkillDirectories] },
+        })
+      else expect(result).toMatchObject({ _tag: 'Err', error: expect.stringContaining(`Command failed: ${binary}`) })
+    } finally {
+      await rm(root, { recursive: true })
+    }
+  })
+  it.each([0, 1, 2])(
+    'permits installed context only when the declared Skill check exits zero, received %s',
+    async (status) => {
+      const root = await mkdtemp(join(tmpdir(), 'declared-context-'))
+      try {
+        const binary = join(root, 'skilld')
+        await writeFile(
+          binary,
+          `#!/bin/sh\n[ "$1" = sync ] && [ "$5" = --check ] || exit 99\necho 'Declared Skills need attention.' >&2\nexit ${status}\n`,
+        )
+        await chmod(binary, 0o755)
+        const paths = {
+          claudeHome: root,
+          instructionsPath: join(root, 'AGENTS.md'),
+          skillsRoot: join(root, 'personal'),
+          requiredSkillDirectories: [],
+          declaredSkills: {
+            binary,
+            manifest: join(root, 'skilld.json'),
+            dataRoot: join(root, 'store'),
+            environment: {},
+          },
+        }
+        await writeFile(paths.instructionsPath, '# Instructions\n')
+        await mkdir(join(paths.skillsRoot, 'pr'), { recursive: true })
+        await writeFile(join(paths.skillsRoot, 'pr/SKILL.md'), 'Personal policy.\n')
+        const result = await loadAgentContext(paths)
+        if (status === 0)
+          expect(result).toMatchObject({ _tag: 'Ok', value: { skillDirectories: [join(paths.skillsRoot, 'pr')] } })
+        else expect(result).toMatchObject({ _tag: 'Err', error: expect.stringContaining('pnpm sync:skills') })
+      } finally {
+        await rm(root, { recursive: true })
+      }
+    },
+  )
+  it('requires portable Skills and passes their directories to OpenCode', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'portable-context-'))
+    const paths = {
+      claudeHome: root,
+      instructionsPath: join(root, 'AGENTS.md'),
+      skillsRoot: join(root, 'personal'),
+      requiredSkillDirectories: [join(root, 'portable/im-part-human')],
+    }
+    try {
+      await writeFile(paths.instructionsPath, '# Instructions\n')
+      await mkdir(join(paths.skillsRoot, 'pr'), { recursive: true })
+      await writeFile(join(paths.skillsRoot, 'pr/SKILL.md'), 'Personal PR policy.\n')
+      await expect(loadAgentContext(paths)).resolves.toMatchObject({
+        _tag: 'Err',
+        error: expect.stringContaining('im-part-human'),
+      })
+      await mkdir(paths.requiredSkillDirectories[0]!, { recursive: true })
+      await writeFile(join(paths.requiredSkillDirectories[0]!, 'SKILL.md'), 'Portable writing.\n')
+      const result = await loadAgentContext(paths)
+      expect(result._tag).toBe('Ok')
+      if (result._tag === 'Err') return
+      const environment = opencodeAgentEnvironment({ context: result.value, environment: {} })
+      expect(environment._tag).toBe('Ok')
+      if (environment._tag === 'Err') return
+      expect(JSON.parse(environment.value.OPENCODE_CONFIG_CONTENT!).skills).toEqual([
+        join(paths.skillsRoot, 'pr'),
+        ...paths.requiredSkillDirectories,
+      ])
+      await mkdir(join(paths.skillsRoot, 'im-part-human'), { recursive: true })
+      await writeFile(join(paths.skillsRoot, 'im-part-human/SKILL.md'), 'Duplicate.\n')
+      await expect(loadAgentContext(paths)).resolves.toMatchObject({
+        _tag: 'Err',
+        error: expect.stringContaining('Duplicate Skill'),
+      })
+    } finally {
+      await rm(root, { recursive: true })
+    }
+  })
   it('loads the global instructions and every installed Wolfstar skill', async () => {
     const root = await mkdtemp(join(tmpdir(), 'wolfstar-agent-context-'))
     const instructionsPath = join(root, 'AGENTS.md')
@@ -41,7 +149,12 @@ describe('loadAgentContext', () => {
 
     try {
       await expect(
-        loadAgentContext({ claudeHome: join(root, '.claude'), instructionsPath, skillsRoot }),
+        loadAgentContext({
+          claudeHome: join(root, '.claude'),
+          instructionsPath,
+          skillsRoot,
+          requiredSkillDirectories: [],
+        }),
       ).resolves.toEqual({
         _tag: 'Ok',
         value: {
@@ -64,6 +177,7 @@ describe('loadAgentContext', () => {
           claudeHome: join(root, '.claude'),
           instructionsPath: join(root, 'missing.md'),
           skillsRoot: join(root, 'skills'),
+          requiredSkillDirectories: [],
         }),
       ).resolves.toEqual({
         _tag: 'Err',
@@ -104,7 +218,7 @@ describe('opencodeAgentEnvironment', () => {
         OPENCODE_CONFIG_CONTENT: JSON.stringify({
           instructions: ['/repo/CONTRIBUTING.md'],
           share: 'disabled',
-          skills: { paths: ['/custom/skill'], urls: ['https://example.com/skills/'] },
+          skills: ['/custom/skill', 'https://example.com/skills/'],
         }),
       },
     })
@@ -115,10 +229,7 @@ describe('opencodeAgentEnvironment', () => {
     expect(JSON.parse(result.value.OPENCODE_CONFIG_CONTENT ?? '')).toEqual({
       instructions: ['/repo/CONTRIBUTING.md', '/home/wolfstar/.codex/AGENTS.md'],
       share: 'disabled',
-      skills: {
-        paths: ['/custom/skill', '/kit/skills/pr', '/kit/skills/unit-tests'],
-        urls: ['https://example.com/skills/'],
-      },
+      skills: ['/custom/skill', 'https://example.com/skills/', '/kit/skills/pr', '/kit/skills/unit-tests'],
     })
   })
 
@@ -301,7 +412,7 @@ describe('opencodeTurnEnvironment', () => {
       environment: {
         OPENCODE_CONFIG_CONTENT: JSON.stringify({
           instructions: ['/home/wolfstar/.codex/AGENTS.md'],
-          skills: { paths: ['/kit/skills/pr'] },
+          skills: ['/kit/skills/pr'],
         }),
       },
       instructionPaths: ['/home/wolfstar/.claude/projects/-home-wolfstar-pkg-unhead/memory/MEMORY.md'],
@@ -314,7 +425,7 @@ describe('opencodeTurnEnvironment', () => {
         '/home/wolfstar/.codex/AGENTS.md',
         '/home/wolfstar/.claude/projects/-home-wolfstar-pkg-unhead/memory/MEMORY.md',
       ],
-      skills: { paths: ['/kit/skills/pr'] },
+      skills: ['/kit/skills/pr'],
     })
   })
 

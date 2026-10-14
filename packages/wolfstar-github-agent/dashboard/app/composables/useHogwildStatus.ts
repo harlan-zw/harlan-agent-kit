@@ -4,6 +4,7 @@ import {
   appendHogwildSample,
   emptyHogwildHistory,
   hogwildLiveUrl,
+  hogwildStatusFresh,
   parseHogwildStatus,
 } from '../utils/hogwild-status.ts'
 
@@ -11,6 +12,7 @@ export type HogwildConnection =
   | { _tag: 'NotOnHogwild' }
   | { _tag: 'Connecting' }
   | { _tag: 'Connected'; status: HogwildStatus }
+  | { _tag: 'Stale'; updatedAt: number }
   | { _tag: 'Unavailable'; reason: string }
 
 export function useHogwildStatus() {
@@ -19,11 +21,18 @@ export function useHogwildStatus() {
   const liveUrl = computed(() =>
     mounted.value ? hogwildLiveUrl(location.value.hostname ?? '', location.value.protocol ?? '') : undefined,
   )
-  const connection = shallowRef<HogwildConnection>({ _tag: 'NotOnHogwild' })
+  const lastConnection = shallowRef<HogwildConnection>({ _tag: 'NotOnHogwild' })
+  const { now } = useDashboard()
+  const connection = computed<HogwildConnection>(() => {
+    const value = lastConnection.value
+    return value._tag === 'Connected' && !hogwildStatusFresh(value.status.updatedAt, now.value)
+      ? { _tag: 'Stale', updatedAt: value.status.updatedAt }
+      : value
+  })
   const history = shallowRef(emptyHogwildHistory())
 
   function unavailable(reason: string): void {
-    connection.value = { _tag: 'Unavailable', reason }
+    lastConnection.value = { _tag: 'Unavailable', reason }
     history.value = emptyHogwildHistory()
   }
 
@@ -34,7 +43,7 @@ export function useHogwildStatus() {
       retries: () => liveUrl.value !== undefined,
     },
     onConnected: () => {
-      connection.value = { _tag: 'Connecting' }
+      lastConnection.value = { _tag: 'Connecting' }
     },
     onDisconnected: () => {
       unavailable('Hogwild status disconnected. Reconnecting.')
@@ -53,12 +62,12 @@ export function useHogwildStatus() {
         return
       }
       history.value = appendHogwildSample(history.value, parsed.value)
-      connection.value = { _tag: 'Connected', status: parsed.value }
+      lastConnection.value = { _tag: 'Connected', status: parsed.value }
     },
   })
 
   watch(liveUrl, (value) => {
-    connection.value = value === undefined ? { _tag: 'NotOnHogwild' } : { _tag: 'Connecting' }
+    lastConnection.value = value === undefined ? { _tag: 'NotOnHogwild' } : { _tag: 'Connecting' }
     history.value = emptyHogwildHistory()
   })
 

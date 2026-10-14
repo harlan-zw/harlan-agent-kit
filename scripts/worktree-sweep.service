@@ -1,10 +1,10 @@
 [Unit]
-Description=Remove clean integrated Git worktrees older than seven days
+Description=Remove clean integrated Git worktrees older than one day
 
 [Service]
 Type=oneshot
 Environment=PATH=%h/.cargo/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=%h/.local/bin/git-worktree-sweep --apply --days 7 %h
+ExecStart=%h/.local/bin/git-worktree-sweep --apply --days 1 %h
 TimeoutStartSec=30min
 Nice=10
 IOSchedulingClass=idle

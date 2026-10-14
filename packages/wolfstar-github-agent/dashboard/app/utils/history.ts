@@ -54,7 +54,14 @@ export function outcomeFilterMatches(row: HistoryRow, filter: OutcomeFilter): bo
  */
 export type HistoryRange =
   | { _tag: 'All' }
-  | { _tag: 'Stats'; from: string | undefined; to: string | undefined; work: WorkKey | undefined }
+  | {
+      _tag: 'Stats'
+      from: string | undefined
+      to: string | undefined
+      work: WorkKey | undefined
+      repository?: string
+      routine?: string
+    }
 
 const workKeys: ReadonlySet<string> = new Set<WorkKey>([
   'conflict_resolution',
@@ -78,8 +85,18 @@ export function historyRangeFromQuery(query: Record<string, unknown>): HistoryRa
   const to = queryString(query.to)
   const workValue = queryString(query.work)
   const work = workValue !== undefined && workKeys.has(workValue) ? (workValue as WorkKey) : undefined
-  if (from === undefined && to === undefined && work === undefined) return { _tag: 'All' }
-  return { _tag: 'Stats', from, to, work }
+  const repository = queryString(query.repository)
+  const routine = queryString(query.routine)
+  if (from === undefined && to === undefined && work === undefined && repository === undefined && routine === undefined)
+    return { _tag: 'All' }
+  return {
+    _tag: 'Stats',
+    from,
+    to,
+    work,
+    ...(repository === undefined ? {} : { repository }),
+    ...(routine === undefined ? {} : { routine }),
+  }
 }
 
 export function historyRowWork(row: HistoryRow): WorkKey {
@@ -104,6 +121,16 @@ function localDate(at: string): string {
 
 function rangeMatches(row: HistoryRow, range: HistoryRange): boolean {
   if (range._tag === 'All') return true
+  const repository =
+    row._tag === 'Routine'
+      ? row.run.repository
+      : row._tag === 'Task'
+        ? row.task.repository
+        : row._tag === 'Review'
+          ? row.agent.repository
+          : row.skip.repository
+  if (range.repository !== undefined && repository !== range.repository) return false
+  if (range.routine !== undefined && (row._tag !== 'Routine' || row.run.name !== range.routine)) return false
   if (range.work !== undefined && historyRowWork(row) !== range.work) return false
   const date = localDate(row.at)
   if (range.from !== undefined && date < range.from) return false

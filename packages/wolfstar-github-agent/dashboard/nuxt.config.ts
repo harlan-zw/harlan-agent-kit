@@ -2,6 +2,7 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-08-13',
   pages: { pattern: ['**/*.vue', '!**/_*.vue'] },
   css: ['~/assets/css/main.css'],
+  colorMode: { preference: 'dark', fallback: 'dark' },
   devtools: { enabled: true },
   modules: ['@nuxt/ui', '@nuxt/fonts', '@nuxt/icon', '@vueuse/nuxt', 'nuxt-skew-protection'],
   skewProtection: {
@@ -10,7 +11,7 @@ export default defineNuxtConfig({
   },
   fonts: {
     families: [
-      { name: 'Mona Sans', provider: 'google', weights: [400, 500, 600] },
+      { name: 'Hubot Sans', provider: 'google', weights: [400, 500, 600] },
       { name: 'JetBrains Mono', provider: 'google', weights: [400, 500] },
     ],
   },
@@ -46,7 +47,7 @@ export default defineNuxtConfig({
     },
     prerender: {
       // `/kit` stays out on purpose. It is a dev page and nothing links to it.
-      routes: ['/', '/history', '/stats', '/watching', '/routines', '/flow'],
+      routes: ['/', '/sessions', '/history', '/stats', '/watching', '/routines', '/flow'],
       ignore: ['/kit'],
     },
   },

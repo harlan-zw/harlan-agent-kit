@@ -1,7 +1,7 @@
 import type { ConsolaInstance } from 'consola'
 import type { GitHubUserAccess } from '../src/github-user-access.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { resolveUserLogin } from '../src/service.ts'
+import { resolveUserLogin, serviceNeedsUserLogin } from '../src/service.ts'
 
 const silentLogger = { info: (() => undefined) as unknown as ConsolaInstance['info'] }
 
@@ -93,4 +93,31 @@ describe('resolveUserLogin', () => {
       spy.mockRestore()
     }
   })
+})
+
+it('resolves the human account for signed checkbox controls with only App repositories', async () => {
+  expect(
+    serviceNeedsUserLogin(
+      {
+        webhook: { _tag: 'Enabled', host: '127.0.0.1', port: 3211, secretPath: '/secret' },
+        mutationsEnabled: true,
+        repositories: [],
+      },
+      0,
+      'secret',
+    ),
+  ).toBe(true)
+  expect(serviceNeedsUserLogin({ webhook: { _tag: 'Disabled' }, mutationsEnabled: true, repositories: [] }, 0)).toBe(
+    false,
+  )
+  expect(
+    serviceNeedsUserLogin(
+      {
+        webhook: { _tag: 'Enabled', host: '127.0.0.1', port: 3211, secretPath: '/secret' },
+        mutationsEnabled: true,
+        repositories: [],
+      },
+      0,
+    ),
+  ).toBe(false)
 })

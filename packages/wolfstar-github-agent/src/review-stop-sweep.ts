@@ -1,11 +1,16 @@
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
-import type { ReviewCheckRunUpdate } from './review-check-run.ts'
+import type { ReviewCheckRunReport, ReviewCheckRunUpdate } from './review-check-run.ts'
 import type { JournalStore, StoppedReview, StoppedReviewDisposition } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import { err, ok } from './result.ts'
-import { reviewCheckRunUpdate } from './review-check-run.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
+import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
+import {
+  AUTOMATED_REVIEW_MARKER,
+  automatedDisclosure,
+  reviewFindingCodeLink,
+  reviewFindingFollowUp,
+} from './review-comment.ts'
 import { cleanLine, updatedAtLabel } from './text.ts'
 
 export type StoppedReviewOutcome =
@@ -33,6 +38,7 @@ export interface ReviewStopSweepOptions {
     'clearAgentLabels' | 'editReviewStatus' | 'getPullRequestReviewSnapshot' | 'upsertReviewCheckRun'
   >
   now: () => Date
+  reportCheckRun: ReviewCheckRunReport
   repositories: RepositoryMapping[]
   store: Pick<
     JournalStore,
@@ -59,20 +65,26 @@ export interface ReviewStopSweepOptions {
  * `neutral`, never a verdict. Skipped for a superseded or foreign comment,
  * because another Task owns the Review there and carries the check run itself.
  */
-function completeStoppedReviewCheckRun(
+async function completeStoppedReviewCheckRun(
   options: ReviewStopSweepOptions,
   mapping: RepositoryMapping,
   review: StoppedReview,
   body: string,
   at: string,
   signal: AbortSignal,
-): Promise<Result<void, string>> {
+): Promise<void> {
   const update: ReviewCheckRunUpdate | null = reviewCheckRunUpdate(
     { taskKind: review.taskKind, phase: 'terminal', desiredOutcome: 'SKIPPED', body },
     at,
   )
-  if (update === null) return Promise.resolve(ok(undefined))
-  return options.github.upsertReviewCheckRun(mapping, review.headSha, update, signal)
+  if (update === null) return
+  await mirrorReviewCheckRun(
+    { publisher: options.github, report: options.reportCheckRun },
+    mapping,
+    review.headSha,
+    update,
+    signal,
+  )
 }
 
 export function stoppedReviewComment(
@@ -99,7 +111,7 @@ GitHub ${action} this pull request.${
       disposition._tag === 'Merged'
         ? `
 
-${review.findings.length === 0 ? 'No material findings were recorded.' : review.findings.map((finding) => (finding._tag === 'Open' ? `- ${cleanLine(finding.summary)} Next: ${finding.resolution === 'Dismissal' ? 'Decide a safe follow-up for the merged change.' : cleanLine(finding.nextAction)}` : `- Fixed: ${cleanLine(finding.summary)}`)).join('\n')}
+${review.findings.length === 0 ? 'No material findings were recorded.' : review.findings.map((finding) => (finding._tag === 'Open' ? `- ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} Next: ${finding.resolution === 'Dismissal' ? 'Decide a safe follow-up for the merged change.' : cleanLine(finding.nextAction)}` : finding._tag === 'Logged' ? `- Logged (${finding.impact}/100): ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} ${reviewFindingFollowUp(finding)}` : `- Fixed: ${cleanLine(finding.summary)}`)).join('\n')}
 
 ${cleanLine(review.reason)}`
         : ' No further automated Review will run.'
@@ -109,7 +121,9 @@ ${cleanLine(review.reason)}`
     const findings = review.findings.map((finding) =>
       finding._tag === 'Fixed'
         ? `- **Fixed:** ${cleanLine(finding.summary)}`
-        : `- **Open:** ${cleanLine(finding.summary)}${/[.!?]$/.test(cleanLine(finding.summary)) ? '' : '.'} Next: ${cleanLine(finding.nextAction)}`,
+        : finding._tag === 'Logged'
+          ? `- **Logged (${finding.impact}/100):** ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} ${reviewFindingFollowUp(finding)}`
+          : `- **Open:** ${cleanLine(finding.summary)}${/[.!?]$/.test(cleanLine(finding.summary)) ? '' : '.'}${reviewFindingCodeLink(review.repository, review.headSha, finding)} Next: ${cleanLine(finding.nextAction)}`,
     )
     return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${review.headSha} -->
@@ -192,10 +206,9 @@ export async function publishStoppedReviews(
     if (edited._tag === 'Err') return err(`${review.repository}#${review.pullRequestNumber}: ${edited.error}`)
     const closure = disposition._tag === 'Stopped' ? null : disposition
     if (edited.value._tag === 'Missing') {
-      // The comment is gone, but the check run it mirrored is not. Close it
-      // before any record, so a failed write keeps the row eligible.
-      const checkRun = await completeStoppedReviewCheckRun(options, mapping, review, body, at, signal)
-      if (checkRun._tag === 'Err') return err(`${review.repository}#${review.pullRequestNumber}: ${checkRun.error}`)
+      // The comment is gone, but the check run it mirrored is not. Close it.
+      // It gates nothing: a failure reaches a person through the report.
+      await completeStoppedReviewCheckRun(options, mapping, review, body, at, signal)
       if (closure !== null) {
         const labels = await options.github.clearAgentLabels(mapping, review.pullRequestNumber, signal)
         if (labels._tag === 'Err') return err(`${review.repository}#${review.pullRequestNumber}: ${labels.error}`)
@@ -267,12 +280,10 @@ export async function publishStoppedReviews(
             },
       )
     }
-    // The comment is closed. Close the check run it mirrored before any
-    // record, so a failed write keeps the row eligible and the next pass
-    // retries both: the comment edit above is idempotent when the body
-    // already holds.
-    const checkRun = await completeStoppedReviewCheckRun(options, mapping, review, body, at, signal)
-    if (checkRun._tag === 'Err') return err(`${review.repository}#${review.pullRequestNumber}: ${checkRun.error}`)
+    // The comment is closed. Close the check run it mirrored. It gates
+    // nothing: a failure reaches a person through the report, and the row
+    // still settles, because no later pass can grant a missing permission.
+    await completeStoppedReviewCheckRun(options, mapping, review, body, at, signal)
     const labels = await options.github.clearAgentLabels(mapping, review.pullRequestNumber, signal)
     if (labels._tag === 'Err') return err(`${review.repository}#${review.pullRequestNumber}: ${labels.error}`)
     const recorded = options.store.recordStoppedReviewStatus({

@@ -1,5 +1,8 @@
 import type { AgentProviderName } from '../src/agent-provider.ts'
 import type { ProviderCapacity } from '../src/types.ts'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createAgentRuntimeSource, parseAgentSelection, resolveAgentSelection } from '../src/agent-profile.ts'
 import { agentStartBlockedReason, resolveAgentStartState } from '../src/capacity.ts'
@@ -7,6 +10,7 @@ import {
   chooseAgentProvider,
   createProviderCapacitySource,
   hasSpendableCapacity,
+  readOpencodeGoCapacity,
   readZaiApiKey,
   readZaiCapacity,
   WEEKLY_WINDOW_MINUTES,
@@ -136,6 +140,28 @@ describe('choosing an Agent provider automatically', () => {
 })
 
 describe('resolving Agent start state', () => {
+  it('stops a pinned provider at its Reserve instead of launching repeated scans', () => {
+    expect(
+      resolveAgentStartState({
+        mutationsEnabled: true,
+        agentControl: { _tag: 'Running' },
+        restartRequest: null,
+        agentSelection: {
+          _tag: 'Pinned',
+          provider: 'opencode',
+          model: 'zai-coding-plan/glm-5.3',
+          reasoningEffort: 'high',
+        },
+        providerCapacities: [
+          {
+            provider: 'opencode',
+            reservePercent: 0,
+            capacity: { _tag: 'Available', usedPercent: 100, resetsAt: '2026-10-14T05:44:29.983Z' },
+          },
+        ],
+      }),
+    ).toEqual({ _tag: 'ReserveReached' })
+  })
   const input = {
     mutationsEnabled: true,
     agentControl: { _tag: 'Running' as const },
@@ -379,6 +405,34 @@ describe('storing an automatic Agent selection', () => {
 })
 
 describe('the capacity source', () => {
+  it('uses an Automatic model choice without changing a pinned selection', () => {
+    const source = createAgentRuntimeSource({
+      configuredProvider: 'opencode',
+      maximumActiveAgents: 1,
+      providers: { claude: stubProvider('claude'), codex: stubProvider('codex'), opencode: stubProvider('opencode') },
+      selection: () => ({ _tag: 'Automatic', order: ['opencode'] }),
+      automaticSelection: (provider) => ({ provider, model: 'opencode-go/glm-5.3-flash', reasoningEffort: null }),
+    })
+    expect(source().profile.roles.routine_scan.model).toBe('opencode-go/glm-5.3-flash')
+    expect(
+      source('wolfstar-project/example', {
+        provider: 'opencode',
+        model: 'zai-coding-plan/glm-5.3',
+        reasoningEffort: 'high',
+      }).profile.roles.routine_scan.model,
+    ).toBe('zai-coding-plan/glm-5.3')
+  })
+  it('keeps OpenCode Go separate from an exhausted GLM Coding Plan', async () => {
+    const source = createProviderCapacitySource({
+      onError: () => undefined,
+      readCodex: async () => ({ _tag: 'Unpublished' }),
+      readOpencode: async () => ({ _tag: 'Available', usedPercent: 100, resetsAt: '2026-10-14T05:44:29.983Z' }),
+      readOpencodeGo: async () => ({ _tag: 'Unpublished' }),
+    })
+    await source.refresh()
+    expect(source.read('opencode', 'opencode-go/glm-5.3-flash')).toEqual({ _tag: 'Unpublished' })
+    expect(source.read('opencode', 'zai-coding-plan/glm-5.3')).toMatchObject({ _tag: 'Available', usedPercent: 100 })
+  })
   it('reports opencode as unavailable until the first plan reading lands', () => {
     const source = createProviderCapacitySource({ onError: () => undefined })
 
@@ -516,4 +570,26 @@ describe('reading the GLM Coding Plan quota', () => {
   it('answers no key when opencode declares no plan, which is not a fault', () => {
     expect(readZaiApiKey('/nonexistent/opencode.json')).toBeNull()
   })
+})
+
+it('reads the ZAI quota credential from native OpenCode V2 settings', () => {
+  const root = mkdtempSync(join(tmpdir(), 'zai-v2-'))
+  try {
+    const path = join(root, 'opencode.json')
+    writeFileSync(path, JSON.stringify({ providers: { 'zai-coding-plan': { settings: { apiKey: ' fixture-key ' } } } }))
+    expect(readZaiApiKey(path)).toBe('fixture-key')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+it('recognizes the Go login from native OpenCode V2 provider settings', () => {
+  const root = mkdtempSync(join(tmpdir(), 'go-v2-'))
+  try {
+    const path = join(root, 'opencode.json')
+    writeFileSync(path, JSON.stringify({ providers: { 'opencode-go': { settings: { apiKey: 'fixture-key' } } } }))
+    expect(readOpencodeGoCapacity(path)).toEqual({ _tag: 'Unpublished' })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

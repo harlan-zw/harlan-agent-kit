@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { createAgentPermitPool } from '../src/agent-permit-pool.ts'
+import { createAgentPermitPool, createRoutinePermitPools } from '../src/agent-permit-pool.ts'
 import { createBatchScheduler } from '../src/batch-scheduler.ts'
 import { createBatchWorker } from '../src/batch-worker.ts'
 import { ok } from '../src/result.ts'
@@ -23,6 +23,12 @@ function setup(mutationsEnabled = false, maximumOpenPullRequests = 8) {
   store.setRepositoryWritesEnabled(priority, true)
   return store
 }
+
+it('holds Routine runs while GitHub holds a quota', () => {
+  const store = setup()
+
+  expect(canClaimRoutineRun(true, ['routine'], store, later, false)).toBe(false)
+})
 
 function readyIssues(
   store: ReturnType<typeof openJournalStore>,
@@ -114,6 +120,30 @@ it('gives Conflict resolution the next claim before older Issue work', () => {
   expect(store.claimNextConflictTask('conflict', later, 60_000)?.pullRequestNumber).toBe(24)
 })
 
+it('lets issue triage and implementation proceed after thirty minutes despite new reviews', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier, [101])
+  store.recordObservation({
+    externalId: 'next-issue',
+    observedAt: earlier,
+    source: 'poll',
+    subject: issueItem({ repository: priority, number: 102, author: 'wolfstar-project' }),
+  })
+  const afterWait = '2026-09-08T00:31:00.000Z'
+  store.recordObservation({
+    externalId: 'review',
+    observedAt: afterWait,
+    source: 'poll',
+    subject: pullRequestItem({ repository: priority, mergeState: 'clean' }),
+  })
+
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)).toBeNull()
+  expect(store.claimNextIssueTriageTask('triage', afterWait, 60_000)?.issueNumber).toBe(102)
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)).toBeNull()
+  expect(store.claimNextIssueWorkTask('implementation', afterWait, 60_000)?.issueNumber).toBe(101)
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)?.pullRequestNumber).toBe(24)
+})
+
 it('keeps a new Batch queued until Review takes its claim', () => {
   const store = setup(true)
   readyIssues(store, priority, earlier)
@@ -130,6 +160,22 @@ it('keeps a new Batch queued until Review takes its claim', () => {
   expect(store.claimNextBatch('batch', later, 60_000)?.repository).toBe(priority)
 })
 
+it('preserves overdue Issue age when planning a new Batch', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier)
+  const afterWait = '2026-09-08T00:31:00.000Z'
+  store.planBatches(afterWait)
+  store.recordObservation({
+    externalId: 'review',
+    observedAt: afterWait,
+    source: 'poll',
+    subject: pullRequestItem({ repository: priority, mergeState: 'clean' }),
+  })
+
+  expect(store.claimNextBatch('batch', afterWait, 60_000)?.repository).toBe(priority)
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)?.pullRequestNumber).toBe(24)
+})
+
 it('does not hold Issue work behind a Review that lacks Approval', () => {
   const store = setup(true)
   readyIssues(store, priority, earlier, [101])
@@ -144,6 +190,23 @@ it('does not hold Issue work behind a Review that lacks Approval', () => {
   expect(store.claimNextIssueWorkTask('implementation', later, 60_000)?.issueNumber).toBe(101)
 })
 
+it('lets an older Batch claim a permit while fresh reviews wait', () => {
+  const store = setup(true)
+  readyIssues(store, priority, earlier)
+  store.planBatches(earlier)
+  const afterWait = '2026-09-08T00:31:00.000Z'
+  store.recordObservation({
+    externalId: 'review',
+    observedAt: afterWait,
+    source: 'poll',
+    subject: pullRequestItem({ repository: priority, mergeState: 'clean' }),
+  })
+
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)).toBeNull()
+  expect(store.claimNextBatch('batch', afterWait, 60_000)?.repository).toBe(priority)
+  expect(store.claimNextAdversarialReviewTask('review', afterWait, 60_000)?.pullRequestNumber).toBe(24)
+})
+
 it('keeps ordinary Review outside the repository priority override for Routines', () => {
   const store = setup(true)
   store.recordObservation({
@@ -153,7 +216,7 @@ it('keeps ordinary Review outside the repository priority override for Routines'
     subject: pullRequestItem({ mergeState: 'clean' }),
   })
 
-  expect(store.hasPriorityAgentTask()).toBe(false)
+  expect(store.hasPriorityAgentTask(later)).toBe(false)
   expect(store.claimNextAdversarialReviewTask('review', later, 60_000)?.pullRequestNumber).toBe(24)
 })
 
@@ -215,7 +278,7 @@ it('gives queued priority batches the next permit before background work across 
     subject: issueItem({ author: 'wolfstar-project' }),
   })
 
-  expect(store.hasPriorityAgentTask()).toBe(true)
+  expect(store.hasPriorityAgentTask(later)).toBe(true)
   expect(store.claimNextConflictTask('conflict', later, 60_000)).toBeNull()
   expect(store.claimNextIssueTriageTask('triage', later, 60_000)).toBeNull()
   expect(store.claimNextIssueWorkTask('issue', later, 60_000)).toBeNull()
@@ -244,7 +307,7 @@ it.each(['paused', 'capped', 'writes disabled'] as const)(
       subject: issueItem({ author: 'wolfstar-project' }),
     })
 
-    expect(store.hasPriorityAgentTask()).toBe(false)
+    expect(store.hasPriorityAgentTask(later)).toBe(false)
     expect(store.claimNextIssueTriageTask('triage', later, 60_000)?.repository).toBe('wolfstar-project/example')
   },
 )
@@ -530,11 +593,19 @@ it('suspends idle batches at the pull request limit and resumes their remaining 
 })
 
 it.each([
-  { triggers: ['routine'] as const, expected: ['sentry-checkin'] },
-  { triggers: ['github', 'routine'] as const, expected: [] },
+  { triggers: ['routine'] as const, now: later, canClaim: true, expected: ['sentry-checkin'] },
+  { triggers: ['github', 'routine'] as const, now: later, canClaim: true, expected: [] },
+  { triggers: ['github', 'routine'] as const, now: '2026-09-08T00:29:59.999Z', canClaim: true, expected: [] },
+  {
+    triggers: ['github', 'routine'] as const,
+    now: '2026-09-08T00:30:00.000Z',
+    canClaim: true,
+    expected: ['sentry-checkin'],
+  },
+  { triggers: ['github', 'routine'] as const, now: '2026-09-08T00:30:00.000Z', canClaim: false, expected: [] },
 ])(
-  'runs due routines with queued priority work only when GitHub is disabled: $triggers',
-  async ({ triggers, expected }) => {
+  'runs waiting routines despite priority work after thirty minutes: $triggers at $now, claims $canClaim',
+  async ({ triggers, now, canClaim, expected }) => {
     const store = setup(true)
     store.recordObservation({
       externalId: 'priority',
@@ -552,14 +623,14 @@ it.each([
     store.openRoutineRun({ routineId: routine.id, scheduledFor: earlier, specSha: 'spec', at: earlier })
     const started: string[] = []
     const scheduler = createWorkerTaskScheduler({
-      canClaim: () => canClaimRoutineRun(true, triggers, store),
+      canClaim: () => canClaimRoutineRun(canClaim, triggers, store, now),
       claim: store.claimNextRoutineRun,
       complete: store.completeRoutineRun,
       fail: store.failRoutineRun,
       heartbeat: store.heartbeatRoutineRun,
       intervalMilliseconds: 5_000,
       leaseMilliseconds: 60_000,
-      now: () => new Date(later),
+      now: () => new Date(now),
       onError: (error) => {
         throw error
       },
@@ -577,6 +648,114 @@ it.each([
     await scheduler.stop()
   },
 )
+
+it.each([
+  { enabled: true, repositoryEnabled: true, retired: false, openedAt: earlier, expected: true },
+  { enabled: true, repositoryEnabled: true, retired: false, openedAt: later, expected: false },
+  { enabled: false, repositoryEnabled: true, retired: false, openedAt: earlier, expected: false },
+  { enabled: true, repositoryEnabled: false, retired: false, openedAt: earlier, expected: false },
+  { enabled: true, repositoryEnabled: true, retired: true, openedAt: earlier, expected: false },
+])(
+  'reserves only eligible Routine runs after thirty minutes in the queue: $enabled, $repositoryEnabled, $retired, $openedAt',
+  ({ enabled, repositoryEnabled, retired, openedAt, expected }) => {
+    const store = setup(true)
+    store.syncRepositories([repositoryMapping({ enabled: repositoryEnabled })], earlier)
+    const [routine] = store.syncRoutines({
+      repository: 'wolfstar-project/example',
+      specSha: 'spec',
+      entries: [{ name: 'daily-checkin', crons: ['0 0 * * *'], timeZone: 'UTC', mode: 'report', enabled }],
+      at: earlier,
+    })
+    if (routine === undefined) throw new Error('Expected a Routine.')
+    store.openRoutineRun({ routineId: routine.id, scheduledFor: earlier, specSha: 'spec', at: openedAt })
+    if (retired)
+      store.retireRoutines({ repository: 'wolfstar-project/example', reason: 'Definition removed.', at: later })
+
+    expect(store.hasOverdueRoutineRun('2026-09-08T00:30:00.000Z')).toBe(expected)
+  },
+)
+
+it('hands the next free permit to an overdue Routine before Review, then allows Review alongside it', async () => {
+  const store = setup(true)
+  const now = '2026-09-08T00:30:00.000Z'
+  const [routine] = store.syncRoutines({
+    repository: 'wolfstar-project/example',
+    specSha: 'spec',
+    entries: [{ name: 'daily-checkin', crons: ['0 0 * * *'], timeZone: 'UTC', mode: 'report', enabled: true }],
+    at: earlier,
+  })
+  if (routine === undefined) throw new Error('Expected a Routine.')
+  store.openRoutineRun({ routineId: routine.id, scheduledFor: earlier, specSha: 'spec', at: earlier })
+  store.recordObservation({
+    externalId: 'review',
+    observedAt: now,
+    source: 'poll',
+    subject: pullRequestItem({ repository: priority, mergeState: 'clean' }),
+  })
+  const pools = createRoutinePermitPools(createAgentPermitPool(2), () => store.hasOverdueRoutineRun(now))
+  const started: string[] = []
+  let releaseRoutine: () => void = () => {}
+  const routineScheduler = createWorkerTaskScheduler({
+    canClaim: () => canClaimRoutineRun(true, ['github', 'routine'], store, now),
+    claim: store.claimNextRoutineRun,
+    complete: store.completeRoutineRun,
+    fail: store.failRoutineRun,
+    heartbeat: store.heartbeatRoutineRun,
+    intervalMilliseconds: 5_000,
+    leaseMilliseconds: 60_000,
+    now: () => new Date(now),
+    onError: (error) => {
+      throw error
+    },
+    permits: pools.routines,
+    worker: {
+      run: async () => {
+        started.push('routine')
+        await new Promise<void>((resolve) => {
+          releaseRoutine = resolve
+        })
+        return ok({ evidence: 'Scan complete.' })
+      },
+    },
+    workerId: 'routine',
+  })
+  const reviewScheduler = createWorkerTaskScheduler({
+    claim: store.claimNextAdversarialReviewTask,
+    complete: store.completeWorkerTask,
+    fail: store.failWorkerTask,
+    heartbeat: store.heartbeatWorkerTask,
+    intervalMilliseconds: 5_000,
+    leaseMilliseconds: 60_000,
+    now: () => new Date(now),
+    onError: (error) => {
+      throw error
+    },
+    permits: pools.items,
+    worker: {
+      run: async () => {
+        started.push('review')
+        return ok({ evidence: 'Reviewed.' })
+      },
+    },
+    workerId: 'review',
+  })
+  // The competing Review timer gets the first chance, like the real Service.
+  await reviewScheduler.runNow()
+  expect(started).toEqual([])
+  const running = routineScheduler.runNow()
+  try {
+    await vi.waitFor(() => expect(started).toContain('routine'))
+    expect(store.listRoutineRuns(routine.id)[0]?.state._tag).toBe('Running')
+    await reviewScheduler.runNow()
+    expect(started).toEqual(['routine', 'review'])
+    releaseRoutine()
+    await running
+    expect(store.listRoutineRuns(routine.id)[0]?.state._tag).toBe('Completed')
+  } finally {
+    releaseRoutine()
+    await Promise.all([routineScheduler.stop(), reviewScheduler.stop(), running])
+  }
+})
 
 it('recovers expired issue-work leases before deciding whether a batch can resume', () => {
   const store = setup(true)
@@ -653,6 +832,6 @@ it('ignores combined issues from settled units when a suspended batch asks for p
     subject: issueItem({ author: 'wolfstar-project' }),
   })
 
-  expect(store.hasPriorityAgentTask()).toBe(false)
+  expect(store.hasPriorityAgentTask(later)).toBe(false)
   expect(store.claimNextIssueTriageTask('triage', later, 60_000)?.repository).toBe('wolfstar-project/example')
 })

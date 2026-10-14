@@ -81,6 +81,7 @@ function routineRun(overrides: Partial<DashboardRoutineRun> = {}): DashboardRout
     usage: { _tag: 'Unavailable' },
     candidates: [],
     activity: [],
+    report: null,
     reportState: 'Published',
     createdAt: '2026-08-19T12:00:00.000Z',
     updatedAt: '2026-08-19T12:05:00.000Z',
@@ -172,6 +173,19 @@ describe('historyRows', () => {
 })
 
 describe('historyRangeFromQuery', () => {
+  it('opens older Routine results for the selected repository and Routine', () => {
+    const snapshot = dashboardSnapshot()
+    snapshot.routineRuns = [
+      routineRun({ id: 'wanted', repository: 'wolfstar-project/nuxt-seo', name: 'daily-checkin' }),
+      routineRun({ id: 'other', repository: 'unjs/unhead', name: 'daily-checkin' }),
+    ]
+    const range = historyRangeFromQuery({
+      work: 'routine_scan',
+      repository: 'wolfstar-project/nuxt-seo',
+      routine: 'daily-checkin',
+    })
+    expect(historyRows(snapshot, 'all', range).map((row) => row.key)).toEqual(['wanted'])
+  })
   it('reads nothing as every record', () => {
     expect(historyRangeFromQuery({})).toEqual({ _tag: 'All' })
     expect(historyRangeFromQuery({ from: '' })).toEqual({ _tag: 'All' })

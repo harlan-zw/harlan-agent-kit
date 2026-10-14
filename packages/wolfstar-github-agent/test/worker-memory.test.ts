@@ -42,6 +42,7 @@ function reviewSnapshot(): PullRequestReviewSnapshot {
     comments: [],
     priorAutomatedReview: { _tag: 'None' },
     pullRequest: pullRequestItem({ mergeState: 'clean' }),
+    findingDiscussions: [],
     requiredChecks: { _tag: 'None' },
     reviews: [],
   }
@@ -83,6 +84,7 @@ const conflictWorktree: PreparedConflictWorktree = {
   headSha: 'head-sha',
   baseSha: 'current-base',
   conflictedFiles: ['src/a.ts'],
+  writablePaths: ['src/a.ts'],
 }
 
 const batchIssues = [

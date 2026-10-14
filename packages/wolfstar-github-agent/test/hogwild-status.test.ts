@@ -10,6 +10,7 @@ import {
   formatHogwildTemperature,
   formatHogwildTemperatures,
   hogwildLiveUrl,
+  hogwildStatusFresh,
   parseHogwildStatus,
   sparklineProjection,
 } from '../dashboard/app/utils/hogwild-status.ts'
@@ -74,6 +75,13 @@ const activeStatus = {
   access: { _tag: 'TailscaleAccess' },
   privateDetails: details,
 }
+
+it('expires host and runner samples even if their sockets stay connected', () => {
+  const now = new Date(details.updatedAt + 30_000)
+  expect(hogwildStatusFresh(details.updatedAt, now)).toBe(false)
+  expect(hogwildStatusFresh(details.updatedAt + 1, now)).toBe(true)
+  expect(hogwildStatusFresh(Number.NaN, now)).toBe(false)
+})
 
 describe('hogwild status boundary', () => {
   it('parses private host and service data once at the boundary', () => {

@@ -46,6 +46,7 @@ import {
   routineTrackingUrl,
   runningPhaseLine,
   scheduledRoutineRecords,
+  serviceClockOffset,
   shortAge,
   stalledLabel,
   systemState,
@@ -121,6 +122,7 @@ function routineRun(overrides: Partial<DashboardRoutineRun> = {}): DashboardRout
     candidates: [],
     activity: [],
     reportState: null,
+    report: null,
     createdAt: '2026-08-27T21:00:00.000Z',
     updatedAt: '2026-08-27T21:01:00.000Z',
     ...overrides,
@@ -241,6 +243,27 @@ describe('buildHistory', () => {
 })
 
 describe('history outcome visibility', () => {
+  it('names logged impact when a review is ready', () => {
+    const ready = reviewAgent({
+      outcome: { _tag: 'Ready', confidence: 95 },
+      findings: [
+        {
+          _tag: 'Logged',
+          impact: 80,
+          summary: 'The empty state loses spacing.',
+          details: {
+            fingerprint: 'empty-spacing',
+            identity: 'empty-spacing',
+            location: { path: 'src/view.ts', line: 14 },
+            proof: 'The list gap disappears.',
+          },
+        },
+      ],
+    })
+
+    expect(reviewOutcomeDetail(ready)).toBe('No finding above 80/100.')
+  })
+
   it('does not promise a Repair before its Task exists', () => {
     const blocked = reviewAgent({
       outcome: { _tag: 'Blocked' },
@@ -998,6 +1021,17 @@ describe('activeAgentActivity', () => {
 })
 
 describe('isSnapshotStale', () => {
+  it('expires data on the Service clock when the browser clock differs', () => {
+    const receivedAt = new Date('2026-08-14T11:55:00Z')
+    const offset = serviceClockOffset('Fri, 14 Aug 2026 12:00:00 GMT', receivedAt)
+    expect(isSnapshotStale('2026-08-14T12:00:00Z', new Date(receivedAt.getTime() + offset))).toBe(false)
+    expect(isSnapshotStale('2026-08-14T12:00:00Z', new Date(receivedAt.getTime() + offset + 91_000))).toBe(true)
+  })
+
+  it('keeps the browser clock when the response has no usable Service date', () => {
+    expect(serviceClockOffset(null, now)).toBe(0)
+    expect(serviceClockOffset('invalid', now)).toBe(0)
+  })
   it('treats a snapshot that never loaded as fresh, so the page does not cry wolf', () => {
     expect(isSnapshotStale('', now)).toBe(false)
   })
@@ -1072,9 +1106,13 @@ describe('incident pane', () => {
   })
 
   it('says what the controller will do next', () => {
-    expect(incidentRecoveryLabel(incident())).toBe('Retrying · retry 2')
-    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'Exhausted' } }))).toBe('Retries exhausted')
-    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'ActionRequired' } }))).toBe('Action required')
+    expect(incidentRecoveryLabel(incident(), new Date('2026-08-14T12:00:00Z'))).toBe('Retry in 1m 0s · retry 2')
+    expect(incidentRecoveryLabel(incident(), new Date('2026-08-14T12:02:00Z'))).toBe('Retry due · retry 2')
+    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'Exhausted' } }), now)).toBe('Retries exhausted')
+    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'ActionRequired' } }), now)).toBe('Action required')
+    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'OnNextOperation' } }), now)).toBe(
+      'The next Controller operation checks recovery.',
+    )
   })
 
   it('names the scope a person can act on', () => {
@@ -1205,7 +1243,7 @@ describe('system pane', () => {
     expect(systemState(snapshot)).toEqual({ label: 'Action required', tone: 'error' })
   })
 
-  it('pairs each Routine with its newest run', () => {
+  it('pairs each Routine with its newest run and settled result', () => {
     const older = routineRun()
     const newest = routineRun({
       id: 'routine-run-2',
@@ -1218,6 +1256,7 @@ describe('system pane', () => {
       {
         routine: routine(),
         latestRun: newest,
+        resultRun: newest,
       },
     ])
   })

@@ -1,7 +1,8 @@
 import type { PackageReleaseRecord, PackageReleaseState, PackageReleaseStore } from './package-release-store.ts'
 import type { PackageReleaseOffer, PackageReleasePlan } from './package-release.ts'
 import type { RepositoryMapping } from './types.ts'
-import { PACKAGE_RELEASE_MARKER, renderPackageRelease } from './package-release.ts'
+import { PACKAGE_RELEASE_MARKER, renderManualMajorRelease, renderPackageRelease } from './package-release.ts'
+import { canReleasePackages } from './repository-policy.ts'
 import { automatedDisclosure } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
@@ -51,21 +52,19 @@ export async function reconcilePackageReleases(options: {
   webhookReady: boolean
   store: PackageReleaseStore
   source: (assertLease: () => void) => PackageReleaseSource
+  mayPublish: () => boolean
   now: () => number
   signal: AbortSignal
-}): Promise<void> {
+}): Promise<{ _tag: 'Completed' } | { _tag: 'Paused' }> {
   const { repository, store, now, signal } = options
-  if (
-    !options.webhookReady ||
-    !repository.enabled ||
-    repository.release === undefined ||
-    repository.ownership !== 'owned'
-  )
-    return
+  if (!options.webhookReady || !canReleasePackages(repository)) return { _tag: 'Completed' }
+  const paused = { _tag: 'Paused' } as const
+  if (!options.mayPublish()) return paused
   const fence = store.claimPackageReleaseLease(repository.github, now())
-  if (fence === null) return
+  if (fence === null) return { _tag: 'Completed' }
   const assertLease = (): void => {
     signal.throwIfAborted()
+    if (!options.mayPublish()) throw paused
     if (!store.renewPackageReleaseLease(repository.github, fence, now())) throw new Error('The release lease expired.')
   }
   const source = options.source(assertLease)
@@ -82,6 +81,7 @@ export async function reconcilePackageReleases(options: {
   const report = async (record: PackageReleaseRecord): Promise<void> => {
     const body = packageReleaseStatus(record)
     if (record.body === body) return
+    assertLease()
     const commentId = await source.comment(record.pullRequestNumber, body, record.commentId)
     assertLease()
     if (!store.recordPackageReleaseComment(record, body, fence, now(), commentId))
@@ -97,7 +97,8 @@ export async function reconcilePackageReleases(options: {
         record = transition(record, { _tag: 'Blocked', reason: 'The repository release policy changed.' })
       if (record.state._tag === 'AwaitingMerge') {
         const offer = await source.inspect(record.pullRequestNumber)
-        if (offer._tag === 'Unavailable') {
+        assertLease()
+        if (offer._tag === 'Unavailable' || offer._tag === 'ManualMajor') {
           record = transition(record, { _tag: 'Blocked', reason: offer.reason })
         } else if (!sameSelection(offer, record.plan)) {
           // A changed head or version needs a fresh checkbox selection.
@@ -113,10 +114,14 @@ export async function reconcilePackageReleases(options: {
       }
       if (record.state._tag === 'Queued' && record.plan._tag === 'Available') {
         const offer = await source.inspect(record.pullRequestNumber)
+        assertLease()
         if (offer._tag !== 'Available' || !samePlan(offer, record.plan)) {
           record = transition(record, {
             _tag: 'Blocked',
-            reason: 'The release range changed. Request a new release after reviewing it.',
+            reason:
+              offer._tag === 'ManualMajor'
+                ? offer.reason
+                : 'The release range changed. Request a new release after reviewing it.',
           })
         } else {
           const prepared = await source.prepare({ ...record, plan: record.plan })
@@ -138,9 +143,10 @@ export async function reconcilePackageReleases(options: {
         .listPackageReleases(repository.github)
         .some((record) => ['Queued', 'Prepared', 'Publishing'].includes(record.state._tag))
     )
-      return
+      return { _tag: 'Completed' }
     const currentRecords = store.listPackageReleases(repository.github)
     const commands = store.listPackageReleaseCommands(repository.github)
+    const manualReleases = new Set<number>()
     const candidates = new Set([
       ...commands.map((command) => command.pullRequestNumber),
       ...(await source.candidates()),
@@ -151,6 +157,17 @@ export async function reconcilePackageReleases(options: {
       const existing = currentRecords.find((record) => record.pullRequestNumber === number)
       if (existing !== undefined && existing.state._tag !== 'Available') continue
       const plan = await source.inspect(number)
+      assertLease()
+      if (plan._tag === 'ManualMajor') {
+        manualReleases.add(number)
+        if (existing !== undefined) {
+          const blocked = transition(existing, { _tag: 'Blocked', reason: plan.reason })
+          await report(blocked)
+        } else {
+          await source.comment(number, renderManualMajorRelease(plan))
+        }
+        continue
+      }
       if (plan._tag === 'Unavailable') {
         if (existing !== undefined) {
           const blocked = transition(existing, { _tag: 'Blocked', reason: plan.reason })
@@ -185,7 +202,7 @@ export async function reconcilePackageReleases(options: {
           requestId: `comment:${command.commentId}`,
           selected: true,
         })
-      } else if (offer === undefined) {
+      } else if (offer === undefined && !manualReleases.has(command.pullRequestNumber)) {
         await source.comment(
           command.pullRequestNumber,
           `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nNo matching patch or minor release is available.\n`,
@@ -194,22 +211,31 @@ export async function reconcilePackageReleases(options: {
       store.consumePackageReleaseCommand(command)
     }
   } catch (error) {
+    // Pause is an expected interruption. Keep the durable phase for the next pass.
+    if (error === paused) return paused
     const active = store
       .listPackageReleases(repository.github)
       .find((record) => ['Queued', 'Prepared', 'Publishing'].includes(record.state._tag))
-    if (active !== undefined && !signal.aborted) {
+    if (active !== undefined && !signal.aborted && options.mayPublish()) {
       const message = cleanLine(error instanceof Error ? error.message : 'The release request failed.')
       const body = `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nRelease ${active.plan.version} is waiting: ${message}\nRetries keep this version.\n`
       if (active.body !== body) {
-        await source.comment(active.pullRequestNumber, body, active.commentId)
-        assertLease()
-        store.recordPackageReleaseComment(active, body, fence, now())
+        await (async () => {
+          assertLease()
+          await source.comment(active.pullRequestNumber, body, active.commentId)
+          assertLease()
+          store.recordPackageReleaseComment(active, body, fence, now())
+        })().catch((reportError: unknown) => {
+          // Pause can stop this notification. The original failure still propagates below.
+          if (reportError !== paused) throw reportError
+        })
       }
     }
     throw error
   } finally {
     store.releasePackageReleaseLease(repository.github, fence)
   }
+  return { _tag: 'Completed' }
 }
 
 function sameSelection(left: PackageReleasePlan, right: PackageReleasePlan): boolean {

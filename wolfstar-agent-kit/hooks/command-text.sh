@@ -11,7 +11,7 @@
 # heredoc openers all read the same state. A heredoc opener found inside a
 # quoted span is prose, and a body starts only once the command line ends.
 drop_prose() {
-  awk '
+  awk -v quoted_tokens="${1:-false}" '
     # Reads one physical line. Returns its command text.
     # Sets cont when the line ends in a continuation, so the caller joins it.
     function scan(line,   i, n, c, rest, opener, out) {
@@ -24,6 +24,7 @@ drop_prose() {
         if (quote == 1) {
           # A single quoted span takes no escapes.
           if (c == "\047") quote = 0
+          else if (quoted_tokens == "true") out = out (c ~ /[;|&()]/ ? " " : c)
           i++
           continue
         }
@@ -36,6 +37,7 @@ drop_prose() {
         }
         if (quote == 2) {
           if (c == "\042") quote = 0
+          else if (quoted_tokens == "true") out = out (c ~ /[;|&()]/ ? " " : c)
           i++
           continue
         }
@@ -80,5 +82,7 @@ drop_prose() {
 
 # Prints one line where every command position follows ^, |, &, ;, ( or a space.
 command_code() {
-  printf '%s\n' "$1" | drop_prose | tr '\n' ';'
+  # Routing needs quoted executable and repository tokens. Quoted separators
+  # remain data, so command examples cannot become executable positions.
+  printf '%s\n' "$1" | drop_prose "${2:-false}" | tr '\n' ';'
 }

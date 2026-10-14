@@ -1,6 +1,6 @@
 import type { InstalledRepository } from '../src/repository-discovery.ts'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -82,6 +82,56 @@ describe('installedWithoutCheckout', () => {
 })
 
 describe('repository discovery', () => {
+  it('inherits release policy only for stable public packages with a tag workflow', () => {
+    const root = mkdtempSync(join(tmpdir(), 'wolfstar-release-defaults-'))
+    temporaryDirectories.push(root)
+    const checkout = join(root, 'example')
+    mkdirSync(join(checkout, '.github', 'workflows'), { recursive: true })
+    writeFileSync(join(checkout, 'package.json'), JSON.stringify({ name: 'example', version: '1.2.3' }))
+    writeFileSync(join(checkout, '.github', 'workflows', 'release.yml'), 'on:\n  push:\n    tags: ["v*"]\n')
+    const installed = [
+      {
+        github: 'wolfstar-project/example',
+        defaultBranch: 'main',
+        archived: false,
+        fork: false,
+        topics: [],
+        authentication: 'app' as const,
+        owner: { login: 'wolfstar-project', type: 'User' as const },
+      },
+    ]
+    const defaults = {
+      owner: 'wolfstar-project',
+      checkoutRoot: root,
+      policy: {
+        manifest: 'package.json',
+        versionFiles: ['package.json'],
+        tagPrefix: 'v',
+        workflow: 'release.yml',
+        checks: 'all' as const,
+        credential: { _tag: 'Repository' as const },
+      },
+    }
+    const map = (overrides: Parameters<typeof buildRepositoryMappings>[2] = []) =>
+      buildRepositoryMappings(
+        installed,
+        [{ github: 'wolfstar-project/example', checkout }],
+        overrides,
+        ['wolfstar-project'],
+        defaults,
+      )
+
+    expect(map()[0]?.release).toEqual(defaults.policy)
+    expect(
+      map([{ ...repositoryMapping(), github: 'wolfstar-project/example', release: undefined }])[0]?.release,
+    ).toBeUndefined()
+    writeFileSync(join(checkout, 'package.json'), JSON.stringify({ name: 'example', version: '1.2.3', private: true }))
+    expect(map()[0]?.release).toBeUndefined()
+    writeFileSync(join(checkout, 'package.json'), JSON.stringify({ name: 'example', version: '1.2.3' }))
+    writeFileSync(join(checkout, '.github', 'workflows', 'release.yml'), 'on:\n  push:\n    branches: [main]\n')
+    expect(map()[0]?.release).toBeUndefined()
+  })
+
   it('ignores temporary worktrees beside the canonical checkout', async () => {
     const root = mkdtempSync(join(tmpdir(), 'wolfstar-discovery-'))
     temporaryDirectories.push(root)

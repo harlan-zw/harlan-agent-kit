@@ -37,6 +37,35 @@ function tokens() {
 }
 
 describe('live pull request base', () => {
+  it('reads only the pull request identity for progress publication', async () => {
+    let reads = 0
+    const client = {
+      rest: {
+        pulls: {
+          get: () => {
+            reads += 1
+            return Promise.resolve({ data: pullRequest() })
+          },
+        },
+      },
+    } as unknown as Octokit
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'wolfstar-github-agent[bot]',
+      ownAppId: 98114,
+      createClient: () => client,
+      tokens: tokens(),
+    })
+
+    expect(await source.getPullRequestStatusIdentity(repositoryMapping(), 24, new AbortController().signal)).toEqual(
+      ok({
+        state: 'open',
+        headSha,
+        baseRef: 'main',
+      }),
+    )
+    expect(reads).toBe(1)
+  })
+
   it('observes the current base branch commit instead of GitHub pull history', async () => {
     const client = {
       rest: {
@@ -133,6 +162,60 @@ describe('live pull request base', () => {
     )
     expect(checkedRefs).toContain(liveBaseSha)
     expect(checkedRefs).not.toContain(historicBaseSha)
+  })
+
+  it('uses only GitHub Actions jobs for review CI', async () => {
+    const listForRef = () => undefined
+    const client = {
+      paginate: (method: unknown) =>
+        Promise.resolve(
+          method === listForRef
+            ? [
+                {
+                  id: 1,
+                  name: 'test',
+                  status: 'completed',
+                  conclusion: 'success',
+                  app: { id: 15368, slug: 'github-actions' },
+                },
+                { id: 2, name: 'Vercel', status: 'completed', conclusion: 'failure', app: { id: 42, slug: 'vercel' } },
+              ]
+            : [],
+        ),
+      rest: {
+        actions: { listWorkflowRunsForRepo: () => undefined },
+        checks: { listForRef },
+        issues: { listComments: () => undefined },
+        pulls: {
+          get: () => Promise.resolve({ data: pullRequest() }),
+          listReviewComments: () => undefined,
+          listReviews: () => undefined,
+        },
+        repos: {
+          getBranch: () => Promise.resolve({ data: { commit: { sha: liveBaseSha } } }),
+          getCombinedStatusForRef: () => Promise.reject(new Error('Commit statuses must not be read.')),
+          listCommits: () => Promise.resolve({ data: [{ sha: liveBaseSha }] }),
+        },
+      },
+    } as unknown as Octokit
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'wolfstar-github-agent[bot]',
+      ownAppId: 98114,
+      createClient: () => client,
+      tokens: tokens(),
+    })
+
+    const result = await source.getPullRequestReviewSnapshot(repositoryMapping(), 24, new AbortController().signal)
+
+    expect(result).toEqual(
+      ok(
+        expect.objectContaining({
+          checks: { _tag: 'Available', checks: [expect.objectContaining({ name: 'test' })] },
+          findingDiscussions: [],
+          requiredChecks: { _tag: 'None' },
+        }),
+      ),
+    )
   })
 
   it.each([
@@ -622,6 +705,44 @@ describe('base checks behind a commit that ran no CI', () => {
       },
     } as unknown as Octokit
   }
+
+  it('reads default branch CI without depending on a triggering pull request', async () => {
+    const checkedRefs: string[] = []
+    const client = clientReadingHistory(
+      {
+        [lastCodeBaseSha]: [
+          {
+            id: 2,
+            name: 'test',
+            status: 'completed',
+            conclusion: 'failure',
+            app: { id: 15368, slug: 'github-actions' },
+            check_suite: { id: 8 },
+          },
+        ],
+      },
+      checkedRefs,
+    )
+    Object.assign(client.rest.pulls, {
+      get: () => {
+        throw new Error('The triggering pull request is unavailable.')
+      },
+    })
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'wolfstar-github-agent[bot]',
+      ownAppId: 98114,
+      createClient: () => client,
+      tokens: tokens(),
+    })
+    const result = await source.getDefaultBranchSnapshot(repositoryMapping(), new AbortController().signal)
+    expect(result).toEqual(
+      ok({
+        baseSha: docsOnlyBaseSha,
+        baseChecks: { _tag: 'Available', checks: [expect.objectContaining({ name: 'test', conclusion: 'failure' })] },
+      }),
+    )
+    expect(checkedRefs).toEqual([docsOnlyBaseSha, lastCodeBaseSha])
+  })
 
   it('reads the newest base commit that has a check run when the head ran none', async () => {
     // gscdump#55 on 2026-09-10: a docs-only merge became the main head, the

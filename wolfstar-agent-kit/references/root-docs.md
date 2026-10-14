@@ -25,8 +25,8 @@ Nothing else may sit at the root. A new root Markdown file is an error.
 | `CONTRIBUTING.md`                           | how a human contributes                                                 | humans                                               |
 | `LICENSE.md`, `SECURITY.md`, `CHANGELOG.md` | the usual                                                               | humans, tooling                                      |
 
-The [`copywriting` skill](../skills/copywriting/SKILL.md) creates and audits `COPY.md`, the way
-the [`glossary` skill](../skills/glossary/SKILL.md) does for `GLOSSARY.md`. A site with
+The `copywriting` Skill creates and audits `COPY.md`, the way
+the `glossary` Skill does for `GLOSSARY.md`. A site with
 user-visible strings and no `COPY.md` is a gap; run its `init` workflow.
 
 `COPY.md` owns the words on screen. `DESIGN.md` owns the pixels and defers voice
@@ -42,17 +42,73 @@ its architecture is `docs/arch/`.
 `ARCHITECTURE.md` is reference, so it belongs in `docs/arch/`. A package with no
 `docs/` directory may keep it at the root.
 
-Moving a document under `docs/` changes which lint rules reach it.
-`eslint-plugin-harlanzw` globs its prose rules at `**/content/**/*.md`,
-`**/docs/**/*.md` and `**/README.md`, so root Markdown other than `README.md`
-never met them. A file that has sat at the root for a year will fail on em
-dashes, adverbs and buzzwords the moment it moves. Fix the prose; it breaks
-Wolfstar's own writing rules either way. Budget for it: skilld.dev's five moved
-files produced 58 errors.
+Moving a document under `docs/` brings it under the prose lint rules. Expect
+em dash and buzzword errors, and fix the prose.
 
 `ROADMAP.md` is aggregate status, so it belongs in `docs/work/README.md` where a
 repository generates one. Two repositories keep it at the root today; leave
 those until their index generator lands.
+
+## Size budgets
+
+An agent reads a filter doc in part when it cannot read it in one pass.
+Budgets count lines, and tokens as characters divided by 4.
+
+| File                             | Cap                   | Section cap                                |
+| -------------------------------- | --------------------- | ------------------------------------------ |
+| `AGENTS.md`                      | 80 lines              | n/a                                        |
+| `DESIGN.md`                      | 300 lines, 12K tokens | 40 lines, 1.5K tokens                      |
+| `VISION.md`                      | 250 lines, 10K tokens | 40 lines                                   |
+| `COPY.md`                        | 120 lines             | 30 lines                                   |
+| `GLOSSARY.md`                    | 400 lines, 14K tokens | split `## Terms` per layer past 60 entries |
+| topic file or nested `AGENTS.md` | 150 lines, 5K tokens  | 40 lines                                   |
+| any paragraph or bullet          | 600 characters        | n/a                                        |
+
+If a file is over budget, do these in order:
+
+1. Delete catalog that code or a brand kit already carries. Keep a one-line pointer.
+2. Move dated exceptions and history to the decisions log or an ADR.
+3. Move rules that bind one layer to that layer's nested `AGENTS.md`.
+4. Only then raise the cap, and record why in an ADR.
+
+A filter doc over 150 lines opens with a load map: "When you work in X, also
+read Y." Agents read the core first and a topic file only for its layer.
+
+## Amendments
+
+A filter doc states the current rule only. It never carries a date, a
+"supersedes", an "until X it said Y", or a count of offending call sites.
+Record the history in `docs/design-decisions.md` or an ADR, and link it once.
+If an exception binds one route, put it next to that route.
+
+## Drift audit
+
+Every backticked component, file, flag or composable in a filter doc must exist.
+Run this from the repository root before you edit one:
+
+```bash
+for f in DESIGN.md COPY.md VISION.md; do
+  [ -f "$f" ] || continue
+  rg -oN '`[A-Za-z][\w./-]*`' "$f" | tr -d '`' | sort -u | while read -r name; do
+    case "$name" in
+      *.ts|*.vue|*.css|*.mjs|*.md) rg --files . | rg -qF "/${name##*/}" || echo "$f: dead file $name" ;;
+      *[a-z][A-Z]*) rg -qw "${name%%.*}" -g '!*.md' . || echo "$f: dead symbol $name" ;;
+    esac
+  done
+done
+for f in DESIGN.md COPY.md VISION.md GLOSSARY.md; do
+  [ -f "$f" ] || continue
+  rg -n '\(20[0-9]{2}-[0-9]{2}-[0-9]{2}\)|until 20[0-9]{2}|superseded' "$f"
+done
+if [ -f DESIGN.md ]; then
+  awk '/^## /{if(s)print n, s; s=$0; n=0} {n++} END{print n, s}' DESIGN.md | awk '$1>40'
+fi
+```
+
+A dead name means the rule is wrong or the code moved. Fix the rule or delete it.
+The second command finds dated amendments. The third finds sections over 40 lines.
+Files that do not exist are skipped, so a repository without every filter doc
+still audits clean.
 
 ## Docs lifecycle
 
@@ -137,20 +193,21 @@ Use [templates/AGENTS.md](../skills/pkg-conform/templates/AGENTS.md) to start on
 
 Nothing enforces this contract yet. Read it and apply it by hand.
 
-`AGENTS.md` is already in `eslint-plugin-harlanzw`'s `PROMPT_MARKERS` and
+`AGENTS.md` is already in `the prose lint plugin`'s `PROMPT_MARKERS` and
 `PROMPT_FILES`, so its 41 existing prompt and deslop rules fire on the file as
 soon as a repository stops ignoring it. Those rules catch wording. They do not
 check anything below.
 
 Planned, none of them shipped:
 
-| Rule                       | Will catch                                        |
-| -------------------------- | ------------------------------------------------- |
-| `prompt-dangling-path`     | a backticked repository path that does not exist  |
-| `prompt-orphan-doc`        | a root filter document `AGENTS.md` never links to |
-| `docs-root-allowlist`      | new Markdown at the repository root               |
-| `docs-work-brief-contract` | a brief missing a field above                     |
-| `docs-reference-no-status` | a `Status:` line in a reference document          |
+| Rule                       | Will catch                                                                   |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| `prompt-dangling-path`     | a backticked repository path that does not exist                             |
+| `prompt-orphan-doc`        | a root filter document `AGENTS.md` never links to                            |
+| `docs-root-allowlist`      | new Markdown at the repository root                                          |
+| `docs-work-brief-contract` | a brief missing a field above                                                |
+| `docs-reference-no-status` | a `Status:` line in a reference document                                     |
+| `filter-doc-budget`        | a filter doc or section over its size budget, a dead name, a dated amendment |
 
 When a rule ships, drop its row and say here that it is enforced.
 

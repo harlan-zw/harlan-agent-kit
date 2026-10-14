@@ -18,8 +18,61 @@ function record(value: unknown): value is Record<string, unknown> {
  *
  * 1: the original whole-history payload.
  * 2: tagged `DesktopHistory`, which carries only what the receiver lacks.
+ * 3: tagged `DesktopFailure`, which says whether the Agent provider started.
+ * 4: the `ContextBudgetWarned` Agent event.
+ * 5: bounded controller image evidence carried in the turn request.
+ * 6: provider processes require the isolated Agent worker configuration.
+ * 7: authenticated controller proof callbacks through desktop child duplex IO.
+ * 8: exact base revision supplied for immutable Review static evidence.
+ * 9: fenced event delivery and host failure attribution across the desktop boundary.
+ * 11: proposed next actions carried by selected Logged findings.
  */
-export const DESKTOP_PROTOCOL = 2
+export const DESKTOP_PROTOCOL = 12
+
+export const DESKTOP_TURN_LEASE_MILLISECONDS = 15_000
+
+/**
+ * Why one desktop turn failed.
+ *
+ * The desktop used to report every failure as one string. A branch Worktrunk
+ * refused to create then read as a failed Agent turn, and each retry spent a
+ * Task attempt on the same refusal.
+ */
+export type DesktopFailure =
+  /** The turn stopped before the Agent provider started, so Hogwild may run it. */
+  | { _tag: 'SetupFailed'; reason: string }
+  /** The Agent provider started and failed. */
+  | { _tag: 'AgentFailed'; reason: string }
+
+/**
+ * The error cause each desktop failure carries to the host pool.
+ *
+ * The first two leave the turn untouched, so the pool runs it on Hogwild.
+ */
+export type DesktopErrorCause = 'desktop-unsupported' | 'desktop-setup' | 'desktop-execution'
+
+export function desktopErrorCause(error: unknown): DesktopErrorCause | null {
+  if (!(error instanceof Error)) return null
+  const cause = error.cause
+  return cause === 'desktop-unsupported' || cause === 'desktop-setup' || cause === 'desktop-execution' ? cause : null
+}
+
+/** Whether another host may still run a turn that failed with this error. */
+export function desktopTurnMayMove(error: unknown): boolean {
+  const cause = desktopErrorCause(error)
+  return cause === 'desktop-unsupported' || cause === 'desktop-setup'
+}
+
+export function parseDesktopFailure(value: unknown): DesktopFailure | null {
+  if (value === null) return null
+  if (
+    record(value) &&
+    (value._tag === 'SetupFailed' || value._tag === 'AgentFailed') &&
+    typeof value.reason === 'string'
+  )
+    return { _tag: value._tag, reason: value.reason }
+  throw new Error('The desktop failure is invalid.')
+}
 
 /**
  * Memory one desktop Agent reserves through `wolfstar-desktop-capacity`.
@@ -72,17 +125,6 @@ export function parseDesktopReport(value: unknown): DesktopReport {
     actions: Number(value.actions),
     jobs,
   }
-}
-
-export function parseDesktopMemory(value: unknown): number {
-  if (
-    !record(value) ||
-    !Number.isSafeInteger(value.memoryGiB) ||
-    Number(value.memoryGiB) < 1 ||
-    Number(value.memoryGiB) > 256
-  )
-    throw new Error('Desktop memory must be between 1 and 256 GiB.')
-  return Number(value.memoryGiB)
 }
 
 /** A turn carries only what the receiver cannot reach, so the shape says which. */
@@ -141,7 +183,16 @@ export function parseDesktopEvents(value: unknown): AgentEvent[] {
     if (event._tag === 'SessionStarted' && typeof event.sessionId === 'string')
       return { _tag: 'SessionStarted', sessionId: event.sessionId }
     if (event._tag === 'Message' && typeof event.text === 'string') return { _tag: 'Message', text: event.text }
-    if (event._tag === 'Failed' && typeof event.reason === 'string') return { _tag: 'Failed', reason: event.reason }
+    if (event._tag === 'Failed' && typeof event.reason === 'string') {
+      if (
+        event.cause !== undefined &&
+        event.cause !== 'host-cancelled' &&
+        event.cause !== 'sandbox-setup' &&
+        event.cause !== 'resource-limit'
+      )
+        throw new Error('The desktop failure cause is invalid.')
+      return { _tag: 'Failed', reason: event.reason, ...(event.cause === undefined ? {} : { cause: event.cause }) }
+    }
     if (
       event._tag === 'Progress' &&
       typeof event.text === 'string' &&
@@ -178,6 +229,26 @@ export function parseDesktopEvents(value: unknown): AgentEvent[] {
       return { _tag: 'FileChanged', changes }
     }
     if (event._tag === 'WebSearch' || event._tag === 'TurnCompleted') return { _tag: event._tag }
+    if (
+      event._tag === 'ContextBudgetWarned' &&
+      Number.isFinite(event.cachedTokensRead) &&
+      Number(event.cachedTokensRead) >= 0 &&
+      record(event.delivery)
+    ) {
+      const delivery = event.delivery
+      if (delivery._tag === 'Sent')
+        return {
+          _tag: 'ContextBudgetWarned',
+          cachedTokensRead: Number(event.cachedTokensRead),
+          delivery: { _tag: 'Sent' },
+        }
+      if (delivery._tag === 'Failed' && typeof delivery.reason === 'string')
+        return {
+          _tag: 'ContextBudgetWarned',
+          cachedTokensRead: Number(event.cachedTokensRead),
+          delivery: { _tag: 'Failed', reason: delivery.reason },
+        }
+    }
     if (
       event._tag === 'ContextBudgetExhausted' &&
       Number.isFinite(event.cachedTokensRead) &&
