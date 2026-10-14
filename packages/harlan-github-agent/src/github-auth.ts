@@ -73,6 +73,10 @@ export interface RepositoryTokenDependencies {
  * `pull_request_merge` carries Contents write for the REST merge endpoint and
  * Pull requests write for GitHub's auto-merge mutation.
  *
+ * `review_thread_write` carries Contents write for `resolveReviewThread`.
+ * GitHub refuses that mutation when Contents is read, even with Pull requests write.
+ * https://github.com/github/gh-aw/issues/35726
+ *
  * `checks_read` carries `actions` because the base gate lists workflow runs
  * to drop the suites a `workflow_run` event attached to the default branch
  * tip. Without it GitHub answers 403 and every CI gate reads PENDING.
@@ -91,6 +95,8 @@ function permissions(access: GitHubRepositoryAccess): Record<string, PermissionL
     return { checks: 'write', metadata: 'read' }
   if (access === 'item_write')
     return { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }
+  if (access === 'review_thread_write')
+    return { contents: 'write', metadata: 'read', pull_requests: 'write' }
   if (access === 'pull_request_merge')
     return { contents: 'write', metadata: 'read', pull_requests: 'write' }
   if (access === 'workflows_write')

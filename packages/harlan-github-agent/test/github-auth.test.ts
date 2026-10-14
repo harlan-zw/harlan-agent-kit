@@ -92,6 +92,7 @@ describe('gitHub App authentication', () => {
     ['contents_write', { contents: 'write', metadata: 'read' }],
     ['item_write', { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }],
     ['pull_request_merge', { contents: 'write', metadata: 'read', pull_requests: 'write' }],
+    ['review_thread_write', { contents: 'write', metadata: 'read', pull_requests: 'write' }],
     ['workflows_write', { contents: 'write', metadata: 'read', workflows: 'write' }],
   ] as const)('mints one repository-scoped %s token', async (access, permissions) => {
     const requests: unknown[] = []

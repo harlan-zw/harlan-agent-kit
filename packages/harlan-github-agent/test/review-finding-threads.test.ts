@@ -3,6 +3,7 @@ import type { ReviewFindingComment, ReviewFindingThread, ReviewFindingThreadMirr
 import type { ClaimedReviewStatusCommand, ReviewFinding } from '../src/types.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
+import { createRepositoryTokenProvider } from '../src/github-auth.ts'
 import { err, ok } from '../src/result.ts'
 import { mirrorReviewFindingThreads } from '../src/review-finding-threads.ts'
 import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
@@ -176,6 +177,38 @@ describe('terminal Review publication', () => {
 })
 
 describe('gitHub review finding threads', () => {
+  it('resolves a finding with repository Contents and Pull requests write access', async () => {
+    const resolved: string[] = []
+    const tokens = createRepositoryTokenProvider({
+      getInstallation: async () => ({ installationId: 42, repositoryName: 'example' }),
+      mintToken: async input => ({
+        token: JSON.stringify(input.permissions),
+        permissions: input.permissions,
+        expiresAt: '2126-01-01T00:00:00.000Z',
+      }),
+    })
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      ownAppId: 98114,
+      tokens,
+      createClient: (token) => {
+        const permissions = JSON.parse(token) as Record<string, string>
+        return {
+          graphql: async (_query: string, variables: { threadId: string }) => {
+            if (permissions.contents !== 'write' || permissions.pull_requests !== 'write')
+              throw new Error('Resource not accessible by integration')
+            resolved.push(variables.threadId)
+            return { resolveReviewThread: { thread: { id: variables.threadId } } }
+          },
+        } as unknown as Octokit
+      },
+    })
+
+    expect(await source.resolveReviewFindingThread(repositoryMapping(), 'T1', new AbortController().signal, authorize))
+      .toEqual(ok(undefined))
+    expect(resolved).toEqual(['T1'])
+  })
+
   function github(responses: Array<number | null>, threads: unknown[] = []) {
     const createReviewComment = vi.fn((_input: Record<string, unknown>) => {
       const status = responses.shift()

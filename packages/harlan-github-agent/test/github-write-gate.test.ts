@@ -25,12 +25,13 @@ describe('gitHub write gate', () => {
 
     const results = await Promise.all([
       gate.getToken('harlan-zw/example', 'item_write'),
+      gate.getToken('harlan-zw/example', 'review_thread_write'),
       gate.getToken('harlan-zw/example', 'contents_write'),
       gate.getToken('harlan-zw/example', 'pull_request_merge'),
       gate.getToken('harlan-zw/example', 'workflows_write'),
     ])
 
-    expect(results).toEqual(Array.from({ length: 4 }, () => ({
+    expect(results).toEqual(Array.from({ length: 5 }, () => ({
       _tag: 'Err',
       error: {
         repository: 'harlan-zw/example',
