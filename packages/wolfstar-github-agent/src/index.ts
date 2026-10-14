@@ -67,7 +67,9 @@ export type {
   ControlClientError,
   ControlClientOptions,
   ControlHealth,
+  ControlReviewRun,
   ControlStatus,
+  ReviewQuery,
   WorkflowEventQuery,
 } from './control-client.ts'
 export { createExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
@@ -95,7 +97,16 @@ export type { ProviderCapacitySource } from './provider-capacity.ts'
 export { createPublicationScheduler } from './publication-scheduler.ts'
 export type { PublicationRemote } from './publication-scheduler.ts'
 export { createPullRequestStatusController } from './pull-request-status-controller.ts'
+export { parsePullRequestWatchTarget, pullRequestWatchFinished } from './pull-request-watch.ts'
+export type { PullRequestWatchOptions, PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
 export { reconcileAllRepositories, reconcileRepository } from './reconcile.ts'
+export {
+  createRepairRecoveryController,
+  parseRepairRecoveryRequest,
+  parseRepairRecoveryResponse,
+  repairRecoveryProof,
+} from './repair-recovery.ts'
+export type { RepairRecoveryPlan, RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 export {
   buildRepositoryMappings,
   discoverGitHubAppRepositories,
@@ -103,7 +114,7 @@ export {
 } from './repository-discovery.ts'
 export type { Result } from './result.ts'
 export { createReviewStatusController } from './review-status-controller.ts'
-export { planRoutineRuns, syncRepositoryRoutines } from './routine-controller.ts'
+export { planRoutineRuns, retireUnmappedRoutines, syncRepositoryRoutines } from './routine-controller.ts'
 export type { RoutinePlan, RoutineSyncOutcome } from './routine-controller.ts'
 export {
   createRoutineReportController,
@@ -127,6 +138,7 @@ export { openJournalStore } from './store.ts'
 export { createTaskScheduler, runClaimedTask } from './task-scheduler.ts'
 export type { ClaimedTaskResult } from './task-scheduler.ts'
 export type * from './types.ts'
+export { createWebhookControls } from './webhook-controls.ts'
 export {
   createReconcileHint,
   createWebhookApp,
@@ -136,4 +148,9 @@ export {
 } from './webhook.ts'
 export type { WebhookHint } from './webhook.ts'
 export { createWorkerTaskScheduler } from './worker-task-scheduler.ts'
-export { createAgentWorkspaceManager, createConflictWorktreeManager, createGitPublicationRemote } from './worktree.ts'
+export {
+  confirmRepairRecoveryRegression,
+  createAgentWorkspaceManager,
+  createConflictWorktreeManager,
+  createGitPublicationRemote,
+} from './worktree.ts'

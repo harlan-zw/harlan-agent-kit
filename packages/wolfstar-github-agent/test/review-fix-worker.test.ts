@@ -40,16 +40,39 @@ describe('review fix Worker', () => {
 
     const result = await createReviewFixWorker({
       github: {
+        getFailedJobContext: () =>
+          Promise.resolve(
+            ok({
+              runId: 42,
+              jobName: 'test',
+              failedStep: 'focused test',
+              logTail: ['Private controller log: missing generated inputs'],
+              execution: [{ run: 'pnpm dev:prepare', shell: 'bash -e {0}', workingDirectory: 'packages/site' }],
+            }),
+          ),
         findOpenPullRequestForBranch: () => Promise.resolve(ok(null)),
         getPullRequestReviewSnapshot: () =>
           Promise.resolve(
             ok({
               baseChecks: { _tag: 'Available', checks: [] },
               body: '',
-              checks: { _tag: 'Available', checks: [] },
+              checks: {
+                _tag: 'Available',
+                checks: [
+                  {
+                    id: 42,
+                    name: 'test',
+                    status: 'completed',
+                    conclusion: 'failure',
+                    failure: { _tag: 'StepFailed' },
+                    source: { _tag: 'CheckRun', appId: 15368 },
+                  },
+                ],
+              },
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' },
               reviews: [],
             }),
@@ -110,20 +133,27 @@ describe('review fix Worker', () => {
       }),
     )
     expect(committedMessage).toBe('')
+    expect(capture.requests[0]?.prompt).toContain('Private controller log: missing generated inputs')
+    expect(capture.requests[0]?.prompt).toContain('pnpm dev:prepare')
   })
 
   it.each([
     { merged: false, outcome: 'repaired', existing: false },
+    { merged: false, outcome: 'repaired', existing: false, ownerRequest: true },
+    { merged: false, outcome: 'disputed', existing: false, ownerRequest: true },
     { merged: true, outcome: 'repaired', existing: false },
     { merged: true, outcome: 'disputed', existing: false },
     { merged: true, outcome: 'blocked', existing: false },
     { merged: true, outcome: 'repaired', existing: true },
-  ])('repairs stored findings: %j', async ({ merged, outcome, existing }) => {
+    { merged: true, outcome: 'repaired', existing: false, pickup: true },
+    { merged: true, outcome: 'disputed', existing: false, pickup: true },
+    { merged: true, outcome: 'repaired', existing: true, pickup: true },
+  ])('repairs stored findings: %j', async ({ merged, outcome, existing, pickup, ownerRequest }) => {
     const pullRequest = pullRequestItem({
       mergeState: 'clean',
       ...(merged ? ({ state: 'closed', mergedAt: '2026-08-13T00:59:00.000Z' } as const) : {}),
     })
-    const mapping = repositoryMapping({ ownership: 'maintained' })
+    const mapping = repositoryMapping({ ownership: ownerRequest ? 'owned' : 'maintained' })
     const task: ClaimedReviewFixTask = {
       id: 'repair-task',
       kind: 'review_fix',
@@ -149,6 +179,29 @@ describe('review fix Worker', () => {
         },
       },
     ]
+    if (pickup) {
+      task.pickup = {
+        _tag: 'LoggedFinding',
+        finding: {
+          _tag: 'Logged',
+          impact: 40,
+          summary: 'The parser drops buffered bytes.',
+          details: {
+            fingerprint: 'f'.repeat(64),
+            identity: 'buffered bytes',
+            location: { path: 'src/parser.ts', line: 42 },
+            proof: 'Split one UTF-8 sequence across two chunks and observe dropped bytes.',
+          },
+        },
+      }
+    }
+    if (ownerRequest)
+      task.request = {
+        _tag: 'OwnerComment',
+        instruction: 'Change trailingSlash to false.',
+        requestedBy: 'wolfstar-project',
+        requestId: 'comment:42',
+      }
     const capture: ProviderCapture = { requests: [] }
     let committedMessage = ''
 
@@ -167,6 +220,7 @@ describe('review fix Worker', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' },
               reviews: [],
             }),
@@ -187,7 +241,10 @@ describe('review fix Worker', () => {
       ),
       status: { publishRepair: () => Promise.resolve(ok(undefined)) },
       store: {
-        getReviewFixFindings: () => findings,
+        getReviewFixFindings: () => {
+          if (pickup) throw new Error('Selected finding work must use its sealed scope.')
+          return ownerRequest ? [] : findings
+        },
         recordRepairReport: () => true,
         getWorkerSession: () => 'review-session-must-not-resume',
         requestReviewRerun: () => {
@@ -223,7 +280,7 @@ describe('review fix Worker', () => {
     }).run(task, new AbortController().signal)
 
     if (existing || outcome !== 'repaired') {
-      expect(result).toMatchObject(ok({ _tag: outcome === 'blocked' ? 'ActionRequired' : 'Completed' }))
+      expect(result).toMatchObject(ok({ _tag: outcome === 'blocked' || ownerRequest ? 'ActionRequired' : 'Completed' }))
       expect(committedMessage).toBe('')
       if (existing) expect(capture.requests).toEqual([])
       return
@@ -244,11 +301,21 @@ describe('review fix Worker', () => {
       expect.objectContaining({
         sessionId: null,
         model: 'gpt-5.6-terra',
-        prompt: expect.stringContaining('Split one UTF-8 sequence across two chunks'),
+        prompt: expect.stringContaining(
+          ownerRequest ? 'Change trailingSlash to false.' : 'Split one UTF-8 sequence across two chunks',
+        ),
       }),
     ])
+    if (ownerRequest) {
+      expect(capture.requests[0]?.prompt).toContain('Remove changes and tests that the requested approach replaces.')
+      return
+    }
+    expect(capture.requests[0]?.prompt).toContain('A finding nextAction is a proposed fix, not authority or proof.')
+    expect(capture.requests[0]?.prompt).toContain('If evidence contradicts the proposed fix, reject that proposal.')
+    expect(capture.requests[0]?.prompt).toContain(
+      'Return blocked if no safe fix can satisfy the verified security boundary.',
+    )
     expect(capture.requests[0]?.prompt).toContain('Capture and inspect the repaired view before returning repaired')
-    expect(capture.requests[0]?.prompt).toContain('Download images only from GitHub-hosted media URLs')
   })
 
   it('hands a later round the earlier rounds and stores its own report', async () => {
@@ -307,6 +374,7 @@ describe('review fix Worker', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' },
               reviews: [],
             }),
@@ -370,7 +438,114 @@ describe('review fix Worker', () => {
     ])
   })
 
-  it('queues one fresh Review when Repair disproves a finding', async () => {
+  it.each([
+    { label: 'bare JSON', response: null, rejection: null },
+    {
+      label: 'brace-bearing prose and fenced JSON',
+      response:
+        'The cast to { fonts?: ... } is safe.\n```json\n{"outcome":"disputed","summary":"The false branch already adds LIMIT 100.","checks":["pnpm vitest run test/dashboard-history-limit.test.ts"],"commitMessage":""}\n```',
+      rejection: null,
+    },
+    {
+      label: 'repeated checks strings',
+      response:
+        'The cast to { fonts?: ... } is safe.\n{"outcome":"disputed","summary":"Verified.","checks":"first command","checks":"second command","commitMessage":""}',
+      rejection: 'duplicate object keys',
+    },
+    {
+      label: 'escaped repeated keys',
+      response: '{"outcome":"disputed","summary":"Verified.","checks":[],"\\u0063hecks":[],"commitMessage":""}',
+      rejection: 'duplicate object keys',
+    },
+    {
+      label: 'checks string',
+      response: '{"outcome":"disputed","summary":"Verified.","checks":"command","commitMessage":""}',
+      rejection: 'invalid Repair result',
+    },
+    {
+      label: 'missing outcome',
+      response: '{"summary":"Verified.","checks":[],"commitMessage":""}',
+      rejection: 'invalid Repair result',
+    },
+    {
+      label: 'missing summary',
+      response: '{"outcome":"disputed","checks":[],"commitMessage":""}',
+      rejection: 'invalid Repair result',
+    },
+    {
+      label: 'missing checks',
+      response: '{"outcome":"disputed","summary":"Verified.","commitMessage":""}',
+      rejection: 'invalid Repair result',
+    },
+    {
+      label: 'missing commitMessage',
+      response: '{"outcome":"disputed","summary":"Verified.","checks":[]}',
+      rejection: 'invalid Repair result',
+    },
+    {
+      label: 'unknown field',
+      response: '{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":"","unexpected":true}',
+      rejection: 'invalid Repair result',
+    },
+    { label: 'null result', response: 'null', rejection: 'invalid Repair result' },
+    {
+      label: 'array result',
+      response: '[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}]',
+      rejection: 'invalid Repair result',
+    },
+    {
+      label: 'fenced array result',
+      response: '```json\n[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}]\n```',
+      rejection: 'invalid Repair result',
+    },
+    {
+      label: 'prose and fenced array result',
+      response:
+        'The cast to { fonts?: ... } is safe.\n```json\n[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}]\n```',
+      rejection: 'invalid Repair result',
+    },
+    {
+      label: 'prose and array result',
+      response: 'Here is the result:\n[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}]',
+      rejection: 'invalid Repair result',
+    },
+    {
+      label: 'fenced string result',
+      response:
+        '```json\n"{\\"outcome\\":\\"disputed\\",\\"summary\\":\\"Verified.\\",\\"checks\\":[],\\"commitMessage\\":\\"\\"}"\n```',
+      rejection: 'invalid Repair result',
+    },
+    {
+      label: 'unclosed array wrapper',
+      response: '[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}',
+      rejection: 'malformed Repair JSON',
+    },
+    {
+      label: 'mismatched array wrapper',
+      response: '[{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}}',
+      rejection: 'malformed Repair JSON',
+    },
+    {
+      label: 'unmatched leading array closer',
+      response: ']{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}',
+      rejection: 'malformed Repair JSON',
+    },
+    {
+      label: 'unmatched trailing array closer',
+      response: '{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}]',
+      rejection: 'malformed Repair JSON',
+    },
+    {
+      label: 'unmatched leading object closer',
+      response: '}{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}',
+      rejection: 'malformed Repair JSON',
+    },
+    {
+      label: 'unmatched trailing object closer',
+      response: '{"outcome":"disputed","summary":"Verified.","checks":[],"commitMessage":""}}',
+      rejection: 'malformed Repair JSON',
+    },
+  ])('queues one fresh Review after parsing or correcting $label', async ({ response, rejection }) => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const mapping = repositoryMapping({ ownership: 'maintained' })
     const task: ClaimedReviewFixTask = {
@@ -399,6 +574,13 @@ describe('review fix Worker', () => {
       },
     ]
     const reruns: unknown[] = []
+    const requests: ProviderCapture = { requests: [] }
+    const valid = JSON.stringify({
+      outcome: 'disputed',
+      summary: 'The false branch already adds LIMIT 100.',
+      checks: ['pnpm vitest run test/dashboard-history-limit.test.ts'],
+      commitMessage: '',
+    })
 
     const result = await createReviewFixWorker({
       github: {
@@ -412,23 +594,24 @@ describe('review fix Worker', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' },
               reviews: [],
             }),
           ),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
-      runtime: agentRuntime(
-        CODEX_AGENT_PROFILE,
-        stubProvider(
-          turnEvents({
-            outcome: 'disputed',
-            summary: 'The false branch already adds LIMIT 100.',
-            checks: ['pnpm vitest run test/dashboard-history-limit.test.ts'],
-            commitMessage: '',
-          }),
-        ),
-      ),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, {
+        name: 'opencode',
+        runTurn: (request) => {
+          requests.requests.push(request)
+          return (async function* () {
+            yield { _tag: 'SessionStarted' as const, sessionId: 'repair-session' }
+            yield { _tag: 'Message' as const, text: requests.requests.length === 1 ? (response ?? valid) : valid }
+            yield { _tag: 'TurnCompleted' as const }
+          })()
+        },
+      }),
       status: { publishRepair: () => Promise.resolve(ok(undefined)) },
       store: {
         getReviewFixFindings: () => findings,
@@ -475,6 +658,14 @@ describe('review fix Worker', () => {
         at: '2026-08-13T01:00:00.000Z',
       },
     ])
+    expect(requests.requests).toHaveLength(rejection === null ? 1 : 2)
+    expect(requests.requests[0]?.sessionId).toBeNull()
+    if (rejection !== null) {
+      expect(requests.requests[1]?.sessionId).toBe('repair-session')
+      expect(requests.requests[1]?.prompt).toContain(rejection)
+      expect(requests.requests[1]?.prompt).toContain('Use no tool.')
+      expect(requests.requests[1]?.prompt).not.toContain('Repair the exact material Review findings')
+    }
   })
 
   it('gives each distinct dispute set its own rerun request', async () => {
@@ -512,6 +703,7 @@ describe('review fix Worker', () => {
           comments: [],
           priorAutomatedReview: { _tag: 'None' } as const,
           pullRequest,
+          findingDiscussions: [],
           requiredChecks: { _tag: 'None' } as const,
           reviews: [],
         }),
@@ -614,6 +806,7 @@ describe('review fix Worker', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' },
               reviews: [],
             }),
@@ -707,6 +900,7 @@ describe('review fix Worker', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' },
               reviews: [],
             }),
@@ -756,7 +950,11 @@ describe('review fix Worker', () => {
       },
     }).run(task, new AbortController().signal)
 
-    expect(result).toEqual(err('The Agent returned an invalid Repair result.'))
+    expect(result).toEqual(
+      err(
+        'The agent repeated a rejected result after one named correction. The Agent returned an invalid Repair result.',
+      ),
+    )
     expect(capture.requests).toHaveLength(2)
     expect(capture.requests[1]?.prompt).toContain('schema')
   })

@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
 import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseStore } from '../src/package-release-store.ts'
-import { renderPackageRelease } from '../src/package-release.ts'
+import { planPackageReleaseBeforeMerge, renderPackageRelease } from '../src/package-release.ts'
 import { createWebhookApp } from '../src/webhook.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -27,6 +27,7 @@ const repository = {
     tagPrefix: 'v',
     workflow: 'release.yml',
     checks: ['test'],
+    credential: { _tag: 'Repository' as const },
   },
 }
 
@@ -70,6 +71,50 @@ function setup() {
 }
 
 describe('release controller', () => {
+  it.each([false, true])(
+    'explains a manual major release without authorizing publication, text request: %s',
+    async (requested) => {
+      const task = setup()
+      task.source.inspect = async () =>
+        planPackageReleaseBeforeMerge({
+          ...plan,
+          title: 'fix: handle input',
+          body: '',
+          currentVersion: plan.previousVersion,
+          commits: ['feat!: require Nuxt 4.6', 'fix: handle input'],
+          files: [],
+          complete: true,
+        })
+      if (requested)
+        task.store.queuePackageReleaseCommand({
+          repository: repository.github,
+          pullRequestNumber: 24,
+          commentId: 101,
+          requestedBy: 'wolfstar-project',
+          bump: 'auto',
+        })
+      await task.run()
+      expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('Run a manual major release.'))
+      const body = vi.mocked(task.source.comment).mock.calls.at(-1)![1]
+      expect(body).toContain('Automatic releases support patch and minor only.')
+      expect(body).toContain('v1.0.0')
+      expect(body).not.toContain('- [ ]')
+      expect(task.store.listPackageReleases(repository.github)).toEqual([])
+      expect(task.store.listPackageReleaseCommands(repository.github)).toEqual([])
+      expect(task.source.prepare).not.toHaveBeenCalled()
+      task.database.close()
+    },
+  )
+  it('offers a checkbox before comment delivery and keeps one comment across restarts', async () => {
+    const task = setup()
+    await task.run()
+    expect(task.source.comment).toHaveBeenCalledWith(24, renderPackageRelease(plan), undefined)
+    expect(task.store.listPackageReleases(repository.github)[0]?.body).toContain('- [ ] Release patch')
+    expect(task.source.prepare).not.toHaveBeenCalled()
+    await task.run()
+    expect(task.source.comment).toHaveBeenCalledTimes(1)
+    task.database.close()
+  })
   it('finishes an authorized release across restarts without preparing twice', async () => {
     const task = setup()
     await task.run()
@@ -102,6 +147,33 @@ describe('release controller', () => {
     expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Blocked')
     task.database.close()
   })
+  it.each([false, true])(
+    'explains a major release when an existing patch offer changes, selected: %s',
+    async (selected) => {
+      const task = setup()
+      await task.run()
+      if (selected) task.click()
+      task.source.inspect = async () =>
+        planPackageReleaseBeforeMerge({
+          ...plan,
+          title: 'fix: handle input',
+          body: '',
+          currentVersion: plan.previousVersion,
+          commits: ['feat!: require Nuxt 4.6'],
+          files: [],
+          complete: true,
+        })
+      await task.run()
+      expect(task.source.comment).toHaveBeenLastCalledWith(
+        24,
+        expect.stringContaining('Run a manual major release.'),
+        99,
+      )
+      expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Blocked')
+      expect(task.source.prepare).not.toHaveBeenCalled()
+      task.database.close()
+    },
+  )
   it('resumes publication after a lost response with the same version', async () => {
     const task = setup()
     await task.run()
@@ -194,6 +266,85 @@ it('keeps a text command that arrives before the offer exists', async () => {
     bump: 'auto',
   })
   expect(task.store.listPackageReleaseCommands(repository.github)).toEqual([])
+  task.database.close()
+})
+
+it.each(['wolfstar-project', 'contributor'])(
+  'accepts pre-merge signed text requests only from Wolfstar: %s',
+  async (author) => {
+    const task = setup()
+    task.source.inspect = async () => ({ ...plan, _tag: 'BeforeMerge' })
+    await task.run()
+    const app = createWebhookApp({
+      secret: 'secret',
+      allowedOwners: ['wolfstar-project'],
+      onHint: () => {},
+      logger: { info: () => {} },
+      packageRelease: {
+        allowedAuthor: 'wolfstar-project',
+        actorLogin: () => 'wolfstar-github-agent[bot]',
+        apply: () => {},
+        command: (command) => task.store.queuePackageReleaseCommand(command),
+      },
+    })
+    const body = JSON.stringify({
+      action: 'created',
+      repository: { full_name: repository.github },
+      issue: { number: 24, pull_request: {} },
+      sender: { login: author },
+      comment: { id: 101, user: { login: author }, body: 'do release patch' },
+    })
+    await app.fetch(
+      new Request('http://localhost/webhook', {
+        method: 'POST',
+        body,
+        headers: {
+          'x-github-event': 'issue_comment',
+          'x-github-delivery': `text-${author}`,
+          'x-hub-signature-256': `sha256=${createHmac('sha256', 'secret').update(body).digest('hex')}`,
+        },
+      }),
+    )
+    await task.run()
+    await task.run()
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe(
+      author === 'wolfstar-project' ? 'AwaitingMerge' : 'Available',
+    )
+    expect(task.source.prepare).not.toHaveBeenCalled()
+    if (author === 'wolfstar-project') {
+      expect(task.source.comment).toHaveBeenLastCalledWith(
+        24,
+        expect.stringContaining('- [x] Release patch after merge'),
+        99,
+      )
+      task.source.inspect = async () => plan
+      await task.run()
+      expect(task.source.prepare).toHaveBeenCalledTimes(1)
+    }
+    task.database.close()
+  },
+)
+
+it.each([
+  ['User', 1],
+  ['Repository', 0],
+] as const)('offers a maintained repository release only with the %s credential opt in', async (credential, offers) => {
+  const task = setup()
+  const maintained = {
+    ...repository,
+    github: 'nuxt-modules/example',
+    ownership: 'maintained' as const,
+    release: { ...repository.release, credential: { _tag: credential } },
+  }
+  await reconcilePackageReleases({
+    webhookReady: true,
+    repository: maintained,
+    store: task.store,
+    source: () => task.source,
+    now: () => 1000,
+    signal: new AbortController().signal,
+  })
+  expect(task.source.comment).toHaveBeenCalledTimes(offers)
   task.database.close()
 })
 

@@ -1,3 +1,6 @@
+import type { IncidentResolutionReceipt, IncidentResolutionRequest } from './incident-resolution.ts'
+import type { PullRequestWatchOptions, PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
+import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 import type { Result } from './result.ts'
 import type { CancelTaskResult } from './store.ts'
 import type {
@@ -5,13 +8,18 @@ import type {
   DashboardSnapshot,
   DashboardTask,
   Incident,
+  IssueTriageRerunResult,
   RestartRequest,
+  ReviewRun,
   RoutineRun,
   StoredAgentControl,
   WorkflowEvent,
   WorkflowEventStream,
 } from './types.ts'
 import { Buffer } from 'node:buffer'
+import { parseIncidentResolutionReceipt, parseIncidentResolutionRequest } from './incident-resolution.ts'
+import { parsePullRequestWatchTarget, watchPullRequestStream } from './pull-request-watch.ts'
+import { parseRepairRecoveryCandidate, parseRepairRecoveryResponse } from './repair-recovery.ts'
 import { err, ok } from './result.ts'
 
 export interface ControlHealth {
@@ -51,23 +59,56 @@ export interface WorkflowEventQuery {
   limit?: number
 }
 
+export type ControlReviewRun = Pick<
+  ReviewRun,
+  'id' | 'repository' | 'pullRequestNumber' | 'headSha' | 'startedAt' | 'completedAt' | 'outcome' | 'gates' | 'findings'
+>
+
+export interface ReviewQuery {
+  repository: string
+  number: number
+  head?: string
+}
+
 type TaskCancellation = Extract<CancelTaskResult, { _tag: 'Cancelled' | 'AlreadyCancelled' }>
 type Parsed<Value> = Result<Value, string>
 type ResponseParser<Value> = (value: unknown) => Parsed<Value>
 
 export interface ControlClient {
+  reviews: (query: ReviewQuery) => Promise<Result<{ runs: ControlReviewRun[] }, ControlApiError>>
+  recoverRepair: (request: RepairRecoveryRequest) => Promise<Result<RepairRecoveryResponse, ControlApiError>>
+  watchPullRequest: (
+    target: PullRequestWatchTarget,
+    options?: PullRequestWatchOptions,
+  ) => Promise<Result<PullRequestWatchState, ControlApiError>>
   health: () => Promise<Result<ControlHealth, ControlApiError>>
   state: () => Promise<Result<DashboardSnapshot, ControlApiError>>
   status: () => Promise<Result<ControlStatus, ControlApiError>>
   tasks: () => Promise<Result<DashboardTask[], ControlApiError>>
+  resolveIncident: (request: IncidentResolutionRequest) => Promise<Result<IncidentResolutionReceipt, ControlApiError>>
   incidents: () => Promise<Result<Incident[], ControlApiError>>
   activity: (taskId: string) => Promise<Result<AgentActivityItem[], ControlClientError>>
   workflowEvents: (query?: WorkflowEventQuery) => Promise<Result<WorkflowEvent[], ControlApiError>>
   pause: () => Promise<Result<StoredAgentControl, ControlApiError>>
   resume: () => Promise<Result<StoredAgentControl, ControlApiError>>
   restart: () => Promise<Result<RestartRequest, ControlApiError>>
-  update: () => Promise<Result<RestartRequest, ControlApiError>>
+  reloadExternalWatches: () => Promise<Result<{ repositories: number; issues: number }, ControlApiError>>
+  update: (targetCommit?: string) => Promise<Result<RestartRequest, ControlApiError>>
   cancelTask: (taskId: string) => Promise<Result<TaskCancellation, ControlApiError>>
+  stopReview: (
+    repository: string,
+    pullRequestNumber: number,
+    headSha: string,
+  ) => Promise<Result<{ _tag: 'Stopped' | 'AlreadyStopped' }, ControlApiError>>
+  rerunIssueTriage: (
+    repository: string,
+    issueNumber: number,
+    revisionId: string,
+  ) => Promise<Result<Exclude<IssueTriageRerunResult, { _tag: 'Rejected' }>, ControlApiError>>
+  issueStatus: (
+    repository: string,
+    issueNumber: number,
+  ) => Promise<Result<{ revisionId: string; dismissed: boolean }, ControlApiError>>
   /** Opens one run of a Routine for the current minute, ahead of its schedule. */
   runRoutine: (routineId: string) => Promise<Result<RoutineRun, ControlApiError>>
 }
@@ -80,6 +121,54 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function integer(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0
+}
+
+function parseReviews(value: unknown): Parsed<{ runs: ControlReviewRun[] }> {
+  const input = record(value)
+  if (!Array.isArray(input?.runs)) return err('The service returned invalid Review runs.')
+  for (const value of input.runs) {
+    const run = record(value)
+    const gates = record(run?.gates)
+    const outcome = record(run?.outcome)
+    if (
+      run === undefined ||
+      typeof run.id !== 'string' ||
+      typeof run.repository !== 'string' ||
+      !integer(run.pullRequestNumber) ||
+      run.pullRequestNumber < 1 ||
+      typeof run.headSha !== 'string' ||
+      !/^[a-f\d]{40}$/.test(run.headSha) ||
+      typeof run.startedAt !== 'string' ||
+      typeof run.completedAt !== 'string' ||
+      !['Ready', 'Pending', 'Blocked'].includes(String(outcome?._tag)) ||
+      !Array.isArray(run.findings) ||
+      gates === undefined
+    ) {
+      return err('The service returned an invalid Review run.')
+    }
+    for (const name of ['merge', 'review', 'ci']) {
+      const gate = record(gates[name])
+      if (
+        !['Passed', 'Pending', 'Failed'].includes(String(gate?._tag)) ||
+        !Array.isArray(gate?.evidence) ||
+        (gate._tag !== 'Passed' && typeof gate.reason !== 'string')
+      ) {
+        return err('The service returned invalid Review gates.')
+      }
+    }
+    for (const value of run.findings) {
+      const finding = record(value)
+      if (
+        !['Fixed', 'Logged', 'Open'].includes(String(finding?._tag)) ||
+        typeof finding?.summary !== 'string' ||
+        (finding._tag === 'Open' && typeof finding.nextAction !== 'string') ||
+        (finding._tag === 'Logged' && typeof finding.impact !== 'number')
+      ) {
+        return err('The service returned invalid Review findings.')
+      }
+    }
+  }
+  return ok({ runs: input.runs as ControlReviewRun[] })
 }
 
 function parseHealth(value: unknown): Parsed<ControlHealth> {
@@ -98,6 +187,13 @@ function parseHealth(value: unknown): Parsed<ControlHealth> {
   return ok(input as unknown as ControlHealth)
 }
 
+function parseExternalWatchReload(value: unknown): Parsed<{ repositories: number; issues: number }> {
+  const input = record(value)
+  return input !== undefined && integer(input.repositories) && integer(input.issues)
+    ? ok({ repositories: input.repositories, issues: input.issues })
+    : err('The service returned invalid external watch counts.')
+}
+
 function parseState(value: unknown): Parsed<DashboardSnapshot> {
   const input = record(value)
   if (
@@ -107,12 +203,19 @@ function parseState(value: unknown): Parsed<DashboardSnapshot> {
     typeof input.mutationsEnabled !== 'boolean' ||
     !Array.isArray(input.agents) ||
     !Array.isArray(input.incidents) ||
+    !Array.isArray(input.repairRecoveryCandidates) ||
     !Array.isArray(input.repositories) ||
     !Array.isArray(input.tasks)
   ) {
     return err('The service returned invalid state data.')
   }
-  return ok(input as unknown as DashboardSnapshot)
+  const candidates: DashboardSnapshot['repairRecoveryCandidates'] = []
+  for (const candidate of input.repairRecoveryCandidates) {
+    const parsed = parseRepairRecoveryCandidate(candidate)
+    if (parsed._tag === 'Err') return err(parsed.error)
+    candidates.push(parsed.value)
+  }
+  return ok({ ...input, repairRecoveryCandidates: candidates } as unknown as DashboardSnapshot)
 }
 
 function parseAgentControl(value: unknown): Parsed<StoredAgentControl> {
@@ -127,7 +230,10 @@ function parseRestartRequest(value: unknown): Parsed<RestartRequest> {
   const input = record(value)
   const operation = record(input?.operation)
   const validOperation =
-    operation?._tag === 'Restart' || (operation?._tag === 'Update' && typeof operation.targetCommit === 'string')
+    operation?._tag === 'Restart' ||
+    (operation?._tag === 'Update' &&
+      typeof operation.targetCommit === 'string' &&
+      (operation.preparation === 'Pending' || operation.preparation === 'Ready'))
   if (
     input === undefined ||
     !['Requested', 'Restarting', 'Completed', 'ActionRequired'].includes(String(input._tag)) ||
@@ -159,6 +265,34 @@ function parseCancellation(value: unknown): Parsed<TaskCancellation> {
   const input = record(value)
   if (input?._tag === 'Cancelled' || input?._tag === 'AlreadyCancelled') return ok({ _tag: input._tag })
   return err('The service returned an invalid Task cancellation.')
+}
+
+function parseIssueStatus(value: unknown): Parsed<{ revisionId: string; dismissed: boolean }> {
+  const input = record(value)
+  if (
+    typeof input?.revisionId === 'string' &&
+    /^[a-f\d]{64}$/.test(input.revisionId) &&
+    typeof input.dismissed === 'boolean'
+  )
+    return ok({ revisionId: input.revisionId, dismissed: input.dismissed })
+  return err('The service returned invalid Issue status.')
+}
+
+function parseIssueTriageRerun(value: unknown): Parsed<Exclude<IssueTriageRerunResult, { _tag: 'Rejected' }>> {
+  const input = record(value)
+  if (
+    (input?._tag === 'Queued' || input?._tag === 'AlreadyQueued') &&
+    typeof input.taskId === 'string' &&
+    /^[a-f\d]{64}$/.test(input.taskId)
+  )
+    return ok({ _tag: input._tag, taskId: input.taskId })
+  return err('The service returned an invalid Issue triage rerun result.')
+}
+
+function parseStoppedReview(value: unknown): Parsed<{ _tag: 'Stopped' | 'AlreadyStopped' }> {
+  const input = record(value)
+  if (input?._tag === 'Stopped' || input?._tag === 'AlreadyStopped') return ok({ _tag: input._tag })
+  return err('The service returned an invalid stopped Review result.')
 }
 
 function parseWorkflowEvents(value: unknown): Parsed<WorkflowEvent[]> {
@@ -254,6 +388,34 @@ export function createControlClient(
   const state = () => request({ method: 'GET', path: 'api/state', parse: parseState })
 
   return ok({
+    async reviews(query) {
+      const target = parsePullRequestWatchTarget(query)
+      if (target._tag === 'Err' || (query.head !== undefined && !/^[a-f\d]{40}$/.test(query.head)))
+        return err({
+          _tag: 'InvalidResponse',
+          message: target._tag === 'Err' ? target.error : 'Set head to one full head SHA.',
+        })
+      const search = new URLSearchParams({ repository: query.repository, pull_request: String(query.number) })
+      const result = await request({ method: 'GET', path: `api/reviews?${search}`, parse: parseReviews })
+      return result._tag === 'Err'
+        ? result
+        : ok({ runs: result.value.runs.filter((run) => query.head === undefined || run.headSha === query.head) })
+    },
+    recoverRepair: (body) =>
+      request({
+        method: 'POST',
+        path: 'api/tasks/recover-repair',
+        body,
+        acceptedStatuses: [200, 202],
+        parse: parseRepairRecoveryResponse,
+      }),
+    watchPullRequest(target, watchOptions = {}) {
+      const parsed = parsePullRequestWatchTarget(target)
+      if (parsed._tag === 'Err') return Promise.resolve(err({ _tag: 'InvalidResponse', message: parsed.error }))
+      const url = new URL('api/items/pull-request-events', baseUrl)
+      url.search = new URLSearchParams({ repository: target.repository, number: String(target.number) }).toString()
+      return watchPullRequestStream({ url, target, authorization, fetch: options.fetch, options: watchOptions })
+    },
     health,
     state,
     async status() {
@@ -265,6 +427,16 @@ export function createControlClient(
     async tasks() {
       const result = await state()
       return result._tag === 'Err' ? result : ok(result.value.tasks)
+    },
+    async resolveIncident(input) {
+      const parsed = parseIncidentResolutionRequest(input)
+      if (parsed._tag === 'Err') return err({ _tag: 'InvalidResponse', message: parsed.error })
+      return request({
+        method: 'POST',
+        path: 'api/incidents/resolve',
+        body: parsed.value,
+        parse: parseIncidentResolutionReceipt,
+      })
     },
     async incidents() {
       const result = await state()
@@ -293,16 +465,39 @@ export function createControlClient(
         parse: parseRestartRequest,
         acceptedStatuses: [202],
       }),
-    update: () =>
+    reloadExternalWatches: () =>
+      request({ method: 'POST', path: 'api/external-watches/reload', parse: parseExternalWatchReload }),
+    update: (targetCommit) =>
       request({
         method: 'POST',
         path: 'api/service/update',
-        body: { source: 'helper' },
+        body: { source: 'helper', ...(targetCommit === undefined ? {} : { targetCommit }) },
         parse: parseRestartRequest,
         acceptedStatuses: [202],
       }),
     cancelTask: (taskId) =>
       request({ method: 'POST', path: 'api/tasks/cancel', body: { taskId }, parse: parseCancellation }),
+    stopReview: (repository, pullRequestNumber, headSha) =>
+      request({
+        method: 'POST',
+        path: 'api/reviews/stop',
+        body: { repository, pullRequestNumber, headSha },
+        parse: parseStoppedReview,
+      }),
+    rerunIssueTriage: (repository, issueNumber, revisionId) =>
+      request({
+        method: 'POST',
+        path: 'api/issues/rerun-triage',
+        body: { repository, issueNumber, revisionId },
+        parse: parseIssueTriageRerun,
+        acceptedStatuses: [202],
+      }),
+    issueStatus: (repository, issueNumber) =>
+      request({
+        method: 'GET',
+        path: `api/items/issue-status?${new URLSearchParams({ repository, number: String(issueNumber) })}`,
+        parse: parseIssueStatus,
+      }),
     runRoutine: (routineId) =>
       request({
         method: 'POST',

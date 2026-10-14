@@ -26,6 +26,7 @@ export function createRestartController(options: {
   now: () => Date
   onActionRequired: (reason: string) => void
   prepareUpdate: (targetCommit: string) => Promise<Result<void, string>>
+  ready?: () => boolean
   intervalMilliseconds?: number
   maximumWaitMilliseconds?: number
 }): RestartController {
@@ -48,13 +49,18 @@ export function createRestartController(options: {
       const at = options.now().toISOString()
       if (Date.parse(at) - Date.parse(request.requestedAt) >= maximumWaitMilliseconds) {
         const minutes = Math.round(maximumWaitMilliseconds / 60_000)
-        const reason = `Active work did not finish within ${minutes} minutes.`
+        const reason =
+          request.operation._tag === 'Update' && request.operation.preparation === 'Pending'
+            ? `Update preparation did not finish within ${minutes} minutes.`
+            : `Active work did not finish within ${minutes} minutes.`
         const required = options.store.requireRestartAction({ id: request.id, at, reason })
         if (required !== null) options.onActionRequired(reason)
         return
       }
 
-      if (!options.store.prepareForRestart(at)) return
+      if (request.operation._tag === 'Update' && request.operation.preparation === 'Pending') return
+
+      if (options.ready?.() === false || !options.store.prepareForRestart(at)) return
       if (request.operation._tag === 'Update') {
         const prepared = await options.prepareUpdate(request.operation.targetCommit)
         if (prepared._tag === 'Err') {

@@ -3,6 +3,7 @@ import type { AgentActivityItem, AgentFeedbackInput } from '../../../src/types.t
 import type { FeedbackVerdict, HistoryRow } from '../utils/history.ts'
 import type { DetailItem } from './DetailList.vue'
 import { useClipboard } from '@vueuse/core'
+import SessionMarkdown from '../pages/_SessionMarkdown.vue'
 import {
   gateTone,
   reviewOutcomeDetail,
@@ -38,6 +39,7 @@ const open = defineModel<boolean>('open', { default: false })
 
 const {
   snapshot,
+  controlsUnavailable,
   relativeTime,
   duration,
   feedbackPending,
@@ -162,6 +164,13 @@ const details = computed<DetailItem[]>(() => {
     { term: 'Repository', value: run.repository, href: `https://github.com/${run.repository}` },
     { term: 'Scheduled', value: relativeTime(run.scheduledFor) },
     { term: 'Mode', value: run.mode },
+    ...(run.agentSelection === undefined
+      ? []
+      : [
+          { term: 'Agent provider', value: run.agentSelection.provider },
+          { term: 'Model', value: run.agentSelection.model ?? 'Provider default' },
+          { term: 'Reasoning effort', value: run.agentSelection.reasoningEffort ?? 'Provider default' },
+        ]),
     { term: 'Report', value: run.reportState ?? 'None' },
     {
       term: ['Queued', 'Running'].includes(run.state._tag) ? 'Updated' : 'Finished',
@@ -172,7 +181,7 @@ const details = computed<DetailItem[]>(() => {
 })
 
 function save(verdict: FeedbackVerdict): void {
-  if (review.value === undefined || feedback.value?._tag !== 'Open') return
+  if (controlsUnavailable.value || review.value === undefined || feedback.value?._tag !== 'Open') return
   const text = feedback.value.reason
   const input: AgentFeedbackInput =
     verdict === 'Useful' ? { _tag: 'Useful', reason: text.length > 0 ? text : null } : { _tag: verdict, reason: text }
@@ -234,6 +243,15 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
         <p v-if="outcome" class="text-sm text-default">
           {{ outcome }}
         </p>
+        <div v-if="row?._tag === 'Routine' && row.run.report" class="flex flex-col gap-2">
+          <p class="text-sm text-muted">
+            {{ row.run.state._tag === 'Completed' ? 'Scan completed' : row.run.state._tag }}
+            <template v-if="row.run.report.verdict">
+              · {{ row.run.report.verdict.severity }} · {{ row.run.report.verdict.coverage }} coverage
+            </template>
+          </p>
+          <SessionMarkdown :text="row.run.report.body" report />
+        </div>
 
         <section v-if="review">
           <p class="field-label mb-2">Review gates</p>
@@ -259,12 +277,18 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
           <ul v-if="findings.length > 0" class="flex flex-col gap-3" role="list">
             <li v-for="(finding, index) in findings" :key="index" class="flex items-start gap-2">
               <StateBadge
-                :tone="finding._tag === 'Fixed' ? 'success' : 'warning'"
+                :tone="finding._tag === 'Fixed' ? 'success' : finding._tag === 'Logged' ? 'neutral' : 'warning'"
                 :label="finding._tag"
                 class="mt-0.5"
               />
               <div class="min-w-0 text-sm">
                 <p>{{ finding.summary }}</p>
+                <p
+                  v-if="finding._tag === 'Logged' || (finding._tag === 'Open' && finding.impact !== undefined)"
+                  class="text-muted"
+                >
+                  Impact: {{ finding.impact }}/100
+                </p>
                 <p v-if="finding._tag === 'Open'" class="text-muted">Next: {{ finding.nextAction }}</p>
               </div>
             </li>
@@ -293,7 +317,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
               class="w-full"
               placeholder="Reason. Noisy and Wrong require one."
               aria-label="Agent feedback reason"
-              :disabled="feedback.pending"
+              :disabled="controlsUnavailable || feedback.pending"
             />
             <div class="mt-2 flex flex-wrap items-center gap-2" role="group" aria-label="Agent feedback">
               <UButton
@@ -301,7 +325,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
                 variant="outline"
                 color="neutral"
                 :loading="feedback.pending && chosen === 'Useful'"
-                :disabled="!feedback.usefulEnabled"
+                :disabled="controlsUnavailable || !feedback.usefulEnabled"
                 @click="save('Useful')"
               >
                 Useful
@@ -311,7 +335,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
                 variant="outline"
                 color="neutral"
                 :loading="feedback.pending && chosen === 'Noisy'"
-                :disabled="!feedback.reasonedEnabled"
+                :disabled="controlsUnavailable || !feedback.reasonedEnabled"
                 @click="save('Noisy')"
               >
                 Noisy
@@ -321,7 +345,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
                 variant="outline"
                 color="neutral"
                 :loading="feedback.pending && chosen === 'Wrong'"
-                :disabled="!feedback.reasonedEnabled"
+                :disabled="controlsUnavailable || !feedback.reasonedEnabled"
                 @click="save('Wrong')"
               >
                 Wrong
@@ -415,7 +439,7 @@ function candidateTone(result: { _tag: string }): 'success' | 'warning' | 'error
           color="neutral"
           icon="i-octicon-sync-16"
           :loading="rerunning"
-          :disabled="rerunPending !== undefined"
+          :disabled="rerunPending !== undefined || controlsUnavailable"
           @click="rerun"
         >
           Rerun review

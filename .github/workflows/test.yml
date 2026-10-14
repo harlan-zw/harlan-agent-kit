@@ -6,8 +6,7 @@ name: Test
 # hosted runner on a public repository lets a fork pull request run code on that
 # host. No self hosted runner is registered here either.
 #
-# Markdown: every event ignores `**/*.md`. Wolfstar pushes Markdown only changes
-# straight to `main` with no pull request, so this workflow must not block them.
+# Markdown: every event ignores `**/*.md`. Markdown changes still use pull requests.
 # Some tests do read tracked Markdown, so a Markdown only change can still break
 # `pnpm test`. The next non Markdown commit reports it.
 
@@ -27,7 +26,7 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,18 +36,20 @@ jobs:
       - run: pnpm lint
 
   typecheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+      - run: pnpm --filter ghostty-terminal-bindings build
+      - run: pnpm --filter ghostty-terminal-bindings typecheck
       - run: pnpm typecheck
       - run: pnpm --filter advocaat typecheck
 
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,10 +58,13 @@ jobs:
       - uses: ./.github/actions/setup
       - run: pnpm build
 
+      # notes-viewer is a deployed service; its vitepress build has no other gate.
+      - run: pnpm --filter notes-viewer build
+
   # This job mirrors `pnpm test`, plus the hook suites that aggregate leaves out.
   # Add a new suite here when you add one to `package.json`.
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -84,6 +88,32 @@ jobs:
           sudo install "$RUNNER_TEMP/wt" /usr/local/bin/wt
           wt --version
 
+      - name: Install Agent process isolation
+        if: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Hosted Ubuntu blocks private loopback setup through its AppArmor gate.
+          # Permit namespace creation on this disposable runner. Worker capabilities stay dropped.
+          if [ -f /proc/sys/kernel/unprivileged_userns_clone ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-user --unshare-pid --unshare-net --cap-drop ALL \
+            --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
+            --proc /proc --dev /dev /usr/bin/true
+          # Proof regressions require a private user scope with a fixed memory limit.
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          printf 'XDG_RUNTIME_DIR=%s\nDBUS_SESSION_BUS_ADDRESS=%s\n' \
+            "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          systemd-run --user --scope --quiet --collect \
+            --property=MemoryMax=64M --property=MemorySwapMax=0 /usr/bin/true
+
       - name: Release preview
         run: pnpm test:release
 
@@ -94,17 +124,26 @@ jobs:
       - name: Agent instructions
         run: pnpm test:context
 
+      - name: Installed Agent commands
+        run: pnpm test:agent-cli
+
       - name: Git hook
         run: pnpm test:commit-hook
 
       - name: Himalaya read only
         run: pnpm test:himalaya
 
+      - name: Browser identities
+        run: pnpm test:browser
+
       - name: Opencode hooks
         run: pnpm test:opencode-hooks
 
       - name: Hogwild CLI
         run: pnpm test:hogwild
+
+      - name: Nuxt module migration
+        run: pnpm test:nuxt-module-migration
 
       - name: Skill doc paths
         run: pnpm test:skill-doc-paths
@@ -120,11 +159,23 @@ jobs:
       - name: Sentry check in
         run: pnpm test:sentry-checkin
 
+      - name: Agent retro exporter
+        run: pnpm test:agent-retro
+
       - name: Service scripts
         run: pnpm test:service
+
+      - name: Lockfile vite graph
+        run: pnpm test:lockfile
 
       - name: Classification package
         run: pnpm --filter advocaat test:run
 
       - name: Service package
         run: pnpm --filter wolfstar-github-agent test:run
+
+      - name: Native terminal bindings
+        run: pnpm --filter ghostty-terminal-bindings test:run
+
+      - name: Notes viewer build smoke
+        run: pnpm test:notes-viewer

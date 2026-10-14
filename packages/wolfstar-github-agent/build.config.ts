@@ -4,7 +4,24 @@ export default defineBuildConfig({
   entries: [
     {
       type: 'bundle',
-      input: ['./src/index.ts', './src/cli.ts', './src/desktop-client.ts', './src/desktop-execute.ts'],
+      input: [
+        './src/index.ts',
+        './src/terminal.ts',
+        './src/cli.ts',
+        './src/desktop-client.ts',
+        './src/desktop-execute.ts',
+        './src/maintenance-execute.ts',
+        './src/desktop-session-execute.ts',
+        './src/terminal-cli.ts',
+        './src/terminal-helper.ts',
+        './src/terminal-lock.ts',
+        './src/agent-sandbox-cli.ts',
+        './src/agent-sandbox-runtime.ts',
+        './src/github-media-render.ts',
+        './src/repair-regression-reporter.ts',
+        './src/review-mcp.ts',
+        './src/review-evidence-cli.ts',
+      ],
     },
   ],
 })

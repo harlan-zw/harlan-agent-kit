@@ -20,6 +20,87 @@ function clientWith(responses: Response[], requests: Request[]) {
 }
 
 describe('wolfstar GitHub Agent control client', () => {
+  it('pins a helper Update commit and parses its preparation phase', async () => {
+    const requests: Request[] = []
+    const targetCommit = 'c'.repeat(40)
+    const receipt = {
+      _tag: 'Requested',
+      id: 'update-1',
+      source: 'helper',
+      operation: { _tag: 'Update', targetCommit, preparation: 'Ready' },
+      requestedAt: '2026-10-12T01:00:00.000Z',
+    }
+    const created = clientWith([Response.json(receipt, { status: 202 })], requests)
+    if (created._tag === 'Err') throw new Error(created.error.message)
+    expect(await created.value.update(targetCommit)).toEqual({ _tag: 'Ok', value: receipt })
+    expect(await requests[0]?.json()).toEqual({ source: 'helper', targetCommit })
+  })
+
+  it.each(['Queued', 'AlreadyQueued'])('reruns exact Issue triage: %s', async (_tag) => {
+    const requests: Request[] = []
+    const receipt = { _tag, taskId: 'b'.repeat(64) }
+    const created = clientWith([Response.json(receipt, { status: 202 })], requests)
+    if (created._tag === 'Err') throw new Error(created.error.message)
+    expect(await created.value.rerunIssueTriage('wolfstar-project/example', 12, 'a'.repeat(64))).toEqual({
+      _tag: 'Ok',
+      value: receipt,
+    })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/issues/rerun-triage`)
+    expect(requests[0]?.headers.get('origin')).toBe(baseUrl)
+    expect(await requests[0]?.json()).toEqual({
+      repository: 'wolfstar-project/example',
+      issueNumber: 12,
+      revisionId: 'a'.repeat(64),
+    })
+  })
+
+  it('rejects malformed Issue triage acceptance', async () => {
+    const created = clientWith([Response.json({ _tag: 'Queued', taskId: '' }, { status: 202 })], [])
+    if (created._tag === 'Err') throw new Error(created.error.message)
+    expect(await created.value.rerunIssueTriage('wolfstar-project/example', 12, 'a'.repeat(64))).toMatchObject({
+      _tag: 'Err',
+      error: { _tag: 'InvalidResponse' },
+    })
+  })
+  it.each([
+    [
+      {
+        _tag: 'Apply',
+        taskId: `logged-finding:${'a'.repeat(64)}`,
+        commitSha: 'b'.repeat(40),
+        expectedBase: 'c'.repeat(40),
+        repository: 'wolfstar-project/example',
+        pullRequestNumber: 24,
+        reason: 'Failed',
+      },
+    ],
+    [
+      {
+        _tag: 'Plan',
+        taskId: 'another-task',
+        commitSha: 'b'.repeat(40),
+        repository: 'wolfstar-project/example',
+        pullRequestNumber: 24,
+        reason: 'Failed',
+      },
+    ],
+  ])('refuses invalid Repair inspection data: %j', async (candidate) => {
+    const created = clientWith([Response.json({ ...dashboardSnapshot(), repairRecoveryCandidates: [candidate] })], [])
+    if (created._tag === 'Err') throw new Error(created.error.message)
+    expect(await created.value.state()).toMatchObject({ _tag: 'Err', error: { _tag: 'InvalidResponse' } })
+  })
+  it('returns durable Repair acceptance without waiting for repository checks', async () => {
+    const requests: Request[] = []
+    const taskId = `logged-finding:${'a'.repeat(64)}`
+    const receipt = { _tag: 'Accepted', taskId, fence: 4 }
+    const created = clientWith([Response.json(receipt, { status: 202 })], requests)
+    if (created._tag === 'Err') throw new Error(created.error.message)
+    const request = { _tag: 'Apply' as const, taskId, commitSha: 'c'.repeat(40), expectedBase: 'b'.repeat(40) }
+    expect(await created.value.recoverRepair(request)).toEqual({ _tag: 'Ok', value: receipt })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/tasks/recover-repair`)
+    expect(requests[0]?.headers.get('origin')).toBe(baseUrl)
+    expect(await requests[0]?.json()).toEqual(request)
+  })
   it('reads health before the shared dashboard state', async () => {
     const requests: Request[] = []
     const snapshot = dashboardSnapshot()
@@ -76,6 +157,34 @@ describe('wolfstar GitHub Agent control client', () => {
     await expect(requests[0]?.json()).resolves.toEqual({ source: 'helper' })
   })
 
+  it('reloads external watches through the control API', async () => {
+    const requests: Request[] = []
+    const created = clientWith([Response.json({ repositories: 3, issues: 12 })], requests)
+
+    expect(created._tag).toBe('Ok')
+    if (created._tag === 'Err') return
+    const result = await created.value.reloadExternalWatches()
+
+    expect(result).toEqual({ _tag: 'Ok', value: { repositories: 3, issues: 12 } })
+    expect(requests[0]?.method).toBe('POST')
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/external-watches/reload`)
+  })
+
+  it('stops Service Review for the exact head', async () => {
+    const requests: Request[] = []
+    const created = clientWith([Response.json({ _tag: 'Stopped' })], requests)
+    expect(created._tag).toBe('Ok')
+    if (created._tag === 'Err') return
+    const result = await created.value.stopReview('wolfstar-project/example', 24, 'a'.repeat(40))
+    expect(result).toEqual({ _tag: 'Ok', value: { _tag: 'Stopped' } })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/reviews/stop`)
+    await expect(requests[0]?.json()).resolves.toEqual({
+      repository: 'wolfstar-project/example',
+      pullRequestNumber: 24,
+      headSha: 'a'.repeat(40),
+    })
+  })
+
   it('returns an HTTP failure as a value', async () => {
     const created = clientWith([Response.json({ message: 'The task already finished.' }, { status: 409 })], [])
 
@@ -122,5 +231,76 @@ describe('wolfstar GitHub Agent control client', () => {
     expect(result).toEqual({ _tag: 'Ok', value: run })
     expect(requests[0]?.url).toBe(`${baseUrl}/api/routines/run`)
     expect(await requests[0]?.json()).toEqual({ routineId: 'wolfstar-project/example:daily-checkin' })
+  })
+})
+
+describe('incident resolution client boundary', () => {
+  const input = { incidentId: 'a'.repeat(64), lastSeenAt: '2026-10-12T00:00:00.000Z', evidence: 'Merged fix verified.' }
+  it.each(['Resolved', 'AlreadyResolved'])('parses %s and sends the exact recovery evidence', async (_tag) => {
+    const requests: Request[] = []
+    const created = clientWith([Response.json({ _tag })], requests)
+    if (created._tag === 'Err') throw new Error(created.error.message)
+    expect(await created.value.resolveIncident(input)).toEqual({ _tag: 'Ok', value: { _tag } })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/incidents/resolve`)
+    expect(await requests[0]?.json()).toEqual(input)
+    expect(requests[0]?.headers.get('origin')).toBe(baseUrl)
+  })
+  it('rejects malformed request before HTTP and malformed acceptance after HTTP', async () => {
+    const requests: Request[] = []
+    const created = clientWith([Response.json({ _tag: 'Accepted' })], requests)
+    if (created._tag === 'Err') throw new Error(created.error.message)
+    expect(await created.value.resolveIncident({ ...input, evidence: '' })).toMatchObject({ _tag: 'Err' })
+    expect(requests).toEqual([])
+    expect(await created.value.resolveIncident(input)).toMatchObject({
+      _tag: 'Err',
+      error: { _tag: 'InvalidResponse' },
+    })
+  })
+})
+
+describe('review reads', () => {
+  it('reads authenticated Review history and filters by the exact head', async () => {
+    const requests: Request[] = []
+    const run = {
+      id: 'review-a',
+      repository: 'wolfstar-project/example',
+      pullRequestNumber: 12,
+      headSha: 'a'.repeat(40),
+      outcome: { _tag: 'Ready' },
+      gates: {
+        merge: { _tag: 'Passed', evidence: [] },
+        review: { _tag: 'Passed', evidence: [] },
+        ci: { _tag: 'Passed', evidence: [] },
+      },
+      findings: [],
+      startedAt: '2026-10-12T01:00:00Z',
+      completedAt: '2026-10-12T01:01:00Z',
+    }
+    const created = clientWith(
+      [Response.json({ runs: [run, { ...run, id: 'review-b', headSha: 'b'.repeat(40) }] })],
+      requests,
+    )
+    if (created._tag === 'Err') throw new Error(created.error.message)
+    expect(await created.value.reviews({ repository: run.repository, number: 12, head: run.headSha })).toEqual({
+      _tag: 'Ok',
+      value: { runs: [run] },
+    })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/reviews?repository=wolfstar-project%2Fexample&pull_request=12`)
+    expect(requests[0]?.headers.get('authorization')).toBe(
+      `Basic ${Buffer.from(`agent:${password}`).toString('base64')}`,
+    )
+  })
+  it('rejects invalid targets before requesting and malformed Review responses after requesting', async () => {
+    const requests: Request[] = []
+    const created = clientWith([Response.json({ runs: [{ headSha: 'latest' }] })], requests)
+    if (created._tag === 'Err') throw new Error(created.error.message)
+    expect(
+      await created.value.reviews({ repository: 'wolfstar-project/example', number: 12, head: 'latest' }),
+    ).toMatchObject({ _tag: 'Err', error: { _tag: 'InvalidResponse' } })
+    expect(requests).toEqual([])
+    expect(await created.value.reviews({ repository: 'wolfstar-project/example', number: 12 })).toMatchObject({
+      _tag: 'Err',
+      error: { _tag: 'InvalidResponse' },
+    })
   })
 })

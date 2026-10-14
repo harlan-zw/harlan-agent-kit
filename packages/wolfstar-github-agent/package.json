@@ -5,7 +5,8 @@
   "description": "Local service for Wolfstar Project's GitHub agents.",
   "license": "MIT",
   "bin": {
-    "wolfstar-github-agent": "./dist/cli.mjs"
+    "wolfstar-github-agent": "./dist/cli.mjs",
+    "wolfstar-terminal": "./dist/terminal-cli.mjs"
   },
   "files": [
     "dist"
@@ -14,13 +15,22 @@
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
   "exports": {
+    "./terminal-lock": "./dist/terminal-lock.mjs",
+    "./terminal": {
+      "types": "./dist/terminal.d.mts",
+      "import": "./dist/terminal.mjs"
+    },
+    "./repair-regression-reporter": {
+      "types": "./dist/repair-regression-reporter.d.mts",
+      "import": "./dist/repair-regression-reporter.mjs"
+    },
     ".": {
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
     }
   },
   "scripts": {
-    "build": "pnpm dashboard:build && obuild",
+    "build": "pnpm --filter ghostty-terminal-bindings build && pnpm dashboard:build && obuild",
     "dashboard:build": "nuxt generate dashboard",
     "dashboard:dev": "nuxt dev dashboard",
     "dev": "node --experimental-strip-types src/cli.ts",
@@ -36,12 +46,21 @@
     "@coldtea/pr-lens-renderer": "catalog:",
     "@coldtea/pr-lens-schema": "catalog:",
     "@openai/codex-sdk": "catalog:",
+    "@pierre/diffs": "catalog:",
+    "@resvg/resvg-js": "catalog:",
     "advocaat": "workspace:*",
     "citty": "catalog:",
     "consola": "catalog:",
+    "esbuild": "catalog:",
+    "ghostty-terminal-bindings": "workspace:*",
     "h3": "catalog:",
+    "image-size": "catalog:",
+    "node-pty": "catalog:",
     "octokit": "catalog:",
+    "saxes": "catalog:",
     "srvx": "catalog:",
+    "typescript": "catalog:",
+    "ws": "catalog:",
     "yaml": "catalog:"
   },
   "devDependencies": {
@@ -51,11 +70,13 @@
     "@nuxt/icon": "catalog:",
     "@nuxt/ui": "catalog:",
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "@vueuse/nuxt": "catalog:",
+    "marked": "catalog:",
+    "node-gyp": "catalog:",
     "nuxt": "catalog:",
     "nuxt-skew-protection": "catalog:",
     "obuild": "catalog:",
-    "typescript": "catalog:",
     "vitest": "catalog:",
     "vue": "catalog:",
     "vue-tsc": "catalog:"

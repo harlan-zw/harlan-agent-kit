@@ -205,12 +205,18 @@ describe('selection mode route', () => {
       dashboardRoot: join(import.meta.dirname, 'fixtures', 'dashboard'),
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
+        finishUpdatePreparation: () => null,
+        resolveIncident: () => ({ _tag: 'Ok', value: { _tag: 'Resolved' } }),
+        requestIssueTriageRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+        getOpenIssueStatus: () => null,
         approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
         cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        stopReviewForHead: () => ({ _tag: 'Stopped' }),
         listRoutines: () => [],
         openRoutineRun: () => null,
         getDashboardSnapshot: () => dashboardSnapshot(),
+        getOpenPullRequestStatus: () => null,
         getStats: () => {
           throw new Error('Unexpected Stats request.')
         },

@@ -21,6 +21,7 @@ describe('subject Workers', () => {
       comments: ['Human review comment.'],
       priorAutomatedReview: { _tag: 'None' as const },
       pullRequest,
+      findingDiscussions: [],
       requiredChecks: { _tag: 'None' as const },
       reviews: [],
     }
@@ -52,6 +53,14 @@ describe('subject Workers', () => {
     expect(
       reviewSnapshotDigest({
         ...snapshot,
+        imageReferences: [
+          { url: 'https://private-user-images.githubusercontent.com/a?jwt=new-signature', label: 'Image' },
+        ],
+      }),
+    ).toBe(reviewSnapshotDigest(snapshot))
+    expect(
+      reviewSnapshotDigest({
+        ...snapshot,
         requiredChecks: { _tag: 'Declared' as const, contexts: ['ci / test'] },
       }),
     ).toBe(reviewSnapshotDigest(snapshot))
@@ -66,19 +75,50 @@ describe('subject Workers', () => {
     const comments: string[] = []
     const stamped: string[] = []
     let attempt: RecordReviewRunInput | undefined
+    const image = {
+      mime: 'image/png' as const,
+      data: 'iVBORw0KGgoAAAANSUhEUgAAABQAAAAKCAYAAAC0VX7mAAAAF0lEQVR4nGNkoDIYNZByMGog5YDqBgIAFJEAC2Vie2MAAAAASUVORK5CYII=',
+      label: 'Before: diagram',
+      source: 'https://github.com/user-attachments/assets/a',
+    }
     const worker = createReviewWorker({
+      mediaSource: async (_repository, references) => {
+        expect(references).toEqual([{ url: image.source, label: image.label }])
+        return { images: [image], unavailable: [] }
+      },
       runtime: createAgentRuntimeSource({
         configuredProvider: 'codex',
         maximumActiveAgents: 6,
         providers: {
-          codex: stubProvider(
-            turnEvents({
-              premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
-              findings: [],
-              confidence: 96,
-            }),
-            capture,
-          ),
+          codex: {
+            name: 'codex',
+            async *runTurn(request) {
+              // Match the provider's strict object contract before accepting a Review turn.
+              const pending: unknown[] = [request.outputSchema]
+              while (pending.length > 0) {
+                const schema = pending.pop()
+                if (typeof schema !== 'object' || schema === null) continue
+                const object = schema as { properties?: Record<string, unknown>; required?: string[]; items?: unknown }
+                for (const [key, property] of Object.entries(object.properties ?? {})) {
+                  if (!object.required?.includes(key)) {
+                    yield { _tag: 'Failed', reason: `Invalid response schema: required must include ${key}.` }
+                    return
+                  }
+                  pending.push(property)
+                }
+                if (object.items !== undefined) pending.push(object.items)
+              }
+              yield* stubProvider(
+                turnEvents({
+                  premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
+                  findings: [],
+                  confidence: 96,
+                  mergeRisk: { verdict: 'contained', reason: 'The change affects one internal helper.' },
+                }),
+                capture,
+              ).runTurn(request)
+            },
+          },
           claude: stubProvider([], undefined, 'claude'),
           opencode: stubProvider([], undefined, 'opencode'),
         },
@@ -108,7 +148,7 @@ describe('subject Workers', () => {
           Promise.resolve(
             ok({
               baseChecks: { _tag: 'Available', checks: [] },
-              body: 'Fixes the bug.',
+              body: '![Before: diagram](https://github.com/user-attachments/assets/a)',
               checks: { _tag: 'Available', checks: [] },
               comments: [],
               priorAutomatedReview: {
@@ -118,6 +158,7 @@ describe('subject Workers', () => {
                 url: 'https://github.com/wolfstar-project/example/pull/24#issuecomment-40',
               },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' as const },
               reviews: [],
             }),
@@ -135,6 +176,7 @@ describe('subject Workers', () => {
           throw new Error('A clean review must not queue Repair work.')
         },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         listReviewRuns: () => [],
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
@@ -209,11 +251,10 @@ describe('subject Workers', () => {
     expect(capture.requests[0]?.prompt).toContain(
       'Visually inspect every image embedded in the pull request description',
     )
-    expect(capture.requests[0]?.prompt).toContain('Download images only from GitHub-hosted media URLs')
-    expect(capture.requests[0]?.prompt).toContain('private-user-images.githubusercontent.com')
-    expect(capture.requests[0]?.prompt).toContain('Authorization')
     expect(capture.requests[0]?.prompt).toContain('stays inaccessible after authenticated retrieval')
-    expect(capture.requests[0]?.prompt).toContain('Use pnpm for every package command. Never use npx.')
+    expect(capture.requests[0]?.media).toEqual([image])
+    expect(capture.requests[0]?.prompt).toContain('Use review_read with revision diff and an empty path.')
+    expect(capture.requests[0]?.prompt).not.toContain('Review the full diff with: git diff')
   })
 
   it.each(['None', 'Stale'] as const)(
@@ -264,6 +305,7 @@ describe('subject Workers', () => {
                   url: 'https://github.com/wolfstar-project/example/pull/24#issuecomment-42',
                 },
                 pullRequest,
+                findingDiscussions: [],
                 requiredChecks: { _tag: 'None' as const },
                 reviews: [],
               }),
@@ -281,6 +323,7 @@ describe('subject Workers', () => {
             throw new Error('A second review must not queue Repair work.')
           },
           getRepairedHeadFindings: () => [],
+          repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
           listReviewRuns: () => [],
           getWorkerSession: () => null,
           storedReviewForHead: () => ({ _tag: storedTag }),
@@ -344,7 +387,12 @@ describe('subject Workers', () => {
     },
   )
 
-  it.each([false, true])('queues findings when merge happens during Review: %s', async (merged) => {
+  it.each([
+    { merged: false, impact: 81 },
+    { merged: true, impact: 81 },
+    { merged: false, impact: 79 },
+    { merged: false, impact: 80 },
+  ])('handles a finding at impact $impact when merged is $merged', async ({ merged, impact }) => {
     const repository = repositoryMapping({ ownership: 'maintained' })
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let attempt: RecordReviewRunInput | undefined
@@ -360,6 +408,7 @@ describe('subject Workers', () => {
             findings: [
               {
                 identity: 'buffered-byte-loss',
+                impact,
                 path: 'src/parser.ts',
                 line: 42,
                 proof: 'A split UTF-8 sequence loses its first byte.',
@@ -419,6 +468,7 @@ describe('subject Workers', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' as const },
               reviews: [],
             }),
@@ -435,6 +485,7 @@ describe('subject Workers', () => {
           return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
         },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         listReviewRuns: () => [],
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
@@ -504,21 +555,21 @@ describe('subject Workers', () => {
     )
     expect(attempt?.findings).toEqual([
       expect.objectContaining({
-        _tag: 'Open',
-        resolution: 'Repair',
+        _tag: impact > 80 ? 'Open' : 'Logged',
+        impact,
         summary: 'The parser drops data.',
-        details: expect.objectContaining({
-          location: { path: 'src/parser.ts', line: 42 },
-          regressionTest: 'Split one UTF-8 sequence across two chunks and assert the original string.',
-        }),
+        nextAction: 'Preserve the buffered bytes.',
+        details: expect.objectContaining({ location: { path: 'src/parser.ts', line: 42 } }),
       }),
     ])
-    expect(queued).toBe(true)
+    expect(queued).toBe(impact > 80)
     if (merged) {
       expect(terminal).toBe('')
     } else {
-      expect(terminal).toContain('### 🤖 BLOCKED')
+      expect(terminal).toContain(impact > 80 ? '### 🤖 BLOCKED' : '### 🤖 READY')
       expect(terminal).toContain('The parser drops data.')
+      if (impact <= 80) expect(terminal).toContain('Optional follow-up: Preserve the buffered bytes.')
+      else expect(terminal).not.toContain('Optional follow-up')
     }
     expect(worktreeVerified).toBe(true)
   })
@@ -541,6 +592,7 @@ describe('subject Workers', () => {
             findings: [
               {
                 identity: 'buffered-byte-loss',
+                impact: 90,
                 path: 'src/parser.ts',
                 line: 42,
                 proof: longProof,
@@ -600,6 +652,7 @@ describe('subject Workers', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' as const },
               reviews: [],
             }),
@@ -618,6 +671,7 @@ describe('subject Workers', () => {
           return { _tag: 'Queued', taskId: 'repair-task', rounds: { number: 1, limit: 3 } }
         },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         listReviewRuns: () => [],
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
@@ -707,6 +761,7 @@ describe('subject Workers', () => {
             findings: [
               {
                 identity: 'persisted-controller-state-removal',
+                impact: 95,
                 path: 'src/store.ts',
                 line: 42,
                 proof: 'A second process sees no active leases when the journal uses private memory.',
@@ -742,6 +797,7 @@ describe('subject Workers', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' as const },
               reviews: [],
             }),
@@ -759,6 +815,7 @@ describe('subject Workers', () => {
           throw new Error('A wrong premise must not queue Repair work.')
         },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         listReviewRuns: () => [],
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
@@ -840,6 +897,7 @@ describe('subject Workers', () => {
             findings: [
               {
                 identity: 'buffered-byte-loss',
+                impact: 90,
                 path: 'src/parser.ts',
                 line: 42,
                 proof: 'A split UTF-8 sequence loses its first byte.',
@@ -900,6 +958,7 @@ describe('subject Workers', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' as const },
               reviews: [],
             }),
@@ -920,6 +979,8 @@ describe('subject Workers', () => {
             reason: 'A repaired head still has the same Review finding: The parser drops data.',
           }
         },
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
+        listReviewRuns: () => [],
         getRepairedHeadFindings: (_repository, _pullRequestNumber, commitSha) => {
           askedForHeadSha = commitSha
           return [
@@ -931,6 +992,7 @@ describe('subject Workers', () => {
               details: {
                 fingerprint: 'a'.repeat(64),
                 identity: 'buffered-byte-loss',
+                impact: 90,
                 location: { path: 'src/parser.ts', line: 40 },
                 proof: 'A split UTF-8 sequence loses its first byte.',
                 regressionTest: 'Split one UTF-8 sequence across two chunks.',
@@ -938,7 +1000,6 @@ describe('subject Workers', () => {
             },
           ]
         },
-        listReviewRuns: () => [],
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
         getRevisionFiles: () => null,
@@ -1053,6 +1114,7 @@ describe('subject Workers', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' as const },
               reviews: [],
             }),
@@ -1070,6 +1132,7 @@ describe('subject Workers', () => {
           throw new Error('Base CI failure must prevent Repair work.')
         },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         listReviewRuns: () => [],
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
@@ -1200,6 +1263,7 @@ describe('subject Workers', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' as const },
               reviews: [],
             }),
@@ -1217,6 +1281,7 @@ describe('subject Workers', () => {
           throw new Error('No Repair is needed.')
         },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         listReviewRuns: () => [],
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
@@ -1340,6 +1405,7 @@ describe('subject Workers', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' as const },
               reviews: [],
             }),
@@ -1357,6 +1423,7 @@ describe('subject Workers', () => {
           throw new Error('No Repair is needed.')
         },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         listReviewRuns: () => [],
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
@@ -1478,6 +1545,7 @@ describe('subject Workers', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' as const },
               reviews: [],
             }),
@@ -1495,6 +1563,7 @@ describe('subject Workers', () => {
           throw new Error('No Repair is needed.')
         },
         getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         listReviewRuns: () => [],
         getWorkerSession: () => null,
         storedReviewForHead: () => ({ _tag: 'None' }),
@@ -1574,6 +1643,9 @@ describe('subject Workers', () => {
             needsCodebaseReview: false,
             summary: 'The parser drops valid input.',
             nextAction,
+            relatedIssues: [],
+            duplicateIssue: null,
+            relatedPullRequests: [],
           }),
           capture,
         ),
@@ -1663,6 +1735,8 @@ describe('subject Workers', () => {
           summary: 'The parser drops valid input.',
           nextAction,
           relatedIssues: [],
+          duplicateIssue: null,
+          relatedPullRequests: [],
         }),
         usage: { _tag: 'Unavailable' },
       },
@@ -1705,6 +1779,8 @@ describe('subject Workers', () => {
       summary: 'The parser drops valid input.',
       nextAction,
       relatedIssues: [],
+      duplicateIssue: null,
+      relatedPullRequests: [],
     })
   })
 })

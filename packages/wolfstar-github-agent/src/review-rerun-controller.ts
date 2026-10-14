@@ -11,7 +11,7 @@ export interface ReviewRerunSync {
 
 export interface ReviewRerunDependencies {
   github: Pick<GitHubSource, 'listReviewRerunRequests'>
-  store: Pick<JournalStore, 'getDashboardSnapshot' | 'requestReviewRerun'>
+  store: Pick<JournalStore, 'listOpenPullRequestRevisions' | 'requestReviewRerun' | 'requestPullRequestChange'>
   allowedAuthors: string[]
   now: () => Date
   signal?: AbortSignal
@@ -24,23 +24,32 @@ export function syncReviewRerunRequests(
   return dependencies.github.listReviewRerunRequests(repository, dependencies.signal).then((requests) => {
     if (requests._tag === 'Err') return err(requests.error.message)
     const at = dependencies.now().toISOString()
-    const subjects = dependencies.store.getDashboardSnapshot(at).items
+    const subjects = dependencies.store.listOpenPullRequestRevisions(repository.github)
     const allowedAuthors = new Set(dependencies.allowedAuthors.map((author) => author.toLowerCase()))
     const results = requests.value.flatMap((request): ReviewRerunResult[] => {
       if (!allowedAuthors.has(request.author.toLowerCase())) return []
-      const subject = subjects.find(
-        (candidate) =>
-          candidate.kind === 'pull_request' &&
-          candidate.repository === repository.github &&
-          candidate.number === request.pullRequestNumber,
-      )
+      const subject = subjects.find((candidate) => candidate.number === request.pullRequestNumber)
       if (subject === undefined) return []
+      if (request.origin === 'ChangeRequest') {
+        return [
+          dependencies.store.requestPullRequestChange({
+            repository: repository.github,
+            pullRequestNumber: request.pullRequestNumber,
+            revisionId: subject.revisionId,
+            requestId: `github-change:${repository.github}:${request.commentId}:${request.updatedAt}`,
+            instruction: request.instruction,
+            requestedBy: request.author,
+            at,
+          }),
+        ]
+      }
       return [
         dependencies.store.requestReviewRerun({
           repository: repository.github,
           pullRequestNumber: request.pullRequestNumber,
           revisionId: subject.revisionId,
-          requestId: `github-comment:${repository.github}:${request.commentId}:${request.updatedAt}`,
+          // Conversation and review comment ids are separate GitHub sequences.
+          requestId: `${request.origin === 'Command' ? 'github-comment' : 'github-review-comment'}:${repository.github}:${request.commentId}:${request.updatedAt}`,
           source: 'github_comment',
           requestedBy: request.author,
           at,
@@ -63,16 +72,11 @@ export async function syncOpenReviewRerunRequests(
   repositories: RepositoryMapping[],
   dependencies: ReviewRerunDependencies,
 ): Promise<Array<Result<ReviewRerunSync, string>>> {
-  const openRepositories = new Set(
-    dependencies.store
-      .getDashboardSnapshot(dependencies.now().toISOString())
-      .items.flatMap((item) =>
-        item.kind === 'pull_request' && item.state === 'open' ? [item.repository.toLowerCase()] : [],
-      ),
-  )
   const eligible = repositories.filter(
     (repository) =>
-      repository.enabled && repository.pullRequestReview && openRepositories.has(repository.github.toLowerCase()),
+      repository.enabled &&
+      repository.pullRequestReview &&
+      dependencies.store.listOpenPullRequestRevisions(repository.github).length > 0,
   )
   const results: Array<Result<ReviewRerunSync, string>> = []
   for (const repository of eligible) results.push(await syncReviewRerunRequests(repository, dependencies))

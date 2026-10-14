@@ -82,6 +82,51 @@ function recordOpenFinding(
 }
 
 describe('review Repair queue', () => {
+  it('keeps a logged finding in the Review without queuing Repair', () => {
+    const store = createStore()
+    const { review, revisionId } = runningReview(store, 'fix/limited-impact')
+    const recorded = store.recordReviewRun({
+      id: 'logged-review',
+      repository: review.repository,
+      pullRequestNumber: review.pullRequestNumber,
+      revisionId,
+      headSha: review.pullRequest.headSha,
+      provider: 'codex',
+      sessionId: 'logged-session',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:00:02.000Z',
+      completedAt: '2026-08-13T01:00:03.000Z',
+      gates: passedReviewGates(),
+      findings: [
+        {
+          _tag: 'Logged',
+          impact: 80,
+          summary: 'A rare empty state loses spacing.',
+          details: {
+            fingerprint: 'empty-spacing',
+            identity: 'empty-spacing',
+            location: { path: 'src/view.ts', line: 14 },
+            proof: 'The gap disappears.',
+          },
+        },
+      ],
+    })
+
+    expect(recorded._tag).toBe('Inserted')
+    expect(store.listReviewRuns(review.repository, review.pullRequestNumber)[0]?.outcome._tag).toBe('Ready')
+    expect(store.getReviewFixFindings(review.repository, review.pullRequestNumber, revisionId)).toEqual([])
+    expect(
+      store.queueReviewFixTaskForReview({
+        taskId: review.id,
+        workerId: review.state.workerId,
+        fence: review.state.fence,
+        at: '2026-08-13T01:00:04.000Z',
+      })._tag,
+    ).toBe('ActionRequired')
+  })
+
   it('starts Repair after the terminal Review status reaches GitHub', () => {
     const store = createStore()
     const { review, revisionId } = runningReview(store, 'fix/publish-review-first')
@@ -652,6 +697,13 @@ describe('review Repair queue', () => {
     })
 
     const first = publishRepairRound(store, 'fix/repeated-finding', 1)
+    expect(
+      store.repairRoundPlan(
+        first.freshReview.repository,
+        first.freshReview.pullRequestNumber,
+        first.freshReview.pullRequest.headSha,
+      ),
+    ).toEqual({ _tag: 'Allowed', number: 2 })
     expect(queueRound(store, first.freshReview, first.at)).toMatchObject({
       _tag: 'Queued',
       rounds: { number: 2, limit: 3 },
@@ -686,16 +738,21 @@ describe('review Repair queue', () => {
     const second = publishRepairRound(store, 'fix/exhausted-rounds', 2)
     expect(queueRound(store, second.freshReview, second.at)).toMatchObject({ _tag: 'Queued', rounds: { number: 3 } })
     const third = publishRepairRound(store, 'fix/exhausted-rounds', 3)
+    const reason =
+      'Repair used 3 of 3 rounds and the finding remains. ' +
+      'Round 1 (`1111111`): Round 1 widened the parser guard. ' +
+      'Round 2 (`2222222`): Round 2 widened the parser guard. ' +
+      'Round 3 (`3333333`): Round 3 widened the parser guard. ' +
+      'A person decides the next step.'
 
-    expect(queueRound(store, third.freshReview, third.at)).toEqual({
-      _tag: 'ActionRequired',
-      reason:
-        'Repair used 3 of 3 rounds and the finding remains. ' +
-        'Round 1 (`1111111`): Round 1 widened the parser guard. ' +
-        'Round 2 (`2222222`): Round 2 widened the parser guard. ' +
-        'Round 3 (`3333333`): Round 3 widened the parser guard. ' +
-        'A person decides the next step.',
-    })
+    expect(
+      store.repairRoundPlan(
+        third.freshReview.repository,
+        third.freshReview.pullRequestNumber,
+        third.freshReview.pullRequest.headSha,
+      ),
+    ).toEqual({ _tag: 'Exhausted', reason })
+    expect(queueRound(store, third.freshReview, third.at)).toEqual({ _tag: 'ActionRequired', reason })
     expect(store.claimNextReviewFixTask('repair-agent-4', '2026-08-13T01:04:00.000Z', 60_000)).toBeNull()
   })
 

@@ -1,6 +1,7 @@
 ---
 name: agent-feedback
 description: Improve one Agent skill from explicit Review feedback. Use only for the agent-feedback Routine.
+license: MIT
 ---
 
 # Agent feedback

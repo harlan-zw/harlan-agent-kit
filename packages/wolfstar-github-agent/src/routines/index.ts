@@ -1,22 +1,28 @@
 import { agentFeedback } from './agent-feedback.ts'
+import { agentRetro } from './agent-retro.ts'
 import { ciReview } from './ci-review.ts'
+import { d1QueryReview } from './d1-query-review.ts'
 import { dailyCheckin } from './daily-checkin.ts'
 import { dependencyUpdates } from './dependency-updates.ts'
 import { perfReview } from './perf-review.ts'
 import { prTriage } from './pr-triage.ts'
 import { sentryCheckin } from './sentry-checkin.ts'
 import { seoReview } from './seo-review.ts'
+import { vitalsReview } from './vitals-review.ts'
 
 // Only compiled definitions grant Routine authority. YAML selects a name from this table.
 const routines = {
   'sentry-checkin': sentryCheckin,
   'pr-triage': prTriage,
   'agent-feedback': agentFeedback,
+  'agent-retro': agentRetro,
   'daily-checkin': dailyCheckin,
+  'd1-query-review': d1QueryReview,
   'dependency-updates': dependencyUpdates,
   'ci-review': ciReview,
   'perf-review': perfReview,
   'seo-review': seoReview,
+  'vitals-review': vitalsReview,
 }
 
 export type RoutineName = keyof typeof routines

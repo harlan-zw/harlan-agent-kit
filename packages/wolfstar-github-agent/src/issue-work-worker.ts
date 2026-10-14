@@ -207,6 +207,26 @@ function preservesTemplate(body: string, template: string): boolean {
   })
 }
 
+/** Restores trusted comments while retaining the Agent's text and checklist choices. */
+function restoreTemplateComments(body: string, template: string): string {
+  const unticked = untick(body)
+  let position = 0
+  let restored = ''
+  for (const part of templateStructure(template)) {
+    const next = unticked.indexOf(part, position)
+    if (next !== -1) {
+      restored += body.slice(position, next + part.length)
+      position = next + part.length
+    } else if (part.startsWith('<!--')) {
+      restored += `\n\n${part}\n\n`
+    } else {
+      // Visible structure needs an Agent correction. Do not publish a guessed body.
+      return body
+    }
+  }
+  return restored + body.slice(position)
+}
+
 function closesLines(issueNumbers: readonly number[]): string {
   return issueNumbers.map((number) => `Closes #${number}.`).join('\n')
 }
@@ -281,7 +301,7 @@ function parseAgentResponse(
         typeof value.pullRequestBody !== 'string'
       )
         return err('The agent returned an invalid issue work result.')
-      const pullRequestBody = withAiDisclosure(value.pullRequestBody)
+      const pullRequestBody = withAiDisclosure(restoreTemplateComments(value.pullRequestBody, template))
       // Each rule names itself. One shared refusal told nobody which of five
       // rules the metadata broke, so the Incident a person read said only that
       // something was wrong, and a retry had nothing to correct.
@@ -329,7 +349,7 @@ function storedTriageLines(triage: IssueTriageResult | null): string {
   if (triage === null) return 'No stored Issue triage exists for this issue state. Plan from the issue data below.'
   return `Stored Issue triage follows. Start from it. Do not triage the issue again.
 Triage summary: ${triage.summary}
-Triage next action: ${triage.nextAction}`
+Triage next action: ${triage.nextAction}${triage.relatedPullRequests.length === 0 ? '' : `\nRelated pull requests: ${triage.relatedPullRequests.map((reference) => `#${reference.number}: ${reference.reason}`).join('; ')}`}`
 }
 
 const pullRequestMetadataLines = `Pull request metadata contract:
@@ -400,7 +420,7 @@ Plan, implement, and verify the complete fix.
 Work as a normal local agent session inside this Git worktree. Use the user's global agent context and installed skills.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
 ${instructionFilesLine(input.instructionFiles)}
-${memoryBlock}Select every installed code-domain skill whose trigger matches the affected implementation. Do not load workflow skills such as pr, unit-tests, or humanize-writing. Their rules are inlined below.
+${memoryBlock}Select every installed code-domain skill whose trigger matches the affected implementation. Do not load workflow skills such as pr, unit-tests, or im-not-a-fly. Their rules are inlined below.
 ${UNIT_TEST_LINES}
 ${checkBudgetLines(CHECK_SCOPES.changedFiles)}
 ${TOOLCHAIN_LINES}
@@ -500,6 +520,10 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
             agentTitle ??= await salvagedTitle(response)
             return parseAgentResponse(response, issueNumbers, templateBody)
           },
+          repairContext: (reason) =>
+            reason.includes('the body drops part of the repository pull request template')
+              ? `Trusted repository pull request template as JSON:\n${JSON.stringify(templateBody)}\nCopy every heading, comment, and checklist in order.`
+              : null,
         },
         {
           freshSession: task.state.fence > 1,

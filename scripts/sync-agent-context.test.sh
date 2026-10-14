@@ -99,6 +99,17 @@ printf '%s %s\n' wolfstar-hooks.ts \
   "$(/usr/bin/sha256sum "$repo_root/wolfstar-agent-kit/plugins/opencode/wolfstar-hooks.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' plugin.json \
   "$(/usr/bin/sha256sum "$repo_root/wolfstar-agent-kit/.claude-plugin/plugin.json" | cut -d' ' -f1)" >> "$opencode_hashes"
+printf '%s %s\n' gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
+printf '%s %s\n' agent-gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
+printf '%s %s\n' agent-tools.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-tools.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
+printf '%s %s\n' agent-check.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-check.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
+printf '%s %s\n' check "$(/usr/bin/sha256sum "$repo_root/bin/check" | cut -d' ' -f1)" >> "$opencode_hashes"
+for name in wolfstar-github-agent hw; do
+  printf '%s %s\n' "$name" "$(/usr/bin/sha256sum "$repo_root/scripts/agent-cli.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
+done
+for source in "$repo_root/scripts/agent-cli-plan.ts" "$repo_root/wolfstar-agent-kit/skills/hogwild/scripts/hw.ts" "$repo_root/wolfstar-agent-kit/skills/hogwild/scripts/plan.ts"; do
+  printf '%s %s\n' "$(basename "$source")" "$(/usr/bin/sha256sum "$source" | cut -d' ' -f1)" >> "$opencode_hashes"
+done
 export WOLFSTAR_AGENT_CONTEXT_TEST_OPENCODE_HASHES="$opencode_hashes"
 export WOLFSTAR_AGENT_CONTEXT_TEST_OPENCODE_BAD=''
 
@@ -207,7 +218,12 @@ grep -E "chmod 644 '$manifest_target.next\.[0-9.]+'" "$calls" >/dev/null
 fixture="$test_root/fixture"
 mkdir -p "$fixture/scripts" "$fixture/wolfstar-agent-kit/hooks" \
   "$fixture/wolfstar-agent-kit/.claude-plugin" "$fixture/wolfstar-agent-kit/plugins/opencode"
-cp "$repo_root/scripts/sync-agent-context.sh" "$repo_root/scripts/agent-context-hooks.sh" "$fixture/scripts/"
+mkdir -p "$fixture/bin"
+cp "$repo_root/bin/check" "$fixture/bin/check"
+cp "$repo_root/scripts/sync-agent-context.sh" "$repo_root/scripts/agent-context-hooks.sh" "$repo_root/scripts/github-public.sh" "$repo_root/scripts/agent-check.ts" "$repo_root/scripts/agent-tools.ts" "$fixture/scripts/"
+cp "$repo_root/scripts/agent-cli.ts" "$repo_root/scripts/agent-cli-plan.ts" "$fixture/scripts/"
+mkdir -p "$fixture/wolfstar-agent-kit/skills/hogwild/scripts"
+cp "$repo_root/wolfstar-agent-kit/skills/hogwild/scripts/"*.ts "$fixture/wolfstar-agent-kit/skills/hogwild/scripts/"
 cp -r "$repo_root/agent-context" "$fixture/agent-context"
 cp "$repo_root/wolfstar-agent-kit/hooks/"*.sh "$fixture/wolfstar-agent-kit/hooks/"
 cp "$repo_root/wolfstar-agent-kit/plugins/opencode/wolfstar-hooks.ts" "$fixture/wolfstar-agent-kit/plugins/opencode/"
@@ -246,6 +262,17 @@ printf '%s %s\n' wolfstar-hooks.ts \
   "$(/usr/bin/sha256sum "$fixture/wolfstar-agent-kit/plugins/opencode/wolfstar-hooks.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
 
 : > "$calls"
+printf '%s %s\n' gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$fixture_hashes"
+printf '%s %s\n' agent-gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$fixture_hashes"
+printf '%s %s\n' agent-tools.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-tools.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
+printf '%s %s\n' agent-check.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-check.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
+printf '%s %s\n' check "$(/usr/bin/sha256sum "$repo_root/bin/check" | cut -d' ' -f1)" >> "$fixture_hashes"
+for name in wolfstar-github-agent hw; do
+  printf '%s %s\n' "$name" "$(/usr/bin/sha256sum "$repo_root/scripts/agent-cli.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
+done
+for source in "$repo_root/scripts/agent-cli-plan.ts" "$repo_root/wolfstar-agent-kit/skills/hogwild/scripts/hw.ts" "$repo_root/wolfstar-agent-kit/skills/hogwild/scripts/plan.ts"; do
+  printf '%s %s\n' "$(basename "$source")" "$(/usr/bin/sha256sum "$source" | cut -d' ' -f1)" >> "$fixture_hashes"
+done
 PATH="$test_root/bin:/usr/bin:/bin" \
   WOLFSTAR_AGENT_CONTEXT_TEST_OPENCODE_HASHES="$fixture_hashes" \
   WOLFSTAR_AGENT_CONTEXT_HOGWILD_HOST=hogwild \
@@ -270,6 +297,19 @@ if ! grep -F 'Hogwild received different hook files.' "$opencode_log" >/dev/null
 fi
 if grep -F "mv '" "$calls" >/dev/null; then
   printf '%s\n' 'Hogwild installed an unverified opencode hook.' >&2
+  exit 1
+fi
+export WOLFSTAR_AGENT_CONTEXT_TEST_OPENCODE_BAD=''
+
+# Check must pass digest verification before either copy is installed.
+: > "$calls"
+export WOLFSTAR_AGENT_CONTEXT_TEST_OPENCODE_BAD=check
+if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/sync-agent-context.sh" hogwild >"$test_root/check.log" 2>&1; then
+  printf '%s\n' 'Hogwild accepted a different Check command.' >&2
+  exit 1
+fi
+if grep -F "mv '" "$calls" >/dev/null; then
+  printf '%s\n' 'Hogwild installed Check without digest verification.' >&2
   exit 1
 fi
 export WOLFSTAR_AGENT_CONTEXT_TEST_OPENCODE_BAD=''

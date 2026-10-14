@@ -1,4 +1,4 @@
 interface:
   display_name: Take Ownership
-  short_description: Finish current work through delivery verification
-  default_prompt: Use $take-ownership to finish this work through delivery and smoke verification.
+  short_description: Finish delivery, close loose ends, and clean task state
+  default_prompt: Use $take-ownership to finish this work through delivery and smoke verification. Use completion mode for remaining work, records, and safe cleanup. Skill selection grants no merge authority.

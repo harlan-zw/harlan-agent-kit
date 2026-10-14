@@ -25,12 +25,15 @@ export HOGWILD_SERVICE_TEST_STATE_POLLS="$test_root/state-polls"
 # Present once this deploy files its own Restart request. Before that, the
 # controller reports whatever restart an earlier deploy left behind.
 export HOGWILD_SERVICE_TEST_RESTART_FILED="$test_root/restart-filed"
+export HOGWILD_SERVICE_TEST_UPDATE_PENDING="$test_root/update-pending"
+export HOGWILD_SERVICE_TEST_UPDATE_READY="$test_root/update-ready"
 export HOGWILD_SERVICE_TEST_DEPLOYED_SHA=1c2b3a49f5d60e7b8a9c0d1e2f3a4b5c6d7e8f90
 export HOGWILD_SERVICE_TEST_LEGACY=false
 export HOGWILD_SERVICE_TEST_LEGACY_SAFE_AFTER=1
 export HOGWILD_SERVICE_TEST_LEGACY_STATE="$test_root/legacy-state"
 export WOLFSTAR_REPOSITORY_ENV_HOME="$test_home"
 export WOLFSTAR_REPOSITORY_ENV_MANIFEST="$test_root/repository-env-files"
+export WOLFSTAR_HOGWILD_ENV_OVERRIDES="$test_root/hogwild-env-overrides"
 # Without this the script reads the real ~/sites/SITES.md. A machine that has
 # one failed, and CI passed only because it has none, so the sites sync was
 # never covered anywhere.
@@ -40,6 +43,9 @@ export WOLFSTAR_AGENT_CONTEXT_SITES_FILE="$test_root/SITES.md"
 export WOLFSTAR_GITHUB_AGENT_DESKTOP_UNIT=wolfstar-desktop-agent-fixture
 export WOLFSTAR_GITHUB_AGENT_SERVICE_SCRIPT="$test_root/bin/service-fixture.sh"
 export XDG_CONFIG_HOME="$test_home/.config"
+export XDG_STATE_HOME="$test_home/.local/state"
+export HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED="$test_root/desktop-restarted"
+export HOGWILD_SERVICE_TEST_DESKTOP_POLLS="$test_root/desktop-polls"
 
 mkdir -p "$test_home/.config/wolfstar-github-agent" "$test_home/sites/example" "$test_root/bin"
 printf '%s\n' 'password' > "$WOLFSTAR_GITHUB_AGENT_PASSWORD_FILE"
@@ -77,7 +83,7 @@ printf '%s\n' \
   > "$test_root/bin/ssh"
 cat >> "$test_root/bin/ssh" <<'FAKE_SSH'
 # Hogwild reports the commit it landed on, so the desktop can be pinned to it.
-if [[ "$*" == *"-- 'revision'"* ]]; then
+if [[ "$*" == *"-- 'revision'"* || "$*" == *"-- 'resolve-update'"* ]]; then
   printf '%s\n' "$HOGWILD_SERVICE_TEST_DEPLOYED_SHA"
   exit
 fi
@@ -110,6 +116,20 @@ printf '%s\n' \
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf '\''curl %s\n'\'' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"' \
+  'if [[ "$*" == *api/state* && -e "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED" && -n "${HOGWILD_SERVICE_TEST_DESKTOP_MODE:-}" ]]; then' \
+  '  polls=$(($(cat "$HOGWILD_SERVICE_TEST_DESKTOP_POLLS") + 1)); printf '\''%s\n'\'' "$polls" > "$HOGWILD_SERVICE_TEST_DESKTOP_POLLS"' \
+  '  case "${HOGWILD_SERVICE_TEST_DESKTOP_MODE:-ready}" in' \
+  '    unavailable) exit 42 ;;' \
+  '    missing) printf '\''{}\n'\''; exit ;;' \
+  '    malformed) printf '\''invalid JSON\n'\''; exit ;;' \
+  '    invalid-time) printf '\''{"desktop":{"connected":true,"current":true,"seenAt":"now"}}\n'\''; exit ;;' \
+  '    disconnected) printf '\''{"desktop":{"connected":false,"current":true,"seenAt":%s}}\n'\'' "$polls"; exit ;;' \
+  '    incompatible) printf '\''{"desktop":{"connected":true,"current":false,"seenAt":%s}}\n'\'' "$polls"; exit ;;' \
+  '    stale) printf '\''{"desktop":{"connected":true,"current":true,"seenAt":1}}\n'\''; exit ;;' \
+  '  esac' \
+  '  seen=1; if ((polls >= 3)); then seen=2; fi' \
+  '  printf '\''{"desktop":{"connected":true,"current":true,"seenAt":%s}}\n'\'' "$seen"; exit' \
+  'fi' \
   'if [ "$HOGWILD_SERVICE_TEST_LEGACY" = true ]; then' \
   '  if [[ "$*" == *api/agents/pause* ]]; then printf '\''Paused\n'\'' > "$HOGWILD_SERVICE_TEST_LEGACY_STATE"; printf '\''{"_tag":"Paused"}\n'\''; exit; fi' \
   '  if [[ "$*" == *api/agents/resume* ]]; then printf '\''Running\n'\'' > "$HOGWILD_SERVICE_TEST_LEGACY_STATE"; printf '\''{"_tag":"Running"}\n'\''; exit; fi' \
@@ -125,6 +145,12 @@ printf '%s\n' \
   '    exit' \
   '  fi' \
   'fi' \
+  'if [[ "$*" == *api/service/update/preparation* ]]; then' \
+  '  if [[ "$*" != *POST* ]]; then printf '\''{"supported":true}\n'\''; exit; fi' \
+  '  if [[ "$*" == *Failed* ]]; then rm -f "$HOGWILD_SERVICE_TEST_UPDATE_PENDING" "$HOGWILD_SERVICE_TEST_UPDATE_READY"; printf '\''{"_tag":"ActionRequired"}\n'\''; exit; fi' \
+  '  : > "$HOGWILD_SERVICE_TEST_UPDATE_READY"; printf '\''{"_tag":"Requested"}\n'\''; exit' \
+  'fi' \
+  'if [[ "$*" == *api/service/update* ]]; then : > "$HOGWILD_SERVICE_TEST_RESTART_FILED"; : > "$HOGWILD_SERVICE_TEST_UPDATE_PENDING"; printf '\''{"_tag":"Requested","id":"restart-1","operation":{"_tag":"Update","targetCommit":"%s","preparation":"Pending"}}\n'\'' "$HOGWILD_SERVICE_TEST_DEPLOYED_SHA"; exit; fi' \
   'if [[ "$*" == *api/service/restart* ]]; then : > "$HOGWILD_SERVICE_TEST_RESTART_FILED"; printf '\''{"_tag":"Requested","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}\n'\''; exit; fi' \
   'if [[ "$*" == *api/state* && ! -e "$HOGWILD_SERVICE_TEST_RESTART_FILED" ]]; then' \
   '  printf '\''{"agentControl":{"_tag":"Running"},"restartRequest":{"_tag":"%s","id":"restart-0","source":"helper","requestedAt":"2026-08-29T00:00:00.000Z"}}\n'\'' "${HOGWILD_SERVICE_TEST_PRIOR_RESTART:-Completed}"' \
@@ -135,20 +161,32 @@ printf '%s\n' \
   '  printf '\''%s\n'\'' "$polls" > "$HOGWILD_SERVICE_TEST_STATE_POLLS"' \
   '  status=Requested' \
   '  if ((polls >= HOGWILD_SERVICE_TEST_RESTART_AFTER)); then status=Completed; fi' \
-  '  printf '\''{"agentControl":{"_tag":"Running"},"restartRequest":{"_tag":"%s","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}}\n'\'' "$status"' \
+  '  if [ "$status" = Completed ] && [ -e "$HOGWILD_SERVICE_TEST_UPDATE_READY" ]; then printf '\''controller prepare-update\n'\'' >> "$HOGWILD_SERVICE_TEST_CALLS"; rm -f "$HOGWILD_SERVICE_TEST_UPDATE_READY" "$HOGWILD_SERVICE_TEST_UPDATE_PENDING"; fi' \
+  '  printf '\''{"desktop":{"connected":true,"current":true,"seenAt":%s},"agentControl":{"_tag":"Running"},"hostCapacity":{"localActive":2,"desktopActive":1},"tasks":[{"state":{"_tag":"Running"}},{"state":{"_tag":"Publishing"}},{"state":{"_tag":"Queued"}}],"restartRequest":{"_tag":"%s","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}}\n'\'' "$polls" "$status"' \
   'fi' \
   > "$test_root/bin/curl"
-printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$test_root/bin/sleep"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'if [ -n "${HOGWILD_SERVICE_TEST_SLEEP_SECONDS:-}" ]; then /usr/bin/sleep "$HOGWILD_SERVICE_TEST_SLEEP_SECONDS"; fi' \
+  'exit 0' > "$test_root/bin/sleep"
 cat > "$test_root/bin/systemctl" <<'FAKE_SYSTEMCTL'
 #!/usr/bin/env bash
 printf 'systemctl %s\n' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"
 if [[ "$*" == *list-unit-files* ]]; then
   printf '%s.service enabled enabled\n' "$WOLFSTAR_GITHUB_AGENT_DESKTOP_UNIT"
 fi
+if [[ "$*" == *"restart $WOLFSTAR_GITHUB_AGENT_DESKTOP_UNIT"* ]]; then
+  : > "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED"
+  printf '%s\n' 0 > "$HOGWILD_SERVICE_TEST_DESKTOP_POLLS"
+fi
+if [[ "$*" == *is-active* && "${HOGWILD_SERVICE_TEST_DESKTOP_MODE:-}" == inactive ]]; then exit 3; fi
 FAKE_SYSTEMCTL
 cat > "$test_root/bin/service-fixture.sh" <<'FAKE_SERVICE'
 #!/usr/bin/env bash
 printf 'service %s\n' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"
+if [ -n "${HOGWILD_SERVICE_TEST_DESKTOP_GATE:-}" ]; then
+  : > "$HOGWILD_SERVICE_TEST_DESKTOP_ENTERED"
+  read -r release < "$HOGWILD_SERVICE_TEST_DESKTOP_GATE"
+fi
 FAKE_SERVICE
 chmod +x "$test_root/bin/systemctl" "$test_root/bin/service-fixture.sh"
 chmod +x "$test_root/bin/ssh" "$test_root/bin/scp" "$test_root/bin/rsync" "$test_root/bin/curl" "$test_root/bin/sleep"
@@ -165,21 +203,26 @@ env_manifest_install_line=$(grep -nE "mv '/home/wolfstar/.config/wolfstar-agent-
 worktrunk_install_line=$(grep -nE "mv '/home/wolfstar/.config/worktrunk/config.toml.next\.[0-9.]+' '/home/wolfstar/.config/worktrunk/config.toml'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 env_copy_line=$(grep -n '^rsync ' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 env_install_line=$(grep -nF "install-staged '/home/wolfstar/.cache/wolfstar-repository-env.fixture'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-prepare_line=$(grep -nF "bash -s -- 'prepare-update' 'origin/main'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
-restart_line=$(grep -n '/api/service/restart' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+resolve_line=$(grep -nF "bash -s -- 'resolve-update' 'origin/main'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+prepare_line=$(grep -n '^controller prepare-update$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+restart_line=$(grep -n 'api/service/update$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 
 # An empty capture reads as 0 inside (( )), so a pattern that matched nothing
 # would still satisfy the ordering below. Refuse that before comparing.
 for step in claude_copy_line codex_copy_line install_line limits_copy_line limits_install_line \
   env_tool_install_line env_manifest_install_line worktrunk_install_line env_copy_line \
-  env_install_line prepare_line restart_line; do
+  env_install_line resolve_line prepare_line restart_line; do
   if [ -z "${!step}" ]; then
     printf '%s\n' "Hogwild update never logged the step this test orders: $step." >&2
     exit 1
   fi
 done
-if ! ((claude_copy_line < codex_copy_line && codex_copy_line < install_line && install_line < limits_copy_line && limits_copy_line < limits_install_line && limits_install_line < env_tool_install_line && env_tool_install_line < env_manifest_install_line && env_manifest_install_line < worktrunk_install_line && worktrunk_install_line < env_copy_line && env_copy_line < env_install_line && env_install_line < prepare_line && prepare_line < restart_line)); then
-  printf '%s\n' 'Hogwild update did not prepare files before its Restart request.' >&2
+if ! ((resolve_line < restart_line && restart_line < claude_copy_line && claude_copy_line < codex_copy_line && codex_copy_line < install_line && install_line < limits_copy_line && limits_copy_line < limits_install_line && limits_install_line < env_tool_install_line && env_tool_install_line < env_manifest_install_line && env_manifest_install_line < worktrunk_install_line && worktrunk_install_line < env_copy_line && env_copy_line < env_install_line && env_install_line < prepare_line)); then
+  printf '%s\n' 'Hogwild prepared the checkout before its durable Update request.' >&2
+  exit 1
+fi
+if grep -F "bash -s -- 'prepare-update'" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+  printf '%s\n' 'The helper prepared Hogwild outside the durable Update.' >&2
   exit 1
 fi
 if grep -E '/api/agents/(pause|resume)' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
@@ -222,7 +265,11 @@ if ! grep -q '^rsync ' "$HOGWILD_SERVICE_TEST_CALLS" \
   printf '%s\n' 'Manual repository environment sync did not install the files.' >&2
   exit 1
 fi
-if grep -E "prepare-update|api/service/restart" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+if grep '^rsync ' "$HOGWILD_SERVICE_TEST_CALLS" | grep -qF " $test_home/ "; then
+  printf '%s\n' 'Repository environment sync sent the desktop files without Hogwild overrides.' >&2
+  exit 1
+fi
+if grep -E "^controller prepare-update|api/service/restart" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
   printf '%s\n' 'Manual repository environment sync changed the service.' >&2
   exit 1
 fi
@@ -247,6 +294,10 @@ if PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" upd
 fi
 if grep -E "prepare-update|api/service/restart" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
   printf '%s\n' 'Hogwild updated or restarted after a context hash mismatch.' >&2
+  exit 1
+fi
+if ! grep -F 'Failed' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+  printf '%s\n' 'The helper did not release its failed Update preparation.' >&2
   exit 1
 fi
 
@@ -363,15 +414,115 @@ for pending in Requested Restarting; do
   fi
 done
 
-# A restart that is stuck in Restarting would otherwise block every deploy
-# forever, and a deploy is how Hogwild recovers. A person can say so on purpose.
+# The retired override cannot bypass an owned Restart request.
 rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED"
 printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
 : > "$HOGWILD_SERVICE_TEST_CALLS"
-if ! HOGWILD_SERVICE_TEST_PRIOR_RESTART=Restarting HOGWILD_DEPLOY_DESPITE_PENDING_RESTART=1 \
+if HOGWILD_SERVICE_TEST_PRIOR_RESTART=Restarting HOGWILD_DEPLOY_DESPITE_PENDING_RESTART=1 \
   PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null 2>&1; then
-  printf '%s\n' 'Hogwild refused an update a person explicitly allowed over a stuck restart.' >&2
+  printf '%s\n' 'The retired override bypassed durable Update ownership.' >&2
   exit 1
 fi
 
+# Hold the desktop after Hogwild reports Completed. A second update must fail
+# before it reaches a network or checkout boundary.
+rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED"
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+export HOGWILD_SERVICE_TEST_RESTART_AFTER=1
+export HOGWILD_SERVICE_TEST_DESKTOP_GATE="$test_root/desktop-gate"
+export HOGWILD_SERVICE_TEST_DESKTOP_ENTERED="$test_root/desktop-entered"
+mkfifo "$HOGWILD_SERVICE_TEST_DESKTOP_GATE"
+PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update > "$test_root/first-update.log" 2>&1 &
+first_update=$!
+for attempt in $(seq 1 1000); do
+  [ -e "$HOGWILD_SERVICE_TEST_DESKTOP_ENTERED" ] && break
+  if ! kill -0 "$first_update" 2>/dev/null; then
+    wait "$first_update"
+    printf '%s\n' 'The first update did not reach desktop preparation.' >&2
+    exit 1
+  fi
+  /usr/bin/sleep 0.01
+done
+if [ ! -e "$HOGWILD_SERVICE_TEST_DESKTOP_ENTERED" ]; then
+  kill "$first_update"
+  wait "$first_update" || true
+  printf '%s\n' 'The first update did not reach its desktop gate.' >&2
+  exit 1
+fi
+regression_failures=0
+for command in update restart; do
+  second_status=0
+  HOGWILD_SERVICE_TEST_DESKTOP_GATE='' HOGWILD_SERVICE_TEST_CALLS="$test_root/second-$command-calls" \
+    PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" "$command" > "$test_root/second-$command.log" 2>&1 || second_status=$?
+  if [ "$second_status" = 0 ] || [ -s "$test_root/second-$command-calls" ]; then
+    printf '%s\n' "A second $command reached the Service while the desktop still updated." >&2
+    regression_failures=$((regression_failures + 1))
+  fi
+  if ! grep -F 'Another Hogwild update or restart is running.' "$test_root/second-$command.log" >/dev/null; then
+    printf '%s\n' "The second $command did not explain its lock refusal." >&2
+    regression_failures=$((regression_failures + 1))
+  fi
+done
+printf '%s\n' 'finish' > "$HOGWILD_SERVICE_TEST_DESKTOP_GATE"
+wait "$first_update"
+unset HOGWILD_SERVICE_TEST_DESKTOP_GATE HOGWILD_SERVICE_TEST_DESKTOP_ENTERED
+# Process exit must release the lock for the next update.
+PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null
+
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+export HOGWILD_SERVICE_TEST_RESTART_AFTER=3
+PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" restart > "$test_root/progress.log"
+if ! grep -E '2 active Tasks.*3 occupied Agent slots.*Elapsed: [0-9]+s' "$test_root/progress.log" >/dev/null; then
+  printf '%s\n' 'Restart did not report active work and elapsed time.' >&2
+  regression_failures=$((regression_failures + 1))
+fi
+if [ "$(grep -c 'Waiting for Restart' "$test_root/progress.log")" != 1 ]; then
+  printf '%s\n' 'Restart repeated unchanged progress on every poll.' >&2
+  regression_failures=$((regression_failures + 1))
+fi
+
+# Keep counts unchanged for over 30 seconds to exercise the real heartbeat.
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+export HOGWILD_SERVICE_TEST_RESTART_AFTER=8
+HOGWILD_SERVICE_TEST_SLEEP_SECONDS=6 PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/hogwild-service.sh" restart > "$test_root/heartbeat.log"
+if [ "$(grep -c 'Waiting for Restart' "$test_root/heartbeat.log")" -lt 2 ]; then
+  printf '%s\n' 'Restart did not send a heartbeat during an unchanged drain.' >&2
+  regression_failures=$((regression_failures + 1))
+fi
+
+[ "$regression_failures" = 0 ] || exit 1
+
+# A successful unit restart must not hide a disconnected, old, or incompatible client.
+export HOGWILD_SERVICE_TEST_RESTART_AFTER=1
+for mode in disconnected incompatible stale missing malformed invalid-time unavailable inactive; do
+  rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED" "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED"
+  printf '%s\n' 0 > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+  if HOGWILD_SERVICE_TEST_DESKTOP_MODE="$mode" PATH="$test_root/bin:/usr/bin:/bin" \
+    bash "$script_dir/hogwild-service.sh" update > "$test_root/desktop-$mode.log" 2>&1; then
+    printf '%s\n' "Update reported success with a $mode desktop client." >&2
+    exit 1
+  fi
+  case "$mode" in
+    disconnected) reason='The desktop is disconnected.' ;;
+    incompatible) reason='The desktop protocol does not match the Service.' ;;
+    stale) reason='The desktop sent no fresh report.' ;;
+    unavailable) reason='The Service did not answer.' ;;
+    inactive) reason='Desktop client stopped after restart.' ;;
+    *) reason='The Service returned no valid desktop report time.' ;;
+  esac
+  if ! grep -F "$reason" "$test_root/desktop-$mode.log" >/dev/null; then
+    printf '%s\n' "Update did not explain the $mode desktop failure." >&2
+    exit 1
+  fi
+done
+rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED" "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED"
+printf '%s\n' 0 > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+HOGWILD_SERVICE_TEST_DESKTOP_MODE=ready PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update > "$test_root/desktop-ready.log"
+if [ "$(cat "$HOGWILD_SERVICE_TEST_DESKTOP_POLLS")" -lt 3 ] \
+  || ! grep -F 'Desktop client connected with the current protocol.' "$test_root/desktop-ready.log" >/dev/null; then
+  printf '%s\n' 'Update did not wait for a fresh desktop report.' >&2
+  exit 1
+fi
+printf '%s\n' 'Desktop connection tests passed'
 printf '%s\n' 'Hogwild service tests passed'

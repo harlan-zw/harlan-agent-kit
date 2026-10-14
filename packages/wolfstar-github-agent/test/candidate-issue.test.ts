@@ -10,7 +10,7 @@ import {
 } from '../src/candidate-issue-controller.ts'
 import { err, ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { issueItem, repositoryMapping } from './fixtures.ts'
 
 const now = () => new Date('2026-08-27T07:10:00.000Z')
 
@@ -76,6 +76,7 @@ function seed(store: ReturnType<typeof openJournalStore>): void {
 
 function publisher(calls: Array<{ title: string; labels?: readonly string[] }>): GitHubIssuePublisher {
   return {
+    updateIssue: async () => ok(undefined),
     findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
     findRoutineTrackingIssue: () => Promise.resolve(ok(null)),
     findIssueCommentByMarker: () => Promise.resolve(ok(null)),
@@ -91,6 +92,37 @@ function publisher(calls: Array<{ title: string; labels?: readonly string[] }>):
 }
 
 describe('writing the issue a Candidate proposes', () => {
+  it('remembers a closed proposal and its rejection reason', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId), routine),
+        at: now().toISOString(),
+      })
+      await createCandidateIssueController({ github: publisher([]), now, store, workerId: 'publisher' }).publishPending(
+        new AbortController().signal,
+      )
+      store.recordObservation({
+        externalId: 'rejected',
+        observedAt: now().toISOString(),
+        source: 'poll',
+        subject: issueItem({
+          number: 101,
+          state: 'closed',
+          closureReason: 'not_planned',
+          closureDetail: 'The warning is expected.',
+        }),
+      })
+      store.reconcileRoutineCandidates(now().toISOString())
+      expect(store.listCandidates(routine.routineId)[0]?.result).toEqual({
+        _tag: 'Rejected',
+        reason: 'The warning is expected.',
+      })
+    } finally {
+      store.close()
+    }
+  })
   it('carries the claim, the target, and the command that proves it', () => {
     const body = candidateIssueBody(candidate, routine)
 
@@ -225,6 +257,7 @@ describe('filing the issues Candidates propose', () => {
         at: now().toISOString(),
       })
       const refusing = {
+        updateIssue: async () => ok(undefined),
         findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
         createComment: async () => ok({ id: 1 }),
         createIssue: async () => ({
@@ -338,6 +371,7 @@ describe('filing the issues Candidates propose', () => {
       let ghost: { number: number; url: string } | null = null
       let created = 0
       const ambiguous = {
+        updateIssue: async () => ok(undefined),
         findOpenIssueByFingerprint: () => Promise.resolve(ok(ghost)),
         createIssue: async () => {
           created += 1
@@ -370,6 +404,7 @@ describe('filing the issues Candidates propose', () => {
         at: now().toISOString(),
       })
       const refusing = {
+        updateIssue: async () => ok(undefined),
         findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
         createComment: async () => ok({ id: 1 }),
         createIssue: async () => ({
@@ -399,6 +434,7 @@ describe('filing the issues Candidates propose', () => {
         at: now().toISOString(),
       })
       const refusing = {
+        updateIssue: async () => ok(undefined),
         findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
         createComment: async () => ok({ id: 1 }),
         createIssue: async () => ({
@@ -427,6 +463,7 @@ describe('filing the issues Candidates propose', () => {
       const commands = candidateIssueCommands(store.listCandidates(routine.routineId), routine)
       store.stageCandidateIssues({ commands, at: now().toISOString() })
       const refusing = {
+        updateIssue: async () => ok(undefined),
         findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
         createComment: async () => ok({ id: 1 }),
         createIssue: async () => ({
@@ -469,6 +506,7 @@ describe('filing the issues Candidates propose', () => {
         at: now().toISOString(),
       })
       const refusing = {
+        updateIssue: async () => ok(undefined),
         findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
         createComment: async () => ok({ id: 1 }),
         createIssue: async () => ({

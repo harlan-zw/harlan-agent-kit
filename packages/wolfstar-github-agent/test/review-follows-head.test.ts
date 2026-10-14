@@ -259,6 +259,9 @@ describe('review work follows the head commit', () => {
             readExistingReviewLabel: () => {
               throw new Error('Unexpected existing review.')
             },
+            getPullRequestStatusIdentity: () => {
+              throw new Error('Unexpected progress identity read.')
+            },
             getPullRequestReviewSnapshot: () =>
               Promise.resolve(
                 ok({
@@ -268,6 +271,7 @@ describe('review work follows the head commit', () => {
                   comments: [],
                   priorAutomatedReview: { _tag: 'None' },
                   pullRequest: pullRequestItem({ baseRef, baseSha: 'base-after-claim', mergeState: 'clean' }),
+                  findingDiscussions: [],
                   requiredChecks: { _tag: 'None' },
                   reviews: [],
                 }),
@@ -313,6 +317,9 @@ describe('review work follows the head commit', () => {
             readExistingReviewLabel: () => {
               throw new Error('Unexpected existing review.')
             },
+            getPullRequestStatusIdentity: () => {
+              throw new Error('Unexpected progress identity read.')
+            },
             getPullRequestReviewSnapshot: () => {
               if (change === 'Dismissal')
                 store.dismissItem({ repository: input.repository, itemNumber: 24, at: '2026-08-13T02:02:01.000Z' })
@@ -328,6 +335,7 @@ describe('review work follows the head commit', () => {
                   comments: [],
                   priorAutomatedReview: { _tag: 'None' },
                   pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }),
+                  findingDiscussions: [],
                   requiredChecks: { _tag: 'None' },
                   reviews: [],
                 }),
@@ -369,6 +377,9 @@ describe('review work follows the head commit', () => {
           readExistingReviewLabel: () => {
             throw new Error('Unexpected existing review.')
           },
+          getPullRequestStatusIdentity: () => {
+            throw new Error('Unexpected progress identity read.')
+          },
           getPullRequestReviewSnapshot: () => {
             store.syncRepositories(
               [repositoryMapping({ writablePullRequestHeadPrefixes: ['different/'] })],
@@ -382,6 +393,7 @@ describe('review work follows the head commit', () => {
                 comments: [],
                 priorAutomatedReview: { _tag: 'None' },
                 pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }),
+                findingDiscussions: [],
                 requiredChecks: { _tag: 'None' },
                 reviews: [],
               }),
@@ -430,6 +442,9 @@ describe('review work follows the head commit', () => {
           readExistingReviewLabel: () => {
             throw new Error('Unexpected existing review.')
           },
+          getPullRequestStatusIdentity: () => {
+            throw new Error('Unexpected progress identity read.')
+          },
           getPullRequestReviewSnapshot: () =>
             Promise.resolve(
               ok({
@@ -439,6 +454,7 @@ describe('review work follows the head commit', () => {
                 comments: [],
                 priorAutomatedReview: { _tag: 'None' },
                 pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }),
+                findingDiscussions: [],
                 requiredChecks: { _tag: 'None' },
                 reviews: [],
               }),
@@ -482,6 +498,9 @@ describe('review work follows the head commit', () => {
           readExistingReviewLabel: () => {
             throw new Error('Unexpected existing review.')
           },
+          getPullRequestStatusIdentity: () => {
+            throw new Error('Unexpected progress identity read.')
+          },
           getPullRequestReviewSnapshot: () =>
             Promise.resolve(
               ok({
@@ -491,6 +510,7 @@ describe('review work follows the head commit', () => {
                 comments: [],
                 priorAutomatedReview: { _tag: 'None' },
                 pullRequest: pullRequestItem({ baseSha: 'base789', mergeState: 'clean' }),
+                findingDiscussions: [],
                 requiredChecks: { _tag: 'None' },
                 reviews: [],
               }),

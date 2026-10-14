@@ -29,6 +29,7 @@ function snapshot(overrides: Parameters<typeof pullRequestItem>[0] = {}) {
     comments: [],
     priorAutomatedReview: { _tag: 'None' as const },
     pullRequest: pullRequestItem({ headSha: 'abc123', ...overrides }),
+    findingDiscussions: [],
     requiredChecks: { _tag: 'None' as const },
     reviews: [],
   })

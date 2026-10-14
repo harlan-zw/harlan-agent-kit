@@ -18,6 +18,178 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+it('upgrades version 90 without blocking an accepted Update', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  const at = '2026-10-12T01:00:00.000Z'
+  before.requestRestart({
+    id: 'legacy-update',
+    source: 'helper',
+    operation: { _tag: 'Update', targetCommit: 'a'.repeat(40), preparation: 'Ready' },
+    at,
+  })
+  before.close()
+  const legacy = new DatabaseSync(path)
+  legacy.exec('ALTER TABLE restart_requests DROP COLUMN preparation_tag; PRAGMA user_version = 90;')
+  legacy.close()
+  const migrated = openJournalStore(path)
+  try {
+    expect(migrated.getRestartRequest()).toMatchObject({ id: 'legacy-update', operation: { preparation: 'Ready' } })
+    expect(migrated.beginRestart({ id: 'legacy-update', processId: 'next-process', at })).toMatchObject({
+      _tag: 'Restarting',
+    })
+  } finally {
+    migrated.close()
+  }
+})
+
+it('upgrades version 89 provider circuits without losing observed failures', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  const input = {
+    provider: 'opencode' as const,
+    credential: 'opencode-go',
+    model: 'zai-coding-plan/glm-5.3-flash',
+    at: '2026-10-12T01:00:00.000Z',
+  }
+  before.recordProviderFailure({ ...input, failureClass: 'network', detail: 'Network failed.' })
+  before.close()
+  const legacy = new DatabaseSync(path)
+  const schema = legacy.prepare("SELECT sql FROM sqlite_master WHERE name = 'provider_circuits'").get() as {
+    sql: string
+  }
+  legacy.exec(`PRAGMA foreign_keys = OFF;
+    ${schema.sql.replace(/^CREATE TABLE[^(]+/, 'CREATE TABLE legacy_circuits ').replace(", 'usage_limit'", '')};
+    INSERT INTO legacy_circuits SELECT * FROM provider_circuits;
+    DROP TABLE provider_circuits;
+    ALTER TABLE legacy_circuits RENAME TO provider_circuits;
+    PRAGMA user_version = 89;`)
+  legacy.close()
+  const migrated = openJournalStore(path)
+  try {
+    expect(migrated.listProviderCircuits()).toContainEqual(
+      expect.objectContaining({ failureClass: 'network', failures: 1 }),
+    )
+    migrated.recordProviderFailure({ ...input, failureClass: 'usage_limit', detail: 'Weekly limit exhausted.' })
+    expect(migrated.providerCanStart(input)).toBe(false)
+  } finally {
+    migrated.close()
+  }
+})
+
+it('upgrades version 88 Routine runs for manual Agent selection', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+  const at = '2026-10-12T01:00:00.000Z'
+  before.syncRepositories([repositoryMapping()], at)
+  const [routine] = before.syncRoutines({
+    repository: 'wolfstar-project/example',
+    specSha: 'head',
+    entries: [{ name: 'ci-review', crons: ['0 1 * * *'], timeZone: 'UTC', mode: 'report', enabled: true }],
+    at,
+  })
+  if (routine === undefined) throw new Error('Expected a Routine.')
+  const existing = before.openRoutineRun({ routineId: routine.id, scheduledFor: at, specSha: 'head', at })
+  if (existing === null) throw new Error('Expected an existing Routine run.')
+  before.close()
+
+  const version88 = new DatabaseSync(path)
+  version88.exec('ALTER TABLE routine_runs DROP COLUMN agent_selection_json; PRAGMA user_version = 88;')
+  version88.close()
+
+  const migrated = openJournalStore(path, true, CODEX_AGENT_PROFILE)
+  try {
+    expect(migrated.getRoutineRun(existing.id)).toMatchObject({ id: existing.id, state: { _tag: 'Queued' } })
+    const selected = migrated.openRoutineRun({
+      routineId: routine.id,
+      scheduledFor: '2026-10-12T01:01:00.000Z',
+      specSha: 'head',
+      agentSelection: { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+      at,
+    })
+    if (selected === null) throw new Error('Expected a selected Routine run.')
+    expect(migrated.claimNextRoutineRun('worker', '2026-10-12T01:02:00.000Z', 60_000)).toMatchObject({
+      id: selected.id,
+      agentSelection: { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+    })
+  } finally {
+    migrated.close()
+  }
+})
+
+it('preserves current and cancelled Review authority when upgrading Task lookups', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  before.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+  for (const number of [24, 25]) {
+    const subject = pullRequestItem({ number, mergeState: 'clean' })
+    const observed = before.recordObservation({
+      externalId: `review-${number}`,
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject,
+    })
+    if (observed._tag !== 'Inserted') throw new Error('Expected a Review Revision.')
+    const task = before.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:01:00.000Z', 600_000)
+    if (task === null) throw new Error('Expected a Review Task.')
+    const reviewRunId = `run-${number}`
+    before.recordReviewRun({
+      id: reviewRunId,
+      repository: subject.repository,
+      pullRequestNumber: number,
+      revisionId: observed.revisionId,
+      headSha: subject.headSha,
+      provider: 'codex',
+      sessionId: 'session',
+      model: 'model',
+      agentVersion: '1',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:01:00.000Z',
+      completedAt: '2026-08-13T01:02:00.000Z',
+      gates: {
+        merge: { _tag: 'Passed', evidence: [] },
+        review: { _tag: 'Passed', evidence: [] },
+        ci: { _tag: 'Passed', evidence: [] },
+      },
+      confidence: 95,
+      findings: [],
+    })
+    before.recordReviewPublication({
+      id: `publication-${number}`,
+      reviewRunId,
+      body: '### READY',
+      at: '2026-08-13T01:03:00.000Z',
+      result: { _tag: 'Published', githubCommentId: number, url: `${subject.url}#comment-${number}` },
+    })
+    if (number === 24)
+      before.completeWorkerTask({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at: '2026-08-13T01:03:01.000Z',
+        evidence: reviewRunId,
+      })
+    else before.cancelTask({ taskId: task.id, at: '2026-08-13T01:03:01.000Z' })
+  }
+  const eligible = before.listReviewGateRefreshes()
+  expect(eligible.map((review) => review.pullRequestNumber)).toEqual([24])
+  before.close()
+  const legacy = new DatabaseSync(path)
+  legacy.exec(
+    'DROP INDEX IF EXISTS worker_tasks_subject_kind; DROP INDEX IF EXISTS tasks_subject_kind; PRAGMA user_version = 83;',
+  )
+  legacy.close()
+
+  for (let reopen = 0; reopen < 2; reopen += 1) {
+    const migrated = openJournalStore(path)
+    try {
+      expect(migrated.listReviewGateRefreshes()).toEqual(eligible)
+    } finally {
+      migrated.close()
+    }
+  }
+})
+
 it('backfills an issue Approval from every issue work Task an older journal queued', () => {
   const path = join(directory, 'state.sqlite')
   const before = openJournalStore(path)
@@ -949,6 +1121,8 @@ it('converges a sibling journal that carries no issue triage runs', () => {
             'The classification service routed this from the report alone: information is missing before work can start.',
           nextAction: 'Add what is missing. The next comment after an edit re-runs triage.',
           relatedIssues: [],
+          duplicateIssue: null,
+          relatedPullRequests: [],
         },
       },
     })
@@ -960,4 +1134,48 @@ it('converges a sibling journal that carries no issue triage runs', () => {
   } finally {
     migrated.close()
   }
+})
+
+it('preserves incident resolution evidence and receipts across reopen and schema upgrade', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path, true)
+  const at = '2026-10-12T00:00:00.000Z'
+  before.syncRepositories([repositoryMapping()], at)
+  before.setRepositoryWritesEnabled('wolfstar-project/example', true)
+  before.recordObservation({
+    externalId: 'resolution-migration',
+    observedAt: at,
+    source: 'poll',
+    subject: pullRequestItem({ mergeState: 'clean' }),
+  })
+  if (before.claimNextAdversarialReviewTask('worker', at, 10000) === null)
+    throw new Error('Expected Review Task with workflow history.')
+  const existingEvents = before.listWorkflowEvents()
+  const incident = before.recordIncident({
+    scope: { _tag: 'Service' },
+    kind: 'unknown',
+    severity: 'warning',
+    operation: 'probe',
+    message: 'Resolved warning',
+    recovery: { _tag: 'ActionRequired' },
+    at,
+  })
+  const request = {
+    incidentId: incident.id,
+    lastSeenAt: at,
+    evidence: 'Merged fix verified.',
+    at: '2026-10-12T01:00:00.000Z',
+  }
+  expect(before.resolveIncident(request)).toEqual({ _tag: 'Ok', value: { _tag: 'Resolved' } })
+  before.close()
+  // Replaying an older schema version must retain every durable event and receipt.
+  const journal = new DatabaseSync(path)
+  journal.exec('PRAGMA user_version = 87')
+  journal.close()
+  const after = openJournalStore(path)
+  expect(after.resolveIncident(request)).toEqual({ _tag: 'Ok', value: { _tag: 'AlreadyResolved' } })
+  expect(after.listIncidents()).toEqual([])
+  expect(after.listWorkflowEvents().filter((event) => event.stream !== 'incident')).toEqual(existingEvents)
+  expect(after.listWorkflowEvents({ stream: 'incident' }).map((event) => event.reason)).toEqual([request.evidence])
+  after.close()
 })

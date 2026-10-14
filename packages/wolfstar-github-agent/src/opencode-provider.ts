@@ -1,18 +1,40 @@
 import type { ChildProcessByStdio } from 'node:child_process'
-import type { Readable } from 'node:stream'
-import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
+import type { Readable, Writable } from 'node:stream'
+import type {
+  AgentEvent,
+  AgentProvider,
+  AgentTokenUsage,
+  AgentTurnRequest,
+  ContextBudgetPhase,
+} from './agent-provider.ts'
+import type { Result } from './result.ts'
+import type { ReviewProofAuthorityFactory } from './review-proof-authority.ts'
+import type { ReviewRuntime } from './review-runtime.ts'
+import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { opencodeTurnEnvironment } from './agent-context.ts'
 import {
+  advanceContextBudget,
   agentProviderFailureReason,
   agentTextEvent,
+  contextBudgetWrapUpPrompt,
   DEFAULT_CACHED_CONTEXT_BUDGET,
   extractJsonObject,
   jsonOutputInstruction,
 } from './agent-provider.ts'
-import { workspaceEnvironment } from './workspace-environment.ts'
+import { opencodeSandboxPaths, prepareAgentSandbox } from './agent-sandbox.ts'
+import { createAgentTransport } from './agent-transport.ts'
+import { materializeAgentMedia } from './github-media.ts'
+import { createOpencodeSession, readOpencodeMessages, recoverOpencodeResult } from './opencode-result.ts'
+import { err, ok } from './result.ts'
+import { createReviewRuntime, REVIEW_TOOL_NAMES } from './review-runtime.ts'
+import { dailyCheckinDirectory } from './workspace-environment.ts'
 
 /** Tools that write files, so activity shows a file change instead of a command. */
 const fileTools = new Set(['edit', 'write', 'patch', 'multiedit'])
@@ -21,21 +43,249 @@ const searchTools = new Set(['webfetch', 'websearch'])
 const maximumErrorCharacters = 600
 
 export type OpencodeProcess = ChildProcessByStdio<null, Readable, Readable>
+type OpencodeClientProcess = ChildProcessByStdio<Writable | null, Readable, Readable>
 
 type OpencodeExit =
   | { _tag: 'Exited'; code: number | null; signal: NodeJS.Signals | null }
   | { _tag: 'SpawnFailed'; error: Error }
 
+/**
+ * The OpenCode server one turn runs on.
+ *
+ * `opencode run` alone serves its session inside its own process, so nothing
+ * outside can reach a running session. A turn therefore starts its own server,
+ * and the run attaches to it. The server runs the tools, so it gets the turn
+ * environment.
+ */
+export interface OpencodeServer {
+  url: string
+  /** Basic auth password for this server. It lives only as long as the turn. */
+  password: string
+  /** Internal socket directory for this turn's isolated attachment client. */
+  transportDirectory?: string
+  memoryExceeded?: () => Promise<boolean>
+  createSession: (signal: AbortSignal) => Promise<Result<string, string>>
+  /** Adds one user message to a busy session. The session reads it before its next model step. */
+  steer: (sessionId: string, text: string) => Promise<Result<void, string>>
+  readMessages: (sessionId: string, signal: AbortSignal) => Promise<Result<unknown, string>>
+  /** Stops the server, and with it every model call the session still makes. */
+  close: (signal: NodeJS.Signals) => void | Promise<void>
+}
+
+export type StartOpencodeServer = (
+  workspace: string,
+  environment: NodeJS.ProcessEnv,
+  readOnlyPaths?: readonly string[],
+  taskId?: string,
+) => Promise<Result<OpencodeServer, string | { _tag: 'SandboxSetupFailed' | 'ResourceLimit'; reason: string }>>
+
+/** The fixed user name OpenCode expects with a server password. */
+const serverUsername = 'opencode'
+const serverStartMilliseconds = 60_000
+const steerMilliseconds = 15_000
+const serverListening = /opencode server listening on (http:\/\/\S+)/
+
+/** Reads the address `opencode serve` prints once it listens. */
+export function opencodeServerUrl(output: string): string | undefined {
+  return serverListening.exec(output)?.[1]
+}
+
+/** Environment that authenticates a client to one turn server. */
+function serverCredentials(password: string): NodeJS.ProcessEnv {
+  return { OPENCODE_SERVER_USERNAME: serverUsername, OPENCODE_SERVER_PASSWORD: password }
+}
+
+/** Starts `opencode serve` on a free local port in the turn's worktree. */
+export function spawnOpencodeServer(
+  readOnly?: boolean,
+  review?: ReviewRuntime,
+  memoryPerAgentGiB?: number,
+): StartOpencodeServer {
+  return async (workspace, environment, readOnlyPaths = [], taskId) => {
+    const password = randomBytes(24).toString('hex')
+    const transportDirectory = await mkdtemp(join(tmpdir(), 'agent-transport-'))
+    const transport = await createAgentTransport(join(transportDirectory, 'opencode.sock'))
+    const releaseTransport = async () => {
+      await transport.close()
+      await rm(transportDirectory, { recursive: true, force: true })
+    }
+    const prepared = await prepareAgentSandbox({
+      workspace,
+      environment: { ...environment, ...serverCredentials(password) },
+      provider: 'opencode',
+      ...(memoryPerAgentGiB === undefined ? {} : { memoryPerAgentGiB }),
+      readOnlyPaths: [...opencodeSandboxPaths(environment), ...readOnlyPaths, ...(review?.readOnlyPaths ?? [])],
+      networkMode: 'opencode-server',
+      transportDirectory,
+      ...(review === undefined ? {} : { reviewHome: review.home }),
+      ...(taskId === undefined ? {} : { taskId }),
+      ...(readOnly === undefined ? {} : { readOnly }),
+    })
+      .then(ok)
+      .catch((error: unknown) =>
+        err({
+          _tag: 'SandboxSetupFailed' as const,
+          reason: `The Agent worker isolation failed: ${error instanceof Error ? error.message : String(error)}`,
+        }),
+      )
+    if (prepared._tag === 'Err') {
+      await releaseTransport()
+      return prepared
+    }
+    const sandbox = prepared.value
+    return new Promise((resolve) => {
+      const child = spawn(
+        sandbox.binary,
+        [
+          ...sandbox.args,
+          sandbox.providerBinary,
+          'serve',
+          ...(review === undefined ? [] : ['--pure']),
+          '--hostname',
+          '127.0.0.1',
+          '--port',
+          '4097',
+        ],
+        {
+          cwd: workspace,
+          env: sandbox.environment,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      )
+      const closed = new Promise<void>((resolve) => child.once('close', () => resolve()))
+      let cleanup: Promise<void> | undefined
+      const release = () => {
+        cleanup ??= closed.then(async () => {
+          try {
+            await sandbox.release()
+          } finally {
+            await releaseTransport()
+          }
+        })
+        return cleanup
+      }
+      let output = ''
+      let settled = false
+      const settle = (result: Result<OpencodeServer, string | { _tag: 'ResourceLimit'; reason: string }>) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(result)
+      }
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL')
+        settle(err(`The opencode server did not start within ${serverStartMilliseconds / 1000} seconds.`))
+      }, serverStartMilliseconds)
+      const read = (chunk: string) => {
+        output = `${output}${chunk}`.slice(-maximumErrorCharacters)
+        const url = opencodeServerUrl(output)
+        if (url !== undefined) {
+          const stateDirectory = dailyCheckinDirectory({ XDG_STATE_HOME: sandbox.workerStateHome }, taskId)
+          const session =
+            review === undefined
+              ? stateDirectory === undefined
+                ? {}
+                : { stateDirectory }
+              : { reviewTools: REVIEW_TOOL_NAMES }
+          settle(
+            ok({
+              ...opencodeServer(transport.url, password, workspace, child, session),
+              transportDirectory,
+              memoryExceeded: sandbox.memoryExceeded,
+              close: async (signal) => {
+                child.kill(signal)
+                const stop = setTimeout(() => child.kill('SIGKILL'), 5_000)
+                stop.unref()
+                try {
+                  await release()
+                } finally {
+                  clearTimeout(stop)
+                }
+              },
+            }),
+          )
+        }
+      }
+      child.stdout.setEncoding('utf8')
+      child.stderr.setEncoding('utf8')
+      child.stdout.on('data', read)
+      child.stderr.on('data', read)
+      child.once('error', (error) => {
+        void release().then(
+          () => settle(err(error.message)),
+          (failure) => settle(err(`Agent cleanup failed: ${failure.message}`)),
+        )
+      })
+      child.once('exit', (code, signal) => {
+        void sandbox
+          .memoryExceeded()
+          .then(async (limited) => {
+            await release()
+            settle(
+              err(
+                limited
+                  ? { _tag: 'ResourceLimit', reason: 'The Agent Task exceeded its memory budget.' }
+                  : opencodeFailureReason(output, { code, signal }),
+              ),
+            )
+          })
+          .catch((failure: Error) => {
+            process.stderr.write(`Agent cleanup failed: ${failure.message}\n`)
+            settle(err(`Agent cleanup failed: ${failure.message}`))
+          })
+      })
+    })
+  }
+}
+
+function opencodeServer(
+  url: string,
+  password: string,
+  workspace: string,
+  child: OpencodeProcess,
+  session: { reviewTools?: readonly string[]; stateDirectory?: string },
+): OpencodeServer {
+  const authorization = `Basic ${Buffer.from(`${serverUsername}:${password}`).toString('base64')}`
+  return {
+    url,
+    password,
+    createSession: (signal) => createOpencodeSession({ url, password, workspace, signal, ...session }),
+    readMessages: (sessionId, signal) => readOpencodeMessages({ url, password, workspace, sessionId, signal }),
+    steer: (sessionId, text) =>
+      fetch(`${url}/session/${encodeURIComponent(sessionId)}/prompt_async?directory=${encodeURIComponent(workspace)}`, {
+        method: 'POST',
+        headers: { authorization: authorization, 'content-type': 'application/json' },
+        body: JSON.stringify({ parts: [{ type: 'text', text }] }),
+        signal: AbortSignal.timeout(steerMilliseconds),
+      })
+        .then((response): Result<void, string> =>
+          response.ok ? ok(undefined) : err(`The opencode server answered ${response.status}.`),
+        )
+        .catch((error: unknown) =>
+          err(
+            `The opencode server did not take the message: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        ),
+    close: (signal) => {
+      child.kill(signal)
+    },
+  }
+}
+
 export interface OpencodeProviderOptions {
-  binaryPath?: string
+  memoryPerAgentGiB?: number
+  readOnly?: boolean
+  reviewProofAuthority?: ReviewProofAuthorityFactory
   /** Stops a run once its session has read this many cached context tokens. */
   cachedContextBudget?: number
   /** Exact environment shared with every OpenCode process. */
   environment?: NodeJS.ProcessEnv
   /** Kills a run that has printed nothing for this long. */
   idleTimeoutMilliseconds?: number
+  /** Injected for tests. Starts the server one turn attaches to. */
+  startOpencodeServer?: StartOpencodeServer
   /** Injected for tests. Returns the raw NDJSON line stream of one run. */
-  spawnOpencode?: (args: string[], workspace: string, environment: NodeJS.ProcessEnv) => OpencodeProcess
+  spawnOpencode?: (args: string[], workspace: string, environment: NodeJS.ProcessEnv) => OpencodeClientProcess
 }
 
 interface OpencodeToolPart {
@@ -162,13 +412,23 @@ export function opencodeAgentEvent(line: OpencodeLine): AgentEvent | undefined {
 /**
  * Every turn starts its own session.
  *
- * `opencode run --session` reopens the session in the directory that created
- * it, which is never the worktree this turn prepared, and the process then
- * stays alive after its loop ends. Each turn therefore carries its own context.
+ * Ignore request.sessionId, because a saved session belongs to its earlier directory.
+ * Create an empty session in this turn's prepared worktree before the CLI starts.
+ * Its identity remains available even when the attached CLI emits no events.
  */
-export function opencodeArguments(request: AgentTurnRequest, prompt: string): string[] {
+export function opencodeArguments(
+  request: AgentTurnRequest,
+  serverUrl: string,
+  mediaPaths: readonly string[] = [],
+  freshSessionId?: string,
+): string[] {
   return [
     'run',
+    ...(request.toolPolicy?._tag === 'Review' ? ['--pure'] : []),
+    '--attach',
+    serverUrl,
+    ...(freshSessionId === undefined ? [] : ['--session', freshSessionId]),
+    ...(mediaPaths.length === 0 ? [] : ['--file', ...mediaPaths]),
     '--format',
     'json',
     '--auto',
@@ -177,39 +437,135 @@ export function opencodeArguments(request: AgentTurnRequest, prompt: string): st
     '--dir',
     request.workspace,
     ...(request.reasoningEffort === undefined ? [] : ['--variant', request.reasoningEffort]),
-    prompt,
   ]
 }
 
 export function createOpencodeProvider(options: OpencodeProviderOptions = {}): AgentProvider {
-  const binaryPath = options.binaryPath ?? 'opencode'
   const idleTimeoutMilliseconds = options.idleTimeoutMilliseconds ?? 10 * 60_000
   const cachedContextBudget = options.cachedContextBudget ?? DEFAULT_CACHED_CONTEXT_BUDGET
   const environment = options.environment ?? process.env
+  const startOpencodeServer =
+    options.startOpencodeServer ?? spawnOpencodeServer(options.readOnly, undefined, options.memoryPerAgentGiB)
   const spawnOpencode =
     options.spawnOpencode ??
-    ((args, workspace, environment) =>
-      spawn(binaryPath, args, {
+    (async (
+      args: string[],
+      workspace: string,
+      environment: NodeJS.ProcessEnv,
+      mediaPaths: readonly string[],
+      taskId?: string,
+      transportDirectory?: string,
+      review?: ReviewRuntime,
+    ) => {
+      if (transportDirectory === undefined) throw new Error('The OpenCode client needs its isolated turn transport.')
+      const sandbox = await prepareAgentSandbox({
+        workspace,
+        environment,
+        provider: 'opencode',
+        ...(options.memoryPerAgentGiB === undefined ? {} : { memoryPerAgentGiB: options.memoryPerAgentGiB }),
+        readOnlyPaths: [...opencodeSandboxPaths(environment), ...mediaPaths, ...(review?.readOnlyPaths ?? [])],
+        networkMode: 'opencode-client',
+        transportDirectory,
+        ...(review === undefined ? {} : { reviewHome: review.home }),
+        ...(taskId === undefined ? {} : { taskId }),
+        readOnly: true,
+      })
+      const child = spawn(sandbox.binary, [...sandbox.args, sandbox.providerBinary, ...args], {
         cwd: workspace,
-        env: environment,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }))
+        env: sandbox.environment,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      const release = () => {
+        void sandbox
+          .release()
+          .catch((error) => process.stderr.write(`Agent sandbox cleanup failed: ${error.message}\n`))
+      }
+      child.once('exit', release)
+      child.once('error', release)
+      return child
+    })
 
-  async function* runOnce(request: AgentTurnRequest, prompt: string): AsyncGenerator<AgentEvent> {
-    // The worktree's seeded .env carries the tokens its own scripts read.
-    // This turn's own instruction files, such as the repository memory index,
-    // merge on top of the shared OpenCode configuration.
+  async function* runOnce(
+    request: AgentTurnRequest,
+    prompt: string,
+    mediaPaths: readonly string[] = [],
+    review?: ReviewRuntime,
+  ): AsyncGenerator<AgentEvent> {
+    const taskId = request.taskId ?? randomUUID()
+    if (request.signal.aborted) {
+      yield { _tag: 'Failed', reason: 'The OpenCode turn was cancelled.' }
+      return
+    }
+    // Profile selection and instruction mounts use only controller inputs.
+    // The sandbox loads repository tooling variables after selecting the boundary.
     const turnEnvironment = opencodeTurnEnvironment({
-      environment: workspaceEnvironment(environment, request.workspace, request.taskId),
+      environment:
+        review === undefined ? environment : { ...environment, OPENCODE_CONFIG_CONTENT: review.opencodeConfiguration },
       instructionPaths: request.instructionPaths ?? [],
     })
     if (turnEnvironment._tag === 'Err') {
       yield { _tag: 'Failed', reason: turnEnvironment.error }
       return
     }
-    const child = spawnOpencode(opencodeArguments(request, prompt), request.workspace, turnEnvironment.value)
-    const abort = () => child.kill('SIGTERM')
+    const start =
+      review === undefined || options.startOpencodeServer !== undefined
+        ? startOpencodeServer
+        : spawnOpencodeServer(true, review, options.memoryPerAgentGiB)
+    const started = await start(request.workspace, turnEnvironment.value, mediaPaths, taskId)
+    if (started._tag === 'Err') {
+      yield typeof started.error === 'string'
+        ? { _tag: 'Failed', reason: agentProviderFailureReason('opencode', started.error) }
+        : {
+            _tag: 'Failed',
+            reason:
+              started.error._tag === 'ResourceLimit'
+                ? started.error.reason
+                : agentProviderFailureReason('opencode', started.error.reason),
+            cause: started.error._tag === 'ResourceLimit' ? 'resource-limit' : 'sandbox-setup',
+          }
+      return
+    }
+    const server = started.value
+    const created = await server.createSession(request.signal).catch(() => err('The OpenCode session creation failed.'))
+    if (created._tag === 'Err' || request.signal.aborted) {
+      const limited = (await server.memoryExceeded?.()) ?? false
+      await server.close('SIGTERM')
+      yield limited
+        ? { _tag: 'Failed', reason: 'The Agent Task exceeded its memory budget.', cause: 'resource-limit' }
+        : { _tag: 'Failed', reason: created._tag === 'Err' ? created.error : 'The OpenCode turn was cancelled.' }
+      return
+    }
+    const launched = await Promise.resolve()
+      .then(() =>
+        spawnOpencode(
+          opencodeArguments(request, server.url, mediaPaths, created.value),
+          request.workspace,
+          { ...turnEnvironment.value, ...serverCredentials(server.password) },
+          mediaPaths,
+          taskId,
+          server.transportDirectory,
+          review,
+        ),
+      )
+      .then(ok)
+      .catch((error: unknown) =>
+        err(`The OpenCode client isolation failed: ${error instanceof Error ? error.message : String(error)}`),
+      )
+    if (launched._tag === 'Err') {
+      await server.close('SIGTERM')
+      yield { _tag: 'Failed', reason: launched.error, cause: 'sandbox-setup' }
+      return
+    }
+    const child = launched.value
+    const stop = (signal: NodeJS.Signals) => {
+      child.kill(signal)
+      void Promise.resolve(server.close(signal)).catch((error) =>
+        process.stderr.write(`Agent cleanup failed: ${error.message}\n`),
+      )
+    }
+    const abort = () => stop('SIGTERM')
     request.signal.addEventListener('abort', abort, { once: true })
+    if (request.signal.aborted) abort()
     let standardError = ''
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => {
@@ -219,6 +575,13 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       child.once('error', (error) => resolve({ _tag: 'SpawnFailed', error }))
       child.once('exit', (code, signal) => resolve({ _tag: 'Exited', code, signal }))
     })
+    // Evidence can exceed the OS argument limit. OpenCode reads the full prompt from stdin.
+    let inputError: Error | undefined
+    child.stdin?.once('error', (error: Error) => {
+      inputError = error
+      stop('SIGKILL')
+    })
+    child.stdin?.end(prompt)
 
     // A silent run means a wedged agent, and its Task holds its lease until the
     // process ends. Stop it so the Task can fail and retry.
@@ -228,13 +591,16 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       () => {
         if (Date.now() - lastOutputAt < idleTimeoutMilliseconds) return
         silent = true
-        child.kill('SIGKILL')
+        stop('SIGKILL')
       },
       Math.max(1_000, Math.floor(idleTimeoutMilliseconds / 4)),
     )
     watchdog.unref()
 
-    let sessionId: string | null = null
+    const sessionId = created.value
+    let sessionReported = false
+    let assistantId: string | undefined
+    const deliveredParts = new Set<string>()
     let failed = false
     let cachedTokensRead = 0
     let usage: Extract<AgentTokenUsage, { _tag: 'Available' }> = {
@@ -246,7 +612,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       reasoning: 0,
     }
     let usageAvailable = false
-    let overBudget = false
+    let budget: ContextBudgetPhase = { _tag: 'Normal' }
     let completed = false
     try {
       for await (const raw of createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY })) {
@@ -260,11 +626,28 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
           // A non-JSON line is plugin or upgrade noise, never a turn result.
           continue
         }
-        if (sessionId === null && typeof parsed.sessionID === 'string') {
-          sessionId = parsed.sessionID
+        if (typeof parsed.sessionID === 'string' && parsed.sessionID !== sessionId) {
+          failed = true
+          stop('SIGKILL')
+          yield { _tag: 'Failed', reason: 'The OpenCode stream returned another session identity.' }
+          break
+        }
+        if (!sessionReported && parsed.sessionID === sessionId) {
+          sessionReported = true
           yield { _tag: 'SessionStarted', sessionId }
         }
         const stepUsage = opencodeAgentUsage(parsed)
+        if (
+          parsed.sessionID === sessionId &&
+          parsed.type === 'step_start' &&
+          typeof parsed.part?.messageID === 'string'
+        )
+          assistantId ??= parsed.part.messageID
+        if (
+          typeof parsed.part?.id === 'string' &&
+          (stepUsage !== undefined || opencodeAgentEvent(parsed) !== undefined)
+        )
+          deliveredParts.add(parsed.part.id)
         if (stepUsage !== undefined) {
           usageAvailable = true
           usage = {
@@ -282,28 +665,47 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
           if (event._tag === 'Failed') failed = true
           if (event._tag === 'TurnCompleted') {
             completed = true
-            if (usageAvailable) yield { _tag: 'Usage', usage }
-            child.kill('SIGTERM')
+          } else {
+            yield event._tag === 'Failed' && (await server.memoryExceeded?.())
+              ? { _tag: 'Failed', reason: 'The Agent Task exceeded its memory budget.', cause: 'resource-limit' }
+              : event
           }
-          yield event
         }
         if (completed) break
         // A stopping step ends the turn by itself, so the budget never discards
         // an answer the session already paid for. Every other step means one
-        // more full read of the context, so stop paying for it now. SIGKILL,
+        // more full read of the context. Past the warning share the session is
+        // asked once to answer now. Past the budget it is stopped. SIGKILL,
         // because a run this deep must not negotiate.
-        if (cachedTokensRead > cachedContextBudget && event?._tag !== 'TurnCompleted') {
-          overBudget = true
-          child.kill('SIGKILL')
+        if (stepUsage === undefined) continue
+        const advanced = advanceContextBudget(budget, cachedTokensRead, cachedContextBudget)
+        budget = advanced.phase
+        if (advanced.action._tag === 'Stop') {
+          stop('SIGKILL')
           break
+        }
+        if (advanced.action._tag === 'Warn') {
+          const delivered = await server.steer(
+            sessionId,
+            contextBudgetWrapUpPrompt(cachedTokensRead, cachedContextBudget),
+          )
+          yield {
+            _tag: 'ContextBudgetWarned',
+            cachedTokensRead,
+            delivery: delivered._tag === 'Ok' ? { _tag: 'Sent' } : { _tag: 'Failed', reason: delivered.error },
+          }
         }
       }
       const exit = await exited
+      if (await server.memoryExceeded?.()) {
+        yield { _tag: 'Failed', reason: 'The Agent Task exceeded its memory budget.', cause: 'resource-limit' }
+        return
+      }
       if (exit._tag === 'SpawnFailed') {
         yield { _tag: 'Failed', reason: agentProviderFailureReason('opencode', exit.error.message) }
         return
       }
-      if (overBudget) {
+      if (budget._tag === 'Exhausted') {
         yield { _tag: 'ContextBudgetExhausted', cachedTokensRead }
         return
       }
@@ -311,23 +713,112 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
         yield { _tag: 'Failed', reason: 'The opencode session stopped sending output.' }
         return
       }
-      if (exit.code !== 0 && !failed && !completed)
+      if (request.signal.aborted) {
+        yield { _tag: 'Failed', reason: 'The OpenCode turn was cancelled.', cause: 'host-cancelled' }
+        return
+      }
+      if (inputError !== undefined) {
+        yield { _tag: 'Failed', reason: `The OpenCode prompt delivery failed: ${inputError.message}` }
+        return
+      }
+      if (completed && exit.code === 0) {
+        if (usageAvailable) yield { _tag: 'Usage', usage }
+        yield { _tag: 'TurnCompleted' }
+      } else if (exit.code !== 0 && !failed) {
         yield { _tag: 'Failed', reason: opencodeFailureReason(standardError, exit) }
+      } else if (exit.code === 0 && !failed && !completed) {
+        if (request.signal.aborted) {
+          yield { _tag: 'Failed', reason: 'The OpenCode result read was cancelled.' }
+          return
+        }
+        if (!sessionReported) yield { _tag: 'SessionStarted', sessionId }
+        const read = await server
+          .readMessages(sessionId, request.signal)
+          .catch(() => err('The OpenCode result read failed.'))
+        const recovered =
+          read._tag === 'Err' ? read : recoverOpencodeResult(read.value, sessionId, assistantId, deliveredParts)
+        if (recovered._tag === 'Err') {
+          yield { _tag: 'Failed', reason: recovered.error }
+          return
+        }
+        if (request.signal.aborted) {
+          yield { _tag: 'Failed', reason: 'The OpenCode result read was cancelled.' }
+          return
+        }
+        yield { _tag: 'Reasoning', text: 'Recovered the completed OpenCode result after its attached stream ended.' }
+        for (const line of recovered.value) {
+          const stepUsage = opencodeAgentUsage(line)
+          if (stepUsage !== undefined) {
+            usageAvailable = true
+            usage = {
+              _tag: 'Available',
+              input: usage.input + stepUsage.input,
+              cachedInput: usage.cachedInput + stepUsage.cachedInput,
+              cacheWrite: usage.cacheWrite + stepUsage.cacheWrite,
+              output: usage.output + stepUsage.output,
+              reasoning: usage.reasoning + stepUsage.reasoning,
+            }
+          }
+          const event = opencodeAgentEvent(line)
+          if (event?._tag !== 'TurnCompleted' && event !== undefined) yield event
+        }
+        if (usageAvailable) yield { _tag: 'Usage', usage }
+        yield { _tag: 'TurnCompleted' }
+      }
     } finally {
       clearInterval(watchdog)
       request.signal.removeEventListener('abort', abort)
+      // The run ended, so its server has no session left to serve.
+      await server.close('SIGTERM')
     }
   }
 
   return {
     name: 'opencode',
     runTurn: (request: AgentTurnRequest) =>
-      runOnce(
-        request,
-        `${request.prompt}
+      (async function* () {
+        const media = await materializeAgentMedia(request.media)
+        let review: ReviewRuntime | undefined
+        try {
+          if (request.toolPolicy?._tag === 'Review') {
+            if (options.reviewProofAuthority === undefined) {
+              yield { _tag: 'Failed', reason: 'The Review requires its controller proof authority.' }
+              return
+            }
+            const prepared = await createReviewRuntime({
+              request,
+              provider: 'opencode',
+              environment,
+              authority: options.reviewProofAuthority,
+            })
+              .then(ok)
+              .catch((error: unknown) =>
+                err(`The Review tools failed to start: ${error instanceof Error ? error.message : String(error)}`),
+              )
+            if (prepared._tag === 'Err') {
+              yield { _tag: 'Failed', reason: prepared.error }
+              return
+            }
+            review = prepared.value
+          }
+          yield* runOnce(
+            request,
+            `${request.prompt}
 
 ${jsonOutputInstruction(request.outputSchema)}`,
-      ),
+            media.paths,
+            review,
+          )
+        } finally {
+          let released: Awaited<ReturnType<ReviewRuntime['release']>> | undefined
+          try {
+            released = await review?.release()
+          } finally {
+            await media.release()
+          }
+          for (const text of released?.warnings ?? []) yield { _tag: 'Reasoning', text: `Controller warning: ${text}` }
+        }
+      })(),
   }
 }
 

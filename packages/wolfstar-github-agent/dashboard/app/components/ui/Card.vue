@@ -4,8 +4,8 @@ import type { VNodeChild } from 'vue'
 /**
  * UiCard — the container for a titled block of content. Ported from the
  * nuxtseo design system without its squircle corners, emphasis shadow, and
- * eject menu: this dashboard draws depth with a hairline and one surface step,
- * never a shadow, and has no chat surface to eject into.
+ * action menu: this dashboard draws depth with a hairline and one surface step,
+ * never a shadow, and uses a separate Agent session view.
  */
 const {
   size = 'md',

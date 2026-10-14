@@ -19,8 +19,7 @@ Current:
 - optional GitHub webhooks on their own port, which hint a reconciliation instead of carrying state
 - authenticated [H3](https://h3.dev) and [srvx](https://srvx.h3.dev) dashboard
 - safe merge conflict commits and pushes
-- three agent providers: [Claude](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://developers.openai.com/codex/sdk/), and [opencode](https://opencode.ai). Set `agent.provider` to `claude`, `codex`, or `opencode`
-- role-specific Claude profiles through the official Claude Agent SDK, with structured output and resumable Claude Code sessions
+- two agent providers: [Codex](https://developers.openai.com/codex/sdk/) and [opencode](https://opencode.ai). Set `agent.provider` to `codex` or `opencode`
 - role-specific Codex profiles: `gpt-5.6-sol` with high reasoning for adversarial review, and `gpt-5.6-terra` with medium reasoning for other work
 - the opencode profile runs `zai-coding-plan/glm-5.3-flash` at the high reasoning effort for every role
 - switch the Agent provider, model, and reasoning effort from the dashboard or the tray, with no restart
@@ -32,9 +31,13 @@ Current:
 - conflict fixes push only when the pull request head commit still matches
 - repair commits push only when the approved head commit still matches
 
-Still to build: PR conformance and deployment ownership.
+Still to build: Claude reviews, PR conformance, and deployment ownership.
 
 ## Run
+
+For native Codex, Claude Code, and opencode terminals, follow [Local Agent terminals](../../docs/agent-terminal.md).
+That guide covers local builds, pairing, shared host capacity, and safe removal.
+The configuration below starts the GitHub maintenance Service.
 
 Copy `config.example.yml` outside a repository, then restrict it:
 
@@ -43,8 +46,6 @@ chmod 600 /absolute/path/to/wolfstar-github-agent.yml
 chmod 600 /absolute/path/to/github-app-private-key.pem
 codex login          # Codex provider only
 codex login status   # Codex provider only
-claude auth login    # Claude provider only
-claude auth status   # Claude provider only
 opencode auth list   # opencode provider only
 wt --version
 pnpm --filter wolfstar-github-agent dashboard:build
@@ -87,15 +88,37 @@ Merge risk routes the merge and never the Review. Every tracked pull request is 
 
 No new issue work starts above `max_open_pull_requests` open pull requests. Review, repair, and conflict fixes continue, because they shorten that queue.
 
+Fresh Routine runs yield to priority GitHub work. After 30 minutes in the Queue, one Routine gets the next free Agent permit. Active Agents continue. While that Routine runs, other permits remain available for GitHub work.
+
+Paused services and disabled Routines keep their existing controls. The wait limit gives priority at the next free permit. If every permit is occupied, starts still wait.
+
 Owned repositories selected in the GitHub App enable Issue triage by default. A maintained repository needs an explicit mapping with `issue_work: true`. Without an installation, the controller uses Wolfstar's authenticated GitHub account. Wolfstar's issues, and the issues the service files for Routines, go through Issue triage and into Issue work on their own. An outside contributor's issue waits for `wolfstar-agent-review` or `Approve` before any agent reads it. One Approval names that exact issue state and covers Issue triage and the Issue work that follows when triage says ready. The service removes the label before saving the Approval. Edited issue text is a new state and waits again.
 
 The triage agent resumes its own session, selects the matching installed skills, implements the change, and runs focused checks. The agent chooses the commit message and pull request metadata. The controller commits and pushes the verified result before it opens one pull request ready for review. Conflict fixes also run by default on owned repositories. They remain disabled on maintained repositories.
 
 Review stays read only. Repair starts fresh with every structured finding. It writes each failing regression test before its fix.
 
+Review uses bounded file reads, literal searches, and one controller proof invocation per Task. The controller reserves that invocation before execution. It retains failed output across retries and desktop offload. The proof supports exported TypeScript APIs through one fixed Node invocation. It cannot install packages, start another process, access sockets, or write files. Unsupported preparation and runtimes remain verification limits.
+
+Each Review uses a private provider home with named login files and controller configuration. Cleanup saves refreshed named login files only. Controller Review writers share a login lock. If the destination differs from its initial snapshot, cleanup preserves it and reports a warning. External SDK writers do not share this lock. Their changes detected before the final rename are preserved; comparison and rename are not globally atomic.
+
 Review decides the pull request premise once. A sound premise permits Repair. A wrong premise recommends Dismissal and never starts Repair.
 
 GitHub status, comments, and labels hold durable workflow truth. The local journal coordinates leases, Agent sessions, Recovery, and Review usage.
+
+On an open pull request, the repository owner can request a change with a leading Agent mention:
+
+```text
+@wolfstar-github-agent change trailingSlash to false
+```
+
+`@wolfstar-agent`, `@wolfstar-github-agent[bot]`, and `/wolfstar-agent` also work.
+An exact `rerun` command still requests Review.
+Other text requests scoped Repair on the current head commit.
+The Service saves each request once and waits for existing Review or Repair work.
+A changed head commit cancels the request. Closed pull requests cannot accept it.
+Only owned repositories and writable head branches accept change requests.
+Pause, Dismissal, Stop Review, and write controls still apply.
 
 Pull request triage uses `wolfstar-agent-review-required` or `wolfstar-agent-review-skipped`.
 The final Review replaces that route with one outcome label: `ready`, `pending`, or `blocked`.
@@ -131,6 +154,17 @@ Open `https://wolfstar-github-agent.localhost/`. Use `agent` as the dashboard us
 
 ## Control API and CLI
 
+For a dedicated automation account, set `github_account` in its Repository mapping.
+Use `login`, `token_path`, `name`, `url`, and `instructions` from `config.example.yml`.
+Store its token in an owned regular file with mode `0600`.
+The controller verifies the login before using that credential.
+If verification fails, publication stops. The controller never selects another account for that repository.
+Other repositories keep their existing authentication.
+
+Account instructions shape Issue triage, Review, and Routine writing.
+Automated attribution uses the configured name and URL. Evidence and commands keep their original text.
+Native reviews use the dedicated account. Review check runs still require the GitHub App.
+
 The dashboard and CLI use the same authenticated Control API.
 Every CLI command prints one JSON value.
 Expected failures print one tagged JSON error and exit with status 1.
@@ -146,7 +180,31 @@ wolfstar-github-agent control tasks --config /absolute/path/to/wolfstar-github-a
 wolfstar-github-agent control incidents --config /absolute/path/to/wolfstar-github-agent.yml
 wolfstar-github-agent control activity --task TASK_ID --config /absolute/path/to/wolfstar-github-agent.yml
 wolfstar-github-agent control events --limit 50 --config /absolute/path/to/wolfstar-github-agent.yml
+wolfstar-github-agent control reviews --repository OWNER/REPO --number NUMBER --head FULL_HEAD_SHA
 ```
+
+Context sync installs `wolfstar-github-agent` and `hw` into `~/.local/bin` on both hosts.
+The launcher uses the Service checkout and its pinned Node runtime.
+It defaults to `~/.config/wolfstar-github-agent/config.yml` and the password file beside it.
+Desktop reads `~/.config/wolfstar-github-agent/control-url`.
+Context sync creates it with the Hogwild URL if missing.
+It preserves an existing target. Hogwild uses loopback.
+Explicit connection arguments override these defaults.
+
+Review reads return `{ runs }`, including findings and gates.
+The optional head filter requires one full head SHA.
+An empty array means no stored Review matches. It does not mean Review passed.
+
+Rerun Issue triage after a controller fix without editing the issue:
+
+```bash
+wolfstar-github-agent control rerun-issue --repository OWNER/REPO --number NUMBER --config /absolute/path/to/wolfstar-github-agent.yml
+```
+
+The CLI reads the current Revision directly, including issues outside the dashboard's latest 100 Items.
+Pass `--revision REVISION_ID` to require a specific Revision.
+The command preserves Approval requirements and rejects Dismissals or active Issue work.
+Repeated requests return the existing queued or running Task.
 
 Target another instance with its URL and password file:
 
@@ -157,6 +215,20 @@ wolfstar-github-agent control restart --url https://wolfstar-github-agent.localh
 wolfstar-github-agent control update --url https://wolfstar-github-agent.localhost --password-file /absolute/path/to/dashboard-password
 wolfstar-github-agent control cancel --task TASK_ID --url https://wolfstar-github-agent.localhost --password-file /absolute/path/to/dashboard-password
 ```
+
+Recover one retained commit from a failed Logged finding Repair:
+
+```bash
+wolfstar-github-agent control recover-repair --task logged-finding:TASK_DIGEST --commit COMMIT_SHA --config /absolute/path/to/wolfstar-github-agent.yml
+wolfstar-github-agent control recover-repair --task logged-finding:TASK_DIGEST --commit COMMIT_SHA --apply --expected-base BASE_SHA --config /absolute/path/to/wolfstar-github-agent.yml
+```
+
+The default command returns a read-only Plan. Apply requires the exact current base from that Plan.
+Apply returns a durable Task ID and fence before fresh checks finish. Read its outcome with `control tasks`.
+Recovery preserves the original commit, Approval, Task identity, and retry budgets.
+Selected regression tests must fail on the current base without import or setup errors.
+The recovered patch must pass those tests, `check`, and the declared build before normal Publication.
+If current regression evidence cannot run, the Task needs attention. Review checks the new pull request head.
 
 The package exports the typed Control API client:
 
@@ -171,6 +243,72 @@ const client = createControlClient({
 ```
 
 ## Webhooks
+
+Interactive Agents can watch one pull request through the Control CLI:
+
+```bash
+wolfstar-github-agent control watch-pr --repository OWNER/REPOSITORY --number NUMBER --config /absolute/path/to/config.yml
+```
+
+The authenticated stream reads the Journal. Waiting clients make no repeated GitHub reads.
+The command returns on a confirmed merge, closure, Dismissal, or actionable work without an active Service Task.
+`--until review` returns published current-Revision Review readiness. `--until merged` waits through actionable findings.
+`--timeout-seconds` bounds the wait. Repeating the command resumes from stored state after disconnection.
+The initial subscription can bootstrap one missing pull request. It follows later head commits and repairs.
+
+Keep the submitting Agent turn active while the command runs.
+After merge, that Agent applies Take Ownership Completion and reports remaining work.
+A finished chat needs a new turn before it can continue.
+
+### Take Ownership
+
+For Service-created pull requests, enable `repositories[].take_ownership` to retain delivery checks after merge.
+The repository must be owned and mapped inside a trusted sites root.
+
+```yaml
+take_ownership:
+  enabled: true
+  production_url: https://example.com
+  required_workflows: [deploy.yml]
+  smoke_paths: [/health]
+```
+
+The controller confirms the exact merge, then checks workflows at its merge commit.
+Use workflow filenames or unique workflow names in `required_workflows`.
+Default branch push runs count. Downstream `workflow_run` runs need explicit triggering push evidence.
+The newest matching run must finish successfully.
+After those runs pass, each smoke URL must return HTTP 2xx without a redirect.
+Smoke requests carry no GitHub credentials and stay on the configured production origin.
+Empty workflow or smoke lists omit that stage.
+
+For a downstream deployment, record its triggering push in `run-name`:
+
+```yaml
+name: Deploy to Prod
+run-name: >-
+  ${{ github.event_name == 'workflow_run' && format('Deploy to Prod [take_ownership:{0}:{1}:{2}:{3}]',
+      github.event.workflow_run.head_repository.full_name, github.event.workflow_run.event,
+      github.event.workflow_run.head_branch, github.event.workflow_run.head_sha) || 'Deploy to Prod' }}
+```
+
+Deploy from that same `github.event.workflow_run.head_sha`.
+The verifier matches the marker's repository, default branch, and full merge SHA.
+Only triggering `push` events qualify. Unmarked runs, pull request triggers, and manual dispatches cannot satisfy Completion.
+The workflow definition commit can differ from the triggering commit.
+Downstream searches start at the merge time and use GitHub's paginated run history.
+GitHub limits each filtered search to 1,000 runs. Older evidence can therefore remain unavailable.
+
+Completion Tasks retain their target, result, and evidence across restarts.
+The existing repository observer resumes them. They consume no Agent slots and add no polling timer.
+`control tasks` and `control status` include `completionTasks`.
+Missing or unreadable evidence retries after one minute, at the next repository observation.
+After 24 hours, the Task reports Action required with its last reason.
+Failed workflows and smoke responses also report Action required.
+If the policy changes, the Task reports Action required for the original delivery target.
+Pause and disabled writes prevent claims and completion writes.
+
+These checks verify workflow results and HTTP availability. They do not prove which commit a URL serves.
+The controller creates no repair, deploy, release, or cleanup action from these checks.
 
 Set `webhook.enabled` to start the separate listener on port 3211.
 The public route exposes only `POST /webhook` through Caddy.
@@ -189,7 +327,7 @@ GitHub is the durable Review workflow record. The newest confirmed canonical com
 
 Select `Automatic` in the Agent provider control to pick the provider by remaining capacity. It walks `agent.order` and takes the first provider whose window has more than its `agent.reserve_percent` left.
 
-Claude does not publish a subscription window to the service, so no Reserve applies to it. Codex publishes a seven-day window, read from `codex app-server`. opencode publishes the GLM Coding Plan windows, read from `https://api.z.ai/api/monitor/usage/quota/limit` with the key in `~/.config/opencode/opencode.json`. The plan publishes a five-hour window and a weekly one, and the fuller of the two decides, because a spent five-hour window stalls the fleet for hours whatever the week has left.
+Codex publishes a seven-day window, read from `codex app-server`. opencode publishes the GLM Coding Plan windows, read from `https://api.z.ai/api/monitor/usage/quota/limit` with the key in `~/.config/opencode/opencode.json`. The plan publishes a five-hour window and a weekly one, and the fuller of the two decides, because a spent five-hour window stalls the fleet for hours whatever the week has left.
 
 A provider that publishes no limit always passes. When no provider may spend, the service stops claiming new Agent Tasks. The System pane shows `Reserve reached`. Active agents and Publications finish.
 
@@ -207,8 +345,24 @@ The CLI does not expose Review runs yet. Read one pull request's local review hi
 Use the `Auto` and `Manual` control in the header to set the Selection mode. `Auto` reviews every eligible pull request. `Manual` waits for you to select each one, whoever opened it. Select a pull request with `Review and repair` in the dashboard, or with the `wolfstar-agent-review` label on GitHub. The Selection mode persists across restarts, and covers pull requests only.
 
 The dashboard shows `Review and repair` for outside contributors, and for every pull request in `Manual`. One Approval covers read only Review and separate scoped Repair for that head commit.
-Use `Eject` on a running agent to stop automation and resume its session in Ghostty. Claude sessions reopen with `claude --resume`, Codex sessions with `codex resume`, and opencode sessions with `opencode --session`.
+Use `Watch logs` on a running Agent to open its live activity in Sessions. Task and Routine logs remain read only.
 The desktop tray has separate Agent and GitHub Actions icons.
+
+The Sessions page opens native Codex, Claude Code, and opencode terminals from configured Projects.
+Choose a Project and Agent provider, then select `New session`.
+Each Agent session uses its host's credentials, tools, instructions, and persistent Worktree.
+Tabs and split terminals control browser views. Closing them keeps the Agent running.
+Use `Stop Agent` to stop its process. The Worktree remains available for inspection.
+Provider prompts, approvals, and model selection stay in the native terminal.
+Follow [Local Agent terminals](../../docs/agent-terminal.md) for installation, pairing, and safe removal.
+
+History preserves older Agent sessions as read-only records.
+`Watch logs` opens read-only maintenance Agent activity.
+Watching opens read-only pull request diffs for the selected base and head commits.
+An optional remote Service connection shows maintenance activity without enabling remote Service controls.
+Local terminal input stays independent of that connection.
+Maintenance Agents retain their existing isolation and controller publication rules.
+
 The Agent menu groups current Agent tasks under Hogwild and Desktop.
 Tasks without a current provider turn stay outside those groups.
 The menu also shows the desktop's shared memory use and limit.
@@ -223,7 +377,7 @@ Keep any existing `WOLFSTAR_GITHUB_RUNNER_REPOSITORIES` setting in that command.
 The SSH account needs [Docker](https://docker.com) access and permission to control the runner service.
 Restart the tray process after changing its environment. Running jobs continue.
 
-Use `Watch logs` from the System pane to open a read-only live event stream while automation continues.
+Use `Watch logs` from a running Agent or the tray to read live activity in Sessions. Automation continues.
 The System chip stays in the header. It opens the System pane, which shows Agent provider limits, Reserves, and unresolved Incidents.
 It separates Wolfstar GitHub Agent from GitHub Actions. A runner failure never changes the Agent status.
 `max_open_pull_requests` stops new issue work while that many pull requests are open. `Manual` Selection mode ignores the limit, because you already select every pull request.
@@ -237,6 +391,8 @@ Enable `mutations_enabled` only after the selected repository policy and GitHub 
 ## Package releases
 
 Eligible open pull requests get one release checkbox in a bot comment.
+Offers appear as soon as the signed webhook listener is ready, including after service restarts.
+The controller does not wait for another repository comment before showing the checkbox.
 Feature titles offer **Release minor after merge**. Fix and performance titles offer **Release patch after merge**.
 Select it before merging. Clear it to cancel while the pull request remains open.
 The selection survives service restarts. A changed head or release version clears the selection.
@@ -244,6 +400,8 @@ After merge, the controller waits for passing default branch push checks before 
 Pull request checks do not count as default branch checks.
 Merged pull requests also retain a release checkbox when no selection exists.
 Docs, chores, known breaking changes, and released changes get no checkbox.
+Known breaking changes get a comment that requests a manual major release.
+The comment explains that automatic releases support patch and minor only.
 If the unreleased range contains features, a fix cannot offer patch.
 Use a feature pull request for that minor release.
 
@@ -252,7 +410,25 @@ Only a signed GitHub webhook from the authenticated Wolfstar account grants rele
 Comment edits cannot create text commands. Duplicate clicks and deliveries cannot publish another version.
 
 Enable the webhook and `github` trigger. Enable repository writes and set Selection mode to Auto.
-Add this block to an owned Repository mapping with `pull_request_review: true`:
+For owned public packages with a stable root `package.json` and a tag publishing workflow, set one default:
+
+```yaml
+release_defaults:
+  owner: wolfstar-project
+  checkout_root: /home/wolfstar/pkg
+  manifest: package.json
+  version_files: [package.json]
+  tag_prefix: v
+  workflow: release.yml
+  checks: all
+```
+
+The default applies only to matching owned checkouts. Every GitHub Actions check run must pass.
+An explicit Repository `release` block replaces the default. Set `release: false` to exclude one Repository.
+Private packages, prereleases, monorepos, and repositories without a matching tag workflow need separate policy or setup.
+Each npm package still needs a trusted publisher for its workflow.
+
+Add this block to an owned Repository mapping with `pr_review: true`:
 
 ```yaml
 writable_pr_authors: [wolfstar-project, 'wolfstar-github-agent[bot]']
@@ -264,6 +440,27 @@ release:
   checks: [test, build] # Use exact GitHub Actions check names.
   changelog: CHANGELOG.md # Optional. The file must already exist.
 ```
+
+A maintained repository gets releases only when its policy opts in explicitly:
+
+```yaml
+ownership: maintained
+release:
+  credential: user # Required. Every release write uses Wolfstar's own token.
+  # manifest, version_files, tag_prefix, workflow, checks, and changelog as above
+```
+
+With `credential: user`, Wolfstar's GitHub CLI token writes the release comment, the version pull request, its merge, and the tag.
+The GitHub App never writes a release there, even if the organization installs it later.
+The release comment and the version pull request carry Wolfstar's name, and their text says an agent wrote them.
+The configuration refuses a `release` block on a maintained repository without `credential: user`.
+It refuses a `release` block on an external repository.
+An owned repository can omit `credential`. It then uses the credential that discovery chose for it.
+
+The GitHub App does not deliver webhooks for a repository where it is not installed.
+Add a repository webhook to such a repository. Point it at the same `/webhook` route, use the same secret, and select Issue comments.
+Without that webhook, the checkbox and `do release` do nothing.
+A tag that Wolfstar's token creates triggers the tag workflow. A tag that `GITHUB_TOKEN` creates would not.
 
 The policy authorizes stable patch and minor releases, including the release version pull request.
 That pull request requires fresh Review at 90% confidence, required checks, and GitHub branch protection.
@@ -329,11 +526,35 @@ Issue work reproduces findings and verifies repairs without weakening checks or 
 Runner operations and GitHub settings appear in the report for their next actor.
 The usual Review and merge policies apply. Other repositories enable `ci-review` through their own Routine spec.
 
+## Daily Agent retro
+
+The `agent-retro` Routine reviews Service events and open Incidents at 07:00 Melbourne time.
+Only `wolfstar-project/wolfstar-agent-kit` may enable it. The controller supplies evidence across its mapped repositories.
+The scan reads the latest 1,000 events within seven days and samples up to 200.
+Failures and repeated attempts come first. Up to 50 open Incidents join the sample.
+Event records include task identity, retries, duration, and available token use.
+Known token shapes are redacted. Prompts, raw transcripts, credentials, and host logs are excluded.
+Missing sources and omitted records remain explicit coverage gaps. They cannot establish fleet success rates.
+
+Each run publishes a report, including runs with no proposed fix.
+At most two proven defects become Candidates. Existing issues and pull requests retain their work.
+Issue triage and Issue work use the normal pipeline. Repairs need a focused reproduction before implementation.
+Changes stay within the Service package or Skills, with at most five changed files per fix.
+Model selection, budgets, permissions, and Review or merge policy remain operator decisions.
+The existing merge policy governs every resulting pull request.
+
+Hogwild runs the schedule without the desktop. Its systemd unit restarts a crashed process.
+The Routine cannot diagnose the controller while the controller is stopped.
+Use the remote dashboard to inspect health, Routine reports, Incidents, and update requests.
+After merging supporting code, use the existing Service update control before the first scheduled scan.
+Start a smoke run with `control routine-run --routine wolfstar-project/wolfstar-agent-kit:agent-retro`.
+Verify the Routine run and its published GitHub report before relying on the schedule.
+
 ## Weekly performance review
 
 The `perf-review` Routine reads a repository's stored Measurements and files one issue per confirmed Regression.
 It reads only. The numbers come from the repository's own CI, which measures each merged commit against its parent and stores the result as a git note.
-A repository takes part only once it stores Measurements. `harlan-zw/gscdump` is the reference implementation.
+A repository takes part only once it stores Measurements. `wolfstar-project/gscdump` is the reference implementation.
 
 A delta becomes a Regression only after it clears two bars.
 First it must beat the noise that same measurement recorded, which is the head build compared against itself in the same job.
@@ -365,6 +586,30 @@ Actions that need an operational change or a person's decision stay in the repor
 Issue work repairs the cause and names the action IDs to resolve after deploy. It never resolves an action itself.
 The usual Review and merge policies apply. Repositories enable `seo-review` through their own Routine spec.
 
+## Weekly vitals review
+
+The `vitals-review` Routine reads one Site's performance from [NuxtSEO](https://nuxtseo.com) and files one issue per page defect.
+It reads two datasets and never mixes them. Field findings say what real users feel. Lab Scans say what Lighthouse measured.
+It matches the repository to its Site the same way `seo-review` does, and needs the same `nuxtseo` CLI and `NUXTSEO_TOKEN`.
+
+A field finding files when NuxtSEO rates it Poor and at least 200 estimated views saw it.
+Its fingerprint is the page, the metric, and the element selector.
+A lab series is one page on one strategy. `scans list` interleaves mobile and desktop, so the Routine never compares across them.
+A lab series files when its last 2 Scans are Poor, or when its last 2 or more Scans are worse than the Scans before them.
+Its fingerprint is the page, the strategy, and the metric.
+A single worse Scan is a Suspect. A series whose earlier Scans already swing is Unstable. Neither files anything.
+
+The Agent returns the CLI rows it relied on, and the controller makes both decisions itself: whether a proposal files, and its fingerprint.
+Each refusal appears in the report under "Controller decisions", so a person sees what the rule turned away.
+A lab drop must name the commit range deployed between its last good Scan and its first worse one.
+
+Issue work fixes the cause. It verifies with local [Unlighthouse](https://unlighthouse.dev) on that route only when the metric reproduces in the lab: LCP, FCP, and TBT, and CLS only when lab CLS is not near zero. INP never does.
+After a fix merges and deploys, the next scan starts a `nuxtseo page scan` for that page and later reports the fix as confirmed or not holding.
+A fix that is not holding names its issue for Wolfstar to reopen, because the ledger never files one fingerprint twice.
+
+When a repository runs `vitals-review` in `propose` mode, the `seo-review` Routine leaves NuxtSEO's performance actions to it. In `report` mode `seo-review` still files them.
+The usual Review and merge policies apply. Repositories enable `vitals-review` through their own Routine spec.
+
 ## Adding a Routine
 
 Built-in definitions live in `src/routines/`. Each definition owns its scan and downstream issue policy.
@@ -383,3 +628,29 @@ Issue work checks a definition's changed-path policy before committing.
 Agent feedback keeps its repository restriction and exact Skill target.
 [Sentry](https://sentry.io) keeps its required report and mode-specific resolution instructions.
 Dependency updates keep one combined Candidate and a shared open-issue fingerprint.
+
+## Public GitHub reads
+
+`pnpm sync:context` installs `agent-gh` for public GitHub reads.
+`pnpm sync:context:hogwild` installs it on Hogwild.
+Agents use `wolfstar-agent-beep` for these reads.
+The Service gives worker processes the same CLI as `gh`.
+The controller keeps its existing credentials and publication rules.
+
+Create a fine-grained token on `wolfstar-agent-beep`.
+Select **Public repositories** and add no account permissions.
+Save it in `~/.config/wolfstar-agent-kit/github-public-token` on each Agent host.
+Run `chmod 600` on that file.
+Never put the token in Git, Agent instructions, or repository environment files.
+
+Check the account with `agent-gh api user --jq .login`.
+Check its quota with `agent-gh api rate_limit`.
+Tokens on this account share its quota across hosts.
+
+The CLI permits read commands and REST `GET` requests.
+API fields keep `GET`, rather than changing the request to `POST`.
+Use `pr view`, `issue view`, or `search` instead of raw [GraphQL](https://graphql.org).
+Missing credentials, denied access, and rate limits never select another account.
+
+The wrapper prevents accidental writes and credential selection.
+It does not isolate processes running under the same operating system account.

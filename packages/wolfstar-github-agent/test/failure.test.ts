@@ -12,6 +12,11 @@ import {
 } from '../src/failure.ts'
 
 describe('classifyFailure', () => {
+  it('defers memory exhaustion to bounded recovery instead of immediate attempts', () => {
+    const reason = 'The Agent Task exceeded its memory budget. The opencode session exited with code 137.'
+    expect(classifyFailure({ message: reason })).toEqual({ _tag: 'Transient', kind: 'resource_limit' })
+    expect(mayRetryFailure({ message: reason })).toBe(false)
+  })
   it.each([
     ['Resource not accessible by integration - https://docs.github.com/rest/pulls/pulls', 'github_access'],
     ['Bad credentials', 'github_access'],
@@ -21,6 +26,8 @@ describe('classifyFailure', () => {
     ['Request quota exhausted for request GET https://api.github.com/repos', 'rate_limit'],
     ['request to https://api.github.com failed, reason: ECONNRESET', 'network'],
     ['fetch failed', 'network'],
+    ['Desktop disconnected during the Agent turn.', 'network'],
+    ['The desktop client disconnected while reporting its result.', 'network'],
     ['The opencode session stopped sending output.', 'agent_provider'],
     ['The opencode session exited with code 1.', 'agent_provider'],
     ['The opencode session failed: Unexpected server error. Check server logs for details.', 'agent_provider'],
@@ -160,6 +167,16 @@ describe('contextBudgetExhaustedReason', () => {
 })
 
 describe('classifyCheckFailure', () => {
+  it.each([
+    { conclusion: 'failure', failedStep: 'Run tests', logTail: [] },
+    { conclusion: 'failure', failedStep: null, logTail: ['All tests passed'] },
+    { conclusion: 'cancelled', failedStep: null, logTail: ['##[error]The operation was canceled.'] },
+    { conclusion: 'cancelled', failedStep: 'Run tests', logTail: ['##[error]The operation was canceled.'] },
+    { conclusion: 'cancelled', runnerLost: true, failedStep: null, logTail: [] },
+  ])('keeps unavailable or cancelled evidence indeterminate: %j', (input) => {
+    expect(classifyCheckFailure({ name: 'test', ...input })).toMatchObject({ _tag: 'Indeterminate' })
+  })
+
   const runnerKill = [
     '##[group]Run pnpm build',
     '> nuxt build',
@@ -212,7 +229,7 @@ describe('classifyCheckFailure', () => {
     ['a registry gateway timeout', registryFetch, /registry\.npmjs\.org/],
     ['a GitHub release asset reset', releaseAsset, /releases\/download/],
   ])('reads %s as Infrastructure', (_name, logTail, reason) => {
-    const failure = classifyCheckFailure({ name: 'build', conclusion: 'failure', logTail })
+    const failure = classifyCheckFailure({ name: 'build', conclusion: 'failure', failedStep: 'Run check', logTail })
     expect(failure).toEqual({ _tag: 'Infrastructure', reason: expect.stringMatching(reason) })
   })
 
@@ -223,7 +240,9 @@ describe('classifyCheckFailure', () => {
       '   × retries a transient failure',
       '##[error]The job running on runner wolfstar-desktop-2 has exceeded the maximum execution time of 10 minutes.',
     ]
-    expect(classifyCheckFailure({ name: 'test', conclusion: 'timed_out', logTail })).toEqual({ _tag: 'Repairable' })
+    expect(classifyCheckFailure({ name: 'test', conclusion: 'timed_out', failedStep: 'Run tests', logTail })).toEqual({
+      _tag: 'Repairable',
+    })
   })
 
   it('ignores kill-signal text that a repository test printed before the real failure', () => {
@@ -235,7 +254,9 @@ describe('classifyCheckFailure', () => {
       'AssertionError: expected "killed" to be "signalled"',
       '##[error]Process completed with exit code 1.',
     ]
-    expect(classifyCheckFailure({ name: 'test', conclusion: 'failure', logTail })).toEqual({ _tag: 'Repairable' })
+    expect(classifyCheckFailure({ name: 'test', conclusion: 'failure', failedStep: 'Run check', logTail })).toEqual({
+      _tag: 'Repairable',
+    })
   })
 
   it('ignores a bare status code or timeout word next to a package host', () => {
@@ -244,20 +265,29 @@ describe('classifyCheckFailure', () => {
       'AssertionError: expected timeout to equal 30000',
       '##[error]Process completed with exit code 1.',
     ]
-    expect(classifyCheckFailure({ name: 'test', conclusion: 'failure', logTail })).toEqual({ _tag: 'Repairable' })
+    expect(classifyCheckFailure({ name: 'test', conclusion: 'failure', failedStep: 'Run check', logTail })).toEqual({
+      _tag: 'Repairable',
+    })
   })
 
   it.each([
     ['a type error', typeError],
     ['a heap limit inside a step', heapLimit],
     ['a test that only mentions a remote host', unpkgMention],
-    ['an empty log', []],
   ])('keeps %s Repairable', (_name, logTail) => {
-    expect(classifyCheckFailure({ name: 'typecheck', conclusion: 'failure', logTail })).toEqual({ _tag: 'Repairable' })
+    expect(
+      classifyCheckFailure({ name: 'typecheck', conclusion: 'failure', failedStep: 'Run check', logTail }),
+    ).toEqual({ _tag: 'Repairable' })
   })
 
   it('reads a lost runner as Infrastructure without a log', () => {
-    const failure = classifyCheckFailure({ name: 'test', conclusion: 'failure', runnerLost: true, logTail: [] })
+    const failure = classifyCheckFailure({
+      name: 'test',
+      conclusion: 'failure',
+      runnerLost: true,
+      failedStep: null,
+      logTail: [],
+    })
     expect(failure).toEqual({ _tag: 'Infrastructure', reason: expect.stringContaining('runner lost the job') })
   })
 })

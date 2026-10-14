@@ -1,8 +1,8 @@
 ---
 name: hogwild
 description: 'Operate the Hogwild home server: which SSH host to use, which account holds sudo, what runs there, where each repo, service, route, and config lives, and how to install tools for the Agent. Use for any task that touches Hogwild over SSH.'
-user_invocable: true
 argument-hint: '[task on Hogwild]'
+license: MIT
 ---
 
 # Hogwild
@@ -11,7 +11,10 @@ Hogwild is one Ubuntu host on the LAN and the tailnet. It runs the Wolfstar GitH
 
 ## The `hw` CLI
 
-`scripts/hw.ts` in this skill runs the routine tasks below and picks the right account each time. Run it with bun; it has no dependencies. The desktop alias `hw` points at it.
+Context sync installs `hw` in `~/.local/bin` for noninteractive shells.
+It runs the installed planner and picks the correct account.
+Run `pnpm sync:context` if the command is missing.
+If sync is unavailable, run `node --experimental-strip-types scripts/hw.ts` from this Skill directory.
 
 ```bash
 hw status                                  # host, services, containers, Agent unit
@@ -63,7 +66,7 @@ Public routes go internet, Cloudflare tunnel, Caddy `:8080`, then the loopback p
 | ----------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | Agent service code                                          | `wolfstar-project/wolfstar-agent-kit` `packages/wolfstar-github-agent`     | `~/pkg/wolfstar-agent-kit`                                                                  | `pnpm service:hogwild:update` from the repo root                                                    |
 | Agent context, worktrunk, env files                         | same repo, `scripts/`                                                      | same                                                                                        | `pnpm sync:context:hogwild`, `pnpm service:hogwild:sync-env`, `pnpm service:hogwild:sync-worktrunk` |
-| Agent config                                                | not in git                                                                 | `hogwild:~/.config/wolfstar-github-agent/config.yml`                                        | edit, then restart the user unit                                                                    |
+| Agent config                                                | not in git                                                                 | `hogwild:~/.config/wolfstar-github-agent/config.yml`                                        | edit, then request durable Restart                                                                  |
 | Agent state                                                 | not in git                                                                 | `hogwild:~/.local/share/wolfstar-github-agent/state.sqlite`, `journal.sqlite`, `worktrees/` | back up before a migration                                                                          |
 | Runner supervisor, runners.conf, Dockerfile, host hardening | `harlan-zw/hogwild-gh-runner` (private) `github-runner/`                   | `~/pkg/hogwild-gh-runner`                                                                   | install steps in its README                                                                         |
 | Host security layout, Docker rules, pending items           | same repo, `hogwild/`                                                      | same                                                                                        | `hogwild/README.md`                                                                                 |
@@ -80,7 +83,15 @@ The live `runners.conf` is `/var/lib/github-runner/config/runners.conf`. Change 
 
 Not every checkout is mapped. `config.yml` lists the active `repositories` and the observe-only `external_repositories`. Read the file for the current list: `ssh hogwild 'rg -n "^  - github:" ~/.config/wolfstar-github-agent/config.yml'`.
 
-If a new repository joins, clone it as `wolfstar` into the matching directory, then add a `repositories` entry and restart the Agent.
+If a new repository joins, clone it as `wolfstar` into the matching directory, then add a `repositories` entry and request durable Restart.
+
+## Email and browser identities
+
+Before email work, read [email-usage](../email-usage/SKILL.md).
+Before browser work, read [browser](../browser/SKILL.md).
+Discover accounts on Hogwild. Its Himalaya configuration intentionally has no send backend.
+Desktop Chrome profiles do not imply signed-in sessions on Hogwild.
+Never copy desktop credentials or browser sessions to the server.
 
 ## Install a tool for the Agent
 
@@ -88,7 +99,7 @@ If a new repository joins, clone it as `wolfstar` into the matching directory, t
 2. If the Agent needs it under a different name, link it as wolfstar: `ssh hogwild 'ln -sf "$(command -v fdfind)" ~/.local/bin/fd'`.
 3. Record it in the tools table in `hogwild-gh-runner/hogwild/README.md`.
 
-Tools in `hogwild:~/.local/bin` today: `node`, `pnpm`, `bun`, `uv`, `gh`, `wt`, `rg`, `fd`, `ripast`, `opencode`, `codex`, `wrangler`, `sentry-cli`, `nuxtseo`, `himalaya`, `dev-browser`. No `claude`; the Agent uses `opencode`.
+Tools in `hogwild:~/.local/bin` today: `node`, `pnpm`, `bun`, `uv`, `gh`, `wt`, `rg`, `fd`, `ripast`, `opencode`, `codex`, `wrangler`, `cf`, `sentry-cli`, `nuxtseo`, `himalaya`, `dev-browser`. No `claude`; the Agent uses `opencode`.
 
 ## Control the Agent
 
@@ -106,7 +117,16 @@ If a change needs the process to pick up new groups or a new Node, restart the u
 ssh hogwild-admin 'sudo systemctl restart user@1000.service'
 ```
 
-Logs: `ssh hogwild 'journalctl --user -u wolfstar-github-agent -n 200'`.
+Use `hw logs agent -n 200` for unit logs.
+
+The launcher reads the default configuration and password file.
+Desktop reads `~/.config/wolfstar-github-agent/control-url`.
+Context sync creates it with the Hogwild URL if missing.
+It preserves an existing target. Hogwild uses loopback.
+Explicit connection arguments win.
+Use the Service Skill for [connection recovery and Review reads](../wolfstar-github-agent/SKILL.md).
+For routine configuration changes, request durable Restart.
+Never restart the user unit directly while Agents run.
 
 ## Docker and firewall
 
@@ -114,7 +134,6 @@ Logs: `ssh hogwild 'journalctl --user -u wolfstar-github-agent -n 200'`.
 
 ## Do not
 
-- Do not start `wolfstar-desktop-github-runner.service` on the desktop. Hogwild is the only runner host.
 - Do not add `wolfstar` to `sudo` or `docker`.
 - Do not edit a primary checkout under `~/pkg` or `~/sites` on the host. The Agent owns them.
 - Do not reboot without draining the runner: `sudo systemctl stop hogwild-github-runner.service`, then `sudo reboot`.

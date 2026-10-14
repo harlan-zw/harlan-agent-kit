@@ -1,7 +1,7 @@
 ---
 name: pkg-conform
 description: 'Conform or scaffold TypeScript packages and Nuxt modules. Use for workspace catalogs, package config, CI, Oxlint, Oxfmt, Vitest, playgrounds, fixtures, or Nuxt module setup.'
-user_invocable: true
+license: MIT
 ---
 
 # Package Conform Skill
@@ -10,13 +10,8 @@ Conform a package to standardized architecture, or scaffold a new one.
 
 ## Worktree isolation
 
-Before any edit, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
-
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
-
-Keep the primary checkout read only. Before mutation, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+Before any edit, read and follow the [worktree isolation contract](../../references/worktree-isolation.md).
+Keep mutation in a task-owned `wt` worktree with a live claim. Keep the primary checkout read only.
 
 ## Usage
 
@@ -110,7 +105,7 @@ See `references/site-package-json.md` for template, optional scripts, and rules.
 
 See `references/site-structure.md` for Nuxt 4 directory layout.
 
-See `references/site-configs.md` for nuxt.config.ts, tsconfig, Oxlint, Oxfmt, .npmrc, and .gitignore templates.
+See `references/site-configs.md` for nuxt.config.ts, tsconfig, eslint, .npmrc, .gitignore templates.
 
 ---
 
@@ -151,14 +146,14 @@ See `references/` for detailed templates:
 - `../../references/code-comments.md` - the comment contract for any code this skill writes
 - `references/pkg-package-json.md` - single repo and monorepo package.json templates
 - `references/catalogs.md` - pnpm workspace catalogs
-- `references/configs.md` - package config file templates (Oxlint, Oxfmt, Vitest, tsconfig, obuild)
+- `references/configs.md` - package config file templates (eslint, vitest, tsconfig, obuild)
 - `references/github-actions.md` - CI/CD workflows (Package only)
 
 **Site references** (when project type is Site):
 
 - `references/site-package-json.md` - package.json template, rules, optional scripts
 - `references/site-structure.md` - Nuxt 4 directory layout and conventions
-- `references/site-configs.md` - nuxt.config.ts, tsconfig, Oxlint, Oxfmt, npmrc, editorconfig, gitignore
+- `references/site-configs.md` - nuxt.config.ts, tsconfig, eslint, npmrc, editorconfig, gitignore
 - `references/site-github-actions.md` - the shared CI gate, deploy gating, self-hosted runner rules
 
 **Nuxt module references** (when `@nuxt/module-builder` detected):
@@ -181,7 +176,7 @@ See `references/` for detailed templates:
 3. [ ] `.github/workflows/test.yml` - action versions and Markdown path filtering
 4. [ ] `.editorconfig` - standard config
 5. [ ] `.gitignore` - standard patterns
-6. [ ] Oxlint and Oxfmt configs - `.oxlintrc.json` and `.oxfmtrc.json`
+6. [ ] ESLint config - antfu + `eslint-plugin-wolfstarzw`. Package: `eslint.config.mjs`; Site: `eslint.config.js`
 7. [ ] `tsconfig.json` - Package: `module: preserve`, `moduleDetection: force`; Site: `extends .nuxt/tsconfig.json`
 8. [ ] Git hooks - `lint-staged` in devDeps, `pre-commit` runs `lint-staged`
 9. [ ] `AGENTS.md` - router shape, 30 to 80 lines. No `CLAUDE.md`, no `CONTEXT.md`. See `../../references/root-docs.md`
@@ -198,18 +193,18 @@ See `references/` for detailed templates:
 
 ### Site-only (when in `*/sites/*` or `*/site/*`)
 
-17. [ ] `package.json` - `private: true`, `engines.node` set to latest stable even-numbered Node (e.g. `>=22.0.0`, `>=24.0.0`), no `exports`/`main`/`types`/`files`
-18. [ ] Scripts - `dev` (nuxi dev), `build` (nuxi prepare && nuxi build), `postinstall` (nuxt prepare), `lint`, `lint:fix`, `typecheck` (nuxt typecheck)
-19. [ ] `pnpm.overrides` - `vite` set to `^8.0.0`
-20. [ ] `nuxt.config.ts` - `future.compatibilityVersion: 5`, `compatibilityDate`, standard module stack
-21. [ ] `tsconfig.json` - just `{ "extends": "./.nuxt/tsconfig.json" }`
-22. [ ] `.oxlintrc.json` and `.oxfmtrc.json` - site build directories ignored
-23. [ ] `.npmrc` - `shamefully-hoist=true`
-24. [ ] `.gitignore` - includes `.nuxt/`, `.output/`, `.data/`, `.wrangler/`, `wrangler.toml`
-25. [ ] `.editorconfig` - 2-space indent, LF, UTF-8, trim trailing whitespace (except `.md`)
-26. [ ] `content.config.ts` - Zod schemas for content collections (if using `@nuxt/content`)
-27. [ ] `app/` directory - Nuxt 4 structure (`app.vue`, `pages/`, `layouts/`, `components/`, `composables/`)
-28. [ ] `.github/workflows/ci.yml` - calls the shared gate and ignores Markdown-only changes. See `references/site-github-actions.md`.
+11. [ ] `package.json` - `private: true`, `engines.node` set to latest stable even-numbered Node (e.g. `>=22.0.0`, `>=24.0.0`), no `exports`/`main`/`types`/`files`
+12. [ ] Scripts - `dev` (nuxi dev), `build` (nuxi prepare && nuxi build), `postinstall` (nuxt prepare), `lint`, `lint:fix`, `typecheck` (nuxt typecheck)
+13. [ ] `pnpm.overrides` - `vite` set to `^8.0.0`
+14. [ ] `nuxt.config.ts` - `future.compatibilityVersion: 5`, `compatibilityDate`, standard module stack
+15. [ ] `tsconfig.json` - just `{ "extends": "./.nuxt/tsconfig.json" }`
+16. [ ] `eslint.config.js` - antfu config with `node/prefer-global/process` and `node/prefer-global/buffer` off
+17. [ ] `.npmrc` - `shamefully-hoist=true`
+18. [ ] `.gitignore` - includes `.nuxt/`, `.output/`, `.data/`, `.wrangler/`, `wrangler.toml`
+19. [ ] `.editorconfig` - 2-space indent, LF, UTF-8, trim trailing whitespace (except `.md`)
+20. [ ] `content.config.ts` - Zod schemas for content collections (if using `@nuxt/content`)
+21. [ ] `app/` directory - Nuxt 4 structure (`app.vue`, `pages/`, `layouts/`, `components/`, `composables/`)
+22. [ ] `.github/workflows/ci.yml` - calls the shared gate and ignores Markdown-only changes. See `references/site-github-actions.md`.
 
 ### Additional Nuxt Module Checklist
 
@@ -217,7 +212,7 @@ When `@nuxt/module-builder` detected, also check (extends Package checklist):
 
 **Structure:** 17. [ ] `src/module.ts` - main module entry exists 18. [ ] `src/runtime/app/` - client/SSR code directory 19. [ ] `src/runtime/server/` - Nitro server code directory 20. [ ] `src/types.ts` - module options types 21. [ ] `playground/` - nuxt.config.ts, app.vue, pages/ 22. [ ] `test/fixtures/basic/` - nuxt.config.ts
 
-**Config:** 23. [ ] `pnpm-workspace.yaml` - add `nuxt:` catalog 24. [ ] `package.json` - nuxt module exports, peerDependencies 25. [ ] `tsconfig.json` - extends `.nuxt/tsconfig.json` 26. [ ] `vitest.config.ts` - use `defineVitestProject` for e2e 27. [ ] `build.config.ts` - nuxt externals including `#imports` 28. [ ] `.oxlintrc.json` and `.oxfmtrc.json` - ignore fixtures/playground 29. [ ] `.gitignore` - nuxt build dirs
+**Config:** 23. [ ] `pnpm-workspace.yaml` - add `nuxt:` catalog 24. [ ] `package.json` - nuxt module exports, peerDependencies 25. [ ] `tsconfig.json` - extends `.nuxt/tsconfig.json` 26. [ ] `vitest.config.ts` - use `defineVitestProject` for e2e 27. [ ] `build.config.ts` - nuxt externals including `#imports` 28. [ ] `eslint.config.mjs` - ignore fixtures/playground 29. [ ] `.gitignore` - nuxt build dirs
 
 **Scripts:** 30. [ ] `typecheck` - uses `nuxt typecheck` (not `tsc`) 31. [ ] `dev:prepare` - prepares module + playground 32. [ ] `prepare:fixtures` - prepares test fixtures 33. [ ] `.github/workflows/test.yml` - includes the prepare step and Markdown path filtering
 
@@ -235,7 +230,7 @@ Read for **all project types**:
 
 - `pnpm-workspace.yaml`, `package.json` — deps, catalogs, `packageManager`, `type`
 - `.github/workflows/*.yml` — action versions against v6 standards
-- `.oxlintrc.json`, `.oxfmtrc.json`, `tsconfig.json`, `.editorconfig`, `.gitignore`
+- `eslint.config.{js,mjs}`, `tsconfig.json`, `.editorconfig`, `.gitignore`
 
 **If Package**, also read: `build.config.ts`, `vitest.config.ts`, package `exports`, release scripts.
 

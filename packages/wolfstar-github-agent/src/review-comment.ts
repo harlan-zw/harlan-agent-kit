@@ -1,9 +1,38 @@
+import type { ReviewFinding } from './types.ts'
+import { cleanText } from './text.ts'
+
 export const AUTOMATED_REVIEW_MARKER = '<!-- wolfstar-agent-kit:pr-triage -->'
 /** The login the GitHub App posts as. */
 export const AGENT_ACTOR_LOGIN = 'wolfstar-github-agent[bot]'
 
+/** Show advice without implying that a Logged finding requires Repair. */
+export function reviewFindingFollowUp(finding: Extract<ReviewFinding, { _tag: 'Logged' }>): string {
+  const action = finding.nextAction === undefined ? '' : cleanText(finding.nextAction).replaceAll(/\s+/g, ' ')
+  return action === '' ? 'Optional follow-up.' : `Optional follow-up: ${action}`
+}
+
 const AGENT_LINK = '[Wolfstar Agent Kit](https://github.com/wolfstar-project/wolfstar-agent-kit)'
 const POLICY_LINK = '[AI open source policy](https://harlanzw.com/blog/ai-in-open-source)'
+
+/** Links a finding to the code that was reviewed, even after the branch moves. */
+export function reviewFindingCodeLink(repository: string | undefined, headSha: string, finding: ReviewFinding): string {
+  if (repository === undefined || finding._tag === 'Fixed' || finding.details === undefined) return ''
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !/^[a-f\d]{6,64}$/i.test(headSha)) return ''
+  const { path, line } = finding.details.location
+  const segments = path.split('/')
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..' || segment.includes('\\')))
+    return ''
+  const encodedPath = segments
+    .map((segment) =>
+      encodeURIComponent(segment).replace(
+        /[!'()*]/g,
+        (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+      ),
+    )
+    .join('/')
+  const lineAnchor = line !== null && Number.isSafeInteger(line) && line > 0 ? `#L${line}` : ''
+  return ` [View code](https://github.com/${repository}/blob/${headSha}/${encodedPath}${lineAnchor})`
+}
 
 export interface AutomatedDisclosure {
   /** What this comment is, as one noun. The reader sees it in the first sentence. */

@@ -1,8 +1,10 @@
-import type { StoredReviewForHead } from '../src/types.ts'
+import type { RepositoryMapping, StoredReviewForHead } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
 import { DatabaseSync } from 'node:sqlite'
 import { Octokit } from 'octokit'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
+import { createGitHubRateLimitGate } from '../src/github-rate-limit.ts'
+import { createGitHubResponseCache } from '../src/github-response-cache.ts'
 import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseSource } from '../src/package-release-github.ts'
 import { createPackageReleaseStore } from '../src/package-release-store.ts'
@@ -19,6 +21,7 @@ const mapping = {
     tagPrefix: 'v',
     workflow: 'release.yml',
     checks: ['test'],
+    credential: { _tag: 'Repository' as const },
   },
 }
 const plan = {
@@ -42,22 +45,123 @@ const record = {
   state: { _tag: 'Queued' as const, requestedBy: 'wolfstar-project' },
 }
 
-function fixture() {
+it('revalidates release candidates across passes and observes changed pull requests', async () => {
+  const cache = createGitHubResponseCache()
+  const seen: Array<string | null> = []
+  const responses = [
+    Response.json([{ number: 24, title: 'fix: handle input', draft: false }], { headers: { etag: '"open-1"' } }),
+    Response.json([], { headers: { etag: '"closed-1"' } }),
+    new Response(null, { status: 304 }),
+    new Response(null, { status: 304 }),
+    Response.json([{ number: 25, title: 'feat: add input', draft: false }], { headers: { etag: '"open-2"' } }),
+    new Response(null, { status: 304 }),
+  ]
+  const tokens = {
+    getToken: async () => ({ _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }),
+    invalidate: () => {},
+  }
+  const source = () =>
+    createPackageReleaseSource({
+      repository: mapping,
+      actors: { repository: { login: 'wolfstar-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
+      template: async () => '',
+      assertLease: () => {},
+      review: () => ({ _tag: 'None' }),
+      signal: new AbortController().signal,
+      now: () => new Date(),
+      responseCache: cache,
+      createClient: (clientOptions) =>
+        new Octokit({
+          ...clientOptions,
+          retry: { enabled: false },
+          throttle: { enabled: false },
+          request: {
+            fetch: async (input: string | URL | Request, init?: RequestInit) => {
+              seen.push(new Request(input, init).headers.get('if-none-match'))
+              const response = responses.shift()
+              if (response === undefined) throw new Error('Unexpected request')
+              return response
+            },
+          },
+        }),
+    })
+  expect(await source().candidates()).toEqual([24])
+  expect(await source().candidates()).toEqual([24])
+  expect(await source().candidates()).toEqual([25])
+  expect(seen).toEqual([null, null, '"open-1"', '"closed-1"', '"open-1"', '"closed-1"'])
+})
+
+it('reports release rate limits for the selected account and holds later requests', async () => {
+  const now = () => new Date('2026-10-10T16:00:00.000Z')
+  const gate = createGitHubRateLimitGate({ now })
+  const tokens = gate.guard(
+    {
+      getToken: async () => ({ _tag: 'Ok', value: { token: 'user-token', expiresAt: '2099-01-01' } }),
+      invalidate: () => {},
+    },
+    () => ({ _tag: 'User', login: 'wolfstar-project' }),
+  )
+  let requests = 0
+  const source = createPackageReleaseSource({
+    repository: { ...mapping, release: { ...mapping.release, credential: { _tag: 'User' } } },
+    actors: { repository: { login: 'unused', tokens }, user: { login: 'wolfstar-project', tokens } },
+    template: async () => '',
+    assertLease: () => {},
+    review: () => ({ _tag: 'None' }),
+    signal: new AbortController().signal,
+    now,
+    createClient: (clientOptions) =>
+      new Octokit({
+        ...clientOptions,
+        retry: { enabled: false },
+        throttle: { enabled: false },
+        request: {
+          fetch: async () => {
+            requests += 1
+            return Response.json(
+              { message: 'API rate limit exceeded.' },
+              {
+                status: 403,
+                headers: {
+                  'x-ratelimit-remaining': '0',
+                  'x-ratelimit-reset': String(Date.parse('2026-10-10T16:06:45.000Z') / 1000),
+                },
+              },
+            )
+          },
+        },
+      }),
+  })
+  await expect(source.comment(24, 'status')).rejects.toThrow('API rate limit exceeded.')
+  expect(gate.read()).toEqual([
+    { quota: { _tag: 'User', login: 'wolfstar-project' }, kind: 'Primary', retryAt: '2026-10-10T16:06:45.000Z' },
+  ])
+  await expect(source.comment(24, 'status')).rejects.toThrow('Requests pause until 2026-10-10T16:06:45.000Z.')
+  expect(requests).toBe(1)
+})
+
+function fixture(
+  repository: RepositoryMapping = mapping,
+  files = [{ filename: 'src/index.ts', patch: '+return []' }] as Array<{ filename: string; patch?: string }>,
+) {
   const writes: Array<{ path: string; body: Record<string, unknown> }> = []
   const refs = new Map<string, string>([
     ['heads/main', sha],
     ['tags/v1.0.0', mergeSha],
   ])
+  const sources = new Map<string, string>()
   let ready = false
   let merged = false
   let changedTree = false
   let published = false
-  let workflowSuccess = false
+  let latestVersion: string | undefined
+  let workflowConclusion: string | null = null
   let rangeSha = mergeSha
   let commentBody = ''
   let sourceOpen = false
   let sourceTitle = 'fix: handle input'
   let mainChecks = true
+  let extraCheckPassed = true
   let checkEvent = 'push'
   let checkBranch = 'main'
   let sourceHead = 'f'.repeat(40)
@@ -94,9 +198,9 @@ function fixture() {
         draft: false,
         state: sourceOpen ? 'open' : 'closed',
         commits: 1,
-        changed_files: 1,
+        changed_files: files.length,
         merge_commit_sha: sourceOpen ? null : mergeSha,
-        base: { ref: 'main' },
+        base: { ref: 'main', sha },
         title: sourceTitle,
         body: '',
         head: { sha: sourceHead },
@@ -104,7 +208,7 @@ function fixture() {
     } else if (path === '/pulls/24/commits') {
       data = [{ sha: sourceHead, commit: { message: sourceTitle } }]
     } else if (path === '/pulls/24/files') {
-      data = [{ filename: 'src/index.ts', patch: '+return []' }]
+      data = files
     } else if (path === '/actions/runs') {
       data = {
         total_count: 1,
@@ -121,23 +225,29 @@ function fixture() {
         ],
       }
     } else if (path.startsWith('/contents/')) {
-      data = {
-        type: 'file',
-        content: Buffer.from(
-          path.endsWith('.yml')
-            ? "on:\n  push:\n    tags: ['v*']\n"
-            : JSON.stringify({
-                name: 'example',
-                version: url.searchParams.get('ref') === 'c'.repeat(40) ? '1.0.1' : '1.0.0',
-              }),
-        ).toString('base64'),
+      if (path === '/contents/src/index.ts') {
+        const source = sources.get(url.searchParams.get('ref') ?? '')
+        if (source === undefined) return Response.json({ message: 'Not Found' }, { status: 404 })
+        data = { type: 'file', content: Buffer.from(source).toString('base64') }
+      } else {
+        data = {
+          type: 'file',
+          content: Buffer.from(
+            path.endsWith('.yml')
+              ? "on:\n  push:\n    tags: ['v*']\n"
+              : JSON.stringify({
+                  name: 'example',
+                  version: url.searchParams.get('ref') === 'c'.repeat(40) ? '1.0.1' : '1.0.0',
+                }),
+          ).toString('base64'),
+        }
       }
     } else if (path.startsWith('/compare/')) {
       data = {
         status: 'ahead',
         total_commits: 1,
         commits: [{ sha: rangeSha, commit: { message: 'fix: handle input' } }],
-        files: [{ filename: 'src/index.ts', patch: '+return []' }],
+        files,
       }
     } else if (path.endsWith('/check-runs')) {
       const main = {
@@ -149,11 +259,12 @@ function fixture() {
         conclusion: 'success',
       }
       const tag = { ...main, id: 20, check_suite: { id: 20 } }
+      const extra = { ...main, id: 11, name: 'lint', conclusion: extraCheckPassed ? 'success' : 'failure' }
       const checkRuns = refs.has('tags/v1.0.1')
         ? url.searchParams.get('filter') === 'all'
-          ? [tag, main]
+          ? [tag, main, extra]
           : [tag]
-        : [main]
+        : [main, extra]
       data = { total_count: checkRuns.length, check_runs: checkRuns }
     } else if (path === `/git/commits/${sha}`) {
       data = { tree: { sha: 'base-tree' } }
@@ -166,22 +277,24 @@ function fixture() {
       refs.set(String(body.ref).slice(5), String(body.sha))
       data = {}
     } else if (path === '/pulls' && req.method === 'GET') {
-      data = []
+      data =
+        sourceOpen && url.searchParams.get('state') === 'open' ? [{ number: 24, title: sourceTitle, draft: false }] : []
     } else if (path === '/pulls' && req.method === 'POST') {
       data = { number: 25 }
     } else if (path.includes('/actions/workflows/')) {
       data = {
-        workflow_runs: workflowSuccess
-          ? [
-              {
-                id: 1,
-                head_branch: 'v1.0.1',
-                status: 'completed',
-                conclusion: 'success',
-                html_url: 'https://github.com/run/1',
-              },
-            ]
-          : [],
+        workflow_runs:
+          workflowConclusion === null
+            ? []
+            : [
+                {
+                  id: 1,
+                  head_branch: 'v1.0.1',
+                  status: 'completed',
+                  conclusion: workflowConclusion,
+                  html_url: 'https://github.com/run/1',
+                },
+              ],
       }
     } else if (path === '/releases/tags/v1.0.1') {
       data = { draft: false, prerelease: false, html_url: 'https://github.com/release/v1.0.1' }
@@ -199,7 +312,17 @@ function fixture() {
       commentBody = String(writes.at(-1)!.body.body)
       data = { id: 100 }
     } else if (path === '/issues/24/comments') {
-      data = []
+      data =
+        commentBody === ''
+          ? []
+          : [
+              {
+                id: 100,
+                body: commentBody,
+                user: { login: 'wolfstar-github-agent[bot]' },
+                issue_url: `https://api.github.com/repos/${mapping.github}/issues/24`,
+              },
+            ]
     } else {
       throw new Error(`Unexpected ${req.method} ${path}`)
     }
@@ -208,13 +331,27 @@ function fixture() {
     return response
   }
   const source = createPackageReleaseSource({
-    repository: mapping,
-    actorLogin: 'wolfstar-github-agent[bot]',
-    template: async () => '### 📚 Description',
-    tokens: {
-      getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }),
-      invalidate: () => {},
+    repository,
+    actors: {
+      repository: {
+        login: 'wolfstar-github-agent[bot]',
+        tokens: {
+          getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }),
+          invalidate: () => {},
+        },
+      },
+      user: {
+        login: 'wolfstar-project',
+        tokens: {
+          getToken: async () => ({
+            _tag: 'Err',
+            error: { repository: mapping.github, message: 'The user credential is not used here.' },
+          }),
+          invalidate: () => {},
+        },
+      },
     },
+    template: async () => '### 📚 Description',
     assertLease: () => {},
     review: (): StoredReviewForHead =>
       ready
@@ -229,9 +366,9 @@ function fixture() {
         : { _tag: 'None' },
     signal: new AbortController().signal,
     now: () => new Date(),
-    createClient: (token) =>
+    createClient: (clientOptions) =>
       new Octokit({
-        auth: token,
+        ...clientOptions,
         request: { fetch: fetcher },
         retry: { enabled: false },
         throttle: { enabled: false },
@@ -239,13 +376,14 @@ function fixture() {
     fetch: async () =>
       Response.json({
         versions: { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) },
-        'dist-tags': { latest: published ? '1.0.1' : '1.0.0' },
+        'dist-tags': { latest: latestVersion ?? (published ? '1.0.1' : '1.0.0') },
       }),
   })
   return {
     source,
     writes,
     refs,
+    sources,
     openSource: (title = 'fix: handle input') => {
       sourceOpen = true
       sourceTitle = title
@@ -261,6 +399,9 @@ function fixture() {
       checkEvent = event
       checkBranch = branch
     },
+    setExtraCheck: (passed: boolean) => {
+      extraCheckPassed = passed
+    },
     allowReview: () => {
       ready = true
     },
@@ -270,8 +411,11 @@ function fixture() {
     publish: () => {
       published = true
     },
-    workflowDone: () => {
-      workflowSuccess = true
+    setLatestVersion: (version: string) => {
+      latestVersion = version
+    },
+    workflowDone: (conclusion = 'success') => {
+      workflowConclusion = conclusion
     },
     removeSource: () => {
       rangeSha = 'f'.repeat(40)
@@ -293,6 +437,48 @@ it('reads the release range and prepares a version pull request without pushing 
   expect(task.refs.get('heads/release/24-1.0.1')).toBe('c'.repeat(40))
 })
 
+it.each(['feat(nuxt)!: require Nuxt 4.6', 'refactor!: remove the old API'])(
+  'discovers breaking-change titles and explains their manual major release: %s',
+  async (title) => {
+    const task = fixture()
+    task.openSource(title)
+    expect(await task.source.candidates()).toEqual([24])
+    expect(await task.source.inspect(24)).toMatchObject({ _tag: 'ManualMajor' })
+    expect(task.writes).toEqual([])
+  },
+)
+
+it('keeps one manual release comment across restarts and replaces it when a patch becomes eligible', async () => {
+  const task = fixture()
+  const database = new DatabaseSync(':memory:')
+  const run = () =>
+    reconcilePackageReleases({
+      repository: mapping,
+      webhookReady: true,
+      store: createPackageReleaseStore(database),
+      source: () => task.source,
+      now: () => Date.now(),
+      signal: new AbortController().signal,
+    })
+  task.openSource('feat!: remove the old API')
+  await run()
+  await run()
+  expect(task.writes).toEqual([
+    {
+      path: '/issues/24/comments',
+      body: expect.objectContaining({ body: expect.stringContaining('Run a manual major release.') }),
+    },
+  ])
+  task.openSource('fix: handle input')
+  await run()
+  expect(task.writes.at(-1)).toMatchObject({
+    path: '/issues/comments/100',
+    body: { body: expect.stringContaining('- [ ] Release patch after merge') },
+  })
+  expect(task.writes.filter((write) => write.path === '/issues/24/comments')).toHaveLength(1)
+  database.close()
+})
+
 it('does not offer a release for a merge already outside the unreleased range', async () => {
   const task = fixture()
   task.removeSource()
@@ -311,6 +497,43 @@ it('waits for both the tag workflow and npm, and never creates the tag twice', a
   expect(task.writes.filter((write) => write.path === '/git/refs')).toHaveLength(1)
 })
 
+it.each(['1.0.2', '1.1.0', '2.0.0'])('completes a published release after latest advances to %s', async (latest) => {
+  const task = fixture()
+  task.refs.set('tags/v1.0.1', sha)
+  task.workflowDone()
+  task.publish()
+  task.setLatestVersion(latest)
+
+  expect(await task.source.publish({ ...record, state: { _tag: 'Publishing', tag: 'v1.0.1', sha } })).toBe(
+    'https://github.com/release/v1.0.1',
+  )
+  expect(task.writes).toEqual([])
+})
+
+it.each(['1.0.0', '2.0.0-beta.1', 'invalid'])(
+  'waits when latest is %s instead of an equal or newer stable release',
+  async (latest) => {
+    const task = fixture()
+    task.refs.set('tags/v1.0.1', sha)
+    task.workflowDone()
+    task.publish()
+    task.setLatestVersion(latest)
+
+    expect(await task.source.publish({ ...record, state: { _tag: 'Publishing', tag: 'v1.0.1', sha } })).toBeNull()
+    expect(task.writes).toEqual([])
+  },
+)
+
+it('waits for the pinned npm version even when latest advances', async () => {
+  const task = fixture()
+  task.refs.set('tags/v1.0.1', sha)
+  task.workflowDone()
+  task.setLatestVersion('2.0.0')
+
+  expect(await task.source.publish({ ...record, state: { _tag: 'Publishing', tag: 'v1.0.1', sha } })).toBeNull()
+  expect(task.writes).toEqual([])
+})
+
 it('refuses a tag collision without writing or republishing', async () => {
   const task = fixture()
   task.refs.set('tags/v1.0.1', 'f'.repeat(40))
@@ -320,6 +543,60 @@ it('refuses a tag collision without writing or republishing', async () => {
   })
   expect(task.writes).toEqual([])
 })
+
+it.each(['failure', 'cancelled', 'timed_out'])(
+  'records a completed %s release workflow once and keeps its pinned version',
+  async (conclusion) => {
+    const task = fixture()
+    task.workflowDone(conclusion)
+    const database = new DatabaseSync(':memory:')
+    const store = createPackageReleaseStore(database)
+    store.saveReleaseOffer({
+      repository: mapping.github,
+      pullRequestNumber: 24,
+      plan,
+      commentId: 99,
+      body: '',
+      policy: JSON.stringify(mapping),
+    })
+    store.requestPackageRelease({
+      repository: mapping.github,
+      pullRequestNumber: 24,
+      commentId: 99,
+      before: '',
+      selected: true,
+      requestId: 'select',
+      requestedBy: 'wolfstar-project',
+      commentAuthor: 'wolfstar-github-agent[bot]',
+    })
+    const source = {
+      ...task.source,
+      prepare: async () => ({ _tag: 'Publishing' as const, tag: 'v1.0.1', sha: 'c'.repeat(40) }),
+    }
+    const run = () =>
+      reconcilePackageReleases({
+        webhookReady: true,
+        repository: mapping,
+        store: createPackageReleaseStore(database),
+        source: () => source,
+        now: () => 1000,
+        signal: new AbortController().signal,
+      })
+    await run()
+    expect(store.listPackageReleases(mapping.github)[0]).toMatchObject({
+      plan: { version: '1.0.1' },
+      state: {
+        _tag: 'Blocked',
+        reason: 'Release workflow failed: https://github.com/run/1. Review that workflow before requesting recovery.',
+      },
+    })
+    const writes = [...task.writes]
+    await run()
+    expect(task.writes).toEqual(writes)
+    expect(task.writes.filter((write) => write.path === '/git/refs')).toHaveLength(1)
+    database.close()
+  },
+)
 
 it('waits for Review, then verifies the actual merge before allowing a tag', async () => {
   const task = fixture()
@@ -407,6 +684,54 @@ it.each(['fix: handle input', 'feat: add input'])(
   },
 )
 
+it.each([false, true])('reads pinned source files before offering optional parameters, open: %s', async (open) => {
+  const before = 'export function read(value: string) { return }'
+  const after = 'export function read(value: string, options?: Headers) { return }'
+  const task = fixture(mapping, [{ filename: 'src/index.ts', patch: `-${before}\n+${after}` }])
+  task.sources.set('v1.0.0', before)
+  task.sources.set(sha, after)
+  task.sources.set('f'.repeat(40), after)
+  if (open) task.openSource()
+  expect(await task.source.inspect(24)).toMatchObject({ _tag: open ? 'BeforeMerge' : 'Available', version: '1.0.1' })
+  task.sources.delete('v1.0.0')
+  expect(await task.source.inspect(24)).toMatchObject({
+    _tag: 'Unavailable',
+    reason: 'A public API changed. Check compatibility before releasing.',
+  })
+  expect(task.writes).toEqual([])
+})
+
+it.each([false, true])('offers a release when GitHub omits a pnpm lockfile patch, open: %s', async (open) => {
+  const task = fixture(mapping, [
+    { filename: 'src/index.ts', patch: '+return []' },
+    { filename: 'test/fixtures/nuxt5/pnpm-lock.yaml' },
+  ])
+  if (open) task.openSource()
+  expect(await task.source.inspect(24)).toMatchObject({
+    _tag: open ? 'BeforeMerge' : 'Available',
+    bump: 'patch',
+    version: '1.0.1',
+  })
+  expect(task.writes).toEqual([])
+})
+
+it.each(['src/index.ts', 'package.json', 'pnpm-workspace.yaml', 'images/example.png'])(
+  'refuses a release when GitHub omits the patch for %s',
+  async (filename) => {
+    const task = fixture(mapping, [{ filename }])
+    expect(await task.source.inspect(24)).toEqual({
+      _tag: 'Unavailable',
+      reason: 'The complete release range could not be read.',
+    })
+    task.openSource()
+    expect(await task.source.inspect(24)).toEqual({
+      _tag: 'Unavailable',
+      reason: 'The complete release range could not be read.',
+    })
+    expect(task.writes).toEqual([])
+  },
+)
+
 it.each(['pending', 'pull_request', 'other-branch'])(
   'waits for default branch push checks, ignoring %s evidence',
   async (mode) => {
@@ -422,6 +747,14 @@ it.each(['pending', 'pull_request', 'other-branch'])(
     expect(await task.source.prepare(record)).toMatchObject({ _tag: 'Prepared' })
   },
 )
+
+it('waits for every GitHub Actions check run under an inherited policy', async () => {
+  const task = fixture({ ...mapping, release: { ...mapping.release, checks: 'all' } })
+  task.setExtraCheck(false)
+  expect(await task.source.prepare(record)).toBeNull()
+  task.setExtraCheck(true)
+  expect(await task.source.prepare(record)).toMatchObject({ _tag: 'Prepared' })
+})
 
 it('releases a preselected pull request only after merge and passing default branch checks', async () => {
   const task = fixture()
@@ -458,4 +791,59 @@ it('releases a preselected pull request only after merge and passing default bra
   expect(store.listPackageReleases(mapping.github)[0]?.state._tag).toBe('Prepared')
   expect(task.refs.has('heads/release/24-1.0.1')).toBe(true)
   db.close()
+})
+
+it('writes a maintained repository release with the user credential even when the App can reach it', async () => {
+  const requests: Array<{ method: string; path: string; authorization: string | null }> = []
+  const appTokens = {
+    getToken: vi.fn(async () => ({ _tag: 'Ok' as const, value: { token: 'app-token', expiresAt: '2099-01-01' } })),
+    invalidate: () => {},
+  }
+  const repository = {
+    ...repositoryMapping({ github: 'nuxt-modules/example', ownership: 'maintained', authentication: 'app' }),
+    release: { ...mapping.release, credential: { _tag: 'User' as const } },
+  }
+  const source = createPackageReleaseSource({
+    repository,
+    actors: {
+      repository: { login: 'wolfstar-github-agent[bot]', tokens: appTokens },
+      user: {
+        login: 'wolfstar-project',
+        tokens: {
+          getToken: async () => ({ _tag: 'Ok', value: { token: 'user-token', expiresAt: '2099-01-01' } }),
+          invalidate: () => {},
+        },
+      },
+    },
+    template: async () => '',
+    assertLease: () => {},
+    review: () => ({ _tag: 'None' }),
+    signal: new AbortController().signal,
+    now: () => new Date(),
+    createClient: (clientOptions) =>
+      new Octokit({
+        ...clientOptions,
+        request: {
+          fetch: async (input: string | URL | Request, init?: RequestInit) => {
+            const req = new Request(input, init)
+            requests.push({
+              method: req.method,
+              path: new URL(req.url).pathname,
+              authorization: req.headers.get('authorization'),
+            })
+            const response = Response.json(req.method === 'GET' ? [] : { id: 7 })
+            Object.defineProperty(response, 'url', { value: req.url })
+            return response
+          },
+        },
+        retry: { enabled: false },
+        throttle: { enabled: false },
+      }),
+  })
+  expect(await source.comment(24, 'status')).toBe(7)
+  expect(requests).toEqual([
+    { method: 'GET', path: '/repos/nuxt-modules/example/issues/24/comments', authorization: 'token user-token' },
+    { method: 'POST', path: '/repos/nuxt-modules/example/issues/24/comments', authorization: 'token user-token' },
+  ])
+  expect(appTokens.getToken).not.toHaveBeenCalled()
 })

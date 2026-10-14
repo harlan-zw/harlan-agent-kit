@@ -309,7 +309,7 @@ describe('issue work worker', () => {
     expect(committed).toBe(false)
   })
 
-  it('resumes triage through personal authentication and prepares repository metadata', async () => {
+  it.each([1, 2])('prepares repository metadata with a fresh session on retry fence %i', async (fence) => {
     const repository = repositoryMapping({ authentication: 'user', ownership: 'maintained', conflictResolution: false })
     const issue = issueItem()
     const capture: ProviderCapture = { requests: [] }
@@ -396,7 +396,7 @@ Closes #12.`,
         repository: repository.github,
         issueNumber: issue.number,
         revisionId: 'revision-1',
-        state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
+        state: { _tag: 'Running', workerId: 'worker-1', fence, leaseExpiresAt: '2026-08-13T01:10:00.000Z' },
         updatedAt: '2026-08-13T01:00:00.000Z',
         repositoryMapping: repository,
         issue,
@@ -408,7 +408,7 @@ Closes #12.`,
       expect.objectContaining({
         model: 'gpt-5.6-terra',
         reasoningEffort: 'medium',
-        sessionId: 'triage-session',
+        sessionId: fence === 1 ? 'triage-session' : null,
         workspace: '/tmp/issue-work',
       }),
     ])
@@ -434,7 +434,7 @@ Closes #12.`,
         expect.objectContaining({
           publication: expect.objectContaining({
             pullRequestBody: expect.stringContaining(
-              '> 🤖 AI disclosure: [Wolfstar Agent Kit](https://github.com/wolfstar-project/wolfstar-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).',
+              '> 🤖 AI disclosure: [Wolfstar Agent Kit](https://github.com/wolfstar-project/wolfstar-agent-kit) modified this description. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).',
             ),
           }),
         }),
@@ -632,7 +632,8 @@ Closes #12.`,
         _tag: 'ActionRequired',
         usage: { _tag: 'Unavailable' },
         reason: 'The Agent did not return a descriptive pull request title.',
-        evidence: 'The agent returned malformed issue work JSON.',
+        evidence:
+          'The agent repeated a rejected result after one named correction. The agent returned malformed issue work JSON.',
       }),
     )
   })
@@ -739,7 +740,7 @@ Closes #12.`,
 
 Fixed the parser.
 
-> 🤖 AI disclosure: [Wolfstar Agent Kit](https://github.com/wolfstar-project/wolfstar-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).
+> 🤖 AI disclosure: [Wolfstar Agent Kit](https://github.com/wolfstar-project/wolfstar-agent-kit) modified this description. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).
 
 ### Linked Issues
 
@@ -1230,6 +1231,7 @@ describe('issue work pull request metadata', () => {
 
     expect(capture.requests).toHaveLength(2)
     expect(capture.requests[1]?.prompt).toContain('the body drops part of the repository pull request template')
+    expect(capture.requests[1]?.prompt).toContain(JSON.stringify(template.body))
     expect(JSON.stringify(recorded)).toContain('the body drops part of the repository pull request template')
     expect(result).toEqual(
       ok(
@@ -1237,6 +1239,53 @@ describe('issue work pull request metadata', () => {
           publication: expect.objectContaining({
             pullRequestTitle: title,
             pullRequestBody: expect.stringMatching(/### Description[\s\S]*### Linked Issues[\s\S]*Closes #12\./),
+          }),
+        }),
+      ),
+    )
+  })
+
+  it('restores trusted template comments without another Agent turn', async () => {
+    const commentTemplate = {
+      _tag: 'Found' as const,
+      body: '<!-- Keep this template. -->\n\n### Description\n\n<!-- Explain why. -->\n\n### Linked Issues\n\n<!-- Close the issue. -->',
+    }
+    const { result, capture } = await runIssueWork({ texts: [answer({})], template: commentTemplate })
+
+    expect(capture.requests).toHaveLength(1)
+    expect(result).toEqual(
+      ok(
+        expect.objectContaining({
+          publication: expect.objectContaining({
+            pullRequestBody: expect.stringMatching(
+              /<!-- Keep this template\. -->[\s\S]*### Description[\s\S]*<!-- Explain why\. -->[\s\S]*The parser dropped the last byte\.[\s\S]*### Linked Issues[\s\S]*<!-- Close the issue\. -->[\s\S]*Closes #12\./,
+            ),
+          }),
+        }),
+      ),
+    )
+  })
+
+  it('keeps checked change types and existing comments when restoring a missing comment', async () => {
+    const commentTemplate = {
+      _tag: 'Found' as const,
+      body: '### Description\n\n<!-- Explain why. -->\n\n- [ ] Bug fix\n\n<!-- Link the issue. -->\n\n### Linked Issues',
+    }
+    const body =
+      '### Description\n\n<!-- Explain why. -->\n\nThe parser dropped the last byte.\n\n- [x] Bug fix\n\n### Linked Issues\n\nCloses #12.'
+    const { result, capture } = await runIssueWork({
+      texts: [answer({ pullRequestBody: body })],
+      template: commentTemplate,
+    })
+
+    expect(capture.requests).toHaveLength(1)
+    expect(result).toEqual(
+      ok(
+        expect.objectContaining({
+          publication: expect.objectContaining({
+            pullRequestBody: expect.stringMatching(
+              /### Description[\s\S]*<!-- Explain why\. -->[\s\S]*The parser dropped the last byte\.[\s\S]*- \[x\] Bug fix[\s\S]*<!-- Link the issue\. -->[\s\S]*### Linked Issues[\s\S]*Closes #12\./,
+            ),
           }),
         }),
       ),

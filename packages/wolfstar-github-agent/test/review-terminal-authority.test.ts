@@ -224,6 +224,17 @@ function publicationHarness(
       readExistingReviewLabel: () => {
         throw new Error('Unexpected existing Review.')
       },
+      getPullRequestStatusIdentity: () => {
+        reads += 1
+        if (boundary === 'snapshot') change()
+        return Promise.resolve(
+          ok({
+            state: test.pullRequest.state,
+            headSha: test.pullRequest.headSha,
+            ...(test.pullRequest.baseRef === undefined ? {} : { baseRef: test.pullRequest.baseRef }),
+          }),
+        )
+      },
       getPullRequestReviewSnapshot: () => {
         reads += 1
         if (boundary === 'snapshot') change()
@@ -235,6 +246,7 @@ function publicationHarness(
             comments: [],
             priorAutomatedReview: { _tag: 'None' as const },
             pullRequest: { ...test.pullRequest, baseSha: 'ordinary-base-movement' },
+            findingDiscussions: [],
             requiredChecks: { _tag: 'None' as const },
             reviews: [],
           }),

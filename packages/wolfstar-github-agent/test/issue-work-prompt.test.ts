@@ -32,6 +32,25 @@ const storedTriage = JSON.stringify({
 })
 
 describe('issueWorkPrompt', () => {
+  it('passes related pull request evidence to issue work', () => {
+    const prompt = issueWorkPrompt({
+      task: task(),
+      body: 'Body',
+      comments: [],
+      template: '### Description',
+      routineSource: null,
+      triage: parseStoredIssueTriage(
+        JSON.stringify({
+          ...JSON.parse(storedTriage),
+          relatedPullRequests: [{ number: 25, reason: 'Changes the parser branch.' }],
+        }),
+      ),
+      instructionFiles: [],
+    })
+
+    expect(prompt).toContain('Related pull requests: #25: Changes the parser branch.')
+  })
+
   it('carries the stored triage summary and next action so the Agent does not triage twice', () => {
     const prompt = issueWorkPrompt({
       task: task(),
@@ -77,9 +96,6 @@ describe('issueWorkPrompt', () => {
     })
 
     expect(prompt).toContain('Do not run the full test suite, the full typecheck, or a build. CI runs those.')
-    expect(prompt).toContain(
-      'Failures outside the changed files are pre-existing. Do not stash changes to verify them.',
-    )
     expect(prompt).toContain('Use pnpm for every package command. Never use npx.')
     expect(prompt).toContain('Write the failing test first.')
     expect(prompt).toContain('pullRequestTitle is a Conventional Commit subject under 70 characters')
@@ -87,7 +103,7 @@ describe('issueWorkPrompt', () => {
       '> 🤖 AI disclosure: [Wolfstar Agent Kit](https://github.com/wolfstar-project/wolfstar-agent-kit) modified this description.',
     )
     expect(prompt).toContain('Read these repository instruction files before you change code: AGENTS.md.')
-    expect(prompt).not.toMatch(/Apply the (?:PR|unit-tests|humanize-writing) skill/)
+    expect(prompt).not.toMatch(/Apply the (?:PR|unit-tests|im-not-a-fly) skill/)
   })
 })
 

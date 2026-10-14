@@ -2,6 +2,8 @@ import type { H3Event } from 'h3'
 import type { DashboardSnapshot } from '../../../src/types.ts'
 import { randomBytes } from 'node:crypto'
 import { createError } from 'h3'
+import { AGENT_MODELS, OPENCODE_AGENT_PROFILE } from '../../../src/agent-profile.ts'
+import { DESKTOP_PROTOCOL } from '../../../src/desktop-protocol.ts'
 import { dashboardSnapshot, pullRequestItem } from '../../../test/fixtures.ts'
 
 /**
@@ -9,7 +11,7 @@ import { dashboardSnapshot, pullRequestItem } from '../../../test/fixtures.ts'
  * without the real controller. Never served from `.output/public`: the service
  * only ever serves that directory, and every handler here 404s outside dev.
  *
- * Scenario via `DASHBOARD_MOCK_SCENARIO`: `default`, `paused`, `stale`, `calm`.
+ * Scenario via `DASHBOARD_MOCK_SCENARIO`: `default`, `paused`, `stale`, `calm`, `rate-limited`.
  */
 export function assertDevMock(event: H3Event): void {
   if (!import.meta.dev) {
@@ -19,7 +21,7 @@ export function assertDevMock(event: H3Event): void {
 
 const hex = (seed: string): string => seed.repeat(64).slice(0, 64)
 
-/** Task IDs are 64 hex characters, so Cancel and Eject validate them like the controller does. */
+/** Task IDs are 64 hex characters, so Cancel validates them like the controller does. */
 export const mockTaskId = (): string => randomBytes(32).toString('hex')
 const minutesAgo = (minutes: number): string => new Date(Date.now() - minutes * 60_000).toISOString()
 const daysAhead = (days: number): string => new Date(Date.now() + days * 86_400_000).toISOString()
@@ -49,7 +51,8 @@ function fixture(): DashboardSnapshot {
     mergeState: 'clean',
   })
   return dashboardSnapshot({
-    hostCapacity: { localActive: 1, localMaximum: 2, desktopActive: 1, desktopMaximum: 1, desktopConnected: true },
+    agentModels: AGENT_MODELS,
+    hostCapacity: { localActive: 1, localMaximum: 2, desktopActive: 1, desktopMaximum: 1, desktopAvailable: true },
     agentSlots: { hogwildCeiling: 4, hogwildMemoryMaximum: 2, desktopCeiling: 2, memoryPerAgentGiB: 8 },
     hostTasks: [
       { taskId: hex('1'), host: 'desktop' },
@@ -57,7 +60,10 @@ function fixture(): DashboardSnapshot {
     ],
     desktop: {
       connected: true,
+      current: true,
+      protocol: DESKTOP_PROTOCOL,
       report: {
+        protocol: DESKTOP_PROTOCOL,
         memoryGiB: 16,
         reservedGiB: 12,
         agents: 1,
@@ -74,7 +80,6 @@ function fixture(): DashboardSnapshot {
           ],
         },
       },
-      requestedMemoryGiB: null,
     },
     status: 'degraded',
     mutationsEnabled: true,
@@ -184,6 +189,18 @@ function fixture(): DashboardSnapshot {
     ],
     incidents: [
       {
+        id: 'retained-repair',
+        scope: { _tag: 'Task', taskId: `logged-finding:${hex('d')}`, repository: nuxtSeo, itemNumber: 412 },
+        kind: 'unknown',
+        severity: 'error',
+        message: 'Repair recovery was interrupted. Apply the retained commit again.',
+        operation: 'publication',
+        recovery: { _tag: 'ActionRequired' },
+        occurrences: 1,
+        firstSeenAt: minutesAgo(35),
+        lastSeenAt: minutesAgo(2),
+      },
+      {
         id: 'incident-1',
         scope: { _tag: 'Repository', repository: unhead },
         kind: 'github_access',
@@ -194,6 +211,16 @@ function fixture(): DashboardSnapshot {
         occurrences: 3,
         firstSeenAt: minutesAgo(35),
         lastSeenAt: minutesAgo(2),
+      },
+    ],
+    repairRecoveryCandidates: [
+      {
+        _tag: 'Plan',
+        taskId: `logged-finding:${hex('d')}`,
+        commitSha: 'e'.repeat(40),
+        repository: nuxtSeo,
+        pullRequestNumber: 412,
+        reason: 'Repair recovery was interrupted. Apply the retained commit again.',
       },
     ],
     queue: [
@@ -457,6 +484,197 @@ function fixture(): DashboardSnapshot {
 
 function scenario(base: DashboardSnapshot): DashboardSnapshot {
   switch (process.env.DASHBOARD_MOCK_SCENARIO) {
+    case 'desktop-incompatible':
+      return {
+        ...base,
+        incidents: [],
+        repairRecoveryCandidates: [],
+        desktop:
+          base.desktop === undefined
+            ? undefined
+            : {
+                ...base.desktop,
+                current: false,
+                report:
+                  base.desktop.report === null ? null : { ...base.desktop.report, protocol: DESKTOP_PROTOCOL - 1 },
+              },
+      }
+    case 'health':
+      return {
+        ...base,
+        desktop:
+          base.desktop === undefined
+            ? undefined
+            : {
+                ...base.desktop,
+                current: false,
+                report:
+                  base.desktop.report === null ? null : { ...base.desktop.report, protocol: DESKTOP_PROTOCOL - 1 },
+              },
+        incidents: [
+          ...base.incidents,
+          ...Array.from({ length: 51 }, (_value, index) => ({
+            ...base.incidents[0]!,
+            id: `burst-${index}`,
+            severity: 'warning' as const,
+            message: `Network request ${index + 1} could not complete.`,
+            recovery:
+              index === 0
+                ? { _tag: 'Retrying' as const, attempt: 1, nextAttemptAt: minutesAgo(5) }
+                : { _tag: 'OnNextOperation' as const },
+            firstSeenAt: minutesAgo(6),
+            lastSeenAt: minutesAgo(5),
+          })),
+        ],
+      }
+    case 'rate-limited':
+      return {
+        ...base,
+        githubRateLimits: [
+          {
+            quota: { _tag: 'Installation', owner: 'wolfstar-project' },
+            kind: 'Primary',
+            retryAt: new Date(Date.now() + 25 * 60_000).toISOString(),
+          },
+          {
+            quota: { _tag: 'User', login: 'wolfstar-project' },
+            kind: 'Secondary',
+            retryAt: new Date(Date.now() + 30_000).toISOString(),
+          },
+        ],
+      }
+    case 'routine-choice':
+      return {
+        ...base,
+        agentProfile: OPENCODE_AGENT_PROFILE,
+        agentSelection: {
+          _tag: 'Pinned',
+          provider: 'opencode',
+          model: 'zai-coding-plan/glm-5.3-flash',
+          reasoningEffort: 'high',
+        },
+        providerCapacities: [
+          {
+            provider: 'codex',
+            reservePercent: 20,
+            capacity: { _tag: 'Available', usedPercent: 5, resetsAt: daysAhead(6) },
+          },
+          {
+            provider: 'opencode',
+            reservePercent: 0,
+            capacity: { _tag: 'Available', usedPercent: 100, resetsAt: daysAhead(2) },
+          },
+        ],
+        agentModelCapacities: {
+          opencodeGo: { _tag: 'Unpublished' },
+          zaiCodingPlan: { _tag: 'Available', usedPercent: 100, resetsAt: daysAhead(2) },
+        },
+      }
+    case 'routine-ux': {
+      const routine = base.routines[0]!
+      const template = base.routineRuns[0]!
+      const other = {
+        ...routine,
+        id: 'unjs/unhead:daily-checkin',
+        repository: 'unjs/unhead',
+        name: 'daily-checkin' as const,
+        trackingIssueNumber: 200,
+      }
+      const report = `<!-- routine-run:internal-marker -->
+# [BLOCKED] Routine report
+
+Coverage is incomplete. [Existing issue](https://github.com/wolfstar-project/nuxt-seo/issues/380).
+
+| Check | Result |
+| --- | --- |
+| Deployment | Passed |
+| Provider | Usage limit reached |
+
+<details>
+<summary>Evidence</summary>
+
+The deployment answered. The provider did not complete the scan.
+
+\`\`\`text
+Weekly/Monthly Limit Exhausted
+\`\`\`
+
+</details>
+
+<img src=x onerror="window.reportUnsafe=true">
+`
+      return {
+        ...base,
+        agentProfile: OPENCODE_AGENT_PROFILE,
+        agentSelection: {
+          _tag: 'Pinned',
+          provider: 'opencode',
+          model: 'zai-coding-plan/glm-5.3-flash',
+          reasoningEffort: 'high',
+        },
+        agentStart: { _tag: 'ReserveReached' },
+        providerCircuits: [],
+        providerCapacities: [
+          {
+            provider: 'codex',
+            reservePercent: 20,
+            capacity: { _tag: 'Available', usedPercent: 8, resetsAt: daysAhead(6) },
+          },
+          {
+            provider: 'opencode',
+            reservePercent: 0,
+            capacity: { _tag: 'Available', usedPercent: 100, resetsAt: daysAhead(2) },
+          },
+        ],
+        agentModelCapacities: {
+          opencodeGo: { _tag: 'Unpublished' },
+          zaiCodingPlan: { _tag: 'Available', usedPercent: 100, resetsAt: daysAhead(2) },
+        },
+        routines: [routine, other],
+        routineRuns: [
+          { ...template, id: 'latest-queued', state: { _tag: 'Queued' }, report: null, scheduledFor: minutesAgo(5) },
+          {
+            ...template,
+            id: 'last-blocked',
+            state: { _tag: 'Completed', evidence: 'Coverage incomplete.' },
+            report: { body: report, verdict: { severity: 'AMBER', coverage: 'incomplete' } },
+            scheduledFor: minutesAgo(60),
+          },
+          {
+            ...template,
+            id: 'other-queued',
+            routineId: other.id,
+            repository: other.repository,
+            name: other.name,
+            state: { _tag: 'Queued' },
+            agentSelection: { provider: 'opencode', model: 'opencode-go/glm-5.3-flash', reasoningEffort: 'high' },
+            report: null,
+            scheduledFor: minutesAgo(10),
+          },
+          {
+            ...template,
+            id: 'other-failed',
+            routineId: other.id,
+            repository: other.repository,
+            name: other.name,
+            state: { _tag: 'Failed', reason: 'The deployment did not answer.' },
+            report: null,
+            scheduledFor: minutesAgo(120),
+          },
+          ...Array.from({ length: 24 }, (_, index) => ({
+            ...template,
+            id: `older-${index}`,
+            scheduledFor: minutesAgo(180 + index * 60),
+            updatedAt: minutesAgo(178 + index * 60),
+            state: { _tag: 'Completed' as const, evidence: 'Checks passed.' },
+            report: {
+              body: '# Clear\n\nAll checks passed.',
+              verdict: { severity: 'GREEN' as const, coverage: 'complete' as const },
+            },
+          })),
+        ],
+      }
+    }
     case 'paused':
       return {
         ...base,
@@ -468,9 +686,12 @@ function scenario(base: DashboardSnapshot): DashboardSnapshot {
         ...base,
         status: 'ready',
         incidents: [],
+        repairRecoveryCandidates: [],
         queue: base.queue.filter((entry) => entry.state._tag !== 'AwaitingApproval'),
         repositories: base.repositories.map((repository) => ({ ...repository, lastError: null })),
       }
+    case 'recovery':
+      return { ...base, status: 'degraded', incidents: [] }
     default:
       return base
   }

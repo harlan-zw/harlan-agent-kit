@@ -6,7 +6,7 @@
 
 <h1>wolfstar-agent-kit</h1>
 
-> 🤖 Wolfstar Project's agent kit for Nuxt and TypeScript work. 35 Skills, 8 hooks, and a service that works on [GitHub](https://github.com) repositories autonomously.
+> 🤖 Wolfstar Project's agent kit for Nuxt and TypeScript work. 38 Skills, 8 hooks, and a service that works on [GitHub](https://github.com) repositories autonomously.
 
 It installs as a [Claude Code](https://claude.com/code) plugin. Codex reads the
 same directory and picks up the Skills.
@@ -102,39 +102,46 @@ Start a new Codex thread after a reinstall, otherwise the new Skills stay unload
 
 Every Skill lives in [`wolfstar-agent-kit/skills/`](./wolfstar-agent-kit/skills).
 
-| Skill                                                                                                           | Description                                                                                      |
-| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [`adversarial-review`](./wolfstar-agent-kit/skills/adversarial-review/SKILL.md)                                 | Review one PR adversarially, hand defects to Repair, publish the bot status                      |
-| [`agent-feedback`](./wolfstar-agent-kit/skills/agent-feedback/SKILL.md)                                         | Improve one Agent Skill from explicit Review feedback                                            |
-| [`close-off`](./wolfstar-agent-kit/skills/close-off/SKILL.md)                                                   | Finish loose ends, verify delivery, clean task-owned Git state                                   |
-| [`content-refresh`](./wolfstar-agent-kit/skills/content-refresh/SKILL.md)                                       | Refresh articles through verified sources, reviewed briefs, screenshots, and publication checks  |
-| [`email-triage`](./wolfstar-agent-kit/skills/email-triage/SKILL.md)                                             | Triage inbox email with [Himalaya](https://github.com/pimalaya/himalaya)                         |
-| [`glossary`](./wolfstar-agent-kit/skills/glossary/SKILL.md)                                                     | Create or audit `GLOSSARY.md` and catch vocabulary drift                                         |
-| [`wolfstar-github-agent`](./wolfstar-agent-kit/skills/wolfstar-github-agent/SKILL.md)                           | Drive or diagnose the local GitHub service                                                       |
-| [`humanize-writing`](./wolfstar-agent-kit/skills/humanize-writing/SKILL.md)                                     | Strip AI tells from prose before it goes out                                                     |
-| [`improve-ts-pkg-architecture`](./wolfstar-agent-kit/skills/improve-ts-pkg-architecture/SKILL.md)               | Find architecture improvements in a TypeScript package                                           |
-| [`issue-triage`](./wolfstar-agent-kit/skills/issue-triage/SKILL.md)                                             | Rank open issues by impact and difficulty                                                        |
-| [`nuxt-frontend-design`](./wolfstar-agent-kit/skills/nuxt-frontend-design/SKILL.md)                             | Build and polish Nuxt UI v4+ pages and design systems                                            |
-| [`nuxt-frontend-review`](./wolfstar-agent-kit/skills/nuxt-frontend-review/SKILL.md)                             | Run a Nuxt frontend and check it against its contract                                            |
-| [`nuxt-improve-codebase-architecture`](./wolfstar-agent-kit/skills/nuxt-improve-codebase-architecture/SKILL.md) | Find Nuxt-native architecture improvements                                                       |
-| [`pkg-conform`](./wolfstar-agent-kit/skills/pkg-conform/SKILL.md)                                               | Conform or scaffold a TypeScript package or Nuxt module                                          |
-| [`plan-ceo`](./wolfstar-agent-kit/skills/plan-ceo/SKILL.md)                                                     | Challenge scope and strategy before anyone writes code                                           |
-| [`pr`](./wolfstar-agent-kit/skills/pr/SKILL.md)                                                                 | Create or update a pull request from current work                                                |
-| [`pr-lens`](./wolfstar-agent-kit/skills/pr-lens/SKILL.md)                                                       | Draw a change as animated architecture and data-flow diagrams with [PR Lens](https://prlens.dev) |
-| [`pr-triage`](./wolfstar-agent-kit/skills/pr-triage/SKILL.md)                                                   | Repair, rank, and order the owned PR backlog                                                     |
-| [`release-notes`](./wolfstar-agent-kit/skills/release-notes/SKILL.md)                                           | Draft changelogs, release notes, and upgrade guides                                              |
-| [`wolfstar-announcements`](./wolfstar-agent-kit/skills/wolfstar-announcements/SKILL.md)                         | Write release, stage, and hotfix announcements for Discord and the website                       |
-| [`ripast`](./wolfstar-agent-kit/skills/ripast/SKILL.md)                                                         | Run AST-aware refactors with [Ripast](https://github.com/wolfstar-project/ripast)                |
-| [`daily-checkin`](./wolfstar-agent-kit/skills/daily-checkin/SKILL.md)                                           | Run nuxt-checkin and interpret site prompt items                                                 |
-| [`dependency-updates`](./wolfstar-agent-kit/skills/dependency-updates/SKILL.md)                                 | Attempt weekly dependency updates, including majors, in one pull request                         |
-| [`ci-review`](./wolfstar-agent-kit/skills/ci-review/SKILL.md)                                                   | Review CI warnings and errors, then propose verified repairs                                     |
-| [`seo-review`](./wolfstar-agent-kit/skills/seo-review/SKILL.md)                                                 | Triage a Site's NuxtSEO actions and repair the ones the code owns                                |
-| [`sentry-checkin`](./wolfstar-agent-kit/skills/sentry-checkin/SKILL.md)                                         | Triage open Sentry issues and repair them with verified PRs                                      |
-| [`social-presence`](./wolfstar-agent-kit/skills/social-presence/SKILL.md)                                       | Plan social content and launch posts                                                             |
-| [`take-ownership`](./wolfstar-agent-kit/skills/take-ownership/SKILL.md)                                         | Own current work through merge, CI, deploy, and smoke checks                                     |
-| [`ts-design-patterns`](./wolfstar-agent-kit/skills/ts-design-patterns/SKILL.md)                                 | Apply the Effect-inspired TypeScript design principles                                           |
-| [`tweet`](./wolfstar-agent-kit/skills/tweet/SKILL.md)                                                           | Draft and polish tweets with visual direction                                                    |
-| [`unit-tests`](./wolfstar-agent-kit/skills/unit-tests/SKILL.md)                                                 | Write or review unit tests through exported behavior                                             |
+| Skill                                                                                                           | Description                                                                                                    |
+| --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| [`adversarial-review`](./wolfstar-agent-kit/skills/adversarial-review/SKILL.md)                                 | Review one PR adversarially, hand defects to Repair, publish the bot status                                    |
+| [`agent-feedback`](./wolfstar-agent-kit/skills/agent-feedback/SKILL.md)                                         | Improve one Agent Skill from explicit Review feedback                                                          |
+| [`brand-lab`](./wolfstar-agent-kit/skills/brand-lab/SKILL.md)                                                   | Compare brand directions for a logo and UI motifs on one private page                                          |
+| [`browser`](./wolfstar-agent-kit/skills/browser/SKILL.md)                                                       | Select Chrome identities, use prompt-free debugging, and clean up task tabs                                    |
+| [`ci-review`](./wolfstar-agent-kit/skills/ci-review/SKILL.md)                                                   | Review CI warnings and errors, then propose verified repairs                                                   |
+| [`close-off`](./wolfstar-agent-kit/skills/close-off/SKILL.md)                                                   | Finish loose ends, verify delivery, clean task-owned Git state                                                 |
+| [`content-refresh`](./wolfstar-agent-kit/skills/content-refresh/SKILL.md)                                       | Refresh articles through verified sources, reviewed briefs, screenshots, and publication checks                |
+| [`copywriting`](./wolfstar-agent-kit/skills/copywriting/SKILL.md)                                               | Create or audit `COPY.md` for voice and canonical wording                                                      |
+| [`daily-checkin`](./wolfstar-agent-kit/skills/daily-checkin/SKILL.md)                                           | Run nuxt-checkin and interpret site prompt items                                                               |
+| [`dependency-updates`](./wolfstar-agent-kit/skills/dependency-updates/SKILL.md)                                 | Attempt weekly dependency updates, including majors, in one pull request                                       |
+| [`email-triage`](./wolfstar-agent-kit/skills/email-triage/SKILL.md)                                             | Review inbox email with [Himalaya](https://github.com/pimalaya/himalaya) and propose actions                   |
+| [`email-usage`](./wolfstar-agent-kit/skills/email-usage/SKILL.md)                                               | Choose email addresses, Himalaya accounts, and mail permissions                                                |
+| [`glossary`](./wolfstar-agent-kit/skills/glossary/SKILL.md)                                                     | Create or audit `GLOSSARY.md` and catch vocabulary drift                                                       |
+| [`humanize-writing`](./wolfstar-agent-kit/skills/humanize-writing/SKILL.md)                                     | Strip AI tells from prose before it goes out                                                                   |
+| [`i-dont-know-just-keep-working`](./wolfstar-agent-kit/skills/i-dont-know-just-keep-working/SKILL.md)           | Find related gaps, bugs, and improvements, then rank next steps by impact, effort, and confidence              |
+| [`improve-ts-pkg-architecture`](./wolfstar-agent-kit/skills/improve-ts-pkg-architecture/SKILL.md)               | Find architecture improvements in a TypeScript package                                                         |
+| [`issue-triage`](./wolfstar-agent-kit/skills/issue-triage/SKILL.md)                                             | Rank open issues by impact and difficulty                                                                      |
+| [`nuxt-4-minors-migration`](./wolfstar-agent-kit/skills/nuxt-4-minors-migration/SKILL.md)                       | Move a Nuxt 4 site to the latest 4.x release with compatibility version 5, and migrate what the minors changed |
+| [`nuxt-frontend-design`](./wolfstar-agent-kit/skills/nuxt-frontend-design/SKILL.md)                             | Build and polish Nuxt UI v4+ pages and design systems                                                          |
+| [`nuxt-frontend-review`](./wolfstar-agent-kit/skills/nuxt-frontend-review/SKILL.md)                             | Run a Nuxt frontend and check it against its contract                                                          |
+| [`nuxt-improve-codebase-architecture`](./wolfstar-agent-kit/skills/nuxt-improve-codebase-architecture/SKILL.md) | Find Nuxt-native architecture improvements                                                                     |
+| [`pkg-conform`](./wolfstar-agent-kit/skills/pkg-conform/SKILL.md)                                               | Conform or scaffold a TypeScript package or Nuxt module                                                        |
+| [`plan-ceo`](./wolfstar-agent-kit/skills/plan-ceo/SKILL.md)                                                     | Challenge scope and strategy before anyone writes code                                                         |
+| [`pr`](./wolfstar-agent-kit/skills/pr/SKILL.md)                                                                 | Create or update a pull request from current work                                                              |
+| [`pr-lens`](./wolfstar-agent-kit/skills/pr-lens/SKILL.md)                                                       | Draw a change as animated architecture and data-flow diagrams with [PR Lens](https://prlens.dev)               |
+| [`pr-triage`](./wolfstar-agent-kit/skills/pr-triage/SKILL.md)                                                   | Repair, rank, and order the owned PR backlog                                                                   |
+| [`release-notes`](./wolfstar-agent-kit/skills/release-notes/SKILL.md)                                           | Draft changelogs, release notes, and upgrade guides                                                            |
+| [`ripast`](./wolfstar-agent-kit/skills/ripast/SKILL.md)                                                         | Run AST-aware refactors with [Ripast](https://github.com/wolfstar-project/ripast)                              |
+| [`sentry-checkin`](./wolfstar-agent-kit/skills/sentry-checkin/SKILL.md)                                         | Triage open Sentry issues and repair them with verified PRs                                                    |
+| [`seo-review`](./wolfstar-agent-kit/skills/seo-review/SKILL.md)                                                 | Triage a Site's NuxtSEO actions and repair the ones the code owns                                              |
+| [`social-presence`](./wolfstar-agent-kit/skills/social-presence/SKILL.md)                                       | Plan social content and launch posts                                                                           |
+| [`take-ownership`](./wolfstar-agent-kit/skills/take-ownership/SKILL.md)                                         | Finish delivery, reconcile loose ends, and clean task-owned Git state                                          |
+| [`ts-design-patterns`](./wolfstar-agent-kit/skills/ts-design-patterns/SKILL.md)                                 | Apply the Effect-inspired TypeScript design principles                                                         |
+| [`tweet`](./wolfstar-agent-kit/skills/tweet/SKILL.md)                                                           | Find tweet ideas, plan launch posts, and draft tweets with visuals                                             |
+| [`unit-tests`](./wolfstar-agent-kit/skills/unit-tests/SKILL.md)                                                 | Write or review unit tests through exported behavior                                                           |
+| [`vitals-review`](./wolfstar-agent-kit/skills/vitals-review/SKILL.md)                                           | File a Site's poor field vitals and persistent lab drops from NuxtSEO, then repair them                        |
+| [`wolfstar-announcements`](./wolfstar-agent-kit/skills/wolfstar-announcements/SKILL.md)                         | Write release, stage, and hotfix announcements for Discord and the website                                     |
+| [`wolfstar-github-agent`](./wolfstar-agent-kit/skills/wolfstar-github-agent/SKILL.md)                           | Drive or diagnose the local GitHub service                                                                     |
 
 ## Hooks
 

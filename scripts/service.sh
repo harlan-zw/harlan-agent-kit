@@ -3,6 +3,7 @@
 #
 #   service.sh update [REF]   move to REF (default origin/main), rebuild, restart
 #   service.sh prepare-update [REF]   move to REF and rebuild without restarting
+#   service.sh resolve-update [REF]   fetch and print REF without changing checkout
 #   service.sh restart        restart the revision already deployed
 #   service.sh revision       print the deployed commit
 #   service.sh status         report what is deployed and whether it answers
@@ -179,6 +180,11 @@ case "$command" in
     require_checkout
     git -C "$SERVICE_CHECKOUT" rev-parse HEAD
     ;;
+  resolve-update)
+    require_checkout
+    git -C "$SERVICE_CHECKOUT" fetch --quiet origin
+    git -C "$SERVICE_CHECKOUT" rev-parse --verify "${2:-origin/main}^{commit}"
+    ;;
   status)
     require_checkout
     report
@@ -191,7 +197,7 @@ case "$command" in
     ;;
   *)
     echo "Unknown command: $command" >&2
-    echo "Use update, prepare-update, restart, revision, or status." >&2
+    echo "Use update, prepare-update, resolve-update, restart, revision, or status." >&2
     exit 1
     ;;
 esac

@@ -1,7 +1,9 @@
+import type { GitHubRateLimit } from './github-rate-limit.ts'
 import type { GitHubResponseCache } from './github-response-cache.ts'
 import type { Result } from './result.ts'
 import type { GitHubRepositoryAccess, GitHubRepositoryToken } from './types.ts'
-import { App, Octokit, RequestError } from 'octokit'
+import { App, Octokit } from 'octokit'
+import { failFastThrottle, parseRateLimit } from './github-rate-limit.ts'
 import { err, ok } from './result.ts'
 
 export interface GitHubTokenError {
@@ -26,13 +28,22 @@ export interface GitHubTokenProvider {
    * wrong. A rejected request is that proof, so the caller reports it here.
    */
   invalidate: (repository: string, access: GitHubRepositoryAccess) => void
+  /**
+   * Hears that GitHub rate limited a request made with this credential.
+   *
+   * A provider that holds quotas refuses the next credential until the reset.
+   */
+  rateLimited?: (repository: string, limit: GitHubRateLimit) => void
 }
 
 type PermissionLevel = 'read' | 'write'
 
-interface MintTokenInput {
+interface RepositoryInstallation {
   installationId: number
   repositoryName: string
+}
+
+interface MintTokenInput extends RepositoryInstallation {
   permissions: Record<string, PermissionLevel>
   /** Mints a new token instead of reading the provider's own cache. */
   refresh: boolean
@@ -50,15 +61,9 @@ interface MintedToken extends GitHubRepositoryToken {
 }
 
 export interface RepositoryTokenDependencies {
-  getInstallationId: (repository: string, signal?: AbortSignal) => Promise<number>
+  getInstallation: (repository: string, signal?: AbortSignal) => Promise<RepositoryInstallation>
   mintToken: (input: MintTokenInput) => Promise<MintedToken>
   now?: () => Date
-}
-
-function repositoryName(repository: string): string {
-  const name = repository.split('/')[1]
-  if (name === undefined || name.length === 0) throw new Error(`Invalid repository mapping: ${repository}.`)
-  return name
 }
 
 /**
@@ -81,6 +86,7 @@ function repositoryName(repository: string): string {
  */
 function permissions(access: GitHubRepositoryAccess): Record<string, PermissionLevel> {
   if (access === 'read') return { contents: 'read', issues: 'read', metadata: 'read', pull_requests: 'read' }
+  if (access === 'deployments_read') return { deployments: 'read', metadata: 'read' }
   if (access === 'checks_read') return { actions: 'read', checks: 'read', metadata: 'read', statuses: 'read' }
   if (access === 'check_write') return { checks: 'write', metadata: 'read' }
   if (access === 'item_write') return { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }
@@ -111,7 +117,7 @@ function errorStatus(error: unknown): number | undefined {
 }
 
 export function createRepositoryTokenProvider(dependencies: RepositoryTokenDependencies): GitHubTokenProvider {
-  const installationIds = new Map<string, number>()
+  const installations = new Map<string, RepositoryInstallation>()
   const tokens = new Map<string, GitHubRepositoryToken>()
   /** Credentials a caller reported as rejected, which must never be reused. */
   const stale = new Set<string>()
@@ -136,14 +142,13 @@ export function createRepositoryTokenProvider(dependencies: RepositoryTokenDepen
   const mint = (
     repository: string,
     access: GitHubRepositoryAccess,
-    installationId: number,
+    installation: RepositoryInstallation,
     refresh: boolean,
   ): Promise<Result<GitHubRepositoryToken, GitHubTokenError>> => {
     const requested = permissions(access)
     return dependencies
       .mintToken({
-        installationId,
-        repositoryName: repositoryName(repository),
+        ...installation,
         permissions: requested,
         refresh,
       })
@@ -164,7 +169,7 @@ export function createRepositoryTokenProvider(dependencies: RepositoryTokenDepen
     invalidate(repository, access) {
       const tokenKey = `${repository.toLowerCase()}:${access}`
       tokens.delete(tokenKey)
-      installationIds.delete(repository)
+      installations.delete(repository)
       stale.add(tokenKey)
     },
     async getToken(repository, access, signal) {
@@ -174,34 +179,34 @@ export function createRepositoryTokenProvider(dependencies: RepositoryTokenDepen
       if (cachedToken !== undefined && Date.parse(cachedToken.expiresAt) - now().getTime() > 60_000)
         return ok(cachedToken)
 
-      const cached = installationIds.get(repository)
-      const installationId = await Promise.resolve(cached)
+      const cached = installations.get(repository)
+      const installation = await Promise.resolve(cached)
         .then(
-          (id) =>
-            id ??
-            dependencies.getInstallationId(repository, signal).then((resolved) => {
-              installationIds.set(repository, resolved)
+          (value) =>
+            value ??
+            dependencies.getInstallation(repository, signal).then((resolved) => {
+              installations.set(repository, resolved)
               return resolved
             }),
         )
-        .then((value): Result<number, GitHubTokenError> => ok(value))
-        .catch((error: unknown): Result<number, GitHubTokenError> => failure(repository, error))
-      if (installationId._tag === 'Err') return installationId
+        .then((value): Result<RepositoryInstallation, GitHubTokenError> => ok(value))
+        .catch((error: unknown): Result<RepositoryInstallation, GitHubTokenError> => failure(repository, error))
+      if (installation._tag === 'Err') return installation
 
-      const token = await mint(repository, access, installationId.value, refresh)
+      const token = await mint(repository, access, installation.value, refresh)
       if (token._tag === 'Ok') {
         tokens.set(tokenKey, token.value)
         return token
       }
-      if (cached === undefined || (token.error.status !== 401 && token.error.status !== 404)) return token
+      if (cached === undefined || ![401, 404, 422].includes(token.error.status ?? 0)) return token
 
       tokens.delete(tokenKey)
-      installationIds.delete(repository)
+      installations.delete(repository)
       return dependencies
-        .getInstallationId(repository, signal)
-        .then((refreshedId) => {
-          installationIds.set(repository, refreshedId)
-          return mint(repository, access, refreshedId, true).then((refreshed) => {
+        .getInstallation(repository, signal)
+        .then((refreshedInstallation) => {
+          installations.set(repository, refreshedInstallation)
+          return mint(repository, access, refreshedInstallation, true).then((refreshed) => {
             if (refreshed._tag === 'Ok') tokens.set(tokenKey, refreshed.value)
             return refreshed
           })
@@ -215,25 +220,46 @@ export interface GitHubAppTokenProviderOptions {
   appId: number
   privateKey: string
   userAgent?: string
+  /** Resolves a missing repository through trusted controller discovery. */
+  resolveRenamedRepository: (repository: string) => Promise<string | undefined>
 }
 
 export function createGitHubAppTokenProvider(options: GitHubAppTokenProviderOptions): GitHubTokenProvider {
   const app = new App({
     appId: options.appId,
     privateKey: options.privateKey,
-    Octokit: Octokit.defaults({ userAgent: options.userAgent ?? 'wolfstar-github-agent/0.0.0' }),
+    Octokit: Octokit.defaults({
+      userAgent: options.userAgent ?? 'wolfstar-github-agent/0.0.0',
+      throttle: failFastThrottle,
+    }),
   })
 
   return createRepositoryTokenProvider({
-    getInstallationId: async (repository, signal) => {
+    getInstallation: async (repository, signal) => {
       const [owner, repo] = repository.split('/')
       if (owner === undefined || repo === undefined) throw new Error(`Invalid repository mapping: ${repository}.`)
-      const response = await app.octokit.rest.apps.getRepoInstallation({
-        owner,
-        repo,
-        ...(signal === undefined ? {} : { request: { signal } }),
+      const read = (name: string) =>
+        app.octokit.rest.apps
+          .getRepoInstallation({
+            owner,
+            repo: name,
+            ...(signal === undefined ? {} : { request: { signal } }),
+          })
+          .then((response) => ({ installationId: response.data.id, repositoryName: name }))
+      return read(repo).catch(async (error: unknown) => {
+        // Unlike repository metadata, this endpoint does not redirect old names.
+        if (errorStatus(error) !== 404) throw error
+        const current = await options.resolveRenamedRepository(repository)
+        const match = current === undefined ? null : /^([^/]+)\/([^/]+)$/.exec(current)
+        if (
+          match === null ||
+          match[1]!.toLowerCase() !== owner.toLowerCase() ||
+          current!.toLowerCase() === repository.toLowerCase()
+        ) {
+          throw error
+        }
+        return read(match[2]!)
       })
-      return response.data.id
     },
     mintToken: async (input) =>
       app.octokit
@@ -318,17 +344,6 @@ export function isAuthenticationRejection(status: number | undefined): boolean {
   return status === 401 || status === 403
 }
 
-/** Rate limits reject valid credentials. Refreshing them spends more requests. */
-function isRateLimitRejection(error: unknown): boolean {
-  if (!(error instanceof RequestError) || error.status !== 403) return false
-  const headers = error.response?.headers
-  return (
-    headers?.['x-ratelimit-remaining'] === '0' ||
-    headers?.['retry-after'] !== undefined ||
-    /\b(?:rate limits?|abuse detection)\b/i.test(error.message)
-  )
-}
-
 export interface AuthenticatedClientOptions {
   /** Optional observation cache. Every reuse is revalidated with GitHub. */
   responseCache?: GitHubResponseCache
@@ -340,7 +355,12 @@ export interface AuthenticatedClientOptions {
   userAgent: string
   signal?: AbortSignal | undefined
   /** Injected for tests. Receives the same options the real client is built with. */
-  createClient?: (options: { authStrategy: () => unknown; auth: unknown; userAgent: string }) => Octokit
+  createClient?: (options: {
+    authStrategy: () => unknown
+    auth: unknown
+    userAgent: string
+    throttle: typeof failFastThrottle
+  }) => Octokit
 }
 
 /**
@@ -380,6 +400,7 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
     authStrategy: mutableTokenStrategy(credential),
     auth: credential,
     userAgent: options.userAgent,
+    throttle: failFastThrottle,
   }
   const octokit =
     options.createClient === undefined ? new Octokit(clientOptions as never) : options.createClient(clientOptions)
@@ -387,7 +408,8 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
 
   octokit.hook.wrap('request', async (request, requestOptions) => {
     const read = () =>
-      options.access === 'read' && options.responseCache !== undefined
+      (options.access === 'read' || options.access === 'checks_read' || options.access === 'deployments_read') &&
+      options.responseCache !== undefined
         ? options.responseCache.request(
             async (endpoint) => {
               // Octokit's inner hooks bind the original options object.
@@ -406,7 +428,10 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
     try {
       return await read()
     } catch (error) {
-      if (retried || !isAuthenticationRejection(errorStatus(error)) || isRateLimitRejection(error)) throw error
+      // Rate limits reject valid credentials. Refreshing them spends more requests.
+      const limit = parseRateLimit(error)
+      if (limit !== null) options.tokens.rateLimited?.(options.repository, limit)
+      if (retried || !isAuthenticationRejection(errorStatus(error)) || limit !== null) throw error
       retried = true
       options.tokens.invalidate(options.repository, options.access)
       const refreshed = await options.tokens.getToken(options.repository, options.access, options.signal)

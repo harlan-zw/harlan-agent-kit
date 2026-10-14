@@ -26,6 +26,7 @@ import {
  */
 const {
   snapshot,
+  controlsUnavailable,
   loading,
   relativeTime,
   repositoryPending,
@@ -39,6 +40,14 @@ const {
 } = useDashboard()
 
 const repositoryQuery = ref('')
+const PullRequestDiff = defineAsyncComponent(() => import('../components/_TerminalDiff.vue'))
+const diffTarget = shallowRef<{ _tag: 'PullRequest'; repository: string; number: number; base: string; head: string }>()
+const diffOpen = computed({
+  get: () => diffTarget.value !== undefined,
+  set: (open: boolean) => {
+    if (!open) diffTarget.value = undefined
+  },
+})
 const itemsFilter = ref<OpenItemsFilter>('all')
 const filterInput = useTemplateRef('filterInput')
 /** The repository whose Enable writes is waiting for confirmation. */
@@ -76,7 +85,7 @@ function menuItems(repository: RepositoryStatus): DropdownMenuItem[] {
   return repositoryActions(repository).map((action) => ({
     label: repositoryActionLabel(action),
     icon: repositoryActionIcon(action),
-    disabled: busy.value,
+    disabled: busy.value || controlsUnavailable.value,
     onSelect: () => act(repository, action),
   }))
 }
@@ -279,11 +288,39 @@ useHead({
                     : 'Could not decide'
               }}</span
             >
+            <UButton
+              v-if="item.kind === 'pull_request'"
+              icon="i-octicon-diff-16"
+              aria-label="Diff"
+              size="xs"
+              color="neutral"
+              variant="ghost"
+              class="ml-2 shrink-0"
+              @click="
+                diffTarget = {
+                  _tag: 'PullRequest',
+                  repository: item.repository,
+                  number: item.number,
+                  base: item.baseSha,
+                  head: item.headSha,
+                }
+              "
+            />
           </li>
         </ul>
 
         <UiEmptyState v-else compact icon="empty" title="Nothing open" :description="openItemsEmptyLine(itemsFilter)" />
       </section>
+      <USlideover
+        v-model:open="diffOpen"
+        title="Diff"
+        :close="false"
+        :ui="{ header: 'sr-only', content: 'w-screen max-w-none', body: 'min-h-0 flex-1 p-0' }"
+      >
+        <template #body>
+          <PullRequestDiff v-if="diffTarget" :target="diffTarget" @close="diffOpen = false" />
+        </template>
+      </USlideover>
 
       <!-- The only place a Dismissal can be undone. Absent until one exists. -->
       <section v-if="dismissed.length > 0" class="min-w-0" aria-label="Dismissed">
@@ -315,7 +352,7 @@ useHead({
                 icon="i-octicon-undo-16"
                 class="shrink-0"
                 :loading="dismissPending === dismissKey(item.repository, item.number)"
-                :disabled="dismissPending !== undefined"
+                :disabled="dismissPending !== undefined || controlsUnavailable"
                 :aria-label="`Restore ${item.repository} ${itemLabel(item)} ${item.number}`"
                 @click="restoreItem(item.repository, item.number)"
               >

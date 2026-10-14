@@ -1,23 +1,18 @@
 ---
 name: release-notes
 description: 'Write release notes, changelogs, announcements, and upgrade guides for major or minor releases.'
-user_invocable: true
 context: fork
 argument-hint: '[version]'
 effort: high
+license: MIT
 ---
 
 Generate Nuxt-style release notes with highlights, categorized changelog, and LLM upgrade prompts for breaking changes.
 
 ## Worktree isolation
 
-Before writing a repository file, follow the [worktree isolation contract](../../references/worktree-isolation.md). It provides the atomic live-agent claim used below.
-
-An existing worktree alone does not prove another agent is active.
-
-`wt` is the only worktree tool. Never run `git worktree add`, and never use a harness worktree option such as `EnterWorktree` or `isolation: "worktree"`. Those write to `.claude/worktrees/`, which is banned. `wt` places every worktree at `<parent>/<repo>.<branch-slug>`.
-
-Keep the primary checkout read only. Before writing, run `wt list --format=json`. Reuse the task's worktree with `wt switch <branch>`, or create one with `wt switch --create <branch> --base <base>`. Read its absolute `path` from the JSON, then pass that path as `workdir` to every later command. Never share a mutation worktree between tasks.
+Before writing a repository file, read and follow the [worktree isolation contract](../../references/worktree-isolation.md).
+Keep mutation in a task-owned `wt` worktree with a live claim. Keep the primary checkout read only.
 
 ## Current State
 
@@ -119,7 +114,11 @@ If any dependency had a **major version bump**, note it as a potential source of
 
 A mislabeled breaking change is the costliest error in a release note: a missed one strands users on broken upgrades, a false one scares them off a safe bump. After steps 1a-1d produce a candidate breaking-change list, verify each one against the actual diff before it reaches the notes.
 
-For a handful of candidates, verify inline. For 10+ (large release, 10+ changed exports), spawn a verifier per candidate — drive it with the **Workflow tool** as a `parallel` verify stage; this skill's instructions are the opt-in. Each verifier gets the candidate plus the relevant diff hunk and answers:
+For a handful of candidates, verify inline.
+For 10+ candidates, this Skill permits read-only verification delegation.
+Use the active provider's available agent tools and configured model policy. Bound parallel work by available slots.
+If delegation is unavailable, verify each candidate sequentially in a separate pass.
+Keep the same evidence and questions for either route. Each verifier reads the candidate and relevant diff hunk, then answers:
 
 - Does this actually break **consumer** code, or only internal/private surface (not in the `exports` map)?
 - Is the migration path described accurate, and does the before/after compile?
@@ -225,7 +224,7 @@ Structure:
 - Changelog items are **one-line bullets** with PR links.
 - Skip empty categories (if no perf changes, omit 🔥 Performance).
 - Contributors: deduplicate, use GitHub usernames with profile links.
-- **Strip AI tells before publishing** -- run the Highlights prose through `/humanize-writing`. The biggest wins for release notes: cut the over-explained takeaway ("this means users can now...") and use specific version numbers, PR links, and real benchmark figures instead of vague claims.
+- Before publishing, run the prose through the `humanize-writing` Skill for the Highlights prose. Preserve versions, links, and measured figures.
 
 ## Step 4: LLM Upgrade Prompt (Breaking Changes Only)
 

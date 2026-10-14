@@ -17,6 +17,11 @@ const REFUSED_NAMES = new Set([
   'CURL_CA_BUNDLE',
   'ENV',
   'GH_CONFIG_DIR',
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_HOST',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
   'GITHUB_API_URL',
   'HOME',
   'HTTP_PROXY',
@@ -27,6 +32,8 @@ const REFUSED_NAMES = new Set([
   'NODE_PATH',
   'PATH',
   'PNPM_HOME',
+  'PNPM_CONFIG_STORE_DIR',
+  'NPM_CONFIG_STORE_DIR',
   'REQUESTS_CA_BUNDLE',
   'SHELL',
   'SSL_CERT_DIR',
@@ -62,7 +69,11 @@ export function parseEnvironmentFile(text: string): Record<string, string> {
       value = value.replace(/\s+#.*$/, '').trim()
     }
     const upperName = name.toUpperCase()
-    if (REFUSED_NAMES.has(upperName) || REFUSED_PREFIXES.some((prefix) => upperName.startsWith(prefix))) continue
+    if (
+      REFUSED_NAMES.has(upperName.replaceAll('-', '_')) ||
+      REFUSED_PREFIXES.some((prefix) => upperName.startsWith(prefix))
+    )
+      continue
     values[name] = value
   }
   return values
@@ -100,27 +111,38 @@ function isDirectory(path: string): boolean {
   }
 }
 
+/** Routine IDs carry the trusted repository, independent of worktree and run date. */
+export function dailyCheckinDirectory(base: NodeJS.ProcessEnv, taskId?: string): string | undefined {
+  const routine = /^([a-z0-9][a-z0-9-]*)\/([a-z0-9][\w.-]*):(daily-checkin|d1-query-review):/i.exec(taskId ?? '')
+  if (!routine) return undefined
+  const stateHome =
+    base.XDG_STATE_HOME && isAbsolute(base.XDG_STATE_HOME)
+      ? base.XDG_STATE_HOME
+      : base.HOME && isAbsolute(base.HOME)
+        ? join(base.HOME, '.local', 'state')
+        : undefined
+  if (!stateHome) throw new Error('Daily check-in needs an absolute HOME or XDG_STATE_HOME.')
+  return join(stateHome, routine[3]!, routine[1]!, routine[2]!)
+}
+
 export function workspaceEnvironment(base: NodeJS.ProcessEnv, workspace: string, taskId?: string): NodeJS.ProcessEnv {
   const values = readEnvironmentValues(join(workspace, '.env'))
-  // Routine IDs carry the trusted repository, independent of worktree and run date.
-  const routine = /^([a-z0-9][a-z0-9-]*)\/([a-z0-9][\w.-]*):daily-checkin:/i.exec(taskId ?? '')
-  if (routine) {
-    const stateHome =
-      base.XDG_STATE_HOME && isAbsolute(base.XDG_STATE_HOME)
-        ? base.XDG_STATE_HOME
-        : base.HOME && isAbsolute(base.HOME)
-          ? join(base.HOME, '.local', 'state')
-          : undefined
-    if (!stateHome) throw new Error('Daily check-in needs an absolute HOME or XDG_STATE_HOME.')
-    values.DAILY_CHECKIN_DIR = join(stateHome, 'daily-checkin', routine[1]!, routine[2]!)
-  }
+  const stateDirectory = dailyCheckinDirectory(base, taskId)
+  if (stateDirectory !== undefined) values.DAILY_CHECKIN_DIR = stateDirectory
   // A repository's own binaries come first, the way a shell inside it would
   // find them. The service unit carries a bare PATH, so a check-in script that
   // shelled out to `wrangler` found nothing and reported every probe as failed.
   const binaries = join(workspace, 'node_modules', '.bin')
-  const PATH = isDirectory(binaries)
+  const repositoryPath = isDirectory(binaries)
     ? [binaries, base.PATH].filter((entry) => entry !== undefined && entry !== '').join(delimiter)
     : base.PATH
+  // Only Agent processes receive this PATH. The controller retains its own gh.
+  const publicGitHub =
+    base.HOME && isAbsolute(base.HOME) ? join(base.HOME, '.local/share/wolfstar-agent-kit/github-bin') : undefined
+  const PATH =
+    publicGitHub && isDirectory(publicGitHub)
+      ? [publicGitHub, repositoryPath].filter(Boolean).join(delimiter)
+      : repositoryPath
   if (Object.keys(values).length === 0 && PATH === base.PATH) return base
   return { ...base, ...values, ...(PATH === undefined ? {} : { PATH }) }
 }

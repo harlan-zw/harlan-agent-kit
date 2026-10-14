@@ -15,6 +15,69 @@ import { trackingIssueBody } from '../src/routine-report-controller.ts'
 import { repositoryMapping } from './fixtures.ts'
 
 describe('gitHub subjects', () => {
+  it('reads owner change requests alongside exact rerun commands', async () => {
+    const source = createGitHubSource({
+      actorLogin: () => 'wolfstar-github-agent[bot]',
+      createClient: () =>
+        ({
+          rest: {
+            issues: {
+              listCommentsForRepo: async () => ({
+                data: [
+                  {
+                    id: 6072523996,
+                    body: '@wolfstar-github-agent can we just changing trailingSlash to false ',
+                    user: { login: 'wolfstar-project' },
+                    issue_url: 'https://api.github.com/repos/wolfstar-project/example/issues/109',
+                    updated_at: '2026-10-09T01:41:51Z',
+                  },
+                  {
+                    id: 2,
+                    body: '@wolfstar-agent rerun',
+                    user: { login: 'wolfstar-project' },
+                    issue_url: 'https://api.github.com/repos/wolfstar-project/example/issues/109',
+                    updated_at: '2026-10-09T01:42:00Z',
+                  },
+                  {
+                    id: 3,
+                    body: 'Mentioned @wolfstar-agent fix this',
+                    user: { login: 'wolfstar-project' },
+                    issue_url: 'https://api.github.com/repos/wolfstar-project/example/issues/109',
+                    updated_at: '2026-10-09T01:43:00Z',
+                  },
+                ],
+              }),
+            },
+            pulls: { listReviewCommentsForRepo: async () => ({ data: [] }) },
+          },
+        }) as unknown as Octokit,
+      issueCutoff: '2026-07-01',
+      tokens: {
+        getToken: async () => ok({ token: 'token', expiresAt: '2026-10-10T02:00:00.000Z' }),
+        invalidate: () => undefined,
+      },
+    })
+    expect(await source.listReviewRerunRequests(repositoryMapping())).toEqual(
+      ok([
+        {
+          author: 'wolfstar-project',
+          commentId: 6072523996,
+          origin: 'ChangeRequest',
+          instruction: 'can we just changing trailingSlash to false',
+          pullRequestNumber: 109,
+          updatedAt: '2026-10-09T01:41:51Z',
+        },
+        {
+          author: 'wolfstar-project',
+          commentId: 2,
+          origin: 'Command',
+          pullRequestNumber: 109,
+          updatedAt: '2026-10-09T01:42:00Z',
+        },
+      ]),
+    )
+  })
+
   it('reads the Routine spec from its canonical repository path', async () => {
     const getContentCalls: Array<Record<string, unknown>> = []
     const client = {

@@ -1,4 +1,5 @@
 import type { AddressInfo } from 'node:net'
+import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -34,6 +35,111 @@ afterEach(async () => {
 })
 
 describe('wolfstar GitHub Agent control CLI', () => {
+  it.each(['valid', 'invalid', 'current'])('reruns triage only for an exact Issue Revision: %s', async (mode) => {
+    const directory = await mkdtemp(join(tmpdir(), 'wolfstar-triage-cli-'))
+    temporaryDirectories.push(directory)
+    const passwordFile = join(directory, 'password')
+    await writeFile(passwordFile, 'test-password-with-at-least-32-bytes\n', { mode: 0o600 })
+    const revisionId = mode === 'invalid' ? 'latest' : 'a'.repeat(64)
+    const requests: unknown[] = []
+    const receipt = { _tag: 'Queued', taskId: 'b'.repeat(64) }
+    const server = createServer(async (request, response) => {
+      if (request.method === 'GET') {
+        requests.push({ path: request.url })
+        response.setHeader('content-type', 'application/json')
+        response.end(JSON.stringify({ revisionId, dismissed: false }))
+        return
+      }
+      let body = ''
+      for await (const chunk of request) body += chunk
+      requests.push({ path: request.url, body: JSON.parse(body) })
+      response.setHeader('content-type', 'application/json')
+      response.statusCode = 202
+      response.end(JSON.stringify(receipt))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address() as AddressInfo
+    const result = await runControlCli([
+      'control',
+      'rerun-issue',
+      '--repository',
+      'wolfstar-project/example',
+      '--number',
+      '12',
+      ...(mode === 'current' ? [] : ['--revision', revisionId]),
+      '--url',
+      `http://127.0.0.1:${address.port}`,
+      '--password-file',
+      passwordFile,
+    ]).finally(
+      () =>
+        new Promise<void>((resolve, reject) =>
+          server.close((error) => (error === undefined ? resolve() : reject(error))),
+        ),
+    )
+    expect(result.code).toBe(mode === 'invalid' ? 1 : 0)
+    if (mode === 'invalid') {
+      expect(JSON.parse(result.stderr)._tag).toBe('InvalidIssueTarget')
+      expect(requests).toEqual([])
+      return
+    }
+    expect(JSON.parse(result.stdout)).toEqual(receipt)
+    expect(requests).toEqual([
+      ...(mode === 'current'
+        ? [{ path: '/api/items/issue-status?repository=wolfstar-project%2Fexample&number=12' }]
+        : []),
+      {
+        path: '/api/issues/rerun-triage',
+        body: { repository: 'wolfstar-project/example', issueNumber: 12, revisionId },
+      },
+    ])
+  })
+  it.each(['normal', 'logged-finding', 'invalid'])('cancels only supported Task identities: %s', async (mode) => {
+    const directory = await mkdtemp(join(tmpdir(), 'wolfstar-recovery-cli-'))
+    temporaryDirectories.push(directory)
+    const passwordFile = join(directory, 'password')
+    await writeFile(passwordFile, 'test-password-with-at-least-32-bytes\n', { mode: 0o600 })
+    const taskId =
+      mode === 'normal'
+        ? 'a'.repeat(64)
+        : mode === 'logged-finding'
+          ? `logged-finding:${'a'.repeat(64)}`
+          : 'logged-finding:arbitrary'
+    const requests: unknown[] = []
+    const server = createServer(async (request, response) => {
+      let body = ''
+      for await (const chunk of request) body += chunk
+      requests.push({ path: request.url, body: JSON.parse(body) })
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({ _tag: 'Cancelled' }))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address() as AddressInfo
+    const result = await runControlCli([
+      'control',
+      'cancel',
+      '--task',
+      taskId,
+      '--url',
+      `http://127.0.0.1:${address.port}`,
+      '--password-file',
+      passwordFile,
+    ]).finally(
+      () =>
+        new Promise<void>((resolve, reject) =>
+          server.close((error) => (error === undefined ? resolve() : reject(error))),
+        ),
+    )
+    if (mode === 'invalid') {
+      expect(result.code).toBe(1)
+      expect(JSON.parse(result.stderr)._tag).toBe('InvalidTaskId')
+      expect(requests).toEqual([])
+      return
+    }
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({ _tag: 'Cancelled' })
+    expect(requests).toEqual([{ path: '/api/tasks/cancel', body: { taskId } }])
+  })
   it('prints one tagged JSON error and exits 1 when a Task ID is missing', async () => {
     const run = await runControlCli(['control', 'cancel'])
 
@@ -192,4 +298,109 @@ describe('wolfstar GitHub Agent control CLI', () => {
     })
     expect(result.stderr).toBe('')
   })
+})
+
+describe('incident resolution Control CLI', () => {
+  it.each([true, false])('sends evidence only after exact target validation: %s', async (valid) => {
+    const directory = await mkdtemp(join(tmpdir(), 'incident-cli-'))
+    temporaryDirectories.push(directory)
+    const passwordFile = join(directory, 'password')
+    await writeFile(passwordFile, 'test-password-with-at-least-32-bytes\n', { mode: 0o600 })
+    const input = {
+      incidentId: 'a'.repeat(64),
+      lastSeenAt: '2026-10-12T00:00:00.000Z',
+      evidence: valid ? 'Merged fix verified.' : '',
+    }
+    const requests: unknown[] = []
+    const server = createServer(async (request, response) => {
+      let body = ''
+      for await (const chunk of request) body += chunk
+      requests.push({ path: request.url, body: JSON.parse(body) })
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({ _tag: 'Resolved' }))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address() as AddressInfo
+    const result = await runControlCli([
+      'control',
+      'resolve-incident',
+      '--incident',
+      input.incidentId,
+      '--last-seen-at',
+      input.lastSeenAt,
+      '--evidence',
+      input.evidence,
+      '--url',
+      `http://127.0.0.1:${address.port}`,
+      '--password-file',
+      passwordFile,
+    ]).finally(
+      () =>
+        new Promise<void>((resolve, reject) =>
+          server.close((error) => (error === undefined ? resolve() : reject(error))),
+        ),
+    )
+    expect(result.code).toBe(valid ? 0 : 1)
+    expect(requests).toEqual(valid ? [{ path: '/api/incidents/resolve', body: input }] : [])
+    expect(JSON.parse(valid ? result.stdout : result.stderr)._tag).toBe(
+      valid ? 'Resolved' : 'InvalidIncidentResolution',
+    )
+  })
+})
+
+it('prints one Review history object filtered to the requested head', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'wolfstar-review-cli-'))
+  temporaryDirectories.push(directory)
+  const passwordFile = join(directory, 'password')
+  await writeFile(passwordFile, 'test-password-with-at-least-32-bytes\n', { mode: 0o600 })
+  const run = {
+    id: 'review-a',
+    repository: 'wolfstar-project/example',
+    pullRequestNumber: 12,
+    headSha: 'a'.repeat(40),
+    outcome: { _tag: 'Ready' },
+    gates: {
+      merge: { _tag: 'Passed', evidence: [] },
+      review: { _tag: 'Passed', evidence: [] },
+      ci: { _tag: 'Passed', evidence: [] },
+    },
+    findings: [],
+    startedAt: '2026-10-12T01:00:00Z',
+    completedAt: '2026-10-12T01:01:00Z',
+  }
+  const requests: unknown[] = []
+  const server = createServer((request, response) => {
+    requests.push({ path: request.url, authorization: request.headers.authorization })
+    response.setHeader('content-type', 'application/json')
+    response.end(JSON.stringify({ runs: [run, { ...run, id: 'review-b', headSha: 'b'.repeat(40) }] }))
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address() as AddressInfo
+  const result = await runControlCli([
+    'control',
+    'reviews',
+    '--repository',
+    run.repository,
+    '--number',
+    '12',
+    '--head',
+    run.headSha,
+    '--url',
+    `http://127.0.0.1:${address.port}`,
+    '--password-file',
+    passwordFile,
+  ]).finally(
+    () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error === undefined ? resolve() : reject(error))),
+      ),
+  )
+  expect(result.code).toBe(0)
+  expect(JSON.parse(result.stdout)).toEqual({ runs: [run] })
+  expect(requests).toEqual([
+    {
+      path: '/api/reviews?repository=wolfstar-project%2Fexample&pull_request=12',
+      authorization: `Basic ${Buffer.from('agent:test-password-with-at-least-32-bytes').toString('base64')}`,
+    },
+  ])
 })

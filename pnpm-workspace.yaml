@@ -1,49 +1,110 @@
 minimumReleaseAgeExcludePrune: true
+minimumReleaseAgeExclude:
+  - '@harlan-zw/jev@0.2.4'
 
 trustPolicy: no-downgrade
 trustPolicyIgnoreAfter: 262800
+
+peerDependencyRules:
+  allowedVersions:
+    vitepress-plugin-mermaid>mermaid: '12'
+
 shellEmulator: true
 
 packages:
   - packages/*
 
+overrides:
+  '@humanfs/node': ^0.16.8
+  '@tiptap/core': 3.30.5
+  '@tiptap/extension-blockquote': 3.30.5
+  '@tiptap/extension-bold': 3.30.5
+  '@tiptap/extension-bubble-menu': 3.30.5
+  '@tiptap/extension-bullet-list': 3.30.5
+  '@tiptap/extension-code': 3.30.5
+  '@tiptap/extension-code-block': 3.30.5
+  '@tiptap/extension-collaboration': 3.30.5
+  '@tiptap/extension-document': 3.30.5
+  '@tiptap/extension-drag-handle': 3.30.5
+  '@tiptap/extension-drag-handle-vue-3': 3.30.5
+  '@tiptap/extension-dropcursor': 3.30.5
+  '@tiptap/extension-floating-menu': 3.30.5
+  '@tiptap/extension-gapcursor': 3.30.5
+  '@tiptap/extension-hard-break': 3.30.5
+  '@tiptap/extension-heading': 3.30.5
+  '@tiptap/extension-horizontal-rule': 3.30.5
+  '@tiptap/extension-image': 3.30.5
+  '@tiptap/extension-italic': 3.30.5
+  '@tiptap/extension-link': 3.30.5
+  '@tiptap/extension-list': 3.30.5
+  '@tiptap/extension-list-item': 3.30.5
+  '@tiptap/extension-list-keymap': 3.30.5
+  '@tiptap/extension-mention': 3.30.5
+  '@tiptap/extension-node-range': 3.30.5
+  '@tiptap/extension-ordered-list': 3.30.5
+  '@tiptap/extension-paragraph': 3.30.5
+  '@tiptap/extension-placeholder': 3.30.5
+  '@tiptap/extension-strike': 3.30.5
+  '@tiptap/extension-text': 3.30.5
+  '@tiptap/extension-underline': 3.30.5
+
+  '@tiptap/extensions': 3.30.5
+  '@tiptap/markdown': 3.30.5
+  '@tiptap/pm': 3.30.5
+  '@tiptap/starter-kit': 3.30.5
+  '@tiptap/suggestion': 3.30.5
+  '@tiptap/vue-3': 3.30.5
+  devalue: ^5.9.2
+  esbuild@^0.27.0: ^0.28.1
+  svgo: ^4.1.0
+  vitepress>vite: ^6.4.3
+
 allowBuilds:
   esbuild: false
+  node-pty: true
   vue-demi: true
-
-minimumReleaseAgeExclude:
-  - '@iconify-json/octicon@1.2.36'
-  - '@iconify-json/simple-icons@1.2.97'
-  - '@harlan-zw/jev@0.2.4'
 
 catalog:
   '@anthropic-ai/claude-agent-sdk': ^0.3.252
-  '@coldtea/pr-lens-renderer': ^0.2.6
-  '@coldtea/pr-lens-schema': ^0.4.0
+  '@coldtea/pr-lens-renderer': ^0.3.2
+  '@coldtea/pr-lens-schema': ^0.7.0
   '@harlan-zw/jev': ^0.2.0
-  '@iconify-json/octicon': ^1.2.36
-  '@iconify-json/simple-icons': ^1.2.97
+  '@iconify-json/octicon': ^1.2.37
+  '@iconify-json/simple-icons': ^1.2.98
   '@nuxt/fonts': ^0.14.0
   '@nuxt/icon': ^2.5.1
-  '@nuxt/ui': ^4.11.1
-  '@openai/codex-sdk': ^0.155.1
-  '@types/node': ^26.6.2
+  '@nuxt/ui': ^4.11.3
+  '@openai/codex-sdk': ^0.160.0
+  '@pierre/diffs': 1.2.0
+  '@resvg/resvg-js': ^2.6.2
+  '@types/node': ^26.6.4
+  '@types/semver': ^7.7.1
+  '@types/ws': 8.18.2
   '@vueuse/nuxt': ^15.0.0
   citty: ^0.2.2
   consola: ^3.4.2
-  h3: ^2.0.1-rc.32
-  mermaid: ^11.12.0
+  esbuild: 0.28.2
+  ghostty-web: 0.4.0
+  h3: ^2.0.1
+  image-size: ^2.0.4
+  marked: ^17.0.6
+  mermaid: ^12.1.0
+  node-gyp: 13.1.0
+  node-pty: 1.1.0
   nuxt: ^4.5.2
-  nuxt-skew-protection: ^1.5.4
-  obuild: ^0.4.40
+  nuxt-skew-protection: ^1.6.1
+  obuild: ^0.4.43
   octokit: ^5.0.5
   oxfmt: ^0.65.0
   oxlint: ^1.80.0
+  saxes: ^6.0.0
+  semver: ^7.7.3
   srvx: ^1.0.5
   typescript: 6.0.3
   vitepress: ^1.6.4
   vitepress-plugin-mermaid: ^2.0.17
-  vitest: ^5.0.1
+  vitest: ^5.0.3
   vue: ^3.5.43
-  vue-tsc: ^3.3.11
+  vue-tsc: ^3.3.12
+  ws: 8.22.0
   yaml: ^2.9.1

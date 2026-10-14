@@ -7,7 +7,11 @@
     "lint:fix": "oxlint . --fix && oxfmt .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "test": "pnpm test:release && pnpm test:context && pnpm test:commit-hook && pnpm test:himalaya && pnpm test:opencode-hooks && pnpm test:hogwild && pnpm test:skill-doc-paths && pnpm test:service && pnpm --filter advocaat test:run && pnpm --filter wolfstar-github-agent test:run",
+    "test": "pnpm test:release && pnpm test:agent-cli && pnpm test:agent-retro && pnpm test:context && pnpm test:commit-hook && pnpm test:himalaya && pnpm test:browser && pnpm test:opencode-hooks && pnpm test:hogwild && pnpm test:nuxt-4-minors-migration && pnpm test:nuxt-module-migration && pnpm test:skill-doc-paths && pnpm test:service && pnpm test:lockfile && pnpm test:github-public && pnpm --filter advocaat test:run && pnpm --filter wolfstar-github-agent test:run && pnpm test:notes-viewer",
+    "test:github-public": "vitest run scripts/github-public.test.ts scripts/agent-check.test.ts scripts/agent-tools.test.ts",
+    "sync:tools": "flock -w 180 $HOME/.local/share/wolfstar-agent-kit/tools.lock node --experimental-strip-types scripts/agent-tools.ts",
+    "test:lockfile": "vitest run scripts/lockfile.test.ts",
+    "test:notes-viewer": "vitest run packages/notes-viewer",
     "typecheck": "pnpm --filter wolfstar-github-agent typecheck",
     "check:context": "scripts/check-agent-context.sh",
     "sync:context": "bash scripts/sync-agent-context.sh local",
@@ -26,23 +30,32 @@
     "test:context": "bash scripts/sync-agent-context.test.sh",
     "test:commit-hook": "bash scripts/commit-msg-hook.test.sh",
     "test:himalaya": "bash scripts/himalaya-read-only.test.sh",
-    "test:service": "bash scripts/service.test.sh && bash scripts/repository-env.test.sh && bash scripts/worktrunk-config.test.sh && bash scripts/worktree-sweep.test.sh && bash scripts/worktree-sweep-service.test.sh && bash scripts/hogwild-service.test.sh",
+    "test:service": "bash scripts/service.test.sh && bash scripts/repository-env.test.sh && bash scripts/worktrunk-config.test.sh && bash scripts/worktrunk-pre-switch.test.sh && pnpm exec vitest run scripts/worktrunk-state.test.ts && bash scripts/worktree-sweep.test.sh && bash scripts/worktree-sweep-service.test.sh && bash scripts/hogwild-service.test.sh",
     "test:worktree-claim": "bash wolfstar-agent-kit/scripts/worktree-claim.test.sh",
     "test:pr-skill-only": "bash wolfstar-agent-kit/hooks/pr-skill-only.test.sh",
     "test:wt-only": "bash wolfstar-agent-kit/hooks/wt-only.test.sh",
+    "test:agent-retro": "python3 -m unittest discover -s wolfstar-agent-kit/skills/agent-retro/scripts -p 'test_*.py' && vitest run wolfstar-agent-kit/skills/agent-retro/scripts/codex-sessions.test.ts",
     "test:sentry-checkin": "python3 -m unittest discover -s wolfstar-agent-kit/skills/sentry-checkin/scripts -p 'test_*.py'",
     "test:release": "vitest run scripts/release.test.ts",
     "release": "node --experimental-strip-types scripts/release.ts",
     "test:opencode-hooks": "vitest run wolfstar-agent-kit/plugins/opencode",
     "test:hogwild": "vitest run wolfstar-agent-kit/skills/hogwild/scripts",
-    "test:skill-doc-paths": "vitest run scripts/skill-doc-paths.test.ts"
+    "test:nuxt-4-minors-migration": "vitest run wolfstar-agent-kit/skills/nuxt-4-minors-migration/scripts",
+    "test:skill-doc-paths": "vitest run scripts/skill-doc-paths.test.ts",
+    "test:browser": "python3 scripts/wolfstar-browser.test.py",
+    "browser:install": "python3 scripts/wolfstar-browser.py install",
+    "test:agent-cli": "vitest run scripts/agent-cli.test.ts",
+    "test:nuxt-module-migration": "vitest run scripts/nuxt-module-migration.test.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/semver": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
+    "semver": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "yaml": "catalog:"
   },
   "packageManager": "pnpm@11.22.0"
 }

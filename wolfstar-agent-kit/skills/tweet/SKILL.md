@@ -1,12 +1,20 @@
 ---
 name: tweet
-description: 'Draft and polish tweets with optional code cards, stat cards, or screenshot wraps. Use when the user wants a tweet or X post.'
-user_invocable: true
+description: 'Find tweet ideas, plan launch posts, and draft or polish tweets with code cards, stat cards, or screenshot wraps. Use for content strategy, what to post, when to post, or an X post.'
+argument-hint: '[draft, topic, release notes, screenshot, or ideas]'
+license: MIT
 ---
 
 # Tweet Skill
 
-Help the user draft, refine, and finalize tweets with compelling visuals. Automatically selects the right visual format based on content.
+Find content opportunities, plan launch posts, and draft tweets with suitable visuals.
+Keep planning and polishing in this Skill.
+
+## Authority
+
+Drafting does not authorize posting, replying, scheduling, or tagging accounts in a published post.
+Show the exact text and wait for publication approval.
+Never invent metrics, engagement, personal experience, or product claims.
 
 ## Gotchas
 
@@ -17,7 +25,7 @@ Help the user draft, refine, and finalize tweets with compelling visuals. Automa
 - **Screenshot dependencies** -- `sharp` and `@resvg/resvg-js` need to be installed. If they're not global, install to a temp dir, don't pollute the project.
 - **Hot takes can backfire** -- always flag the hot take variation as risky. The user should consciously opt in, not accidentally post something inflammatory.
 - **Always suggest a visual** -- text-only dev tweets get buried by the algorithm. Every finalized tweet should have a visual recommendation, even if the user didn't ask for one.
-- **Strip AI tells** -- before finalizing, run copy through `/humanize-writing`. No em-dashes, no "it's not X, it's Y", name specific tools/numbers over vague claims. AI-sounding tweets read as marketing and get ignored.
+- Before finalizing, run the prose through the `humanize-writing` Skill. Preserve supplied facts and voice.
 
 ## Data Storage
 
@@ -30,15 +38,25 @@ echo "$(date -I) | VISUAL_TYPE | FINAL_TWEET_TEXT" >> "${CLAUDE_PLUGIN_DATA}/twe
 
 On subsequent runs, read recent history to maintain consistent voice and avoid repeating hooks/angles.
 
-## Input
+## Input and mode
 
-`$ARGUMENTS` may contain:
+Select the mode from the user's request:
 
-- Raw tweet text to refine
-- A file path to a screenshot to wrap
-- A code snippet to visualize
-- Release notes or changelog to turn into a launch tweet
-- Nothing (interactive mode)
+| Request                                              | Mode      | Next step                                                                                           |
+| ---------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------- |
+| Ideas, content strategy, what to post, or no input   | Discovery | Read [planning](references/planning.md), then offer ranked ideas.                                   |
+| A launch, release notes, changelog, or a new project | Launch    | Read [planning](references/planning.md), then offer launch approaches.                              |
+| A draft, topic, screenshot, or code snippet          | Draft     | Start Step 1.                                                                                       |
+| Posting time or cadence only                         | Planning  | Read [planning](references/planning.md) and [playbook](references/playbook.md). Answer the request. |
+
+An explicit request wins over inferred input type.
+If the user asks to polish a release tweet, use Draft mode.
+If the user supplies an image without planning context, use Draft mode.
+
+Read both References when the user asks for a content plan.
+After a Discovery or Launch choice, continue at Step 1 with the chosen angle.
+Keep that angle. Do not repeat research or produce another set of initial approaches.
+If the user already selected exact copy, skip Step 2 and generate the requested visual.
 
 ## Step 1: Analyze Input & Select Visual Strategy
 
@@ -163,7 +181,7 @@ For milestones, releases with impressive numbers, benchmarks. Customize:
 
 Tips for good stat cards:
 
-- Round numbers up ("1,200+" not "1,187")
+- Use verified numbers. Never round up metrics to make them look better.
 - Use human-readable units ("45k" not "44,892")
 - Lead with the most impressive stat
 - Pair with a tweet that gives context the card doesn't
@@ -191,7 +209,7 @@ Present:
 - The final tweet text with character count
 - The generated visual (show the image)
 - Suggested accounts to tag (max 2, relevant to content)
-- Suggested posting time (if relevant)
+- Suggested posting time (if relevant), using the user's audience and timezone
 
 Log to `${CLAUDE_PLUGIN_DATA}/tweet-history.log`.
 

@@ -8,66 +8,68 @@ did not cover it.
 
 ## Map
 
-| Term                 | Storage                                                                                                                                 | Owner              | Relationship                                                        | Customer word                                   |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------- | ----------------------------------------------- |
-| Agent provider       | `agent.provider`                                                                                                                        | Configuration      | 1 to N Agents                                                       | agent provider                                  |
-| Agent selection      | `agent_selection`                                                                                                                       | Controller         | One per service                                                     | Agent selection                                 |
-| Follow configuration | `agent_selection.tag`                                                                                                                   | Configuration      | One Agent selection state                                           | Follow configuration                            |
-| Automatic selection  | `agent_selection.provider_order`                                                                                                        | Controller         | One Agent selection state                                           | Automatic                                       |
-| Reserve              | `agent.reservePercent`                                                                                                                  | Configuration      | One per service                                                     | Reserve                                         |
-| Reasoning effort     | `agent_selection.reasoning_effort`                                                                                                      | Controller         | One per Agent selection                                             | Reasoning effort                                |
-| Repository mapping   | `repositories`                                                                                                                          | Configuration      | 1 to N Items                                                        | repository                                      |
-| Item                 | `subjects`                                                                                                                              | Journal            | 1 to N Revisions, Tasks, Agents                                     | issue or pull request                           |
-| Observation          | `observations`                                                                                                                          | Reconciliation     | N to 1 Revision                                                     | none                                            |
-| Revision             | `revisions`                                                                                                                             | Journal            | N to 1 Item, 1 to N Review runs                                     | none                                            |
-| Agent                | `worker_sessions`                                                                                                                       | Runner             | N to 1 Item, 1 to N Review runs                                     | agent                                           |
-| Task                 | `tasks`, `worker_tasks`                                                                                                                 | Scheduler          | N to 1 Item and Revision                                            | task                                            |
-| Routine              | `routines`                                                                                                                              | Scheduler          | N to 1 Repository mapping, 1 to N Routine runs                      | Routine                                         |
-| Routine run          | `routine_runs`                                                                                                                          | Scheduler          | N to 1 Routine                                                      | run                                             |
-| Lease holder         | `tasks.worker_id`                                                                                                                       | Scheduler          | One per Running Task                                                | none                                            |
-| Queue                | derived dashboard state                                                                                                                 | Controller         | Orders active Tasks and actionable Items                            | queue                                           |
-| Stats                | derived from Journal records                                                                                                            | Dashboard          | N completed records per date range                                  | Stats                                           |
-| Control API          | authenticated HTTP routes                                                                                                               | Controller         | One per service, used by the dashboard and CLI                      | Control API                                     |
-| Agent slots          | `agent_slots`                                                                                                                           | Controller         | One count per host, 1 to N Agents                                   | Agent slots                                     |
-| Pause                | `agent_control`                                                                                                                         | Controller         | Stops new agent Tasks from starting                                 | Pause                                           |
-| Restart request      | `restart_requests`                                                                                                                      | Controller         | N per service, one active                                           | Restart after current work                      |
-| Service update       | `origin/main`, `restart_requests.operation_tag`                                                                                         | Controller         | One check, optional Restart request                                 | Update available; Update after current work     |
-| Selection mode       | `agent_control.selection_mode`                                                                                                          | Controller         | One per service                                                     | Selection mode                                  |
-| Dismissal            | `item_dismissals`                                                                                                                       | Controller         | One per Item                                                        | Dismiss                                         |
-| Eject                | dashboard and System pane action                                                                                                        | Controller         | Transfers one active agent session to Wolfstar's terminal           | Eject                                           |
-| Watch logs           | System pane action                                                                                                                      | Observer           | Opens one read-only live Task event stream                          | Watch logs                                      |
-| Weekly Codex limit   | live Codex account                                                                                                                      | System pane        | One seven-day usage window                                          | Weekly Codex limit                              |
-| Recently finished    | derived dashboard state                                                                                                                 | System pane        | Three newest finished Tasks or Review runs                          | Recently finished                               |
-| Self-hosted runner   | Docker container labels                                                                                                                 | GitHub Actions     | N per repository, independent of this service                       | self-hosted runner                              |
-| Conflict resolution  | `tasks.kind`                                                                                                                            | Scheduler          | One Task kind                                                       | conflict resolution                             |
-| Baseline repair      | `tasks.kind`                                                                                                                            | Scheduler          | One Task for one failing default branch commit                      | Baseline repair                                 |
-| Repair               | `tasks.kind`                                                                                                                            | Scheduler          | One Task for the findings of one Review run                         | repair                                          |
-| Repair round         | `repair_reports`, Repair lineage in `publication_commands`                                                                              | Scheduler          | One Repair in a chain of controller Repairs on one pull request     | repair round                                    |
-| Context budget       | `agent.contextBudget`                                                                                                                   | Runner             | One per agent session                                               | Context budget                                  |
-| Stack                | `subjects` base ref, `publication_commands.base_ref`                                                                                    | GitHub             | A pull request whose base is another pull request's head            | stack                                           |
-| Issue triage         | `worker_tasks.kind`                                                                                                                     | Scheduler          | One Task for one issue Revision                                     | issue triage                                    |
-| Issue triage comment | `issue_triage_comment_commands`                                                                                                         | Controller         | One canonical comment per issue                                     | automated triage                                |
-| Issue triage label   | `wolfstar-agent-ready-to-implement`, `wolfstar-agent-ready-to-spec`, `wolfstar-agent-needs-info`, or `wolfstar-agent-wait-to-implement` | GitHub             | One per triaged issue Revision                                      | triage route                                    |
-| Issue work           | `tasks.kind`                                                                                                                            | Scheduler          | One authorized Task for one issue Revision                          | issue work                                      |
-| Batch                | `batches`, `batch_units`, `batch_tasks`                                                                                                 | Scheduler          | One per repository at a time, 1 to N Issue work Tasks, 1 to N units | Batch                                           |
-| Pull request triage  | Pull request title, `pull_request_triage` Agent role, or `pull_request_triage_runs`                                                     | Controller, Runner | One deterministic or low-cost decision per pull request head commit | pull request triage                             |
-| Take Ownership       | `repositories.take_ownership`                                                                                                           | Controller         | One policy per Repository mapping                                   | Take Ownership                                  |
-| Publication command  | `publication_commands`                                                                                                                  | Controller         | One to one Task                                                     | none                                            |
-| Review run           | `review_runs`                                                                                                                           | Runner             | N to 1 Revision, 1 to N Publications                                | review                                          |
-| Agent feedback       | `agent_feedback`                                                                                                                        | Controller         | One per Review run                                                  | Agent feedback                                  |
-| Review usage         | `review_runs.usage`                                                                                                                     | Runner             | One per Review run                                                  | Review usage                                    |
-| Review gate          | `review_runs.gates`                                                                                                                     | Controller         | Three per Review run                                                | gate                                            |
-| Review outcome       | `review_runs.outcome_tag`                                                                                                               | Controller         | One per Review run                                                  | READY, PENDING, or BLOCKED                      |
-| Running label        | `wolfstar-agent-running` label                                                                                                          | GitHub             | One per Item with a Running Task                                    | none                                            |
-| Review finding       | `review_runs.findings`                                                                                                                  | Adversarial review | N per Review run                                                    | issue                                           |
-| Auto merge           | `wolfstar-agent-auto-merge` label                                                                                                       | GitHub             | One per pull request                                                | auto-merge                                      |
-| Publication          | `review_publications`                                                                                                                   | Journal            | N to 1 Review run                                                   | automated review                                |
-| Approval             | `pull_request_approvals` or `tasks.kind = issue_work`                                                                                   | Controller         | N to 1 Revision                                                     | approval                                        |
-| Legacy issue cutoff  | `issue_cutoff`                                                                                                                          | Configuration      | One per service                                                     | none                                            |
-| Action required      | `tasks.state_tag`                                                                                                                       | Scheduler          | One Task state                                                      | action required                                 |
-| Incident             | `incidents`                                                                                                                             | Controller         | N to 1 Repository mapping, Task, or the service                     | incident                                        |
-| Recovery             | `incidents.recovery`                                                                                                                    | Controller         | One per Incident                                                    | Retrying, Retries exhausted, or Action required |
-| Process finding      | `process_findings`                                                                                                                      | Supervision        | N per workflow                                                      | none                                            |
+| Term                 | Storage                                                                                                                                 | Owner                        | Relationship                                                        | Customer word                                                    |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Agent session        | terminal host records; `desktop-sessions.json` for History                                                                              | Selected host and Controller | N to 1 Project, one persistent Worktree                             | Agent session                                                    |
+| Project              | host inventories                                                                                                                        | Selected host                | 1 to N Agent sessions                                               | Project                                                          |
+| Agent provider       | `agent.provider`                                                                                                                        | Configuration                | 1 to N Agents                                                       | agent provider                                                   |
+| Agent selection      | `agent_selection`                                                                                                                       | Controller                   | One per service                                                     | Agent selection                                                  |
+| Follow configuration | `agent_selection.tag`                                                                                                                   | Configuration                | One Agent selection state                                           | Follow configuration                                             |
+| Automatic selection  | `agent_selection.provider_order`                                                                                                        | Controller                   | One Agent selection state                                           | Automatic                                                        |
+| Reserve              | `agent.reservePercent`                                                                                                                  | Configuration                | One per service                                                     | Reserve                                                          |
+| Reasoning effort     | `agent_selection.reasoning_effort`                                                                                                      | Controller                   | One per Agent selection                                             | Reasoning effort                                                 |
+| Repository mapping   | `repositories`                                                                                                                          | Configuration                | 1 to N Items                                                        | repository                                                       |
+| Item                 | `subjects`                                                                                                                              | Journal                      | 1 to N Revisions, Tasks, Agents                                     | issue or pull request                                            |
+| Observation          | `observations`                                                                                                                          | Reconciliation               | N to 1 Revision                                                     | none                                                             |
+| Revision             | `revisions`                                                                                                                             | Journal                      | N to 1 Item, 1 to N Review runs                                     | none                                                             |
+| Agent                | `worker_sessions`                                                                                                                       | Runner                       | N to 1 Item, 1 to N Review runs                                     | agent                                                            |
+| Task                 | `tasks`, `worker_tasks`                                                                                                                 | Scheduler                    | N to 1 Item and Revision                                            | task                                                             |
+| Routine              | `routines`                                                                                                                              | Scheduler                    | N to 1 Repository mapping, 1 to N Routine runs                      | Routine                                                          |
+| Routine run          | `routine_runs`                                                                                                                          | Scheduler                    | N to 1 Routine                                                      | run                                                              |
+| d1-query-review      | compiled Routine definition                                                                                                             | Scheduler                    | One weekly Routine per production site                              | d1-query-review                                                  |
+| Lease holder         | `tasks.worker_id`                                                                                                                       | Scheduler                    | One per Running Task                                                | none                                                             |
+| Queue                | derived dashboard state                                                                                                                 | Controller                   | Orders active Tasks and actionable Items                            | queue                                                            |
+| Stats                | derived from Journal records                                                                                                            | Dashboard                    | N completed records per date range                                  | Stats                                                            |
+| Control API          | authenticated HTTP routes                                                                                                               | Controller                   | One per service, used by the dashboard and CLI                      | Control API                                                      |
+| Agent slots          | `agent_slots`                                                                                                                           | Controller                   | One count per host, 1 to N Agents                                   | Agent slots                                                      |
+| Pause                | `agent_control`                                                                                                                         | Controller                   | Stops new agent Tasks from starting                                 | Pause                                                            |
+| Restart request      | `restart_requests`                                                                                                                      | Controller                   | N per service, one active                                           | Restart after current work                                       |
+| Service update       | `origin/main`, `restart_requests.operation_tag`                                                                                         | Controller                   | One check, optional Restart request                                 | Update available; Update after current work                      |
+| Selection mode       | `agent_control.selection_mode`                                                                                                          | Controller                   | One per service                                                     | Selection mode                                                   |
+| Dismissal            | `item_dismissals`                                                                                                                       | Controller                   | One per Item                                                        | Dismiss                                                          |
+| Watch logs           | Sessions and running Agent actions                                                                                                      | Observer                     | Opens read-only live Task or Routine activity                       | Watch logs                                                       |
+| Weekly Codex limit   | live Codex account                                                                                                                      | System pane                  | One seven-day usage window                                          | Weekly Codex limit                                               |
+| Recently finished    | derived dashboard state                                                                                                                 | System pane                  | Three newest finished Tasks or Review runs                          | Recently finished                                                |
+| Self-hosted runner   | Docker container labels                                                                                                                 | GitHub Actions               | N per repository, independent of this service                       | self-hosted runner                                               |
+| Conflict resolution  | `tasks.kind`                                                                                                                            | Scheduler                    | One Task kind                                                       | conflict resolution                                              |
+| Baseline repair      | `tasks.kind`                                                                                                                            | Scheduler                    | One Task for one failing default branch commit                      | Baseline repair                                                  |
+| Repair               | `tasks.kind`                                                                                                                            | Scheduler                    | One Task for the findings of one Review run                         | repair                                                           |
+| Repair round         | `repair_reports`, Repair lineage in `publication_commands`                                                                              | Scheduler                    | One Repair in a chain of controller Repairs on one pull request     | repair round                                                     |
+| Context budget       | `agent.contextBudget`                                                                                                                   | Runner                       | One per agent session                                               | Context budget                                                   |
+| Stack                | `subjects` base ref, `publication_commands.base_ref`                                                                                    | GitHub                       | A pull request whose base is another pull request's head            | stack                                                            |
+| Issue triage         | `worker_tasks.kind`                                                                                                                     | Scheduler                    | One Task for one issue Revision                                     | issue triage                                                     |
+| Issue triage comment | `issue_triage_comment_commands`                                                                                                         | Controller                   | One canonical comment per issue                                     | automated triage                                                 |
+| Issue triage label   | `wolfstar-agent-ready-to-implement`, `wolfstar-agent-ready-to-spec`, `wolfstar-agent-needs-info`, or `wolfstar-agent-wait-to-implement` | GitHub                       | One per triaged issue Revision                                      | triage route                                                     |
+| Issue work           | `tasks.kind`                                                                                                                            | Scheduler                    | One authorized Task for one issue Revision                          | issue work                                                       |
+| Batch                | `batches`, `batch_units`, `batch_tasks`                                                                                                 | Scheduler                    | One per repository at a time, 1 to N Issue work Tasks, 1 to N units | Batch                                                            |
+| Pull request triage  | Pull request title, `pull_request_triage` Agent role, or `pull_request_triage_runs`                                                     | Controller, Runner           | One deterministic or low-cost decision per pull request head commit | pull request triage                                              |
+| Take Ownership       | `repositories.take_ownership`                                                                                                           | Controller                   | One policy per Repository mapping                                   | Take Ownership                                                   |
+| Publication command  | `publication_commands`                                                                                                                  | Controller                   | One to one Task                                                     | none                                                             |
+| Review run           | `review_runs`                                                                                                                           | Runner                       | N to 1 Revision, 1 to N Publications                                | review                                                           |
+| Agent feedback       | `agent_feedback`                                                                                                                        | Controller                   | One per Review run                                                  | Agent feedback                                                   |
+| Review usage         | `review_runs.usage`                                                                                                                     | Runner                       | One per Review run                                                  | Review usage                                                     |
+| Review gate          | `review_runs.gates`                                                                                                                     | Controller                   | Three per Review run                                                | gate                                                             |
+| Review outcome       | `review_runs.outcome_tag`                                                                                                               | Controller                   | One per Review run                                                  | READY, PENDING, or BLOCKED                                       |
+| Running label        | `wolfstar-agent-running` label                                                                                                          | GitHub                       | One per Item with a Running Task                                    | none                                                             |
+| Review finding       | `review_runs.findings`                                                                                                                  | Adversarial review           | N per Review run                                                    | issue                                                            |
+| Auto merge           | `wolfstar-agent-auto-merge` label                                                                                                       | GitHub                       | One per pull request                                                | auto-merge                                                       |
+| Publication          | `review_publications`                                                                                                                   | Journal                      | N to 1 Review run                                                   | automated review                                                 |
+| Approval             | `pull_request_approvals` or `tasks.kind = issue_work`                                                                                   | Controller                   | N to 1 Revision                                                     | approval                                                         |
+| Legacy issue cutoff  | `issue_cutoff`                                                                                                                          | Configuration                | One per service                                                     | none                                                             |
+| Action required      | `tasks.state_tag`                                                                                                                       | Scheduler                    | One Task state                                                      | action required                                                  |
+| Incident             | `incidents`                                                                                                                             | Controller                   | N to 1 Repository mapping, Task, or the service                     | incident                                                         |
+| Recovery             | `incidents.recovery`                                                                                                                    | Controller                   | One per Incident                                                    | Retrying, OnNextOperation, Retries exhausted, or Action required |
+| Process finding      | `process_findings`                                                                                                                      | Supervision                  | N per workflow                                                      | none                                                             |
 
 ### GitHub terms adopted unchanged
 
@@ -118,11 +120,30 @@ Collisions
 
 ## Terms
 
+### Agent session
+
+One saved conversation with an Agent provider in one Worktree on Desktop or Hogwild.
+
+An Agent session keeps the host selected when it starts. It never moves between hosts.
+
+An Agent session keeps its messages, Agent events, and native provider session ID.
+Stop requires confirmation from the selected host before another turn starts.
+
+Never: chat, thread. Use Agent session.
+
+### Project
+
+One repository checkout on Desktop or Hogwild within `~/pkg` or `~/sites`.
+
+Each host reports its own Projects. A Project has many Agent sessions. Each Agent session keeps its own Worktree.
+
+Never: workspace, folder. Use Project.
+
 ### Agent provider
 
 The one local agent runtime that answers every Agent turn: `claude`, `codex`, or `opencode`.
 
-The Agent provider owns its models, reasoning efforts, sessions, and Eject command. A saved session belongs to the provider that created it.
+The Agent provider owns its models, reasoning efforts, and sessions. A saved session belongs to the provider that created it.
 
 Use Agent provider. Do not use backend, engine, model provider, or vendor.
 
@@ -372,15 +393,9 @@ Restoring queues nothing by itself. The next observation replans the Item from i
 
 Use Dismissal for the record and `Dismiss` for the control. Do not use skip, ignore, delete, mute, or snooze.
 
-### Eject
-
-Stop one active automated Task, then open its saved agent session in Wolfstar's terminal for interactive control.
-
-Use Eject for this transfer. Do not use attach or take over.
-
 ### Watch logs
 
-Open one active Task's live agent event stream in Wolfstar's terminal. Automation continues unchanged.
+Open one active Task or Routine run's live Agent activity in Sessions. Automation continues unchanged.
 
 Use Watch logs for this view. Do not use Monitor or attach.
 
@@ -638,7 +653,8 @@ Use instead of error, problem, outage, or alert in dashboard copy.
 
 What the controller will do about one Incident without being asked.
 
-One of `Retrying`, `Retries exhausted`, or `Action required`.
+Recovery names a scheduled retry deadline, the next Controller operation, exhausted retries, or a required action.
+A past deadline reads `Retry due`. It does not claim that a retry is running.
 
 ### Merge risk
 
@@ -670,7 +686,7 @@ A Regression is not an Incident, because an Incident is a failure of the control
 
 ### Suspect
 
-A delta that cleared its Threshold but has not persisted across three later Measurements. A Suspect appears in the Routine report and files nothing.
+A delta that cleared its Threshold but has not persisted yet: across three later Measurements for a Benchmark, or across a second consecutive Scan for a Lab series. A Suspect appears in the Routine report and files nothing.
 
 ### Opportunity
 
@@ -680,9 +696,31 @@ An Opportunity is proven by the pull request that answers it. Its automated perf
 
 ### Threshold
 
-What a delta must clear before it counts as a Regression: a relative floor, and a multiple of the noise the same Measurement recorded.
+What a delta must clear before it counts. For a Regression: a relative floor, and a multiple of the noise the same Measurement recorded. For a Lab drop: a fixed floor per metric, and a share of the reference Scans' median.
 
 Use Threshold. Do not use budget, which is a banned synonym for Reserve.
+
+### Vitals finding
+
+One row of NuxtSEO's `vitals findings`: a field Core Web Vital failing for real users on one route, attributed to one element selector.
+
+NuxtSEO names it a finding, so this keeps its word. Always qualify it: a bare finding is ambiguous with Review finding and Process finding.
+
+### Lab series
+
+The completed Lighthouse Scans of one page on one strategy, mobile or desktop, oldest first.
+
+Scan is NuxtSEO's word and stays. A Lab series never mixes strategies, because NuxtSEO scans each on its own day and a mixed list reads a schedule as a drop.
+
+### Poor series
+
+A Lab series whose last two Scans sit above the Poor line for one metric. It files an issue whether or not the page was ever better.
+
+### Lab drop
+
+A Lab series whose last two or more Scans each clear the Threshold against the median of the Scans before them, attributed to the commit range deployed in between.
+
+A Lab drop is not a Regression, because a Regression belongs to a Benchmark and one commit. When the Scans before the drop disagree with each other, the series is Unstable and files nothing.
 
 ### Process finding
 

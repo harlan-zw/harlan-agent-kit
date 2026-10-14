@@ -34,11 +34,15 @@ export type TransientKind =
   | 'controller'
   | 'subject_changed'
   | 'agent_result'
+  /** One fresh turn may avoid memory pressure. Repeated exhaustion stops. */
+  | 'resource_limit'
 
 export type PermanentKind =
   | 'policy'
   /** The agent session read its whole Context budget without an answer. */
   | 'context_budget'
+  /** The agent repeated a rejected result after the controller named the broken rule. */
+  | 'agent_result'
   | 'unknown'
 
 export interface FailureSignal {
@@ -75,6 +79,7 @@ export const REVIEW_REPAIR_REFUSALS = {
  * that follows it.
  */
 export const CONTEXT_BUDGET_EXHAUSTED = 'The agent read its whole Context budget without an answer.'
+export const MEMORY_BUDGET_EXHAUSTED = 'The Agent Task exceeded its memory budget.'
 
 export interface ContextBudgetExhaustedInput {
   cachedTokensRead: number
@@ -97,6 +102,19 @@ export function contextBudgetExhaustedReason(input: ContextBudgetExhaustedInput)
 
 export function isContextBudgetExhausted(message: string): boolean {
   return message.startsWith(CONTEXT_BUDGET_EXHAUSTED)
+}
+
+/**
+ * The first sentence of every reason a repeated rejected result reports.
+ *
+ * The correction prompt names the rule the answer broke. An agent that returns
+ * the same answer anyway has decided, so a fresh turn only buys the same
+ * answer again. One Review spent 18 attempts and five hours that way.
+ */
+export const AGENT_RESULT_REPEATED = 'The agent repeated a rejected result after one named correction.'
+
+export function repeatedAgentResultReason(reason: string): string {
+  return `${AGENT_RESULT_REPEATED} ${reason}`
 }
 
 /**
@@ -181,6 +199,7 @@ const networkPatterns: RegExp[] = [
   /\bEHOSTUNREACH\b/,
   /\bENETUNREACH\b/,
   /\bsocket hang up\b/i,
+  /\bdesktop(?: client)? disconnected\b/i,
   /\bfetch failed\b/i,
   /\bnetwork\b.+\berror\b/i,
   /\brequest\b.+\btimed out\b/i,
@@ -254,10 +273,14 @@ function matches(patterns: RegExp[], message: string): boolean {
  */
 export function classifyFailure(signal: FailureSignal): FailureClass {
   const message = signal.message
+  if (message.startsWith(MEMORY_BUDGET_EXHAUSTED)) return { _tag: 'Transient', kind: 'resource_limit' }
 
   // Matched first and by prefix. No later pattern can then make a session that
   // already spent its whole budget spend another one.
   if (isContextBudgetExhausted(message)) return { _tag: 'Permanent', kind: 'context_budget' }
+  // Matched by prefix before the Transient agent result patterns, which the
+  // quoted parser reason would otherwise match.
+  if (message.startsWith(AGENT_RESULT_REPEATED)) return { _tag: 'Permanent', kind: 'agent_result' }
 
   if (permanentMessages.has(message.trim()) || matches(permanentPatterns, message))
     return { _tag: 'Permanent', kind: 'policy' }
@@ -317,11 +340,21 @@ export function isSubjectMovedReason(message: string): boolean {
  */
 export function mayRetryFailure(signal: FailureSignal): boolean {
   const failure = classifyFailure(signal)
+  // Memory recovery goes through delayed recovery, never immediate attempts.
+  if (failure.kind === 'resource_limit') return false
   return failure._tag !== 'Permanent' || failure.kind === 'unknown'
 }
 
 /** Recovery limit for failures a person can affect. Provider outages keep capped backoff. */
 export const MAXIMUM_RECOVERY_ATTEMPTS = 5
+
+/** Shared by recovery, observation, and status reporting. */
+export function canRecoverFailure(signal: FailureSignal, recoveryAttempts: number): boolean {
+  const failure = classifyFailure(signal)
+  if (failure._tag !== 'Transient') return false
+  if (failure.kind === 'agent_provider') return true
+  return recoveryAttempts < (failure.kind === 'resource_limit' ? 1 : MAXIMUM_RECOVERY_ATTEMPTS)
+}
 
 const baseRecoveryDelayMilliseconds = 60_000
 const maximumRecoveryDelayMilliseconds = 30 * 60_000
@@ -339,8 +372,12 @@ export function recoveryDelayMilliseconds(recoveryAttempts: number): number {
   return Math.min(baseRecoveryDelayMilliseconds * 2 ** (recoveryAttempts - 1), maximumRecoveryDelayMilliseconds)
 }
 
-export function nextRecoveryAt(failedAt: string, recoveryAttempts: number): string {
-  return new Date(Date.parse(failedAt) + recoveryDelayMilliseconds(recoveryAttempts)).toISOString()
+export function nextRecoveryAt(failedAt: string, recoveryAttempts: number, signal?: FailureSignal): string {
+  const delay =
+    signal !== undefined && classifyFailure(signal).kind === 'resource_limit'
+      ? Math.max(baseRecoveryDelayMilliseconds, recoveryDelayMilliseconds(recoveryAttempts))
+      : recoveryDelayMilliseconds(recoveryAttempts)
+  return new Date(Date.parse(failedAt) + delay).toISOString()
 }
 
 /**
@@ -351,12 +388,18 @@ export function nextRecoveryAt(failedAt: string, recoveryAttempts: number): stri
  * to the repository fixes that, and every past Agent turn on one produced a
  * mask: a retry wrapper, a concurrency limit, or a build flag. A person repairs
  * the host, then re-runs the check.
+ * `Indeterminate` means the evidence cannot authorize repository changes.
  */
-export type CheckFailureClass = { _tag: 'Repairable' } | { _tag: 'Infrastructure'; reason: string }
+export type CheckFailureClass =
+  | { _tag: 'Repairable' }
+  | { _tag: 'Infrastructure'; reason: string }
+  | { _tag: 'Indeterminate'; reason: string }
 
 export interface CheckFailureSignal {
   name: string
   conclusion: string | null
+  /** The actual failing step, or null when GitHub reports none. */
+  failedStep: string | null
   /** What the job steps say, when the controller could read them. */
   runnerLost?: boolean
   /** The last lines of the failed job log, oldest first. Empty when unavailable. */
@@ -375,7 +418,6 @@ const runnerKillPatterns: RegExp[] = [
   /\blost communication with the server\b/i,
   /\bThe hosted runner\b.+\blost communication\b/i,
   /\bThe self-hosted runner\b.+\blost communication\b/i,
-  /\bThe operation was canceled\b/i,
 ]
 
 /** Remote services a workflow downloads from, which the repository does not control. */
@@ -418,12 +460,11 @@ function remoteFetchFailure(logTail: string[]): string | null {
  *
  * Only a runner kill or a remote download failure is Infrastructure. A heap
  * limit inside a step stays Repairable, because the workflow's `NODE_OPTIONS`
- * is the repository's to change. An unreadable log stays Repairable, because
- * an Agent can still read the repository. A `timed_out` conclusion stays
- * Repairable unless the log shows the host or a download stalled.
+ * is the repository's to change. Missing logs or a missing failed step remain
+ * Indeterminate. Cancellation alone does not identify the cause.
  */
 export function classifyCheckFailure(signal: CheckFailureSignal): CheckFailureClass {
-  if (signal.runnerLost === true)
+  if (signal.runnerLost === true && signal.conclusion !== 'cancelled')
     return {
       _tag: 'Infrastructure',
       reason: `The runner lost the job for check "${signal.name}" before any step failed.`,
@@ -441,6 +482,15 @@ export function classifyCheckFailure(signal: CheckFailureSignal): CheckFailureCl
   const host = remoteFetchFailure(signal.logTail)
   if (host !== null)
     return { _tag: 'Infrastructure', reason: `A download from ${host} failed during check "${signal.name}".` }
+  if (signal.logTail.every((line) => line.trim().length === 0))
+    return { _tag: 'Indeterminate', reason: `Check "${signal.name}" has no readable failure log.` }
+  if (signal.logTail.every((line) => line.trim().length === 0 || /\bThe operation was canceled\b/i.test(line)))
+    return { _tag: 'Indeterminate', reason: `Check "${signal.name}" reports cancellation without a failure cause.` }
+  if (signal.failedStep === null || signal.failedStep.trim().length === 0)
+    return {
+      _tag: 'Indeterminate',
+      reason: `Check "${signal.name}" has no confirmed failed step (${signal.conclusion ?? 'unknown'}).`,
+    }
   return { _tag: 'Repairable' }
 }
 
@@ -485,8 +535,7 @@ export async function classifyCheckFailureWithResidual(input: {
   abort?: AbortSignal
 }): Promise<CheckFailureClass> {
   const classified = classifyCheckFailure(input.signal)
-  if (classified._tag === 'Infrastructure' || input.classification === null) return classified
-  if (input.signal.logTail.length === 0) return classified
+  if (classified._tag !== 'Repairable' || input.classification === null) return classified
   const result = await input.classification.classify({
     state: { check: input.signal.name, conclusion: input.signal.conclusion, logTail: input.signal.logTail.slice(-30) },
     questions: checkFailureQuestions(input.signal.name),

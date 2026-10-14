@@ -75,6 +75,23 @@ describe('built-in Routine contracts', () => {
 })
 
 describe('cI review reports', () => {
+  it('groups maintenance before filing and preserves urgent repairs', () => {
+    const result = getRoutine('ci-review').parseResponse({
+      report: 'Three proven findings.',
+      candidates: [
+        { ...candidate, urgency: 'maintenance' },
+        { ...candidate, fingerprint: 'two', urgency: 'maintenance' },
+        { ...candidate, fingerprint: 'outage', urgency: 'urgent' },
+      ],
+    })
+    expect(result).toMatchObject({
+      _tag: 'Ok',
+      value: {
+        candidates: [{ fingerprint: 'outage' }, { claim: expect.stringContaining('one'), estimatedChangedFiles: 2 }],
+      },
+    })
+    if (result._tag === 'Ok') expect(result.value.candidates).toHaveLength(2)
+  })
   it.each([undefined, '', '  '])('requires evidence even with no findings: %s', (report) => {
     expect(getRoutine('ci-review').parseResponse({ report, candidates: [] })).toEqual({
       _tag: 'Err',

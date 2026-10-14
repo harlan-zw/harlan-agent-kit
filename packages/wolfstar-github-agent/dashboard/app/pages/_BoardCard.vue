@@ -34,6 +34,7 @@ const { card, tabindex = 0 } = defineProps<{
 
 const {
   snapshot,
+  controlsUnavailable,
   now,
   duration,
   relativeTime,
@@ -44,9 +45,6 @@ const {
   cancelPending,
   cancelErrors,
   cancelAgentTask,
-  ejectPending,
-  ejectErrors,
-  ejectAgent,
   taskFor,
   canRunReview,
   rerunPending,
@@ -62,7 +60,7 @@ const {
 const face = ref<HTMLButtonElement | null>(null)
 const primaryControl = ref<{ $el: HTMLElement } | null>(null)
 const slideoverOpen = ref(false)
-const confirming = ref<'cancel' | 'dismiss' | 'eject' | undefined>()
+const confirming = ref<'cancel' | 'dismiss' | undefined>()
 
 const entry = computed(() => (card._tag === 'Running' || card._tag === 'Done' ? undefined : card.entry))
 const agent = computed(() => (card._tag === 'Running' ? card.agent : undefined))
@@ -98,28 +96,25 @@ const primaryPending = computed(
 )
 const cancelling = computed(() => taskId.value !== undefined && cancelPending.value === taskId.value)
 const dismissing = computed(() => itemDismissKey.value.length > 0 && dismissPending.value === itemDismissKey.value)
-const ejecting = computed(() => agent.value !== undefined && ejectPending.value === agent.value.id)
 
 /** Any write in flight on this board. One at a time keeps the result readable. */
 const busy = computed(
   () =>
+    controlsUnavailable.value ||
     approvalPending.value !== undefined ||
     cancelPending.value !== undefined ||
     dismissPending.value !== undefined ||
-    ejectPending.value !== undefined ||
     rerunPending.value !== undefined,
 )
 
 const cancelError = computed(() => (taskId.value === undefined ? undefined : cancelErrors.value[taskId.value]))
 const dismissError = computed(() => dismissErrors.value[itemDismissKey.value])
-const ejectError = computed(() => (agent.value === undefined ? undefined : ejectErrors.value[agent.value.id]))
 
 /** Errors that belong under the face. Cancel and Dismiss errors show in their modal instead. */
 const faceErrors = computed(() =>
   [
     entry.value === undefined ? undefined : approvalErrorFor(entry.value),
     rerunErrors.value[rerunKey.value],
-    confirming.value === 'eject' ? undefined : ejectError.value,
     confirming.value === 'cancel' ? undefined : cancelError.value,
     confirming.value === 'dismiss' ? undefined : dismissError.value,
   ].filter((error): error is string => error !== undefined),
@@ -160,27 +155,21 @@ const menuItems = computed<DropdownMenuItem[][]>(() => {
           disabled: busy.value,
           onSelect: () => act(action),
         }
-  /* Eject ends the automated turn, so it sits with the other consequential actions and confirms. */
-  const eject: DropdownMenuItem[] = canEject.value
-    ? [
-        {
-          label: 'Eject to terminal',
-          icon: 'i-octicon-terminal-16',
-          disabled: busy.value,
-          onSelect: () => {
-            confirming.value = 'eject'
+  const logs: DropdownMenuItem[] =
+    agent.value === undefined
+      ? []
+      : [
+          {
+            label: 'Watch logs',
+            icon: 'i-octicon-terminal-16',
+            to: { path: '/sessions', query: { task: agent.value.id } },
           },
-        },
-      ]
-    : []
-  return [quiet.map(item), [...eject, ...destructive.map(item)]].filter((group) => group.length > 0)
+        ]
+  return [[...logs, ...quiet.map(item)], destructive.map(item)].filter((group) => group.length > 0)
 })
-
-const canEject = computed(() => agent.value !== undefined && agent.value.session._tag === 'Connected')
 
 const consequence = computed(() => {
   if (confirming.value === 'cancel') return cancelConsequence(work.value)
-  if (confirming.value === 'eject') return 'The automated turn stops and the saved session opens in Ghostty.'
   return dismissConsequence(identity.value?.kind ?? 'pull_request')
 })
 
@@ -218,12 +207,7 @@ function act(action: CardAction): void {
 }
 
 async function confirm(): Promise<void> {
-  if (confirming.value === 'eject' && agent.value !== undefined) {
-    const id = agent.value.id
-    await ejectAgent(id)
-    if (ejectErrors.value[id] === undefined) confirming.value = undefined
-    return
-  }
+  if (controlsUnavailable.value) return
   if (confirming.value === 'cancel' && taskId.value !== undefined) {
     const id = taskId.value
     await cancelAgentTask(id)
@@ -235,10 +219,6 @@ async function confirm(): Promise<void> {
     await dismissItem(identity.value.repository, identity.value.number)
     if (dismissErrors.value[key] === undefined) confirming.value = undefined
   }
-}
-
-function eject(): void {
-  if (agent.value !== undefined) void ejectAgent(agent.value.id)
 }
 
 const confirmOpen = computed({
@@ -506,7 +486,6 @@ defineExpose({
       :busy="busy"
       @act="act"
       @primary="pressPrimary"
-      @eject="eject"
     />
 
     <ConfirmModal
@@ -514,15 +493,13 @@ defineExpose({
       :title="
         confirming === 'cancel'
           ? 'Cancel this task?'
-          : confirming === 'eject'
-            ? 'Eject this agent?'
-            : `Dismiss this ${identity?.kind === 'issue' ? 'issue' : 'pull request'}?`
+          : `Dismiss this ${identity?.kind === 'issue' ? 'issue' : 'pull request'}?`
       "
       :consequence="consequence"
-      :confirm-label="confirming === 'cancel' ? 'Cancel task' : confirming === 'eject' ? 'Eject' : 'Dismiss'"
-      :pending="confirming === 'cancel' ? cancelling : confirming === 'eject' ? ejecting : dismissing"
-      :tone="confirming === 'eject' ? 'primary' : 'error'"
-      :error="confirming === 'cancel' ? cancelError : confirming === 'eject' ? ejectError : dismissError"
+      :confirm-label="confirming === 'cancel' ? 'Cancel task' : 'Dismiss'"
+      :pending="confirming === 'cancel' ? cancelling : dismissing"
+      tone="error"
+      :error="confirming === 'cancel' ? cancelError : dismissError"
       @confirm="confirm"
     />
   </article>

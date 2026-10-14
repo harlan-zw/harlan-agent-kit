@@ -1,4 +1,5 @@
-import type { DashboardRoutineRun, Routine } from '../../../src/types.ts'
+import type { DashboardRoutineRun, DashboardSnapshot, Routine } from '../../../src/types.ts'
+import { hasSpendableCapacity, selectedModelCapacity } from '../../../src/capacity.ts'
 import { parseCron } from '../../../src/routine-schedule.ts'
 import { routineRunPresentation, routineTrackingUrl, scheduledRoutineRecords } from './dashboard.ts'
 import { nextRoutineInstant } from './system.ts'
@@ -11,6 +12,10 @@ import { nextRoutineInstant } from './system.ts'
 export interface RoutineRow {
   routine: Routine
   latestRun: DashboardRoutineRun | undefined
+  resultRun: DashboardRoutineRun | undefined
+  resultLabel: string
+  resultTone: 'success' | 'warning' | 'error' | 'neutral'
+  resultDetail: string | undefined
   /** The next instant this Routine answers, or null when disabled or outside the horizon. */
   next: string | null
   schedule: string
@@ -68,13 +73,23 @@ export function routineRows(
   return scheduledRoutineRecords(routines, runs)
     .map((record) => {
       const presentation = routineRunPresentation(record.latestRun)
+      const result = routineRunPresentation(record.resultRun)
       return {
         ...record,
+        resultLabel: result.label,
+        resultTone: result.tone === 'primary' ? ('neutral' as const) : result.tone,
+        resultDetail:
+          record.resultRun?.state._tag === 'Completed' && record.resultRun.report?.verdict?.coverage !== 'incomplete'
+            ? undefined
+            : result.detail,
         next: nextRoutineInstant(record.routine, now)?.toISOString() ?? null,
         schedule: routineSchedule(record.routine),
         label: presentation.label,
         tone: presentation.tone === 'primary' ? ('neutral' as const) : presentation.tone,
-        detail: presentation.detail,
+        detail:
+          record.latestRun?.state._tag === 'Completed' && record.latestRun.report?.verdict?.coverage !== 'incomplete'
+            ? undefined
+            : presentation.detail,
         trackingUrl: routineTrackingUrl(record.routine),
       }
     })
@@ -106,4 +121,104 @@ export function routineRunDetail(
 /** The newest runs across every Routine, for the log below the schedule. */
 export function recentRoutineRuns(runs: readonly DashboardRoutineRun[], limit = 20): DashboardRoutineRun[] {
   return [...runs].sort((left, right) => right.scheduledFor.localeCompare(left.scheduledFor)).slice(0, limit)
+}
+
+export interface RoutineFilters {
+  repository: string
+  routine: string
+  result: string
+}
+
+function identityMatches(record: { repository: string; name: string }, filters: RoutineFilters): boolean {
+  return (
+    (filters.repository === 'all' || record.repository === filters.repository) &&
+    (filters.routine === 'all' || record.name === filters.routine)
+  )
+}
+
+export function filterRoutineRows(rows: readonly RoutineRow[], filters: RoutineFilters): RoutineRow[] {
+  return rows.filter(
+    (row) =>
+      identityMatches(row.routine, filters) &&
+      (filters.result === 'all' || row.label === filters.result || row.resultLabel === filters.result),
+  )
+}
+
+export function filterRoutineRuns(
+  runs: readonly DashboardRoutineRun[],
+  filters: RoutineFilters,
+): DashboardRoutineRun[] {
+  return runs.filter(
+    (run) =>
+      identityMatches(run, filters) &&
+      (filters.result === 'all' || routineRunPresentation(run).label === filters.result),
+  )
+}
+
+export interface RoutineQueueBlock {
+  provider: string
+  model: string
+  reason: string
+  retryAt: string | undefined
+  count: number
+}
+
+/** Each queued run names its own provider, including a manual choice. */
+export function routineQueueBlocks(
+  snapshot: DashboardSnapshot,
+  runs: readonly DashboardRoutineRun[],
+  now: Date,
+): RoutineQueueBlock[] {
+  const groups = new Map<string, RoutineQueueBlock>()
+  for (const run of runs) {
+    if (run.state._tag !== 'Queued') continue
+    const provider = run.agentSelection?.provider ?? snapshot.agentProfile.provider
+    const model = run.agentSelection?.model ?? snapshot.agentProfile.roles.routine_scan.model
+    const capacity = selectedModelCapacity(snapshot, provider, model)
+    const reserve = snapshot.providerCapacities.find((entry) => entry.provider === provider)?.reservePercent ?? 0
+    const circuit = snapshot.providerCircuits
+      .filter(
+        (entry) =>
+          entry.provider === provider &&
+          (entry.model === model ||
+            (entry.failureClass === 'usage_limit' &&
+              entry.model.slice(0, entry.model.indexOf('/') + 1) === model.slice(0, model.indexOf('/') + 1))) &&
+          entry.state._tag !== 'Closed',
+      )
+      .find(
+        (entry) =>
+          (entry.state._tag === 'Open' && Date.parse(entry.state.retryAt) > now.getTime()) ||
+          (entry.state._tag === 'HalfOpen' && Date.parse(entry.state.leaseExpiresAt) > now.getTime()),
+      )
+    let reason: string | undefined
+    let retryAt: string | undefined
+    if (snapshot.agentControl._tag === 'Paused') {
+      reason = 'Paused'
+    } else if (!snapshot.mutationsEnabled) {
+      reason = 'Writes off'
+    } else if (snapshot.agentStart._tag === 'RestartRequested') {
+      reason = 'Restarting after current work'
+    } else if (!hasSpendableCapacity(capacity, reserve)) {
+      reason =
+        capacity._tag === 'Unavailable'
+          ? capacity.reason
+          : capacity._tag === 'Available' && capacity.usedPercent >= 100
+            ? 'Usage limit reached.'
+            : 'Reserve reached.'
+      retryAt = capacity._tag === 'Available' && capacity.resetsAt !== '' ? capacity.resetsAt : undefined
+    } else if (circuit !== undefined) {
+      reason = circuit.lastDetail
+      retryAt =
+        circuit.state._tag === 'Open'
+          ? circuit.state.retryAt
+          : circuit.state._tag === 'HalfOpen'
+            ? circuit.state.leaseExpiresAt
+            : undefined
+    }
+    if (reason === undefined) continue
+    const key = `${provider}:${model}:${reason}`
+    const current = groups.get(key)
+    groups.set(key, { provider, model, reason, retryAt, count: (current?.count ?? 0) + 1 })
+  }
+  return [...groups.values()]
 }

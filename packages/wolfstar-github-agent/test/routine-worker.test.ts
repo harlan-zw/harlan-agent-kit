@@ -1,12 +1,12 @@
-import type { Entry, Questions, SystemOneResult } from 'advocaat'
-import type { AgentEvent } from '../src/agent-provider.ts'
-import type { ClassificationSource } from '../src/classification.ts'
+import type { AgentRuntimeSource } from '../src/agent-profile.ts'
+import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
+import type { writeCheckinGitHubEvidence } from '../src/checkin-github-evidence.ts'
 import type { GitHubIssuePublisher } from '../src/github.ts'
 import type { RoutineScanInput } from '../src/routines/contract.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { createAgentActivityLog } from '../src/agent-activity.ts'
-import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { CODEX_AGENT_PROFILE, createAgentRuntimeSource } from '../src/agent-profile.ts'
 import { ok } from '../src/result.ts'
 import { createRoutineReportController } from '../src/routine-report-controller.ts'
 import { createRoutineScanWorker } from '../src/routine-worker.ts'
@@ -24,12 +24,28 @@ function claimStoredRun(store: ReturnType<typeof openJournalStore>, at = now().t
   return task
 }
 
-function scanning(answer: unknown, capture?: { prompts: string[] }) {
+function scanning(answer: unknown, capture?: { prompts: string[]; requests?: AgentTurnRequest[] }) {
   return {
     name: 'codex' as const,
-    runTurn: (request: { prompt: string }) => {
+    runTurn: (request: AgentTurnRequest) => {
       capture?.prompts.push(request.prompt)
+      capture?.requests?.push(request)
       return (async function* (): AsyncIterable<AgentEvent> {
+        // Codex rejects the whole turn when an object property is not required.
+        const pending: unknown[] = [request.outputSchema]
+        while (pending.length > 0) {
+          const schema = pending.pop()
+          if (typeof schema !== 'object' || schema === null) continue
+          const object = schema as { properties?: Record<string, unknown>; required?: string[]; items?: unknown }
+          for (const [key, property] of Object.entries(object.properties ?? {})) {
+            if (!object.required?.includes(key)) {
+              yield { _tag: 'Failed', reason: `Invalid response schema: required must include ${key}.` }
+              return
+            }
+            pending.push(property)
+          }
+          if (object.items !== undefined) pending.push(object.items)
+        }
         yield { _tag: 'SessionStarted', sessionId: 'session-1' }
         yield { _tag: 'Message', text: JSON.stringify(answer) }
         yield { _tag: 'TurnCompleted' }
@@ -43,39 +59,36 @@ function workerFor(
   provider: ReturnType<typeof scanning>,
   maximumChangedFiles?: number,
   activityLog?: ReturnType<typeof createAgentActivityLog>,
-  classification?: ClassificationSource | null,
+  writtenEvidence?: Array<Parameters<typeof writeCheckinGitHubEvidence>[0]>,
+  runtime?: AgentRuntimeSource,
 ) {
   return createRoutineScanWorker({
+    serviceEvidence: store,
+    writeCheckinEvidence: async (input) => {
+      writtenEvidence?.push(input)
+    },
+    githubEvidence: {
+      collect: async () => ({
+        observedAt: now().toISOString(),
+        issues: { _tag: 'Available', entries: [{ number: 7, title: 'Private controller issue' }], truncated: false },
+        pullRequests: { _tag: 'Available', entries: [], truncated: false },
+        workflowRuns: { _tag: 'Unavailable', reason: 'Controller cannot read Actions' },
+        deployments: { _tag: 'Available', entries: [], truncated: false },
+        deploymentStatuses: [],
+        jobLogs: { _tag: 'NotRequested' },
+      }),
+    },
     ...(activityLog === undefined ? {} : { activityLog }),
-    ...(classification === undefined ? {} : { classification }),
     logger: { error: () => undefined, info: () => undefined },
     ...(maximumChangedFiles === undefined ? {} : { maximumChangedFiles }),
     now,
-    runtime: () => ({ profile: CODEX_AGENT_PROFILE, provider }),
+    runtime: runtime ?? (() => ({ profile: CODEX_AGENT_PROFILE, provider })),
     store,
-    workspaces: { prepareRoutine: async () => ok({ path: '/tmp/routine', baseSha: 'abc123', headSha: 'abc123' }) },
+    workspaces: {
+      prepareRoutine: async () =>
+        ok({ path: '/tmp/routine', baseSha: 'abc123', headSha: 'abc123', defaultBranchSha: 'abc123' }),
+    },
   })
-}
-
-function worthClassification(dropTitles: string[]): ClassificationSource {
-  return {
-    classify: <Q extends Questions>(input: { state: Entry }) =>
-      Promise.resolve({
-        _tag: 'Ok' as const,
-        value: {
-          model: 'jev-1.13.0',
-          answers: {
-            worth: {
-              type: 'choice',
-              choice: dropTitles.includes(String((input.state as { title?: unknown }).title)) ? 'DROP' : 'FILE',
-              confidence: 0.9,
-              probabilities: {},
-            },
-          },
-          usage: { input_tokens: 10, output_tokens: 0 },
-        } as SystemOneResult<Q>,
-      }),
-  }
 }
 
 function seed(store: ReturnType<typeof openJournalStore>, name: ClaimedRoutineRun['name'] = 'pr-triage'): void {
@@ -95,6 +108,7 @@ function seed(store: ReturnType<typeof openJournalStore>, name: ClaimedRoutineRu
 }
 
 const candidate = {
+  urgency: 'urgent',
   fingerprint: 'src/store.ts#openRoutineRun',
   title: 'Fixture title',
   target: 'src/store.ts',
@@ -104,64 +118,54 @@ const candidate = {
 }
 
 describe('building the scan prompt', () => {
-  it('drops only the candidate the worth gate refuses and says so in the run line', async () => {
+  it('executes only the selected scan on Codex while the Service stays on OpenCode', async () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store, 'ci-review')
-      store.setRepositoryWritesEnabled('wolfstar-project/example', true)
-      const noise = { ...candidate, fingerprint: 'scripts/alerts.log#count', title: 'Alert count grew by one' }
-      const task = claimStoredRun(store)
-      const result = await workerFor(
-        store,
-        scanning({ report: 'One real finding.', candidates: [candidate, noise] }),
-        undefined,
-        undefined,
-        worthClassification([noise.title]),
-      ).run(task, new AbortController().signal)
-
-      expect(result._tag).toBe('Ok')
-      if (result._tag !== 'Ok') throw new Error(result.error)
-      expect(store.listCandidates('wolfstar-project/example:ci-review').map((entry) => entry.fingerprint)).toEqual([
-        candidate.fingerprint,
-      ])
-      expect(result.value.evidence).toContain('1 dropped by the classification gate')
-      expect(result.value.evidence).toContain('1 new')
-      expect(result.value.evidence).not.toContain('2 new')
-    } finally {
-      store.close()
-    }
-  })
-
-  it('keeps every candidate when the worth gate fails', async () => {
-    const store = openJournalStore(':memory:')
-    try {
-      seed(store, 'ci-review')
-      store.setRepositoryWritesEnabled('wolfstar-project/example', true)
-      const task = claimStoredRun(store)
-      const failing: ClassificationSource = {
-        classify: () =>
-          Promise.resolve({ _tag: 'Err' as const, error: { _tag: 'Unavailable' as const, message: 'down' } }),
+      const capture = { prompts: [] as string[], requests: [] as AgentTurnRequest[] }
+      const provider = scanning({ report: 'No findings.', candidates: [] }, capture)
+      const runtime = createAgentRuntimeSource({
+        configuredProvider: 'opencode',
+        maximumActiveAgents: 1,
+        providers: {
+          claude: { name: 'claude', async *runTurn() {} },
+          codex: provider,
+          opencode: {
+            name: 'opencode',
+            async *runTurn() {
+              yield { _tag: 'Failed', reason: 'OpenCode is exhausted.' }
+            },
+          },
+        },
+        selection: () => ({
+          _tag: 'Pinned',
+          provider: 'opencode',
+          model: 'zai-coding-plan/glm-5.3',
+          reasoningEffort: 'high',
+        }),
+      })
+      const task = {
+        ...claimStoredRun(store),
+        agentSelection: {
+          provider: 'codex' as const,
+          model: 'gpt-6.1-sol' as const,
+          reasoningEffort: 'medium' as const,
+        },
       }
-      const result = await workerFor(
-        store,
-        scanning({ report: 'Findings.', candidates: [candidate] }),
-        undefined,
-        undefined,
-        failing,
-      ).run(task, new AbortController().signal)
+      const result = await workerFor(store, provider, undefined, undefined, undefined, runtime).run(
+        task,
+        new AbortController().signal,
+      )
 
       expect(result._tag).toBe('Ok')
-      if (result._tag !== 'Ok') throw new Error(result.error)
-      expect(store.listCandidates('wolfstar-project/example:ci-review').map((entry) => entry.fingerprint)).toEqual([
-        candidate.fingerprint,
-      ])
-      expect(result.value.evidence).not.toContain('dropped by the classification gate')
+      expect(capture.requests[0]).toMatchObject({ model: 'gpt-6.1-sol', reasoningEffort: 'medium' })
+      expect(runtime().provider.name).toBe('opencode')
     } finally {
       store.close()
     }
   })
 
-  it('spends no worth call on an already-known Candidate and labels it already known', async () => {
+  it('labels a Candidate the ledger already holds as already known', async () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store, 'ci-review')
@@ -179,36 +183,20 @@ describe('building the scan prompt', () => {
         candidates: [candidate],
         at: '2026-08-26T07:05:00.000Z',
       })
-      const asked: string[] = []
-      const asking: ClassificationSource = {
-        classify: <Q extends Questions>(input: { state: Entry }) => {
-          asked.push(String((input.state as { title?: unknown }).title))
-          return Promise.resolve({
-            _tag: 'Ok' as const,
-            value: {
-              model: 'jev-1.13.0',
-              answers: { worth: { type: 'choice', choice: 'FILE', confidence: 0.9, probabilities: {} } },
-              usage: { input_tokens: 10, output_tokens: 0 },
-            } as SystemOneResult<Q>,
-          })
-        },
-      }
       const fresh = { ...candidate, fingerprint: 'scripts/alerts.log#count', title: 'Alert count grew by one' }
       const task = claimStoredRun(store)
+      const capture = { prompts: [] as string[] }
       const result = await workerFor(
         store,
-        scanning({ report: 'One repeat, one new.', candidates: [candidate, fresh] }),
-        undefined,
-        undefined,
-        asking,
+        scanning({ report: 'One repeat, one new.', candidates: [candidate, fresh] }, capture),
       ).run(task, new AbortController().signal)
 
       expect(result._tag).toBe('Ok')
       if (result._tag !== 'Ok') throw new Error(result.error)
-      expect(asked).toEqual([fresh.title])
+      expect(capture.prompts[0]).toContain('Private controller issue')
+      expect(capture.prompts[0]).toContain('Controller cannot read Actions')
       expect(result.value.evidence).toContain('1 already known')
       expect(result.value.evidence).toContain('1 new')
-      expect(result.value.evidence).not.toContain('dropped by the classification gate')
       const known = store
         .listCandidates('wolfstar-project/example:ci-review')
         .find((entry) => entry.fingerprint === candidate.fingerprint)
@@ -367,7 +355,7 @@ describe('building the scan prompt', () => {
   it.each([
     { _tag: 'Merged', pullRequest: 42 } as const,
     { _tag: 'Superseded', reason: 'Handled by another fix.' } as const,
-  ])('leaves a $_tag Candidate out of the next scan memory', (result) => {
+  ])('preserves a $_tag Candidate for deployment and regression checks', (result) => {
     const prompt = routineScanPrompt({
       mode: 'propose',
       name: 'pr-triage',
@@ -390,7 +378,8 @@ describe('building the scan prompt', () => {
       repository: 'wolfstar-project/example',
     })
 
-    expect(prompt).not.toContain('src/closed.ts')
+    expect(prompt).toContain('src/closed.ts')
+    expect(prompt).toContain(JSON.stringify(result))
     expect(prompt).toContain('Nothing has been rejected yet.')
   })
 
@@ -407,6 +396,25 @@ describe('building the scan prompt', () => {
 })
 
 describe('running one scan', () => {
+  it.each(['pr-triage', 'sentry-checkin', 'ci-review', 'perf-review', 'seo-review'] as const)(
+    'completes %s without a check-in verdict',
+    async (name) => {
+      const store = openJournalStore(':memory:')
+      try {
+        seed(store, name)
+        const result = await workerFor(store, scanning({ report: 'No findings.', verdict: null, candidates: [] })).run(
+          claimStoredRun(store),
+          new AbortController().signal,
+        )
+
+        expect(result).toMatchObject({ _tag: 'Ok' })
+        expect(store.listCandidates(`wolfstar-project/example:${name}`)).toEqual([])
+      } finally {
+        store.close()
+      }
+    },
+  )
+
   it('rejects oversized CI reports before persisting findings', async () => {
     const store = openJournalStore(':memory:')
     try {
@@ -585,6 +593,39 @@ describe('running one scan', () => {
       ).run(claimStoredRun(store), new AbortController().signal)
       expect(result).toEqual({ _tag: 'Err', error: 'The daily check-in Routine answered without its verdict.' })
       expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)).toBeNull()
+    } finally {
+      store.close()
+    }
+  })
+
+  it('hands scoped private evidence to the collector before starting a daily turn', async () => {
+    const store = openJournalStore(':memory:')
+    const written: Array<Parameters<typeof writeCheckinGitHubEvidence>[0]> = []
+    try {
+      seed(store, 'daily-checkin')
+      store.setRepositoryWritesEnabled('wolfstar-project/example', true)
+      await workerFor(
+        store,
+        scanning({
+          report: 'Controller read is unavailable.',
+          candidates: [],
+          verdict: { severity: 'AMBER', coverage: 'incomplete' },
+        }),
+        undefined,
+        undefined,
+        written,
+      ).run(claimStoredRun(store), new AbortController().signal)
+      expect(written).toMatchObject([
+        {
+          workspace: '/tmp/routine',
+          repository: 'wolfstar-project/example',
+          branch: 'main',
+          evidence: {
+            observedAt: now().toISOString(),
+            workflowRuns: { _tag: 'Unavailable', reason: 'Controller cannot read Actions' },
+          },
+        },
+      ])
     } finally {
       store.close()
     }
@@ -987,6 +1028,10 @@ describe('running one scan', () => {
           calls.comments.push(input.body)
           return ok({ id: 900 })
         },
+        updateIssue: async (input) => {
+          calls.comments.push(input.body)
+          return ok(undefined)
+        },
         findOpenIssueByFingerprint: async () => ok(null),
         findRoutineTrackingIssue: async () => ok(null),
         findIssueCommentByMarker: async () => ok(null),
@@ -995,7 +1040,7 @@ describe('running one scan', () => {
         new AbortController().signal,
       )
 
-      expect(calls.issues).toEqual(['[BLOCKED] Daily check-in: 2026-08-27'])
+      expect(calls.issues).toEqual(['[BLOCKED] Daily check-in: wolfstar-project/example'])
       expect(calls.comments[0]).toContain('Failed. The scan agent answered with something other than JSON.')
     } finally {
       store.close()
@@ -1104,6 +1149,63 @@ describe('claiming a Routine run', () => {
       })
 
       expect(store.claimNextRoutineRun('worker-1', '2026-08-27T07:05:00.000Z', 60_000)).toBeNull()
+    } finally {
+      store.close()
+    }
+  })
+})
+
+describe('agent retro scan publication', () => {
+  it('passes durable Service evidence to the Agent and stages the proven fix', async () => {
+    const store = openJournalStore(':memory:')
+    const repository = 'wolfstar-project/wolfstar-agent-kit'
+    try {
+      store.syncRepositories([repositoryMapping({ github: repository })], now().toISOString())
+      store.setRepositoryWritesEnabled(repository, true)
+      store.syncRoutines({
+        repository,
+        specSha: 'abc123',
+        entries: [{ name: 'agent-retro', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+        at: now().toISOString(),
+      })
+      store.openRoutineRun({
+        routineId: `${repository}:agent-retro`,
+        scheduledFor: now().toISOString(),
+        specSha: 'abc123',
+        at: now().toISOString(),
+      })
+      const incident = store.recordIncident({
+        scope: { _tag: 'Service' },
+        kind: 'unknown',
+        severity: 'error',
+        message: 'A fixture retry loop.',
+        operation: 'fixture',
+        recovery: { _tag: 'ActionRequired' },
+        at: now().toISOString(),
+      })
+      const capture = { prompts: [] as string[] }
+      const result = await workerFor(
+        store,
+        scanning(
+          {
+            report: `Incident ${incident.id} needs a repair.`,
+            verdict: { severity: 'RED', coverage: 'incomplete' },
+            candidates: [{ ...candidate, target: 'packages/wolfstar-github-agent/src/store.ts' }],
+          },
+          capture,
+        ),
+      ).run(claimStoredRun(store), new AbortController().signal)
+      expect(result._tag).toBe('Ok')
+      expect(capture.prompts[0]).toContain(incident.id)
+      expect(capture.prompts[0]).toContain('A fixture retry loop.')
+      expect(store.listCandidates(`${repository}:agent-retro`)).toMatchObject([
+        { target: 'packages/wolfstar-github-agent/src/store.ts' },
+      ])
+      const command = store.claimNextCandidateIssue('publisher', now().toISOString(), 60_000)
+      expect(command).toMatchObject({
+        repository,
+        body: expect.stringContaining('packages/wolfstar-github-agent/src/store.ts'),
+      })
     } finally {
       store.close()
     }

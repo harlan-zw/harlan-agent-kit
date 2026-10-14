@@ -1,6 +1,7 @@
 import type { AgentEvent, AgentProvider } from './agent-provider.ts'
 import type { ProviderCircuit, ProviderFailureClass, ProviderStartReservation } from './types.ts'
 import { agentProviderFailureReason } from './agent-provider.ts'
+import { desktopErrorCause } from './desktop-protocol.ts'
 
 export interface CircuitProtectedProviderStore {
   reserveProviderStart: (input: {
@@ -11,6 +12,7 @@ export interface CircuitProtectedProviderStore {
     at: string
     leaseMilliseconds: number
   }) => ProviderStartReservation
+  releaseProviderStart: (input: { circuitId: string; workerId: string; fence: number; at: string }) => boolean
   recordProviderFailure: (input: {
     provider: AgentProvider['name']
     credential: string
@@ -44,6 +46,8 @@ export interface CircuitProtectedProviderOptions {
 
 /** Classifies a provider failure without keeping random request identifiers. */
 export function stableProviderFailureClass(reason: string): ProviderFailureClass {
+  if (/\b(?:limit exhausted|usage limit|quota exceeded|credits? exhausted|weekly\/monthly limit)\b/i.test(reason))
+    return 'usage_limit'
   if (/\b(?:network|ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed)\b/i.test(reason))
     return 'network'
   if (/\b(?:overloaded|capacity|busy|too many requests)\b/i.test(reason)) return 'overloaded'
@@ -82,11 +86,16 @@ export function createCircuitProtectedProvider(options: CircuitProtectedProvider
 
         let failed = false
         let completed = false
+        let healthRecorded = false
         try {
           for await (const event of options.provider.runTurn(request)) {
             if (request.signal.aborted) return
             if (event._tag === 'Failed' && !failed) {
               failed = true
+              if (event.cause !== undefined) {
+                yield event
+                continue
+              }
               options.store.recordProviderFailure({
                 provider: options.provider.name,
                 credential: options.credential,
@@ -99,17 +108,28 @@ export function createCircuitProtectedProvider(options: CircuitProtectedProvider
                   : { canaryCircuitId: reservation.canary.circuitId, canaryFence: reservation.canary.fence }),
                 at: options.now().toISOString(),
               })
+              healthRecorded = true
             }
             if (event._tag === 'TurnCompleted') completed = true
             yield event
           }
+          if (!failed && completed && !request.signal.aborted) {
+            options.store.recordProviderSuccess({
+              provider: options.provider.name,
+              credential: options.credential,
+              model: request.model,
+              workerId,
+              ...(reservation.canary === null
+                ? {}
+                : { canaryCircuitId: reservation.canary.circuitId, canaryFence: reservation.canary.fence }),
+              at: options.now().toISOString(),
+            })
+            healthRecorded = true
+          }
         } catch (error) {
-          // Neither cause says the Agent provider is unhealthy, so neither one
-          // may open its circuit.
-          if (
-            error instanceof Error &&
-            (error.cause === 'desktop-execution' || error.cause === 'desktop-unsupported')
-          ) {
+          // No desktop cause says the Agent provider is unhealthy, so none of
+          // them may open its circuit.
+          if (error instanceof Error && desktopErrorCause(error) !== null) {
             if (!request.signal.aborted) yield { _tag: 'Failed', reason: error.message }
             return
           }
@@ -128,19 +148,12 @@ export function createCircuitProtectedProvider(options: CircuitProtectedProvider
               : { canaryCircuitId: reservation.canary.circuitId, canaryFence: reservation.canary.fence }),
             at: options.now().toISOString(),
           })
+          healthRecorded = true
           yield { _tag: 'Failed', reason: agentProviderFailureReason(options.provider.name, detail) }
+        } finally {
+          if (reservation.canary !== null && !healthRecorded)
+            options.store.releaseProviderStart({ ...reservation.canary, at: options.now().toISOString() })
         }
-        if (failed || !completed || request.signal.aborted) return
-        options.store.recordProviderSuccess({
-          provider: options.provider.name,
-          credential: options.credential,
-          model: request.model,
-          workerId,
-          ...(reservation.canary === null
-            ? {}
-            : { canaryCircuitId: reservation.canary.circuitId, canaryFence: reservation.canary.fence }),
-          at: options.now().toISOString(),
-        })
       })(),
   }
 }

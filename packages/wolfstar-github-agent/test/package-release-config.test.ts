@@ -17,8 +17,17 @@ it('parses an explicit package release policy', () => {
       tagPrefix: 'v',
       workflow: 'release.yml',
       checks: ['test', 'build'],
+      credential: { _tag: 'Repository' },
     },
   })
+})
+it('parses the explicit user credential opt in', () => {
+  const parsed = parsePackageReleaseConfig({ ...input, credential: 'user' })
+  expect(parsed._tag === 'Ok' && parsed.value.credential).toEqual({ _tag: 'User' })
+})
+it('accepts all successful GitHub Actions check runs for inherited policies', () => {
+  const parsed = parsePackageReleaseConfig({ ...input, checks: 'all' })
+  expect(parsed._tag === 'Ok' && parsed.value.checks).toBe('all')
 })
 it.each([
   { manifest: '../package.json' },
@@ -31,6 +40,8 @@ it.each([
   { workflow: '../release.yml' },
   { checks: [] },
   { checks: [1] },
+  { credential: 'app' },
+  { credential: true },
 ])('rejects invalid release configuration: %j', (change) => {
   expect(parsePackageReleaseConfig({ ...input, ...change })._tag).toBe('Err')
 })

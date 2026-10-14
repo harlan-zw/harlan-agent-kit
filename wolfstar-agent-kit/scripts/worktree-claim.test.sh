@@ -49,4 +49,6 @@ sleep 2
 bash "$claim_script" acquire --path "$repo" --session recovered --lease 30 | jq -e '.claimed' >/dev/null
 bash "$claim_script" release --path "$repo" --session recovered >/dev/null
 
+pnpm --dir "$script_dir/../.." exec vitest run "$script_dir/worktree-claim.test.ts"
+
 echo 'worktree claim tests passed'

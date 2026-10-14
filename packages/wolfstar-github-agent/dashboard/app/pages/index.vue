@@ -88,7 +88,7 @@ useHead({
 </script>
 
 <template>
-  <div class="flex flex-col gap-4 md:h-[calc(100dvh-6rem)] xl:h-[calc(100dvh-8rem)]">
+  <div class="flex flex-col gap-4 md:h-full">
     <h1 class="sr-only">Board</h1>
     <BoardIncidentRow
       v-if="topIncident"

@@ -1,3 +1,6 @@
+import type { Result } from './result.ts'
+import { err, ok } from './result.ts'
+
 export interface PassStepOptions {
   /** Reports a defect for the System pane. Never called for an aborted pass. */
   onDefect: (step: string, reason: string) => void
@@ -25,13 +28,23 @@ export async function runPassStep<T>(
   fallback: T,
   options: PassStepOptions,
 ): Promise<T> {
+  const result = await runPassStepResult(step, run, options)
+  return result._tag === 'Ok' ? result.value : fallback
+}
+
+/** Keeps a step's failure cause while allowing the pass to continue. */
+export async function runPassStepResult<T>(
+  step: string,
+  run: () => T | Promise<T>,
+  options: PassStepOptions,
+): Promise<Result<T, string>> {
   try {
-    return await run()
+    return ok(await run())
   } catch (error) {
     // Stopping the service aborts every request in flight, and each one rejects
     // with an abort. That is the shutdown, not a defect.
-    if (options.signal.aborted) return fallback
-    options.onDefect(step, error instanceof Error ? error.message : String(error))
-    return fallback
+    const reason = error instanceof Error ? error.message : String(error)
+    if (!options.signal.aborted) options.onDefect(step, reason)
+    return err(reason)
   }
 }

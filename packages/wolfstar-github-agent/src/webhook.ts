@@ -1,9 +1,14 @@
+import type { LoggedFindingPickup } from './logged-finding-pickup.ts'
 import type { PackageReleaseCommand, PackageReleaseRequest } from './package-release.ts'
+import type { Result } from './result.ts'
+import type { ReviewApproval } from './review-approval.ts'
 import type { ReviewCancellation } from './review-cancel.ts'
 import { Buffer } from 'node:buffer'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { H3 } from 'h3'
+import { loggedFindingPickup } from './logged-finding-pickup.ts'
 import { packageReleaseCommand, releaseRequest } from './package-release.ts'
+import { reviewApproval } from './review-approval.ts'
 import { reviewCancellation } from './review-cancel.ts'
 
 /**
@@ -19,6 +24,8 @@ export const HINTED_WEBHOOK_EVENTS = new Set([
   'issues',
   'pull_request',
   'pull_request_review',
+  // A reply on a finding thread asks for a fresh Review.
+  'pull_request_review_comment',
   'push',
   'status',
 ])
@@ -135,7 +142,12 @@ export function createReconcileHint(options: ReconcileHintOptions): ReconcileHin
 export interface WebhookAppOptions {
   allowedOwners: readonly string[]
   logger: { info: (message: string) => void }
-  onHint: (repository: string) => void
+  onHint: (repository: string, event: string) => void
+  reviewApproval?: {
+    allowedAuthor: string
+    actorLogin: (repository: string) => string | null
+    apply: (request: ReviewApproval & { requestId: string }) => Promise<Result<void, string>>
+  }
   reviewCancellation?: {
     actorLogin: (repository: string) => string | null
     apply: (request: ReviewCancellation & { requestId: string }) => void
@@ -146,6 +158,11 @@ export interface WebhookAppOptions {
     apply: (request: PackageReleaseRequest & { requestId: string }) => void
     command?: (command: PackageReleaseCommand) => void
   }
+  loggedFindingPickup?: {
+    allowedAuthor: string
+    actorLogin: (repository: string) => string | null
+    apply: (request: LoggedFindingPickup & { requestId: string }) => void
+  }
   secret: string
   now?: () => number
 }
@@ -155,7 +172,7 @@ export interface WebhookAppOptions {
  *
  * This app accepts signed Review cancellation and reconciliation hints. It runs on its own
  * port so that exposing it through a tunnel cannot reach the control API, which
- * can pause agents, approve pull requests, and eject sessions.
+ * can pause agents, approve pull requests, and cancel Tasks.
  */
 export function createWebhookApp(options: WebhookAppOptions): H3 {
   const app = new H3()
@@ -212,6 +229,28 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
       ) {
         options.packageRelease.apply({ ...release, requestId: delivery })
       }
+      const pickup = loggedFindingPickup(name, payload)
+      if (
+        pickup !== null &&
+        options.loggedFindingPickup !== undefined &&
+        pickup.requestedBy.toLowerCase() === options.loggedFindingPickup.allowedAuthor.toLowerCase() &&
+        options.loggedFindingPickup.actorLogin(hint.repository)?.toLowerCase() === pickup.commentAuthor.toLowerCase()
+      ) {
+        options.loggedFindingPickup.apply({ ...pickup, requestId: delivery })
+      }
+      const approval = reviewApproval(name, payload)
+      if (
+        approval !== null &&
+        options.reviewApproval !== undefined &&
+        approval.requestedBy.toLowerCase() === options.reviewApproval.allowedAuthor.toLowerCase() &&
+        options.reviewApproval.actorLogin(hint.repository)?.toLowerCase() === approval.commentAuthor.toLowerCase()
+      ) {
+        const applied = await options.reviewApproval.apply({ ...approval, requestId: delivery })
+        if (applied._tag === 'Err') {
+          options.logger.info(`Review Approval failed: ${applied.error}`)
+          return new Response('Review Approval failed. Retry this delivery.', { status: 503 })
+        }
+      }
       const cancellation = reviewCancellation(name, payload)
       if (
         cancellation !== null &&
@@ -222,7 +261,7 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
         options.reviewCancellation.apply({ ...cancellation, requestId: delivery })
       }
       options.logger.info(`Webhook: ${name} on ${hint.repository}.`)
-      options.onHint(hint.repository)
+      options.onHint(hint.repository, name)
     }
     // Record only accepted deliveries. Polling recovers work after a restart.
     if (deliveries.size >= maximumDeliveries) {

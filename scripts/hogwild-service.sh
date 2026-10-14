@@ -23,10 +23,24 @@ REMOTE_OVERRIDE="$REMOTE_OVERRIDE_DIR/hogwild.conf"
 WORKTRUNK_CONFIG_FILE="$SCRIPT_DIR/worktrunk.toml"
 REPOSITORY_ENV_TOOL_FILE="$SCRIPT_DIR/repository-env.sh"
 REPOSITORY_ENV_MANIFEST_FILE="${WOLFSTAR_REPOSITORY_ENV_MANIFEST:-$SCRIPT_DIR/repository-env-files}"
+# Values Hogwild gets in place of the desktop's, such as a read-only Cloudflare
+# token. It lives outside every repository and never leaves this machine as is.
+HOGWILD_ENV_OVERRIDES_FILE="${WOLFSTAR_HOGWILD_ENV_OVERRIDES:-$HOME/.config/wolfstar-agent-kit/hogwild-env-overrides}"
 REMOTE_WORKTRUNK_CONFIG="$REMOTE_HOME/.config/worktrunk/config.toml"
 REMOTE_REPOSITORY_ENV_TOOL="$REMOTE_HOME/.local/bin/wolfstar-repository-env"
 REMOTE_REPOSITORY_ENV_MANIFEST="$REMOTE_HOME/.config/wolfstar-agent-kit/repository-env-files"
 REMOTE_REPOSITORY_ENV_STAGE=''
+
+# Hold one descriptor through Hogwild restart, desktop preparation, and cleanup.
+acquire_service_lock() {
+  local directory="${XDG_STATE_HOME:-$HOME/.local/state}/wolfstar-agent-kit"
+  mkdir -p "$directory"
+  exec 9>"$directory/hogwild-service.lock"
+  if ! flock --nonblock 9; then
+    echo "Another Hogwild update or restart is running. Wait for it to finish." >&2
+    return 1
+  fi
+}
 
 require_inputs() {
   if [[ ! "$HOGWILD_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
@@ -81,14 +95,9 @@ controller_request() {
 # service checkout under a pending restart and files a second request. Two
 # Claude Code sessions in this repository did that on 2026-09-16.
 #
-# A controller that does not answer cannot report a pending restart, and a deploy
-# is how Hogwild recovers, so that case never blocks. Neither does a controller
-# too old to report Restart requests.
+# The capability check below rejects controllers that cannot hold preparation.
 refuse_while_restart_pending() {
   local state tag
-  if [ "${HOGWILD_DEPLOY_DESPITE_PENDING_RESTART:-}" = 1 ]; then
-    return 0
-  fi
   if ! state=$(controller_request "$HOGWILD_ORIGIN/api/state" 2>/dev/null); then
     return 0
   fi
@@ -97,7 +106,6 @@ refuse_while_restart_pending() {
     Requested|Restarting)
       echo "Hogwild already has a Restart request that is $tag, so another deploy is still draining." >&2
       echo "Wait for it to complete, then deploy again." >&2
-      echo "If that restart is stuck, set HOGWILD_DEPLOY_DESPITE_PENDING_RESTART=1 to deploy anyway." >&2
       exit 1
       ;;
   esac
@@ -110,6 +118,22 @@ request_restart() {
     --data '{"source":"helper"}' \
     "$HOGWILD_ORIGIN/api/service/restart" \
     | jq --exit-status --raw-output '.id'
+}
+
+request_update() {
+  local target_commit=$1 request
+  request=$(controller_request --header 'Content-Type: application/json' --request POST \
+    --data "$(jq --null-input --arg commit "$target_commit" '{source:"helper",targetCommit:$commit,preparation:"Pending"}')" \
+    "$HOGWILD_ORIGIN/api/service/update")
+  jq --exit-status --raw-output --arg commit "$target_commit" \
+    'if .operation._tag == "Update" and .operation.targetCommit == $commit and .operation.preparation == "Pending" then .id else error("Another Restart request owns the Service.") end' <<< "$request"
+}
+
+finish_update_preparation() {
+  local request_id=$1 outcome=$2
+  controller_request --header 'Content-Type: application/json' --request POST \
+    --data "$(jq --null-input --arg id "$request_id" --arg outcome "$outcome" '{id:$id,_tag:$outcome,reason:"The update helper failed during file sync."}')" \
+    "$HOGWILD_ORIGIN/api/service/update/preparation" >/dev/null
 }
 
 controller_supports_restart() {
@@ -126,18 +150,45 @@ controller_supports_restart() {
 
 wait_for_restart() {
   local restart_id=$1
-  local attempt state tag reason
+  local attempt state tag reason progress elapsed
+  local started=$SECONDS last_reported=-30 last_progress=''
   for attempt in $(seq 1 $((MAXIMUM_RESTART_SECONDS / RESTART_POLL_SECONDS))); do
     state=$(controller_request "$HOGWILD_ORIGIN/api/state" 2>/dev/null || true)
     if [ -z "$state" ]; then
+      if [ "$last_progress" != 'Waiting for Service response.' ] || ((SECONDS - last_reported >= 30)); then
+        echo "Waiting for Service response. Elapsed: $((SECONDS - started))s."
+        last_progress='Waiting for Service response.'
+        last_reported=$SECONDS
+      fi
       sleep "$RESTART_POLL_SECONDS"
       continue
     fi
     tag=$(jq --exit-status --raw-output --arg id "$restart_id" \
       'if .restartRequest.id == $id then .restartRequest._tag else "Unknown" end' <<< "$state")
     case "$tag" in
-      Completed) return ;;
-      Requested|Restarting) ;;
+      Completed)
+        echo "Hogwild restarted. Elapsed: $((SECONDS - started))s."
+        return
+        ;;
+      Requested|Restarting)
+        progress=$(jq --raw-output --arg tag "$tag" '
+          if $tag == "Restarting" then "Restarting Hogwild."
+          else
+            (if (.tasks | type) == "array" then
+              [.tasks[] | select(.state._tag == "Running" or .state._tag == "Publishing")] | length
+            else "unknown" end) as $tasks |
+            (if (.hostCapacity.localActive | type) == "number" and (.hostCapacity.desktopActive | type) == "number" then
+              .hostCapacity.localActive + .hostCapacity.desktopActive
+            else "unknown" end) as $slots |
+            "Waiting for Restart: \($tasks) active Tasks, \($slots) occupied Agent slots."
+          end' <<< "$state")
+        if [ "$progress" != "$last_progress" ] || ((SECONDS - last_reported >= 30)); then
+          elapsed=$((SECONDS - started))
+          echo "$progress Elapsed: ${elapsed}s."
+          last_progress=$progress
+          last_reported=$SECONDS
+        fi
+        ;;
       ActionRequired)
         reason=$(jq --raw-output '.restartRequest.reason' <<< "$state")
         echo "Hogwild requires action before restart: $reason" >&2
@@ -241,14 +292,30 @@ safe_restart() {
 # place. Recorded before the scp, so the EXIT trap reclaims it on every exit
 # path, including the ones set -e takes with no cleanup branch in sight.
 staged_file=''
+# The local copy of the repository environment, with Hogwild overrides applied.
+# It holds secrets, so every exit path removes it.
+outgoing_env_stage=''
+pending_update_id=''
 
 cleanup_staged_file() {
+  if [ -n "$pending_update_id" ]; then
+    if ! finish_update_preparation "$pending_update_id" Failed; then
+      echo "Update preparation cleanup failed. Inspect request $pending_update_id." >&2
+    fi
+    pending_update_id=''
+  fi
   if [ -n "$staged_file" ]; then
     ssh -o BatchMode=yes "$HOGWILD_HOST" "rm -f '$staged_file'" >/dev/null 2>&1 || true
     staged_file=''
   fi
+  if [ -n "$outgoing_env_stage" ]; then
+    rm -rf -- "$outgoing_env_stage"
+    outgoing_env_stage=''
+  fi
 }
 trap cleanup_staged_file EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 sync_verified_file() {
   local source=$1
@@ -312,9 +379,10 @@ require_safe_repository_environment_stage() {
 }
 
 sync_repository_environment() {
+  outgoing_env_stage=$(umask 077 && mktemp -d)
   WOLFSTAR_REPOSITORY_ENV_HOME="$REPOSITORY_ENV_HOME" \
   WOLFSTAR_REPOSITORY_ENV_MANIFEST="$REPOSITORY_ENV_MANIFEST_FILE" \
-    bash "$REPOSITORY_ENV_TOOL_FILE" validate-source >/dev/null
+    bash "$REPOSITORY_ENV_TOOL_FILE" stage-outgoing "$outgoing_env_stage/stage" "$HOGWILD_ENV_OVERRIDES_FILE" >/dev/null
 
   if ! REMOTE_REPOSITORY_ENV_STAGE=$(ssh -o BatchMode=yes "$HOGWILD_HOST" \
     "umask 077; mkdir -p '$REMOTE_HOME/.cache'; mktemp -d '$REMOTE_HOME/.cache/wolfstar-repository-env.XXXXXX'"); then
@@ -326,7 +394,7 @@ sync_repository_environment() {
     --files-from=<(WOLFSTAR_REPOSITORY_ENV_HOME="$REPOSITORY_ENV_HOME" \
       WOLFSTAR_REPOSITORY_ENV_MANIFEST="$REPOSITORY_ENV_MANIFEST_FILE" \
       bash "$REPOSITORY_ENV_TOOL_FILE" list-paths) \
-    "$REPOSITORY_ENV_HOME/" "$HOGWILD_HOST:$REMOTE_REPOSITORY_ENV_STAGE/"; then
+    "$outgoing_env_stage/stage/" "$HOGWILD_HOST:$REMOTE_REPOSITORY_ENV_STAGE/"; then
     cleanup_repository_environment_stage || true
     echo "Hogwild could not receive the repository environment." >&2
     exit 1
@@ -351,6 +419,51 @@ DESKTOP_UNIT="${WOLFSTAR_GITHUB_AGENT_DESKTOP_UNIT:-wolfstar-desktop-agent}"
 DESKTOP_SERVICE_SCRIPT="${WOLFSTAR_GITHUB_AGENT_SERVICE_SCRIPT:-$SCRIPT_DIR/service.sh}"
 DESKTOP_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
+wait_for_desktop() {
+  local attempt state seen remaining request_timeout
+  local started=$SECONDS baseline='' reason='The Service did not answer.'
+  echo "Waiting for a fresh desktop report with the current protocol."
+  for attempt in $(seq 1 60); do
+    remaining=$((120 - SECONDS + started))
+    if [ "$remaining" -le 0 ]; then break; fi
+    request_timeout=$((remaining < 10 ? remaining : 10))
+    if ! systemctl --user is-active --quiet "$DESKTOP_UNIT"; then
+      echo "Desktop client stopped after restart. Inspect its user unit." >&2
+      return 1
+    fi
+    state=$(controller_request --connect-timeout "$request_timeout" --max-time "$request_timeout" "$HOGWILD_ORIGIN/api/state" 2>/dev/null || true)
+    if [ -z "$state" ]; then
+      reason='The Service did not answer.'
+    elif ! seen=$(jq --exit-status --raw-output '
+      .desktop | if type == "object" and has("seenAt") then
+        if .seenAt == null then 0
+        elif (.seenAt | type) == "number" and .seenAt >= 0 then .seenAt
+        else error("Invalid report time.") end
+      else error("Missing report time.") end' <<< "$state" 2>/dev/null); then
+      reason='The Service returned no valid desktop report time.'
+    else
+      # Capture the controller clock after systemd has stopped the previous client.
+      # A later report proves the replacement can communicate, without host clock comparisons.
+      if [ -z "$baseline" ]; then baseline=$seen; fi
+      if jq --exit-status --argjson baseline "$baseline" \
+        '.desktop.connected == true and .desktop.current == true and .desktop.seenAt > $baseline' \
+        <<< "$state" >/dev/null && systemctl --user is-active --quiet "$DESKTOP_UNIT"; then
+        echo "Desktop client connected with the current protocol."
+        return 0
+      fi
+      reason=$(jq --raw-output '
+        if .desktop.connected != true then "The desktop is disconnected."
+        elif .desktop.current != true then "The desktop protocol does not match the Service."
+        else "The desktop sent no fresh report." end' <<< "$state")
+    fi
+    remaining=$((120 - SECONDS + started))
+    if [ "$remaining" -le 0 ]; then break; fi
+    if [ "$attempt" -lt 60 ]; then sleep "$((remaining < 2 ? remaining : 2))"; fi
+  done
+  echo "Desktop client connection check failed: $reason" >&2
+  return 1
+}
+
 update_desktop_client() {
   local ref=$1
   if ! systemctl --user list-unit-files "$DESKTOP_UNIT.service" >/dev/null 2>&1 \
@@ -366,6 +479,7 @@ update_desktop_client() {
   install -Dm644 "$SCRIPT_DIR/desktop-agent.service" "$DESKTOP_UNIT_DIR/$DESKTOP_UNIT.service"
   systemctl --user daemon-reload
   systemctl --user restart "$DESKTOP_UNIT"
+  wait_for_desktop
   echo "Desktop client: $(git -C "${WOLFSTAR_GITHUB_AGENT_CHECKOUT:-$HOME/.local/share/wolfstar-github-agent/service}" log --oneline -1)"
 }
 
@@ -381,6 +495,9 @@ require_inputs
 
 command="${1:-update}"
 case "$command" in
+  update|restart) acquire_service_lock ;;
+esac
+case "$command" in
   update)
     ref="${2:-origin/main}"
     if [[ ! "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
@@ -388,20 +505,31 @@ case "$command" in
       exit 1
     fi
     refuse_while_restart_pending
+    if ! controller_request "$HOGWILD_ORIGIN/api/service/update/preparation" | jq --exit-status '.supported == true' >/dev/null; then
+      echo "The Service cannot hold Update preparation. Update it with its installed helper first." >&2
+      exit 1
+    fi
+    deployed_revision=$(remote_service resolve-update "$ref" | tr -d '[:space:]')
+    if [[ ! "$deployed_revision" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "Hogwild did not resolve a full commit SHA." >&2
+      exit 1
+    fi
+    pending_update_id=$(request_update "$deployed_revision")
+    restart_id=$pending_update_id
     sync_context
     sync_service_override
     sync_worktrunk
     sync_repository_environment
-    remote_service prepare-update "$ref"
-    # Hogwild resolved the ref minutes ago. Reading back the commit it landed
-    # on keeps the desktop on that one, because a merge that lands during the
-    # deploy moves origin/main and would leave the two halves a commit apart.
-    deployed_revision=$(remote_service revision | tr -d '[:space:]')
-    if [[ ! "$deployed_revision" =~ ^[0-9a-f]{40}$ ]]; then
-      echo "Hogwild did not report the commit it deployed." >&2
+    # The durable Update blocks claims, drains work, then prepares this commit.
+    # Preparing first lets fresh Tasks start during dependency and build work.
+    finish_update_preparation "$pending_update_id" Ready
+    pending_update_id=''
+    wait_for_restart "$restart_id"
+    actual_revision=$(remote_service revision | tr -d '[:space:]')
+    if [ "$actual_revision" != "$deployed_revision" ]; then
+      echo "Hogwild started a different commit. Inspect the Update request." >&2
       exit 1
     fi
-    safe_restart
     remote_service status
     # After Hogwild, because a desktop ahead of the controller stands itself
     # down and the work simply stays on Hogwild until this finishes.

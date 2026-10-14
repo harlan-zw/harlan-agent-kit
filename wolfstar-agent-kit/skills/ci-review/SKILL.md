@@ -1,6 +1,7 @@
 ---
 name: ci-review
 description: Inspect GitHub Actions logs for warnings and errors, triage their causes, and repair actionable findings. Use for the ci-review Routine and its Issue work.
+license: MIT
 ---
 
 # CI review
@@ -101,13 +102,15 @@ If existing work owns the fix, return its link and a blocked outcome instead of 
 6. Run only the scoped checks permitted by the controller. CI owns the full suite, typecheck, and build.
 7. Report the original evidence, changed behavior, verification, and anything only GitHub Actions can prove.
 
+Use the [focused check recipes](../../references/focused-checks.md) to retain original exits and resolve declared preparation.
+
 If reproduction needs a command outside the check budget, report that limitation and leave verification to CI.
 Do not load workflow Skills. Use the controller's inlined rules.
 
 Do not suppress warnings broadly, weaken assertions, skip tests, or add `continue-on-error` to obtain green checks.
 Preserve command exit codes when capturing output. Never use a successful formatting command as proof of success.
 Use narrowly scoped handling only when the diagnostic is proven expected and the report explains why.
-Do not change secrets, branch protection, permissions, or runner services. Self-hosted runners belong on Hogwild.
+Do not change secrets, branch protection, permissions, or runner services. Self-hosted runners run on Hogwild and on the desktop.
 Do not deploy, re-run workflows, or edit another pull request's branch.
 Do not stage, commit, push, publish, or change GitHub metadata. The controller owns those actions.
 If the cause cannot be reproduced or verified, return the limitation. Never claim the warning or error was fixed.

@@ -48,6 +48,7 @@ export interface ReviewGateSweepOptions {
     | 'recordCiRepairFinding'
     | 'recordIncident'
     | 'recordReviewPublication'
+    | 'repairRoundPlan'
     | 'resolveIncidents'
     | 'stageReviewGateStatus'
   >
@@ -98,7 +99,10 @@ export async function refreshReviewGates(
     )
       return ok({ _tag: 'Superseded', repository: review.repository, pullRequestNumber: review.pullRequestNumber })
 
-    const { gates, reportedChecks, ciCause } = refreshControllerGates(review.gates, live.value, mapping)
+    const { gates, reportedChecks, ciCause } = refreshControllerGates(review.gates, live.value, mapping, {
+      reviewStartedAt: review.startedAt,
+      now: options.now(),
+    })
     const outcome = reviewOutcome(gates)
     const confidence = outcome === 'READY' ? review.confidence : undefined
     let findings = review.findings
@@ -118,7 +122,12 @@ export async function refreshReviewGates(
       findings.some((finding) => finding._tag === 'Open' && finding.resolution !== 'Dismissal') &&
       !findings.some((finding) => finding._tag === 'Open' && finding.resolution === 'Dismissal')
     if (repairable) {
-      const preflight = repairPreflight(mapping, live.value, await options.preflightRepair(review.repository, signal))
+      const preflight = repairPreflight(
+        mapping,
+        live.value,
+        await options.preflightRepair(review.repository, signal),
+        options.store.repairRoundPlan(review.repository, review.pullRequestNumber, review.headSha),
+      )
       const repair =
         preflight._tag === 'Authorized'
           ? options.store.queueReviewFixForGate({
@@ -150,6 +159,7 @@ export async function refreshReviewGates(
       confidence,
       reportedChecks,
       review.mergeRisk?.combined,
+      review.repository,
     )
     // A red default branch holds this review PENDING until someone repairs
     // it. No review lease exists here, so this is the only place that can

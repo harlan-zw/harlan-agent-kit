@@ -16,3 +16,14 @@ export function isReviewRerunCommand(body: string): boolean {
     /^@wolfstar-github-agent(?:\[bot\])?\s+rerun$/i.test(command)
   )
 }
+
+/** Only a leading, exact Agent handle addresses a command to this Service. */
+export function parsePullRequestCommand(
+  body: string,
+): { _tag: 'Rerun' } | { _tag: 'Change'; instruction: string } | null {
+  if (isReviewRerunCommand(body)) return { _tag: 'Rerun' }
+  const text = body.trim()
+  const match = /^(?:\/wolfstar-agent|@wolfstar-agent|@wolfstar-github-agent(?:\[bot\])?)(?=\s)/i.exec(text)
+  const instruction = match === null ? undefined : text.slice(match[0].length).trim()
+  return instruction === undefined || instruction === '' ? null : { _tag: 'Change', instruction }
+}

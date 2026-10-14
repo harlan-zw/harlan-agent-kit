@@ -5,9 +5,12 @@ import type {
   GitHubAgentSource,
   PublishedReviewStatus,
   ReviewPublicationSource,
+  ReviewStatusIdentitySource,
 } from './github-agent-source.ts'
+import type { NativeReviewMirror } from './native-review.ts'
 import type { Result } from './result.ts'
-import type { ReviewCheckRunPublisher } from './review-check-run.ts'
+import type { ReviewCheckRunMirror } from './review-check-run.ts'
+import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
 import type { JournalStore } from './store.ts'
 import type {
   ClaimedAdversarialReviewTask,
@@ -18,11 +21,13 @@ import type {
   ReviewStatusTaskPhase,
 } from './types.ts'
 import { formatPhaseDuration } from './agent-progress.ts'
+import { nativeReviewBody } from './native-review.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
 import { REVIEW_CANCEL_CONTROL } from './review-cancel.ts'
-import { reviewCheckRunUpdate } from './review-check-run.ts'
+import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
+import { mirrorReviewFindingThreads } from './review-finding-threads.ts'
 import { updatedAtLabel } from './text.ts'
 
 export interface ReviewStatusController {
@@ -44,9 +49,17 @@ export interface ReviewStatusController {
 
 export interface ReviewStatusControllerOptions {
   /** Mirrors each Review publication onto the Review check run. Absent leaves the check run unwritten. */
-  checkRuns?: ReviewCheckRunPublisher
-  commentControls?: boolean
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewPublicationSource & ExistingReviewLabelSource
+  nativeReviews?: NativeReviewMirror
+  checkRuns?: ReviewCheckRunMirror
+  commentControls?: (repository: string) => boolean
+  loggedFindings?: Pick<JournalStore, 'decorateLoggedFindings'>
+  loggedFindingControls?: (repository: string) => boolean
+  /** Puts each finding beside its code. Absent writes the canonical comment alone. */
+  findingThreads?: ReviewFindingThreadMirror
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> &
+    ReviewStatusIdentitySource &
+    ReviewPublicationSource &
+    ExistingReviewLabelSource
   leaseMilliseconds: number
   now: () => Date
   store: Pick<
@@ -63,8 +76,13 @@ export interface ReviewStatusControllerOptions {
 }
 
 export interface ReviewStatusPublicationOptions {
-  checkRuns?: ReviewCheckRunPublisher
-  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> & ReviewPublicationSource & ExistingReviewLabelSource
+  nativeReviews?: NativeReviewMirror
+  checkRuns?: ReviewCheckRunMirror
+  findingThreads?: ReviewFindingThreadMirror
+  github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> &
+    ReviewStatusIdentitySource &
+    ReviewPublicationSource &
+    ExistingReviewLabelSource
   now: () => Date
   store: Pick<
     JournalStore,
@@ -192,11 +210,20 @@ export async function publishClaimedReviewStatus(
   if (command.taskKind === 'existing_review')
     return publishExistingReviewLabel(options, command, command.expectedBaseRef, signal)
 
-  const current = await options.github.getPullRequestReviewSnapshot(
-    command.repositoryMapping,
-    command.pullRequestNumber,
-    signal,
-  )
+  const current =
+    command.phase === 'terminal'
+      ? await options.github
+          .getPullRequestReviewSnapshot(command.repositoryMapping, command.pullRequestNumber, signal)
+          .then((result) =>
+            result._tag === 'Err'
+              ? result
+              : ok({
+                  state: result.value.pullRequest.state,
+                  headSha: result.value.pullRequest.headSha,
+                  baseRef: result.value.pullRequest.baseRef,
+                }),
+          )
+      : await options.github.getPullRequestStatusIdentity(command.repositoryMapping, command.pullRequestNumber, signal)
   if (current._tag === 'Err') {
     options.store.deferReviewStatus({
       commandId: command.id,
@@ -208,9 +235,9 @@ export async function publishClaimedReviewStatus(
     return current
   }
   if (
-    current.value.pullRequest.state !== 'open' ||
-    current.value.pullRequest.headSha !== command.expectedHeadSha ||
-    current.value.pullRequest.baseRef !== command.expectedBaseRef
+    current.value.state !== 'open' ||
+    current.value.headSha !== command.expectedHeadSha ||
+    current.value.baseRef !== command.expectedBaseRef
   ) {
     const reason = 'The pull request changed before the review comment was posted.'
     options.store.supersedeReviewStatus({
@@ -255,38 +282,6 @@ export async function publishClaimedReviewStatus(
   })
   if (!commentConfirmed) return err('GitHub accepted the review comment, but its receipt lost the Publication lease.')
 
-  const checkRun = options.checkRuns === undefined ? null : reviewCheckRunUpdate(command, options.now().toISOString())
-  if (options.checkRuns !== undefined && checkRun !== null) {
-    const checkRunAuthority = authorizeWrite(options, command)
-    if (checkRunAuthority._tag === 'Err') return checkRunAuthority
-    const mirrored = await options.checkRuns.upsertReviewCheckRun(
-      command.repositoryMapping,
-      command.expectedHeadSha,
-      checkRun,
-      signal,
-      () => authorizeWrite(options, command),
-    )
-    if (mirrored._tag === 'Err') {
-      options.store.deferReviewStatus({
-        commandId: command.id,
-        workerId: command.workerId,
-        fence: command.fence,
-        at: options.now().toISOString(),
-        reason: mirrored.error,
-      })
-      return mirrored
-    }
-    const checkRunConfirmed = options.store.recordReviewStatusReceipt({
-      commandId: command.id,
-      workerId: command.workerId,
-      fence: command.fence,
-      at: options.now().toISOString(),
-      sink: 'check_run',
-    })
-    if (!checkRunConfirmed)
-      return err('GitHub accepted the Review check run, but its receipt lost the Publication lease.')
-  }
-
   const label =
     command.phase !== 'terminal'
       ? null
@@ -325,6 +320,73 @@ export async function publishClaimedReviewStatus(
       sink: 'outcome_label',
     })
     if (!labelConfirmed) return err('GitHub accepted the Review label, but its receipt lost the Publication lease.')
+  }
+
+  // The check run mirrors the comment, so it writes last and gates nothing.
+  // Its failure reaches a person through the mirror's report instead.
+  const checkRun = options.checkRuns === undefined ? null : reviewCheckRunUpdate(command, options.now().toISOString())
+  if (options.checkRuns !== undefined && checkRun !== null) {
+    const checkRunAuthority = authorizeWrite(options, command)
+    if (checkRunAuthority._tag === 'Err') return checkRunAuthority
+    const mirrored = await mirrorReviewCheckRun(
+      options.checkRuns,
+      command.repositoryMapping,
+      command.expectedHeadSha,
+      checkRun,
+      signal,
+      () => authorizeWrite(options, command),
+    )
+    if (mirrored._tag === 'Written') {
+      const checkRunConfirmed = options.store.recordReviewStatusReceipt({
+        commandId: command.id,
+        workerId: command.workerId,
+        fence: command.fence,
+        at: options.now().toISOString(),
+        sink: 'check_run',
+      })
+      if (!checkRunConfirmed)
+        return err('GitHub accepted the Review check run, but its receipt lost the Publication lease.')
+    }
+  }
+  // Inline threads mirror the comment like the check run: they write after
+  // it, and their failure reaches a person through the mirror's report.
+  const findings =
+    options.findingThreads === undefined ||
+    command.phase !== 'terminal' ||
+    command.taskKind !== 'adversarial_review' ||
+    command.reviewRunId === null
+      ? null
+      : options.findingThreads.findings(command.repository, command.pullRequestNumber, command.reviewRunId)
+  if (options.findingThreads !== undefined && findings !== null) {
+    const threadAuthority = authorizeWrite(options, command)
+    if (threadAuthority._tag === 'Err') return threadAuthority
+    await mirrorReviewFindingThreads(
+      options.findingThreads,
+      command.repositoryMapping,
+      command.pullRequestNumber,
+      command.expectedHeadSha,
+      findings,
+      signal,
+      () => authorizeWrite(options, command),
+    )
+  }
+  if (
+    options.nativeReviews !== undefined &&
+    command.phase === 'terminal' &&
+    command.taskKind === 'adversarial_review' &&
+    command.reviewRunId !== null
+  ) {
+    const authority = authorizeWrite(options, command)
+    if (authority._tag === 'Err') return authority
+    const result = await options.nativeReviews.publisher.upsertNativeReview(
+      command.repositoryMapping,
+      command.pullRequestNumber,
+      command.expectedHeadSha,
+      nativeReviewBody(command.expectedHeadSha, command.desiredOutcome, published.value.url),
+      signal,
+      () => authorizeWrite(options, command),
+    )
+    options.nativeReviews.report(command.repository, result)
   }
   const completed = options.store.completeReviewStatus({
     commandId: command.id,
@@ -378,7 +440,7 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
     replacePriorReview: boolean,
     signal: AbortSignal,
   ): Promise<Result<PublishedReviewStatus, string>> {
-    if (options.commentControls && taskPhase.phase !== 'terminal')
+    if (options.commentControls?.(task.repository) && taskPhase.phase !== 'terminal')
       body += `\n\n${REVIEW_CANCEL_CONTROL}\n\nLeave unchecked to finish Review after merge.`
     const at = options.now().toISOString()
     const staged = options.store.stageReviewStatus({
@@ -408,6 +470,12 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
       )
     },
     stageTerminal(task, body, desiredOutcome, reviewRunId, gates) {
+      if (
+        options.loggedFindingControls?.(task.repository) &&
+        reviewRunId !== undefined &&
+        options.loggedFindings !== undefined
+      )
+        body = options.loggedFindings.decorateLoggedFindings(body, reviewRunId)
       const staged = options.store.stageReviewStatus({
         taskKind: 'adversarial_review',
         phase: 'terminal',

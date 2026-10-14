@@ -215,3 +215,63 @@ describe('combining service state', () => {
     })
   })
 })
+
+it.each(['preserved', 'conflict'])(
+  'keeps Routine incident resolution evidence during consolidation: %s',
+  async (mode) => {
+    const path = paths()
+    seedGitHubState(path.github)
+    seedRoutineState(path.routine)
+    const routine = openJournalStore(path.routine)
+    const at = '2026-10-12T00:00:00.000Z'
+    const incident = routine.recordIncident({
+      scope: { _tag: 'Service' },
+      kind: 'unknown',
+      severity: 'warning',
+      operation: 'routine_probe',
+      message: 'Verified old failure',
+      recovery: { _tag: 'ActionRequired' },
+      at,
+    })
+    const request = {
+      incidentId: incident.id,
+      lastSeenAt: at,
+      evidence: 'Verified Routine recovery.',
+      at: '2026-10-12T01:00:00.000Z',
+    }
+    expect(routine.resolveIncident(request)).toEqual({ _tag: 'Ok', value: { _tag: 'Resolved' } })
+    routine.close()
+    if (mode === 'conflict') {
+      const github = openJournalStore(path.github)
+      github.recordIncident({
+        scope: { _tag: 'Service' },
+        kind: 'unknown',
+        severity: 'warning',
+        operation: 'routine_probe',
+        message: 'Verified old failure',
+        recovery: { _tag: 'ActionRequired' },
+        at,
+      })
+      expect(github.resolveIncident({ ...request, evidence: 'Different verified recovery.' })).toEqual({
+        _tag: 'Ok',
+        value: { _tag: 'Resolved' },
+      })
+      github.close()
+    }
+    const result = await combineServiceState({
+      githubPath: path.github,
+      routinePath: path.routine,
+      outputPath: path.output,
+    })
+    if (mode === 'conflict') {
+      expect(result).toMatchObject({ _tag: 'Err', error: { _tag: 'StateConflict' } })
+      expect(existsSync(path.output)).toBe(false)
+      return
+    }
+    expect(result._tag).toBe('Ok')
+    const combined = openJournalStore(path.output)
+    expect(combined.resolveIncident(request)).toEqual({ _tag: 'Ok', value: { _tag: 'AlreadyResolved' } })
+    expect(combined.listWorkflowEvents({ stream: 'incident' }).map((event) => event.reason)).toEqual([request.evidence])
+    combined.close()
+  },
+)

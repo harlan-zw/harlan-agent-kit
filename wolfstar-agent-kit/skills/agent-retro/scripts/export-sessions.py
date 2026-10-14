@@ -3,25 +3,68 @@
 
 Run on Hogwild. Reads both databases read-only.
 
-Usage: export-sessions.py OUT_DIR [--days 7] [--per-goal 10]
+Usage: export-sessions.py OUT_DIR [--days 7] [--per-goal 10] [--redact-env-file PATH ...]
 """
 import collections
+import argparse
+import hashlib
 import json
 import os
 import re
 import sqlite3
 import sys
 import time
+import subprocess
+from pathlib import Path
+from functools import cache
 
-out = sys.argv[1]
-days = 7
-per_goal = 10
-args = sys.argv[2:]
-for i, a in enumerate(args):
-    if a == '--days':
-        days = int(args[i + 1])
-    if a == '--per-goal':
-        per_goal = int(args[i + 1])
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('out')
+parser.add_argument('--days', type=int, default=7)
+parser.add_argument('--per-goal', type=int, default=10)
+parser.add_argument('--redact-env-file', action='append', default=[], metavar='PATH')
+parser.add_argument('--codex-root', action='append', default=[], metavar='PATH')
+parser.add_argument('--codex-node', default=os.environ.get('WOLFSTAR_CODEX_EXPORT_NODE', 'node'))
+args = parser.parse_args()
+out, days, per_goal = args.out, args.days, args.per_goal
+
+SENSITIVE_KEY = re.compile(r'token|secret|password|api_?key|private_?key', re.I)
+
+
+def load_secret_values(paths):
+    """Read explicit single-line dotenv sources. Never include values in errors."""
+    values = set()
+    for path in paths:
+        with open(path) as source:
+            for number, line in enumerate(source, 1):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                assignment = re.fullmatch(r'(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)', line)
+                if assignment is None:
+                    raise ValueError(f'Invalid environment assignment in {path}, line {number}.')
+                key, value = assignment.groups()
+                if not SENSITIVE_KEY.search(key):
+                    continue
+                if value.startswith(('"', "'")):
+                    quoted = re.fullmatch(r'(["\'])(.*?)\1\s*(?:#.*)?', value)
+                    if quoted is None:
+                        raise ValueError(f'Invalid secret assignment in {path}, line {number}. Use single-line values.')
+                    value = quoted.group(2)
+                    if quoted.group(1) == '"':
+                        try:
+                            value = json.loads('"' + value + '"')
+                        except json.JSONDecodeError:
+                            raise ValueError(f'Invalid quoted secret in {path}, line {number}.') from None
+                else:
+                    value = re.split(r'\s+#', value, maxsplit=1)[0].rstrip()
+                if value:
+                    values.add(value)
+    return sorted(values, key=len, reverse=True)
+
+
+# A missing or malformed source stops before any artifact is written.
+KNOWN_SECRETS = load_secret_values(args.redact_env_file)
 
 OPENCODE_DB = os.path.expanduser('~/.local/share/opencode/opencode.db')
 JOURNAL_DB = os.path.expanduser('~/.local/share/wolfstar-github-agent/state.sqlite')
@@ -33,9 +76,14 @@ def open_readonly(path):
     return con
 
 
-con = open_readonly(OPENCODE_DB)
+con = open_readonly(OPENCODE_DB) if os.path.exists(OPENCODE_DB) else None
 journal = open_readonly(JOURNAL_DB) if os.path.exists(JOURNAL_DB) else None
 since = int((time.time() - days * 86400) * 1000)
+codex_reader = str(Path(__file__).with_name('codex-sessions.ts'))
+codex = json.loads(subprocess.run(
+    [args.codex_node, '--experimental-strip-types', codex_reader, str(since), *args.codex_root],
+    capture_output=True, text=True, check=True,
+).stdout)
 
 # Worktree slug -> goal. The controller names each worktree after its role.
 GOALS = [
@@ -50,23 +98,44 @@ GOALS = [
 TASK_KIND = {'review_fix': 'review_fix', 'resolve_conflict': 'resolve_conflict', 'baseline_repair': 'baseline_repair'}
 
 SLUG = re.compile(r'\.wolfstar-agent-(?:review|fix|pull|baseline|issue|routine)-(?P<number>[^-]+)-(?P<revision>[0-9a-f]{12})')
+BASELINE_SLUG = re.compile(r'\.wolfstar-agent-baseline-(?P<base>[0-9a-f]{12})-(?P<lease>[0-9a-f]{12})(?:$|/)')
+TASK_LEASE_SLUG = re.compile(r'\.wolfstar-agent-(?:fix|pull|baseline)-[^/]+-(?P<lease>[0-9a-f]{12})(?:$|/)')
 
 # Transcripts carry raw shell output. Redact token shapes before anything reads them.
 SECRETS = [
+    (re.compile(r'((?:token|secret|password|api_key|apikey|private_key)"\s*:\s*)"(?:\\.|[^"\\])*"', re.I), r'\1"***"'),
     (re.compile(r'(x-access-token:)[^@\s]+(@)', re.I), r'\1***\2'),
     (re.compile(r'\b(gh[pousr]_)[A-Za-z0-9]{16,}\b'), r'\1***'),
     (re.compile(r'\b(github_pat_)\w{16,}\b'), r'\1***'),
     (re.compile(r'\b(sk-)[\w-]{16,}\b'), r'\1***'),
     (re.compile(r'\b(sntry[su]_)[\w-]{16,}\b'), r'\1***'),
     (re.compile(r'(Bearer\s+)[\w.-]{16,}\b', re.I), r'\1***'),
-    (re.compile(r'((?:token|secret|password|api_key|apikey)\s*[=:]\s*["\']?)[\w.-]{16,}', re.I), r'\1***'),
+    (re.compile(r'((?:token|secret|password|api_key|apikey)["\']?\s*[=:]\s*["\']?)[\w./+=-]{1,}', re.I), r'\1***'),
 ]
 
 
 def redact(s):
+    for value in KNOWN_SECRETS:
+        s = s.replace(value, '***')
+        # Index JSON escapes quotes and newlines in titles and journal reasons.
+        s = s.replace(json.dumps(value)[1:-1], '***')
     for pat, rep in SECRETS:
         s = pat.sub(rep, s)
     return s
+
+
+def redact_data(value):
+    """Redact parsed fields before serialization or presentation changes."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {
+            redact(key): '***' if SENSITIVE_KEY.search(key) and isinstance(item, str) else redact_data(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_data(item) for item in value]
+    return value
 
 
 def goal_of(directory):
@@ -77,8 +146,24 @@ def goal_of(directory):
 
 
 def subject_of(directory):
+    baseline = BASELINE_SLUG.search(directory)
+    if baseline:
+        return baseline.group('base')
     m = SLUG.search(directory)
     return f"{m.group('number')}-{m.group('revision')}" if m else directory
+
+
+@cache
+def tasks_by_lease():
+    """Task worktree suffixes name exact leases, including Logged finding Repairs."""
+    if journal is None:
+        return {}
+    tasks = {}
+    for row in journal.execute('select id, kind, fence from tasks'):
+        for fence in range(1, row['fence'] + 1):
+            key = hashlib.sha256(f"{row['id']}:{fence}".encode()).hexdigest()[:12]
+            tasks[(row['kind'], key)] = row['id']
+    return tasks
 
 
 def trunc(s, n):
@@ -116,6 +201,7 @@ def journal_outcome(goal, sess):
     m = SLUG.search(sess['directory'])
     if not m:
         return None
+    lease = TASK_LEASE_SLUG.search(sess['directory'])
     kind = TASK_KIND.get(goal)
     if goal == 'issue':
         row = journal.execute(
@@ -128,27 +214,46 @@ def journal_outcome(goal, sess):
             return dict(source='worker_tasks', task=row['id'][:12], state=row['state_tag'], reason=row['reason'], attempts=row['attempts'])
     if kind is None:
         return None
-    row = journal.execute(
-        'select id, state_tag, reason, attempts, recovery_attempts, fence from tasks where kind = ? and revision_id like ? order by updated_at desc limit 1',
-        (kind, m.group('revision') + '%'),
-    ).fetchone()
+    if lease:
+        task_id = tasks_by_lease().get((kind, lease.group('lease')))
+        row = journal.execute(
+            'select id, state_tag, reason, attempts, recovery_attempts, fence from tasks where kind = ? and id = ?',
+            (kind, task_id),
+        ).fetchone()
+    else:
+        row = journal.execute(
+            'select id, state_tag, reason, attempts, recovery_attempts, fence from tasks where kind = ? and revision_id like ? order by updated_at desc limit 1',
+            (kind, m.group('revision') + '%'),
+        ).fetchone()
     if row is None:
-        return dict(source='tasks', outcome='no task row for this revision')
+        return dict(source='tasks', outcome='no task row for this worktree')
     transitions = journal.execute(
         'select to_tag, reason from task_transitions where task_id = ? order by created_at desc limit 3', (row['id'],),
     ).fetchall()
-    return dict(source='tasks', task=row['id'][:12], state=row['state_tag'], reason=row['reason'], attempts=row['attempts'], recovery_attempts=row['recovery_attempts'], fence=row['fence'], last_transitions=[f"{t['to_tag']}: {t['reason']}" for t in transitions])
+    task_label = row['id'] if row['id'].startswith('logged-finding:') else row['id'][:12]
+    return dict(source='tasks', task=task_label, state=row['state_tag'], reason=row['reason'], attempts=row['attempts'], recovery_attempts=row['recovery_attempts'], fence=row['fence'], last_transitions=[f"{t['to_tag']}: {t['reason']}" for t in transitions])
 
 
 def render(goal, sess):
-    parts = con.execute(
-        'select p.data, p.time_created, m.data as mdata from part p join message m on m.id=p.message_id where p.session_id=? order by p.time_created, p.id',
-        (sess['id'],),
-    ).fetchall()
+    if sess.get('provider') == 'codex':
+        exported = json.loads(subprocess.run(
+            [args.codex_node, '--experimental-strip-types', codex_reader, '--file', sess['file']],
+            capture_output=True, text=True, check=True,
+        ).stdout)
+        if exported['session'] is None:
+            raise ValueError('The selected Codex session has no session metadata.')
+        parts = exported['session']['parts']
+        sess['end_reason'] = exported['session']['end_reason']
+    else:
+        parts = con.execute(
+            'select p.data, p.time_created, m.data as mdata from part p join message m on m.id=p.message_id where p.session_id=? order by p.time_created, p.id',
+            (sess['id'],),
+        ).fetchall()
     lines = []
     dur = (sess['time_updated'] - sess['time_created']) / 1000
     outcome = journal_outcome(goal, sess)
     lines.append(f"# session {sess['id']}")
+    lines.append(f"provider: {sess.get('provider', 'opencode')}")
     lines.append(f"title: {sess['title']}")
     lines.append(f"directory: {sess['directory']}")
     lines.append(f"model: {sess['model']}")
@@ -164,7 +269,9 @@ def render(goal, sess):
     last_kind = 'none'
     body = []
     for p in parts:
-        d = json.loads(p['data'])
+        # Redact complete input and output before summaries, line selection,
+        # or whitespace changes can split a known secret into fragments.
+        d = redact_data(json.loads(p['data']))
         m = json.loads(p['mdata'])
         role = m.get('role')
         t = (p['time_created'] - t0) / 1000
@@ -217,7 +324,7 @@ def render(goal, sess):
         elif typ == 'patch':
             body.append(f"{ts} PATCH files={d.get('files')}")
             last_kind = 'patch'
-    end_reason = 'answered' if last_kind == 'assistant' else f'ended on {last_kind} (still running at export, killed, or provider error; see journal)'
+    end_reason = sess.get('end_reason') or ('answered' if last_kind == 'assistant' else f'ended on {last_kind} (still running at export, killed, or provider error; see journal)')
     lines.append(f"end_reason: {end_reason}")
     lines.append('')
     lines.extend(body)
@@ -230,10 +337,13 @@ def render(goal, sess):
         lines.append('repeated bash commands: ' + json.dumps(dup)[:2000])
     if edits:
         lines.append('edited files: ' + json.dumps(sorted(edits)))
-    return '\n'.join(lines), dict(tools=dict(tool_counts), tool_seconds={k: round(v) for k, v in tool_seconds.items()}, duration_min=round(dur / 60, 1), end_reason=end_reason, journal=outcome)
+    return redact('\n'.join(lines)), dict(tools=dict(tool_counts), tool_seconds={k: round(v) for k, v in tool_seconds.items()}, duration_min=round(dur / 60, 1), end_reason=end_reason, journal=outcome)
 
 
-sessions = con.execute('select * from session where time_created > ? and parent_id is null order by time_created desc', (since,)).fetchall()
+sessions = [dict(row) for row in con.execute('select * from session where time_created > ? and parent_id is null order by time_created desc', (since,))] if con is not None else []
+sessions.extend(session for session in codex['sessions'] if session['parent_id'] is None)
+sessions.sort(key=lambda session: session['time_created'], reverse=True)
+os.makedirs(out, exist_ok=True)
 groups = collections.defaultdict(list)
 for s in sessions:
     groups[goal_of(s['directory'])].append(s)
@@ -247,9 +357,13 @@ for goal, ss in groups.items():
         by_subject[subject_of(s['directory'])].append(s)
     # Spread the sample: at most two per subject before filling from the rest.
     picked = []
+    # A large loop may be older than the newest ten subjects. Always inspect it.
+    largest = max(by_subject.values(), key=len)
+    if len(largest) > 5:
+        picked.append(max(largest, key=lambda session: session['time_updated'] - session['time_created']))
     for round_ in range(3):
         for lst in by_subject.values():
-            if round_ < len(lst) and len(picked) < per_goal:
+            if round_ < len(lst) and lst[round_] not in picked and len(picked) < per_goal:
                 picked.append(lst[round_])
     picked = picked[:per_goal]
     stats = []
@@ -258,18 +372,19 @@ for goal, ss in groups.items():
         with open(os.path.join(gdir, f"{s['id']}.md"), 'w') as f:
             f.write(text)
         model = json.loads(s['model'] or '{}')
-        stats.append(dict(id=s['id'], title=s['title'], subject=subject_of(s['directory']), model=model.get('id'), tokens_in=s['tokens_input'], tokens_out=s['tokens_output'], reasoning=s['tokens_reasoning'], cache_read=s['tokens_cache_read'], **meta))
+        stats.append(dict(id=s['id'], provider=s.get('provider', 'opencode'), title=s['title'], subject=subject_of(s['directory']), model=model.get('id'), tokens_in=s['tokens_input'], tokens_out=s['tokens_output'], reasoning=s['tokens_reasoning'], cache_read=s['tokens_cache_read'], **meta))
     repeats = {k: len(v) for k, v in by_subject.items() if len(v) > 1}
     with open(os.path.join(gdir, 'INDEX.md'), 'w') as f:
         f.write(f"# {goal}: {len(ss)} sessions in last {days} days, {len(picked)} exported\n\n")
         if repeats:
             f.write('subjects with repeated sessions (subject: count): ' + json.dumps(dict(sorted(repeats.items(), key=lambda kv: -kv[1]))) + '\n\n')
         for st in stats:
-            f.write(json.dumps(st) + '\n')
+            f.write(redact(json.dumps(redact_data(st))) + '\n')
     index.append((goal, len(ss), len(picked), repeats))
 
 with open(os.path.join(out, 'INDEX.md'), 'w') as f:
     f.write(f"window: last {days} days, sessions total: {len(sessions)}, journal joined: {journal is not None}\n")
+    f.write(f"Codex sessions: {sum(s.get('provider') == 'codex' for s in sessions)}, malformed Codex records: {codex['malformed']}\n")
     for goal, n, k, repeats in sorted(index, key=lambda r: -r[1]):
         top = max(repeats.values()) if repeats else 0
         f.write(f"- {goal}: {n} sessions, {k} exported, repeated subjects: {len(repeats)} (max {top})\n")

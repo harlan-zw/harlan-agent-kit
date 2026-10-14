@@ -4,5 +4,11 @@
   "semi": false,
   "singleQuote": true,
   "trailingComma": "all",
-  "ignorePatterns": [".claude/**", "**/.claude/**", "packages/wolfstar-github-agent/test/fixtures/**"]
+  "ignorePatterns": [
+    ".claude/**",
+    "**/.claude/**",
+    "packages/wolfstar-github-agent/test/fixtures/**",
+    "packages/ghostty-terminal-bindings/scripts/{build,verify,provenance}.ts",
+    "packages/ghostty-terminal-bindings/.generated/**"
+  ]
 }

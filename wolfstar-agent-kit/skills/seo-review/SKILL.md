@@ -1,6 +1,7 @@
 ---
 name: seo-review
 description: Read a Site's ranked NuxtSEO actions through the nuxtseo CLI, confirm which ones this repository can fix, and repair the cause. Use for the seo-review Routine and its Issue work.
+license: MIT
 ---
 
 # SEO review
@@ -64,14 +65,22 @@ Map the evidence to this repository. Read the route, the component, the content 
 
 Sort each action into one disposition:
 
-| Disposition         | Means                                                                                                                              | Candidate |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| Repository fix      | A change in this repository removes the cause. For example a redirect for a 404, a canonical, a title, or a render-blocking asset. | Yes       |
-| Already fixed       | The default branch already removes the cause. The action waits for a deploy or a re-scan.                                          | No        |
-| Aged evidence       | `evidence.freshness.verdict` is `aged`, and a live `curl` of a sample URL no longer shows the defect.                              | No        |
-| Operational         | The fix is outside the code: Search Console, DNS, Cloudflare, or a NuxtSEO setting.                                                | No        |
-| Needs a person      | A content or product decision, such as which page should rank for a query.                                                         | No        |
-| Not this repository | The URL belongs to another app or Site.                                                                                            | No        |
+| Disposition            | Means                                                                                                                              | Candidate |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Repository fix         | A change in this repository removes the cause. For example a redirect for a 404, a canonical, a title, or a render-blocking asset. | Yes       |
+| Already fixed          | The default branch already removes the cause. The action waits for a deploy or a re-scan.                                          | No        |
+| Aged evidence          | `evidence.freshness.verdict` is `aged`, and a live `curl` of a sample URL no longer shows the defect.                              | No        |
+| Operational            | The fix is outside the code: Search Console, DNS, Cloudflare, or a NuxtSEO setting.                                                | No        |
+| Needs a person         | A content or product decision, such as which page should rank for a query.                                                         | No        |
+| Not this repository    | The URL belongs to another app or Site.                                                                                            | No        |
+| Owned by vitals-review | A performance action, and this repository runs `vitals-review` in `propose` mode.                                                  | No        |
+
+### Boundary with vitals-review
+
+The `vitals-review` Routine owns performance on a Site whose repository runs it in `propose` mode.
+That covers the action types `cwv-poor`, `cwv-element`, `cwv-regression`, `poor-cwv-pages`, `poor-homepage-lighthouse`, `lcp-not-preloaded`, `render-blocking-resources`, `js-transfer-weight`, `payload-too-heavy`, `perf-waste`, and `third-party-bloat`.
+Read `.github/routines.yml` on the default branch. If it enables `vitals-review` with `mode: propose`, mark those actions Owned by vitals-review, list them in the report, and judge them no further.
+If it does not, or `vitals-review` only reports, judge them here like any other action. A reporting Routine files nothing, so deferring to it would drop the action.
 
 Verify a Repository fix against the current default branch before you propose it.
 A live check of the URL is cheap and allowed: `curl -sI <url>`.

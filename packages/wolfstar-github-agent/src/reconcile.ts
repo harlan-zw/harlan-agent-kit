@@ -7,7 +7,6 @@ import type { PullRequestTriageController, PullRequestTriageDecision } from './p
 import type { Result } from './result.ts'
 import type { JournalStore, RecordObservationResult } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
-import { createHash } from 'node:crypto'
 import { isEligibleGitHubSubjectAuthor } from './github.ts'
 import { err, ok } from './result.ts'
 import { revisionIdFor } from './store.ts'
@@ -34,18 +33,11 @@ export interface ReconciliationDependencies {
   mutationsEnabled?: boolean
   pullRequestTriage?: PullRequestTriageController
   refreshReviewGates?: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<void, string>>
+  recoverRunnerIncidents?: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<number, string>>
   github: Pick<GitHubSource, 'getIssue' | 'getPullRequest' | 'listOpenItems'>
   store: JournalStore
   now: () => Date
   signal?: AbortSignal
-}
-
-const observationIdentityVersion = 'subject-revision-v2'
-
-function observationId(repository: string, subject: { kind: string; number: number }): string {
-  return createHash('sha256')
-    .update(`${observationIdentityVersion}:${repository}:${subject.kind}:${subject.number}:${JSON.stringify(subject)}`)
-    .digest('hex')
 }
 
 function countResults(
@@ -96,7 +88,14 @@ export async function reconcileRepository(
   const unverifiedClosedPullRequestNumbers = dependencies.store
     .listUnverifiedClosedPullRequestNumbers(repository.github)
     .filter((number) => !seenPullRequests.has(number))
-  const finalPullRequestNumbers = [...new Set([...missingPullRequestNumbers, ...unverifiedClosedPullRequestNumbers])]
+  const completionPullRequestNumbers = writesEnabled
+    ? dependencies.store
+        .listUnverifiedCompletionPullRequestNumbers(repository)
+        .filter((number) => !seenPullRequests.has(number))
+    : []
+  const finalPullRequestNumbers = [
+    ...new Set([...missingPullRequestNumbers, ...unverifiedClosedPullRequestNumbers, ...completionPullRequestNumbers]),
+  ]
   const [finalIssueReads, finalPullRequestReads] = await Promise.all([
     Promise.all(
       missingIssueNumbers.map((number) => dependencies.github.getIssue(repository, number, dependencies.signal)),
@@ -218,10 +217,8 @@ export async function reconcileRepository(
   const eligibleWrites = eligibleItems.map((subject) => {
     const verdict = subject.kind === 'pull_request' ? triageVerdicts.get(subject.number) : undefined
     const issueDecision = subject.kind === 'issue' ? issueDecisions.get(subject.number) : undefined
-    return dependencies.store.recordObservation({
-      externalId: observationId(repository.github, subject),
+    return dependencies.store.recordPollObservation({
       observedAt,
-      source: 'poll',
       subject,
       ...(verdict === undefined
         ? {}
@@ -233,16 +230,13 @@ export async function reconcileRepository(
     })
   })
   const finalIssueWrites = finalIssues.map((subject) =>
-    dependencies.store.recordObservation({
-      externalId: observationId(repository.github, subject),
+    dependencies.store.recordPollObservation({
       observedAt,
-      source: 'poll',
       subject,
     }),
   )
   const finalPullRequestWrites = finalPullRequests.map((subject) =>
-    dependencies.store.recordExactPullRequestObservation({
-      externalId: observationId(repository.github, subject),
+    dependencies.store.recordPollObservation({
       observedAt,
       subject,
     }),
@@ -407,6 +401,13 @@ export async function reconcileRepository(
       observedAt,
     )
   dependencies.store.recordPollSuccess(repository.github, observedAt)
+  if (writesEnabled && dependencies.recoverRunnerIncidents !== undefined) {
+    const recovery = await dependencies.recoverRunnerIncidents(
+      repository,
+      dependencies.signal ?? AbortSignal.timeout(30_000),
+    )
+    if (recovery._tag === 'Err') return err({ repository: repository.github, message: recovery.error })
+  }
   return ok({
     repository: repository.github,
     subjects: eligibleItems.length,

@@ -54,6 +54,19 @@ export function canRepairPullRequestHead(mapping: RepositoryMapping, pullRequest
   )
 }
 
+/** Conflict planning and publication require the same branch and author authority. */
+export function canResolveConflictPullRequestHead(
+  mapping: RepositoryMapping,
+  pullRequest: GitHubPullRequestItem,
+): boolean {
+  return (
+    mapping.conflictResolution &&
+    canRepairPullRequestHead(mapping, pullRequest) &&
+    (pullRequest.headRepository.toLowerCase() !== mapping.github.toLowerCase() ||
+      mapping.writablePullRequestAuthors.some((author) => author.toLowerCase() === pullRequest.author.toLowerCase()))
+  )
+}
+
 /**
  * True when the controller may open a pull request for an issue here.
  *
@@ -64,4 +77,17 @@ export function canWorkIssues(mapping: RepositoryMapping): boolean {
   return (
     mapping.enabled && canPushBranch(mapping) && mapping.issueWork && mapping.writablePullRequestHeadPrefixes.length > 0
   )
+}
+
+/**
+ * True when the controller may offer and publish package releases here.
+ *
+ * An owned repository needs a release policy. A maintained repository also
+ * needs the explicit `credential: user` opt in, so every release write there
+ * uses Wolfstar's own token and never the App.
+ */
+export function canReleasePackages(mapping: RepositoryMapping): boolean {
+  if (!mapping.enabled || !mapping.pullRequestReview || mapping.release === undefined) return false
+  if (mapping.ownership === 'owned') return true
+  return mapping.ownership === 'maintained' && mapping.release.credential._tag === 'User'
 }

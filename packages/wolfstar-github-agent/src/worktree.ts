@@ -2,6 +2,7 @@ import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubPullRequestPublisher, GitHubSource } from './github.ts'
 import type { PublicationRemote } from './publication-scheduler.ts'
+import type { RepairRecoveryArtifact, RepairRecoveryWorktrees } from './repair-recovery.ts'
 import type { Result } from './result.ts'
 import type {
   ClaimedAdversarialReviewTask,
@@ -18,12 +19,20 @@ import type {
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import process from 'node:process'
-import { StringDecoder } from 'node:string_decoder'
+import { fileURLToPath } from 'node:url'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
-import { canPushBranch, canRepairBaseline, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
+import {
+  canPushBranch,
+  canRepairBaseline,
+  canResolveConflictPullRequestHead,
+  canWorkIssues,
+  canWritePullRequestHead,
+} from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -32,6 +41,7 @@ export interface PreparedConflictWorktree {
   headSha: string
   baseSha: string
   conflictedFiles: string[]
+  writablePaths: string[]
 }
 
 /**
@@ -109,6 +119,10 @@ export interface PreparedWorkerWorkspace {
   path: string
 }
 
+export interface PreparedRoutineWorkspace extends PreparedWorkerWorkspace {
+  defaultBranchSha: string
+}
+
 /**
  * An issue workspace with the default branch tip it was prepared against.
  *
@@ -146,7 +160,7 @@ export interface AgentWorkspaceManager {
     signal: AbortSignal,
   ) => Promise<Result<PreparedWorkerWorkspace, string>>
   /** A Routine scan reads the default branch. It never starts from a pull request head. */
-  prepareRoutine: (task: ClaimedRoutineRun, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
+  prepareRoutine: (task: ClaimedRoutineRun, signal: AbortSignal) => Promise<Result<PreparedRoutineWorkspace, string>>
   /** A Batch planning turn reads the default branch, so it can see which issues touch the same code. */
   prepareBatch: (batch: ClaimedBatch, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   verifyReview: (
@@ -284,6 +298,8 @@ function runGit(
   githubToken?: string,
   allowFileProtocol = false,
 ): Promise<CommandResult> {
+  // Path lists scale with the change. Stream them instead of applying execFile's 1 MiB limit.
+  if (args.includes('--name-only')) return runGitPathOutput(checkout, args, signal, githubToken, allowFileProtocol)
   return new Promise((resolve) => {
     const protocols = allowFileProtocol
       ? ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.file.allow=always']
@@ -291,15 +307,81 @@ function runGit(
     execFile(
       'git',
       ['-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null', ...protocols, '-C', checkout, ...args],
-      { encoding: 'utf8', env: gitEnvironment(githubToken), signal },
-      (error, stdout, stderr) =>
+      { encoding: 'buffer', env: gitEnvironment(githubToken), signal },
+      (error, stdout, stderr) => {
+        // Replacement decoding can alias two distinct Git paths.
+        let output: string
+        try {
+          output = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(stdout)
+        } catch {
+          resolve({ exitCode: 1, stdout: '', stderr: 'Git output contains invalid UTF-8.' })
+          return
+        }
         resolve({
           exitCode: error === null ? 0 : typeof error.code === 'number' ? error.code : 1,
-          stdout: stdout.trim(),
-          stderr: stderr.trim() || error?.message.trim() || '',
-        }),
+          stdout: output,
+          stderr: stderr.toString('utf8').trim() || error?.message.trim() || '',
+        })
+      },
     )
   })
+}
+
+function runGitPathOutput(
+  checkout: string,
+  args: string[],
+  signal: AbortSignal,
+  githubToken?: string,
+  allowFileProtocol = false,
+): Promise<CommandResult> {
+  return new Promise((resolve) => {
+    const protocols = allowFileProtocol
+      ? ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.file.allow=always']
+      : ['-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always']
+    const child = spawn(
+      'git',
+      ['-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null', ...protocols, '-C', checkout, ...args],
+      {
+        env: gitEnvironment(githubToken),
+        signal,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
+    const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+    let stdout = ''
+    let stderr = ''
+    let failure = ''
+    const decode = (chunk?: Buffer) => {
+      if (failure !== '') return
+      try {
+        stdout += decoder.decode(chunk, { stream: chunk !== undefined })
+      } catch {
+        failure = 'Git output contains invalid UTF-8.'
+        child.kill('SIGTERM')
+      }
+    }
+    child.stdout.on('data', decode)
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = `${stderr}${chunk.toString('utf8')}`.slice(-64 * 1024)
+    })
+    child.on('error', (error: Error) => {
+      failure = error.message
+    })
+    child.on('close', (code) => {
+      decode()
+      resolve({
+        exitCode: failure === '' ? (code ?? 1) : 1,
+        stdout: failure === '' ? stdout : '',
+        stderr: failure || stderr.trim(),
+      })
+    })
+  })
+}
+
+/** Git scalar protocols use whitespace-delimited values, unlike path lists. */
+async function runGitScalar(checkout: string, args: string[], signal: AbortSignal): Promise<CommandResult> {
+  const result = await runGit(checkout, args, signal)
+  return { ...result, stdout: result.stdout.trim() }
 }
 
 /**
@@ -335,27 +417,8 @@ function runWt(checkout: string, args: string[], signal: AbortSignal): Promise<C
 function runGitDigest(checkout: string, args: string[], signal: AbortSignal): Promise<CommandDigestResult> {
   return new Promise((resolve) => {
     const hash = createHash('sha256')
-    const decoder = new StringDecoder('utf8')
     const stderr: Buffer[] = []
-    let started = false
-    let trailingWhitespace = ''
     let spawnError = ''
-
-    const update = (value: string) => {
-      let text = trailingWhitespace + value
-      trailingWhitespace = ''
-      if (!started) {
-        text = text.trimStart()
-        if (text.length === 0) return
-        started = true
-      }
-      const trailing = text.match(/\s+$/u)?.[0] ?? ''
-      if (trailing.length > 0) {
-        trailingWhitespace = trailing
-        text = text.slice(0, -trailing.length)
-      }
-      hash.update(text)
-    }
 
     const child = spawn(
       'git',
@@ -374,13 +437,12 @@ function runGitDigest(checkout: string, args: string[], signal: AbortSignal): Pr
       ],
       { env: gitEnvironment(), signal, stdio: ['ignore', 'pipe', 'pipe'] },
     )
-    child.stdout.on('data', (chunk: Buffer) => update(decoder.write(chunk)))
+    child.stdout.on('data', (chunk: Buffer) => hash.update(chunk))
     child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
     child.on('error', (error: Error) => {
       spawnError = error.message
     })
     child.on('close', (code) => {
-      update(decoder.end())
       resolve({
         digest: hash.digest('hex'),
         exitCode: code ?? 1,
@@ -398,11 +460,11 @@ function runGitDigest(checkout: string, args: string[], signal: AbortSignal): Pr
  * index line abbreviation with the object count of the repository, so a large
  * checkout wrote 11 character blob names where the mirror wrote 9, and every
  * publication of that repository failed on a digest that described the same
- * commit. Raw lines carry full blob names, the mode, and the path, and no diff
+ * commit. NUL-delimited records carry full blob names, the mode, and the path. No diff
  * setting, `.gitattributes` driver, or object count can change them.
  */
 function contentDiffArgs(...args: string[]): string[] {
-  return ['diff', '--raw', '--no-abbrev', '--no-renames', ...args]
+  return ['diff', '--raw', '-z', '--no-abbrev', '--no-renames', ...args]
 }
 
 function repositoryGitDirectory(root: string, repository: string): string {
@@ -410,7 +472,7 @@ function repositoryGitDirectory(root: string, repository: string): string {
 }
 
 function publicationArtifactRef(taskId: string): string {
-  return `refs/wolfstar-github-agent/publications/${taskId}`
+  return `refs/wolfstar-github-agent/publications/${createHash('sha256').update(taskId).digest('hex')}`
 }
 
 /**
@@ -529,7 +591,7 @@ async function prepareWtWorktree(
   }
   if (prepared === undefined) return err('wt did not report the prepared agent worktree.')
 
-  const head = await runGit(prepared.path, ['rev-parse', 'HEAD'], signal)
+  const head = await runGitScalar(prepared.path, ['rev-parse', 'HEAD'], signal)
   if (head.exitCode !== 0 || head.stdout !== baseSha)
     return err('The wt worktree does not match the required head commit.')
   return ok(prepared.path)
@@ -655,7 +717,7 @@ async function ensureControllerRepository(
 ): Promise<Result<string, string>> {
   const repository = repositoryGitDirectory(root, repositoryName)
   await mkdir(repository, { recursive: true, mode: 0o700 })
-  const initialized = await runGit(repository, ['rev-parse', '--is-bare-repository'], signal)
+  const initialized = await runGitScalar(repository, ['rev-parse', '--is-bare-repository'], signal)
   if (initialized.exitCode === 0) return ok(repository)
   const init = await runGit(repository, ['init', '--bare', '.'], signal)
   return init.exitCode === 0 ? ok(repository) : err(`Could not create the controller repository: ${init.stderr}`)
@@ -680,6 +742,21 @@ async function pinPublicationArtifact(
     true,
   )
   return pinned.exitCode === 0 ? ok(artifactRef) : err(`Could not pin the publication artifact: ${pinned.stderr}`)
+}
+
+async function conflictWritablePaths(
+  worktree: Omit<PreparedConflictWorktree, 'writablePaths'>,
+  signal: AbortSignal,
+): Promise<Result<string[], string>> {
+  const mergeBase = await runGitScalar(worktree.path, ['merge-base', worktree.headSha, worktree.baseSha], signal)
+  if (mergeBase.exitCode !== 0) return err(`Could not resolve the merge base: ${mergeBase.stderr}`)
+  const merged = await runGit(
+    worktree.path,
+    ['diff', '--name-only', '--no-renames', '-z', mergeBase.stdout, worktree.baseSha],
+    signal,
+  )
+  if (merged.exitCode !== 0) return err(`Could not inspect what the base branch changed: ${merged.stderr}`)
+  return ok([...new Set([...worktree.conflictedFiles, ...merged.stdout.split('\0').filter(Boolean)])].sort())
 }
 
 export function createConflictWorktreeManager(options: ConflictWorktreeManagerOptions): ConflictWorktreeManager {
@@ -720,10 +797,10 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     )
     if (fetch.exitCode !== 0) return err(`Git fetch failed: ${fetch.stderr}`)
 
-    const head = await runGit(repository, ['rev-parse', headRef], signal)
+    const head = await runGitScalar(repository, ['rev-parse', headRef], signal)
     if (head.exitCode !== 0 || head.stdout !== task.pullRequest.headSha)
       return err('Fetched pull request head no longer matches the claimed commit SHA.')
-    const base = await runGit(repository, ['rev-parse', baseRef], signal)
+    const base = await runGitScalar(repository, ['rev-parse', baseRef], signal)
     if (base.exitCode !== 0) return err(`Could not resolve the base branch: ${base.stderr}`)
     const worktree = await prepareWtWorktree(repository, branch, head.stdout, signal)
     if (worktree._tag === 'Err') return worktree
@@ -748,7 +825,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
       await runGit(worktree.value, ['merge', '--abort'], signal)
       return ok({ _tag: 'CleanMerge', headSha: head.stdout, baseSha: base.stdout, baseRef: baseBranch })
     }
-    const unmerged = await runGit(worktree.value, ['diff', '--name-only', '--diff-filter=U'], signal)
+    const unmerged = await runGit(worktree.value, ['diff', '--name-only', '-z', '--diff-filter=U'], signal)
     if (unmerged.exitCode !== 0) return err(`Could not list the conflicted files: ${unmerged.stderr}`)
     // A merge that never started, for unrelated histories or a file in the way,
     // has no unmerged files either. That used to read as "no longer conflicts"
@@ -760,14 +837,17 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
       )
     }
 
+    const prepared = {
+      path: worktree.value,
+      headSha: head.stdout,
+      baseSha: base.stdout,
+      conflictedFiles: unmerged.stdout.split('\0').filter(Boolean).sort(),
+    }
+    const writablePaths = await conflictWritablePaths(prepared, signal)
+    if (writablePaths._tag === 'Err') return writablePaths
     return ok({
       _tag: 'Conflicted',
-      worktree: {
-        path: worktree.value,
-        headSha: head.stdout,
-        baseSha: base.stdout,
-        conflictedFiles: unmerged.stdout.split('\n').filter(Boolean).sort(),
-      },
+      worktree: { ...prepared, writablePaths: writablePaths.value },
     })
   }
 
@@ -778,8 +858,9 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     message: string,
     signal: AbortSignal,
   ): Promise<Result<PreparedConflictPublication, string>> {
-    const add = await runGit(worktree.path, ['add', '--all'], signal)
-    if (add.exitCode !== 0) return err(`Could not stage the conflict resolution: ${add.stderr}`)
+    const indexed = await runGitDigest(worktree.path, contentDiffArgs('--cached', 'HEAD'), signal)
+    if (indexed.exitCode !== 0) return err(`Could not inspect the verified conflict index: ${indexed.stderr}`)
+    if (indexed.digest !== patch.digest) return err('The conflict index changed after verification.')
     const committed = await runGit(
       worktree.path,
       ['-c', `user.name=${gitIdentity.name}`, '-c', `user.email=${gitIdentity.email}`, 'commit', '-m', message],
@@ -787,9 +868,9 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     )
     if (committed.exitCode !== 0)
       return err(`Could not commit the conflict resolution: ${committed.stderr || committed.stdout}`)
-    const commitSha = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+    const commitSha = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
     if (commitSha.exitCode !== 0) return err(`Could not resolve the conflict commit: ${commitSha.stderr}`)
-    const parents = await runGit(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
+    const parents = await runGitScalar(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
     const expectedParents = [worktree.headSha, worktree.baseSha]
     if (parents.exitCode !== 0 || !expectedParents.every((parent) => parents.stdout.split(' ').includes(parent)))
       return err('The conflict commit does not contain the expected head and base parents.')
@@ -812,51 +893,65 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     worktree: PreparedConflictWorktree,
     signal: AbortSignal,
   ): Promise<Result<VerifiedConflictPatch, string>> {
-    const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+    const head = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
     if (head.exitCode !== 0 || head.stdout !== task.pullRequest.headSha)
       return err('The worker changed HEAD. Workers must not commit or rewrite history.')
 
-    const workerChanged = await runGit(worktree.path, ['diff', '--name-only'], signal)
+    const workerChanged = await runGit(worktree.path, ['diff', '--name-only', '--no-renames', '-z', 'HEAD'], signal)
     if (workerChanged.exitCode !== 0) return err(`Could not inspect the conflict fix: ${workerChanged.stderr}`)
-    const workerChangedPaths = workerChanged.stdout.split('\n').filter(Boolean).sort()
+    const indexed = await runGit(
+      worktree.path,
+      ['diff', '--cached', '--name-only', '--no-renames', '-z', 'HEAD'],
+      signal,
+    )
+    if (indexed.exitCode !== 0) return err(`Could not inspect the conflict index: ${indexed.stderr}`)
+    // A staged edit can be hidden by restoring HEAD in the working tree.
+    // Inspect both views so it cannot enter the verified index unnoticed.
+    const workerChangedPaths = [...new Set([...workerChanged.stdout.split('\0'), ...indexed.stdout.split('\0')])]
+      .filter(Boolean)
+      .sort()
     // The merge, not the conflict list, bounds what a resolution may touch. A
     // marker is only where two edits met: reconciling them often means the test
     // or the call site the base branch moved, and refusing those killed correct
     // resolutions outright. Anything the merge did not touch is still unrelated
     // work that has no place in a merge commit.
-    const mergeBase = await runGit(worktree.path, ['merge-base', worktree.headSha, worktree.baseSha], signal)
-    if (mergeBase.exitCode !== 0) return err(`Could not resolve the merge base: ${mergeBase.stderr}`)
-    const merged = await runGit(worktree.path, ['diff', '--name-only', mergeBase.stdout, worktree.baseSha], signal)
-    if (merged.exitCode !== 0) return err(`Could not inspect what the base branch changed: ${merged.stderr}`)
-    const writablePaths = new Set([...worktree.conflictedFiles, ...merged.stdout.split('\n').filter(Boolean)])
+    const writable = await conflictWritablePaths(worktree, signal)
+    if (writable._tag === 'Err') return writable
+    const writablePaths = new Set(writable.value)
     const unexpectedPath = workerChangedPaths.find((path) => !writablePaths.has(path))
     if (unexpectedPath !== undefined)
       return err(`The worker changed a file the merge did not touch: ${unexpectedPath}.`)
-    const untracked = await runGit(worktree.path, ['ls-files', '--others', '--exclude-standard'], signal)
+    const untracked = await runGit(worktree.path, ['ls-files', '-z', '--others', '--exclude-standard'], signal)
     if (untracked.exitCode !== 0) return err(`Could not inspect untracked files: ${untracked.stderr}`)
     if (untracked.stdout.length > 0)
-      return err(`The worker created an untracked file: ${untracked.stdout.split('\n')[0]}.`)
+      return err(`The worker created an untracked file: ${untracked.stdout.split('\0')[0]}.`)
 
-    const diffCheck = await runGit(worktree.path, ['diff', '--check'], signal)
+    const diffCheck = await runGit(worktree.path, ['diff', '--check', 'HEAD'], signal)
     if (diffCheck.exitCode !== 0)
       return err(`Resolved patch failed git diff check: ${diffCheck.stdout || diffCheck.stderr}`)
 
-    // Conflicted files stage even when the worker left one side untouched, or
-    // the merge stays unresolved. Everything the worker touched stages with them.
-    const staged = await runGit(
-      worktree.path,
-      ['add', '--', ...new Set([...worktree.conflictedFiles, ...workerChangedPaths])],
-      signal,
+    // Stage only verified paths still in the index. A worker's `git rm` already
+    // stages a deletion and removes its index entry, so naming it fails git add.
+    // An unstaged deletion keeps its entry and must still stage here.
+    const tracked = await runGit(worktree.path, ['ls-files', '-z'], signal)
+    if (tracked.exitCode !== 0) return err(`Could not inspect the conflict index: ${tracked.stderr}`)
+    const trackedPaths = new Set(tracked.stdout.split('\0').filter(Boolean))
+    const stagePaths = [...new Set([...worktree.conflictedFiles, ...workerChangedPaths])].filter((path) =>
+      trackedPaths.has(path),
     )
-    if (staged.exitCode !== 0) return err(`Could not stage the conflict fix: ${staged.stderr}`)
-    const unmerged = await runGit(worktree.path, ['diff', '--name-only', '--diff-filter=U'], signal)
+    if (stagePaths.length > 0) {
+      const staged = await runGit(worktree.path, ['--literal-pathspecs', 'add', '--', ...stagePaths], signal)
+      if (staged.exitCode !== 0) return err(`Could not stage the conflict fix: ${staged.stderr}`)
+    }
+    const unmerged = await runGit(worktree.path, ['diff', '--name-only', '-z', '--diff-filter=U'], signal)
     if (unmerged.exitCode !== 0 || unmerged.stdout.length > 0)
       return err(`Merge conflicts remain: ${unmerged.stdout || unmerged.stderr}`)
 
     const patch = await runGitDigest(worktree.path, contentDiffArgs('--cached', 'HEAD'), signal)
     if (patch.exitCode !== 0) return err(`Could not read the conflict resolution patch: ${patch.stderr}`)
-    const changed = await runGit(worktree.path, ['diff', '--cached', '--name-only', 'HEAD'], signal)
-    const changedPaths = changed.stdout.split('\n').filter(Boolean).sort()
+    const changed = await runGit(worktree.path, ['diff', '--cached', '--name-only', '-z', 'HEAD'], signal)
+    if (changed.exitCode !== 0) return err(`Could not inspect the conflict resolution files: ${changed.stderr}`)
+    const changedPaths = changed.stdout.split('\0').filter(Boolean).sort()
     const changedFiles = changedPaths.length
 
     return ok({
@@ -897,7 +992,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
     )
     if (fetch.exitCode !== 0) return err(`Git fetch failed: ${fetch.stderr}`)
 
-    const head = await runGit(repository, ['rev-parse', headRef], signal)
+    const head = await runGitScalar(repository, ['rev-parse', headRef], signal)
     if (head.exitCode !== 0) return err(`Could not resolve the Worker head: ${head.stderr}`)
     const branch = agentWorktreeBranch(label, { taskId: task.id, fence: task.state.fence })
     const worktree = await prepareWtWorktree(repository, branch, head.stdout, signal)
@@ -920,13 +1015,19 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       // A Routine runs from the exact source commit stored when its Run opened.
       // A later default branch push cannot change queued work.
       const baseRef = `refs/wolfstar-github-agent/routines/${task.name}`
-      return prepareRepository(
+      const defaultRef = `refs/wolfstar-github-agent/routines/${task.name}-default-branch`
+      const prepared = await prepareRepository(
         task,
         `routine-${task.name}-${task.scheduledFor.slice(0, 10)}`,
-        [`+${task.specSha}:${baseRef}`],
+        [`+${task.specSha}:${baseRef}`, `+refs/heads/${task.repositoryMapping.defaultBranch}:${defaultRef}`],
         baseRef,
         signal,
       )
+      if (prepared._tag === 'Err') return prepared
+      const current = await runGitScalar(task.repositoryMapping.checkout, ['rev-parse', defaultRef], signal)
+      return current.exitCode === 0
+        ? ok({ ...prepared.value, defaultBranchSha: current.stdout })
+        : err(`Could not resolve the Routine default branch: ${current.stderr}`)
     },
 
     async prepareBaseline(task, signal) {
@@ -949,7 +1050,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
         const ref = `refs/wolfstar-github-agent/fixes/${task.pullRequestNumber}/merged-base`
         return prepareRepository(
           task,
-          `fix-${task.pullRequestNumber}`,
+          `fix-${task.pullRequestNumber}${task.pickup === undefined ? '' : `-${task.pickup.finding.details.fingerprint.slice(0, 12)}`}`,
           [`+refs/heads/${task.repositoryMapping.defaultBranch}:${ref}`],
           ref,
           signal,
@@ -968,7 +1069,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       if (prepared.value.headSha !== task.pullRequest.headSha)
         return err('Fetched pull request head no longer matches the approved repair commit SHA.')
       const repository = task.repositoryMapping.checkout
-      const base = await runGit(repository, ['rev-parse', baseRef], signal)
+      const base = await runGitScalar(repository, ['rev-parse', baseRef], signal)
       if (base.exitCode !== 0 || base.stdout !== task.pullRequest.baseSha)
         return err('Fetched base branch no longer matches the approved repair base commit SHA.')
       return ok({ ...prepared.value, baseSha: base.stdout })
@@ -990,7 +1091,7 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
         signal,
       )
       if (prepared._tag === 'Err') return prepared
-      const defaultBranch = await runGit(task.repositoryMapping.checkout, ['rev-parse', defaultRef], signal)
+      const defaultBranch = await runGitScalar(task.repositoryMapping.checkout, ['rev-parse', defaultRef], signal)
       if (defaultBranch.exitCode !== 0) return err(`Could not resolve the default branch: ${defaultBranch.stderr}`)
       if (stacked && prepared.value.baseSha !== base.headSha)
         return err('The stack base branch moved before the worktree was prepared.')
@@ -1011,14 +1112,14 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       if (prepared.value.headSha !== task.pullRequest.headSha)
         return err('Fetched pull request head no longer matches the claimed review commit SHA.')
       const repository = task.repositoryMapping.checkout
-      const base = await runGit(repository, ['rev-parse', baseRef], signal)
+      const base = await runGitScalar(repository, ['rev-parse', baseRef], signal)
       if (base.exitCode !== 0 || base.stdout !== task.pullRequest.baseSha)
         return err('Fetched base branch no longer matches the claimed review base commit SHA.')
       return ok({ ...prepared.value, baseSha: base.stdout })
     },
 
     async verifyReview(task, worktree, signal) {
-      const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const head = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (head.exitCode !== 0 || head.stdout !== task.pullRequest.headSha)
         return err('The Review Agent changed HEAD. Review must stay read only.')
       const tracked = await runGit(worktree.path, ['status', '--porcelain=v1', '--untracked-files=all'], signal)
@@ -1039,7 +1140,7 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
     prepare: workspaces.prepareFix,
 
     async verify(task, worktree, signal) {
-      const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const head = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (head.exitCode !== 0 || head.stdout !== worktree.headSha)
         return err('The agent changed HEAD. Agents must not commit or rewrite history.')
       const staged = await runGit(worktree.path, ['diff', '--cached', '--quiet'], signal)
@@ -1077,9 +1178,9 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
       )
       if (committed.exitCode !== 0)
         return err(`Could not commit the verified repair: ${committed.stderr || committed.stdout}`)
-      const commitSha = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const commitSha = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (commitSha.exitCode !== 0) return err(`Could not resolve the repair commit: ${commitSha.stderr}`)
-      const parent = await runGit(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
+      const parent = await runGitScalar(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
       if (parent.exitCode !== 0 || parent.stdout !== worktree.headSha)
         return err('The repair commit does not have the approved head commit as its parent.')
       const artifactRef = await pinPublicationArtifact(
@@ -1096,6 +1197,358 @@ export function createReviewFixWorktreeManager(options: ConflictWorktreeManagerO
   }
 }
 
+/** Runs current selected evidence without copying credentials into repository scripts. */
+export type RecoveryCommand = (input: {
+  workspace: string
+  command: string
+  args: string[]
+  signal: AbortSignal
+  readOnlyPaths?: readonly string[]
+  writablePaths?: readonly string[]
+}) => Promise<{ exitCode: number; stdout?: string; stderr?: string }>
+
+const runRecoveryCommand: RecoveryCommand = async () => {
+  throw new Error('Recovery commands require shared host admission.')
+}
+
+/** Keep repository preparation and package-local test resolution in both test runs. */
+async function repairRecoveryTestCommands(
+  path: string,
+  regressionPaths: string[],
+): Promise<Result<Array<{ args: string[]; paths: string[]; prepare: string[][] }>, string>> {
+  const root = await realpath(path)
+  const commands = new Map<string, { args: string[]; paths: string[]; prepare: string[][] }>()
+  for (const selected of regressionPaths) {
+    const file = resolve(root, selected)
+    const outside = (target: string) => {
+      const name = relative(root, target)
+      return isAbsolute(name) || name === '..' || name.startsWith('../')
+    }
+    if (isAbsolute(selected) || file === root || outside(file) || outside(await realpath(file)))
+      return err('The selected regression test must stay inside its worktree.')
+    let directory = dirname(file)
+    let args = ['exec', 'vitest']
+    let owner = root
+    let prepare: string[][] = []
+    for (;;) {
+      const manifestPath = await realpath(join(directory, 'package.json')).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return undefined
+        throw error
+      })
+      if (manifestPath !== undefined) {
+        if (outside(manifestPath)) return err('The recovery package manifest must stay inside its worktree.')
+        const parsed: unknown = JSON.parse(await readFile(manifestPath, 'utf8'))
+        if (typeof parsed !== 'object' || parsed === null) return err('The recovery package manifest is invalid.')
+        const scripts = (parsed as { scripts?: unknown }).scripts
+        if (typeof scripts === 'object' && scripts !== null) {
+          // pnpm forwards selectors to the final command. Do not select recursive wrappers or pipelines.
+          const script = ['test:run', 'test'].find((name) => {
+            const command = (scripts as Record<string, unknown>)[name]
+            return (
+              typeof command === 'string' &&
+              /^(?:pnpm\s+exec\s+)?vitest(?:\s[^;&|<>`]+)?$/.test(command.split('&&').at(-1)!.trim())
+            )
+          })
+          if (script !== undefined) {
+            owner = directory
+            args = ['--dir', directory, 'run', script]
+            if (typeof (scripts as Record<string, unknown>)['dev:prepare'] === 'string')
+              prepare = [['--dir', directory, 'run', 'dev:prepare']]
+            break
+          }
+        }
+      }
+      if (directory === root) break
+      directory = dirname(directory)
+    }
+    const command = commands.get(owner) ?? { args, paths: [], prepare }
+    command.paths.push(`./${relative(owner, file)}`)
+    commands.set(owner, command)
+  }
+  return ok([...commands.values()])
+}
+
+export async function confirmRepairRecoveryRegression(
+  path: string,
+  regressionPaths: string[],
+  signal: AbortSignal,
+  runCommand: RecoveryCommand = runRecoveryCommand,
+): Promise<Result<void, string>> {
+  const commands = await repairRecoveryTestCommands(path, regressionPaths)
+  if (commands._tag === 'Err') return commands
+  let assertions = 0
+  for (const command of commands.value) {
+    for (const args of command.prepare) {
+      if ((await runCommand({ workspace: path, command: 'pnpm', args, signal })).exitCode !== 0)
+        return err('The selected regression test preparation failed.')
+    }
+    const result = await confirmRegressionCommand(path, command, signal, runCommand)
+    if (result._tag === 'Err') return result
+    assertions += result.value
+  }
+  return assertions > 0
+    ? ok(undefined)
+    : err('The selected regression tests must fail on the current base without setup errors.')
+}
+
+async function confirmRegressionCommand(
+  path: string,
+  command: { args: string[]; paths: string[] },
+  signal: AbortSignal,
+  runCommand: RecoveryCommand,
+): Promise<Result<number, string>> {
+  const sourceReporter = fileURLToPath(new URL('./repair-regression-reporter.ts', import.meta.url))
+  const installedReporter = existsSync(sourceReporter)
+    ? sourceReporter
+    : fileURLToPath(import.meta.resolve('wolfstar-github-agent/repair-regression-reporter'))
+  const scratch = await mkdtemp(join(tmpdir(), 'repair-regression-evidence-'))
+  const reporterDirectory = join(scratch, 'reporter')
+  const reporter = join(reporterDirectory, basename(installedReporter))
+  const evidenceDirectory = join(scratch, 'evidence')
+  const evidenceFile = join(evidenceDirectory, 'result.json')
+  let output: string | undefined
+  try {
+    // The Service checkout is protected. Expose only a standalone reporter,
+    // outside both that checkout and the worker's writable evidence directory.
+    await mkdir(reporterDirectory)
+    await mkdir(evidenceDirectory)
+    await copyFile(installedReporter, reporter)
+    // Assertion failures are expected. The isolated reporter supplies their category.
+    await runCommand({
+      workspace: path,
+      command: 'pnpm',
+      args: [...command.args, '--run', `--reporter=${reporter}`, `--outputFile=${evidenceFile}`, ...command.paths],
+      signal,
+      readOnlyPaths: [reporterDirectory],
+      writablePaths: [evidenceDirectory],
+    })
+    output = await readFile(evidenceFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined
+      throw error
+    })
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+  if (output === undefined) return err('The selected regression tests produced no current failure evidence.')
+  let report: unknown
+  try {
+    report = JSON.parse(output)
+  } catch {
+    return err('The selected regression tests produced no current failure evidence.')
+  }
+  if (typeof report !== 'object' || report === null) return err('The selected regression report is invalid.')
+  const result = report as {
+    _tag?: unknown
+    assertions?: unknown
+    otherFailures?: unknown
+    setupFailed?: unknown
+    interrupted?: unknown
+  }
+  return result._tag === 'RegressionEvidence' &&
+    typeof result.assertions === 'number' &&
+    Number.isSafeInteger(result.assertions) &&
+    result.assertions >= 0 &&
+    result.otherFailures === 0 &&
+    result.setupFailed === false &&
+    result.interrupted === false
+    ? ok(result.assertions)
+    : err('The selected regression tests must fail on the current base without setup errors.')
+}
+
+export async function runRepairRecoveryChecks(
+  path: string,
+  regressionPaths: string[],
+  signal: AbortSignal,
+  runCommand: RecoveryCommand = runRecoveryCommand,
+): Promise<Result<string[], string>> {
+  const tests = await repairRecoveryTestCommands(path, regressionPaths)
+  if (tests._tag === 'Err') return tests
+  if (tests.value.length === 0) return err('Select current regression tests before recovery.')
+  const commands: Array<{ command: string; args: string[] }> = [
+    { command: 'pnpm', args: ['install', '--frozen-lockfile'] },
+    ...tests.value.flatMap((test) =>
+      [...test.prepare, [...test.args, '--run', ...test.paths]].map((args) => ({ command: 'pnpm', args })),
+    ),
+  ]
+  const manifest: unknown = JSON.parse(await readFile(join(path, 'package.json'), 'utf8'))
+  if (typeof manifest !== 'object' || manifest === null) return err('The recovery repository has no package manifest.')
+  const scripts = (manifest as { scripts?: unknown }).scripts
+  const declared = (name: string) =>
+    typeof scripts === 'object' && scripts !== null && typeof (scripts as Record<string, unknown>)[name] === 'string'
+  if (declared('dev:prepare')) commands.push({ command: 'pnpm', args: ['run', 'dev:prepare'] })
+  commands.push({ command: 'check', args: [] })
+  if (declared('build')) commands.push({ command: 'pnpm', args: ['build'] })
+  const checks: string[] = []
+  for (const command of commands) {
+    const result = await runCommand({ workspace: path, ...command, signal })
+    if (result.exitCode !== 0) {
+      const output = [result.stdout, result.stderr]
+        .filter(Boolean)
+        .join('\n')
+        .trim()
+        .slice(-16 * 1024)
+      const label = [command.command, ...command.args].join(' ')
+      return err(`Fresh Repair checks failed: ${label}.${output ? `\n${output}` : ''}`)
+    }
+    checks.push(`${command.command} ${command.args.join(' ')} passed`.trim())
+  }
+  return ok(checks)
+}
+
+/** Ports only the artifact the failed Task retained, then uses normal verification and pinning. */
+export function createRepairRecoveryWorktreeManager(
+  options: ConflictWorktreeManagerOptions & {
+    runChecks: typeof runRepairRecoveryChecks
+    confirmRegression: typeof confirmRepairRecoveryRegression
+    runCommand?: RecoveryCommand
+    recordChecks: (task: ClaimedReviewFixTask, checks: string[]) => boolean
+  },
+): RepairRecoveryWorktrees {
+  const fixes = createReviewFixWorktreeManager(options)
+  const inspectRecovery: RepairRecoveryWorktrees['inspectRecovery'] = async (target, signal) => {
+    const finding = target.task.pickup?.finding
+    if (finding === undefined) return err('Recovery needs the original selected finding.')
+    const retainedRef = `refs/heads/${agentWorktreeBranch(`fix-${target.task.pullRequestNumber}-${finding.details.fingerprint.slice(0, 12)}`, { taskId: target.task.id, fence: target.proof.originalFence })}`
+    const checkout = target.task.repositoryMapping.checkout
+    const retained = await runGitScalar(checkout, ['rev-parse', '--verify', retainedRef], signal)
+    if (retained.exitCode !== 0 || retained.stdout !== target.proof.commitSha)
+      return err('The original retained Repair ref does not match the persisted failed pin.')
+    const parents = await runGitScalar(checkout, ['show', '--no-patch', '--format=%P', target.proof.commitSha], signal)
+    if (parents.exitCode !== 0 || !/^[a-f\d]{40}$/.test(parents.stdout))
+      return err('The retained Repair must have exactly one parent commit.')
+    const changed = await runGit(
+      checkout,
+      ['diff-tree', '-r', '--no-commit-id', '--name-only', '-z', target.proof.commitSha],
+      signal,
+    )
+    if (changed.exitCode !== 0) return err('The retained Repair paths could not be read.')
+    const changedPaths = changed.stdout.split('\0').filter(Boolean)
+    if (changedPaths.length === 0) return err('The retained Repair patch is empty.')
+    const artifact: RepairRecoveryArtifact = {
+      parentSha: parents.stdout,
+      retainedRef,
+      changedPaths,
+      regressionPaths: changedPaths.filter((path) => /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path)),
+    }
+    return ok(artifact)
+  }
+  return {
+    inspectRecovery,
+    async recover(task, target, plan, signal) {
+      const retained = await inspectRecovery(target, signal)
+      if (retained._tag === 'Err') return retained
+      if (
+        JSON.stringify(retained.value) !==
+        JSON.stringify({
+          parentSha: plan.parentSha,
+          retainedRef: plan.retainedRef,
+          changedPaths: plan.changedPaths,
+          regressionPaths: plan.regressionPaths,
+        })
+      )
+        return err('The retained Repair changed after its Plan.')
+      const prepared = await fixes.prepare(task, signal)
+      if (prepared._tag === 'Err') return prepared
+      const workspace = prepared.value
+      if (workspace.headSha !== plan.expectedBase)
+        return err('The fetched default branch base changed before recovery.')
+      const applied = await runGit(workspace.path, ['cherry-pick', '--no-commit', target.proof.commitSha], signal)
+      if (applied.exitCode !== 0)
+        return err('The retained Repair conflicts with the current base. Recovery needs a current patch.')
+      const nonempty = await runGit(workspace.path, ['diff', '--cached', '--quiet'], signal)
+      if (nonempty.exitCode === 0) return err('The retained Repair is already present or has an empty patch.')
+      if (nonempty.exitCode !== 1) return err('The retained Repair patch could not be inspected.')
+      const appliedDigest = await runGitDigest(workspace.path, contentDiffArgs('--cached', 'HEAD'), signal)
+      if (appliedDigest.exitCode !== 0) return err('The retained Repair patch could not be verified.')
+      const patchTree = await runGitScalar(workspace.path, ['write-tree'], signal)
+      if (patchTree.exitCode !== 0) return err('The retained Repair tree could not be preserved.')
+      const baseline = await runGit(
+        workspace.path,
+        ['restore', '--source=HEAD', '--staged', '--worktree', '--', '.'],
+        signal,
+      )
+      const tests = await runGit(
+        workspace.path,
+        ['restore', `--source=${patchTree.stdout}`, '--staged', '--worktree', '--', ...plan.regressionPaths],
+        signal,
+      )
+      if (baseline.exitCode !== 0 || tests.exitCode !== 0)
+        return err('The selected regression tests could not be isolated on the current base.')
+      // Prepare dependencies before the red run. The same current base owns both test runs.
+      const installed =
+        (
+          await (options.runCommand ?? runRecoveryCommand)({
+            workspace: workspace.path,
+            command: 'pnpm',
+            args: ['install', '--frozen-lockfile'],
+            signal,
+          })
+        ).exitCode === 0
+      if (!installed) return err('Current base dependencies could not be installed for regression evidence.')
+      const regression = await options.confirmRegression(workspace.path, plan.regressionPaths, signal)
+      if (regression._tag === 'Err') return err({ _tag: 'EvidenceRequired', reason: regression.error })
+      const restored = await runGit(
+        workspace.path,
+        ['restore', `--source=${patchTree.stdout}`, '--staged', '--worktree', '--', '.'],
+        signal,
+      )
+      if (restored.exitCode !== 0)
+        return err('The retained Repair could not be restored after current regression evidence.')
+      const reset = await runGit(workspace.path, ['reset'], signal)
+      if (reset.exitCode !== 0) return err('The retained Repair could not prepare fresh checks.')
+      const paths = await runGit(workspace.path, ['diff', '--name-only', '-z', 'HEAD'], signal)
+      if (paths.exitCode !== 0 || paths.stdout.length === 0)
+        return err('The retained Repair is already present or has an empty patch.')
+      const checks = await options.runChecks(workspace.path, plan.regressionPaths, signal)
+      if (checks._tag === 'Err') return checks
+      const verified = await fixes.verify(task, workspace, signal)
+      if (verified._tag === 'Err') return verified
+      if (verified.value.changedFiles === 0) return err('Fresh Repair checks left an empty patch.')
+      if (verified.value.digest !== appliedDigest.digest)
+        return err('Fresh checks changed the retained patch. Request a current Repair.')
+      if (
+        !options.recordChecks(task, [
+          'Selected regression tests failed on the current base without setup errors.',
+          ...checks.value,
+        ])
+      )
+        return err('The Repair lost authority before recording fresh checks.')
+      if (plan.operation === 'Reuse') {
+        const retainedDigest = await runGitDigest(
+          task.repositoryMapping.checkout,
+          contentDiffArgs(plan.parentSha, target.proof.commitSha),
+          signal,
+        )
+        if (retainedDigest.exitCode !== 0 || retainedDigest.digest !== verified.value.digest)
+          return err('Fresh checks changed the retained patch. Request a current Repair.')
+        const pinned = await pinPublicationArtifact(
+          options.root,
+          task.repository,
+          task.id,
+          task.repositoryMapping.checkout,
+          target.proof.commitSha,
+          signal,
+        )
+        return pinned._tag === 'Err'
+          ? pinned
+          : ok({
+              ...verified.value,
+              commitSha: target.proof.commitSha,
+              baseSha: plan.expectedBase,
+              artifactRef: pinned.value,
+            })
+      }
+      return fixes.commit(
+        task,
+        workspace,
+        verified.value,
+        `fix: recover selected finding from #${task.pullRequestNumber}`,
+        signal,
+      )
+    },
+  }
+}
+
 export function createBaselineRepairWorktreeManager(
   options: ConflictWorktreeManagerOptions,
 ): BaselineRepairWorktreeManager {
@@ -1107,7 +1560,7 @@ export function createBaselineRepairWorktreeManager(
     prepare: workspaces.prepareBaseline,
 
     async verify(_task, worktree, signal) {
-      const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const head = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (head.exitCode !== 0 || head.stdout !== worktree.baseSha)
         return err('The agent changed HEAD. Agents must not commit or rewrite history.')
       const staged = await runGit(worktree.path, ['diff', '--cached', '--quiet'], signal)
@@ -1135,9 +1588,9 @@ export function createBaselineRepairWorktreeManager(
       )
       if (committed.exitCode !== 0)
         return err(`Could not commit the verified Baseline repair: ${committed.stderr || committed.stdout}`)
-      const commitSha = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const commitSha = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (commitSha.exitCode !== 0) return err(`Could not resolve the Baseline repair commit: ${commitSha.stderr}`)
-      const parent = await runGit(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
+      const parent = await runGitScalar(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
       if (parent.exitCode !== 0 || parent.stdout !== worktree.baseSha)
         return err('The Baseline repair commit does not have the failing base commit as its parent.')
       const artifactRef = await pinPublicationArtifact(
@@ -1163,7 +1616,7 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
     prepare: workspaces.prepareIssue,
 
     async verify(task, worktree, signal) {
-      const head = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const head = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (head.exitCode !== 0 || head.stdout !== worktree.baseSha)
         return err('The agent changed HEAD. Agents must not commit or rewrite history.')
       const staged = await runGit(worktree.path, ['diff', '--cached', '--quiet'], signal)
@@ -1211,7 +1664,7 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
       )
       if (fetched.exitCode !== 0)
         return ok({ _tag: 'Unstacked', reason: `Could not fetch the stack base branch: ${cleanLine(fetched.stderr)}` })
-      const stackHead = await runGit(worktree.path, ['rev-parse', stackRef], signal)
+      const stackHead = await runGitScalar(worktree.path, ['rev-parse', stackRef], signal)
       if (stackHead.exitCode !== 0)
         return ok({
           _tag: 'Unstacked',
@@ -1235,7 +1688,7 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
       )
       if (captured.exitCode !== 0)
         return err(`Could not capture the verified change: ${captured.stderr || captured.stdout}`)
-      const capturedSha = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const capturedSha = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (capturedSha.exitCode !== 0) return err(`Could not resolve the captured change: ${capturedSha.stderr}`)
 
       /** Puts the worktree back exactly where `verify` left it. */
@@ -1283,9 +1736,9 @@ export function createIssueWorktreeManager(options: ConflictWorktreeManagerOptio
       )
       if (committed.exitCode !== 0)
         return err(`Could not commit the verified change: ${committed.stderr || committed.stdout}`)
-      const commitSha = await runGit(worktree.path, ['rev-parse', 'HEAD'], signal)
+      const commitSha = await runGitScalar(worktree.path, ['rev-parse', 'HEAD'], signal)
       if (commitSha.exitCode !== 0) return err(`Could not resolve the issue work commit: ${commitSha.stderr}`)
-      const parent = await runGit(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
+      const parent = await runGitScalar(worktree.path, ['show', '--no-patch', '--format=%P', commitSha.stdout], signal)
       if (parent.exitCode !== 0 || parent.stdout !== worktree.baseSha)
         return err('The issue work commit does not have the approved base commit as its parent.')
       const artifactRef = await pinPublicationArtifact(
@@ -1403,10 +1856,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
           pullRequest.value.headRepository.toLowerCase() !== headRepository.toLowerCase() ||
           !canWriteHead ||
           (command.taskKind === 'resolve_conflict' &&
-            ownedHead &&
-            !command.repositoryMapping.writablePullRequestAuthors.some(
-              (author) => author.toLowerCase() === pullRequest.value.author.toLowerCase(),
-            ))
+            !canResolveConflictPullRequestHead(command.repositoryMapping, pullRequest.value))
         ) {
           return err('The pull request no longer authorizes publication.')
         }
@@ -1482,10 +1932,10 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
     async push(command, signal) {
       if (!isSafeGitRef(command.headRef)) return err('Pull request head ref is unsafe.')
       const repository = repositoryGitDirectory(options.root, command.repository)
-      const artifact = await runGit(repository, ['rev-parse', command.artifactRef], signal)
+      const artifact = await runGitScalar(repository, ['rev-parse', command.artifactRef], signal)
       if (artifact.exitCode !== 0 || artifact.stdout !== command.commitSha)
         return err('The pinned publication artifact does not match the prepared commit.')
-      const parents = await runGit(repository, ['show', '--no-patch', '--format=%P', command.commitSha], signal)
+      const parents = await runGitScalar(repository, ['show', '--no-patch', '--format=%P', command.commitSha], signal)
       const expectedParents =
         command.taskKind === 'resolve_conflict'
           ? `${command.expectedHeadSha} ${command.baseSha}`
@@ -1497,10 +1947,10 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
         return err('The publication artifact patch digest does not match.')
       const changed = await runGit(
         repository,
-        ['diff', '--name-only', command.expectedHeadSha, command.commitSha],
+        ['diff', '--name-only', '-z', command.expectedHeadSha, command.commitSha],
         signal,
       )
-      if (changed.exitCode !== 0 || changed.stdout.split('\n').filter(Boolean).length !== command.changedFiles)
+      if (changed.exitCode !== 0 || changed.stdout.split('\0').filter(Boolean).length !== command.changedFiles)
         return err('The publication artifact changed file count does not match.')
       const ancestor = await runGit(
         repository,

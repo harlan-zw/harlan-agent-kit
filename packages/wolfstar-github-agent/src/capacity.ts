@@ -1,8 +1,10 @@
 import type { AgentProviderName } from './agent-provider.ts'
 import type {
   AgentControl,
+  AgentProfile,
   AgentSelection,
   AgentStartState,
+  DashboardSnapshot,
   ProviderCapacity,
   ProviderCapacityStatus,
   RestartRequest,
@@ -34,15 +36,22 @@ export function resolveAgentStartState(input: {
   agentControl: AgentControl
   restartRequest: RestartRequest | null
   agentSelection: AgentSelection
+  agentProfile?: Pick<AgentProfile, 'provider'>
   providerCapacities: readonly ProviderCapacityStatus[]
 }): AgentStartState {
   if (!input.mutationsEnabled) return { _tag: 'WritesDisabled' }
   if (input.agentControl._tag === 'Paused') return { _tag: 'Paused' }
   if (!restartAllowsTaskClaims(input.restartRequest)) return { _tag: 'RestartRequested' }
-  if (input.agentSelection._tag !== 'Automatic') return { _tag: 'Available' }
-
   const capacities = new Map(input.providerCapacities.map((entry) => [entry.provider, entry]))
-  const selected = input.agentSelection.order.map((provider) => capacities.get(provider))
+  const order =
+    input.agentSelection._tag === 'Automatic'
+      ? input.agentSelection.order
+      : input.agentSelection._tag === 'Pinned'
+        ? [input.agentSelection.provider]
+        : [input.agentProfile?.provider ?? input.providerCapacities[0]?.provider].filter(
+            (provider): provider is AgentProviderName => provider !== undefined,
+          )
+  const selected = order.map((provider) => capacities.get(provider))
   if (selected.some((entry) => entry !== undefined && hasSpendableCapacity(entry.capacity, entry.reservePercent)))
     return { _tag: 'Available' }
   // A Reserve a person can lower outranks a provider that would not answer.
@@ -54,6 +63,36 @@ export function resolveAgentStartState(input: {
   if (selected.some((entry) => entry === undefined || entry.capacity._tag === 'Unavailable'))
     return { _tag: 'CapacityUnavailable' }
   return { _tag: 'ReserveReached' }
+}
+
+/** Model choices in one OpenCode CLI use different subscriptions. */
+export function selectedModelCapacity(
+  snapshot: Pick<DashboardSnapshot, 'agentModelCapacities' | 'providerCapacities'>,
+  provider: AgentProviderName,
+  model: string | null | undefined,
+): ProviderCapacity {
+  if (provider === 'opencode' && model?.startsWith('opencode-go/'))
+    return (
+      snapshot.agentModelCapacities?.opencodeGo ?? {
+        _tag: 'Unavailable',
+        reason: 'Reload Service data to check OpenCode Go.',
+      }
+    )
+  if (provider === 'opencode' && model?.startsWith('zai-coding-plan/'))
+    return (
+      snapshot.agentModelCapacities?.zaiCodingPlan ??
+      snapshot.providerCapacities.find((entry) => entry.provider === provider)?.capacity ?? {
+        _tag: 'Unavailable',
+        reason: 'Usage is unavailable.',
+      }
+    )
+  if (provider === 'opencode' && model != null) return { _tag: 'Unpublished' }
+  return (
+    snapshot.providerCapacities.find((entry) => entry.provider === provider)?.capacity ?? {
+      _tag: 'Unavailable',
+      reason: 'Usage is unavailable.',
+    }
+  )
 }
 
 /**
@@ -77,7 +116,13 @@ export function agentStartBlockedReason(input: {
   // holding a Task is proof that claims are not blocked, whatever one reading
   // of a provider limit says.
   if (input.runningTasks > 0) return null
-  const order = new Set<AgentProviderName>(input.agentSelection._tag === 'Automatic' ? input.agentSelection.order : [])
+  const order = new Set<AgentProviderName>(
+    input.agentSelection._tag === 'Automatic'
+      ? input.agentSelection.order
+      : input.agentSelection._tag === 'Pinned'
+        ? [input.agentSelection.provider]
+        : input.providerCapacities.map((entry) => entry.provider),
+  )
   const detail = input.providerCapacities
     .filter((entry) => order.has(entry.provider))
     .map((entry) => {

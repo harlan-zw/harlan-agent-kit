@@ -39,6 +39,8 @@ github:
   private_key_path: /home/wolfstar/.config/wolfstar-github-agent/app.pem
   allowed_owners: [wolfstar-project]
 server:
+  # Install the Tailscale session ingress before enabling host credentials.
+  agent_sessions: false
   host: 127.0.0.1
   port: 3210
   allowed_origin: https://wolfstar-github-agent.localhost
@@ -91,13 +93,25 @@ issue_batches: true
 # With webhooks on, polling only has to catch what a delivery missed.
 poll_interval_seconds: 60
 issue_cutoff: 2026-07-14
-# Public, read-only watches outside the GitHub App installation.
+# Public, read-only issue watches. They can also show issues in a maintained
+# repository whose Issue work is disabled.
 # - github: nuxt-modules/sitemap
 #   issues: [658]
 # - github: nuxt-modules/robots
 #   issues: all
 external_repositories: []
 repositories: []
+# Give one Repository mapping a dedicated automation account:
+#   github_account:
+#     login: im-brundlefly
+#     token_path: /home/wolfstar/.config/wolfstar-github-agent/brundlefly-token
+#     name: Brundlefly
+#     url: https://github.com/wolfstar-project/brundlefly
+#     instructions: |
+#       Use plain English and short sentences.
+#       Explain each finding before a sparse, dry aside.
+# The token needs an owned regular file with mode 0600.
+# Its verified login must match. Failed credentials never use another account.
 # Owned repositories enable issue work and conflict resolution by default.
 # Maintained repositories need an explicit policy. Without an installation,
 # the controller uses the authenticated GitHub account.
@@ -140,7 +154,18 @@ repositories: []
 # A file an agent reads as instructions is always Sensitive. SKILL.md, AGENTS.md,
 # CLAUDE.md, .github, .claude and .codex need no entry, and a repository cannot
 # widen its own globs to cover them.
-# Package releases are disabled unless an owned Repository mapping includes release.
+# Inherit release policy for owned public packages under one checkout root.
+# A stable root package.json and a matching tag workflow must exist.
+# Explicit Repository release policy replaces the default. Set release: false to opt out.
+# release_defaults:
+#   owner: wolfstar-project
+#   checkout_root: /home/wolfstar/pkg
+#   manifest: package.json
+#   version_files: [package.json]
+#   tag_prefix: v
+#   workflow: release.yml
+#   checks: all  # Every GitHub Actions check run must pass.
+# Without release_defaults, package releases need an explicit Repository release policy.
 # Enable webhooks, repository writes, pull_request_review, and automatic selection first.
 # Trust the publishing actor in writable_pr_authors so the version pull request receives Review.
 #   release:

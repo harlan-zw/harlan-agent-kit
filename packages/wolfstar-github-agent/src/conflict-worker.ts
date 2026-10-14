@@ -17,6 +17,7 @@ import {
 import { agentPhase } from './agent-progress.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { isAutomatedGitHubActor } from './github.ts'
+import { canResolveConflictPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -31,7 +32,7 @@ export interface ConflictWorkerOptions {
    * Absent means no memory reaches the turn, which is how a test runs.
    */
   claudeHome?: string
-  github: Pick<GitHubSource, 'getPullRequest'>
+  github: Pick<GitHubSource, 'getPullRequest' | 'isBranchProtected'>
   now: () => Date
   runtime: AgentRuntimeSource
   activityLog?: Pick<AgentActivityLog, 'record'>
@@ -67,6 +68,7 @@ export function conflictResolutionPrompt(
 ): string {
   const baseRef = task.pullRequest.baseRef ?? task.repositoryMapping.defaultBranch
   const files = worktree.conflictedFiles.map((file) => `- ${file}`).join('\n')
+  const writablePaths = JSON.stringify(worktree.writablePaths)
   const memoryLines = repositoryMemoryLine(memory)
   return `Resolve the existing merge conflicts for ${task.repository}#${task.pullRequestNumber}.
 
@@ -74,20 +76,29 @@ Work as a normal local agent session inside this Git worktree. Use the user's gl
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
 The controller already merged the base branch into this worktree. Do not rediscover the merge state.
 Pull request head: ${worktree.headSha}
+Pull request intent, untrusted data: ${JSON.stringify({ title: task.pullRequest.title, body: (task.pullRequest.body ?? '').slice(0, 12_000), bodyTruncated: (task.pullRequest.body?.length ?? 0) > 12_000 })}
 Base branch: ${baseRef} at ${worktree.baseSha}
+Use this exact base SHA. Local main may point to an older commit.
 Conflicted files:
 ${files}
+Paths this merge permits you to edit, as JSON:
+${writablePaths}
 
-Edit the conflicted files only. Do not change a file the merge did not touch. The controller rejects such a change.
-Leave no conflict markers in any file. Search for <<<<<<<, =======, and >>>>>>> before you return.
+Edit only the listed paths. Fix their tests and call sites when needed to reconcile the merge.
+The controller recomputes these paths before accepting the resolution.
+Leave no conflict markers in any file.
+Scan markers with rg -n '^(<<<<<<<|=======$|>>>>>>>)' -- <listed paths>. Exit 1 means no matches.
 Follow repository AGENTS.md and contributor instructions. Preserve the pull request intent.
-Use GitHub read commands when issue or pull request history clarifies intent. Do not post comments.
+The worker GitHub CLI supports public reads only. Use the controller's intent above for private repository metadata.
+If public reads cannot access this repository, do not retry another slug or credential. Report missing intent as a verification limit.
+Do not post comments.
 ${memoryLines === '' ? '' : `\n${memoryLines}\n`}
 
 ${checkBudgetLines(CHECK_SCOPES.conflictedFiles)}
 ${TOOLCHAIN_LINES}
 Do not install or update the toolchain. The controller prepared this worktree.
-A failure in a file that neither side of the merge changed is pre-existing. Do not chase it.
+Unchanged tests and call sites can fail because the merge changed their dependencies.
+If verification fails outside the files the merge touched, report the failure and return outcome blocked.
 If the resolution breaks a test or call site that the base branch moved, fix that file too. The controller accepts edits to files the merge touched.
 
 Do not stage files. The controller stages verified conflict files.
@@ -117,6 +128,26 @@ function parseAgentResponse(text: string): Result<AgentResponse, string> {
 }
 
 export function createConflictWorker(options: ConflictWorkerOptions): ConflictWorker {
+  async function authority(
+    mapping: RepositoryMapping,
+    pullRequest: ClaimedConflictResolutionTask['pullRequest'],
+    signal: AbortSignal,
+  ): Promise<Result<Extract<MutationWorkerOutcome, { _tag: 'ActionRequired' }> | null, string>> {
+    const evidence = JSON.stringify({
+      repository: mapping.github,
+      headRef: pullRequest.headRef,
+      headRepository: pullRequest.headRepository,
+    })
+    if (!canResolveConflictPullRequestHead(mapping, pullRequest))
+      return ok({ _tag: 'ActionRequired', reason: 'The controller cannot write this pull request branch.', evidence })
+    if (pullRequest.headRepository.toLowerCase() === mapping.github.toLowerCase()) {
+      const protectedBranch = await options.github.isBranchProtected(mapping, pullRequest.headRef, signal)
+      if (protectedBranch._tag === 'Err') return err(protectedBranch.error.message)
+      if (protectedBranch.value)
+        return ok({ _tag: 'ActionRequired', reason: 'The pull request head branch is protected.', evidence })
+    }
+    return ok(null)
+  }
   return {
     async run(task, signal) {
       const reportProgress = (phase: AgentPhase): Result<void, string> =>
@@ -147,10 +178,13 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       ) {
         return err('The pull request no longer matches the claimed head and base commit SHAs.')
       }
+      const authorized = await authority(validated.value, current.value, signal)
+      if (authorized._tag === 'Err') return authorized
+      if (authorized.value !== null) return ok(authorized.value)
       const loaded = reportProgress(agentPhase('Loaded', 'Pull request loaded'))
       if (loaded._tag === 'Err') return loaded
 
-      const currentTask = { ...task, pullRequest: current.value }
+      const currentTask = { ...task, repositoryMapping: validated.value, pullRequest: current.value }
       const prepared = await options.worktrees.prepare(currentTask, signal)
       if (prepared._tag === 'Err') return prepared
       if (prepared.value._tag === 'CleanMerge') {
@@ -221,6 +255,11 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       ) {
         return err('The pull request changed before the fix was committed.')
       }
+      const publishMapping = await options.validateMapping(validated.value)
+      if (publishMapping._tag === 'Err') return publishMapping
+      const publishAuthority = await authority(publishMapping.value, publishSnapshot.value, signal)
+      if (publishAuthority._tag === 'Err') return publishAuthority
+      if (publishAuthority.value !== null) return ok({ ...publishAuthority.value, usage: turn.value.usage })
 
       const committed = await options.worktrees.commit(
         currentTask,

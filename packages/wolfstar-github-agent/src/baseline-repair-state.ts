@@ -1,3 +1,5 @@
+import type { GitHubChecksSnapshot } from './github-agent-source.ts'
+
 export const BASELINE_REPAIR_LABEL = 'wolfstar-agent-baseline-repair'
 export const BASELINE_REPAIR_MARKER = '<!-- wolfstar-agent-kit:baseline-repair -->'
 
@@ -55,4 +57,18 @@ export function withBaselineRepairMarker(body: string): string {
     .join('\n')
     .trim()
   return `${BASELINE_REPAIR_MARKER}\n${description}`
+}
+
+/** Requires positive completed CI before retiring a Baseline repair. */
+export function baselineChecksPassed(checks: GitHubChecksSnapshot): boolean {
+  return (
+    checks._tag === 'Available' &&
+    checks.checks.length > 0 &&
+    checks.checks.every(
+      (check) =>
+        check.status === 'completed' &&
+        ['success', 'skipped', 'neutral'].includes(check.conclusion ?? '') &&
+        check.failure._tag !== 'RunnerLost',
+    )
+  )
 }

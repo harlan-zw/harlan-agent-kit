@@ -1,9 +1,14 @@
+import type { PackageReleaseDefaults } from './package-release.ts'
 import type { RepositoryAuthentication, RepositoryMapping } from './types.ts'
 import { execFile } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { readdir, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { App, Octokit } from 'octokit'
+import { parse } from 'yaml'
 import { normalizeGitHubRemote } from './config.ts'
+import { failFastThrottle } from './github-rate-limit.ts'
+import { stableVersion } from './package-release.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 
 export interface InstalledRepository {
@@ -94,7 +99,10 @@ export async function discoverGitHubAppRepositories(
   const app = new App({
     appId: options.appId,
     privateKey: options.privateKey,
-    Octokit: Octokit.defaults({ userAgent: options.userAgent ?? 'wolfstar-github-agent/0.0.0' }),
+    Octokit: Octokit.defaults({
+      userAgent: options.userAgent ?? 'wolfstar-github-agent/0.0.0',
+      throttle: failFastThrottle,
+    }),
   })
   const repositories: InstalledRepository[] = []
   for await (const { repository } of app.eachRepository.iterator()) {
@@ -115,14 +123,75 @@ export async function discoverGitHubAppRepositories(
   return repositories
 }
 
-function defaultMapping(repository: InstalledRepository, checkout: string): RepositoryMapping {
+function inheritedRelease(
+  repository: InstalledRepository,
+  checkout: string,
+  defaults: PackageReleaseDefaults | undefined,
+): PackageReleaseDefaults['policy'] | undefined {
+  if (
+    defaults === undefined ||
+    repository.owner.type !== 'User' ||
+    repository.owner.login.toLowerCase() !== defaults.owner.toLowerCase() ||
+    repository.github.split('/')[0]?.toLowerCase() !== defaults.owner.toLowerCase() ||
+    !isWithin(defaults.checkoutRoot, checkout)
+  ) {
+    return undefined
+  }
+  // A default only applies to a public, stable package with a matching tag workflow.
+  // Explicit repository policies still support monorepos and other layouts.
+  try {
+    const pkg: unknown = JSON.parse(readFileSync(join(checkout, defaults.policy.manifest), 'utf8'))
+    if (
+      typeof pkg !== 'object' ||
+      pkg === null ||
+      !('name' in pkg) ||
+      typeof pkg.name !== 'string' ||
+      !('version' in pkg) ||
+      typeof pkg.version !== 'string' ||
+      stableVersion(pkg.version) === null ||
+      ('private' in pkg && pkg.private === true)
+    ) {
+      return undefined
+    }
+    const workflow: unknown = parse(
+      readFileSync(join(checkout, '.github', 'workflows', defaults.policy.workflow), 'utf8'),
+    )
+    const triggers = typeof workflow === 'object' && workflow !== null && 'on' in workflow ? workflow.on : null
+    const push = typeof triggers === 'object' && triggers !== null && 'push' in triggers ? triggers.push : null
+    const tags = typeof push === 'object' && push !== null && 'tags' in push ? push.tags : null
+    if (
+      !Array.isArray(tags) ||
+      !tags.some((pattern) => pattern === `${defaults.policy.tagPrefix}*` || pattern === '*' || pattern === '**')
+    )
+      return undefined
+    return defaults.policy
+  } catch (error) {
+    // Missing or malformed package metadata is ineligible. Other file errors stop startup.
+    if (
+      error instanceof SyntaxError ||
+      (error instanceof Error && error.name === 'YAMLParseError') ||
+      (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')
+    ) {
+      return undefined
+    }
+    throw error
+  }
+}
+
+function defaultMapping(
+  repository: InstalledRepository,
+  checkout: string,
+  releaseDefaults?: PackageReleaseDefaults,
+): RepositoryMapping {
   const ownership = repository.owner.type === 'User' ? 'owned' : 'maintained'
+  const release = inheritedRelease(repository, checkout, releaseDefaults)
   return {
     github: repository.github,
     checkout,
     enabled: !repository.archived,
     authentication: repository.authentication,
     ownership,
+    ...(release === undefined ? {} : { release }),
     defaultBranch: repository.defaultBranch,
     writablePullRequestAuthors: ['wolfstar-project', AGENT_ACTOR_LOGIN],
     writablePullRequestHeadPrefixes: ['fix/', 'feat/', 'chore/', 'docs/', 'refactor/', 'perf/', 'test/', 'ci/'],
@@ -163,6 +232,31 @@ export function isAllowedRepository(github: string, allowedOwners: string[]): bo
   })
 }
 
+/** A trusted checkout whose origin still names a repository GitHub renamed. */
+export interface RenamedCheckout {
+  checkout: string
+  /** The name the origin remote gives. */
+  origin: string
+  /** The name GitHub answers with today. */
+  current: string
+}
+
+export interface UserRepositoryDiscovery {
+  repositories: InstalledRepository[]
+  /**
+   * Checkout repositories GitHub gave no answer for. Their absence from the
+   * mapping proves nothing, because an outage reads exactly like no access.
+   */
+  unresolved: string[]
+  renamed: RenamedCheckout[]
+}
+
+type UserRepositoryRead =
+  | { _tag: 'Found'; repository: InstalledRepository }
+  | { _tag: 'Excluded' }
+  | { _tag: 'Unresolved'; github: string }
+  | { _tag: 'Renamed'; renamed: RenamedCheckout }
+
 /**
  * Repositories Wolfstar maintains that the App cannot reach.
  *
@@ -171,35 +265,41 @@ export function isAllowedRepository(github: string, allowedOwners: string[]): bo
  */
 export async function discoverUserRepositories(
   options: UserRepositoryDiscoveryOptions,
-): Promise<InstalledRepository[]> {
+): Promise<UserRepositoryDiscovery> {
   const installed = new Set(options.installed.map((repository) => repository.github.toLowerCase()))
   const candidates = options.checkouts.filter(
     (checkout) =>
       isAllowedRepository(checkout.github, options.allowedOwners) && !installed.has(checkout.github.toLowerCase()),
   )
   const unique = [...new Map(candidates.map((checkout) => [checkout.github.toLowerCase(), checkout])).values()]
-  const repositories = await Promise.all(
+  const reads = await Promise.all(
     unique.map((checkout) =>
       options
         .readRepository(checkout.github)
-        .then((repository) => {
+        .then((repository): UserRepositoryRead => {
+          if (repository === undefined) return { _tag: 'Unresolved', github: checkout.github }
           // GitHub answers a renamed repository with its current name. A checkout that
-          // still points at the old name says nothing about the repository behind it.
-          if (repository === undefined || repository.github.toLowerCase() !== checkout.github.toLowerCase())
-            return undefined
-          return installed.has(repository.github.toLowerCase())
-            ? undefined
-            : { ...repository, authentication: 'user' as const }
+          // still points at the old name says nothing about the repository behind it,
+          // so it maps nothing, and the operator is told to update its origin.
+          if (repository.github.toLowerCase() !== checkout.github.toLowerCase())
+            return {
+              _tag: 'Renamed',
+              renamed: { checkout: checkout.checkout, origin: checkout.github, current: repository.github },
+            }
+          if (installed.has(repository.github.toLowerCase()) || repository.archived || repository.fork)
+            return { _tag: 'Excluded' }
+          return { _tag: 'Found', repository: { ...repository, authentication: 'user' } }
         })
-        .catch(() => {
-          // An unreadable repository is one Wolfstar cannot reach either, so it stays untracked.
-          return undefined
-        }),
+        // A failed read is not swallowed: it marks the repository unresolved, so
+        // nothing downstream reads its absence as a removal.
+        .catch((): UserRepositoryRead => ({ _tag: 'Unresolved', github: checkout.github })),
     ),
   )
-  return repositories.flatMap((repository) =>
-    repository === undefined || repository.archived || repository.fork ? [] : [repository],
-  )
+  return {
+    repositories: reads.flatMap((read) => (read._tag === 'Found' ? [read.repository] : [])),
+    unresolved: reads.flatMap((read) => (read._tag === 'Unresolved' ? [read.github] : [])),
+    renamed: reads.flatMap((read) => (read._tag === 'Renamed' ? [read.renamed] : [])),
+  }
 }
 
 /**
@@ -231,6 +331,7 @@ export function buildRepositoryMappings(
   checkouts: LocalCheckout[],
   overrides: RepositoryMapping[],
   allowedOwners: string[],
+  releaseDefaults?: PackageReleaseDefaults,
 ): RepositoryMapping[] {
   const checkoutByRepository = new Map(checkouts.map((checkout) => [checkout.github.toLowerCase(), checkout.checkout]))
   const overrideByRepository = new Map(overrides.map((mapping) => [mapping.github.toLowerCase(), mapping]))
@@ -241,7 +342,7 @@ export function buildRepositoryMappings(
       if (!isAllowedRepository(repository.github, allowedOwners)) return []
       const checkout = checkoutByRepository.get(repository.github.toLowerCase())
       if (checkout === undefined) return []
-      const defaults = defaultMapping(repository, checkout)
+      const defaults = defaultMapping(repository, checkout, releaseDefaults)
       const override = overrideByRepository.get(repository.github.toLowerCase())
       return [
         {
@@ -249,11 +350,9 @@ export function buildRepositoryMappings(
           ...override,
           github: repository.github,
           checkout,
-          // How the controller reaches a repository is discovered, never declared.
-          // A configuration file cannot know whether the App is installed, and one
-          // that claimed an installation the organization refused sent every write
-          // to a token that does not exist.
-          authentication: repository.authentication,
+          // Discover App access unless the owner selects a dedicated automation account.
+          // Configuration alone cannot establish an App installation.
+          authentication: override?.githubAccount === undefined ? repository.authentication : 'user',
           defaultBranch: repository.defaultBranch,
           enabled: !repository.archived && (override?.enabled ?? true),
         },

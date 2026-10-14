@@ -23,6 +23,113 @@ function createStore() {
 }
 
 describe('restart request', () => {
+  it('preserves Pending preparation after process replacement', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'wolfstar-update-preparation-'))
+    directories.push(directory)
+    const path = join(directory, 'state.sqlite')
+    const at = '2026-10-12T01:00:00.000Z'
+    const first = openJournalStore(path)
+    first.requestRestart({
+      id: 'pending-update',
+      source: 'helper',
+      operation: { _tag: 'Update', targetCommit: 'a'.repeat(40), preparation: 'Pending' },
+      at,
+    })
+    first.close()
+    const next = openJournalStore(path)
+    stores.push(next)
+    expect(next.getRestartRequest()).toMatchObject({ _tag: 'Requested', operation: { preparation: 'Pending' } })
+    expect(next.beginRestart({ id: 'pending-update', processId: 'next', at })).toBeNull()
+    expect(next.finishUpdatePreparation({ id: 'pending-update', _tag: 'Ready', at })).toMatchObject({
+      operation: { preparation: 'Ready' },
+    })
+    expect(next.finishUpdatePreparation({ id: 'pending-update', _tag: 'Ready', at })).toMatchObject({
+      operation: { preparation: 'Ready' },
+    })
+  })
+
+  it('blocks claims during Update file sync and waits for its exact preparation receipt', async () => {
+    vi.useFakeTimers()
+    const store = createStore()
+    const at = '2026-10-12T01:00:00.000Z'
+    store.requestRestart({
+      id: 'preparing-update',
+      source: 'helper',
+      operation: { _tag: 'Update', targetCommit: 'a'.repeat(40), preparation: 'Pending' },
+      at,
+    })
+    const prepareUpdate = vi.fn(async () => ({ _tag: 'Ok' as const, value: undefined }))
+    const controller = createRestartController({
+      store,
+      processId: 'process',
+      now: () => new Date(at),
+      prepareUpdate,
+      onActionRequired: vi.fn(),
+      intervalMilliseconds: 1_000,
+    })
+    controller.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(prepareUpdate).not.toHaveBeenCalled()
+    expect(store.beginRestart({ id: 'preparing-update', processId: 'wrong-process', at })).toBeNull()
+    expect(store.finishUpdatePreparation({ id: 'wrong', _tag: 'Ready', at })).toBeNull()
+    expect(store.finishUpdatePreparation({ id: 'preparing-update', _tag: 'Ready', at })).toMatchObject({
+      operation: { preparation: 'Ready' },
+    })
+    await vi.advanceTimersByTimeAsync(1_000)
+    await controller.waitForRestart()
+    expect(prepareUpdate).toHaveBeenCalledWith('a'.repeat(40))
+    controller.stop()
+  })
+
+  it('releases a failed preparation without changing manual Pause', () => {
+    const store = createStore()
+    const at = '2026-10-12T01:00:00.000Z'
+    store.requestRestart({
+      id: 'failed-update',
+      source: 'helper',
+      operation: { _tag: 'Update', targetCommit: 'a'.repeat(40), preparation: 'Pending' },
+      at,
+    })
+    store.pauseAgents(at)
+    expect(
+      store.finishUpdatePreparation({ id: 'failed-update', _tag: 'Failed', reason: 'File sync failed.', at }),
+    ).toMatchObject({ _tag: 'ActionRequired', reason: 'File sync failed.' })
+    expect(store.finishUpdatePreparation({ id: 'failed-update', _tag: 'Ready', at })).toBeNull()
+    expect(store.getDashboardSnapshot(at).agentControl).toMatchObject({ _tag: 'Paused' })
+  })
+
+  it('waits for native Sessions before preparing an Update', async () => {
+    vi.useFakeTimers()
+    const store = createStore()
+    store.requestRestart({
+      id: 'session-update',
+      source: 'dashboard',
+      operation: { _tag: 'Update', targetCommit: 'a'.repeat(40), preparation: 'Ready' },
+      at: '2026-08-29T01:00:00.000Z',
+    })
+    let ready = false
+    const prepareUpdate = vi.fn(async () => ({ _tag: 'Ok' as const, value: undefined }))
+    const controller = createRestartController({
+      store,
+      processId: 'session-process',
+      now: () => new Date('2026-08-29T01:00:10.000Z'),
+      ready: () => ready,
+      prepareUpdate,
+      onActionRequired: vi.fn(),
+      intervalMilliseconds: 1_000,
+    })
+    controller.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(store.getRestartRequest()?._tag).toBe('Requested')
+    expect(prepareUpdate).not.toHaveBeenCalled()
+    ready = true
+    await vi.advanceTimersByTimeAsync(1_000)
+    await controller.waitForRestart()
+    expect(store.getRestartRequest()?._tag).toBe('Restarting')
+    expect(prepareUpdate).toHaveBeenCalledWith('a'.repeat(40))
+    controller.stop()
+  })
+
   it('stops new Task claims without changing Pause', () => {
     const state = resolveAgentStartState({
       mutationsEnabled: true,
@@ -99,13 +206,13 @@ describe('restart request', () => {
     store.requestRestart({
       id: 'update-1',
       source: 'dashboard',
-      operation: { _tag: 'Update', targetCommit },
+      operation: { _tag: 'Update', targetCommit, preparation: 'Ready' },
       at: '2026-09-02T03:00:00.000Z',
     })
 
     expect(store.getRestartRequest()).toMatchObject({
       _tag: 'Requested',
-      operation: { _tag: 'Update', targetCommit },
+      operation: { _tag: 'Update', targetCommit, preparation: 'Ready' },
     })
   })
 
@@ -280,7 +387,7 @@ describe('restart request', () => {
       _tag: 'Requested',
       id: 'update-1',
       source: 'dashboard',
-      operation: { _tag: 'Update', targetCommit },
+      operation: { _tag: 'Update', targetCommit, preparation: 'Ready' },
       requestedAt: '2026-09-02T03:00:00.000Z',
     }
     const controller = createRestartController({

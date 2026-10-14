@@ -9,12 +9,15 @@ import { restartNotice } from '../utils/system.ts'
  */
 const emit = defineEmits<{ keyboard: [] }>()
 
-const { snapshot, controlPending, setSelectionMode, setAgentControl, requestRestart } = useDashboard()
+const { snapshot, controlsUnavailable, controlPending, setSelectionMode, setAgentControl, requestRestart } =
+  useDashboard()
 const notifications = useNotifications()
 const colorMode = useColorMode()
 const toast = useToast()
 
 const wide = useMediaQuery('(min-width: 48rem)')
+const route = useRoute()
+const sessionPage = computed(() => route.path === '/sessions')
 
 const restart = computed(() => restartNotice(snapshot.value.restartRequest))
 const restartActive = computed(
@@ -39,42 +42,47 @@ const items = computed<DropdownMenuItem[][]>(() => {
     ? []
     : [
         [
+          { label: 'Sessions', to: '/sessions', icon: 'i-octicon-comment-discussion-16' },
           { label: 'Board', to: '/', icon: 'i-octicon-columns-16' },
           { label: 'History', to: '/history', icon: 'i-octicon-history-16' },
           { label: 'Watching', to: '/watching', icon: 'i-octicon-broadcast-16' },
           { label: 'Routines', to: '/routines', icon: 'i-octicon-calendar-16' },
           { label: 'Stats', to: '/stats', icon: 'i-octicon-graph-16' },
         ],
-        [
-          {
-            label: paused.value ? 'Resume' : 'Pause',
-            icon: paused.value ? 'i-octicon-play-16' : 'i-octicon-stop-16',
-            disabled: controlPending.value,
-            onSelect: () => setAgentControl(paused.value ? 'resume' : 'pause'),
-          },
-        ],
+        sessionPage.value
+          ? []
+          : [
+              {
+                label: paused.value ? 'Resume' : 'Pause',
+                icon: paused.value ? 'i-octicon-play-16' : 'i-octicon-stop-16',
+                disabled: controlPending.value || controlsUnavailable.value,
+                onSelect: () => setAgentControl(paused.value ? 'resume' : 'pause'),
+              },
+            ],
       ]
   return [
     ...compact,
-    [
-      { label: 'Selection mode', type: 'label' },
-      {
-        label: 'Auto',
-        description: 'The service selects each pull request.',
-        type: 'checkbox',
-        checked: snapshot.value.selectionMode === 'auto',
-        disabled: controlPending.value,
-        onUpdateChecked: () => setSelectionMode('auto'),
-      },
-      {
-        label: 'Manual',
-        description: 'You select each pull request.',
-        type: 'checkbox',
-        checked: snapshot.value.selectionMode === 'manual',
-        disabled: controlPending.value,
-        onUpdateChecked: () => setSelectionMode('manual'),
-      },
-    ],
+    sessionPage.value
+      ? []
+      : [
+          { label: 'Selection mode', type: 'label' },
+          {
+            label: 'Auto',
+            description: 'The service selects each pull request.',
+            type: 'checkbox',
+            checked: snapshot.value.selectionMode === 'auto',
+            disabled: controlPending.value || controlsUnavailable.value,
+            onUpdateChecked: () => setSelectionMode('auto'),
+          },
+          {
+            label: 'Manual',
+            description: 'You select each pull request.',
+            type: 'checkbox',
+            checked: snapshot.value.selectionMode === 'manual',
+            disabled: controlPending.value || controlsUnavailable.value,
+            onUpdateChecked: () => setSelectionMode('manual'),
+          },
+        ],
     [
       ...(notifications.supported.value
         ? [
@@ -114,15 +122,22 @@ const items = computed<DropdownMenuItem[][]>(() => {
       },
       { label: 'How it works', to: '/flow', icon: 'i-octicon-workflow-16' },
     ],
-    [
-      {
-        label: restartActive.value && restart.value !== undefined ? restart.value.text : 'Restart after current work',
-        icon: 'i-octicon-sync-16',
-        disabled: controlPending.value || restart.value?._tag === 'Requested' || restart.value?._tag === 'Restarting',
-        onSelect: () => requestRestart(),
-      },
-    ],
-  ]
+    sessionPage.value
+      ? []
+      : [
+          {
+            label:
+              restartActive.value && restart.value !== undefined ? restart.value.text : 'Restart after current work',
+            icon: 'i-octicon-sync-16',
+            disabled:
+              controlPending.value ||
+              controlsUnavailable.value ||
+              restart.value?._tag === 'Requested' ||
+              restart.value?._tag === 'Restarting',
+            onSelect: () => requestRestart(),
+          },
+        ],
+  ].filter((group) => group.length > 0)
 })
 </script>
 

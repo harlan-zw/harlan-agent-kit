@@ -1,10 +1,13 @@
+import type { Octokit } from 'octokit'
 import type { GitHubTokenProvider } from './github-auth.ts'
+import type { GitHubResponseCache } from './github-response-cache.ts'
 import type { PackageReleaseSource } from './package-release-controller.ts'
 import type { PackageReleaseOffer } from './package-release.ts'
 import type { GitHubRepositoryAccess, RepositoryMapping, StoredReviewForHead } from './types.ts'
 import { Buffer } from 'node:buffer'
-import { Octokit } from 'octokit'
 import { parse } from 'yaml'
+import { createAuthenticatedClient } from './github-auth.ts'
+import { createGitHubResponseCache } from './github-response-cache.ts'
 import {
   PACKAGE_RELEASE_MARKER,
   planPackageRelease,
@@ -19,31 +22,74 @@ interface Manifest {
   [key: string]: unknown
 }
 
+const releaseTitle = /^(?:feat|fix|perf)(?:\([^\n]*\))?:|^[a-z]+(?:\([^\n]*\))?!:/i
+
+function stableVersionAtLeast(value: string | undefined, required: string): boolean {
+  const current = stableVersion(value ?? '')
+  const minimum = stableVersion(required)
+  if (current === null || minimum === null) return false
+  for (const index of [0, 1, 2] as const) {
+    if (current[index] !== minimum[index]) return current[index] > minimum[index]
+  }
+  return true
+}
+
+function hasReleasePatch(file: { filename: string; patch?: string }): boolean {
+  // GitHub omits large generated lockfile patches. Classification uses commit
+  // messages, and the public API removal check needs source patches only.
+  return file.patch !== undefined || /(?:^|\/)pnpm-lock\.yaml$/.test(file.filename)
+}
+
+/** One GitHub identity: the login it writes as, and the credential that proves it. */
+export interface PackageReleaseActor {
+  login: string
+  tokens: GitHubTokenProvider
+}
+
 /** All remote writes stay in the controller, with a fresh lease and repository credential. */
 export function createPackageReleaseSource(options: {
   repository: RepositoryMapping
-  tokens: GitHubTokenProvider
-  actorLogin: string
+  /**
+   * `repository` is the credential discovery chose. `user` is Wolfstar's own.
+   * The release policy picks one. Discovery never does, so an App installed
+   * later cannot take over a release that must speak for Wolfstar.
+   */
+  actors: { repository: PackageReleaseActor; user: PackageReleaseActor }
   assertLease: () => void
   review: (number: number, sha: string) => StoredReviewForHead
   template: () => Promise<string>
   signal: AbortSignal
   now: () => Date
   fetch?: typeof globalThis.fetch
-  createClient?: (token: string) => Octokit
+  createClient?: Parameters<typeof createAuthenticatedClient>[0]['createClient']
+  responseCache?: GitHubResponseCache
 }): PackageReleaseSource {
   const { repository, signal, assertLease } = options
   const config = repository.release
   if (config === undefined) throw new Error('Package releases are disabled.')
+  const actor = config.credential._tag === 'User' ? options.actors.user : options.actors.repository
   const [owner = '', repo = ''] = repository.github.split('/')
   const scope = { owner, repo }
   const request = { signal, timeout: 30_000 }
+  const responseCache = options.responseCache ?? createGitHubResponseCache()
   const client = async (access: GitHubRepositoryAccess): Promise<Octokit> => {
     assertLease()
-    const result = await options.tokens.getToken(repository.github, access, signal)
+    const result = await actor.tokens.getToken(repository.github, access, signal)
     if (result._tag === 'Err') throw new Error(result.error.message)
-    const octokit = options.createClient?.(result.value.token) ?? new Octokit({ auth: result.value.token, request })
-    octokit.hook.before('request', () => assertLease())
+    const octokit = createAuthenticatedClient({
+      tokens: actor.tokens,
+      repository: repository.github,
+      access,
+      token: result.value.token,
+      userAgent: 'wolfstar-github-agent',
+      signal,
+      responseCache,
+      ...(options.createClient === undefined ? {} : { createClient: options.createClient }),
+    })
+    octokit.hook.before('request', (requestOptions) => {
+      assertLease()
+      requestOptions.request = { ...requestOptions.request, ...request }
+    })
     return octokit
   }
   const getRef = async (ref: string): Promise<string | null> => {
@@ -81,16 +127,48 @@ export function createPackageReleaseSource(options: {
     }
     return value as Manifest
   }
+  const releaseFiles = async (
+    files: Array<{ filename: string; patch?: string; previous_filename?: string }>,
+    before: string,
+    after: string,
+  ) =>
+    Promise.all(
+      files.map(async (file) => {
+        const patch = file.patch ?? ''
+        if (
+          file.previous_filename !== undefined ||
+          !/\.[cm]?[jt]sx?$/.test(file.filename) ||
+          !/^-(?!-).*\bexport\b/m.test(patch)
+        )
+          return { filename: file.filename, patch }
+        const read = (path: string, ref: string) =>
+          content(path, ref).catch((error: unknown) => {
+            // Removed or renamed exports need manual compatibility review.
+            if (typeof error === 'object' && error !== null && 'status' in error && error.status === 404) return null
+            throw error
+          })
+        const [oldSource, newSource] = await Promise.all([
+          read(file.previous_filename ?? file.filename, before),
+          read(file.filename, after),
+        ])
+        return {
+          filename: file.filename,
+          patch,
+          ...(oldSource === null || newSource === null ? {} : { source: { before: oldSource, after: newSource } }),
+        }
+      }),
+    )
   const registry = async (
     name: string,
   ): Promise<{
     versions: Record<string, { version: string; gitHead?: string }>
     'dist-tags': Record<string, string>
-  }> => {
+  } | null> => {
     const response = await (options.fetch ?? globalThis.fetch)(
       `https://registry.npmjs.org/${encodeURIComponent(name)}`,
       { signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
     )
+    if (response.status === 404) return null
     if (!response.ok) throw new Error(`npm could not read ${name}: HTTP ${response.status}.`)
     const value = (await response.json()) as { versions?: unknown; 'dist-tags'?: unknown }
     if (
@@ -111,7 +189,7 @@ export function createPackageReleaseSource(options: {
       ...scope,
       ref: sha,
       per_page: 100,
-      filter: defaultBranch ? 'all' : 'latest',
+      filter: defaultBranch || config.checks === 'all' ? 'all' : 'latest',
     })
     // A passing pull request check on the same SHA is not default branch CI evidence.
     const runs = defaultBranch
@@ -123,18 +201,13 @@ export function createPackageReleaseSource(options: {
           per_page: 100,
         })
       : []
-    const suites = new Set(
-      runs
-        .filter(
-          (run) =>
-            run.head_sha === sha &&
-            run.event === 'push' &&
-            run.head_branch === repository.defaultBranch &&
-            run.status === 'completed' &&
-            run.conclusion === 'success',
-        )
-        .map((run) => run.check_suite_id),
+    const pushRuns = runs.filter(
+      (run) => run.head_sha === sha && run.event === 'push' && run.head_branch === repository.defaultBranch,
     )
+    const latestRuns = pushRuns.filter(
+      (run) => !pushRuns.some((other) => other.workflow_id === run.workflow_id && other.id > run.id),
+    )
+    const suites = new Set(latestRuns.map((run) => run.check_suite_id))
     // Tag workflows can reuse check names. Keep the newest attempt within each check suite.
     const latest = checks.filter(
       (check) =>
@@ -143,10 +216,27 @@ export function createPackageReleaseSource(options: {
             other.name === check.name && other.check_suite?.id === check.check_suite?.id && other.id > check.id,
         ),
     )
+    if (config.checks === 'all') {
+      const relevant = latest.filter(
+        (check) => (!defaultBranch || suites.has(check.check_suite?.id)) && check.app?.slug === 'github-actions',
+      )
+      const pushPassed =
+        latestRuns.length > 0 && latestRuns.every((run) => run.status === 'completed' && run.conclusion === 'success')
+      return (
+        relevant.length > 0 &&
+        (!defaultBranch || pushPassed) &&
+        relevant.every((check) => check.status === 'completed' && check.conclusion === 'success')
+      )
+    }
+    const passedSuites = new Set(
+      latestRuns
+        .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+        .map((run) => run.check_suite_id),
+    )
     return config.checks.every((name) =>
       latest.some(
         (check) =>
-          (!defaultBranch || suites.has(check.check_suite?.id)) &&
+          (!defaultBranch || passedSuites.has(check.check_suite?.id)) &&
           check.name === name &&
           check.app?.slug === 'github-actions' &&
           check.status === 'completed' &&
@@ -159,20 +249,20 @@ export function createPackageReleaseSource(options: {
     const unavailable = (reason: string): PackageReleaseOffer => ({ _tag: 'Unavailable', reason })
     if (
       !repository.pullRequestReview ||
-      !repository.writablePullRequestAuthors.some((author) => author.toLowerCase() === options.actorLogin.toLowerCase())
+      !repository.writablePullRequestAuthors.some((author) => author.toLowerCase() === actor.login.toLowerCase())
     )
       return unavailable('Release preparation requires Review and a trusted publishing author.')
     const api = await client('read')
     const pull = (await api.rest.pulls.get({ ...scope, pull_number: number })).data
     if (pull.base.ref !== repository.defaultBranch || pull.draft || (!pull.merged && pull.state !== 'open'))
       return unavailable('The pull request must be open or merged into the default branch.')
-    if (!/^(?:feat|fix|perf)(?:\([^\n]*\))?:/i.test(pull.title))
-      return unavailable('This pull request does not need a package release.')
+    if (!releaseTitle.test(pull.title)) return unavailable('This pull request does not need a package release.')
     const sha = await sourceSha()
     const pkg = await manifest(config.manifest, sha)
     if (pkg.private || typeof pkg.name !== 'string' || !/^(?:@[\w.-]+\/)?[\w.-]+$/.test(pkg.name))
       return unavailable('The configured package is not a public npm package.')
     const npm = await registry(pkg.name)
+    if (npm === null) return unavailable('The package has no published stable release.')
     const version = npm['dist-tags'].latest
     if (version === undefined || stableVersion(version) === null)
       return unavailable('The package has no stable latest release.')
@@ -180,7 +270,12 @@ export function createPackageReleaseSource(options: {
     const previousSha = await getRef(`tags/${tag}`)
     if (previousSha === null) return unavailable('The published version has no matching Git tag.')
     const range = (await api.rest.repos.compareCommits({ ...scope, base: tag, head: sha })).data
-    const workflow: unknown = parse(await content(`.github/workflows/${config.workflow}`, sha))
+    const workflowText = await content(`.github/workflows/${config.workflow}`, sha).catch((error: unknown) => {
+      if (typeof error === 'object' && error !== null && 'status' in error && error.status === 404) return null
+      throw error
+    })
+    if (workflowText === null) return unavailable('The release workflow is missing from the default branch.')
+    const workflow: unknown = parse(workflowText)
     const triggers = typeof workflow === 'object' && workflow !== null && 'on' in workflow ? workflow.on : null
     if (typeof triggers !== 'object' || triggers === null || !('push' in triggers))
       return unavailable('The release workflow must publish from a tag push.')
@@ -203,14 +298,14 @@ export function createPackageReleaseSource(options: {
       currentVersion: pkg.version,
       packageName: pkg.name,
       commits: range.commits.map((commit) => commit.commit.message),
-      files: (range.files ?? []).map((file) => ({ filename: file.filename, patch: file.patch ?? '' })),
+      files: await releaseFiles(range.files ?? [], tag, sha),
       complete:
         ['ahead', 'identical'].includes(range.status) &&
         range.total_commits === range.commits.length &&
         range.commits.length < 250 &&
         range.files !== undefined &&
         range.files.length < 300 &&
-        range.files.every((file) => file.patch !== undefined),
+        range.files.every(hasReleasePatch),
     }
     if (!pull.merged) {
       const [commits, files] = await Promise.all([
@@ -234,14 +329,14 @@ export function createPackageReleaseSource(options: {
       return planPackageReleaseBeforeMerge({
         ...common,
         commits: [...common.commits, ...commits.map((commit) => commit.commit.message)],
-        files: [...common.files, ...files.map((file) => ({ filename: file.filename, patch: file.patch ?? '' }))],
+        files: [...common.files, ...(await releaseFiles(files, pull.base.sha, pull.head.sha))],
         complete:
           common.complete &&
           commits.length === pull.commits &&
           commits.length < 250 &&
           files.length === pull.changed_files &&
           files.length < 300 &&
-          files.every((file) => file.patch !== undefined),
+          files.every(hasReleasePatch),
       })
     }
     return planPackageRelease({
@@ -274,7 +369,7 @@ export function createPackageReleaseSource(options: {
         : [stored]
     const existing = comments.find(
       (comment) =>
-        comment.user?.login.toLowerCase() === options.actorLogin.toLowerCase() &&
+        comment.user?.login.toLowerCase() === actor.login.toLowerCase() &&
         comment.issue_url.endsWith(`/issues/${number}`) &&
         comment.body?.startsWith(PACKAGE_RELEASE_MARKER),
     )
@@ -299,11 +394,7 @@ export function createPackageReleaseSource(options: {
         base: repository.defaultBranch,
         per_page: 100,
       })
-      numbers.push(
-        ...open
-          .filter((pull) => !pull.draft && /^(?:feat|fix|perf)(?:\([^\n]*\))?:/i.test(pull.title))
-          .map((pull) => pull.number),
-      )
+      numbers.push(...open.filter((pull) => !pull.draft && releaseTitle.test(pull.title)).map((pull) => pull.number))
       for await (const response of api.paginate.iterator(api.rest.pulls.list, {
         ...scope,
         state: 'closed',
@@ -314,8 +405,7 @@ export function createPackageReleaseSource(options: {
       })) {
         for (const pull of response.data) {
           if (Date.parse(pull.updated_at) < cutoff) return numbers
-          if (pull.merged_at !== null && /^(?:feat|fix|perf)(?:\([^\n]*\))?:/i.test(pull.title))
-            numbers.push(pull.number)
+          if (pull.merged_at !== null && releaseTitle.test(pull.title)) numbers.push(pull.number)
         }
       }
       return numbers
@@ -328,12 +418,8 @@ export function createPackageReleaseSource(options: {
       const current = await manifest(config.manifest, plan.sourceSha)
       const tag = `${config.tagPrefix}${plan.version}`
       if (current.version === plan.version) return { _tag: 'Publishing', tag, sha: plan.sourceSha }
-      if (
-        !repository.writablePullRequestAuthors.some(
-          (author) => author.toLowerCase() === options.actorLogin.toLowerCase(),
-        )
-      )
-        return blocked('Add the GitHub App author to writable_pr_authors before enabling release preparation.')
+      if (!repository.writablePullRequestAuthors.some((author) => author.toLowerCase() === actor.login.toLowerCase()))
+        return blocked(`Add ${actor.login} to writable_pr_authors before enabling release preparation.`)
       const files = await Promise.all(
         config.versionFiles.map(async (path) => {
           const value = await manifest(path, plan.sourceSha)
@@ -393,7 +479,7 @@ export function createPackageReleaseSource(options: {
         .replace(/^- \[ \] 🧹 Chore$/m, '- [x] 🧹 Chore')
         .replace(/^> 🤖 AI disclosure:.*$/gm, '')
         .trimEnd()
-      const body = `${template}\n\n${description}\n\n> 🤖 AI disclosure: [Wolfstar Agent Kit](https://github.com/wolfstar-project/wolfstar-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).`
+      const body = `${template}\n\n${description}\n\n> 🤖 AI disclosure: [Wolfstar Agent Kit](https://github.com/wolfstar-project/wolfstar-agent-kit) modified this description. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).`
       const writer = await client('item_write')
       const existing = (
         await writer.rest.pulls.list({
@@ -487,15 +573,18 @@ export function createPackageReleaseSource(options: {
       const run = runs[0]
       if (run === undefined || run.status !== 'completed') return null
       if (run.conclusion !== 'success')
-        throw new Error(`Release workflow failed: ${run.html_url}. Re-run that workflow for the same version.`)
+        return blocked(`Release workflow failed: ${run.html_url}. Review that workflow before requesting recovery.`)
       for (const path of config.versionFiles.filter((path) => path.endsWith('package.json'))) {
         const pkg = await manifest(path, sha)
         if (pkg.private) continue
         if (typeof pkg.name !== 'string') throw new Error('A public release package has no npm name.')
         const npm = await registry(pkg.name)
+        // A later release can move latest before this receipt reconciles.
+        // Verify the pinned version without moving any npm tag backwards.
         if (
+          npm === null ||
           npm.versions[record.plan.version]?.version !== record.plan.version ||
-          npm['dist-tags'].latest !== record.plan.version
+          !stableVersionAtLeast(npm['dist-tags'].latest, record.plan.version)
         )
           return null
       }

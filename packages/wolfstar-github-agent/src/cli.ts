@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 import type { ControlClient } from './control-client.ts'
 import type { Result } from './result.ts'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
 import { jev } from 'advocaat'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
+import { checkAgentWorker } from './agent-sandbox.ts'
 import { createClassificationSource } from './classification.ts'
 import { forwardLeadingOptions } from './cli-leading-options.ts'
 import { invokesSubCommand } from './cli-subcommand.ts'
 import { loadClassificationToken, loadConfig } from './config.ts'
 import { createControlClient } from './control-client.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
+import { parseIncidentResolutionRequest } from './incident-resolution.ts'
+import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
 import { err } from './result.ts'
 import { describePreflightIssues, loadServiceInputs } from './service-preflight.ts'
@@ -63,6 +66,10 @@ type ControlCommandError =
   | { _tag: 'InvalidTaskId'; message: string }
   | { _tag: 'InvalidEventLimit'; message: string }
   | { _tag: 'InvalidStream'; message: string }
+  | { _tag: 'InvalidIncidentResolution'; message: string }
+  | { _tag: 'InvalidReviewTarget'; message: string }
+  | { _tag: 'InvalidIssueTarget'; message: string }
+  | { _tag: 'InvalidWatchTarget'; message: string }
   | { _tag: 'InvalidBaseUrl'; message: string }
 
 const workflowEventStreams = [
@@ -78,6 +85,7 @@ const workflowEventStreams = [
   'candidate_issue',
   'routine_report',
   'provider_circuit',
+  'incident',
 ] as const
 
 async function loadControlClient(
@@ -141,11 +149,11 @@ async function runControl<ErrorValue>(
 }
 
 function taskId(value: string): { _tag: 'Ok'; value: string } | { _tag: 'Err'; error: ControlCommandError } {
-  return /^[a-f\d]{64}$/.test(value)
+  return /^(?:logged-finding:)?[a-f\d]{64}$/.test(value)
     ? { _tag: 'Ok', value }
     : {
         _tag: 'Err',
-        error: { _tag: 'InvalidTaskId', message: 'The Task ID must contain 64 lowercase hexadecimal characters.' },
+        error: { _tag: 'InvalidTaskId', message: 'Set a 64-character Task ID or logged-finding Task ID.' },
       }
 }
 
@@ -188,6 +196,108 @@ const controlCommand = defineCommand({
     description: 'Read and control one running Wolfstar GitHub Agent service.',
   },
   subCommands: {
+    reviews: defineCommand({
+      meta: { name: 'reviews', description: 'Read Review runs, findings, and gates for one pull request.' },
+      args: {
+        ...controlConnectionArguments,
+        repository: { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
+        number: { type: 'string', description: 'Pull request number.', required: true },
+        head: { type: 'string', description: 'Optional full head SHA.' },
+      },
+      async run({ args }) {
+        const target = parsePullRequestWatchTarget({ repository: args.repository, number: Number(args.number) })
+        if (target._tag === 'Err' || (args.head !== undefined && !/^[a-f\d]{40}$/.test(args.head))) {
+          writeJson(
+            {
+              _tag: 'InvalidReviewTarget',
+              message: target._tag === 'Err' ? target.error : 'Set head to one full head SHA.',
+            } satisfies ControlCommandError,
+            process.stderr,
+          )
+          process.exitCode = 1
+          return
+        }
+        await runControl(args, (client) =>
+          client.reviews({ ...target.value, ...(args.head === undefined ? {} : { head: args.head }) }),
+        )
+      },
+    }),
+    'watch-pr': defineCommand({
+      meta: { name: 'watch-pr', description: 'Watch one pull request through Service events, without polling GitHub.' },
+      args: {
+        ...controlConnectionArguments,
+        repository: { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
+        number: { type: 'string', description: 'Pull request number.', required: true },
+        until: {
+          type: 'string',
+          description: 'Stop at attention, review readiness, or merge: attention, review, merged.',
+          default: 'attention',
+        },
+        'timeout-seconds': { type: 'string', description: 'Optional watch duration from 1 to 86400 seconds.' },
+      },
+      async run({ args }) {
+        const target = parsePullRequestWatchTarget({ repository: args.repository, number: Number(args.number) })
+        const until = args.until
+        const timeoutSeconds = args['timeout-seconds'] === undefined ? undefined : Number(args['timeout-seconds'])
+        if (target._tag === 'Err' || (until !== 'attention' && until !== 'review' && until !== 'merged')) {
+          writeJson(
+            {
+              _tag: 'InvalidWatchTarget',
+              message: target._tag === 'Err' ? target.error : 'Set until to attention, review, or merged.',
+            } satisfies ControlCommandError,
+            process.stderr,
+          )
+          process.exitCode = 1
+          return
+        }
+        if (
+          timeoutSeconds !== undefined &&
+          (!Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86_400)
+        ) {
+          writeJson(
+            {
+              _tag: 'InvalidWatchTarget',
+              message: 'Set timeout-seconds from 1 to 86400.',
+            } satisfies ControlCommandError,
+            process.stderr,
+          )
+          process.exitCode = 1
+          return
+        }
+        const controller = new AbortController()
+        const stop = () => controller.abort()
+        process.once('SIGINT', stop)
+        process.once('SIGTERM', stop)
+        try {
+          await runControl(args, (client) =>
+            client.watchPullRequest(target.value, {
+              signal:
+                timeoutSeconds === undefined
+                  ? controller.signal
+                  : AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutSeconds * 1_000)]),
+              until,
+              onUpdate: (state) =>
+                writeJson(
+                  {
+                    event: 'pull-request',
+                    status: state._tag,
+                    ...(state._tag === 'NotObserved'
+                      ? {}
+                      : {
+                          headSha: state.pullRequest.headSha,
+                          tasks: state.tasks.map((task) => ({ id: task.id, kind: task.kind, state: task.state._tag })),
+                        }),
+                  },
+                  process.stderr,
+                ),
+            }),
+          )
+        } finally {
+          process.removeListener('SIGINT', stop)
+          process.removeListener('SIGTERM', stop)
+        }
+      },
+    }),
     status: defineCommand({
       meta: { name: 'status', description: 'Read service health and the shared dashboard state.' },
       args: controlConnectionArguments,
@@ -198,9 +308,14 @@ const controlCommand = defineCommand({
       args: controlConnectionArguments,
       run: ({ args }) =>
         runControl(args, (client) =>
-          client
-            .tasks()
-            .then((result) => (result._tag === 'Err' ? result : { _tag: 'Ok', value: { tasks: result.value } })),
+          client.state().then((result) =>
+            result._tag === 'Err'
+              ? result
+              : {
+                  _tag: 'Ok',
+                  value: { tasks: result.value.tasks, completionTasks: result.value.completionTasks ?? [] },
+                },
+          ),
         ),
     }),
     incidents: defineCommand({
@@ -272,12 +387,130 @@ const controlCommand = defineCommand({
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, (client) => client.restart()),
     }),
+    'reload-external-watches': defineCommand({
+      meta: { name: 'reload-external-watches', description: 'Reload public issue watches without restarting agents.' },
+      args: controlConnectionArguments,
+      run: ({ args }) => runControl(args, (client) => client.reloadExternalWatches()),
+    }),
     update: defineCommand({
       meta: { name: 'update', description: 'Request Update after current work.' },
-      args: controlConnectionArguments,
-      run: ({ args }) => runControl(args, (client) => client.update()),
+      args: {
+        ...controlConnectionArguments,
+        commit: { type: 'string', description: 'Full commit SHA for this Update.' },
+      },
+      run: ({ args }) => runControl(args, (client) => client.update(args.commit)),
     }),
     cancel: controlTaskCommand({ name: 'cancel', description: 'Cancel one active or queued Task.' }),
+    'recover-repair': defineCommand({
+      meta: {
+        name: 'recover-repair',
+        description: 'Plan retained Repair recovery. Apply runs fresh checks before normal Publication.',
+      },
+      args: {
+        ...controlConnectionArguments,
+        task: { type: 'string', description: 'Selected finding Task ID.', required: true },
+        commit: { type: 'string', description: 'Exact retained commit SHA.', required: true },
+        apply: { type: 'boolean', description: 'Claim recovery and run fresh checks.', default: false },
+        'expected-base': { type: 'string', description: 'Exact base SHA from the current Plan.' },
+      },
+      run: ({ args }) =>
+        runControl(args, (client) =>
+          client.recoverRepair(
+            args.apply
+              ? { _tag: 'Apply', taskId: args.task, commitSha: args.commit, expectedBase: args['expected-base'] ?? '' }
+              : { _tag: 'Plan', taskId: args.task, commitSha: args.commit },
+          ),
+        ),
+    }),
+    'resolve-incident': defineCommand({
+      meta: { name: 'resolve-incident', description: 'Resolve one exact incident with verified evidence.' },
+      args: {
+        ...controlConnectionArguments,
+        incident: { type: 'string', description: 'Exact incident ID.' },
+        'last-seen-at': { type: 'string', description: 'Exact UTC lastSeenAt from the incident.' },
+        evidence: { type: 'string', description: 'Verified recovery evidence.' },
+      },
+      async run({ args }) {
+        const parsed = parseIncidentResolutionRequest({
+          incidentId: args.incident,
+          lastSeenAt: args['last-seen-at'],
+          evidence: args.evidence,
+        })
+        if (parsed._tag === 'Err') {
+          writeJson(
+            { _tag: 'InvalidIncidentResolution', message: parsed.error } satisfies ControlCommandError,
+            process.stderr,
+          )
+          process.exitCode = 1
+          return
+        }
+        await runControl(args, (client) => client.resolveIncident(parsed.value))
+      },
+    }),
+    'stop-review': defineCommand({
+      meta: { name: 'stop-review', description: 'Stop Service Review for one pull request head.' },
+      args: {
+        ...controlConnectionArguments,
+        repository: { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
+        number: { type: 'string', description: 'Pull request number.', required: true },
+        head: { type: 'string', description: 'Exact head commit SHA.', required: true },
+      },
+      async run({ args }) {
+        const number = Number(args.number)
+        if (
+          !/^[^/]+\/[^/]+$/.test(args.repository) ||
+          !Number.isSafeInteger(number) ||
+          number < 1 ||
+          !/^[a-f\d]{40}$/.test(args.head)
+        ) {
+          writeJson(
+            {
+              _tag: 'InvalidReviewTarget',
+              message: 'Set a valid repository, pull request number, and head commit.',
+            } satisfies ControlCommandError,
+            process.stderr,
+          )
+          process.exitCode = 1
+          return
+        }
+        await runControl(args, (client) => client.stopReview(args.repository, number, args.head))
+      },
+    }),
+    'rerun-issue': defineCommand({
+      meta: { name: 'rerun-issue', description: 'Rerun Issue triage for one current Revision.' },
+      args: {
+        ...controlConnectionArguments,
+        repository: { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
+        number: { type: 'string', description: 'Issue number.', required: true },
+        revision: { type: 'string', description: 'Exact Revision ID. Defaults to the tracked current Revision.' },
+      },
+      async run({ args }) {
+        const number = Number(args.number)
+        if (
+          !/^[^/]+\/[^/]+$/.test(args.repository) ||
+          !Number.isSafeInteger(number) ||
+          number < 1 ||
+          (args.revision !== undefined && !/^[a-f\d]{64}$/.test(args.revision))
+        ) {
+          writeJson(
+            {
+              _tag: 'InvalidIssueTarget',
+              message: 'Set a valid repository, issue number, and Revision ID.',
+            } satisfies ControlCommandError,
+            process.stderr,
+          )
+          process.exitCode = 1
+          return
+        }
+        await runControl(args, async (client) => {
+          if (args.revision !== undefined) return client.rerunIssueTriage(args.repository, number, args.revision)
+          const current = await client.issueStatus(args.repository, number)
+          return current._tag === 'Err'
+            ? current
+            : client.rerunIssueTriage(args.repository, number, current.value.revisionId)
+        })
+      },
+    }),
     'routine-run': defineCommand({
       meta: { name: 'routine-run', description: 'Open one Routine run now, ahead of its schedule.' },
       args: {
@@ -509,6 +742,7 @@ const checkConfig = defineCommand({
       process.exitCode = 1
       return
     }
+    await checkAgentWorker(process.env)
     consola.success(`This revision accepts ${configPath}.`)
   },
 })
@@ -547,6 +781,7 @@ const command = defineCommand({
 
     const { classificationToken, config, dashboardPassword, gitIdentity, githubPrivateKey, webhookSecret } =
       inputs.value
+    await checkAgentWorker(process.env)
     const classification = config.classification
     const webhook = config.webhook
 
@@ -555,7 +790,14 @@ const command = defineCommand({
       now: () => new Date(),
       onError: (error) => consola.error(error),
     })
+    const capacityCommand = process.env.WOLFSTAR_HOST_CAPACITY_COMMAND
+    if (
+      capacityCommand !== undefined &&
+      (!isAbsolute(capacityCommand) || capacityCommand.includes('\0') || capacityCommand.length > 4096)
+    )
+      throw new Error('The host capacity command requires an absolute path.')
     const service = await startAgentService({
+      ...(capacityCommand === undefined ? {} : { capacityCommand }),
       ...(classification._tag === 'Enabled' && classificationToken !== null
         ? {
             classification: {
@@ -567,6 +809,7 @@ const command = defineCommand({
           }
         : {}),
       config,
+      configPath,
       dashboardPassword,
       gitIdentity,
       githubPrivateKey,

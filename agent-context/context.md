@@ -9,6 +9,9 @@ Dyslexia + ADHD. Answer first, short lines, plain words, bullets. Need-to-knows 
 - Extremely concise; sacrifice grammar. A few short lines, never a wall.
 - Work done: state the outcome, stop. Rationale only when the outcome is surprising.
 - End a work task with confidence /100 that it works end to end. Score what you verified, not how code reads. Below 90, name the untested path in one line.
+- If you propose multiple next steps, rank them in a table: Next step | Impact /100 | Effort S/M/L | Confidence /100 | Why.
+- Impact measures the concrete benefit for this task. Effort includes implementation, verification, and rollout: S means one focused change, M means several related changes, L means broad or uncertain work.
+- Prefer high impact and low effort. Respect dependencies and required work. Give each score evidence or name the uncertainty. Recommend the first step. Ranking does not authorize extra work.
 - 5+ tool calls: print `▓▓▓░░ 57% next-step` at real progress. Orchestrating: relay `(docs: 80%, cache: done)`.
 
 ## Asking
@@ -25,6 +28,28 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 - Confirm: issues, PRs to repos I don't maintain, review comments, any reply, email, social posts.
 - An explicit "post it" in the conversation overrides that, for that message only.
 - The ban is on speaking as me. A message whose body says an agent wrote it, as `pr-triage` does, may post freely.
+
+## Email and Chrome identities
+
+- Before email work, read the `email-usage` Skill. Before browser work, read the `browser` Skill.
+- Use `contact@wolfstar.rocks` for personal work, `clients@harlanzw.com` for clients, and `agent@harlanzw.com` for explicit agent identity.
+- Default signed-in browser work to Agent. Use Clients for client work. Explicit user choices take precedence.
+- If a site requires `contact@wolfstar.rocks`, use Wolfstar's existing main profile.
+- Identity selection needs no extra approval for an authorized task. Honor Chrome's main-profile connection approval.
+- Desktop Chrome profiles: Wolfstar = `Default`, Clients = `Profile 2`, Agent = `Profile 4`.
+- Discover profiles on each host. Verify the target site's signed-in identity before private reads or changes.
+- For Clients and Agent, use their dedicated automation launchers and `wolfstar-browser connect <identity> <task-name>`.
+- For existing Wolfstar Chrome, use built-in remote debugging and `dev-browser --connect`. Do not add flags to its standard directory.
+- A named `dev-browser` session does not select a Chrome profile. Never substitute another identity's session.
+- For ordinary shared Chrome, select an existing tab in the intended profile. Verify the target site's signed-in email.
+- Reconnect after Chrome restarts. Never kill shared Chrome or stop the shared browser daemon to repair attachment.
+- Himalaya: pass `-a wolfstarzw`, `-a clients`, or `-a hotmail` explicitly. Discover other accounts with `account list`.
+- `wolfstarzw` and `clients` share the existing Zoho mailbox. Scan it once when checking all mail.
+- Use `himalaya message read --preview` to avoid marking mail as read.
+- Agent mail access is read only by default. Draft exact messages in chat or private scratch files.
+- Never send, forward, schedule, save drafts, move, delete, or flag mail without explicit authorization for that action.
+- If a read-only Hook blocks an authorized action, report it. Never bypass the Hook through another tool.
+- Never print full mail configs or credentials. Keep `harlanzw.com` receiving through Zoho unless migration is requested.
 
 ## Writing style
 
@@ -50,13 +75,38 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 ## Tools
 
+- For public GitHub reads, use `agent-gh`. It uses `wolfstar-agent-beep` and a separate API quota.
+- GitHub Agent workers route `gh` reads through the same CLI automatically.
+- The token file is `~/.config/wolfstar-agent-kit/github-public-token`. Keep it owner-only with mode `600`.
+- Use a fine-grained token with Public repositories access and no account permissions.
+- If that token fails, stop. Never switch to Wolfstar's credentials to finish a public read.
+- The public CLI refuses writes and raw GraphQL. Use `pr view`, `issue view`, or `search` for GraphQL reads.
+- Authorized controller writes and private access keep their existing GitHub credentials.
+- Before a private read, verify the repository is private. Set `WOLFSTAR_AGENT_GITHUB_PRIVATE=owner/repo` on that `gh` command.
+- Specify the matching repository with `--repo`, `-R`, a `repo view` argument, or a `repos/owner/repo` API path.
+- The exception applies to that command only. It never permits credential fallback after `agent-gh` fails.
+- Watch tracked pull requests through the Service Control API. Repeated GitHub polling spends quota.
+
 - Find and search files: ripgrep (`rg`).
-- Rename, move, or import update spanning 2+ files: `pnpm dlx @ripast/cli`. AST-aware across TS/JS/Vue SFCs; dry-run by default, `--apply` to write.
-- Browser testing and automation: `dev-browser` (`--help`). If `$DISPLAY` is empty, pass `--headless`; a headed launch exits with "launched a headed browser without having a XServer".
+- Rename, move, or import update spanning 2+ files: use `ripide` through the launcher selected by its Skill. The retired `@ripast/cli` package stays stale. Dry run is the default; use `--apply` to write.
+- Before using Ripast, read its `ripast` Skill.
+- Browser testing and automation: `dev-browser` (`--help`). Always pass `--headless` for unattended tests, even with `$DISPLAY`.
+- Launch dedicated Agent and Clients Chrome headless with `wolfstar-browser open <identity>`. Visible work requires an explicit user request.
+- `--headless` does not hide attached Chrome. Use `wolfstar-browser connect` to enforce headless connections. Never bring tabs to the foreground.
 - Wait for CI with `gh run watch <run-id>` or `gh pr checks <number> --watch`. Never poll with `sleep`; the shell tool times out first.
 - Give each task its own `dev-browser` name. Close every named page when browser work ends. Never run `dev-browser stop`; it stops shared browsers.
 - Scratch output stays out of the repository. Screenshots, one-off reports, and exploratory notes go to the session scratchpad. A one-off script goes in a gitignored `scripts/scratchpad/`; only durable, referenced tooling lives in `scripts/` proper.
 - Run a repository binary with `pnpm exec`, never `npx`. npm's npx does not read pnpm's layout as a local install, falls back to a cached copy in `~/.npm/_npx`, and fails with resolution errors that read as a broken tree. If `pnpm exec <bin>` works where `npx <bin>` fails, purge the matching `~/.npm/_npx` entry.
+
+## Cloudflare CLI: cf, v20260928
+
+`cf` is the current Cloudflare CLI. It covers the whole Cloudflare platform. Prefer it over Wrangler.
+
+- Create a project with `cf init`. Develop with `cf dev`. Deploy with `cf deploy`.
+- Manage account resources with `cf <product> …`, for example `cf d1 list`.
+- Use Wrangler only if the project already has `wrangler.jsonc`, `wrangler.json`, or `wrangler.toml`, or if I ask for it. Keep Wrangler there until I ask to migrate; then use `cf migrate`.
+- `cf` commands differ from Wrangler commands. Check `cf --help` or `cf cli search <task>`; never guess.
+- If a `cf` command fails in a project without Wrangler, do not fall back to Wrangler (`pnpm dlx wrangler` included). Offer to report the failure first.
 
 ## Worktrees
 
@@ -72,6 +122,9 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 ## TypeScript
 
+- Always use TypeScript for new code, including scripts, automation, data processing, and one-off scratch tools.
+- Never fall back to Python or JavaScript for convenience. Run TypeScript with the repository runtime or Node type stripping.
+- Use another language only when I request it or an existing tool requires it.
 - Functional, actively avoid classes.
 - No backwards compatibility unless asked. All projects are in development; delete freely.
 - No inline or dynamic imports without a strong treeshaking reason.
@@ -104,7 +157,7 @@ Latest APIs (reactive prop destructure, array event defines). Prefer vueuse over
 
 My review rate is the bottleneck, not tool limits. Agents prove their own work (passing test, screenshot, typecheck) so review covers only what needs a human.
 
-Self-hosted runners run on Hogwild. Never start `wolfstar-desktop-github-runner.service` on the desktop.
+Self-hosted runners run on Hogwild (`hogwild-github-runner.service`) and on the desktop (`wolfstar-desktop-github-runner.service`).
 
 Every change opens a pull request. A Markdown-only change is no exception.
 Never push to `origin/main` directly.
@@ -138,4 +191,6 @@ Every commit subject follows Conventional Commits: `type(scope): description`.
 
 ## Reference material
 
-Rubrics and procedures live in `~/pkg/wolfstar-agent-kit/wolfstar-agent-kit/skills/*/SKILL.md`. The plugin lists them. Read the SKILL.md that matches the work before starting it. Trust the file, not memory.
+Personal rubrics and procedures live in `~/pkg/wolfstar-agent-kit/wolfstar-agent-kit/skills/*/SKILL.md`.
+Use personal `pr` for delivery. Its Hooks and Service policy take precedence over general pull request guidance.
+Load the installed Skill that matches the task. Trust its file, not memory.

@@ -28,8 +28,12 @@ export function createGitHubResponseCache(
       const headers = Object.fromEntries(
         Object.entries(requestOptions.headers).map(([name, value]) => [name.toLowerCase(), value]),
       )
+      const accept = typeof headers.accept === 'string' ? headers.accept : ''
+      // Rendered HTML carries expiring private image grants. Never retain or revalidate that representation.
       // Caller-owned conditional and non-JSON requests keep their original semantics.
       if (
+        accept.includes('application/vnd.github.full+json') ||
+        accept.includes('application/vnd.github.html+json') ||
         requestOptions.method !== 'GET' ||
         headers['if-none-match'] !== undefined ||
         headers['if-modified-since'] !== undefined ||

@@ -12,6 +12,7 @@ export WOLFSTAR_GITHUB_AGENT_CHECKOUT="$test_root/service"
 export SERVICE_TEST_CALLS="$test_root/curl.calls"
 export SERVICE_TEST_PNPM_CALLS="$test_root/pnpm.calls"
 export SERVICE_TEST_SYNC_CALLS="$test_root/sync.calls"
+export SERVICE_TEST_GIT_CALLS="$test_root/git.calls"
 
 export WOLFSTAR_GITHUB_AGENT_NODE="$test_root/bin/node"
 
@@ -40,7 +41,9 @@ printf '%s\n' \
   > "$WOLFSTAR_GITHUB_AGENT_CHECKOUT/packages/wolfstar-github-agent/src/cli.ts"
 
 git() {
+  printf '%s\n' "$*" >> "$SERVICE_TEST_GIT_CALLS"
   case "$*" in
+    *'rev-parse --verify'*) printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
     *'status --porcelain'*) return 0 ;;
     *'log --oneline -1'*) printf '%s\n' 'deployed revision' ;;
     *'rev-parse HEAD'*) printf '%s\n' 'deployed-sha' ;;
@@ -66,6 +69,15 @@ sleep() {
 }
 
 export -f git systemctl curl sleep
+
+resolved=$(PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/service.sh" resolve-update origin/main)
+if [[ "$resolved" != aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]] || \
+  ! grep -F 'fetch' "$SERVICE_TEST_GIT_CALLS" >/dev/null || \
+  grep -E 'reset|checkout' "$SERVICE_TEST_GIT_CALLS" >/dev/null || \
+  [[ -e "$SERVICE_TEST_PNPM_CALLS" ]]; then
+  printf '%s\n' 'Resolving an Update changed the checkout or failed to fetch its target.' >&2
+  exit 1
+fi
 
 if ! status_output=$(PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/service.sh" status); then
   printf '%s\n' 'service rejected an answering degraded health endpoint' >&2

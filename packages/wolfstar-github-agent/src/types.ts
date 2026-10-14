@@ -2,11 +2,14 @@ import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PullRequestPurpose } from './baseline-repair-state.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
+import type { GitHubRateLimitHold } from './github-rate-limit.ts'
 import type { AgentSlotLimits, HostCapacity } from './host-capacity.ts'
 import type { MergeRisk, MergeRiskPolicy } from './merge-risk.ts'
-import type { PackageReleaseConfig } from './package-release.ts'
+import type { PackageReleaseConfig, PackageReleaseDefaults } from './package-release.ts'
+import type { RepairRecoveryCandidate } from './repair-recovery.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { RoutineName } from './routines/index.ts'
+import type { CompletionTask } from './take-ownership-store.ts'
 
 export type RepositoryOwnership = 'owned' | 'maintained' | 'external'
 
@@ -43,9 +46,20 @@ export type RepositoryAutoMergeScope =
    */
   | { _tag: 'Contained'; minimumConfidence: number; policy: MergeRiskPolicy; labelOverridesRisk: boolean }
 
+export interface GitHubAccount {
+  login: string
+  tokenPath: string
+  name: string
+  url: string
+  instructions: string
+}
+
 export interface RepositoryMapping {
+  /** A dedicated controller account. Its credential never falls back to the App or owner. */
+  githubAccount?: GitHubAccount
   /** Explicit authority for stable patch and minor package releases. */
-  release?: PackageReleaseConfig
+  /** Explicit undefined disables inherited release defaults. */
+  release?: PackageReleaseConfig | undefined
   github: string
   checkout: string
   enabled: boolean
@@ -158,6 +172,8 @@ export interface AgentConfig {
     host: string
     port: number
     allowedOrigin: string
+    /** Enable only after the public ingress denies desktop session routes. */
+    agentSessions?: boolean
     /** HTTPS or loopback HTTP origins allowed to frame the dashboard. Empty keeps framing denied. */
     frameAncestors: readonly string[]
   }
@@ -185,6 +201,7 @@ export interface AgentConfig {
   pollIntervalSeconds: number
   issueCutoff: string
   externalRepositories: ExternalRepositoryWatch[]
+  releaseDefaults?: PackageReleaseDefaults
   repositories: RepositoryMapping[]
 }
 
@@ -212,6 +229,9 @@ interface GitHubItemBase {
 
 export interface GitHubIssueItem extends GitHubItemBase {
   kind: 'issue'
+  /** Older Observations have no recorded closure reason. */
+  closureReason?: string | null
+  closureDetail?: string | null
   approvalLabels: PullRequestApprovalKind[]
   /** Title, body, non-controller comments, and human labels at observation time. */
   contentDigest: string
@@ -227,11 +247,15 @@ export interface GitHubIssueItem extends GitHubItemBase {
 }
 
 export interface GitHubPullRequestItem extends GitHubItemBase {
+  /** Controller-read intent. Older stored observations can omit the description. */
+  body?: string
   kind: 'pull_request'
   approvalLabels: PullRequestApprovalKind[]
   /** True when the Auto merge label lets the controller merge this pull request. */
   autoMerge: boolean
   mergedAt: string | null
+  /** Available after merge. Older journal entries may omit it. */
+  mergeCommitSha?: string | null
   draft: boolean
   baseSha: string
   /**
@@ -298,6 +322,15 @@ export type IssueApprovalResult =
       reason: { _tag: 'ItemNotFound' | 'RevisionMismatch' | 'ApprovalNotRequired' | 'NotAuthorized' | 'NothingToStart' }
     }
 
+export type IssueTriageRerunResult =
+  | { _tag: 'Queued' | 'AlreadyQueued'; taskId: string }
+  | {
+      _tag: 'Rejected'
+      reason: {
+        _tag: 'ItemNotFound' | 'RevisionMismatch' | 'Dismissed' | 'NotAuthorized' | 'ApprovalRequired' | 'WorkActive'
+      }
+    }
+
 export type ReviewRerunSource = 'dashboard' | 'github_comment' | 'repair_dispute'
 
 export type ReviewRerunRejection =
@@ -305,6 +338,7 @@ export type ReviewRerunRejection =
   | { _tag: 'RevisionMismatch' }
   | { _tag: 'AuthorNotAllowed' }
   | { _tag: 'ReviewNotReady' }
+  | { _tag: 'ReviewStopped' }
   | { _tag: 'DisputeCapReached' }
 
 export type ReviewRerunResult =
@@ -355,7 +389,22 @@ export interface ReviewGates {
 export type ReviewFinding =
   | { _tag: 'Fixed'; summary: string }
   | {
+      _tag: 'Logged'
+      impact: number
+      summary: string
+      /** Older stored Review runs may have no proposed action. */
+      nextAction?: string
+      details: {
+        fingerprint: string
+        identity: string
+        location: { path: string; line: number | null }
+        proof: string
+      }
+    }
+  | {
       _tag: 'Open'
+      /** Absent on Review runs recorded before impact scoring. */
+      impact?: number
       summary: string
       nextAction: string
       /** Current Reviews choose Repair or recommend a person Dismiss the Item. */
@@ -610,6 +659,8 @@ export interface ClaimedReviewFixTask extends ReviewFixTask {
   repositoryMapping: RepositoryMapping
   pullRequest: GitHubPullRequestItem
   rounds: { number: number; limit: number; prior: RepairRound[] }
+  pickup?: { _tag: 'LoggedFinding'; finding: Extract<ReviewFinding, { _tag: 'Logged' }> }
+  request?: { _tag: 'OwnerComment'; instruction: string; requestedBy: string; requestId: string }
 }
 
 /**
@@ -890,6 +941,7 @@ export interface RoutineReportCommand {
   repository: string
   routineName: RoutineName
   body: string
+  verdict: { severity: 'GREEN' | 'AMBER' | 'RED'; coverage: 'complete' | 'incomplete' } | null
 }
 
 /** One leased report, with the tracking issue it belongs to when one exists. */
@@ -943,6 +995,8 @@ export interface RoutineRun {
   specSha: string
   /** The Publication authority stored when this Run opened. */
   mode: RoutineMode
+  /** The choice for this scan alone. Scheduled runs use the Service selection. */
+  agentSelection?: PinnedAgentSelection
   state: RoutineRunState
   fence: number
   attempts: number
@@ -959,6 +1013,7 @@ export interface DashboardRoutineRun extends RoutineRun {
   activity: AgentActivityItem[]
   /** State of this run's tracking-issue report command, or null when none was staged. */
   reportState: RoutineReportCommandState | null
+  report: Pick<RoutineReportCommand, 'body' | 'verdict'> | null
 }
 
 /** The lifecycle of one Routine run's tracking-issue report. */
@@ -990,6 +1045,7 @@ export interface ClaimedRoutineRun {
   repositoryMapping: RepositoryMapping
   name: RoutineName
   mode: RoutineMode
+  agentSelection?: PinnedAgentSelection
   scheduledFor: string
   specSha: string
   attempts: number
@@ -1068,6 +1124,7 @@ export type WorkflowEventStream =
   | 'candidate_issue'
   | 'routine_report'
   | 'provider_circuit'
+  | 'incident'
 
 export interface WorkflowEvent {
   id: number
@@ -1090,7 +1147,14 @@ export interface WorkflowEvent {
   occurredAt: string
 }
 
-export type ProviderFailureClass = 'network' | 'overloaded' | 'stalled' | 'process_exit' | 'authentication' | 'unknown'
+export type ProviderFailureClass =
+  | 'usage_limit'
+  | 'network'
+  | 'overloaded'
+  | 'stalled'
+  | 'process_exit'
+  | 'authentication'
+  | 'unknown'
 
 export type ProviderCircuitState =
   | { _tag: 'Closed' }
@@ -1143,6 +1207,7 @@ export interface ClaimedIssueTriageCommentCommand extends IssueTriageCommentComm
 export type GitHubRepositoryAccess =
   | 'check_write'
   | 'read'
+  | 'deployments_read'
   | 'checks_read'
   | 'contents_write'
   | 'item_write'
@@ -1332,7 +1397,7 @@ export interface ReviewAgent extends ReviewRun {
 
 export type DashboardAgent = ActiveAgent | ReviewAgent
 
-export type CodexAgentModel = 'gpt-5.6-sol' | 'gpt-5.6-terra' | 'gpt-5.6-luna'
+export type CodexAgentModel = 'gpt-5.6-sol' | 'gpt-5.6-terra' | 'gpt-5.6-luna' | 'gpt-6.1-sol'
 export type ClaudeAgentModel = 'claude-fable-5' | 'claude-opus-4-8' | 'claude-sonnet-5'
 /**
  * Models opencode can answer with.
@@ -1508,6 +1573,7 @@ export type IncidentScope =
  */
 export type IncidentKind =
   | 'github_unavailable'
+  | 'resource_limit'
   | 'github_access'
   | 'rate_limit'
   | 'network'
@@ -1539,6 +1605,7 @@ export type IncidentKind =
 /** What the controller will do about an Incident without being asked. */
 export type IncidentRecovery =
   | { _tag: 'Retrying'; attempt: number; nextAttemptAt: string }
+  | { _tag: 'OnNextOperation' }
   | { _tag: 'Exhausted' }
   | { _tag: 'ActionRequired' }
 
@@ -1584,6 +1651,8 @@ export interface TriageSkip {
 }
 
 export interface DashboardSnapshot {
+  /** Controller delivery checks, exposed by the Control API. */
+  completionTasks?: CompletionTask[]
   hostTasks?: Array<{ taskId: string | null; host: 'hogwild' | 'desktop' }>
   hostCapacity?: HostCapacity
   agentSlots?: AgentSlotLimits
@@ -1613,10 +1682,16 @@ export interface DashboardSnapshot {
   agentModels: Record<AgentProviderName, readonly AgentModel[]>
   reasoningEfforts: readonly CodexReasoningEffort[]
   providerCapacities: ProviderCapacityStatus[]
+  /** OpenCode plans have separate usage windows, even within the same CLI. */
+  agentModelCapacities?: { opencodeGo: ProviderCapacity; zaiCodingPlan: ProviderCapacity }
+  /** Credential holds reported by GitHub, read directly from the request gate. */
+  githubRateLimits: GitHubRateLimitHold[]
   /** Durable Agent provider health, separate from subscription capacity. */
   providerCircuits: ProviderCircuit[]
   agents: DashboardAgent[]
   incidents: Incident[]
+  /** Failed retained Repairs available for inspection. Apply rechecks current authority. */
+  repairRecoveryCandidates: RepairRecoveryCandidate[]
   queue: QueueEntry[]
   repositories: RepositoryStatus[]
   items: ItemSummary[]
@@ -1645,7 +1720,9 @@ export type ServiceUpdateStatus =
 
 export type RestartRequestSource = 'dashboard' | 'tray' | 'helper'
 
-export type RestartOperation = { _tag: 'Restart' } | { _tag: 'Update'; targetCommit: string }
+export type RestartOperation =
+  | { _tag: 'Restart' }
+  | { _tag: 'Update'; targetCommit: string; preparation: 'Pending' | 'Ready' }
 
 interface RestartRequestBase {
   id: string

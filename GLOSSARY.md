@@ -75,7 +75,7 @@ below cover the plugin surface only.
 
 ### Skill
 
-**Is:** one `SKILL.md` under `wolfstar-agent-kit/skills/`, plus its References and templates.
+**Is:** one `SKILL.md`, plus its References and templates. Personal Skills live under `wolfstar-agent-kit/skills/`.
 **Use for:** the README Skill table, every skill directory name, prose about invoking one.
 **Never:** command, slash command, playbook, recipe, prompt, workflow, agent.
 **Casing:** `Skill` in prose, kebab-case in directory names, `SKILL.md` for the file.
@@ -218,7 +218,7 @@ the replacement when it refuses a commit.
 
 Scopes that look like drift and are not: `dashboard` names
 `packages/wolfstar-github-agent/dashboard/`, a real directory with its own design system.
-`hooks`, `skills`, `pr`, and `glossary` each name a directory too. All of them stay.
+`hooks`, `skills`, and `pr` each name a local directory. `glossary` names a Skill. These scopes remain allowed.
 
 ## Open questions
 

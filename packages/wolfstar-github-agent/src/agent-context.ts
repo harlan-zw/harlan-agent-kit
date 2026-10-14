@@ -1,7 +1,7 @@
 import type { Result } from './result.ts'
 import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join, resolve } from 'node:path'
+import { basename, delimiter, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
 import { err, ok } from './result.ts'
 
@@ -10,6 +10,7 @@ export interface AgentContextPaths {
   claudeHome: string
   instructionsPath: string
   skillsRoot: string
+  requiredSkillDirectories: readonly string[]
 }
 
 export interface AgentContext {
@@ -60,6 +61,7 @@ export function defaultAgentContextPaths(
     claudeHome,
     instructionsPath: join(codexHome, 'AGENTS.md'),
     skillsRoot: join(workingDirectory, 'wolfstar-agent-kit', 'skills'),
+    requiredSkillDirectories: [],
   }
 }
 
@@ -95,6 +97,21 @@ export async function loadAgentContext(paths: AgentContextPaths): Promise<Result
   if (failed?._tag === 'Err') return failed
   const skillDirectories = candidates.filter((_, index) => checked[index]?._tag === 'Ok' && checked[index].value)
   if (skillDirectories.length === 0) return err(`No Wolfstar skills exist under ${paths.skillsRoot}.`)
+
+  for (const directory of paths.requiredSkillDirectories) {
+    if (skillDirectories.some((existing) => basename(existing) === basename(directory)))
+      return err(`Duplicate Skill: ${directory}. Remove the personal copy before starting the Agent.`)
+    const installed = await stat(join(directory, 'SKILL.md'))
+      .then((metadata) => ok(metadata.isFile()))
+      .catch((error: unknown) =>
+        isMissingPath(error)
+          ? ok(false)
+          : err(`The required Skill could not be read: ${directory}: ${errorMessage(error)}`),
+      )
+    if (installed._tag === 'Err') return installed
+    if (!installed.value) return err(`The required Skill is missing: ${directory}.`)
+    skillDirectories.push(directory)
+  }
 
   return ok({ claudeHome: paths.claudeHome, instructionPaths: [paths.instructionsPath], skillDirectories })
 }
@@ -323,7 +340,19 @@ export function checkBudgetLines(scope: CheckScope): string {
       : ''
   return `Check budget: ${scope}
 ${fullSuiteRule}${lastResort}
-Failures outside the changed files are pre-existing. Do not stash changes to verify them.`
+Run checks serially. Use one test worker and disable file parallelism when the test runner supports it.
+Stop each dev server after its focused check. Do not leave builds or test runners running in the background.
+Run test commands without pipes. If you pipe output, set pipefail in the same shell command and report the program's exit code.
+For complete logs without pipes, use the installed agent-check.ts <plan.json>. Put its plan and logs in scratch.
+The JSON plan has prerequisites (argv arrays), check (one argv array), and logDirectory. It stops on the first nonzero exit.
+Declare prerequisites only from the repository's scripts or the failing workflow. Run only preparation needed by the focused check.
+Exception: an explicitly declared prerequisite build may generate missing inputs for that check. It does not authorize a full validation build.
+If Nuxt types or workspace exports are missing, inspect those declarations once. Do not guess package names or retry the same check.
+Use rg -n for matching lines or rg -l for paths. Never use rg -r for recursive search; -r replaces matches.
+Regenerate pnpm-lock.yaml with the pinned pnpm version. Never edit its YAML by hand.
+If matching base evidence proves the failure existed, report it as pre-existing. Otherwise, report its cause as unknown.
+A filtered diagnostic list does not prove the command passed. Report its original exit code and the verification limit.
+Do not stash changes to verify the base. Use available base CI evidence.`
 }
 
 /** The core of the unit-tests skill, inlined so no Agent reads the file each session. */
@@ -353,6 +382,23 @@ export const PULL_REQUEST_BODY_LINES = `Pull request description rules:
 - Vary the shape. Do not open every paragraph with "This". Bullets and fragments are fine.
 - No em dashes. Plain words. No "this means that" takeaway.`
 
+/**
+ * Images arrive as controller-fetched pixels on either host. Worker credentials
+ * cannot retrieve private evidence, so the controller owns that boundary.
+ */
+export const GITHUB_MEDIA_LINES = `The controller supplies image pixels and identifies their source and labels. Inspect every attached image.
+SVG evidence arrives as rendered PNG pixels. Respect Before labels as historical evidence.
+For any unavailable image, use the controller's retrieval reason and return a material documentation finding.
+Never request credentials, use gh auth token, or bypass the worker GitHub CLI to retrieve private images.
+The worker GitHub CLI supports public reads only. Use the supplied snapshot for private metadata.
+Do not retry another repository slug or credential after a private read fails.`
+
 /** Toolchain rules for every Agent turn that may run a command. */
 export const TOOLCHAIN_LINES = `Use pnpm for every package command. Never use npx.
-Never add debug output to tracked files.`
+The worker GitHub CLI supports public reads only. When a controller snapshot is supplied, use it for private repository evidence.
+If required private evidence is missing, report that limitation. Do not request credentials or bypass the worker CLI.
+Never add debug output to tracked files.
+For secret diagnostics, report only whether a value exists or whether two values match.
+Never print secret values, prefixes, cookies, tokens, signing keys, or configuration objects that contain them.
+Do not print environment files or unfiltered environment variables. Inspect only the named setting and return a boolean.
+Keep failing test evidence. Redact secret values before displaying logs or adding evidence to reports.`

@@ -61,6 +61,7 @@ describe('which triggers one machine answers', () => {
         candidates: [],
         activity: [],
         reportState: null,
+        report: null,
         createdAt: '2026-08-28T21:00:00.000Z',
         updatedAt: '2026-08-28T21:01:00.000Z',
       },

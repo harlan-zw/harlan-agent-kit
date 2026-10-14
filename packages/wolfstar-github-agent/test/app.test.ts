@@ -1,13 +1,16 @@
 import type { AgentSelection } from '../src/agent-profile.ts'
+import type { AgentAppOptions } from '../src/app.ts'
 import type { StatsRange, StatsSnapshot } from '../src/stats.ts'
 import type { RestartOperation, SelectionMode } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentApp } from '../src/app.ts'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
 import { readDesktopResponse } from '../src/desktop-protocol.ts'
-import { dashboardSnapshot } from './fixtures.ts'
+import { dashboardSnapshot, pullRequestItem } from './fixtures.ts'
 
 const allowedOrigin = 'https://wolfstar-github-agent.localhost'
 const allowedHost = new URL(allowedOrigin).host
@@ -36,6 +39,12 @@ function statsSnapshot(range: StatsRange, generatedAt: string): StatsSnapshot {
   }
 }
 const agentControls = {
+  finishUpdatePreparation: () => null,
+  resolveIncident: () => ({ _tag: 'Ok' as const, value: { _tag: 'Resolved' as const } }),
+  getOpenIssueStatus: () => null,
+  requestIssueTriageRerun: () => ({ _tag: 'Rejected' as const, reason: { _tag: 'ItemNotFound' as const } }),
+  stopReviewForHead: () => ({ _tag: 'Stopped' as const }),
+  getOpenPullRequestStatus: (_repository: string, _number: number) => null,
   getStats: (range: StatsRange, generatedAt: string) => statsSnapshot(range, generatedAt),
   listRoutines: () => [],
   openRoutineRun: () => null,
@@ -65,12 +74,21 @@ const agentControls = {
 
 afterEach(() => vi.useRealTimers())
 
-function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof createDesktopBroker>) {
+function createApp(
+  snapshot = dashboardSnapshot(),
+  desktop?: ReturnType<typeof createDesktopBroker>,
+  repairRecovery?: AgentAppOptions['repairRecovery'],
+  root = dashboardRoot,
+  overrides: Partial<AgentAppOptions['store']> = {},
+  pullRequestDiff?: AgentAppOptions['pullRequestDiff'],
+) {
   return createAgentApp({
     ...(desktop === undefined ? {} : { desktop }),
+    ...(repairRecovery === undefined ? {} : { repairRecovery }),
+    ...(pullRequestDiff === undefined ? {} : { pullRequestDiff }),
     allowedOrigin,
     dashboardPassword,
-    dashboardRoot,
+    dashboardRoot: root,
     now,
     store: {
       ...agentControls,
@@ -80,11 +98,210 @@ function createApp(snapshot = dashboardSnapshot(), desktop?: ReturnType<typeof c
       getDashboardSnapshot: () => snapshot,
       listReviewRuns: () => [],
       requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      ...overrides,
     },
   })
 }
 
 describe('dashboard HTTP app', () => {
+  it('serves only tracked exact Revision diffs and refuses public ingress', async () => {
+    const base = 'a'.repeat(40)
+    const head = 'b'.repeat(40)
+    const list = vi.fn(async () => ({ _tag: 'Err' as const, error: 'Unavailable' as const }))
+    const file = vi.fn(async () => ({ _tag: 'Err' as const, error: 'Changed' as const }))
+    const snapshot = dashboardSnapshot({
+      items: [
+        {
+          ...pullRequestItem({ baseSha: base, headSha: head }),
+          revisionId: 'revision',
+          observedAt: now().toISOString(),
+          dismissed: false,
+          approval: { _tag: 'ReviewRequired' },
+        },
+      ],
+    })
+    const app = createApp(snapshot, undefined, undefined, dashboardRoot, {}, { list, file })
+    const url = `${allowedOrigin}/api/items/pull-request-diff?repository=wolfstar-project/example&number=24&base=${base}&head=${head}`
+    const headers = { authorization, host: allowedHost }
+    const response = await app.request(url, { headers })
+    expect(await response.json()).toEqual({ _tag: 'Err', error: 'Unavailable' })
+    expect(list.mock.calls).toHaveLength(1)
+    const changed = await app.request(url.replace(head, 'c'.repeat(40)), { headers })
+    expect(await changed.json()).toEqual({ _tag: 'Err', error: 'Changed' })
+    const unmapped = await app.request(url.replace('wolfstar-project/example', 'other/private'), { headers })
+    expect(await unmapped.json()).toEqual({ _tag: 'Err', error: 'Unavailable' })
+    const publicResponse = await app.request(url, { headers: { ...headers, 'x-wolfstar-agent-ingress': 'public' } })
+    expect(publicResponse.status).toBe(403)
+    expect(list.mock.calls).toHaveLength(1)
+    expect(file.mock.calls).toHaveLength(0)
+  })
+  it('serves a direct Session page and its hydration payload through the Service', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agent-session-page-'))
+    mkdirSync(join(root, 'sessions'))
+    writeFileSync(join(root, 'index.html'), 'Board')
+    writeFileSync(join(root, 'sessions', 'index.html'), '<main>Agent conversation</main>')
+    writeFileSync(join(root, 'sessions', '_payload.json'), '{"page":"sessions"}')
+    const app = createApp(undefined, undefined, undefined, root)
+    const headers = { authorization, host: allowedHost }
+    try {
+      const page = await app.request(`${allowedOrigin}/sessions?session=saved-session`, { headers })
+      expect(page.status).toBe(200)
+      expect(await page.text()).toContain('Agent conversation')
+      const payload = await app.request(`${allowedOrigin}/sessions/_payload.json`, { headers })
+      expect(await payload.json()).toEqual({ page: 'sessions' })
+    } finally {
+      rmSync(root, { recursive: true })
+    }
+  })
+  it('keeps maintenance desktop calls working while interactive sessions are disabled', async () => {
+    const app = createApp()
+    const headers = { authorization, host: allowedHost, origin: allowedOrigin }
+    const report = await app.request(`${allowedOrigin}/api/desktop/sessions/report`, {
+      method: 'POST',
+      headers,
+      body: '{}',
+    })
+    expect(await report.json()).toEqual({ accepted: false, stops: [] })
+    const claim = await app.request(`${allowedOrigin}/api/desktop/sessions/claim`, {
+      method: 'POST',
+      headers,
+      body: '{}',
+    })
+    expect(await readDesktopResponse(claim)).toBeNull()
+    const browser = await app.request(`${allowedOrigin}/api/sessions`, { headers })
+    expect(browser.status).toBe(503)
+    expect(await browser.text()).toContain('Enable Agent sessions after installing the private ingress.')
+  })
+  it('keeps its dashboard generation while an update replaces files', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agent-dashboard-'))
+    const headers = { authorization, host: allowedHost }
+    mkdirSync(join(root, '_nuxt'))
+    writeFileSync(join(root, 'index.html'), '<script src="/_nuxt/old.js"></script>Old dashboard')
+    writeFileSync(join(root, '_nuxt/old.js'), 'old controller client')
+    const oldApp = createApp(undefined, undefined, undefined, root)
+    rmSync(join(root, '_nuxt/old.js'))
+    writeFileSync(join(root, 'index.html'), '<script src="/_nuxt/new.js"></script>New dashboard')
+    writeFileSync(join(root, '_nuxt/new.js'), 'new controller client')
+    const newApp = createApp(undefined, undefined, undefined, root)
+    // Remove the build completely, as prepare-update does before generating it.
+    rmSync(root, { recursive: true })
+
+    const oldHtml = await oldApp.request(`${allowedOrigin}/`, { headers })
+    expect(await oldHtml.text()).toContain('Old dashboard')
+    const oldAsset = await oldApp.request(`${allowedOrigin}/_nuxt/old.js`, { headers })
+    expect(oldAsset.status).toBe(200)
+    expect(await oldAsset.text()).toBe('old controller client')
+    expect((await oldApp.request(`${allowedOrigin}/_nuxt/new.js`, { headers })).status).toBe(404)
+    const newHtml = await newApp.request(`${allowedOrigin}/`, { headers })
+    expect(await newHtml.text()).toContain('New dashboard')
+    const newAsset = await newApp.request(`${allowedOrigin}/_nuxt/new.js`, { headers })
+    expect(await newAsset.text()).toBe('new controller client')
+    expect((await newApp.request(`${allowedOrigin}/_nuxt/old.js`, { headers })).status).toBe(404)
+    expect((await oldApp.request(`${allowedOrigin}/_nuxt/old.js`, { headers: { host: allowedHost } })).status).toBe(401)
+  })
+
+  it('accepts explicit Repair recovery only through authenticated control', async () => {
+    const taskId = `logged-finding:${'a'.repeat(64)}`
+    const recover = vi.fn(async () => ({ _tag: 'Ok' as const, value: { _tag: 'Accepted' as const, taskId, fence: 4 } }))
+    const app = createApp(undefined, undefined, recover)
+    const path = `http://${allowedHost}/api/tasks/recover-repair`
+    const body = JSON.stringify({ _tag: 'Apply', taskId, commitSha: 'c'.repeat(40), expectedBase: 'b'.repeat(40) })
+    const headers = { authorization, host: allowedHost, origin: allowedOrigin, 'content-type': 'application/json' }
+    const accepted = await app.request(path, { method: 'POST', headers, body })
+    expect(accepted.status).toBe(202)
+    expect(await accepted.json()).toEqual({ _tag: 'Accepted', taskId, fence: 4 })
+    const denied = await app.request(path, { method: 'POST', headers: { ...headers, authorization: '' }, body })
+    expect(denied.status).toBe(401)
+    const invalid = await app.request(path, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ _tag: 'Apply', taskId, commitSha: 'c'.repeat(40) }),
+    })
+    expect(invalid.status).toBe(400)
+    expect(recover).toHaveBeenCalledTimes(1)
+  })
+  it('stops Service Review only for the requested head', async () => {
+    const requests: unknown[] = []
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: {
+        ...agentControls,
+        stopReviewForHead: (input) => {
+          requests.push(input)
+          return { _tag: 'Stopped' }
+        },
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+    const path = `http://${allowedHost}/api/reviews/stop`
+    const body = JSON.stringify({
+      repository: 'wolfstar-project/example',
+      pullRequestNumber: 24,
+      headSha: 'a'.repeat(40),
+    })
+    const response = await app.request(path, {
+      method: 'POST',
+      headers: { authorization, host: allowedHost, origin: allowedOrigin, 'content-type': 'application/json' },
+      body,
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ _tag: 'Stopped' })
+    expect(requests).toEqual([
+      {
+        repository: 'wolfstar-project/example',
+        pullRequestNumber: 24,
+        headSha: 'a'.repeat(40),
+        at: now().toISOString(),
+      },
+    ])
+    const unauthorized = await app.request(path, {
+      method: 'POST',
+      headers: { host: allowedHost, origin: allowedOrigin, 'content-type': 'application/json' },
+      body,
+    })
+    expect(unauthorized.status).toBe(401)
+  })
+  it('reads one tracked pull request status through the authenticated API', async () => {
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      store: {
+        ...agentControls,
+        getOpenPullRequestStatus: () => ({ headSha: 'abc123', dismissed: true }),
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+    const path = `http://${allowedHost}/api/items/pull-request-status?repository=wolfstar-project%2Fexample&number=24`
+    const response = await app.request(path, { headers: { authorization, host: allowedHost } })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ headSha: 'abc123', dismissed: true })
+    const unauthorized = await app.request(path, { headers: { host: allowedHost } })
+    expect(unauthorized.status).toBe(401)
+  })
+
+  it('reports a pull request the service does not track', async () => {
+    const response = await createApp().request(
+      `http://${allowedHost}/api/items/pull-request-status?repository=wolfstar-project%2Fexample&number=999`,
+      { headers: { authorization, host: allowedHost } },
+    )
+    expect(response.status).toBe(404)
+  })
+
   it('records parsed Agent feedback', async () => {
     const recorded: unknown[] = []
     const app = createAgentApp({
@@ -148,6 +365,7 @@ describe('dashboard HTTP app', () => {
           candidates: [],
           activity: [],
           reportState: null,
+          report: null,
           createdAt: '2026-08-13T00:00:00.000Z',
           updatedAt: now().toISOString(),
         },
@@ -245,6 +463,129 @@ describe('dashboard HTTP app', () => {
     shutdown.abort()
     await reader.cancel()
     expect(new TextDecoder().decode(update?.value)).toContain('Reading the changed files.')
+  })
+
+  it('samples one Dashboard per tick and preserves each live subscriber baseline', async () => {
+    vi.useFakeTimers()
+    const shutdown = new AbortController()
+    let current = dashboardSnapshot({ status: 'ready' })
+    const getDashboardSnapshot = vi.fn(() => current)
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      eventIntervalMilliseconds: 1_000,
+      shutdownSignal: shutdown.signal,
+      store: {
+        ...agentControls,
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot,
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+    const connect = async () => {
+      const response = await app.request(`http://${allowedHost}/api/events`, {
+        headers: { authorization, host: allowedHost },
+      })
+      const reader = response.body!.getReader()
+      await reader.read()
+      return reader
+    }
+    const readState = async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
+      const frame = new TextDecoder().decode((await reader.read()).value)
+      return JSON.parse(
+        frame
+          .split('\n')
+          .find((line) => line.startsWith('data:'))!
+          .slice(5),
+      )
+    }
+    const first = await connect()
+    current = dashboardSnapshot({ status: 'starting' })
+    const second = await connect()
+    const secondRead = readState(second)
+    let secondReceived = false
+    void secondRead.then(() => {
+      secondReceived = true
+    })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect((await readState(first)).status).toBe('starting')
+    expect(secondReceived).toBe(false)
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(3)
+
+    current = dashboardSnapshot({ status: 'degraded' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await secondRead).toEqual(await readState(first))
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(4)
+    await first.cancel()
+    current = dashboardSnapshot({ status: 'ready' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect((await readState(second)).status).toBe('ready')
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(5)
+
+    await second.cancel()
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(5)
+    const reconnected = await connect()
+    current = dashboardSnapshot({ status: 'starting' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect((await readState(reconnected)).status).toBe('starting')
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(7)
+    shutdown.abort()
+    expect(await reconnected.read()).toEqual({ value: undefined, done: true })
+    await reconnected.cancel()
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(getDashboardSnapshot).toHaveBeenCalledTimes(7)
+  })
+
+  it('keeps live Dashboard updates flowing when another subscriber does not read', async () => {
+    vi.useFakeTimers()
+    const shutdown = new AbortController()
+    let current = dashboardSnapshot({ status: 'ready' })
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      eventIntervalMilliseconds: 1_000,
+      shutdownSignal: shutdown.signal,
+      store: {
+        ...agentControls,
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => current,
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+    const responses = await Promise.all(
+      [1, 2].map(() =>
+        app.request(`http://${allowedHost}/api/events`, { headers: { authorization, host: allowedHost } }),
+      ),
+    )
+    const stalled = responses[0]!.body!.getReader()
+    const active = responses[1]!.body!.getReader()
+    await active.read()
+    for (const status of ['starting', 'degraded', 'ready'] as const) {
+      current = dashboardSnapshot({ status })
+      await vi.advanceTimersByTimeAsync(1_000)
+      const frame = new TextDecoder().decode((await active.read()).value)
+      expect(
+        JSON.parse(
+          frame
+            .split('\n')
+            .find((line) => line.startsWith('data:'))!
+            .slice(5),
+        ).status,
+      ).toBe(status)
+    }
+    shutdown.abort()
+    await Promise.all([stalled.cancel(), active.cancel()])
   })
 
   it('switches the Agent provider, model, and reasoning effort', async () => {
@@ -437,6 +778,26 @@ describe('dashboard HTTP app', () => {
       },
     ])
     expect(unknown.status).toBe(404)
+
+    const agentSelection = { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'medium' }
+    const chosen = await app.request(`http://${allowedHost}/api/routines/run`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ routineId: routine.id, agentSelection }),
+    })
+    expect(chosen.status).toBe(202)
+    expect(opened.at(-1)).toMatchObject({ agentSelection })
+
+    const invalid = await app.request(`http://${allowedHost}/api/routines/run`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        routineId: routine.id,
+        agentSelection: { ...agentSelection, model: 'zai-coding-plan/glm-5.3' },
+      }),
+    })
+    expect(invalid.status).toBe(400)
+    expect(opened).toHaveLength(2)
   })
 
   it('stores a dashboard Restart request', async () => {
@@ -481,6 +842,33 @@ describe('dashboard HTTP app', () => {
     expect(response.status).toBe(202)
     expect(await response.json()).toEqual(expect.objectContaining({ _tag: 'Requested', source: 'dashboard' }))
     expect(requests).toEqual([expect.objectContaining({ source: 'dashboard', at: now().toISOString() })])
+  })
+
+  it('reloads external watches without a Restart request', async () => {
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      reloadExternalWatches: async () => ({ _tag: 'Ok', value: { repositories: 3, issues: 12 } }),
+      store: {
+        ...agentControls,
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+
+    const response = await app.request(`http://${allowedHost}/api/external-watches/reload`, {
+      method: 'POST',
+      headers: { authorization, host: allowedHost, origin: allowedOrigin },
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ repositories: 3, issues: 12 })
   })
 
   it('pins the available commit in a dashboard Update request', async () => {
@@ -535,7 +923,7 @@ describe('dashboard HTTP app', () => {
     expect(requests).toEqual([
       expect.objectContaining({
         source: 'dashboard',
-        operation: { _tag: 'Update', targetCommit: latestCommit },
+        operation: { _tag: 'Update', targetCommit: latestCommit, preparation: 'Ready' },
       }),
     ])
   })
@@ -592,9 +980,68 @@ describe('dashboard HTTP app', () => {
     expect(requests).toEqual([
       expect.objectContaining({
         source: 'helper',
-        operation: { _tag: 'Update', targetCommit: latestCommit },
+        operation: { _tag: 'Update', targetCommit: latestCommit, preparation: 'Ready' },
       }),
     ])
+  })
+
+  it('pins an explicit helper Update even before the latest-commit check finishes', async () => {
+    const targetCommit = 'c'.repeat(40)
+    const response = await createApp().request(`http://${allowedHost}/api/service/update`, {
+      method: 'POST',
+      headers: { authorization, host: allowedHost, origin: allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'helper', targetCommit }),
+    })
+    expect(response.status).toBe(202)
+    expect(await response.json()).toMatchObject({ operation: { _tag: 'Update', targetCommit } })
+  })
+
+  it.each(['main', '', 'A'.repeat(40), 123])('rejects an invalid helper Update commit: %s', async (targetCommit) => {
+    const response = await createApp().request(`http://${allowedHost}/api/service/update`, {
+      method: 'POST',
+      headers: { authorization, host: allowedHost, origin: allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'helper', targetCommit }),
+    })
+    expect(response.status).toBe(400)
+  })
+
+  it('does not give a competing helper ownership of existing preparation', async () => {
+    const targetCommit = 'c'.repeat(40)
+    const app = createApp(undefined, undefined, undefined, undefined, {
+      requestRestart: (input) => ({ _tag: 'Requested', ...input, id: 'another-helper', requestedAt: input.at }),
+    })
+    const response = await app.request(`http://${allowedHost}/api/service/update`, {
+      method: 'POST',
+      headers: { authorization, host: allowedHost, origin: allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ source: 'helper', targetCommit, preparation: 'Pending' }),
+    })
+    expect(response.status).toBe(409)
+  })
+
+  it.each(['null', '{', '{"id":"x","_tag":"Unknown"}'])('rejects malformed preparation receipts: %s', async (body) => {
+    const response = await createApp().request(`http://${allowedHost}/api/service/update/preparation`, {
+      method: 'POST',
+      headers: { authorization, host: allowedHost, origin: allowedOrigin, 'content-type': 'application/json' },
+      body,
+    })
+    expect(response.status).toBe(400)
+  })
+
+  it('passes the exact preparation receipt to the Journal', async () => {
+    const finishUpdatePreparation = vi.fn(() => null)
+    const app = createApp(undefined, undefined, undefined, undefined, { finishUpdatePreparation })
+    const response = await app.request(`http://${allowedHost}/api/service/update/preparation`, {
+      method: 'POST',
+      headers: { authorization, host: allowedHost, origin: allowedOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'update-1', _tag: 'Failed', reason: 'Sync failed.' }),
+    })
+    expect(response.status).toBe(409)
+    expect(finishUpdatePreparation).toHaveBeenCalledWith({
+      id: 'update-1',
+      _tag: 'Failed',
+      reason: 'Sync failed.',
+      at: now().toISOString(),
+    })
   })
 
   it('reports read-only health', async () => {
@@ -849,37 +1296,40 @@ describe('dashboard HTTP app', () => {
     )
   })
 
-  it('returns filtered workflow events for reliability analysis', async () => {
-    const requests: unknown[] = []
-    const app = createAgentApp({
-      allowedOrigin,
-      dashboardPassword,
-      dashboardRoot,
-      now,
-      store: {
-        ...agentControls,
-        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
-        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
-        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
-        getDashboardSnapshot: () => dashboardSnapshot(),
-        getStats: (range, generatedAt) => statsSnapshot(range, generatedAt),
-        listReviewRuns: () => [],
-        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
-        listWorkflowEvents(input) {
-          requests.push(input)
-          return []
+  it.each(['review_status', 'incident'])(
+    'returns filtered %s workflow events for reliability analysis',
+    async (stream) => {
+      const requests: unknown[] = []
+      const app = createAgentApp({
+        allowedOrigin,
+        dashboardPassword,
+        dashboardRoot,
+        now,
+        store: {
+          ...agentControls,
+          approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+          approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+          cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+          getDashboardSnapshot: () => dashboardSnapshot(),
+          getStats: (range, generatedAt) => statsSnapshot(range, generatedAt),
+          listReviewRuns: () => [],
+          requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+          listWorkflowEvents(input) {
+            requests.push(input)
+            return []
+          },
         },
-      },
-    })
+      })
 
-    const response = await app.request(`http://${allowedHost}/api/workflow-events?stream=review_status&limit=25`, {
-      headers: { authorization, host: allowedHost },
-    })
+      const response = await app.request(`http://${allowedHost}/api/workflow-events?stream=${stream}&limit=25`, {
+        headers: { authorization, host: allowedHost },
+      })
 
-    expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ events: [] })
-    expect(requests).toEqual([{ stream: 'review_status', limit: 25 }])
-  })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ events: [] })
+      expect(requests).toEqual([{ stream, limit: 25 }])
+    },
+  )
 
   it('records a local Review and repair approval for the exact Revision', async () => {
     const approvals: unknown[] = []
@@ -1031,16 +1481,20 @@ describe('dashboard HTTP app', () => {
     expect(cancellations).toEqual([{ taskId, at: now().toISOString() }])
   })
 
-  it('ejects a running agent into its interactive Codex session', async () => {
+  it.each([
+    ['codex', '018f3c70-7b79-7be9-9c26-1c94e3a33430'],
+    ['opencode', 'ses_current123'],
+    ['opencode', 'desktop:ses_current123'],
+    ['codex', 'desktop:018f3c70-7b79-7be9-9c26-1c94e3a33430'],
+  ] as const)('refuses the retired transfer endpoint for a running %s session %s', async (provider, sessionId) => {
     const taskId = 'a'.repeat(64)
-    const sessionId = '018f3c70-7b79-7be9-9c26-1c94e3a33430'
     const cancellations: unknown[] = []
     const snapshot = dashboardSnapshot({
       agents: [
         {
           _tag: 'ActiveAgent',
           id: taskId,
-          provider: 'codex',
+          provider,
           role: 'adversarial_review',
           author: 'wolfstar-project',
           session: { _tag: 'Connected', id: sessionId },
@@ -1065,7 +1519,6 @@ describe('dashboard HTTP app', () => {
       dashboardPassword,
       dashboardRoot,
       now,
-      settleTask: async () => true,
       store: {
         ...agentControls,
         approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
@@ -1091,305 +1544,7 @@ describe('dashboard HTTP app', () => {
       body: JSON.stringify({ taskId }),
     })
 
-    expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({
-      _tag: 'Ejected',
-      provider: 'codex',
-      sessionId,
-      repository: 'wolfstar-project/example',
-      itemNumber: 24,
-    })
-    expect(cancellations).toEqual([{ taskId, at: now().toISOString() }])
-  })
-
-  it('waits for the running Agent to settle before transferring its session', async () => {
-    const taskId = 'a'.repeat(64)
-    let finishSettlement!: () => void
-    const settlement = new Promise<void>((resolve) => {
-      finishSettlement = resolve
-    })
-    const cancellations: unknown[] = []
-    const snapshot = dashboardSnapshot({
-      agents: [
-        {
-          _tag: 'ActiveAgent',
-          id: taskId,
-          provider: 'opencode',
-          role: 'adversarial_review',
-          author: 'wolfstar-project',
-          session: { _tag: 'Connected', id: 'ses_abc12345' },
-          repository: 'wolfstar-project/example',
-          repositoryUrl: 'https://github.com/wolfstar-project/example',
-          subjectKind: 'pull_request',
-          itemNumber: 24,
-          title: 'Fix parser',
-          subjectUrl: 'https://github.com/wolfstar-project/example/pull/24',
-          headSha: 'abc123',
-          commitUrl: 'https://github.com/wolfstar-project/example/commit/abc123',
-          startedAt: now().toISOString(),
-          updatedAt: now().toISOString(),
-          progress: { percent: 40, label: 'Reviewing' },
-          activity: [],
-          state: { _tag: 'Working', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
-        },
-      ],
-    })
-    const app = createAgentApp({
-      allowedOrigin,
-      dashboardPassword,
-      dashboardRoot,
-      now,
-      settleTask: async () => {
-        await settlement
-        return true
-      },
-      store: {
-        ...agentControls,
-        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
-        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
-        cancelTask(input) {
-          cancellations.push(input)
-          return { _tag: 'Cancelled' }
-        },
-        getDashboardSnapshot: () => snapshot,
-        listReviewRuns: () => [],
-        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
-      },
-    })
-    let response: Response | undefined
-
-    const request = Promise.resolve(
-      app.request(`http://${allowedHost}/api/agents/eject`, {
-        method: 'POST',
-        headers: {
-          authorization: authorization,
-          'content-type': 'application/json',
-          host: allowedHost,
-          origin: allowedOrigin,
-        },
-        body: JSON.stringify({ taskId }),
-      }),
-    ).then((value) => {
-      response = value
-      return value
-    })
-    await vi.waitFor(() => expect(cancellations).toHaveLength(1))
-
-    expect(response).toBeUndefined()
-    finishSettlement()
-    expect((await request).status).toBe(200)
-  })
-
-  it('keeps the Eject request open when settlement takes more than ten seconds', async () => {
-    vi.useFakeTimers()
-    try {
-      const taskId = 'a'.repeat(64)
-      const snapshot = dashboardSnapshot({
-        agents: [
-          {
-            _tag: 'ActiveAgent',
-            id: taskId,
-            provider: 'opencode',
-            role: 'adversarial_review',
-            author: 'wolfstar-project',
-            session: { _tag: 'Connected', id: 'ses_abc12345' },
-            repository: 'wolfstar-project/example',
-            repositoryUrl: 'https://github.com/wolfstar-project/example',
-            subjectKind: 'pull_request',
-            itemNumber: 24,
-            title: 'Fix parser',
-            subjectUrl: 'https://github.com/wolfstar-project/example/pull/24',
-            headSha: 'abc123',
-            commitUrl: 'https://github.com/wolfstar-project/example/commit/abc123',
-            startedAt: now().toISOString(),
-            updatedAt: now().toISOString(),
-            progress: { percent: 40, label: 'Reviewing' },
-            activity: [],
-            state: { _tag: 'Working', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
-          },
-        ],
-      })
-      const app = createAgentApp({
-        allowedOrigin,
-        dashboardPassword,
-        dashboardRoot,
-        now,
-        settleTask: () => new Promise((resolve) => setTimeout(resolve, 11_000, true)),
-        store: {
-          ...agentControls,
-          approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
-          approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
-          cancelTask: () => ({ _tag: 'Cancelled' }),
-          getDashboardSnapshot: () => snapshot,
-          listReviewRuns: () => [],
-          requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
-        },
-      })
-      let response: Response | undefined
-
-      const request = Promise.resolve(
-        app.request(`http://${allowedHost}/api/agents/eject`, {
-          method: 'POST',
-          headers: {
-            authorization: authorization,
-            'content-type': 'application/json',
-            host: allowedHost,
-            origin: allowedOrigin,
-          },
-          body: JSON.stringify({ taskId }),
-        }),
-      ).then((value) => {
-        response = value
-        return value
-      })
-      await vi.advanceTimersByTimeAsync(10_001)
-
-      expect(response).toBeUndefined()
-      await vi.advanceTimersByTimeAsync(999)
-      expect((await request).status).toBe(200)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('returns a safe recovery path when the running Agent does not settle', async () => {
-    vi.useFakeTimers()
-    try {
-      const taskId = 'a'.repeat(64)
-      const sessionId = 'ses_abc12345'
-      const snapshot = dashboardSnapshot({
-        agents: [
-          {
-            _tag: 'ActiveAgent',
-            id: taskId,
-            provider: 'opencode',
-            role: 'adversarial_review',
-            author: 'wolfstar-project',
-            session: { _tag: 'Connected', id: sessionId },
-            repository: 'wolfstar-project/example',
-            repositoryUrl: 'https://github.com/wolfstar-project/example',
-            subjectKind: 'pull_request',
-            itemNumber: 24,
-            title: 'Fix parser',
-            subjectUrl: 'https://github.com/wolfstar-project/example/pull/24',
-            headSha: 'abc123',
-            commitUrl: 'https://github.com/wolfstar-project/example/commit/abc123',
-            startedAt: now().toISOString(),
-            updatedAt: now().toISOString(),
-            progress: { percent: 40, label: 'Reviewing' },
-            activity: [],
-            state: { _tag: 'Working', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
-          },
-        ],
-      })
-      const app = createAgentApp({
-        allowedOrigin,
-        dashboardPassword,
-        dashboardRoot,
-        now,
-        settleTask: () => new Promise(() => {}),
-        store: {
-          ...agentControls,
-          approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
-          approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
-          cancelTask: () => ({ _tag: 'Cancelled' }),
-          getDashboardSnapshot: () => snapshot,
-          listReviewRuns: () => [],
-          requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
-        },
-      })
-
-      const request = Promise.resolve(
-        app.request(`http://${allowedHost}/api/agents/eject`, {
-          method: 'POST',
-          headers: {
-            authorization: authorization,
-            'content-type': 'application/json',
-            host: allowedHost,
-            origin: allowedOrigin,
-          },
-          body: JSON.stringify({ taskId }),
-        }),
-      )
-      await vi.advanceTimersByTimeAsync(12_000)
-      const response = await request
-
-      expect(response.status).toBe(503)
-      expect(await response.json()).toEqual(
-        expect.objectContaining({
-          data: {
-            _tag: 'EjectDelayed',
-            provider: 'opencode',
-            sessionId,
-            nextAction: 'Stop Wolfstar GitHub Agent. Then resume this saved session.',
-          },
-        }),
-      )
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('rejects an invalid provider session before cancelling its Task', async () => {
-    const taskId = 'a'.repeat(64)
-    const cancellations: unknown[] = []
-    const snapshot = dashboardSnapshot({
-      agents: [
-        {
-          _tag: 'ActiveAgent',
-          id: taskId,
-          provider: 'opencode',
-          role: 'adversarial_review',
-          author: 'wolfstar-project',
-          session: { _tag: 'Connected', id: 'ses_abc12345;touch_/tmp/pwned' },
-          repository: 'wolfstar-project/example',
-          repositoryUrl: 'https://github.com/wolfstar-project/example',
-          subjectKind: 'pull_request',
-          itemNumber: 24,
-          title: 'Fix parser',
-          subjectUrl: 'https://github.com/wolfstar-project/example/pull/24',
-          headSha: 'abc123',
-          commitUrl: 'https://github.com/wolfstar-project/example/commit/abc123',
-          startedAt: now().toISOString(),
-          updatedAt: now().toISOString(),
-          progress: { percent: 40, label: 'Reviewing' },
-          activity: [],
-          state: { _tag: 'Working', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
-        },
-      ],
-    })
-    const app = createAgentApp({
-      allowedOrigin,
-      dashboardPassword,
-      dashboardRoot,
-      now,
-      settleTask: async () => true,
-      store: {
-        ...agentControls,
-        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
-        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
-        cancelTask(input) {
-          cancellations.push(input)
-          return { _tag: 'Cancelled' }
-        },
-        getDashboardSnapshot: () => snapshot,
-        listReviewRuns: () => [],
-        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
-      },
-    })
-
-    const response = await app.request(`http://${allowedHost}/api/agents/eject`, {
-      method: 'POST',
-      headers: {
-        authorization: authorization,
-        'content-type': 'application/json',
-        host: allowedHost,
-        origin: allowedOrigin,
-      },
-      body: JSON.stringify({ taskId }),
-    })
-
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(404)
     expect(cancellations).toEqual([])
   })
 
@@ -1478,7 +1633,7 @@ describe('dashboard HTTP app', () => {
 
 describe('agent slot HTTP boundary', () => {
   const limits = { hogwildCeiling: 4, hogwildMemoryMaximum: 2, desktopCeiling: 2, memoryPerAgentGiB: 8 }
-  const capacity = { localActive: 0, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopConnected: true }
+  const capacity = { localActive: 0, localMaximum: 2, desktopActive: 0, desktopMaximum: 1, desktopAvailable: true }
 
   function createSlotApp() {
     const written: Array<{ host: string; slots: number }> = []
@@ -1565,8 +1720,9 @@ describe('desktop capacity HTTP boundary', () => {
     await expect(readDesktopResponse(response)).resolves.toBeNull()
   })
 
-  it('saves a valid memory setting and refuses malformed input', async () => {
+  it('rejects Agent writes to the root-owned budget without changing reported capacity', async () => {
     const desktop = createDesktopBroker({ now: () => now().getTime() })
+    desktop.report({ protocol: 12, memoryGiB: 16, reservedGiB: 8, agents: 1, actions: 0 })
     const app = createApp(dashboardSnapshot(), desktop)
     const send = (body: unknown) =>
       app.request(`http://${allowedHost}/api/desktop/capacity`, {
@@ -1574,9 +1730,75 @@ describe('desktop capacity HTTP boundary', () => {
         headers: { authorization, host: allowedHost, origin: allowedOrigin, 'content-type': 'application/json' },
         body: JSON.stringify(body),
       })
-    expect((await send({ memoryGiB: 20 })).status).toBe(200)
-    expect(desktop.read().requestedMemoryGiB).toBe(20)
-    expect((await send({ memoryGiB: 0 })).status).toBe(400)
-    expect(desktop.read().requestedMemoryGiB).toBe(20)
+    const refused = await send({ memoryGiB: 20 })
+    expect(refused.status).toBe(403)
+    expect(await refused.text()).toContain('Change Desktop memory in the host configuration.')
+    expect((await send({ memoryGiB: 0 })).status).toBe(403)
+    expect(desktop.read().report?.memoryGiB).toBe(16)
   })
+})
+
+describe('authenticated incident resolution', () => {
+  it.each(['Resolved', 'AlreadyResolved', 'NotFound', 'Changed', 'TaskActive'] as const)(
+    'returns %s without accepting invalid or unauthenticated evidence',
+    async (_tag) => {
+      const resolveIncident = vi.fn<AgentAppOptions['store']['resolveIncident']>(() =>
+        _tag === 'Resolved' || _tag === 'AlreadyResolved'
+          ? { _tag: 'Ok', value: { _tag } }
+          : { _tag: 'Err', error: { _tag } },
+      )
+      const app = createAgentApp({
+        allowedOrigin,
+        dashboardPassword,
+        dashboardRoot,
+        now,
+        store: {
+          ...agentControls,
+          resolveIncident,
+          approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+          approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+          cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+          getDashboardSnapshot: () => dashboardSnapshot(),
+          listReviewRuns: () => [],
+          requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+        },
+      })
+      const path = `http://${allowedHost}/api/incidents/resolve`
+      const input = {
+        incidentId: 'a'.repeat(64),
+        lastSeenAt: '2026-10-12T00:00:00.000Z',
+        evidence: 'Verified merged fix.',
+      }
+      const headers = { authorization, host: allowedHost, origin: allowedOrigin, 'content-type': 'application/json' }
+      const response = await app.request(path, { method: 'POST', headers, body: JSON.stringify(input) })
+      expect(response.status).toBe(
+        _tag === 'Resolved' || _tag === 'AlreadyResolved' ? 200 : _tag === 'NotFound' ? 404 : 409,
+      )
+      expect(resolveIncident).toHaveBeenCalledWith({ ...input, at: now().toISOString() })
+      expect(
+        (
+          await app.request(path, {
+            method: 'POST',
+            headers: { ...headers, authorization: '' },
+            body: JSON.stringify(input),
+          })
+        ).status,
+      ).toBe(401)
+      expect(
+        (
+          await app.request(path, {
+            method: 'POST',
+            headers: { ...headers, origin: 'https://other.example' },
+            body: JSON.stringify(input),
+          })
+        ).status,
+      ).toBe(403)
+      expect((await app.request(path, { method: 'POST', headers, body: '{' })).status).toBe(400)
+      expect(
+        (await app.request(path, { method: 'POST', headers, body: JSON.stringify({ ...input, evidence: ' ' }) }))
+          .status,
+      ).toBe(400)
+      expect(resolveIncident).toHaveBeenCalledTimes(1)
+    },
+  )
 })

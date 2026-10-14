@@ -55,6 +55,11 @@ export interface HogwildStatus {
   updatedAt: number
 }
 
+export function hogwildStatusFresh(updatedAt: number, now: Date): boolean {
+  const age = now.getTime() - updatedAt
+  return Number.isFinite(updatedAt) && updatedAt > 0 && age >= -30_000 && age < 30_000
+}
+
 export type ParseHogwildStatusResult = { _tag: 'Ok'; value: HogwildStatus } | { _tag: 'Err'; reason: string }
 
 type HogwildServiceName = HogwildStatus['services'][number]['name']

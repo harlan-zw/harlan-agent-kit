@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "name": "wolfstar-agent-kit",
+  "agents": ["codex", "claude-code", "opencode"],
+  "mode": "symlink",
+  "skills": {
+    "ripast": {
+      "source": "github:wolfstar-project/ripide/packages/cli/skills/ripast#commit:8dfbcce6c44b123e35cdf3440828f78a52d6248e"
+    },
+    "skilld": {
+      "source": "github:skilld-dev/skilld/skills/skilld#commit:395000f01f4bbe3a681c7dd29fdfced00d609b52"
+    },
+    "im-not-a-fly": {
+      "source": "github:wolfstar-project/brundlefly/skills/im-not-a-fly#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+    },
+    "technical-guide": {
+      "source": "github:wolfstar-project/brundlefly/skills/technical-guide#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+    },
+    "im-a-fly": {
+      "source": "github:wolfstar-project/brundlefly/skills/im-a-fly#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+    },
+    "pull-request-summary": {
+      "source": "github:wolfstar-project/brundlefly/skills/pull-request-summary#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+    },
+    "glossary": {
+      "source": "github:wolfstar-project/brundlefly/skills/glossary#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+    },
+    "copywriting": {
+      "source": "github:wolfstar-project/brundlefly/skills/copywriting#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+    }
+  },
+  "requires": {
+    "pr": ["pull-request-summary", "im-not-a-fly"],
+    "adversarial-review": ["im-not-a-fly"],
+    "content-refresh": ["technical-guide", "im-not-a-fly", "glossary"],
+    "tweet": ["im-not-a-fly"],
+    "release-notes": ["im-not-a-fly"],
+    "improve-ts-pkg-architecture": ["glossary"],
+    "nuxt-improve-codebase-architecture": ["glossary"],
+    "nuxt-frontend-design": ["copywriting"]
+  }
+}

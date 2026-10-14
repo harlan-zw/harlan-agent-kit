@@ -1,3 +1,4 @@
+import type { ReviewCheckRunOutcome } from '../src/review-check-run.ts'
 import type { JournalStore, StoppedReview } from '../src/store.ts'
 import { describe, expect, it } from 'vitest'
 import { err, ok } from '../src/result.ts'
@@ -49,12 +50,39 @@ function snapshot(overrides: Parameters<typeof pullRequestItem>[0] = {}) {
     comments: [],
     priorAutomatedReview: { _tag: 'None' as const },
     pullRequest: pullRequestItem({ headSha: 'abc123', ...overrides }),
+    findingDiscussions: [],
     requiredChecks: { _tag: 'None' as const },
     reviews: [],
   })
 }
 
 describe('stoppedReviewComment', () => {
+  it.each(['Merged', 'Repair'] as const)('keeps optional advice when closing %s work', (mode) => {
+    const body = stoppedReviewComment(
+      {
+        ...stopped,
+        taskKind: mode === 'Repair' ? 'review_fix' : 'adversarial_review',
+        findings: [
+          {
+            _tag: 'Logged',
+            impact: 40,
+            summary: 'The fallback needs more detail.',
+            nextAction: 'Name the missing setting.',
+            details: {
+              fingerprint: 'f'.repeat(64),
+              identity: 'fallback',
+              location: { path: 'src/config.ts', line: 1 },
+              proof: 'The fallback omits the setting.',
+            },
+          },
+        ],
+      },
+      '2026-08-15T04:00:00.000Z',
+      mode === 'Merged' ? { _tag: 'Merged' } : { _tag: 'Stopped' },
+    )
+    expect(body).toContain('Optional follow-up: Name the missing setting.')
+  })
+
   it('replaces the progress claim with a final state and its reason', () => {
     const body = stoppedReviewComment(stopped, '2026-08-15T04:00:00.000Z')
 
@@ -72,6 +100,31 @@ describe('stoppedReviewComment', () => {
     expect(body).toContain('Second exact finding. Next: Fix the second boundary.')
     expect(body).toContain('The Repair Agent found an unsafe scope.')
     expect(body).not.toContain('### 🤖 REPAIR')
+  })
+
+  it('keeps the reviewed code link after merge', () => {
+    const body = stoppedReviewComment(
+      {
+        ...stopped,
+        findings: [
+          {
+            _tag: 'Open',
+            summary: 'The queue can drop events.',
+            nextAction: 'Preserve pending events.',
+            details: {
+              fingerprint: 'queue-events',
+              location: { path: 'src/queue.ts', line: 42 },
+              proof: 'The queue resets before sending.',
+              regressionTest: 'Send two events.',
+            },
+          },
+        ],
+      },
+      '2026-08-15T04:00:00.000Z',
+      { _tag: 'Merged' },
+    )
+
+    expect(body).toContain('[View code](https://github.com/wolfstar-project/example/blob/abc123/src/queue.ts#L42)')
   })
 })
 
@@ -106,6 +159,7 @@ describe('publishStoppedReviews', () => {
             ),
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -140,6 +194,7 @@ describe('publishStoppedReviews', () => {
           },
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -172,6 +227,7 @@ describe('publishStoppedReviews', () => {
           editReviewStatus: () => Promise.resolve(ok({ _tag: 'Foreign', reason })),
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -214,6 +270,7 @@ describe('publishStoppedReviews', () => {
             ),
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -263,6 +320,7 @@ describe('publishStoppedReviews', () => {
           },
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -301,6 +359,7 @@ describe('publishStoppedReviews', () => {
           },
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           recordReviewClosure: (input) => {
@@ -342,6 +401,7 @@ describe('publishStoppedReviews', () => {
           editReviewStatus: () => Promise.resolve(ok({ _tag: 'Missing' })),
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           recordReviewClosure: () => {
@@ -393,6 +453,7 @@ describe('publishStoppedReviews', () => {
           },
         },
         now: () => new Date(clock),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -419,6 +480,7 @@ describe('publishStoppedReviews', () => {
           editReviewStatus: () => Promise.reject(new Error('The budget was spent before any row ran.')),
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -446,6 +508,7 @@ describe('publishStoppedReviews', () => {
           editReviewStatus: () => Promise.resolve(ok({ _tag: 'Missing' })),
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -495,6 +558,7 @@ describe('publishStoppedReviews', () => {
           },
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -528,6 +592,7 @@ describe('publishStoppedReviews', () => {
           },
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -542,8 +607,9 @@ describe('publishStoppedReviews', () => {
     expect(checkRuns).toEqual([{ headSha: 'abc123', conclusion: 'neutral' }])
   })
 
-  it('keeps a stopped review eligible when the check run write fails', async () => {
+  it('settles a stopped review when the installation refuses its check run', async () => {
     let recorded = 0
+    const reports: ReviewCheckRunOutcome[] = []
     const { results } = await publishStoppedReviews(
       {
         github: {
@@ -557,9 +623,11 @@ describe('publishStoppedReviews', () => {
                 url: 'https://github.com/wolfstar-project/example/pull/24#issuecomment-42',
               }),
             ),
-          upsertReviewCheckRun: () => Promise.resolve(err('GitHub refused the check run write.')),
+          upsertReviewCheckRun: () =>
+            Promise.resolve(err('The permissions requested are not granted to this installation.')),
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: (_repository, outcome) => reports.push(outcome),
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -574,8 +642,9 @@ describe('publishStoppedReviews', () => {
       new AbortController().signal,
     )
 
-    expect(results[0]?._tag).toBe('Err')
-    expect(recorded).toBe(0)
+    expect(results[0]?._tag).toBe('Ok')
+    expect(recorded).toBe(1)
+    expect(reports.map((report) => report._tag)).toEqual(['Refused'])
   })
 
   it('retires a stale publication after another Task replaces its comment', async () => {
@@ -588,6 +657,7 @@ describe('publishStoppedReviews', () => {
           editReviewStatus: () => Promise.resolve(ok({ _tag: 'Changed' })),
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,
@@ -619,6 +689,7 @@ describe('publishStoppedReviews', () => {
           },
         },
         now: () => new Date('2026-08-15T04:00:00.000Z'),
+        reportCheckRun: () => undefined,
         repositories: [repositoryMapping()],
         store: {
           ...reviewClosureStore,

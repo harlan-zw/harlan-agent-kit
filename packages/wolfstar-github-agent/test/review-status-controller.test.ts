@@ -1,4 +1,4 @@
-import type { ReviewCheckRunUpdate } from '../src/review-check-run.ts'
+import type { ReviewCheckRunOutcome, ReviewCheckRunUpdate } from '../src/review-check-run.ts'
 import type { ClaimedReviewFixTask } from '../src/types.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { agentPhase } from '../src/agent-progress.ts'
@@ -7,7 +7,7 @@ import { createReviewStatusController } from '../src/review-status-controller.ts
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 describe('review status controller', () => {
-  function harness(commentControls = false) {
+  function harness(commentControls = false, denySnapshot = false, identityChange?: 'closed' | 'head' | 'base') {
     const repository = repositoryMapping()
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const task: ClaimedReviewFixTask = {
@@ -26,24 +26,39 @@ describe('review status controller', () => {
     let body = ''
     let stagedBody = ''
     const controller = createReviewStatusController({
-      commentControls,
+      commentControls: () => commentControls,
       github: {
         readExistingReviewLabel: () => {
           throw new Error('Unexpected existing review.')
         },
-        getPullRequestReviewSnapshot: () =>
+        getPullRequestStatusIdentity: () =>
           Promise.resolve(
             ok({
-              baseChecks: { _tag: 'Available', checks: [] },
-              body: '',
-              checks: { _tag: 'Available', checks: [] },
-              comments: [],
-              priorAutomatedReview: { _tag: 'None' },
-              pullRequest,
-              requiredChecks: { _tag: 'None' as const },
-              reviews: [],
+              state: identityChange === 'closed' ? ('closed' as const) : pullRequest.state,
+              headSha: identityChange === 'head' ? 'changed-head' : pullRequest.headSha,
+              ...(identityChange === 'base'
+                ? { baseRef: 'changed-base' }
+                : pullRequest.baseRef === undefined
+                  ? {}
+                  : { baseRef: pullRequest.baseRef }),
             }),
           ),
+        getPullRequestReviewSnapshot: () =>
+          denySnapshot
+            ? Promise.reject(new Error('Progress read the full Review snapshot.'))
+            : Promise.resolve(
+                ok({
+                  baseChecks: { _tag: 'Available', checks: [] },
+                  body: '',
+                  checks: { _tag: 'Available', checks: [] },
+                  comments: [],
+                  priorAutomatedReview: { _tag: 'None' },
+                  pullRequest,
+                  findingDiscussions: [],
+                  requiredChecks: { _tag: 'None' as const },
+                  reviews: [],
+                }),
+              ),
         upsertReviewStatus: (_repository, _number, _commentId, value, replacePriorReview) => {
           body = value
           replaced = replacePriorReview
@@ -84,9 +99,7 @@ describe('review status controller', () => {
         deferReviewStatus: () => {
           throw new Error('Unexpected defer.')
         },
-        supersedeReviewStatus: () => {
-          throw new Error('Unexpected supersede.')
-        },
+        supersedeReviewStatus: () => true,
       },
       workerId: 'status-worker',
     })
@@ -107,6 +120,33 @@ describe('review status controller', () => {
 
     expect(read().replaced).toBe(true)
     expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 35% · Git worktree ready')
+  })
+
+  it('publishes progress after reading only the pull request identity', async () => {
+    const { controller, task } = harness(false, true)
+
+    expect(
+      await controller.publishRepair(
+        task,
+        agentPhase('WorktreeReady', 'Git worktree ready'),
+        new AbortController().signal,
+      ),
+    ).toEqual(ok(undefined))
+  })
+
+  it.each(['closed', 'head', 'base'] as const)('refuses progress when the pull request changed: %s', async (change) => {
+    const { controller, task, read } = harness(false, true, change)
+
+    expect(
+      (
+        await controller.publishRepair(
+          task,
+          agentPhase('WorktreeReady', 'Git worktree ready'),
+          new AbortController().signal,
+        )
+      )._tag,
+    ).toBe('Err')
+    expect(read().body).toBe('')
   })
 
   it.each([false, true])('offers a checkbox only with webhook controls enabled: %s', async (enabled) => {
@@ -167,8 +207,10 @@ describe('review status check run sink', () => {
       (_repository: unknown, _headSha: string, _update: ReviewCheckRunUpdate, _signal: AbortSignal) =>
         failing === undefined ? Promise.resolve(ok(undefined)) : failing(),
     )
+    const reports: ReviewCheckRunOutcome[] = []
     const checkRuns = {
-      upsertReviewCheckRun: (...args: Parameters<typeof upsert>) => upsert(...args),
+      publisher: { upsertReviewCheckRun: (...args: Parameters<typeof upsert>) => upsert(...args) },
+      report: (_repository: string, outcome: ReviewCheckRunOutcome) => reports.push(outcome),
     }
     const controller = createReviewStatusController({
       checkRuns,
@@ -176,6 +218,14 @@ describe('review status check run sink', () => {
         readExistingReviewLabel: () => {
           throw new Error('Unexpected existing review.')
         },
+        getPullRequestStatusIdentity: () =>
+          Promise.resolve(
+            ok({
+              state: pullRequest.state,
+              headSha: pullRequest.headSha,
+              ...(pullRequest.baseRef === undefined ? {} : { baseRef: pullRequest.baseRef }),
+            }),
+          ),
         getPullRequestReviewSnapshot: () =>
           Promise.resolve(
             ok({
@@ -185,6 +235,7 @@ describe('review status check run sink', () => {
               comments: [],
               priorAutomatedReview: { _tag: 'None' },
               pullRequest,
+              findingDiscussions: [],
               requiredChecks: { _tag: 'None' as const },
               reviews: [],
             }),
@@ -234,7 +285,7 @@ describe('review status check run sink', () => {
       workerId: 'status-worker',
     })
 
-    return { controller, deferred, upsert, task }
+    return { controller, deferred, reports, upsert, task }
   }
 
   it('publishes the check run beside the comment, on the reviewed head', async () => {
@@ -258,15 +309,16 @@ describe('review status check run sink', () => {
     expect(deferred).toEqual([])
   })
 
-  it('defers the publication when the check run write fails', async () => {
-    const { controller, deferred, task } = harness(() => Promise.resolve(err('GitHub refused the check run write.')))
+  it('publishes and reports when the check run write fails', async () => {
+    const { controller, deferred, reports, task } = harness(() => Promise.resolve(err('GitHub timed out.')))
     const result = await controller.publishRepair(
       task,
       agentPhase('WorktreeReady', 'Git worktree ready'),
       new AbortController().signal,
     )
 
-    expect(result).toEqual(err('GitHub refused the check run write.'))
-    expect(deferred).toEqual(['GitHub refused the check run write.'])
+    expect(result).toEqual(ok(undefined))
+    expect(deferred).toEqual([])
+    expect(reports).toEqual([{ _tag: 'Failed', message: 'GitHub timed out.' }])
   })
 })

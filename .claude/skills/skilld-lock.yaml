@@ -1,8 +1,0 @@
-skills:
-  improve-codebase-architecture:
-    repo: mattpocock/skills
-    source: github
-    syncedAt: 2026-05-09
-    generator: external
-    path: skills/engineering/improve-codebase-architecture
-    ref: main

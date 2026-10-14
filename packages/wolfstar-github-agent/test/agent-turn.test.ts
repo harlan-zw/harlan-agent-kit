@@ -1,11 +1,12 @@
 import type { AgentPhase } from '../src/agent-progress.ts'
-import type { AgentEvent, AgentProvider } from '../src/agent-provider.ts'
+import type { AgentEvent, AgentProvider, AgentTurnRequest } from '../src/agent-provider.ts'
 import type { Result } from '../src/result.ts'
+import type { AgentRole } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { agentPhase } from '../src/agent-progress.ts'
 import { runAgentTurn, runParsedAgentTurn, runRepairedAgentTurn } from '../src/agent-turn.ts'
-import { mayRetryFailure } from '../src/failure.ts'
+import { classifyFailure, mayRetryFailure } from '../src/failure.ts'
 import { err, ok } from '../src/result.ts'
 import { agentRuntime, turnEvents } from './fixtures.ts'
 
@@ -81,6 +82,48 @@ function malformedAware(provider: AgentProvider) {
   }
 }
 
+describe('factory production authority', () => {
+  it.each<AgentRole>([
+    'conflict_resolution',
+    'review_fix',
+    'baseline_repair',
+    'adversarial_review',
+    'issue_triage',
+    'issue_work',
+    'batch_plan',
+    'routine_scan',
+    'routine_fix',
+  ])('delivers the production boundary to %s', async (role) => {
+    const capture = { prompts: [] as string[] }
+    await runAgentTurn(
+      options(replies([{ outcome: 'resolved' }], capture)),
+      { ...input, role },
+      new AbortController().signal,
+    )
+
+    expect(capture.prompts[0]).toContain('Production access is read only for this Agent turn.')
+    expect(capture.prompts[0]).toContain('A read-only POST query is allowed.')
+    expect(capture.prompts[0]).toContain(
+      'Local fixture writes are allowed inside this worktree, in task-owned scratch files, and on loopback services.',
+    )
+    expect(capture.prompts[0]).toContain(
+      'Only a separate controller operation can exercise approved production write authority.',
+    )
+  })
+
+  it('preserves the production boundary during result correction', async () => {
+    const capture = { prompts: [] as string[] }
+    await runParsedAgentTurn(
+      options(replies([{ outcome: 'invalid' }, { outcome: 'resolved' }], capture)),
+      input,
+      new AbortController().signal,
+    )
+
+    expect(capture.prompts[1]).toContain('Production access is read only for this Agent turn.')
+    expect(capture.prompts[1]).toContain('Use no tool.')
+  })
+})
+
 describe('runParsedAgentTurn', () => {
   it('reads JSON inside a Markdown code fence without a repair turn', async () => {
     const capture = { prompts: [] as string[] }
@@ -104,6 +147,57 @@ describe('runParsedAgentTurn', () => {
       ok({ value: { outcome: 'resolved' }, sessionId: 'session-1', usage: { _tag: 'Unavailable' } }),
     )
     expect(capture.prompts).toHaveLength(1)
+  })
+
+  it('reads one JSON result after brace-bearing prose and a code fence', async () => {
+    const capture = { prompts: [] as string[] }
+    const provider = rawReplies(
+      ['The cast to { fonts?: ... } is safe.\n```json\n{"outcome":"resolved","note":"a \\"quoted\\" {brace}"}\n```'],
+      capture,
+    )
+
+    const result = await runParsedAgentTurn(malformedAware(provider), input, new AbortController().signal)
+
+    expect(result).toEqual(
+      ok({ value: { outcome: 'resolved' }, sessionId: 'session-1', usage: { _tag: 'Unavailable' } }),
+    )
+    expect(capture.prompts).toHaveLength(1)
+  })
+
+  it('rejects ambiguous JSON results instead of selecting one', async () => {
+    const capture = { prompts: [] as string[] }
+    const provider = rawReplies(['{"outcome":"wrong"}\n{"outcome":"resolved"}', 'still prose'], capture)
+
+    const result = await runParsedAgentTurn(malformedAware(provider), input, new AbortController().signal)
+
+    expect(result).toEqual(err('The agent returned malformed conflict resolution JSON.'))
+    expect(capture.prompts).toHaveLength(2)
+  })
+
+  it('corrects a fresh result in its exact completed session without repeating the work prompt', async () => {
+    const requests: AgentTurnRequest[] = []
+    const provider: AgentProvider = {
+      name: 'opencode',
+      runTurn: (request) => {
+        requests.push(request)
+        return (async function* () {
+          yield* turnEvents({ outcome: requests.length === 1 ? 'nearly' : 'resolved' })
+        })()
+      },
+    }
+
+    const result = await runParsedAgentTurn(
+      { ...options(provider), store: { getWorkerSession: () => 'other-session', saveWorkerSession: () => undefined } },
+      { ...input, freshSession: true },
+      new AbortController().signal,
+    )
+
+    expect(result).toEqual(
+      ok({ value: { outcome: 'resolved' }, sessionId: 'session-1', usage: { _tag: 'Unavailable' } }),
+    )
+    expect(requests.map((request) => request.sessionId)).toEqual([null, 'session-1'])
+    expect(requests[1]?.prompt).toContain('Use no tool.')
+    expect(requests[1]?.prompt).not.toContain('Resolve the conflict.')
   })
 
   it('still rejects an answer with no JSON object with the parser error', async () => {
@@ -139,6 +233,28 @@ describe('runParsedAgentTurn', () => {
 
     expect(result).toEqual(err('The agent returned an invalid conflict resolution result.'))
     expect(capture.prompts).toHaveLength(2)
+  })
+
+  it('stops retrying a result the agent repeats after the named correction', async () => {
+    const capture = { prompts: [] as string[] }
+    const provider = replies([{ outcome: 'nearly' }, { outcome: 'nearly' }], capture)
+
+    const result = await runParsedAgentTurn(options(provider), input, new AbortController().signal)
+
+    expect(result._tag).toBe('Err')
+    const reason = result._tag === 'Err' ? result.error : ''
+    expect(reason).toContain('The agent returned an invalid conflict resolution result.')
+    expect(classifyFailure({ message: reason })).toEqual({ _tag: 'Permanent', kind: 'agent_result' })
+    expect(mayRetryFailure({ message: reason })).toBe(false)
+  })
+
+  it('keeps retrying a result the correction changed but did not fix', async () => {
+    const capture = { prompts: [] as string[] }
+    const provider = replies([{ outcome: 'nearly' }, { outcome: 'still wrong' }], capture)
+
+    const result = await runParsedAgentTurn(options(provider), input, new AbortController().signal)
+
+    expect(result._tag === 'Err' && mayRetryFailure({ message: result.error })).toBe(true)
   })
 
   it('never asks twice for a result that already fits', async () => {

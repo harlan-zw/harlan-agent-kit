@@ -1,4 +1,5 @@
 import type { AgentProviderName } from '../../../src/agent-provider.ts'
+import type { GitHubRateLimitHold } from '../../../src/github-rate-limit.ts'
 import type { CronExpression } from '../../../src/routine-schedule.ts'
 import type {
   AgentStartState,
@@ -13,6 +14,7 @@ import type {
 } from '../../../src/types.ts'
 import { hasSpendableCapacity } from '../../../src/capacity.ts'
 import { matchesCron, parseCron, wallClockParts } from '../../../src/routine-schedule.ts'
+import { isSnapshotStale } from './dashboard.ts'
 
 /**
  * Pure presentation for the System chip, the System slideover, and the banners.
@@ -36,9 +38,13 @@ export interface SystemChipCounts {
 
 export type SystemChipState =
   | { _tag: 'Loading' }
+  | { _tag: 'Unavailable'; lastUpdatedAt: string }
   | ({ _tag: 'Normal' } & SystemChipCounts)
   | ({ _tag: 'CannotStart'; reason: string } & SystemChipCounts)
+  | ({ _tag: 'DesktopUpdateRequired' } & SystemChipCounts)
+  | ({ _tag: 'GitHubRateLimited'; incidents: number } & SystemChipCounts)
   | ({ _tag: 'Incident'; incidents: number } & SystemChipCounts)
+  | ({ _tag: 'RepairRecovery'; repairs: number } & SystemChipCounts)
 
 const cannotStartReasons: Record<Exclude<AgentStartState['_tag'], 'Available'>, string> = {
   Paused: 'Paused',
@@ -67,8 +73,9 @@ function manualHoldsQueue(snapshot: DashboardSnapshot): boolean {
  * A placeholder snapshot has no `generatedAt`, so it reports nothing: a reason
  * the controller never sent must not render as amber.
  */
-export function systemChipState(snapshot: DashboardSnapshot): SystemChipState {
+export function systemChipState(snapshot: DashboardSnapshot, now: Date): SystemChipState {
   if (snapshot.generatedAt.length === 0) return { _tag: 'Loading' }
+  if (isSnapshotStale(snapshot.generatedAt, now)) return { _tag: 'Unavailable', lastUpdatedAt: snapshot.generatedAt }
   const active = snapshot.agents.filter((agent) => agent._tag === 'ActiveAgent').length
   // Agent slots are a control, so the chip counts the hosts rather than the
   // configured ceiling the schedulers are sized for.
@@ -76,9 +83,17 @@ export function systemChipState(snapshot: DashboardSnapshot): SystemChipState {
   const maximum =
     capacity === undefined
       ? snapshot.agentProfile.maximumActiveAgents
-      : capacity.localMaximum + (capacity.desktopConnected ? capacity.desktopMaximum : 0)
+      : capacity.localMaximum + (capacity.desktopAvailable ? capacity.desktopMaximum : 0)
   const counts: SystemChipCounts = { active, maximum, live: active > 0 }
+  if (snapshot.githubRateLimits.length > 0)
+    return {
+      _tag: 'GitHubRateLimited',
+      incidents: snapshot.incidents.filter((incident) => incident.operation !== 'github_rate_limit').length,
+      ...counts,
+    }
   if (snapshot.incidents.length > 0) return { _tag: 'Incident', incidents: snapshot.incidents.length, ...counts }
+  if (snapshot.repairRecoveryCandidates.length > 0)
+    return { _tag: 'RepairRecovery', repairs: snapshot.repairRecoveryCandidates.length, ...counts }
   if (snapshot.agentStart._tag !== 'Available') {
     const reason =
       snapshot.agentStart._tag === 'RestartRequested' && snapshot.restartRequest?.operation._tag === 'Update'
@@ -87,7 +102,59 @@ export function systemChipState(snapshot: DashboardSnapshot): SystemChipState {
     return { _tag: 'CannotStart', reason, ...counts }
   }
   if (manualHoldsQueue(snapshot)) return { _tag: 'CannotStart', reason: 'Manual', ...counts }
+  if (snapshot.desktop?.connected && !snapshot.desktop.current) return { _tag: 'DesktopUpdateRequired', ...counts }
   return { _tag: 'Normal', ...counts }
+}
+
+/** Connection alone cannot confirm that the desktop can accept this Service's work. */
+export function desktopPresentation(desktop: DashboardSnapshot['desktop'], fresh: boolean) {
+  if (!fresh)
+    return {
+      label: 'Unavailable',
+      tone: 'warning' as const,
+      detail: 'Reload Service data before changing desktop settings.',
+      report: null,
+    }
+  if (!desktop?.connected || desktop.report === null)
+    return {
+      label: 'Disconnected',
+      tone: 'warning' as const,
+      detail: 'Desktop takes no new work until it reconnects.',
+      report: null,
+    }
+  if (!desktop.current)
+    return {
+      label: 'Update required',
+      tone: 'warning' as const,
+      detail: 'Desktop takes no new work until its protocol matches the Service.',
+      report: null,
+    }
+  return {
+    label: desktop.report.agents + desktop.report.actions > 0 ? 'Helping Hogwild' : 'Idle',
+    tone: 'neutral' as const,
+    detail: `Connected. Protocol ${desktop.report.protocol} matches the Service.`,
+    report: desktop.report,
+  }
+}
+
+export function retryDeadline(at: string, now: Date): string {
+  const seconds = Math.max(0, Math.ceil((Date.parse(at) - now.getTime()) / 1000))
+  if (!Number.isFinite(seconds) || seconds === 0) return 'Retry due'
+  return `Retry in ${Math.floor(seconds / 60)}m ${seconds % 60}s`
+}
+
+export function githubRateLimitRow(hold: GitHubRateLimitHold, now: Date) {
+  const seconds = Math.max(0, Math.ceil((Date.parse(hold.retryAt) - now.getTime()) / 1000))
+  const minutes = Math.floor(seconds / 60)
+  return {
+    owner: hold.quota._tag === 'Installation' ? hold.quota.owner : hold.quota.login,
+    credential: hold.quota._tag === 'Installation' ? 'GitHub App installation' : 'GitHub account',
+    limit: hold.kind === 'Primary' ? 'Primary rate limit' : 'Secondary rate limit',
+    retryAt: hold.retryAt,
+    deadline: new Date(hold.retryAt).toUTCString(),
+    retry: seconds === 0 ? 'Retry due' : `Retry in ${minutes > 0 ? `${minutes}m ` : ''}${seconds % 60}s`,
+    detail: seconds === 0 ? 'The next GitHub request checks recovery.' : 'Requests using this credential are paused.',
+  }
 }
 
 export interface CapacityRow {
@@ -326,7 +393,9 @@ export function batchRow(batch: Batch): BatchRow {
 export type FaviconTone = 'error' | 'warning' | 'success'
 
 export function faviconTone(snapshot: DashboardSnapshot, decisions: number): FaviconTone {
-  const blocking = snapshot.incidents.some((incident) => incident.recovery._tag !== 'Retrying')
+  const blocking = snapshot.incidents.some(
+    (incident) => incident.recovery._tag === 'Exhausted' || incident.recovery._tag === 'ActionRequired',
+  )
   const unhealthy = snapshot.repositories.some((repository) => repository.lastError !== null)
   if (blocking || unhealthy) return 'error'
   return decisions > 0 || snapshot.incidents.length > 0 ? 'warning' : 'success'

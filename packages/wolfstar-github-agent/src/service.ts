@@ -1,14 +1,19 @@
 import type { ConsolaInstance } from 'consola'
 import type { Server } from 'srvx'
 import type { AgentProviderName } from './agent-provider.ts'
+import type { ReloadableExternalWatchController } from './external-watch.ts'
 import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
+import type { GitHubQuota } from './github-rate-limit.ts'
 import type { GitHubUserAccess } from './github-user-access.ts'
 import type { AgentSlotLimits } from './host-capacity.ts'
 import type { AgentSlotCounts } from './host-memory.ts'
 import type { Result } from './result.ts'
+import type { ReviewCheckRunReport } from './review-check-run.ts'
+import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
 import type { ServiceUpdateSource } from './service-update.ts'
+import type { SessionController } from './session-controller.ts'
 import type { JournalStore } from './store.ts'
 import type {
   ClaimedAgentTask,
@@ -25,28 +30,33 @@ import { jev } from 'advocaat'
 import { createAgentActivityLog } from './agent-activity.ts'
 import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } from './agent-context.ts'
 import { agentLabelItem } from './agent-label.ts'
-import { createAgentPermitPool } from './agent-permit-pool.ts'
+import { createAgentPermitPool, createRoutinePermitPools } from './agent-permit-pool.ts'
 import { AGENT_PROVIDER_NAMES, agentProfile, createAgentRuntimeSource } from './agent-profile.ts'
-import { DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
 import { createAgentApp } from './app.ts'
 import { createApprovalController } from './approval-controller.ts'
 import { createAutoMergeController } from './auto-merge-controller.ts'
+import { retireObsoleteBaselineRepairs } from './baseline-repair-sweep.ts'
 import { createBaselineRepairWorker, inspectWorkspaceFiles } from './baseline-repair-worker.ts'
 import { createBatchScheduler } from './batch-scheduler.ts'
 import { createBatchWorker } from './batch-worker.ts'
 import { createCandidateIssueController } from './candidate-issue-controller.ts'
-import { agentStartBlockedReason, resolveAgentStartState } from './capacity.ts'
+import { agentStartBlockedReason, hasSpendableCapacity, resolveAgentStartState } from './capacity.ts'
 import { createClaudeProvider } from './claude-provider.ts'
 import { createClassificationSource } from './classification.ts'
-import { createCodexProvider } from './codex-provider.ts'
-import { validateRepositoryMappings } from './config.ts'
+import { loadConfig, validateRepositoryMappings } from './config.ts'
 import { createConflictWorker } from './conflict-worker.ts'
 import { createDesktopBroker } from './desktop-broker.ts'
 import { DESKTOP_AGENT_SLOT_CEILING } from './desktop-protocol.ts'
-import { createExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
+import { createReloadableExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
 import { classifyFailure, isSubjectMovedReason } from './failure.ts'
+import { createGitHubAccountTokenProvider, readGitHubAccountLogin, readGitHubAccountToken } from './github-account.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
+import { createGitHubMediaSource } from './github-media.ts'
+import { createGitHubPullRequestDiff } from './github-pull-request-diff.ts'
+import { createGitHubRateLimitGate, readAfterGitHubRateLimit } from './github-rate-limit.ts'
+import { createGitHubRequestCounts } from './github-request-counts.ts'
+import { createGitHubResponseCache } from './github-response-cache.ts'
 import { createGitHubUserAccess } from './github-user-access.ts'
 import { createUserAssetUploader } from './github-user-assets.ts'
 import {
@@ -63,15 +73,17 @@ import {
 } from './github.ts'
 import { createHostAgentPool } from './host-capacity.ts'
 import { agentSlotLine, agentSlotSizing, localAgentMemoryBytes } from './host-memory.ts'
+import { setHostSlotPolicy } from './host-slot-policy.ts'
 import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
-import { createOpencodeProvider } from './opencode-provider.ts'
+import { publishLoggedFindingPickups } from './logged-finding-sweep.ts'
+import { createMaintenanceCheckCommand, createMaintenanceScopeProvider } from './maintenance-scope.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
 import { createPackageReleaseSource } from './package-release-github.ts'
-import { runPassStep } from './poll-pass.ts'
-import { createPoller } from './poller.ts'
+import { runPassStep, runPassStepResult } from './poll-pass.ts'
+import { createIndependentPollers, createPoller } from './poller.ts'
 import { chooseAgentProvider, createProviderCapacitySource } from './provider-capacity.ts'
 import { createCircuitProtectedProvider } from './provider-circuit.ts'
 import { createPublicationScheduler } from './publication-scheduler.ts'
@@ -80,6 +92,7 @@ import { createPullRequestStatusController } from './pull-request-status-control
 import { createPullRequestTriageController } from './pull-request-triage.ts'
 import { publishQueuePositions } from './queue-position-sweep.ts'
 import { reconcileAllRepositories } from './reconcile.ts'
+import { createRepairRecoveryController } from './repair-recovery.ts'
 import {
   buildRepositoryMappings,
   discoverGitHubAppRepositories,
@@ -87,33 +100,46 @@ import {
   discoverUserRepositories,
   installedWithoutCheckout,
 } from './repository-discovery.ts'
+import { canReleasePackages } from './repository-policy.ts'
 import { createRestartController, restartAllowsTaskClaims } from './restart-request.ts'
 import { err, ok } from './result.ts'
+import { applyReviewApproval } from './review-approval.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 import { createReviewFixWorker } from './review-fix-worker.ts'
 import { refreshReviewGates } from './review-gate-sweep.ts'
+import { createReviewProofAuthority } from './review-proof-controller.ts'
 import { syncOpenReviewRerunRequests } from './review-rerun-controller.ts'
 import { createReviewStatusController } from './review-status-controller.ts'
 import { createReviewStatusScheduler } from './review-status-scheduler.ts'
 import { publishStoppedReviews } from './review-stop-sweep.ts'
-import { planRoutineRuns, syncRepositoryRoutines } from './routine-controller.ts'
+import { planRoutineRuns, retireUnmappedRoutines, syncRepositoryRoutines } from './routine-controller.ts'
 import { createRoutineReportController } from './routine-report-controller.ts'
 import { ROUTINE_SPEC_PATH } from './routine-spec.ts'
 import { createRoutineScanWorker } from './routine-worker.ts'
+import { resolveRecoveredRunnerIncidents } from './runner-lost-recovery.ts'
 import { clearAbandonedRunningLabels } from './running-label-sweep.ts'
 import { startAgentServer } from './server.ts'
+import { createSessionController } from './session-controller.ts'
 import { openJournalStore } from './store.ts'
+import { runCompletionTask } from './take-ownership-completion.ts'
+import { createCompletionSource } from './take-ownership-github.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
+import { createControllerTerminals } from './terminal-controller.ts'
+import { createWebhookControls } from './webhook-controls.ts'
 import { createReconcileHint, createWebhookApp } from './webhook.ts'
+import { createRoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
 import { createWorkerTaskScheduler } from './worker-task-scheduler.ts'
 import {
   agentWorktreeLeaseKey,
+  confirmRepairRecoveryRegression,
   createAgentWorkspaceManager,
   createBaselineRepairWorktreeManager,
   createConflictWorktreeManager,
   createGitPublicationRemote,
   createIssueWorktreeManager,
+  createRepairRecoveryWorktreeManager,
   createReviewFixWorktreeManager,
+  runRepairRecoveryChecks,
   sweepAgentWorktrees,
 } from './worktree.ts'
 
@@ -125,12 +151,15 @@ export interface RunningAgentService {
 
 export interface StartAgentServiceOptions {
   config: ValidatedAgentConfig
+  /** The running service reads only external watches and the issue cutoff from this file. */
+  configPath?: string
   /** Required when the configuration enables the webhook listener. */
   webhookSecret?: string
   /** Required when the configuration enables the classification service. */
   classification?: { accountId: string; apiToken: string; gatewayId?: string; model: string }
   userAccess?: GitHubUserAccess
   dashboardPassword: string
+  capacityCommand?: string
   githubPrivateKey: string
   gitIdentity: GitIdentity
   logger: Pick<ConsolaInstance, 'error' | 'info'>
@@ -187,11 +216,66 @@ function recordServiceIncident(
     severity: failure._tag === 'Transient' ? 'warning' : 'error',
     operation,
     message,
-    recovery:
-      failure._tag === 'Transient' ? { _tag: 'Retrying', attempt: 0, nextAttemptAt: at } : { _tag: 'ActionRequired' },
+    recovery: failure._tag === 'Transient' ? { _tag: 'OnNextOperation' } : { _tag: 'ActionRequired' },
     at,
   })
 }
+
+/**
+ * Files every Review check run write against its repository.
+ *
+ * A refusal names the missing permission and asks a person to grant it. Any
+ * other failure warns, and the next publication on the head writes the check
+ * run again. A write that lands clears both.
+ */
+export function createReviewCheckRunReport(
+  store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents'>,
+  now: () => Date,
+): ReviewCheckRunReport {
+  return (repository, outcome) => {
+    const at = now().toISOString()
+    const scope: IncidentScope = { _tag: 'Repository', repository }
+    if (outcome._tag === 'Written') {
+      store.resolveIncidents(scope, at, REVIEW_CHECK_RUN_OPERATION)
+      return
+    }
+    if (outcome._tag === 'Failed') {
+      recordServiceIncident(store, at, REVIEW_CHECK_RUN_OPERATION, outcome.message, scope)
+      return
+    }
+    store.recordIncident({
+      scope,
+      kind: 'installation_access',
+      severity: 'error',
+      operation: REVIEW_CHECK_RUN_OPERATION,
+      message: `The GitHub App installation does not grant ${outcome.permission}. The Review check run is not written. Grant ${outcome.permission} to the App installation.`,
+      recovery: { _tag: 'ActionRequired' },
+      at,
+    })
+  }
+}
+
+const REVIEW_CHECK_RUN_OPERATION = 'review_check_run'
+
+/**
+ * Files every inline finding sync against its repository.
+ *
+ * A failure warns, and the next terminal publication on the pull request
+ * syncs again. A sync that lands clears it.
+ */
+export function createReviewFindingThreadsReport(
+  store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents'>,
+  now: () => Date,
+): ReviewFindingThreadMirror['report'] {
+  return (repository, outcome) => {
+    const at = now().toISOString()
+    const scope: IncidentScope = { _tag: 'Repository', repository }
+    if (outcome._tag === 'Written') store.resolveIncidents(scope, at, REVIEW_FINDING_THREADS_OPERATION)
+    else recordServiceIncident(store, at, REVIEW_FINDING_THREADS_OPERATION, outcome.message, scope)
+  }
+}
+
+const REVIEW_FINDING_THREADS_OPERATION = 'review_finding_threads'
 
 /**
  * Records one poll pass's failures, unless the pass was aborted.
@@ -211,6 +295,23 @@ export function createPassIncidentRecorder(options: {
     if (options.signal.aborted) return
     replaceServiceIncidents(options.store, options.now().toISOString(), operation, messages)
   }
+}
+
+/** Reconciles release repositories and records the pass's failures. */
+export async function reconcilePackageReleasePass(options: {
+  repositories: readonly RepositoryMapping[]
+  mayPublish: (repository: string) => boolean
+  reconcile: (repository: RepositoryMapping) => Promise<void>
+  guarded: <T>(step: string, run: () => T | Promise<T>) => Promise<Result<T, string>>
+  record: (operation: string, messages: readonly string[]) => void
+}): Promise<void> {
+  const failures: string[] = []
+  for (const repository of options.repositories) {
+    if (!options.mayPublish(repository.github)) continue
+    const result = await options.guarded('Package releases', () => options.reconcile(repository))
+    if (result._tag === 'Err') failures.push(`${repository.github}: ${result.error}`)
+  }
+  options.record('package_release', failures)
 }
 
 /** Replaces one controller pass's Service Incidents with its current failures. */
@@ -263,9 +364,67 @@ export async function resolveUserLogin(
 export function canClaimRoutineRun(
   canClaim: boolean,
   triggers: readonly ServiceTrigger[],
-  store: Pick<JournalStore, 'hasPriorityAgentTask'>,
+  store: Pick<JournalStore, 'hasPriorityAgentTask' | 'hasOverdueRoutineRun'>,
+  now: string,
+  mayUseGitHub = true,
 ): boolean {
-  return canClaim && (!triggers.includes('github') || !store.hasPriorityAgentTask())
+  return (
+    mayUseGitHub &&
+    canClaim &&
+    (!triggers.includes('github') || store.hasOverdueRoutineRun(now) || !store.hasPriorityAgentTask(now))
+  )
+}
+
+export interface ExternalWatchReloadOptions {
+  /** The running service reads only external watches and the issue cutoff from this file. */
+  configPath: string
+  externalWatch: Pick<ReloadableExternalWatchController, 'reload'>
+  now: () => Date
+  logger: Pick<ConsolaInstance, 'info'>
+}
+
+/**
+ * Re-reads the configuration file and swaps the external watches.
+ *
+ * loadConfig is the only gate. Startup and a reload read the same file
+ * through it, so a Restart and a reload accept identical configurations;
+ * the ownership and 0600 mode checks already guard who can choose the owners.
+ */
+export function createExternalWatchReload(
+  options: ExternalWatchReloadOptions,
+): () => Promise<Result<{ repositories: number; issues: number }, string>> {
+  return async () => {
+    const loaded = await loadConfig(options.configPath).catch((error: unknown) =>
+      err([
+        { path: '$', message: error instanceof Error ? error.message : 'The configuration file could not be read.' },
+      ]),
+    )
+    if (loaded._tag === 'Err') return err(loaded.error.map((issue) => `${issue.path}: ${issue.message}`).join('\n'))
+    const result = await options.externalWatch.reload({
+      watches: loaded.value.externalRepositories,
+      issueCutoff: loaded.value.issueCutoff,
+      now: options.now,
+    })
+    if (result._tag === 'Ok')
+      options.logger.info(
+        `Reloaded ${result.value.repositories} external repository watches with ${result.value.issues} public issues.`,
+      )
+    return result
+  }
+}
+
+/** Signed human controls need Wolfstar's login even when every repository uses the App. */
+export function serviceNeedsUserLogin(
+  config: Pick<ValidatedAgentConfig, 'webhook' | 'mutationsEnabled' | 'releaseDefaults' | 'repositories'>,
+  userRepositoryCount: number,
+  webhookSecret?: string,
+): boolean {
+  return (
+    userRepositoryCount > 0 ||
+    config.releaseDefaults !== undefined ||
+    config.repositories.some((repository) => repository.release !== undefined) ||
+    (config.mutationsEnabled && config.webhook._tag !== 'Disabled' && webhookSecret !== undefined)
+  )
 }
 
 export async function startAgentService(options: StartAgentServiceOptions): Promise<RunningAgentService> {
@@ -276,33 +435,44 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const opencodeEnvironment = opencodeAgentEnvironment({ context: agentContext.value, environment: process.env })
   if (opencodeEnvironment._tag === 'Err') throw new Error(opencodeEnvironment.error)
   const [installedRepositories, localCheckouts] = await Promise.all([
-    discoverGitHubAppRepositories({
-      appId: options.config.github.appId,
-      allowedOwners: options.config.github.allowedOwners,
-      privateKey: options.githubPrivateKey,
+    readAfterGitHubRateLimit({
+      read: () =>
+        discoverGitHubAppRepositories({
+          appId: options.config.github.appId,
+          allowedOwners: options.config.github.allowedOwners,
+          privateKey: options.githubPrivateKey,
+        }),
+      now,
+      wait: (milliseconds) => waitForHost(milliseconds),
+      onHold: (until) =>
+        options.logger.info(`GitHub limited repository discovery. Startup will retry at ${until.toISOString()}.`),
     }),
     discoverLocalCheckouts(options.config.trustedCheckoutRoots),
   ])
   const userAccess = options.userAccess ?? createGitHubUserAccess()
-  const userRepositories = await discoverUserRepositories({
+  const userDiscovery = await discoverUserRepositories({
     allowedOwners: options.config.github.allowedOwners,
     checkouts: localCheckouts,
     installed: installedRepositories,
     readRepository: (github) => userAccess.readRepository(github),
   })
+  const userRepositories = userDiscovery.repositories
   // The GitHub CLI answers a degraded API with an error, and reading Wolfstar's
   // login used to throw out of start and take the whole service with it. The
   // repositories that need the login are dropped for this run instead, so the
   // ones that do not need it keep working.
-  const resolvedLogin =
-    userRepositories.length === 0
-      ? { _tag: 'Ok' as const, value: AGENT_ACTOR_LOGIN }
-      : await resolveUserLogin(userAccess, options.logger)
+  // Package releases need the login as well. Only Wolfstar grants release
+  // authority, and a release with the user credential writes as him.
+  const needsUserLogin = serviceNeedsUserLogin(options.config, userRepositories.length, options.webhookSecret)
+  const resolvedLogin = needsUserLogin
+    ? await resolveUserLogin(userAccess, options.logger)
+    : { _tag: 'Ok' as const, value: AGENT_ACTOR_LOGIN }
   const activeUserRepositories = resolvedLogin._tag === 'Ok' ? userRepositories : []
   const userLogin = resolvedLogin._tag === 'Ok' ? resolvedLogin.value : AGENT_ACTOR_LOGIN
+  const userLoginKnown = needsUserLogin && resolvedLogin._tag === 'Ok'
   if (resolvedLogin._tag === 'Err') {
     options.logger.error(
-      `The GitHub CLI could not name its account, so ${userRepositories.length} repositories that need it stay untracked this run: ${resolvedLogin.error}`,
+      `The GitHub CLI could not name its account: ${resolvedLogin.error}. Repositories that need its identity stay untracked. Human checkbox controls and package releases stay off.`,
     )
   }
   if (activeUserRepositories.length > 0)
@@ -310,11 +480,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       `${activeUserRepositories.length} repositories answer to @${userLogin} because the GitHub App is not installed: ${activeUserRepositories.map((repository) => repository.github).join(', ')}.`,
     )
   const userRepositoryNames = new Set(activeUserRepositories.map((repository) => repository.github.toLowerCase()))
+  // A repository discovery could not settle keeps its Routines. Without the
+  // login, every user repository is dropped for this run, so none is settled.
+  const unresolvedRepositories =
+    resolvedLogin._tag === 'Ok'
+      ? userDiscovery.unresolved
+      : [...userDiscovery.unresolved, ...userRepositories.map((repository) => repository.github)]
   const discoveredMappings = buildRepositoryMappings(
     [...installedRepositories, ...activeUserRepositories],
     localCheckouts,
     options.config.repositories,
     options.config.github.allowedOwners,
+    options.config.releaseDefaults,
   )
   const validatedDiscovery = await validateRepositoryMappings({ ...options.config, repositories: discoveredMappings })
   if (validatedDiscovery._tag === 'Err')
@@ -349,11 +526,24 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     config.agent.reasoningEffort,
   )
   let releaseWebhookReady = false
+  const webhookControls = createWebhookControls({
+    ready: () => releaseWebhookReady && userLoginKnown && config.triggers.includes('github'),
+  })
   const processId = randomUUID()
+  let sessions: SessionController | undefined
   const restartController = createRestartController({
     store,
     processId,
     now,
+    ready: () =>
+      !(
+        sessions
+          ?.snapshot()
+          .sessions.some(
+            (session) =>
+              session.status === 'running' || session.status === 'stopping' || session.status === 'interrupted',
+          ) ?? false
+      ),
     onActionRequired: (reason) => {
       const at = now().toISOString()
       const failure = classifyFailure({ message: reason })
@@ -380,14 +570,33 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const capacity = createProviderCapacitySource({
     onError: (error) => options.logger.error(error),
   })
+  const automaticSelection = (provider: AgentProviderName) => {
+    const profile = agentProfile(provider)
+    const defaultModel = profile.roles.routine_scan.model
+    const canStart = (model: string): boolean =>
+      hasSpendableCapacity(capacity.read(provider, model), config.agent.reservePercent[provider]) &&
+      store.providerCanStart({ provider, credential: profile.authentication, model, at: now().toISOString() })
+    return {
+      provider,
+      model:
+        provider === 'opencode' && !canStart(defaultModel) && canStart('opencode-go/glm-5.3-flash')
+          ? ('opencode-go/glm-5.3-flash' as const)
+          : null,
+      reasoningEffort: null,
+    }
+  }
   const chooseProvider = (order: readonly AgentProviderName[]): AgentProviderName | null =>
     chooseAgentProvider({
-      capacity: capacity.read,
+      capacity: (provider) =>
+        capacity.read(provider, automaticSelection(provider).model ?? agentProfile(provider).roles.routine_scan.model),
       order: order.filter((provider) => {
         const profile = agentProfile(provider)
         return store.providerCanStart({
           provider,
           credential: profile.authentication,
+          ...(provider === 'opencode'
+            ? { model: automaticSelection(provider).model ?? profile.roles.routine_scan.model }
+            : {}),
           at: now().toISOString(),
         })
       }),
@@ -395,10 +604,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     })
   // Both provider runtimes are built once. Switching the Agent selection then
   // costs one journal read, and the service never restarts to answer it.
-  const desktop = createDesktopBroker({
-    now: () => now().getTime(),
-    settingsPath: join(dirname(config.storage.path), 'desktop-capacity.json'),
-  })
+  const reviewProofAuthority = createReviewProofAuthority(store, now)
+  const maintenanceAdmission = {
+    capacityCommand: options.capacityCommand ?? '/usr/local/bin/wolfstar-host-capacity',
+    memoryGiB: config.agent.memoryPerAgentGiB,
+  }
+  const runMaintenanceCommand = createMaintenanceCheckCommand(maintenanceAdmission)
+  const desktop = createDesktopBroker({ now: () => now().getTime(), reviewProofAuthority })
   const sizing = agentSlotSizing(
     configuredProfile.maximumActiveAgents,
     await localAgentMemoryBytes(config.agent.hostReserveGiB),
@@ -416,17 +628,22 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     const setting = store.getAgentSlots()
     return {
       hogwild: Math.min(setting.hogwild ?? sizing.suggested, slotLimits.hogwildCeiling),
-      desktop: Math.min(setting.desktop ?? 1, slotLimits.desktopCeiling),
+      desktop: Math.min(setting.desktop ?? 2, slotLimits.desktopCeiling),
     }
   }
   options.logger.info(agentSlotLine(agentSlots(), sizing))
+  await setHostSlotPolicy(maintenanceAdmission.capacityCommand, agentSlots().hogwild).catch((cause: unknown) => {
+    store.close()
+    throw cause
+  })
   const hosts = createHostAgentPool({
     localMaximum: () => agentSlots().hogwild,
     desktopMaximum: () => agentSlots().desktop,
-    desktopConnected: desktop.available,
+    desktopAvailable: desktop.available,
     wait: (signal) => waitForHost(500, undefined, { signal }),
   })
   const runtime = createAgentRuntimeSource({
+    automaticSelection,
     chooseProvider,
     configuredProvider: configuredProfile.provider,
     // Schedulers are sized for the ceiling, so raising Agent slots takes effect
@@ -446,15 +663,20 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       codex: createCircuitProtectedProvider({
         credential: agentProfile('codex').authentication,
         now,
-        provider: hosts.provider(createCodexProvider(), desktop.provider('codex')),
+        provider: hosts.provider(
+          createMaintenanceScopeProvider({ ...maintenanceAdmission, name: 'codex', reviewProofAuthority }),
+          desktop.provider('codex'),
+        ),
         store,
       }),
       opencode: createCircuitProtectedProvider({
         credential: agentProfile('opencode').authentication,
         now,
         provider: hosts.provider(
-          createOpencodeProvider({
-            cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET,
+          createMaintenanceScopeProvider({
+            ...maintenanceAdmission,
+            name: 'opencode',
+            reviewProofAuthority,
             environment: opencodeEnvironment.value,
           }),
           desktop.provider('opencode'),
@@ -468,6 +690,26 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   options.logger.info(`Agent provider: ${profile.provider} with ${profile.roles.adversarial_review.model}.`)
   const startedAt = now().toISOString()
   store.syncRepositories(config.repositories, startedAt)
+  replaceServiceIncidents(
+    store,
+    startedAt,
+    'repository_rename',
+    userDiscovery.renamed.map(
+      (renamed) =>
+        `${renamed.checkout}: the origin names ${renamed.origin}, but GitHub renamed it to ${renamed.current}. No Agent sees it. Run: git -C ${renamed.checkout} remote set-url origin https://github.com/${renamed.current}.git, then restart the service.`,
+    ),
+  )
+  const routineMapping = retireUnmappedRoutines({
+    now,
+    repositories: config.repositories,
+    unresolved: unresolvedRepositories,
+    store,
+  })
+  routineMapping.retired.forEach(({ repository, names }) =>
+    options.logger.info(
+      `${repository}: retired ${names.length} routines, because the repository has no enabled Repository mapping: ${names.join(', ')}.`,
+    ),
+  )
   if (config.mutationsEnabled) {
     const recovered = store.recoverInterruptedAgentTasks(startedAt)
     if (recovered > 0) options.logger.info(`Recovered ${recovered} interrupted agent tasks.`)
@@ -483,17 +725,59 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
   // A repository the App cannot reach is answered with Wolfstar's own account.
   const actorLogin = (repository: RepositoryMapping): string =>
-    repository.authentication === 'user' ? userLogin : AGENT_ACTOR_LOGIN
+    repository.githubAccount?.login ?? (repository.authentication === 'user' ? userLogin : AGENT_ACTOR_LOGIN)
+  // The release policy picks the release author, never discovery. See createPackageReleaseSource.
+  const releaseActorLogin = (repository: RepositoryMapping): string | null => {
+    if (!userLoginKnown || !canReleasePackages(repository)) return null
+    return repository.release?.credential._tag === 'User' ? userLogin : actorLogin(repository)
+  }
   const appTokens = createGitHubAppTokenProvider({
     appId: config.github.appId,
     privateKey: options.githubPrivateKey,
+    resolveRenamedRepository: async (repository) => {
+      const resolved = await userAccess.readRepository(repository)
+      // A redirect alone grants no App access. Require the current repository
+      // in the same allowed installation discovery before minting its token.
+      return installedRepositories.find(
+        (installed) => installed.github.toLowerCase() === resolved?.github.toLowerCase(),
+      )?.github
+    },
   })
-  const userTokens = createUserTokenProvider({ readToken: (signal) => userAccess.token(signal) })
-  const routedTokens = createRoutedTokenProvider({
-    app: appTokens,
-    user: userTokens,
-    usesUserToken: (repository) => userRepositoryNames.has(repository.toLowerCase()),
+  const releaseResponseCache = createGitHubResponseCache()
+  const usesUserToken = (repository: string): boolean => userRepositoryNames.has(repository.toLowerCase())
+  const rawUserTokens = createUserTokenProvider({ readToken: (signal) => userAccess.token(signal) })
+  // A rate limited quota refuses its credentials until GitHub resets it, so a
+  // held installation spends no request and the System pane names it.
+  const rateLimits = createGitHubRateLimitGate({ now })
+  const requestCounts = createGitHubRequestCounts({
+    now,
+    report: (report) => options.logger.info(`GitHub requests: ${JSON.stringify(report)}`),
   })
+  const userQuota = (): GitHubQuota => ({ _tag: 'User', login: userLogin })
+  const userTokens = requestCounts.tokens(rateLimits.guard(rawUserTokens, userQuota), userQuota)
+  const accountFor = (name: string) =>
+    config.repositories.find((repository) => repository.github.toLowerCase() === name.toLowerCase())?.githubAccount
+  const repositoryQuota = (repository: string): GitHubQuota => {
+    const account = accountFor(repository)
+    return account !== undefined
+      ? { _tag: 'User', login: account.login }
+      : usesUserToken(repository)
+        ? userQuota()
+        : { _tag: 'Installation', owner: repository.split('/')[0] ?? repository }
+  }
+  const routedTokens = requestCounts.tokens(
+    rateLimits.guard(
+      createGitHubAccountTokenProvider({
+        fallback: createRoutedTokenProvider({ app: appTokens, user: rawUserTokens, usesUserToken }),
+        account: accountFor,
+        readToken: readGitHubAccountToken,
+        readLogin: readGitHubAccountLogin,
+        now,
+      }),
+      repositoryQuota,
+    ),
+    repositoryQuota,
+  )
   // Write authority belongs at the credential boundary. Every current and
   // future mutation needs one of these write credentials before it can leave.
   const gatedTokens = (source: GitHubTokenProvider): GitHubTokenProvider =>
@@ -502,6 +786,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       source,
     })
   const tokens = gatedTokens(routedTokens)
+  const mediaSource = createGitHubMediaSource({ tokens: routedTokens, fetch: globalThis.fetch })
   const legacyUserTokens = gatedTokens(userTokens)
   const github = createGitHubSource({ actorLogin, tokens, issueCutoff: config.issueCutoff })
   const pullRequestStatuses = createPullRequestStatusController({
@@ -509,13 +794,21 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     now,
     repositories: config.repositories,
   })
-  const installed = new Set(config.repositories.map((repository) => repository.github.toLowerCase()))
-  const externalWatches = config.externalRepositories.filter((watch) => !installed.has(watch.github.toLowerCase()))
-  const externalWatch = createExternalWatchController({
-    watches: externalWatches,
+  const externalWatch = createReloadableExternalWatchController({
+    watches: config.externalRepositories,
     issueCutoff: config.issueCutoff,
     now,
   })
+  const reloadConfigPath = options.configPath
+  const reloadExternalWatches =
+    reloadConfigPath === undefined
+      ? undefined
+      : createExternalWatchReload({
+          configPath: reloadConfigPath,
+          externalWatch,
+          logger: options.logger,
+          now,
+        })
   // Ephemeral: what each running agent is doing right now, never persisted.
   const activityLog = createAgentActivityLog()
   const workerGithub = createGitHubAgentSource({
@@ -539,10 +832,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             model: options.classification.model,
           }),
         })
+  const reportCheckRun = createReviewCheckRunReport(store, now)
+  const findingThreads: ReviewFindingThreadMirror = {
+    source: workerGithub,
+    findings: (repository, pullRequestNumber, reviewRunId) =>
+      store.listReviewRuns(repository, pullRequestNumber).find((run) => run.id === reviewRunId)?.findings ?? null,
+    report: createReviewFindingThreadsReport(store, now),
+  }
   const pullRequestTriage = createPullRequestTriageController({
     classification,
     github: workerGithub,
     now,
+    reportCheckRun,
     store,
   })
   // Issue triage classification runs only when the configuration sets a band:
@@ -577,7 +878,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       root: controllerRoot,
       tokens,
     })
-    const permits = createAgentPermitPool(() => {
+    const sharedPermits = createAgentPermitPool(() => {
       const capacity = hosts.read()
       const desktopUsable = desktop.available() || capacity.desktopActive > 0
       return capacity.localMaximum + (desktopUsable ? capacity.desktopMaximum : 0)
@@ -596,11 +897,20 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       const selection = store.getAgentSelection()
       if (selection._tag === 'Automatic') return chooseProvider(selection.order) !== null
       const current = runtime().profile
-      return store.providerCanStart({
-        provider: current.provider,
-        credential: current.authentication,
-        at: now().toISOString(),
-      })
+      return (
+        hasSpendableCapacity(
+          capacity.read(current.provider, current.roles.routine_scan.model),
+          config.agent.reservePercent[current.provider],
+        ) &&
+        store.providerCanStart({
+          provider: current.provider,
+          credential: current.authentication,
+          ...(current.provider === 'opencode' || (selection._tag === 'Pinned' && selection.model !== null)
+            ? { model: current.roles.routine_scan.model }
+            : {}),
+          at: now().toISOString(),
+        })
+      )
     }
     /**
      * Writes the Running label as the scheduler takes and gives up a lease.
@@ -681,8 +991,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }),
     })
     const reviewStatus = createReviewStatusController({
-      checkRuns: workerGithub,
-      commentControls: config.webhook._tag !== 'Disabled' && options.webhookSecret !== undefined,
+      nativeReviews: {
+        publisher: workerGithub,
+        report: (repository, result) => {
+          if (result._tag === 'Err') options.logger.error(`${repository}: native Review failed: ${result.error}`)
+        },
+      },
+      checkRuns: { publisher: workerGithub, report: reportCheckRun },
+      findingThreads,
+      commentControls: webhookControls.available,
+      loggedFindings: store,
+      loggedFindingControls: webhookControls.available,
       github: workerGithub,
       leaseMilliseconds: 2 * 60_000,
       now,
@@ -690,6 +1009,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       workerId: randomUUID(),
     })
     const subjectWorkerOptions = {
+      mediaSource,
       activityLog,
       claudeHome: agentContext.value.claudeHome,
       github: workerGithub,
@@ -713,7 +1033,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           severity: 'warning',
           operation: 'review_status_comment',
           message: reason,
-          recovery: { _tag: 'Retrying', attempt: 0, nextAttemptAt: now().toISOString() },
+          recovery: { _tag: 'OnNextOperation' },
           at: now().toISOString(),
         })
       },
@@ -738,8 +1058,43 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }),
       workspaces,
     }
+    const { items: permits, routines: routinePermits } = createRoutinePermitPools(
+      sharedPermits,
+      () => config.triggers.includes('routine') && canClaim() && store.hasOverdueRoutineRun(now().toISOString()),
+    )
     return {
+      repairRecovery: createRepairRecoveryController({
+        store,
+        github: workerGithub,
+        validateMapping,
+        permits,
+        canClaim,
+        acquireHost: hosts.tryAcquireLocal,
+        now,
+        workerId: randomUUID(),
+        onError: (error) => options.logger.error(error),
+        worktrees: createRepairRecoveryWorktreeManager({
+          gitIdentity: options.gitIdentity,
+          root: controllerRoot,
+          tokens,
+          runChecks: (path, paths, signal) => runRepairRecoveryChecks(path, paths, signal, runMaintenanceCommand),
+          confirmRegression: (path, paths, signal) =>
+            confirmRepairRecoveryRegression(path, paths, signal, runMaintenanceCommand),
+          runCommand: runMaintenanceCommand,
+          recordChecks: (task, checks) =>
+            store.recordRepairReport({
+              taskId: task.id,
+              workerId: task.state.workerId,
+              fence: task.state.fence,
+              at: now().toISOString(),
+              summary: `Recovered selected finding: ${task.pickup!.finding.summary}`,
+              checks,
+            }),
+        }),
+      }),
       approvals: createApprovalController({
+        reviewApprovalControls: (repository) => webhookControls.available(repository.github),
+        checkboxApprovals: store,
         github: workerGithub,
         now,
         store,
@@ -818,8 +1173,27 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }),
       ),
       routines: createWorkerTaskScheduler({
-        canClaim: () => canClaimRoutineRun(canClaim(), config.triggers, store),
-        claim: store.claimNextRoutineRun,
+        // A manual choice checks its own provider. It cannot reopen the global Queue.
+        canClaim: () =>
+          store.getAgentControl()._tag === 'Running' && restartAllowsTaskClaims(store.getRestartRequest()),
+        claim: (workerId, at, leaseMilliseconds) =>
+          store.claimNextRoutineRun(workerId, at, leaseMilliseconds, (selection) =>
+            selection === undefined
+              ? canClaimRoutineRun(canClaim(), config.triggers, store, at, rateLimits.read().length === 0)
+              : hasSpendableCapacity(
+                  capacity.read(
+                    selection.provider,
+                    selection.model ?? agentProfile(selection.provider).roles.routine_scan.model,
+                  ),
+                  config.agent.reservePercent[selection.provider],
+                ) &&
+                store.providerCanStart({
+                  provider: selection.provider,
+                  credential: agentProfile(selection.provider).authentication,
+                  model: selection.model ?? agentProfile(selection.provider).roles.routine_scan.model,
+                  at,
+                }),
+          ),
         complete: store.completeRoutineRun,
         fail: store.failRoutineRun,
         heartbeat: store.heartbeatRoutineRun,
@@ -830,11 +1204,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         onError: (error) => options.logger.error(error),
         onTaskStarted: stampRunningLabel,
         onTaskSettled: settleTask,
-        permits,
+        permits: routinePermits,
         // GitHub writes remain controller-owned. Sentry propose runs may resolve verified fixes.
         worker: createRoutineScanWorker({
+          serviceEvidence: store,
+          serviceUpdate: options.serviceUpdate.read,
           activityLog,
-          classification,
+          githubEvidence: createRoutineGitHubEvidenceSource({ tokens: routedTokens, now, jobs: workerGithub }),
           logger: {
             error: (message) => options.logger.error(message),
             info: (message) => options.logger.info(message),
@@ -887,7 +1263,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         workerId: randomUUID(),
       }),
       reviewStatuses: createReviewStatusScheduler({
-        checkRuns: workerGithub,
+        nativeReviews: {
+          publisher: workerGithub,
+          report: (repository, result) => {
+            if (result._tag === 'Err') options.logger.error(`${repository}: native Review failed: ${result.error}`)
+          },
+        },
+        checkRuns: { publisher: workerGithub, report: reportCheckRun },
+        findingThreads,
         github: workerGithub,
         intervalMilliseconds: 2_000,
         leaseMilliseconds: 2 * 60_000,
@@ -931,6 +1314,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             accesses: ['item_write', 'contents_write'],
             source: tokens,
             worker: createReviewFixWorker({
+              mediaSource,
               activityLog,
               claudeHome: agentContext.value.claudeHome,
               github: workerGithub,
@@ -1050,6 +1434,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     workerId: randomUUID(),
   })
   const routineReports = createRoutineReportController({
+    canPublish: () => rateLimits.read().length === 0,
     github: createGitHubIssuePublisher({ tokens: routedTokens }),
     now,
     store,
@@ -1059,6 +1444,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     repository: RepositoryMapping,
     signal: AbortSignal,
   ): Promise<Result<void, string>> => {
+    const baseline = await retireObsoleteBaselineRepairs({ github: workerGithub, now, repository, store }, signal)
+    if (baseline._tag === 'Err') options.logger.error(`Baseline repair: ${baseline.error}`)
     const settled = await refreshReviewGates(
       {
         github: workerGithub,
@@ -1102,198 +1489,196 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }
     })
     if (signal.aborted) return err('Review gate refresh was aborted.')
-    const messages = settled.flatMap((result) => (result._tag === 'Err' ? [result.error] : []))
+    const messages = [
+      ...(baseline._tag === 'Err' ? [baseline.error] : []),
+      ...settled.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
+    ]
     const scope = { _tag: 'Repository' as const, repository: repository.github }
     const at = now().toISOString()
     messages.forEach((message) => recordServiceIncident(store, at, 'review_gate_refresh', message, scope))
     store.resolveIncidents(scope, at, 'review_gate_refresh', messages)
     return messages.length === 0 ? ok(undefined) : err(messages.join('\n'))
   }
-  const poller = createPoller({
-    intervalMilliseconds: config.pollIntervalSeconds * 1_000,
-    timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
-    poll: async (signal) => {
-      const recordPassIncidents = createPassIncidentRecorder({ store, now, signal })
-      // Cleared here and written only by the guard below, so a pass where every
-      // step answered normally resolves the last pass's defects.
-      recordPassIncidents('poll_pass', [])
-      const passDefects: string[] = []
-      const guarded = <T>(step: string, run: () => T | Promise<T>, fallback: T): Promise<T> =>
-        runPassStep(step, run, fallback, {
+  const poller = createIndependentPollers([
+    {
+      intervalMilliseconds: config.pollIntervalSeconds * 1_000,
+      timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
+      poll: async (signal) => {
+        const recordPassIncidents = createPassIncidentRecorder({ store, now, signal })
+        // Cleared here and written only by the guard below, so a pass where every
+        // step answered normally resolves the last pass's defects.
+        recordPassIncidents('poll_pass', [])
+        recordPassIncidents('github_rate_limit', rateLimits.active())
+        const passDefects: string[] = []
+        const passStepOptions = {
           signal,
-          onDefect: (name, reason) => {
+          onDefect: (name: string, reason: string) => {
             options.logger.error(`${name}: ${reason}`)
             passDefects.push(`${name}: ${reason}`)
             recordPassIncidents('poll_pass', passDefects)
           },
+        }
+        const guarded = <T>(step: string, run: () => T | Promise<T>, fallback: T): Promise<T> =>
+          runPassStep(step, run, fallback, passStepOptions)
+        const guardedResult = <T>(step: string, run: () => T | Promise<T>): Promise<Result<T, string>> =>
+          runPassStepResult(step, run, passStepOptions)
+        // A Failed Task recovers on every pass, not only at start. Waiting for a
+        // restart is what kept a transient GitHub reject holding a review down
+        // for a whole day.
+        if (config.mutationsEnabled) {
+          const retried = await guarded(
+            'Task recovery',
+            () => {
+              store.resolveStaleTaskIncidents(now().toISOString())
+              return store.retryRecoverableWorkerFailures(now().toISOString())
+            },
+            0,
+          )
+          if (retried > 0) options.logger.info(`Requeued ${retried} tasks after recoverable failures.`)
+        }
+        // Routines answer a clock, so they are read and planned on the same pass
+        // that observes GitHub. A repository declares its own schedule, and the
+        // spec is read at the default branch commit only.
+        const routineFailures: string[] = []
+        const syncedRoutines = !config.triggers.includes('routine')
+          ? []
+          : await guarded(
+              'Routine spec sync',
+              () =>
+                Promise.all(
+                  config.repositories
+                    .filter((repository) => repository.enabled)
+                    .map(async (repository) => ({
+                      repository: repository.github,
+                      outcome: await syncRepositoryRoutines(repository, { github, store, now, signal }),
+                    })),
+                ),
+              [],
+            )
+        if (signal.aborted) return
+        syncedRoutines.forEach(({ repository, outcome }) => {
+          if (outcome._tag === 'Refused')
+            routineFailures.push(`${repository}: the Routine spec was refused. ${outcome.reason}`)
+          if (outcome._tag === 'Unread')
+            routineFailures.push(`${repository}: the Routine spec could not be read. ${outcome.reason}`)
+          // A repository that never declared a Routine has nothing to report. One
+          // whose spec disappeared just lost its schedule, so it does.
+          if (outcome._tag === 'Absent' && outcome.retired.length > 0)
+            routineFailures.push(
+              `${repository}: ${ROUTINE_SPEC_PATH} is gone, so ${outcome.retired.length} routines were retired: ${outcome.retired.join(', ')}.`,
+            )
+          if (outcome._tag === 'Synced' && outcome.routines.length > 0)
+            options.logger.info(`${repository}: ${outcome.routines.length} routines declared.`)
         })
-      // A Failed Task recovers on every pass, not only at start. Waiting for a
-      // restart is what kept a transient GitHub reject holding a review down
-      // for a whole day.
-      if (config.mutationsEnabled) {
-        const retried = await guarded(
-          'Task recovery',
-          () => {
-            store.resolveStaleTaskIncidents(now().toISOString())
-            return store.retryRecoverableWorkerFailures(now().toISOString())
-          },
-          0,
-        )
-        if (retried > 0) options.logger.info(`Requeued ${retried} tasks after recoverable failures.`)
-      }
-      // Routines answer a clock, so they are read and planned on the same pass
-      // that observes GitHub. A repository declares its own schedule, and the
-      // spec is read at the default branch commit only.
-      const routineFailures: string[] = []
-      const syncedRoutines = !config.triggers.includes('routine')
-        ? []
-        : await guarded(
-            'Routine spec sync',
-            () =>
-              Promise.all(
-                config.repositories
-                  .filter((repository) => repository.enabled)
-                  .map(async (repository) => ({
-                    repository: repository.github,
-                    outcome: await syncRepositoryRoutines(repository, { github, store, now, signal }),
-                  })),
-              ),
+        if (!config.triggers.includes('github')) {
+          const observedAt = now().toISOString()
+          syncedRoutines.forEach(({ repository, outcome }) =>
+            recordRoutineOnlyRepositoryHealth({
+              at: observedAt,
+              outcome,
+              repository,
+              store,
+            }),
+          )
+        }
+        recordPassIncidents('routine_spec', routineFailures)
+
+        if (config.mutationsEnabled && config.triggers.includes('routine')) {
+          const planned = await guarded(
+            'Routine planning',
+            () => planRoutineRuns({ now, repositories: config.repositories, store }),
+            { opened: [], skipped: [], unmapped: [] },
+          )
+          planned.opened.forEach((run) =>
+            options.logger.info(`${run.repository}: queued the ${run.name} routine for ${run.scheduledFor}.`),
+          )
+          planned.skipped.forEach((run) =>
+            options.logger.info(`${run.repository}: skipped the ${run.name} routine due at ${run.scheduledFor}.`),
+          )
+          // Only a repository discovery could not settle reaches here. A settled
+          // one had its Routines retired at start.
+          recordPassIncidents(
+            'routine_unmapped',
+            planned.unmapped.map(
+              ({ repository, names }) =>
+                `${repository}: ${names.length} routines open no runs, because the repository has no enabled Repository mapping: ${names.join(', ')}. If GitHub answered for it at start, restart the service to retire them.`,
+            ),
+          )
+        }
+
+        // Everything below answers a GitHub observation, so a routines-only
+        // machine skips it and never reads or writes another machine's work.
+        if (!config.triggers.includes('github')) return
+        if (config.mutationsEnabled && config.issueBatches) {
+          const batches = await guarded(
+            'Batch planning',
+            () => Promise.resolve(store.planBatches(now().toISOString())),
             [],
           )
-      if (signal.aborted) return
-      syncedRoutines.forEach(({ repository, outcome }) => {
-        if (outcome._tag === 'Refused')
-          routineFailures.push(`${repository}: the Routine spec was refused. ${outcome.reason}`)
-        if (outcome._tag === 'Unread')
-          routineFailures.push(`${repository}: the Routine spec could not be read. ${outcome.reason}`)
-        // A repository that never declared a Routine has nothing to report. One
-        // whose spec disappeared just lost its schedule, so it does.
-        if (outcome._tag === 'Absent' && outcome.retired.length > 0)
-          routineFailures.push(
-            `${repository}: ${ROUTINE_SPEC_PATH} is gone, so ${outcome.retired.length} routines were retired: ${outcome.retired.join(', ')}.`,
+          batches.forEach((batch) =>
+            options.logger.info(
+              `${batch.repository}: opened a Batch for issues ${batch.issueNumbers.map((number) => `#${number}`).join(', ')}.`,
+            ),
           )
-        if (outcome._tag === 'Synced' && outcome.routines.length > 0)
-          options.logger.info(`${repository}: ${outcome.routines.length} routines declared.`)
-      })
-      if (!config.triggers.includes('github')) {
-        const observedAt = now().toISOString()
-        syncedRoutines.forEach(({ repository, outcome }) =>
-          recordRoutineOnlyRepositoryHealth({
-            at: observedAt,
-            outcome,
-            repository,
-            store,
-          }),
-        )
-      }
-      recordPassIncidents('routine_spec', routineFailures)
-
-      // Candidate issues are filed on the same pass, a few at a time. A scan
-      // that found twenty proposals must not open twenty issues at once.
-      if (config.mutationsEnabled && config.triggers.includes('routine')) {
-        const filed = await guarded('Candidate issue publication', () => candidateIssues.publishPending(signal), [])
-        filed.forEach((result) => {
-          if (result._tag === 'Ok')
-            options.logger.info(`${result.value.repository}#${result.value.issueNumber}: filed a routine proposal.`)
-        })
-        recordPassIncidents(
-          'candidate_issue',
-          filed.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
-        )
-
-        const reported = await guarded('Routine report publication', () => routineReports.publishPending(signal), [])
-        recordPassIncidents(
-          'routine_report',
-          reported.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
-        )
-      }
-
-      if (config.mutationsEnabled && config.triggers.includes('routine')) {
-        const planned = await guarded('Routine planning', () => planRoutineRuns({ now, store }), {
-          opened: [],
-          skipped: [],
-        })
-        planned.opened.forEach((run) =>
-          options.logger.info(`${run.repository}: queued the ${run.name} routine for ${run.scheduledFor}.`),
-        )
-        planned.skipped.forEach((run) =>
-          options.logger.info(`${run.repository}: skipped the ${run.name} routine due at ${run.scheduledFor}.`),
-        )
-      }
-
-      // Everything below answers a GitHub observation, so a routines-only
-      // machine skips it and never reads or writes another machine's work.
-      if (!config.triggers.includes('github')) return
-      if (config.mutationsEnabled && config.issueBatches) {
-        const batches = await guarded(
-          'Batch planning',
-          () => Promise.resolve(store.planBatches(now().toISOString())),
+        }
+        const reruns = await guarded(
+          'Review rerun sync',
+          () =>
+            syncOpenReviewRerunRequests(config.repositories, {
+              allowedAuthors: config.github.allowedOwners,
+              github,
+              store,
+              now,
+              signal,
+            }),
           [],
         )
-        batches.forEach((batch) =>
-          options.logger.info(
-            `${batch.repository}: opened a Batch for issues ${batch.issueNumbers.map((number) => `#${number}`).join(', ')}.`,
-          ),
+        reruns.forEach((result) => {
+          if (result._tag === 'Err') {
+            options.logger.error(`Review rerun command: ${result.error}`)
+          } else if (result.value.results.some((item) => item._tag === 'Queued')) {
+            options.logger.info(`${result.value.repository}: queued work from a pull request command.`)
+          }
+        })
+        recordPassIncidents(
+          'review_rerun',
+          reruns.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
         )
-      }
-      const reruns = await guarded(
-        'Review rerun sync',
-        () =>
-          syncOpenReviewRerunRequests(config.repositories, {
-            allowedAuthors: config.github.allowedOwners,
-            github,
-            store,
-            now,
-            signal,
-          }),
-        [],
-      )
-      reruns.forEach((result) => {
-        if (result._tag === 'Err') {
-          options.logger.error(`Review rerun command: ${result.error}`)
-        } else if (result.value.results.some((item) => item._tag === 'Queued')) {
-          options.logger.info(`${result.value.repository}: queued a requested review rerun.`)
-        }
-      })
-      recordPassIncidents(
-        'review_rerun',
-        reruns.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
-      )
-      const snapshot = store.getDashboardSnapshot(now().toISOString())
-      // A Reserve or an unreadable provider stops every claim by design, and
-      // said so nowhere outside the Dashboard. Twenty seven Tasks waited seven
-      // hours behind one with no log line and no Incident to read.
-      const blocked = agentStartBlockedReason({
-        startState: resolveAgentStartState(snapshot),
-        queuedTasks: snapshot.tasks.filter((task) => task.state._tag === 'Queued').length,
-        runningTasks: snapshot.tasks.filter((task) => task.state._tag === 'Running' || task.state._tag === 'Publishing')
-          .length,
-        agentSelection: snapshot.agentSelection,
-        providerCapacities: snapshot.providerCapacities,
-      })
-      if (blocked !== null) options.logger.info(blocked)
-      recordPassIncidents('agent_capacity', blocked === null ? [] : [blocked])
-      const statusSync = await guarded('Pull request status sync', () => pullRequestStatuses.sync(snapshot, signal), {
-        checked: 0,
-        errors: [],
-      })
-      statusSync.errors.forEach((error) => {
-        options.logger.error(`Pull request status: ${error}`)
-      })
-      recordPassIncidents('pull_request_status', statusSync.errors)
-      if (mutationSchedulers !== undefined) {
-        if (
-          config.triggers.includes('github') &&
-          config.webhook._tag === 'Enabled' &&
-          store.getAgentControl()._tag !== 'Paused'
-        ) {
-          for (const repository of config.repositories.filter(
-            (repository) => repository.enabled && repository.release !== undefined,
-          )) {
-            if (!store.mayPublishPackageRelease(repository.github)) continue
-            const errors = await guarded(
-              'Package releases',
-              async () => {
+        const snapshot = store.getDashboardSnapshot(now().toISOString())
+        // A Reserve or an unreadable provider stops every claim by design, and
+        // said so nowhere outside the Dashboard. Twenty seven Tasks waited seven
+        // hours behind one with no log line and no Incident to read.
+        const blocked = agentStartBlockedReason({
+          startState: resolveAgentStartState(snapshot),
+          queuedTasks: snapshot.tasks.filter((task) => task.state._tag === 'Queued').length,
+          runningTasks: snapshot.tasks.filter(
+            (task) => task.state._tag === 'Running' || task.state._tag === 'Publishing',
+          ).length,
+          agentSelection: snapshot.agentSelection,
+          providerCapacities: snapshot.providerCapacities,
+        })
+        if (blocked !== null) options.logger.info(blocked)
+        recordPassIncidents('agent_capacity', blocked === null ? [] : [blocked])
+        const statusSync = await guarded('Pull request status sync', () => pullRequestStatuses.sync(snapshot, signal), {
+          checked: 0,
+          errors: [],
+        })
+        statusSync.errors.forEach((error) => {
+          options.logger.error(`Pull request status: ${error}`)
+        })
+        recordPassIncidents('pull_request_status', statusSync.errors)
+        if (mutationSchedulers !== undefined) {
+          if (
+            config.triggers.includes('github') &&
+            config.webhook._tag === 'Enabled' &&
+            store.getAgentControl()._tag !== 'Paused'
+          ) {
+            await reconcilePackageReleasePass({
+              repositories: config.repositories.filter((repository) => releaseActorLogin(repository) !== null),
+              mayPublish: (repository) => store.mayPublishPackageRelease(repository),
+              guarded: guardedResult,
+              record: recordPassIncidents,
+              reconcile: async (repository) => {
                 await reconcilePackageReleases({
                   repository,
                   webhookReady: releaseWebhookReady,
@@ -1303,8 +1688,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                   source: (assertLease) =>
                     createPackageReleaseSource({
                       repository,
-                      tokens,
-                      actorLogin: actorLogin(repository),
+                      responseCache: releaseResponseCache,
+                      actors: {
+                        repository: { login: actorLogin(repository), tokens },
+                        user: { login: userLogin, tokens: legacyUserTokens },
+                      },
                       signal,
                       now,
                       template: async () => {
@@ -1338,94 +1726,147 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                       },
                     }),
                 })
-                return [] as string[]
               },
-              [`${repository.github}: package release reconciliation failed.`],
-            )
-            recordPassIncidents('package_release', errors)
+            })
           }
-        }
-        const stopped = await guarded(
-          'Stopped review comments',
-          () =>
-            publishStoppedReviews(
-              {
-                github: workerGithub,
-                now,
-                repositories: config.repositories,
-                store,
-              },
-              signal,
-            ),
-          { results: [], remaining: 0 },
-        )
-        // The list size, every pass. A sweep that reports three outcomes while
-        // its list holds a hundred rows is invisible without this line.
-        if (stopped.results.length > 0 || stopped.remaining > 0) {
-          options.logger.info(
-            stopped.remaining > 0
-              ? `Stopped review comments: closed ${stopped.results.length} this pass, ${stopped.remaining} left for the next.`
-              : `Stopped review comments: closed ${stopped.results.length}.`,
+          const stopped = await guarded(
+            'Stopped review comments',
+            () =>
+              publishStoppedReviews(
+                {
+                  github: workerGithub,
+                  now,
+                  reportCheckRun,
+                  repositories: config.repositories,
+                  store,
+                },
+                signal,
+              ),
+            { results: [], remaining: 0 },
+          )
+          // The list size, every pass. A sweep that reports three outcomes while
+          // its list holds a hundred rows is invisible without this line.
+          if (stopped.results.length > 0 || stopped.remaining > 0) {
+            options.logger.info(
+              stopped.remaining > 0
+                ? `Stopped review comments: closed ${stopped.results.length} this pass, ${stopped.remaining} left for the next.`
+                : `Stopped review comments: closed ${stopped.results.length}.`,
+            )
+          }
+          stopped.results.forEach((result) => {
+            if (result._tag === 'Ok') {
+              options.logger.info(
+                result.value._tag === 'CommentGone'
+                  ? `${result.value.repository}#${result.value.pullRequestNumber}: the stopped review comment was deleted, so nothing was written.`
+                  : result.value._tag === 'Superseded'
+                    ? `${result.value.repository}#${result.value.pullRequestNumber}: another writer took the comment, so it was left alone.`
+                    : result.value._tag === 'Retired'
+                      ? `${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The publication retired.`
+                      : `${result.value.repository}#${result.value.pullRequestNumber}: closed the stopped review comment.`,
+              )
+            } else {
+              options.logger.error(`Stopped review comment: ${result.error}`)
+            }
+          })
+          recordPassIncidents(
+            'stopped_review_comment',
+            stopped.results.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
+          )
+          if (releaseWebhookReady) {
+            const errors = await guarded(
+              'Logged finding status',
+              () =>
+                publishLoggedFindingPickups(
+                  {
+                    github: workerGithub,
+                    store,
+                    repositories: config.repositories,
+                    now,
+                    workerId: 'logged-finding-status',
+                  },
+                  signal,
+                ),
+              ['The finding status update failed.'],
+            )
+            errors.forEach((error) => options.logger.error(error))
+          }
+          const positions = await guarded(
+            'Queue position comments',
+            () =>
+              publishQueuePositions(
+                {
+                  github: workerGithub,
+                  now,
+                  repositories: config.repositories,
+                  store,
+                },
+                signal,
+              ),
+            [],
+          )
+          positions.forEach((result) => {
+            if (result._tag === 'Ok') {
+              options.logger.info(
+                result.value._tag === 'CommentGone'
+                  ? `${result.value.repository}#${result.value.pullRequestNumber}: the automated comment was deleted, so nothing was written.`
+                  : result.value._tag === 'Superseded'
+                    ? `${result.value.repository}#${result.value.pullRequestNumber}: an agent claimed the Task, so the Queue position comment was left to it.`
+                    : result.value._tag === 'Retired'
+                      ? `${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The publication retired.`
+                      : result.value.queue._tag === 'Paused'
+                        ? `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads that the repository is paused.`
+                        : `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads Queue position ${result.value.queue.position} of ${result.value.queue.total}.`,
+              )
+            } else {
+              options.logger.error(`Queue position comment: ${result.error}`)
+            }
+          })
+          recordPassIncidents(
+            'queue_position_comment',
+            positions.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
           )
         }
-        stopped.results.forEach((result) => {
-          if (result._tag === 'Ok') {
-            options.logger.info(
-              result.value._tag === 'CommentGone'
-                ? `${result.value.repository}#${result.value.pullRequestNumber}: the stopped review comment was deleted, so nothing was written.`
-                : result.value._tag === 'Superseded'
-                  ? `${result.value.repository}#${result.value.pullRequestNumber}: another writer took the comment, so it was left alone.`
-                  : result.value._tag === 'Retired'
-                    ? `${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The publication retired.`
-                    : `${result.value.repository}#${result.value.pullRequestNumber}: closed the stopped review comment.`,
-            )
-          } else {
-            options.logger.error(`Stopped review comment: ${result.error}`)
-          }
-        })
-        recordPassIncidents(
-          'stopped_review_comment',
-          stopped.results.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
-        )
-        const positions = await guarded(
-          'Queue position comments',
-          () =>
-            publishQueuePositions(
-              {
-                github: workerGithub,
-                now,
-                repositories: config.repositories,
-                store,
-              },
-              signal,
-            ),
-          [],
-        )
-        positions.forEach((result) => {
-          if (result._tag === 'Ok') {
-            options.logger.info(
-              result.value._tag === 'CommentGone'
-                ? `${result.value.repository}#${result.value.pullRequestNumber}: the automated comment was deleted, so nothing was written.`
-                : result.value._tag === 'Superseded'
-                  ? `${result.value.repository}#${result.value.pullRequestNumber}: an agent claimed the Task, so the Queue position comment was left to it.`
-                  : result.value._tag === 'Retired'
-                    ? `${result.value.repository}#${result.value.pullRequestNumber}: ${result.value.reason} The publication retired.`
-                    : result.value.queue._tag === 'Paused'
-                      ? `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads that the repository is paused.`
-                      : `${result.value.repository}#${result.value.pullRequestNumber}: the comment now reads Queue position ${result.value.queue.position} of ${result.value.queue.total}.`,
-            )
-          } else {
-            options.logger.error(`Queue position comment: ${result.error}`)
-          }
-        })
-        recordPassIncidents(
-          'queue_position_comment',
-          positions.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
-        )
-      }
+      },
+      onError: (error) => options.logger.error(error),
     },
-    onError: (error) => options.logger.error(error),
-  })
+    {
+      // Pending commands live locally. Quiet passes make no GitHub requests.
+      // Delivery must keep its cadence when repository recovery is slow.
+      intervalMilliseconds: 60_000,
+      timeoutMilliseconds: 60_000,
+      poll: async (signal) => {
+        if (!config.mutationsEnabled || !config.triggers.includes('routine')) return
+        const recordPassIncidents = createPassIncidentRecorder({ store, now, signal })
+        const passDefects: string[] = []
+        recordPassIncidents('routine_publication', [])
+        const guarded = <T>(step: string, run: () => T | Promise<T>, fallback: T): Promise<T> =>
+          runPassStep(step, run, fallback, {
+            signal,
+            onDefect: (name, reason) => {
+              options.logger.error(`${name}: ${reason}`)
+              passDefects.push(`${name}: ${reason}`)
+              recordPassIncidents('routine_publication', passDefects)
+            },
+          })
+        // Keep the existing bounded batches. One scan cannot file twenty issues at once.
+        const filed = await guarded('Candidate issue publication', () => candidateIssues.publishPending(signal), [])
+        filed.forEach((result) => {
+          if (result._tag === 'Ok')
+            options.logger.info(`${result.value.repository}#${result.value.issueNumber}: filed a routine proposal.`)
+        })
+        recordPassIncidents(
+          'candidate_issue',
+          filed.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
+        )
+        const reported = await guarded('Routine report publication', () => routineReports.publishPending(signal), [])
+        recordPassIncidents(
+          'routine_report',
+          reported.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
+        )
+      },
+      onError: (error) => options.logger.error(error),
+    },
+  ])
   // Timer and webhook reads share one poller per repository, so they cannot overlap.
   // Each repository backs off independently when its reads fail.
   const repositoryPollers = new Map(
@@ -1449,6 +1890,16 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                         approvals: mutationSchedulers.approvals,
                         autoMerge: mutationSchedulers.autoMerge,
                         refreshReviewGates: refreshRepositoryReviewGates,
+                        recoverRunnerIncidents: (mapping, recoverySignal) =>
+                          resolveRecoveredRunnerIncidents(
+                            {
+                              repository: mapping,
+                              github: workerGithub,
+                              store,
+                              now,
+                            },
+                            recoverySignal,
+                          ),
                       }),
                   // A read-only deployment runs no classification and settles nothing.
                   mutationsEnabled: config.mutationsEnabled,
@@ -1463,6 +1914,23 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                   if (result._tag === 'Err') throw new Error(`${result.error.repository}: ${result.error.message}`)
                   options.logger.info(
                     `${result.value.repository}: observed ${result.value.subjects} open pull requests and issues.`,
+                  )
+                }
+                store.reconcileRoutineCandidates(now().toISOString(), repository.github)
+                if (
+                  config.mutationsEnabled &&
+                  store.getAgentControl()._tag === 'Running' &&
+                  restartAllowsTaskClaims(store.getRestartRequest())
+                ) {
+                  await runCompletionTask(
+                    {
+                      repository,
+                      store,
+                      now,
+                      workerId: 'take-ownership',
+                      source: createCompletionSource({ tokens, fetch: globalThis.fetch }),
+                    },
+                    signal,
                   )
                 }
               },
@@ -1520,25 +1988,73 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     onError: (error) => options.logger.error(error),
   })
   const dashboardShutdown = new AbortController()
-  const settleAgentTask = async (taskId: string): Promise<boolean> => {
-    if (mutationSchedulers === undefined) return false
-    const schedulers = [
-      ...mutationSchedulers.tasks,
-      ...mutationSchedulers.baselineRepairs,
-      ...mutationSchedulers.issueWork,
-      ...mutationSchedulers.issues,
-      ...mutationSchedulers.repairs,
-      ...mutationSchedulers.reviews,
-    ]
-    const settled = await Promise.all(schedulers.map((scheduler) => scheduler.settle(taskId)))
-    return settled.includes(true)
-  }
+  sessions =
+    config.server.agentSessions === true
+      ? createSessionController({
+          path: join(dirname(config.storage.path), 'desktop-sessions.json'),
+          now,
+          availableSlots: (host) => {
+            if (!restartAllowsTaskClaims(store.getRestartRequest())) return 0
+            return host === 'desktop'
+              ? Math.max(0, agentSlots().desktop - hosts.read().desktopActive)
+              : Math.max(0, agentSlots().hogwild - hosts.read().localActive)
+          },
+        })
+      : undefined
   const app = createAgentApp({
+    pullRequestDiff: createGitHubPullRequestDiff({
+      tokens: routedTokens,
+      now: () => now().getTime(),
+      log: (message) => options.logger.error(message),
+    }),
+    ...(sessions === undefined ? {} : { sessions }),
+    ...(mutationSchedulers === undefined ? {} : { repairRecovery: mutationSchedulers.repairRecovery.run }),
+    ...(config.triggers.includes('github')
+      ? {
+          pullRequestWatch: {
+            state: store.getPullRequestWatchState,
+            observe: async (target, signal) => {
+              const repository = config.repositories.find(
+                (repository) =>
+                  repository.enabled && repository.github.toLowerCase() === target.repository.toLowerCase(),
+              )
+              if (repository === undefined) return err('The repository is not enabled in this service.')
+              // Use the normal triage and observation path for an open pull request.
+              await repositoryPollers.get(repository.github.toLowerCase())?.runNow()
+              const state = store.getPullRequestWatchState(repository.github, target.number)
+              if (state !== null && state._tag !== 'NotObserved' && state._tag !== 'PendingClosure')
+                return ok(undefined)
+              // A pull request merged before the first observation is absent from the open list.
+              const read = await github.getPullRequest(repository, target.number, signal)
+              if (read._tag === 'Err') return err(read.error.message)
+              if (read.value.state !== 'closed')
+                return err('The service did not select this open pull request for observation.')
+              const observedAt = now().toISOString()
+              const recorded = store.recordPollObservation({ subject: read.value, observedAt })
+              if (recorded._tag === 'Conflict' || recorded._tag === 'Stale')
+                return err('The pull request changed during observation. Run watch-pr again.')
+              const verified = store.recordVerifiedPullRequestClosure({
+                repository: repository.github,
+                pullRequestNumber: target.number,
+                revisionId: recorded.revisionId,
+                headSha: read.value.headSha,
+                baseSha: read.value.baseSha,
+                disposition: read.value.mergedAt === null ? { _tag: 'Closed' } : { _tag: 'Merged' },
+                at: observedAt,
+              })
+              return verified ? ok(undefined) : err('The pull request closure could not be confirmed.')
+            },
+          },
+        }
+      : {}),
+    ...(reloadExternalWatches === undefined ? {} : { reloadExternalWatches }),
     desktop,
     hostCapacity: hosts.read,
     hostTasks: hosts.tasks,
     agentSlots: slotLimits,
-    setAgentSlots: (host, slots) => {
+    hostSlotPolicy: agentSlots,
+    setAgentSlots: async (host, slots) => {
+      if (host === 'hogwild') await setHostSlotPolicy(maintenanceAdmission.capacityCommand, slots)
       store.setAgentSlots({ host, slots, at: now().toISOString() })
       return hosts.read()
     },
@@ -1547,18 +2063,28 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       approveIssue: store.approveIssue,
       approvePullRequest: store.approvePullRequest,
       cancelTask: store.cancelTask,
+      stopReviewForHead: store.stopReviewForHead,
+      resolveIncident: store.resolveIncident,
       listRoutines: store.listRoutines,
       openRoutineRun: store.openRoutineRun,
       getDashboardSnapshot: (at) => {
-        const snapshot = dashboardSnapshotForTriggers(
+        const stored = dashboardSnapshotForTriggers(
           pullRequestStatuses.apply(
             mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot()),
           ),
           config.triggers,
         )
+        const snapshot = { ...stored, agentProfile: runtime().profile }
         const providerCapacities = AGENT_PROVIDER_NAMES.map((provider) => ({
           provider,
-          capacity: capacity.read(provider),
+          capacity: capacity.read(
+            provider,
+            snapshot.agentSelection._tag === 'Automatic'
+              ? (automaticSelection(provider).model ?? agentProfile(provider).roles.routine_scan.model)
+              : snapshot.agentProfile.provider === provider
+                ? snapshot.agentProfile.roles.routine_scan.model
+                : agentProfile(provider).roles.routine_scan.model,
+          ),
           reservePercent: config.agent.reservePercent[provider],
         }))
         const classification =
@@ -1569,17 +2095,26 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           ...snapshot,
           agentProviderOrder: config.agent.order,
           providerCapacities,
+          agentModelCapacities: {
+            opencodeGo: capacity.read('opencode', 'opencode-go/glm-5.3-flash'),
+            zaiCodingPlan: capacity.read('opencode', 'zai-coding-plan/glm-5.3-flash'),
+          },
+          githubRateLimits: rateLimits.read(),
           ...(classification === undefined ? {} : { classification }),
         }
         return { ...current, agentStart: resolveAgentStartState(current) }
       },
       getStats: store.getStats,
+      getOpenPullRequestStatus: store.getOpenPullRequestStatus,
+      getOpenIssueStatus: store.getOpenIssueStatus,
       listWorkflowEvents: store.listWorkflowEvents,
       listReviewRuns: store.listReviewRuns,
       pauseAgents: store.pauseAgents,
       recordAgentFeedback: store.recordAgentFeedback,
       requestRestart: store.requestRestart,
+      finishUpdatePreparation: store.finishUpdatePreparation,
       requestReviewRerun: store.requestReviewRerun,
+      requestIssueTriageRerun: store.requestIssueTriageRerun,
       resumeAgents: store.resumeAgents,
       selectAgent: store.selectAgent,
       setRepositoryPaused: store.setRepositoryPaused,
@@ -1593,14 +2128,34 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     frameAncestors: config.server.frameAncestors,
     dashboardPassword: options.dashboardPassword,
     now,
-    settleTask: settleAgentTask,
     shutdownSignal: dashboardShutdown.signal,
   })
+  const listenOrigin = `http://${config.server.host.includes(':') ? `[${config.server.host}]` : config.server.host}:${config.server.port}`
+  const terminals =
+    config.server.agentSessions === true
+      ? await createControllerTerminals({
+          directory: join(dirname(config.storage.path), 'terminals'),
+          origin: config.server.allowedOrigin,
+          listenOrigin,
+          password: options.dashboardPassword,
+          memoryGiB: config.agent.memoryPerAgentGiB,
+          admissionCli: maintenanceAdmission.capacityCommand,
+          protectedPaths: [
+            dirname(config.storage.path),
+            config.github.privateKeyPath,
+            ...(options.configPath === undefined ? [] : [dirname(options.configPath)]),
+            ...(config.webhook._tag === 'Enabled' ? [config.webhook.secretPath] : []),
+            ...(config.classification._tag === 'Enabled' ? [config.classification.tokenPath] : []),
+          ],
+        })
+      : undefined
   const server = await startAgentServer({
     app,
     hostname: config.server.host,
     port: config.server.port,
+    ...(terminals === undefined ? {} : { terminals: terminals.routes }),
   }).catch((error) => {
+    void terminals?.close()
     store.close()
     throw error
   })
@@ -1627,28 +2182,65 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           app: createWebhookApp({
             allowedOwners: config.github.allowedOwners,
             logger: { info: (message) => options.logger.info(message) },
-            onHint: (repository) => {
+            onHint: (repository, event) => {
+              webhookControls.observe(repository, event)
               const name = repository.toLowerCase()
               if (repositoryPollers.has(name)) reconcileHint.hint(name)
             },
             packageRelease: {
               allowedAuthor: userLogin,
               actorLogin: (name) => {
-                const repository = config.repositories.find(
-                  (repository) =>
-                    repository.github === name &&
-                    repository.enabled &&
-                    repository.release !== undefined &&
-                    repository.ownership === 'owned',
-                )
+                const repository = config.repositories.find((repository) => repository.github === name)
                 return repository === undefined || !config.mutationsEnabled || !store.mayPublishPackageRelease(name)
                   ? null
-                  : actorLogin(repository)
+                  : releaseActorLogin(repository)
               },
               apply: (request) => {
                 store.requestPackageRelease(request)
               },
               command: (command) => store.queuePackageReleaseCommand(command),
+            },
+            loggedFindingPickup: {
+              allowedAuthor: userLogin,
+              actorLogin: (name) => {
+                const repository = config.repositories.find(
+                  (repository) => repository.github.toLowerCase() === name.toLowerCase() && repository.enabled,
+                )
+                return repository === undefined || !config.mutationsEnabled || !repository.pullRequestReview
+                  ? null
+                  : actorLogin(repository)
+              },
+              apply: (request) => {
+                store.requestLoggedFindingPickup({ ...request, at: now().toISOString() })
+              },
+            },
+            reviewApproval: {
+              allowedAuthor: userLogin,
+              actorLogin: (name) => {
+                const repository = config.repositories.find(
+                  (repository) => repository.github.toLowerCase() === name.toLowerCase(),
+                )
+                return repository === undefined ||
+                  !userLoginKnown ||
+                  !repository.enabled ||
+                  !config.mutationsEnabled ||
+                  !repository.pullRequestReview ||
+                  !store.mayWriteRepository(repository.github)
+                  ? null
+                  : actorLogin(repository)
+              },
+              apply: (request) => {
+                const repository = config.repositories.find(
+                  (repository) => repository.github.toLowerCase() === request.repository.toLowerCase(),
+                )
+                if (repository === undefined) return Promise.resolve(ok(undefined))
+                return applyReviewApproval(
+                  { github: workerGithub, store },
+                  repository,
+                  request,
+                  AbortSignal.timeout(30_000),
+                )
+              },
             },
             reviewCancellation: {
               actorLogin: (name) => {
@@ -1672,6 +2264,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         })
 
   releaseWebhookReady = webhookServer !== null
+  requestCounts.start()
 
   // A process that died mid-Task left the Running label saying an Agent is on
   // an Item nothing is on. The journal answers that, so it is settled once here
@@ -1741,6 +2334,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         ...(mutationSchedulers?.issueWork.map((scheduler) => scheduler.stop()) ?? []),
         ...(mutationSchedulers?.batches.map((scheduler) => scheduler.stop()) ?? []),
         mutationSchedulers?.publications.stop() ?? Promise.resolve(),
+        mutationSchedulers?.repairRecovery.stop() ?? Promise.resolve(),
         mutationSchedulers?.reviewStatuses.stop() ?? Promise.resolve(),
         ...(mutationSchedulers?.repairs.map((scheduler) => scheduler.stop()) ?? []),
         ...(mutationSchedulers?.reviews.map((scheduler) => scheduler.stop()) ?? []),
@@ -1748,7 +2342,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         mutationSchedulers?.routines.stop() ?? Promise.resolve(),
       ])
       dashboardShutdown.abort()
+      await terminals?.close()
       await Promise.all([server.close(), webhookServer?.close() ?? Promise.resolve()])
+      requestCounts.stop()
       store.close()
     },
   }

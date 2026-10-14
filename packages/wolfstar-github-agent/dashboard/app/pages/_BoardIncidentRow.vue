@@ -22,6 +22,7 @@ const {
 }>()
 
 const emit = defineEmits<{ open: [] }>()
+const { now } = useDashboard()
 
 const scope = computed(() => incidentScopeLabel(incident))
 const url = computed(() => incidentUrl(incident))
@@ -49,7 +50,7 @@ function rowClick(event: MouseEvent): void {
     }}</a>
     <span v-else class="font-mono text-sm text-toned">{{ scope }}</span>
     <span class="min-w-0 flex-1 truncate text-default">{{ incident.message }}</span>
-    <span class="text-muted">{{ incidentRecoveryLabel(incident) }}</span>
+    <span class="text-muted">{{ incidentRecoveryLabel(incident, now) }}</span>
     <span class="font-mono text-sm text-dimmed">{{ incident.occurrences }}×</span>
     <time class="font-mono text-sm text-dimmed" :datetime="incident.lastSeenAt">{{ age }}</time>
     <span v-if="more > 0" class="font-mono text-sm text-dimmed">and {{ more }} more</span>

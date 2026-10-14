@@ -1,8 +1,8 @@
 ---
 name: content-refresh
-description: 'Refresh a collection of articles with verified sources, reviewed briefs, human writing, and crisp screenshots. Use for an editorial audit, article rewrite, or coordinated content refresh.'
-user_invocable: true
+description: 'Coordinate a collection refresh with shared evidence, reviewed briefs, and independent article reviews. Use for an editorial audit or a refresh across several articles.'
 argument-hint: '[content directory] [scope or exclusions]'
+license: MIT
 ---
 
 # Content refresh
@@ -16,7 +16,7 @@ Precise examples should also remain useful to agents.
 Inspect the target repository, its Agent instructions, content configuration, routes, navigation, and existing editorial records.
 Include relevant hidden project records, such as prior SEO research under .claude/, using a bounded search.
 Treat old research as leads to recheck, not current source proof.
-Read its glossary through the [glossary Skill](../glossary/SKILL.md).
+Read its glossary through the [glossary](../glossary/SKILL.md) Skill.
 If no glossary exists, use that Skill to propose terms and resolve naming decisions before dependent copy.
 Do not silently adopt another project's vocabulary.
 Do not transfer another product's facts, terminology, source scores, or rollout claims.
@@ -86,9 +86,11 @@ A new revision invalidates affected approvals. Recheck changed claims and consum
 ## Write and verify
 
 Read [screenshots](references/screenshots.md) before planning visual evidence.
-Use the target's article voice and the [humanize-writing Skill](../humanize-writing/SKILL.md).
+Research each technical article from primary sources, run its examples, and verify them as a reader would.
+This Skill owns shared records, the worker pool, and collection publication checks.
+Use the target's article voice and the [humanize-writing](../humanize-writing/SKILL.md) Skill.
 Run a distinct factual review before the humanize pass.
-Then apply both humanize-writing passes under COPY.md, including progressive complexity.
+Then apply `humanize-writing` under COPY.md.
 Record the main writing changes in the brief. Recheck meaning, uncertainty, dates, and examples afterward.
 The final article reviewer reads the humanized revision, not an earlier draft.
 Record useful findings in the brief instead of flooding the user with every worker's writing report.
@@ -105,7 +107,7 @@ Change a reviewed parent for a foundation correction, not merely to append downs
 Do not add automatic merge labels to Skills or Agent instructions.
 
 Use [adversarial-review](../adversarial-review/SKILL.md) for final PR review.
-Use [take-ownership](../take-ownership/SKILL.md) for authorized delivery, then [close-off](../close-off/SKILL.md).
+Use [take-ownership](../take-ownership/SKILL.md) for authorized delivery and its Completion mode for remaining work and cleanup.
 Wait for CI using gh run watch or gh pr checks --watch, never sleep-based polling.
 
 Verify every published route, title, description, canonical, internal link, and downloadable example.

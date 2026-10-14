@@ -3,12 +3,12 @@
 
 /*
  * Tokens for the dashboard. DESIGN.md holds the rules; this file holds the values.
- * Every neutral is OKLCH hue 80 with chroma 0.004 to 0.01, so the greys read as paper.
+ * Neutral workspace surfaces use zero chroma. Colour identifies state.
  * Contrast is verified by the /kit page at runtime.
  */
 
 @theme {
-  --font-sans: 'Mona Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Hubot Sans', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
   --default-transition-duration: 120ms;
@@ -19,22 +19,26 @@
   color-scheme: light;
   /* 0.25rem: sm 4px, md 6px, lg 8px through Nuxt UI's radius multipliers. */
   --ui-radius: 0.25rem;
-  --ui-bg: oklch(98.6% 0.004 80);
-  --ui-bg-muted: oklch(96.2% 0.006 80);
-  --ui-bg-elevated: oklch(99.4% 0.004 80);
-  --ui-bg-accented: oklch(92.5% 0.008 80);
-  --ui-bg-inverted: oklch(21% 0.006 80);
-  --ui-border: oklch(91.5% 0.008 80);
-  --ui-border-muted: oklch(93.5% 0.007 80);
-  --ui-border-accented: oklch(85% 0.01 80);
-  --ui-border-inverted: oklch(21% 0.006 80);
-  --ui-text: oklch(21% 0.006 80);
-  --ui-text-highlighted: oklch(21% 0.006 80);
-  --ui-text-toned: oklch(38% 0.008 80);
-  --ui-text-muted: oklch(49% 0.01 80);
-  --ui-text-dimmed: oklch(53.5% 0.01 80);
-  --ui-text-inverted: oklch(96.2% 0.006 80);
-  --ui-primary: oklch(21% 0.006 80);
+  --terminal-bg: #171717;
+  --terminal-fg: #e5e5e5;
+  --terminal-selection: #3b82f680;
+  --terminal-selection-text: #ffffff;
+  --ui-bg: oklch(98.6% 0 0);
+  --ui-bg-muted: oklch(96.2% 0 0);
+  --ui-bg-elevated: oklch(99.4% 0 0);
+  --ui-bg-accented: oklch(92.5% 0 0);
+  --ui-bg-inverted: oklch(21% 0 0);
+  --ui-border: oklch(91.5% 0 0);
+  --ui-border-muted: oklch(93.5% 0 0);
+  --ui-border-accented: oklch(85% 0 0);
+  --ui-border-inverted: oklch(21% 0 0);
+  --ui-text: oklch(21% 0 0);
+  --ui-text-highlighted: oklch(21% 0 0);
+  --ui-text-toned: oklch(38% 0 0);
+  --ui-text-muted: oklch(49% 0 0);
+  --ui-text-dimmed: oklch(53.5% 0 0);
+  --ui-text-inverted: oklch(96.2% 0 0);
+  --ui-primary: oklch(21% 0 0);
   /* Primer foreground colours. Text on a tint uses the .status-* ramp below. */
   --ui-success: #1a7f37;
   --ui-warning: #9a6700;
@@ -44,22 +48,22 @@
 
 .dark {
   color-scheme: dark;
-  --ui-bg: oklch(17% 0.006 80);
-  --ui-bg-muted: oklch(20% 0.006 80);
-  --ui-bg-elevated: oklch(23% 0.007 80);
-  --ui-bg-accented: oklch(30% 0.008 80);
-  --ui-bg-inverted: oklch(96.2% 0.006 80);
-  --ui-border: oklch(29% 0.008 80);
-  --ui-border-muted: oklch(26% 0.007 80);
-  --ui-border-accented: oklch(36% 0.009 80);
-  --ui-border-inverted: oklch(96.2% 0.006 80);
-  --ui-text: oklch(96.2% 0.006 80);
-  --ui-text-highlighted: oklch(96.2% 0.006 80);
-  --ui-text-toned: oklch(82% 0.006 80);
-  --ui-text-muted: oklch(72% 0.008 80);
-  --ui-text-dimmed: oklch(63% 0.008 80);
-  --ui-text-inverted: oklch(17% 0.006 80);
-  --ui-primary: oklch(96.2% 0.006 80);
+  --ui-bg: oklch(17% 0 0);
+  --ui-bg-muted: oklch(20% 0 0);
+  --ui-bg-elevated: oklch(23% 0 0);
+  --ui-bg-accented: oklch(30% 0 0);
+  --ui-bg-inverted: oklch(96.2% 0 0);
+  --ui-border: oklch(29% 0 0);
+  --ui-border-muted: oklch(26% 0 0);
+  --ui-border-accented: oklch(36% 0 0);
+  --ui-border-inverted: oklch(96.2% 0 0);
+  --ui-text: oklch(96.2% 0 0);
+  --ui-text-highlighted: oklch(96.2% 0 0);
+  --ui-text-toned: oklch(82% 0 0);
+  --ui-text-muted: oklch(72% 0 0);
+  --ui-text-dimmed: oklch(63% 0 0);
+  --ui-text-inverted: oklch(17% 0 0);
+  --ui-primary: oklch(96.2% 0 0);
   --ui-success: #3fb950;
   --ui-warning: #d29922;
   --ui-error: #f85149;
@@ -219,5 +223,15 @@ body {
 
   .live-dot {
     animation: none;
+  }
+}
+
+/* Keep the workspace header compact while preserving touch targets. */
+.workspace-header {
+  height: 2.5rem;
+}
+@media (pointer: coarse), (max-width: 47.999rem) {
+  .workspace-header {
+    height: 3rem;
   }
 }

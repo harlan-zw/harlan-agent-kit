@@ -45,7 +45,7 @@ The controller checks the original Worktree before importing a result.
 It refuses late results from completed or cancelled turns.
 
 The desktop checks the turn every three seconds. Cancellation or connection loss stops its Agent scope.
-Eject shows a desktop command for desktop sessions. Their Worktrees stay on desktop for session recovery.
+Sessions shows live Agent activity from both hosts. Agent sessions keep their Worktrees on the selected host.
 
 GitHub credentials and dependency directories do not transfer between hosts.
 Ignored files stay local, except pull request diagrams under `.pr-lens`.

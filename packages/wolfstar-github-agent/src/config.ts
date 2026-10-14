@@ -7,6 +7,7 @@ import type {
   ClassificationConfig,
   CodexReasoningEffort,
   ExternalRepositoryWatch,
+  GitHubAccount,
   RepositoryAutoMergeScope,
   RepositoryMapping,
   RepositoryOwnership,
@@ -706,6 +707,37 @@ function serviceTriggers(source: UnknownRecord, issues: ConfigIssue[]): readonly
   return triggers
 }
 
+function githubAccount(value: unknown, path: string, issues: ConfigIssue[]): GitHubAccount | undefined {
+  if (!isRecord(value)) {
+    issues.push({ path, message: 'Expected an object.' })
+    return undefined
+  }
+  const login = requiredString(value, 'login', path, issues)
+  const tokenPath = requiredString(value, 'token_path', path, issues)
+  const name = requiredString(value, 'name', path, issues)
+  const url = requiredString(value, 'url', path, issues)
+  const instructions = requiredString(value, 'instructions', path, issues)
+  if (login !== undefined && !/^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i.test(login))
+    issues.push({ path: `${path}.login`, message: 'Expected a GitHub account login.' })
+  if (tokenPath !== undefined && !isAbsolute(tokenPath))
+    issues.push({ path: `${path}.token_path`, message: 'Expected an absolute path.' })
+  if (name !== undefined && (name.length > 100 || /[\r\n[\]]/.test(name)))
+    issues.push({ path: `${path}.name`, message: 'Expected a plain display name under 101 characters.' })
+  if (url !== undefined && !/^https:\/\/[a-z\d.-]+(?:\/[^\s()<>]*)?$/i.test(url))
+    issues.push({ path: `${path}.url`, message: 'Expected an HTTPS URL without Markdown delimiters.' })
+  if (instructions !== undefined && instructions.length > 8000)
+    issues.push({ path: `${path}.instructions`, message: 'Keep account instructions under 8001 characters.' })
+  if (
+    login === undefined ||
+    tokenPath === undefined ||
+    name === undefined ||
+    url === undefined ||
+    instructions === undefined
+  )
+    return undefined
+  return { login, tokenPath, name, url, instructions }
+}
+
 function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[]): RepositoryMapping | undefined {
   const path = `$.repositories[${index}]`
   if (!isRecord(value)) {
@@ -713,7 +745,12 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
     return undefined
   }
 
-  const release = value.release === undefined ? undefined : parsePackageReleaseConfig(value.release)
+  const account =
+    value.github_account === undefined
+      ? undefined
+      : githubAccount(value.github_account, `${path}.github_account`, issues)
+  const releaseDisabled = value.release === false
+  const release = value.release === undefined || releaseDisabled ? undefined : parsePackageReleaseConfig(value.release)
   if (release?._tag === 'Err') issues.push({ path: `${path}.release`, message: release.error })
   const github = requiredString(value, 'github', path, issues)
   const checkout = requiredString(value, 'checkout', path, issues)
@@ -731,8 +768,14 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
   )
     issues.push({ path: `${path}.poll_interval_seconds`, message: 'Expected an integer from 10 to 3600.' })
   const repositoryOwnership = ownership(value, path, issues)
-  if (release?._tag === 'Ok' && repositoryOwnership !== 'owned')
-    issues.push({ path: `${path}.release`, message: 'Package releases require an owned repository.' })
+  if (release?._tag === 'Ok' && repositoryOwnership === 'external')
+    issues.push({ path: `${path}.release`, message: 'Package releases require an owned or maintained repository.' })
+  // A maintained release speaks for Wolfstar. It must name his own credential, so the App never publishes it.
+  if (release?._tag === 'Ok' && repositoryOwnership === 'maintained' && release.value.credential._tag !== 'User')
+    issues.push({
+      path: `${path}.release`,
+      message: 'Package releases in a maintained repository need the explicit opt in credential: user.',
+    })
   const reasoningEffort = roleReasoningEfforts(value.reasoning_effort, `${path}.reasoning_effort`, issues)
   const defaultBranch = requiredString(value, 'default_branch', path, issues)
   const writablePullRequestAuthors = stringArray(value, 'writable_pr_authors', path, issues)
@@ -803,7 +846,8 @@ function repositoryMapping(value: unknown, index: number, issues: ConfigIssue[])
 
   return {
     github,
-    ...(release?._tag === 'Ok' ? { release: release.value } : {}),
+    ...(account === undefined ? {} : { githubAccount: account }),
+    ...(releaseDisabled ? { release: undefined } : release?._tag === 'Ok' ? { release: release.value } : {}),
     checkout,
     enabled,
     ...(typeof priority === 'number' ? { priority } : {}),
@@ -901,6 +945,10 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
       : undefined
   if (port === undefined) issues.push({ path: '$.server.port', message: 'Expected an integer from 1 to 65535.' })
   const allowedOrigin = server === undefined ? undefined : requiredString(server, 'allowed_origin', '$.server', issues)
+  const agentSessions =
+    server?.agent_sessions === undefined ? false : requiredBoolean(server, 'agent_sessions', '$.server', issues)
+  if (server?.desktop_sessions !== undefined)
+    issues.push({ path: '$.server.desktop_sessions', message: 'Replace desktop_sessions with agent_sessions.' })
   const frameAncestors =
     server === undefined
       ? undefined
@@ -953,6 +1001,45 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
 
   const trustedCheckoutRoots = [join(homedir(), 'pkg'), join(homedir(), 'sites')]
 
+  const releaseDefaultsValue = document.value.release_defaults
+  const releaseDefaultsRecord =
+    releaseDefaultsValue === undefined ? undefined : isRecord(releaseDefaultsValue) ? releaseDefaultsValue : null
+  if (releaseDefaultsRecord === null) issues.push({ path: '$.release_defaults', message: 'Expected an object.' })
+  const releaseDefaultsOwner =
+    releaseDefaultsRecord === undefined || releaseDefaultsRecord === null
+      ? undefined
+      : requiredString(releaseDefaultsRecord, 'owner', '$.release_defaults', issues)
+  const releaseDefaultsRoot =
+    releaseDefaultsRecord === undefined || releaseDefaultsRecord === null
+      ? undefined
+      : requiredString(releaseDefaultsRecord, 'checkout_root', '$.release_defaults', issues)
+  const releaseDefaultsPolicy =
+    releaseDefaultsRecord === undefined || releaseDefaultsRecord === null
+      ? undefined
+      : parsePackageReleaseConfig(releaseDefaultsRecord)
+  if (releaseDefaultsPolicy?._tag === 'Err')
+    issues.push({ path: '$.release_defaults', message: releaseDefaultsPolicy.error })
+  if (
+    releaseDefaultsOwner !== undefined &&
+    (!/^[\w-]+$/.test(releaseDefaultsOwner) ||
+      !allowedOwners?.some((owner) => owner.toLowerCase() === releaseDefaultsOwner.toLowerCase()))
+  ) {
+    issues.push({ path: '$.release_defaults.owner', message: 'Expected an allowed GitHub owner.' })
+  }
+  if (
+    releaseDefaultsRoot !== undefined &&
+    (!isAbsolute(releaseDefaultsRoot) || !trustedCheckoutRoots.some((root) => isWithin(root, releaseDefaultsRoot)))
+  ) {
+    issues.push({
+      path: '$.release_defaults.checkout_root',
+      message: 'Expected a path inside a trusted checkout root.',
+    })
+  }
+  const releaseDefaults =
+    releaseDefaultsOwner !== undefined && releaseDefaultsRoot !== undefined && releaseDefaultsPolicy?._tag === 'Ok'
+      ? { owner: releaseDefaultsOwner, checkoutRoot: releaseDefaultsRoot, policy: releaseDefaultsPolicy.value }
+      : undefined
+
   const repositoriesValue = document.value.repositories
   const repositories = Array.isArray(repositoriesValue)
     ? repositoriesValue
@@ -1002,6 +1089,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     allowedOwners === undefined ||
     port === undefined ||
     allowedOrigin === undefined ||
+    agentSessions === undefined ||
     frameAncestors === undefined ||
     storagePath === undefined ||
     pollIntervalSeconds === undefined ||
@@ -1019,7 +1107,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   return ok({
     agent,
     github: { appId, privateKeyPath, allowedOwners },
-    server: { host, port, allowedOrigin, frameAncestors },
+    server: { host, port, allowedOrigin, frameAncestors, agentSessions },
     webhook,
     classification,
     triggers,
@@ -1032,6 +1120,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     pollIntervalSeconds,
     issueCutoff,
     externalRepositories,
+    ...(releaseDefaults === undefined ? {} : { releaseDefaults }),
     repositories,
   })
 }
