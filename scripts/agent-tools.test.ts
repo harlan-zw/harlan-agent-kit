@@ -70,11 +70,12 @@ it('refuses script installers inside an otherwise verified archive', async () =>
   await expect(syncAgentTool({ ...f, release, download: async () => bytes })).rejects.toThrow('native executable')
 })
 
-it('installs the platform-named Codex executable from its official archive', async () => {
+it('installs Codex and its command host from one verified package', async () => {
   const f = fixture()
-  const name = 'codex-x86_64-unknown-linux-musl'
-  copyFileSync('/usr/bin/true', join(f.home, 'archive', name))
-  execFileSync('/usr/bin/tar', ['-czf', join(f.home, 'codex.tar.gz'), '-C', join(f.home, 'archive'), name])
+  const name = 'codex-package-x86_64-unknown-linux-musl'
+  copyFileSync('/usr/bin/true', join(f.home, 'archive/bin/codex'))
+  copyFileSync('/usr/bin/true', join(f.home, 'archive/bin/codex-code-mode-host'))
+  execFileSync('/usr/bin/tar', ['-czf', join(f.home, 'codex.tar.gz'), '-C', join(f.home, 'archive'), 'bin'])
   const bytes = readFileSync(join(f.home, 'codex.tar.gz'))
   const release = { tag_name: 'rust-v0.162.1', draft: false, prerelease: false, assets: [{
     name: `${name}.tar.gz`,
@@ -83,6 +84,20 @@ it('installs the platform-named Codex executable from its official archive', asy
   }] }
   expect(await syncAgentTool({ ...f, tool: managedTools[1], release, download: async () => bytes })).toBe('Updated')
   expect(execFileSync(join(f.home, '.local/share/harlan-agent-kit/tools/bin/codex'), ['--version'], { encoding: 'utf8' })).toContain('GNU coreutils')
+  const host = join(f.home, '.local/share/harlan-agent-kit/tools/bin/codex-code-mode-host')
+  expect(execFileSync(host, ['--version'], { encoding: 'utf8' })).toContain('GNU coreutils')
+  expect(await syncAgentTool({ ...f, tool: managedTools[1], release, download: async () => {
+    throw new Error('Unexpected download')
+  } })).toBe('Current')
+  rmSync(host)
+  expect(await syncAgentTool({ ...f, tool: managedTools[1], release, download: async () => bytes })).toBe('Updated')
+  expect(execFileSync(host, ['--version'], { encoding: 'utf8' })).toContain('GNU coreutils')
+  writeFileSync(join(f.home, 'archive/bin/codex-code-mode-host'), '#!/bin/sh\nexit 0\n')
+  execFileSync('/usr/bin/tar', ['-czf', join(f.home, 'codex.tar.gz'), '-C', join(f.home, 'archive'), 'bin'])
+  const unsafeBytes = readFileSync(join(f.home, 'codex.tar.gz'))
+  const unsafeRelease = { ...release, assets: [{ ...release.assets[0], digest: `sha256:${createHash('sha256').update(unsafeBytes).digest('hex')}` }] }
+  await expect(syncAgentTool({ ...f, tool: managedTools[1], release: unsafeRelease, download: async () => unsafeBytes })).rejects.toThrow('native executable')
+  expect(execFileSync(host, ['--version'], { encoding: 'utf8' })).toContain('GNU coreutils')
 })
 
 it('installs OpenCode V2 from its integrity checked npm archive', async () => {

@@ -2,7 +2,7 @@
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import process from 'node:process'
@@ -12,7 +12,7 @@ import { promisify } from 'node:util'
 const execute = promisify(execFile)
 export const managedTools = [
   { name: 'gh', repository: 'cli/cli', asset: (arch: string) => new RegExp(`^gh_[0-9.]+_linux_${arch === 'arm64' ? 'arm64' : 'amd64'}\\.tar\\.gz$`) },
-  { name: 'codex', repository: 'openai/codex', asset: (arch: string) => new RegExp(`^codex-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-unknown-linux-musl\\.tar\\.gz$`) },
+  { name: 'codex', repository: 'openai/codex', asset: (arch: string) => new RegExp(`^codex-package-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-unknown-linux-musl\\.tar\\.gz$`) },
   { name: 'opencode' },
   { name: 'bun', repository: 'oven-sh/bun', asset: (arch: string) => new RegExp(`^bun-linux-${arch === 'arm64' ? 'aarch64' : 'x64-baseline'}\\.zip$`) },
   { name: 'wt', repository: 'max-sixty/worktrunk', asset: (arch: string) => new RegExp(`^worktrunk-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-unknown-linux-musl\\.tar\\.xz$`) },
@@ -80,6 +80,7 @@ export async function syncAgentTool(input: {
   const root = join(input.home, '.local/share/harlan-agent-kit/tools')
   const binary = join(root, 'bin', input.tool.name)
   const receipt = join(root, `${input.tool.name}.json`)
+  const executableNames = input.tool.name === 'codex' ? ['codex', 'codex-code-mode-host'] : [input.tool.name]
   const previous = await readFile(receipt, 'utf8').catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT')
       return undefined
@@ -88,11 +89,11 @@ export async function syncAgentTool(input: {
   if (previous !== undefined) {
     const record = JSON.parse(previous) as { digest?: string }
     if (record.digest === release.asset.digest
-      && await stat(binary).then(metadata => metadata.isFile() && (metadata.mode & 0o111) !== 0).catch((error: NodeJS.ErrnoException) => {
+      && (await Promise.all(executableNames.map(name => stat(join(root, 'bin', name)).then(metadata => metadata.isFile() && (metadata.mode & 0o111) !== 0).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT')
           return false
         throw error
-      })) {
+      })))).every(Boolean)) {
       return 'Current'
     }
   }
@@ -103,22 +104,37 @@ export async function syncAgentTool(input: {
   const scratch = await mkdtemp(join(tmpdir(), 'agent-tool-'))
   await mkdir(join(root, 'bin'), { recursive: true, mode: 0o700 })
   const staged = `${binary}.${randomUUID()}`
+  const bundle = `${staged}.bundle`
   try {
     const archive = join(scratch, release.asset.name)
     await writeFile(archive, bytes, { mode: 0o600 })
     const zip = release.asset.name.endsWith('.zip')
     const members = (await execute(zip ? '/usr/bin/unzip' : '/usr/bin/tar', zip ? ['-Z1', archive] : ['-tf', archive], { maxBuffer: 4 * 1024 * 1024 })).stdout.trim().split('\n')
-    const executableName = input.tool.name === 'codex' ? release.asset.name.replace(/\.tar\.gz$/, '') : input.tool.name
-    const candidates = members.filter(member => member === executableName || member.endsWith(`/${executableName}`))
-    const member = candidates[0]
-    if (candidates.length !== 1 || member === undefined || member.startsWith('/') || member.split('/').includes('..'))
-      throw new Error(`The Agent tool archive has no unique executable: ${input.tool.name}`)
-    const contents = (await execute(zip ? '/usr/bin/unzip' : '/usr/bin/tar', zip ? ['-p', archive, member] : ['-xOf', archive, member], { encoding: 'buffer', maxBuffer: 512 * 1024 * 1024 })).stdout
-    if (contents.subarray(0, 4).toString('hex') !== '7f454c46')
-      throw new Error(`The Agent tool archive must contain a native executable: ${input.tool.name}`)
-    await writeFile(staged, contents, { mode: 0o700 })
-    await execute(staged, ['--version'], { timeout: 30_000 })
-    await chmod(staged, 0o755)
+    await mkdir(bundle, { mode: 0o700 })
+    for (const name of executableNames) {
+      const candidates = members.filter(member => member === name || member.endsWith(`/${name}`))
+      const member = candidates[0]
+      if (candidates.length !== 1 || member === undefined || member.startsWith('/') || member.split('/').includes('..'))
+        throw new Error(`The Agent tool archive has no unique executable: ${name}`)
+      const contents = (await execute(zip ? '/usr/bin/unzip' : '/usr/bin/tar', zip ? ['-p', archive, member] : ['-xOf', archive, member], { encoding: 'buffer', maxBuffer: 512 * 1024 * 1024 })).stdout
+      if (contents.subarray(0, 4).toString('hex') !== '7f454c46')
+        throw new Error(`The Agent tool archive must contain a native executable: ${name}`)
+      await writeFile(join(bundle, name), contents, { mode: 0o755 })
+    }
+    await execute(join(bundle, input.tool.name), ['--version'], { timeout: 30_000 })
+    if (input.tool.name === 'codex') {
+      // Resolve Codex and its sibling from one immutable directory, even during sync.
+      const installed = await mkdtemp(join(root, 'codex-release-'))
+      await rename(bundle, installed)
+      const hostLink = `${staged}.host`
+      await symlink(join(installed, 'codex-code-mode-host'), hostLink)
+      await rename(hostLink, join(root, 'bin/codex-code-mode-host'))
+      await symlink(join(installed, 'codex'), staged)
+    }
+    else {
+      await rename(join(bundle, input.tool.name), staged)
+      await chmod(staged, 0o755)
+    }
     await rename(staged, binary)
     const stagedReceipt = join(scratch, 'receipt.json')
     await writeFile(stagedReceipt, JSON.stringify({ tag: release.tag, digest: release.asset.digest }), { mode: 0o600 })
@@ -130,6 +146,8 @@ export async function syncAgentTool(input: {
   finally {
     await rm(staged, { force: true })
     await rm(`${staged}.json`, { force: true })
+    await rm(`${staged}.host`, { force: true })
+    await rm(bundle, { recursive: true, force: true })
     await rm(scratch, { recursive: true, force: true })
   }
 }
