@@ -54,7 +54,9 @@ export class ControllerContainer extends Container<Env> {
   }
 
   async readSetup(): Promise<SetupRecord> {
-    return { ...EMPTY_SETUP, ...(await this.ctx.storage.get<SetupRecord>(SETUP_KEY)) }
+    const stored = await this.ctx.storage.get<SetupRecord>(SETUP_KEY)
+    // A record saved before a provider existed lacks its field, so the defaults fill it.
+    return { ...EMPTY_SETUP, ...stored, providers: { ...EMPTY_SETUP.providers, ...stored?.providers } }
   }
 
   async writeSetup(record: SetupRecord): Promise<void> {
@@ -116,6 +118,7 @@ export function controllerEnvironment(record: SetupRecord, allowedOwners: string
   const app = record.app!
   return {
     WOLFSTAR_GITHUB_APP_ID: String(app.id),
+    WOLFSTAR_GITHUB_APP_SLUG: app.slug,
     WOLFSTAR_GITHUB_APP_PRIVATE_KEY: app.privateKey,
     WOLFSTAR_GITHUB_WEBHOOK_SECRET: app.webhookSecret,
     WOLFSTAR_DASHBOARD_PASSWORD: record.dashboardPassword ?? '',
@@ -127,5 +130,7 @@ export function controllerEnvironment(record: SetupRecord, allowedOwners: string
     CLAUDE_CODE_OAUTH_TOKEN: record.providers.claudeToken ?? '',
     WOLFSTAR_CODEX_AUTH_JSON: record.providers.codexAuth ?? '',
     WOLFSTAR_ZAI_API_KEY: record.providers.zaiApiKey ?? '',
+    WOLFSTAR_WORKERS_AI_TOKEN: record.providers.workersAiToken ?? '',
+    WOLFSTAR_WORKERS_AI_ACCOUNT_ID: record.providers.workersAiAccountId ?? '',
   }
 }

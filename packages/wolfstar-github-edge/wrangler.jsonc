@@ -13,6 +13,9 @@
   // Everything else comes from the setup page at /setup on the deployed URL.
   "vars": {
     "ALLOWED_OWNERS": "wolfstar-project",
+    // Cloudflare Access in front of every route but /webhook. Clear both to turn the check off.
+    "ACCESS_TEAM_DOMAIN": "https://wolfstar.cloudflareaccess.com",
+    "ACCESS_AUD": "808350b0ce80d953105d631f4e9db423289eb1e973f45de04eb38ca53341242e",
   },
   "containers": [
     {

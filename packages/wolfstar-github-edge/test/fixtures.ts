@@ -32,7 +32,13 @@ export const READY_SETUP: SetupRecord = {
     gitEmail: '9+wolfstar-project-agent-abcd[bot]@users.noreply.github.com',
   },
   dashboardPassword: DASHBOARD_PASSWORD,
-  providers: { claudeToken: 'sk-ant-oat01-token', codexAuth: null, zaiApiKey: null },
+  providers: {
+    claudeToken: 'sk-ant-oat01-token',
+    codexAuth: null,
+    zaiApiKey: null,
+    workersAiToken: null,
+    workersAiAccountId: null,
+  },
   issueCutoff: '2026-09-14',
 }
 

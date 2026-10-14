@@ -24,6 +24,10 @@ export interface ProviderCredentials {
   claudeToken: string | null
   codexAuth: string | null
   zaiApiKey: string | null
+  /** A Cloudflare API token with Workers AI access. opencode runs Workers AI models with it. */
+  workersAiToken: string | null
+  /** The account the Workers AI token bills. Found from the token when the form leaves it empty. */
+  workersAiAccountId: string | null
 }
 
 export interface SetupRecord {
@@ -42,7 +46,7 @@ export const EMPTY_SETUP: SetupRecord = {
   dashboardPassword: null,
   sessionHash: null,
   manifestState: null,
-  providers: { claudeToken: null, codexAuth: null, zaiApiKey: null },
+  providers: { claudeToken: null, codexAuth: null, zaiApiKey: null, workersAiToken: null, workersAiAccountId: null },
   mutationsEnabled: true,
   issueCutoff: null,
 }
@@ -64,8 +68,12 @@ export interface SetupDependencies {
 
 /** The controller can run once it has an App and at least one Agent provider. */
 export function isReady(record: SetupRecord): boolean {
-  const { claudeToken, codexAuth, zaiApiKey } = record.providers
-  return record.app !== null && record.dashboardPassword !== null && (claudeToken ?? codexAuth ?? zaiApiKey) !== null
+  const { claudeToken, codexAuth, zaiApiKey, workersAiToken } = record.providers
+  return (
+    record.app !== null &&
+    record.dashboardPassword !== null &&
+    (claudeToken ?? codexAuth ?? zaiApiKey ?? workersAiToken) !== null
+  )
 }
 
 export const DASHBOARD_USER = 'agent'
@@ -352,6 +360,8 @@ ${saved ? '<p><strong>Saved.</strong> The controller is restarting with these se
 <label>Claude <small>output of <code>claude setup-token</code></small>${set(record.providers.claudeToken)}<input type="password" name="claude_token" autocomplete="off"></label>
 <label>Codex <small>contents of <code>~/.codex/auth.json</code> after <code>codex login</code></small>${set(record.providers.codexAuth)}<textarea name="codex_auth" rows="4" autocomplete="off"></textarea></label>
 <label>opencode <small>GLM Coding Plan API key</small>${set(record.providers.zaiApiKey)}<input type="password" name="zai_api_key" autocomplete="off"></label>
+<label>Cloudflare Workers AI <small>an API token with the Workers AI Read permission. Runs through opencode, billed to your Cloudflare account</small>${set(record.providers.workersAiToken)}<input type="password" name="workers_ai_token" autocomplete="off"></label>
+<label>Workers AI account ID <small>optional, found from the token when it can see one account</small>${record.providers.workersAiAccountId === null ? '' : ` <small>(${escapeHtml(record.providers.workersAiAccountId)})</small>`}<input type="text" name="workers_ai_account_id" autocomplete="off" pattern="[0-9a-f]{32}"></label>
 <label><input type="checkbox" name="mutations_enabled"${record.mutationsEnabled ? ' checked' : ''}> Let the agent write to GitHub <small>comments, labels, pull requests, pushes</small></label>
 <button type="submit">Save and start</button>
 </form>
@@ -359,6 +369,47 @@ ${saved ? '<p><strong>Saved.</strong> The controller is restarting with these se
 <p>Open <a href="${escapeHtml(origin)}/">${escapeHtml(origin)}/</a> and sign in as <code>${DASHBOARD_USER}</code> with this password. Save it now. This page shows it again only after you sign in with it.</p>
 <p class="box"><code>${escapeHtml(record.dashboardPassword ?? '')}</code></p>`,
   )
+}
+
+type WorkersAiCheck = { _tag: 'Accepted'; accountId: string } | { _tag: 'Refused'; reason: string }
+
+/**
+ * Finds the account a Workers AI token bills and proves the token can reach Workers AI.
+ *
+ * A wrong token fails here, on the setup page, instead of on the first Agent turn.
+ */
+async function checkWorkersAi(
+  dependencies: SetupDependencies,
+  token: string,
+  typedAccount: string | null,
+): Promise<WorkersAiCheck> {
+  const call = async (path: string): Promise<{ ok: boolean; body: { result?: unknown } }> => {
+    const response = await dependencies.fetch(`https://api.cloudflare.com/client/v4${path}`, {
+      headers: { authorization: `Bearer ${token}`, 'user-agent': USER_AGENT },
+    })
+    return { ok: response.ok, body: (await response.json().catch(() => ({}))) as { result?: unknown } }
+  }
+
+  let accountId = typedAccount
+  if (accountId !== null && !/^[0-9a-f]{32}$/.test(accountId))
+    return { _tag: 'Refused', reason: 'The account ID must have 32 hexadecimal characters.' }
+  if (accountId === null) {
+    const accounts = await call('/accounts?per_page=50')
+    const ids = Array.isArray(accounts.body.result)
+      ? accounts.body.result.flatMap((account: { id?: unknown }) =>
+          typeof account.id === 'string' ? [account.id] : [],
+        )
+      : []
+    if (!accounts.ok || ids.length === 0)
+      return { _tag: 'Refused', reason: 'The token cannot list any account. Enter the account ID as well.' }
+    if (ids.length > 1)
+      return { _tag: 'Refused', reason: 'The token can see more than one account. Enter the account ID as well.' }
+    accountId = ids[0]!
+  }
+  const models = await call(`/accounts/${accountId}/ai/models/search?per_page=1`)
+  if (!models.ok)
+    return { _tag: 'Refused', reason: 'The token cannot read Workers AI on that account. Give it Workers AI Read.' }
+  return { _tag: 'Accepted', accountId }
 }
 
 async function canEditProviders(request: Request, record: SetupRecord): Promise<boolean> {
@@ -405,12 +456,27 @@ async function saveProviders(
       )
     }
   }
+  const workersAiToken = text('workers_ai_token') ?? record.providers.workersAiToken
+  const typedAccount = text('workers_ai_account_id')
+  let workersAiAccountId = typedAccount ?? record.providers.workersAiAccountId
+  if (workersAiToken !== null && (text('workers_ai_token') !== null || typedAccount !== null)) {
+    const account = await checkWorkersAi(dependencies, workersAiToken, typedAccount)
+    if (account._tag === 'Refused')
+      return page(
+        'Workers AI login refused',
+        `<h1>Workers AI login refused</h1><p>${escapeHtml(account.reason)} <a href="/setup/providers">Back</a>.</p>`,
+        { status: 400 },
+      )
+    workersAiAccountId = account.accountId
+  }
   const next: SetupRecord = {
     ...record,
     providers: {
       claudeToken: text('claude_token') ?? record.providers.claudeToken,
       codexAuth: codexAuth ?? record.providers.codexAuth,
       zaiApiKey: text('zai_api_key') ?? record.providers.zaiApiKey,
+      workersAiToken,
+      workersAiAccountId,
     },
     mutationsEnabled: form.get('mutations_enabled') === 'on',
   }

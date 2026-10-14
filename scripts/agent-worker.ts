@@ -57,12 +57,24 @@ const providerConfig = await readFile(join(source, '.config/opencode/opencode.js
     throw error
   },
 )
-const configured = (JSON.parse(providerConfig) as { providers?: Record<string, { settings?: { apiKey?: unknown } }> })
-  .providers
-const providers: Record<string, { settings: { apiKey: string } }> = {}
-for (const id of ['zai-coding-plan', 'opencode-go']) {
+const configured = (
+  JSON.parse(providerConfig) as { providers?: Record<string, { settings?: { apiKey?: unknown; baseURL?: unknown } }> }
+).providers
+const providers: Record<string, { settings: { apiKey: string; baseURL?: string } }> = {}
+// Workers AI also needs its account endpoint. Only that exact endpoint is copied, so the key cannot go elsewhere.
+const workersAiBaseUrl = /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/[0-9a-f]{32}\/ai\/v1$/
+for (const id of ['zai-coding-plan', 'opencode-go', 'cloudflare-workers-ai']) {
   const apiKey = configured?.[id]?.settings?.apiKey
-  if (typeof apiKey === 'string' && apiKey.trim() !== '') providers[id] = { settings: { apiKey } }
+  if (typeof apiKey !== 'string' || apiKey.trim() === '') continue
+  const baseURL = configured?.[id]?.settings?.baseURL
+  providers[id] = {
+    settings: {
+      apiKey,
+      ...(id === 'cloudflare-workers-ai' && typeof baseURL === 'string' && workersAiBaseUrl.test(baseURL)
+        ? { baseURL }
+        : {}),
+    },
+  }
 }
 await mkdir(join(home, '.config/opencode'), { recursive: true, mode: 0o700 })
 await writeFile(

@@ -1,9 +1,11 @@
 import type { AgentProviderName } from './agent-provider.ts'
 import type { Result } from './result.ts'
+import type { PinnedAgentSelection } from './types.ts'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { isAllowedRepository } from './repository-discovery.ts'
 import { err, ok } from './result.ts'
+import { WORKERS_AI_MODELS, WORKERS_AI_PROVIDER, workersAiBaseUrl } from './workers-ai.ts'
 
 /**
  * Everything the Cloudflare Container hands the controller at start.
@@ -16,6 +18,8 @@ import { err, ok } from './result.ts'
  */
 export interface CloudflareRuntimeInputs {
   appId: number
+  /** The slug of the App the setup page created. Its bot posts as `<slug>[bot]`. */
+  appSlug: string
   privateKey: string
   webhookSecret: string
   dashboardPassword: string
@@ -35,11 +39,14 @@ export interface ProviderCredentials {
   codexAuth: string | null
   /** The GLM Coding Plan key opencode uses. */
   zaiApiKey: string | null
+  /** A Cloudflare API token with Workers AI access, and the account it bills. opencode runs these models. */
+  workersAi: { apiToken: string; accountId: string } | null
 }
 
 /** The variable names the edge Worker sets. Keep in step with `packages/wolfstar-github-edge`. */
 export const RUNTIME_VARIABLES = {
   appId: 'WOLFSTAR_GITHUB_APP_ID',
+  appSlug: 'WOLFSTAR_GITHUB_APP_SLUG',
   privateKey: 'WOLFSTAR_GITHUB_APP_PRIVATE_KEY',
   webhookSecret: 'WOLFSTAR_GITHUB_WEBHOOK_SECRET',
   dashboardPassword: 'WOLFSTAR_DASHBOARD_PASSWORD',
@@ -51,6 +58,8 @@ export const RUNTIME_VARIABLES = {
   claudeToken: 'CLAUDE_CODE_OAUTH_TOKEN',
   codexAuth: 'WOLFSTAR_CODEX_AUTH_JSON',
   zaiApiKey: 'WOLFSTAR_ZAI_API_KEY',
+  workersAiToken: 'WOLFSTAR_WORKERS_AI_TOKEN',
+  workersAiAccountId: 'WOLFSTAR_WORKERS_AI_ACCOUNT_ID',
 } as const
 
 /**
@@ -93,6 +102,9 @@ export function readRuntimeInputs(
   const appId = Number(appIdText)
   if (appIdText !== '' && (!Number.isSafeInteger(appId) || appId <= 0))
     issues.push(`${RUNTIME_VARIABLES.appId} is not a positive integer.`)
+  const appSlug = required(RUNTIME_VARIABLES.appSlug).toLowerCase()
+  if (appSlug !== '' && !/^[a-z0-9][a-z0-9-]{0,62}$/.test(appSlug))
+    issues.push(`${RUNTIME_VARIABLES.appSlug} is not a GitHub App slug.`)
   const privateKey = required(RUNTIME_VARIABLES.privateKey)
   const webhookSecret = required(RUNTIME_VARIABLES.webhookSecret)
   const dashboardPassword = required(RUNTIME_VARIABLES.dashboardPassword)
@@ -106,10 +118,18 @@ export function readRuntimeInputs(
   if (issueCutoff !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(issueCutoff))
     issues.push(`${RUNTIME_VARIABLES.issueCutoff} is not a YYYY-MM-DD date.`)
 
+  const workersAiToken = optional(environment[RUNTIME_VARIABLES.workersAiToken])
+  const workersAiAccountId = optional(environment[RUNTIME_VARIABLES.workersAiAccountId])
+  if (workersAiToken !== null && (workersAiAccountId === null || workersAiBaseUrl(workersAiAccountId)._tag === 'Err'))
+    issues.push(`${RUNTIME_VARIABLES.workersAiAccountId} must be the 32 character Cloudflare account ID.`)
   const providers: ProviderCredentials = {
     claudeToken: optional(environment[RUNTIME_VARIABLES.claudeToken]),
     codexAuth: optional(environment[RUNTIME_VARIABLES.codexAuth]),
     zaiApiKey: optional(environment[RUNTIME_VARIABLES.zaiApiKey]),
+    workersAi:
+      workersAiToken === null || workersAiAccountId === null
+        ? null
+        : { apiToken: workersAiToken, accountId: workersAiAccountId },
   }
   if (configuredProviders(providers).length === 0)
     issues.push('No Agent provider credential is set. Add one on the setup page.')
@@ -117,6 +137,7 @@ export function readRuntimeInputs(
   if (issues.length > 0) return err(issues)
   return ok({
     appId,
+    appSlug,
     privateKey,
     webhookSecret,
     dashboardPassword,
@@ -134,7 +155,8 @@ export function configuredProviders(providers: ProviderCredentials): AgentProvid
   return [
     ...(providers.claudeToken === null ? [] : ['claude' as const]),
     ...(providers.codexAuth === null ? [] : ['codex' as const]),
-    ...(providers.zaiApiKey === null ? [] : ['opencode' as const]),
+    // opencode serves both the GLM Coding Plan and Workers AI.
+    ...(providers.zaiApiKey === null && providers.workersAi === null ? [] : ['opencode' as const]),
   ]
 }
 
@@ -151,6 +173,11 @@ export interface RuntimePaths {
   sitesRoot: string
   codexAuth: string
   opencodeConfig: string
+  /** The sandboxed Agent home, outside every controller credential path. */
+  workerHome: string
+  workerProfile: string
+  /** Where `scripts/agent-tools.ts` installs gh, codex, opencode, wt, rg, and fd. */
+  toolsBin: string
 }
 
 export function runtimePaths(home: string): RuntimePaths {
@@ -168,6 +195,9 @@ export function runtimePaths(home: string): RuntimePaths {
     sitesRoot: join(home, 'sites'),
     codexAuth: join(home, '.codex', 'auth.json'),
     opencodeConfig: join(home, '.config', 'opencode', 'opencode.json'),
+    workerHome: join(home, '.local', 'share', 'wolfstar-agent-kit', 'worker-home'),
+    workerProfile: join(configDirectory, 'worker.json'),
+    toolsBin: join(home, '.local', 'share', 'wolfstar-agent-kit', 'tools', 'bin'),
   }
 }
 
@@ -192,6 +222,7 @@ export function renderRuntimeConfig(inputs: CloudflareRuntimeInputs, paths: Runt
     },
     github: {
       app_id: inputs.appId,
+      app_slug: inputs.appSlug,
       private_key_path: paths.privateKey,
       allowed_owners: inputs.allowedOwners,
     },
@@ -219,8 +250,16 @@ export function renderRuntimeConfig(inputs: CloudflareRuntimeInputs, paths: Runt
   })
 }
 
-/** opencode reads the GLM Coding Plan key from its own configuration, and so does the service. */
-export function renderOpencodeConfig(existing: string | null, apiKey: string): string {
+/**
+ * The provider logins opencode reads, in the opencode v2 shape.
+ *
+ * The service reads the GLM Coding Plan key from here too, and worker
+ * provisioning copies both entries into the sandboxed worker home.
+ */
+export function renderOpencodeConfig(
+  existing: string | null,
+  credentials: Pick<ProviderCredentials, 'zaiApiKey' | 'workersAi'>,
+): string {
   let config: Record<string, unknown> = {}
   if (existing !== null) {
     try {
@@ -231,23 +270,39 @@ export function renderOpencodeConfig(existing: string | null, apiKey: string): s
       // A broken file is replaced. The Container owns it.
     }
   }
-  const providers = (typeof config.provider === 'object' && config.provider !== null ? config.provider : {}) as Record<
-    string,
-    Record<string, unknown>
-  >
-  const plan = providers['zai-coding-plan'] ?? {}
-  const options = (typeof plan.options === 'object' && plan.options !== null ? plan.options : {}) as Record<
-    string,
-    unknown
-  >
-  return `${JSON.stringify(
-    {
-      ...config,
-      provider: { ...providers, 'zai-coding-plan': { ...plan, options: { ...options, apiKey } } },
-    },
-    null,
-    2,
-  )}\n`
+  const providers = { ...(isRecord(config.providers) ? config.providers : {}) }
+  const withSettings = (id: string, settings: Record<string, string>): void => {
+    const current = isRecord(providers[id]) ? providers[id] : {}
+    const previous = isRecord(current.settings) ? current.settings : {}
+    providers[id] = { ...current, settings: { ...previous, ...settings } }
+  }
+  if (credentials.zaiApiKey !== null) withSettings('zai-coding-plan', { apiKey: credentials.zaiApiKey })
+  if (credentials.workersAi !== null) {
+    const baseURL = workersAiBaseUrl(credentials.workersAi.accountId)
+    if (baseURL._tag === 'Ok')
+      withSettings(WORKERS_AI_PROVIDER, { apiKey: credentials.workersAi.apiToken, baseURL: baseURL.value })
+  }
+  return `${JSON.stringify({ ...config, providers }, null, 2)}\n`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * The selection that makes Workers AI usable when it is the only route.
+ *
+ * Every opencode role defaults to a GLM Coding Plan model. With only Workers
+ * AI configured those turns would fail, so the Container pins a Workers AI
+ * model once, while the selection still follows the configuration.
+ */
+export function workersAiOnlySelection(providers: ProviderCredentials): PinnedAgentSelection | null {
+  const onlyWorkersAi =
+    providers.workersAi !== null &&
+    providers.zaiApiKey === null &&
+    providers.claudeToken === null &&
+    providers.codexAuth === null
+  return onlyWorkersAi ? { provider: 'opencode', model: WORKERS_AI_MODELS[0], reasoningEffort: null } : null
 }
 
 export interface InstallationRepository {
