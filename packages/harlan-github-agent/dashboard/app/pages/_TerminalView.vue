@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { TerminalClientMessage, TerminalInput, TerminalScreen, TerminalSession, TerminalWriter } from '../../../src/terminal-protocol.ts'
-import { useClipboard, useCssVar, useDocumentVisibility, useEventListener, useIntervalFn, useResizeObserver, useTextSelection, useTimeoutFn } from '@vueuse/core'
+import { useClipboard, useCssVar, useDocumentVisibility, useEventListener, useIntervalFn, useMediaQuery, useResizeObserver, useTextSelection, useTimeoutFn } from '@vueuse/core'
 import { browserKeyEvent, CanvasRenderer } from 'ghostty-terminal-bindings/browser'
 import { createSessionImeLatch } from '../utils/session-ime.ts'
 import { terminalFailureCopy } from '../utils/terminal-copy.ts'
+import { submitTerminalDraft } from '../utils/terminal-draft.ts'
 import { createTerminalInputChannel } from '../utils/terminal-input.ts'
 import { parseTerminalFrame } from '../utils/terminal-protocol.ts'
 import { applyTerminalScreen } from '../utils/terminal-screen.ts'
@@ -14,6 +15,9 @@ const terminalBackground = useCssVar('--terminal-bg', container)
 const terminalForeground = useCssVar('--terminal-fg', container)
 const canvas = useTemplateRef('canvas')
 const input = useTemplateRef('input')
+const phoneInput = useMediaQuery('(pointer: coarse)')
+const draft = ref('')
+const draftComposing = ref(false)
 const visibility = useDocumentVisibility()
 let viewId = ''
 const writer = shallowRef<TerminalWriter>(null)
@@ -73,7 +77,7 @@ function send(message: TerminalClientMessage) {
 
 function transmit(message: TerminalInput | { type: 'Resize', cols: number, rows: number }) {
   if (!writable.value || !writer.value)
-    return
+    return false
   const result = channel?.transmit(message)
   if (result?._tag === 'Err') {
     failure.value = terminalFailureCopy[result.reason]
@@ -82,6 +86,26 @@ function transmit(message: TerminalInput | { type: 'Resize', cols: number, rows:
       deliveryBlocked.value = true
       send({ type: 'ReleaseWriter' })
     }
+  }
+  return result?._tag === 'Ok'
+}
+
+function phoneKey(key: string, code: string, ctrlKey = false) {
+  if (draftComposing.value || !writable.value)
+    return
+  const encoded = browserKeyEvent(new KeyboardEvent('keydown', { key, code, ctrlKey }), keyboardLayout)
+  if (!encoded)
+    return
+  history.value = undefined
+  if (screen.value)
+    render(screen.value)
+  const message: TerminalInput = { type: 'Key', event: encoded }
+  if (key === 'Enter') {
+    if (submitTerminalDraft(draft.value, message, transmit) !== 'Rejected')
+      draft.value = ''
+  }
+  else {
+    transmit(message)
   }
 }
 
@@ -172,7 +196,8 @@ function connect() {
       }
       if (message.writer?.viewId === viewId) {
         resize()
-        input.value?.focus({ preventScroll: true })
+        if (!phoneInput.value)
+          input.value?.focus({ preventScroll: true })
       }
     }
     else if (message.type === 'InputReceipt') {
@@ -392,10 +417,24 @@ onScopeDispose(() => {
     <p v-if="failure" role="alert" class="shrink-0 px-3 py-1 text-xs text-error">
       {{ failure }}
     </p>
-    <div ref="container" class="terminal-viewport relative min-h-0 flex-1 overflow-auto" @click="input?.focus({ preventScroll: true })">
+    <div ref="container" class="terminal-viewport relative min-h-0 flex-1 overflow-auto" @click="!phoneInput && input?.focus({ preventScroll: true })">
       <canvas ref="canvas" aria-hidden="true" class="block" @mousedown="mouse($event, 'down')" @mouseup="mouse($event, 'up')" @mousemove="mouse($event, 'move')" />
-      <textarea ref="input" aria-label="Agent terminal" :readonly="!writable" autocapitalize="off" autocomplete="off" autocorrect="off" :spellcheck="false" class="absolute top-0 left-0 size-px resize-none border-0 p-0 opacity-0 outline-none" @focus="focus(true)" @blur="focus(false)" />
+      <textarea ref="input" aria-label="Agent terminal" :readonly="!writable || phoneInput" :tabindex="phoneInput ? -1 : 0" :aria-hidden="phoneInput" autocapitalize="off" autocomplete="off" autocorrect="off" :spellcheck="false" class="absolute top-0 left-0 size-px resize-none border-0 p-0 text-base opacity-0 outline-none" @focus="focus(true)" @blur="focus(false)" />
       <pre :style="selectionStyle" class="terminal-selection absolute top-0 left-0 m-0 select-text whitespace-pre text-transparent" aria-label="Agent terminal output" @mousedown="mouse($event, 'down')" @mouseup="mouse($event, 'up')" @mousemove="mouse($event, 'move')">{{ textLines }}</pre>
+    </div>
+    <div v-if="phoneInput" class="shrink-0 space-y-2 border-t border-default bg-default p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      <textarea v-model="draft" aria-label="Agent terminal" :readonly="!writable" rows="2" class="block max-h-32 min-h-11 w-full resize-none rounded border border-default bg-default p-2 text-base outline-none focus:border-primary" @compositionstart="draftComposing = true" @compositionend="draftComposing = false" @focus="focus(true)" @blur="focus(false)" />
+      <div class="flex gap-2">
+        <UButton color="neutral" variant="outline" class="min-h-11" :disabled="!writable || draftComposing" @click="phoneKey('Escape', 'Escape')">
+          Esc
+        </UButton>
+        <UButton color="neutral" variant="outline" class="min-h-11" :disabled="!writable || draftComposing" @click="phoneKey('c', 'KeyC', true)">
+          Ctrl+C
+        </UButton>
+        <UButton class="ml-auto min-h-11" :disabled="!writable || draftComposing" @click="phoneKey('Enter', 'Enter')">
+          {{ draft ? 'Send' : 'Enter' }}
+        </UButton>
+      </div>
     </div>
   </div>
 </template>

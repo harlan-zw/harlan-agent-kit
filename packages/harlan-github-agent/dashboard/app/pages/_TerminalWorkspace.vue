@@ -31,6 +31,7 @@ const projectId = computed({ get: () => layout.value.projectId, set: (value) => 
 } })
 const projectLayout = computed(() => Object.hasOwn(layout.value.projects, projectId.value) ? layout.value.projects[projectId.value]! : emptyTerminalProjectLayout())
 const narrow = useMediaQuery('(max-width: 767px)')
+const projectsOpen = ref(false)
 const tabList = useTemplateRef<HTMLElement>('tabList')
 const terminalArea = useTemplateRef<HTMLElement>('terminalArea')
 const provider = ref<TerminalProvider>('codex')
@@ -96,6 +97,7 @@ async function refresh() {
 }
 
 async function select(session: TerminalSession) {
+  projectsOpen.value = false
   diffOpen.value = false
   const current = Object.hasOwn(layout.value.projects, session.projectId) ? layout.value.projects[session.projectId]! : emptyTerminalProjectLayout()
   storedLayout.value = { ...layout.value, projectId: session.projectId, projects: { ...layout.value.projects, [session.projectId]: updateTerminalProjectLayout(current, { _tag: 'Open', sessionId: session.id }) } }
@@ -234,8 +236,8 @@ watch(visibility, (value) => {
 </script>
 
 <template>
-  <div class="grid h-full min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[240px_minmax(0,1fr)] md:grid-rows-1">
-    <aside class="flex min-h-0 flex-col border-b border-default bg-muted md:border-r md:border-b-0" aria-label="Projects">
+  <div class="flex h-full min-h-0 flex-col md:grid md:grid-cols-[240px_minmax(0,1fr)] md:grid-rows-1">
+    <aside class="min-h-0 flex-col overflow-y-auto border-b border-default bg-muted md:flex md:border-r md:border-b-0" :class="projectsOpen || !selected ? 'flex max-md:max-h-[45dvh]' : 'hidden'" aria-label="Projects">
       <div class="flex h-10 shrink-0 items-center justify-between border-b border-default px-3">
         <span class="text-xs font-semibold tracking-wide">Projects</span>
         <UButton v-if="capabilities.controller" to="/sessions?view=history" icon="i-octicon-history-16" aria-label="History" variant="ghost" size="xs" />
@@ -291,18 +293,19 @@ watch(visibility, (value) => {
         Force new session
       </UButton>
     </aside>
-    <section class="flex min-h-0 min-w-0 flex-col">
+    <section class="flex min-h-0 min-w-0 flex-1 flex-col">
       <p v-if="selectedProjectUnavailable" role="status" class="shrink-0 border-b border-default px-3 py-2 text-xs text-muted">
         {{ terminalFailureCopy.ProjectUnavailable }}
       </p>
-      <div class="flex h-10 min-w-0 shrink-0 items-center border-b border-default bg-muted">
+      <div class="flex h-11 min-w-0 shrink-0 items-center border-b border-default bg-muted md:h-10">
+        <UButton icon="i-octicon-repo-16" aria-label="Projects" :aria-expanded="projectsOpen" variant="ghost" class="min-h-11 shrink-0 md:hidden" @click="projectsOpen = !projectsOpen" />
         <div ref="tabList" role="tablist" aria-label="Agent sessions" class="flex min-w-0 flex-1 self-stretch overflow-x-auto">
           <div v-for="(session, index) in tabSessions" :key="session.id" role="presentation" class="flex shrink-0 items-center border-r border-default" :class="!diffOpen && selectedId === session.id ? 'border-t-2 border-t-accented bg-default text-highlighted' : 'text-muted'">
             <button :id="`terminal-tab-${session.id}`" role="tab" :data-tab="session.id" :aria-selected="!diffOpen && selectedId === session.id" :aria-controls="visibleSessions.some(value => value.id === session.id) ? `terminal-pane-${session.id}` : undefined" :tabindex="!diffOpen && selectedId === session.id ? 0 : -1" class="flex h-full max-w-48 min-w-0 items-center gap-2 px-3 text-xs focus-visible:outline-2 focus-visible:outline-primary" @click="select(session)" @keydown="tabKey($event, index)">
               <UIcon name="i-octicon-terminal-16" class="size-3 shrink-0" />
               <span class="truncate">{{ providerNames[session.provider] }} {{ index + 1 }}</span>
             </button>
-            <button aria-label="Close tab" class="flex size-8 shrink-0 items-center justify-center text-dimmed hover:bg-elevated hover:text-highlighted focus-visible:outline-2 focus-visible:outline-primary" @click="closeTab(session.id)">
+            <button aria-label="Close tab" class="flex size-11 shrink-0 items-center justify-center text-dimmed hover:bg-elevated hover:text-highlighted focus-visible:outline-2 focus-visible:outline-primary md:size-8" @click="closeTab(session.id)">
               <UIcon name="i-octicon-x-16" class="size-3" />
             </button>
           </div>
