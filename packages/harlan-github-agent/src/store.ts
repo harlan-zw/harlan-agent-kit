@@ -7825,7 +7825,7 @@ export function openJournalStore(
           return { _tag: 'ApprovalRequired' }
         if (database.prepare(`
           SELECT 1 FROM tasks WHERE subject_id = ? AND kind = 'issue_work'
-            AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+            AND state_tag IN ('Queued', 'Running', 'Publishing')
         `).get(row.subject_id) !== undefined) {
           return { _tag: 'WorkActive' }
         }
@@ -7834,6 +7834,19 @@ export function openJournalStore(
       if (reason !== undefined || row === undefined) {
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: reason ?? { _tag: 'ItemNotFound' } }
+      }
+      const stoppedWork = database.prepare(`
+        SELECT id, state_tag, fence FROM tasks
+        WHERE subject_id = ? AND revision_id = ? AND kind = 'issue_work'
+          AND state_tag IN ('ActionRequired', 'Failed')
+      `).all(row.subject_id, input.revisionId) as unknown as Array<{ id: string, state_tag: 'ActionRequired' | 'Failed', fence: number }>
+      for (const work of stoppedWork) {
+        // An explicit rerun requires a fresh route before the same work may resume.
+        database.prepare(`
+          UPDATE tasks SET state_tag = 'Superseded', reason = ?, updated_at = ?
+          WHERE id = ? AND state_tag = ?
+        `).run(freshIssueTriageReason, input.at, work.id, work.state_tag)
+        recordTransition(database, { taskId: work.id, from: work.state_tag, to: 'Superseded', reason: freshIssueTriageReason, fence: work.fence, at: input.at })
       }
       if (row.task_id !== null && (row.state_tag === 'Queued' || row.state_tag === 'Running')) {
         database.exec('COMMIT')

@@ -101,9 +101,12 @@ if (process.argv[2] === 'serve') {
   const managedTools = join(home, '.local/share/harlan-agent-kit/tools/bin')
   await mkdir(managedTools, { recursive: true })
   await copyFile('/usr/bin/true', join(managedTools, 'codex'))
+  await copyFile('/usr/bin/true', join(managedTools, 'codex-code-mode-host'))
   await writeFile(join(managedTools, 'gh'), '#!/bin/sh\nprintf "current-host-cli\\n"\n', { mode: 0o755 })
   const toolSandbox = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, readOnly: true })
   try {
+    const commandHost = await execute(toolSandbox.binary, [...toolSandbox.args, '/run/agent/host-tools/codex-code-mode-host', '--version'], { env: toolSandbox.environment })
+    expect(commandHost.stdout).toContain('GNU coreutils')
     const runningTool = execute(toolSandbox.binary, [...toolSandbox.args, '/bin/sh', '-c', '/run/agent/host-tools/gh; read -r line; /run/agent/host-tools/gh'], { env: toolSandbox.environment })
     await new Promise<void>((resolve, reject) => {
       runningTool.child.stdout!.once('data', () => resolve())
