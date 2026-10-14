@@ -1,5 +1,5 @@
 import type { Octokit } from 'octokit'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { err, ok } from '../src/result.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -10,13 +10,13 @@ const fixture = vi.hoisted(() => {
   const octokit = {
     rest: {
       issues: {
-        get: async ({ issue_number }: { issue_number: number }) => ({ data: { labels: response(issue_number).data } }),
+        get: async ({ issue_number }: { issue_number: number, request?: { signal: AbortSignal } }) => ({ data: { labels: response(issue_number).data } }),
         createLabel: async () => ({ data: {} }),
         addLabels: async ({ issue_number, labels: added }: { issue_number: number, labels: string[] }) => {
           labels.set(issue_number, new Set([...held(issue_number), ...added]))
           return response(issue_number)
         },
-        removeLabel: async ({ issue_number, name }: { issue_number: number, name: string }) => {
+        removeLabel: async ({ issue_number, name }: { issue_number: number, name: string, request?: { signal: AbortSignal } }) => {
           held(issue_number).delete(name)
           return response(issue_number)
         },
@@ -48,7 +48,63 @@ beforeEach(() => {
   vi.restoreAllMocks()
 })
 
+afterEach(() => vi.useRealTimers())
+
 describe('concurrent Agent label writes', () => {
+  it('gives a queued Running-label cleanup its full write deadline', async () => {
+    vi.useFakeTimers()
+    const deadline = () => {
+      const controller = new AbortController()
+      setTimeout(() => controller.abort(new Error('The label write timed out.')), 30_000)
+      return controller.signal
+    }
+    const read = fixture.octokit.rest.issues.get
+    vi.spyOn(fixture.octokit.rest.issues, 'get').mockImplementation(async (request) => {
+      await new Promise(resolve => setTimeout(resolve, 25_000))
+      request.request!.signal.throwIfAborted()
+      return read(request)
+    })
+    const remove = fixture.octokit.rest.issues.removeLabel
+    vi.spyOn(fixture.octokit.rest.issues, 'removeLabel').mockImplementation(async (request) => {
+      await new Promise(resolve => setTimeout(resolve, 25_000))
+      request.request!.signal.throwIfAborted()
+      return remove(request)
+    })
+    const github = source()
+    const repository = repositoryMapping()
+
+    const running = github.stampAgentLabel(repository, 24, 'RUNNING', deadline)
+    const cleanup = github.clearRunningLabel(repository, 24, deadline)
+    await vi.advanceTimersByTimeAsync(50_000)
+
+    expect(await running).toEqual(ok(undefined))
+    expect(await cleanup).toEqual(ok(undefined))
+    expect([...fixture.labels.get(24)!]).toEqual([])
+  })
+
+  it('does not start a cancelled queued stamp', async () => {
+    const pending = Promise.withResolvers<void>()
+    const read = fixture.octokit.rest.issues.get
+    const reads: number[] = []
+    vi.spyOn(fixture.octokit.rest.issues, 'get').mockImplementation(async (request) => {
+      reads.push(request.issue_number)
+      await pending.promise
+      return read(request)
+    })
+    const github = source()
+    const repository = repositoryMapping()
+    const cancellation = new AbortController()
+    const first = github.stampAgentLabel(repository, 24, 'RUNNING', new AbortController().signal)
+    const cancelled = github.stampAgentLabel(repository, 24, 'BLOCKED', cancellation.signal)
+    cancellation.abort(new Error('The caller cancelled the write.'))
+    pending.resolve()
+
+    expect(await first).toEqual(ok(undefined))
+    expect(await cancelled).toEqual(err('The caller cancelled the write.'))
+    expect(reads).toEqual([24])
+    expect([...fixture.labels.get(24)!]).toEqual(['harlan-agent-running'])
+  })
+
   it('settles competing Running and Review stamps in request order', async () => {
     fixture.labels.set(24, new Set(['bug', 'harlan-agent-ready']))
     const github = source()

@@ -786,8 +786,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
      * The clear takes off the Running label alone. A settled Review stamps its
      * verdict just before its Task settles, and a blanket clear would wipe it.
      *
-     * Each write carries its own deadline, so a slow GitHub cannot hold the
-     * shutdown open on a label nobody is waiting for.
+     * Each write starts its deadline after the queue wait.
+     * Its deadline still bounds slow GitHub operations.
      */
     const labelDeadline = (): AbortSignal => AbortSignal.timeout(30_000)
     const labelWrite = (label: string, write: Promise<Result<void, string>>): void => {
@@ -802,14 +802,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       const item = agentLabelItem(task)
       if (item === undefined)
         return
-      labelWrite('Running label', workerGithub.stampAgentLabel(item.repositoryMapping, item.itemNumber, 'RUNNING', labelDeadline()))
+      labelWrite(`${item.repositoryMapping.github}#${item.itemNumber}: Running label`, workerGithub.stampAgentLabel(item.repositoryMapping, item.itemNumber, 'RUNNING', labelDeadline))
     }
     const settleTask = (taskId: string, task: object): void => {
       activityLog.clear(taskId)
       const item = agentLabelItem(task)
       if (item === undefined)
         return
-      labelWrite('Running label', workerGithub.clearRunningLabel(item.repositoryMapping, item.itemNumber, labelDeadline()))
+      labelWrite(`${item.repositoryMapping.github}#${item.itemNumber}: Running label`, workerGithub.clearRunningLabel(item.repositoryMapping, item.itemNumber, labelDeadline))
     }
     const validateMapping = async (mapping: RepositoryMapping) => {
       const validated = await validateRepositoryMappings({ ...config, repositories: [mapping] })
