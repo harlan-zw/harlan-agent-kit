@@ -165,6 +165,8 @@ export interface AgentConfig {
   }
   github: {
     appId: number
+    /** The App's slug, when the App is not named wolfstar-github-agent. Its bot posts as `<slug>[bot]`. */
+    appSlug?: string
     privateKeyPath: string
     allowedOwners: string[]
   }
@@ -1410,7 +1412,8 @@ export type ClaudeAgentModel = 'claude-fable-5' | 'claude-opus-4-8' | 'claude-so
  * `zai-coding-plan/` runs on the GLM Coding Plan, which publishes a real quota
  * and is the route the service prefers. `opencode-go/` is metered per token.
  * The `opencode/` models are the free tier, and they keep answering after
- * everything above has reached its limit.
+ * everything above has reached its limit. `cloudflare-workers-ai/` runs on
+ * the Cloudflare account's Workers AI and is billed per token there.
  */
 export type OpencodeAgentModel =
   | 'zai-coding-plan/glm-4.7'
@@ -1446,6 +1449,18 @@ export type OpencodeAgentModel =
   | 'opencode-go/qwen3.6-plus'
   | 'opencode-go/qwen3.7-max'
   | 'opencode-go/qwen3.7-plus'
+  | WorkersAiAgentModel
+/** Cloudflare Workers AI models opencode runs through its `cloudflare-workers-ai` provider. */
+export type WorkersAiAgentModel =
+  | 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code'
+  | 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6'
+  | 'cloudflare-workers-ai/@cf/zai-org/glm-5.3'
+  | 'cloudflare-workers-ai/@cf/zai-org/glm-5.3-flash'
+  | 'cloudflare-workers-ai/@cf/zai-org/glm-5.2'
+  | 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813'
+  | 'cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731'
+  | 'cloudflare-workers-ai/@cf/qwen/qwen3.8-27b'
+  | 'cloudflare-workers-ai/@cf/openai/gpt-oss-120b'
 export type AgentModel = ClaudeAgentModel | CodexAgentModel | OpencodeAgentModel
 export type CodexReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 

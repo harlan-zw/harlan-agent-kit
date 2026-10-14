@@ -914,6 +914,18 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   const appId =
     typeof appIdValue === 'number' && Number.isSafeInteger(appIdValue) && appIdValue > 0 ? appIdValue : undefined
   if (appId === undefined) issues.push({ path: '$.github.app_id', message: 'Expected a positive safe integer.' })
+  const appSlugValue = github?.app_slug
+  const appSlug =
+    appSlugValue === undefined
+      ? undefined
+      : typeof appSlugValue === 'string' && /^[a-z0-9][a-z0-9-]{0,62}$/.test(appSlugValue)
+        ? appSlugValue
+        : null
+  if (appSlug === null)
+    issues.push({
+      path: '$.github.app_slug',
+      message: 'Expected the GitHub App slug: lowercase letters, digits, and dashes.',
+    })
   const privateKeyPath =
     github === undefined ? undefined : requiredString(github, 'private_key_path', '$.github', issues)
   if (privateKeyPath !== undefined && !isAbsolute(privateKeyPath))
@@ -1160,7 +1172,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
 
   return ok({
     agent,
-    github: { appId, privateKeyPath, allowedOwners },
+    github: { appId, ...(appSlug === undefined || appSlug === null ? {} : { appSlug }), privateKeyPath, allowedOwners },
     server: {
       host,
       port,

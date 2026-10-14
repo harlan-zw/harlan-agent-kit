@@ -509,6 +509,8 @@ export interface GitHubAgentSource {
 export interface GitHubAgentSourceOptions {
   /** The login the controller posts as, which depends on how the repository authenticates. */
   actorLogin: (repository: RepositoryMapping) => string
+  /** The GitHub App's own bot login. Defaults to `wolfstar-github-agent[bot]`. */
+  appActorLogin?: string
   createClient?: (token: string) => Octokit
   /** A former writer whose active marked comments remain canonical after an authentication change. */
   legacyActor?: {
@@ -705,6 +707,7 @@ export function createGitHubAgentSource(
   ReviewFindingThreadSource &
   ReviewApprovalSource &
   NativeReviewPublisher {
+  const appActorLogin = (options.appActorLogin ?? AGENT_ACTOR_LOGIN).toLowerCase()
   // Review snapshots reread every open pull request and its base branch on
   // each sweep. Revalidated reads answer 304 when nothing changed, and GitHub
   // charges no primary quota for a 304. All read-only access uses the cache.
@@ -1305,7 +1308,7 @@ export function createGitHubAgentSource(
           const migrating =
             repository.githubAccount !== undefined &&
             stored?.body?.includes(AUTOMATED_ISSUE_TRIAGE_MARKER) &&
-            [AGENT_ACTOR_LOGIN, AGENT_ACTOR_LOGIN.replace('[bot]', '')].includes(stored.user?.login.toLowerCase() ?? '')
+            [appActorLogin, appActorLogin.replace('[bot]', '')].includes(stored.user?.login.toLowerCase() ?? '')
           const existing =
             commentId === null || migrating
               ? comments
@@ -1691,7 +1694,7 @@ export function createGitHubAgentSource(
           const migrating =
             repository.githubAccount !== undefined &&
             stored?.body?.includes(AUTOMATED_REVIEW_MARKER) &&
-            [AGENT_ACTOR_LOGIN, AGENT_ACTOR_LOGIN.replace('[bot]', '')].includes(stored.user?.login.toLowerCase() ?? '')
+            [appActorLogin, appActorLogin.replace('[bot]', '')].includes(stored.user?.login.toLowerCase() ?? '')
           if (migrating && stored !== undefined && normalizeReviewControl(stored.body ?? '') !== stored.body)
             return err('Review cancellation is pending.')
           const existing =

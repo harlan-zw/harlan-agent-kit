@@ -2,8 +2,19 @@ import type { ReviewFinding } from './types.ts'
 import { cleanText } from './text.ts'
 
 export const AUTOMATED_REVIEW_MARKER = '<!-- wolfstar-agent-kit:pr-triage -->'
-/** The login the GitHub App posts as. */
+/** The login the GitHub App posts as, when the configuration names no App slug. */
 export const AGENT_ACTOR_LOGIN = 'wolfstar-github-agent[bot]'
+
+/**
+ * The login one GitHub App posts as.
+ *
+ * GitHub names an App's bot after the App's slug. A deployment that created its
+ * own App, such as the Cloudflare setup page, has a slug of its own, and the
+ * controller only recognises comments written under the login it expects.
+ */
+export function agentActorLogin(appSlug: string | undefined): string {
+  return appSlug === undefined ? AGENT_ACTOR_LOGIN : `${appSlug.toLowerCase()}[bot]`
+}
 
 /** Show advice without implying that a Logged finding requires Repair. */
 export function reviewFindingFollowUp(finding: Extract<ReviewFinding, { _tag: 'Logged' }>): string {

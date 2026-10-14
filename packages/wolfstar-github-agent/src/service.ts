@@ -106,7 +106,7 @@ import { canReleasePackages } from './repository-policy.ts'
 import { createRestartController, restartAllowsTaskClaims } from './restart-request.ts'
 import { err, ok } from './result.ts'
 import { applyReviewApproval } from './review-approval.ts'
-import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
+import { agentActorLogin } from './review-comment.ts'
 import { createReviewFixWorker } from './review-fix-worker.ts'
 import { refreshReviewGates } from './review-gate-sweep.ts'
 import { createReviewProofAuthority } from './review-proof-controller.ts'
@@ -489,12 +489,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // ones that do not need it keep working.
   // Package releases need the login as well. Only Wolfstar grants release
   // authority, and a release with the user credential writes as him.
+  // The App's bot login follows its slug, so a deployment with its own App recognises its own comments.
+  const appActorLogin = agentActorLogin(options.config.github.appSlug)
   const needsUserLogin = serviceNeedsUserLogin(options.config, userRepositories.length, options.webhookSecret)
   const resolvedLogin = needsUserLogin
     ? await resolveUserLogin(userAccess, options.logger)
-    : { _tag: 'Ok' as const, value: AGENT_ACTOR_LOGIN }
+    : { _tag: 'Ok' as const, value: appActorLogin }
   const activeUserRepositories = resolvedLogin._tag === 'Ok' ? userRepositories : []
-  const userLogin = resolvedLogin._tag === 'Ok' ? resolvedLogin.value : AGENT_ACTOR_LOGIN
+  const userLogin = resolvedLogin._tag === 'Ok' ? resolvedLogin.value : appActorLogin
   const userLoginKnown = needsUserLogin && resolvedLogin._tag === 'Ok'
   if (resolvedLogin._tag === 'Err') {
     options.logger.error(
@@ -518,6 +520,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     options.config.repositories,
     options.config.github.allowedOwners,
     options.config.releaseDefaults,
+    appActorLogin,
   )
   const validatedDiscovery = await validateRepositoryMappings({ ...options.config, repositories: discoveredMappings })
   if (validatedDiscovery._tag === 'Err')
@@ -751,7 +754,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
   // A repository the App cannot reach is answered with Wolfstar's own account.
   const actorLogin = (repository: RepositoryMapping): string =>
-    repository.githubAccount?.login ?? (repository.authentication === 'user' ? userLogin : AGENT_ACTOR_LOGIN)
+    repository.githubAccount?.login ?? (repository.authentication === 'user' ? userLogin : appActorLogin)
   // The release policy picks the release author, never discovery. See createPackageReleaseSource.
   const releaseActorLogin = (repository: RepositoryMapping): string | null => {
     if (!userLoginKnown || !canReleasePackages(repository)) return null
@@ -839,6 +842,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const activityLog = createAgentActivityLog()
   const workerGithub = createGitHubAgentSource({
     actorLogin,
+    appActorLogin,
     legacyActor: { login: userLogin, tokens: legacyUserTokens },
     ownAppId: config.github.appId,
     tokens,
