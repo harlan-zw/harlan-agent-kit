@@ -86,16 +86,15 @@ describe('controller image evidence', () => {
     expect(evidence.unavailable).toHaveLength(1)
   })
 
-  it('reports missing read permission without retrying or upgrading credentials', async () => {
+  it.each([
+    'https://github.com/user-attachments/assets/a',
+    'https://private-user-images.githubusercontent.com/a.png?jwt=fixture-signed-access',
+  ])('requires repository read permission before fetching %s', async (url) => {
     let calls = 0
     const evidence = await source(async () => {
       calls++
       return new Response(svg)
-    }, false)(
-      'owner/repo',
-      [{ url: 'https://github.com/user-attachments/assets/a', label: 'Image' }],
-      new AbortController().signal,
-    )
+    }, false)('owner/repo', [{ url, label: 'Image' }], new AbortController().signal)
     expect(calls).toBe(0)
     expect(evidence.unavailable[0]?.reason).toContain('Read access unavailable')
   })
@@ -261,6 +260,54 @@ describe('controller image evidence', () => {
       label: 'Before: diagram',
     })
     expect(JSON.stringify(evidence)).not.toContain('fixture-signed-access')
+  })
+
+  it.each([
+    { mime: 'image/svg+xml', bytes: Buffer.from(svg) },
+    {
+      mime: 'image/png',
+      bytes: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAABQAAAAKCAYAAAC0VX7mAAAAF0lEQVR4nGNkoDIYNZByMGog5YDqBgIAFJEAC2Vie2MAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    },
+  ])('retrieves signed $mime pixels without conflicting storage authentication', async ({ mime, bytes }) => {
+    const requested: string[] = []
+    const evidence = await source(async (input, options) => {
+      requested.push(String(input))
+      if (new Headers(options?.headers).has('authorization'))
+        return new Response('Only one authentication mechanism allowed', { status: 400 })
+      return requested.length === 1
+        ? new Response(null, {
+            status: 302,
+            headers: {
+              location:
+                'https://github-production-user-asset-6210df.s3.amazonaws.com/image?signature=fixture-storage-grant',
+            },
+          })
+        : new Response(bytes, { headers: { 'content-type': mime } })
+    })(
+      'owner/repo',
+      [
+        {
+          url: 'https://private-user-images.githubusercontent.com/123/image?jwt=fixture-signed-access',
+          source: 'https://github.com/user-attachments/assets/a',
+          label: 'Signup evidence',
+        },
+      ],
+      new AbortController().signal,
+    )
+    expect(evidence.unavailable).toEqual([])
+    expect(parseAgentMedia(evidence.images)).toEqual([
+      expect.objectContaining({
+        mime: 'image/png',
+        label: 'Signup evidence',
+        source: 'https://github.com/user-attachments/assets/a',
+      }),
+    ])
+    expect(requested).toHaveLength(2)
+    expect(JSON.stringify(evidence)).not.toContain('fixture-signed-access')
+    expect(JSON.stringify(evidence)).not.toContain('fixture-storage-grant')
   })
 
   it('reports an expired signed image without retrying another credential or URL', async () => {

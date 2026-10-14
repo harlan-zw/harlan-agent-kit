@@ -48,6 +48,8 @@
     "@openai/codex-sdk": "catalog:",
     "@pierre/diffs": "catalog:",
     "@resvg/resvg-js": "catalog:",
+    "@simplewebauthn/browser": "catalog:",
+    "@simplewebauthn/server": "catalog:",
     "advocaat": "workspace:*",
     "citty": "catalog:",
     "consola": "catalog:",

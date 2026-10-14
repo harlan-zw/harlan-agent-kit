@@ -10,7 +10,7 @@ Create or update a pull request for the current branch. Idempotent -- safe to ru
 
 Every change opens a pull request. Markdown is no exception: a Skill or instruction file changes agent behaviour in every repository, and a README change still earns a review. Never push to `origin/main` directly.
 
-A Markdown-only pull request runs no CI unless a workflow event uses `paths` to include that Markdown. Its review is the whole gate, so treat the review outcome as the check.
+A Markdown-only pull request runs no CI where workflows filter Markdown at the event. Where a `changes` job skips the other jobs, it reports one passed `changes` check and skipped checks. A skipped check counts as passed. In both shapes the review is the whole gate, so treat the review outcome as the check.
 
 ## When to invoke
 
@@ -135,8 +135,14 @@ Add `### ⚠️ Breaking Changes` and `### 📝 Migration` only when the change 
 
 ### Description gate
 
-Write the body from the intended base, the complete net diff, the user's intent, the effective template, and the current body when updating.
-The description must meet these requirements:
+Load the installed Brundlefly `pull-request-summary` Skill before writing or revising the body.
+Use `~/.agents/skills/pull-request-summary/SKILL.md` in Codex.
+Use the configured Claude Skills directory or OpenCode's configured Skill paths in those providers.
+If it is missing, run `pnpm sync:skills` from Wolfstar Agent Kit, then load it.
+Stop publication if the Skill cannot load. Do not substitute a second description rubric.
+
+Supply the intended base, complete net diff, user intent, effective template, and current body when updating.
+Add these local description requirements:
 
 - Use the effective template and preserve its required comments and sections.
 - Omit verification, testing, and QA sections or mentions. CI owns that evidence.
@@ -148,7 +154,7 @@ The description must meet these requirements:
 - Preserve author notes, attachments, and reviewer decisions outside the requested edit.
 - Include the PR Lens diagram when the Diagram rules below require it.
 
-Publish the body only after these checks pass.
+Use the returned body only after its description checks pass.
 Resolve required-input gaps before publishing dependent text.
 This Skill retains title rules, branches, commits, publication, CI, and Review.
 Re-read the remote body before an update. Reconcile concurrent edits before replacing it.
@@ -159,9 +165,9 @@ Before writing the description, decide whether the change earns a diagram. Read 
 
 A diagram goes in the description, after the why and before the AI disclosure. Never in a trailing comment.
 
-Before pushing, run the title and description through the [humanize-writing](../humanize-writing/SKILL.md) Skill.
+Before pushing, load the installed Brundlefly `im-part-human` Skill for the title and description.
 Preserve the Description gate, template, and disclosure.
-After prose edits, repeat the description checks.
+After prose edits, repeat the `pull-request-summary` description checks.
 
 ## Step 4: Verify
 
@@ -275,7 +281,7 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    Then confirm every applicable run passed.
    For verified private repositories, scope each `gh run watch` with `WOLFSTAR_AGENT_GITHUB_PRIVATE=OWNER/REPO`.
    Do not use `gh pr checks --watch` while Review is queued; the service's own check run can keep it waiting.
-   A Markdown-only pull request may have no check runs. Confirm that its workflows exclude the changed paths.
+   A Markdown-only pull request may have no check runs, or only skipped ones beside `changes`. Confirm that its workflows exclude the changed paths. Count a skipped check as passed.
 3. Read the trusted `wolfstar-github-agent` marked comment and matching Review outcome label.
    Read issue comments with `gh api repos/OWNER/REPO/issues/NUMBER/comments --paginate`.
    Match `<!-- wolfstar-agent-kit:pr-triage -->` and `<!-- reviewed-sha: HEAD_SHA -->`.
@@ -330,19 +336,37 @@ For a repository the service does not track, use CI and the available reviewers;
 
 Do not post replies to other reviewers without approval. Draft a reply for a question or non-actionable comment and show it to the user.
 
-### Wait for Wolfstar's merge
+### Hand back the ready pull request
 
-After current-head CI and Review pass, keep the submitting Agent responsible for the human merge decision.
-Run `control watch-pr` using [pull request watching](references/pull-request-watch.md).
-Run it in the foreground and keep the Agent turn active while it waits.
-Do not background the command and end the turn. A finished chat cannot receive its tool result.
 An active Service implementation Task returns to its controller instead of waiting here.
+After current-head CI and Review pass, resolve the merge path using the [Auto merge contract](../../references/auto-merge.md).
+Check enabled policy, labels, and the current-head Merge risk verdict against that contract.
+If the current head qualifies for automatic merge, use [pull request watching](references/pull-request-watch.md) in the foreground.
+Keep the turn active until merge, actionable work, closure, or Dismissal.
+On `Merged`, apply `../take-ownership/SKILL.md` in Completion mode for the returned target and merge commit.
+Verify required delivery and smoke stages before cleanup.
+On `ActionRequired`, follow existing repair authority, then reassess the current head and merge path.
+If automatic merge cannot progress, report the exact blocker. Preserve the target and unintegrated work.
 
-On `Merged`, apply `../take-ownership/SKILL.md` in Completion mode for this exact pull request.
+After current-head CI and Review pass, check whether only Wolfstar's merge decision remains.
+If so, hand the pull request back.
+Record the repository, number, URL, head SHA, branch, and absolute worktree path in the session scratchpad.
+Retain current-head CI and Review evidence, remaining findings, and required delivery stages with that target.
+Report readiness and the pull request link, then end the turn.
+Preserve unintegrated work. Release this task's live worktree claim while no mutation is active.
+Ownership of later delivery remains with the submitting Agent.
+Do not start a background watch or promise an automatic chat wake-up.
+
+If Wolfstar requests an active merge wait, use [pull request watching](references/pull-request-watch.md) in the foreground.
+Keep that turn active while the watch runs. Stop the watch if Wolfstar ends the wait.
+
+When Wolfstar reports a merge or requests follow-up, resume the recorded target and read its current remote state.
+Confirm the merge commit before applying `../take-ownership/SKILL.md` in Completion mode for this exact pull request.
 Verify required delivery, reconcile records, clean task-owned Git state, and report remaining work.
-On `ActionRequired`, use the existing repair and publication rules, then resume the watch.
-On `Closed` or `Dismissed`, report that outcome and preserve unintegrated work.
-If Wolfstar explicitly ends the wait, stop the watch and retain the pull request target for the next turn.
+If it remains open, compare the current head with the recorded head before reusing evidence.
+If the head changed, restart Step 6. Acquire the worktree claim before any mutation.
+If actionable work remains, use the existing repair and publication rules.
+If it is closed or dismissed, report that outcome and preserve unintegrated work.
 
 ## Step 7: Cleanup (after merge or user says "finish")
 

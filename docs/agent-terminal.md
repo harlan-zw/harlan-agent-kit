@@ -53,7 +53,7 @@ Use existing Project control checkouts with an `origin/main` branch.
 ```json
 {
   "directory": "/absolute/private/terminal-state",
-  "origin": "http://127.0.0.1:43177",
+  "origin": "http://localhost:43177",
   "hostLabel": "Desktop",
   "projects": [
     {
@@ -81,7 +81,8 @@ Project IDs must be unique. Project paths and file paths must be absolute.
 `directory` stores authentication, Agent session records, and the helpers' pinned artifacts.
 Keep it private and outside repositories. Do not share it between hosts.
 `protectedPaths` optionally lists additional absolute paths that Agents must not access.
-The origin must use `http://127.0.0.1` with an explicit port.
+The origin must use `http://localhost` with an explicit port. The listener binds only to `127.0.0.1`.
+Numeric loopback links redirect to the canonical localhost address before sign-in.
 
 Restrict the configuration, then start from the application Worktree root:
 
@@ -95,6 +96,10 @@ The command prints a pairing link. Open that exact link in the browser on this h
 The link expires after five minutes and works once. Restart the command to obtain another link.
 Keep pairing links private. Pairing grants access to this host's terminals.
 The browser saves local authentication and removes the pairing code from its address.
+Select `Manage Passkeys`, then `Add Passkey`, after opening the pairing link.
+Use `Sign in with Passkey` on later visits. Each Passkey belongs to this address.
+If you lose a Passkey, use a new pairing link. Removing a Passkey revokes its signed-in sessions.
+Signing out closes authenticated terminal streams. The Agent session keeps running.
 The CLI starts from a configuration filename. It provides no install or uninstall subcommands.
 
 Each new Agent session creates a `terminal/<session-id>` Worktree through `wt`.

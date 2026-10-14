@@ -3,7 +3,7 @@
 set -uo pipefail
 
 apply=false
-stale_days=7
+stale_days=1
 scan_root=$HOME
 
 usage() {
@@ -45,10 +45,12 @@ done
 worktrunk_bin=${WORKTREE_SWEEP_WT:-$(command -v wt 2>/dev/null || true)}
 jq_bin=${WORKTREE_SWEEP_JQ:-$(command -v jq 2>/dev/null || true)}
 realpath_bin=$(command -v realpath 2>/dev/null || true)
+readlink_bin=$(command -v readlink 2>/dev/null || true)
 gh_bin=$(command -v gh 2>/dev/null || true)
 [[ -x $worktrunk_bin ]] || fail 'Worktrunk is not installed.'
 [[ -x $jq_bin ]] || fail 'jq is not installed.'
 [[ -x $realpath_bin ]] || fail 'realpath is not installed.'
+[[ -x $readlink_bin ]] || fail 'readlink is not installed.'
 
 now=$(date +%s)
 repo_count=0
@@ -59,6 +61,7 @@ removed_count=0
 kept_count=0
 error_count=0
 declare -A seen_repositories=()
+declare -A target_patch_ids=()
 
 # Fetches must not wait for an interactive credential prompt in the daily service.
 fetch_origin() {
@@ -163,7 +166,7 @@ default_target_for() {
 }
 
 is_integrated() {
-  local repository=$1 head=$2 target=$3 head_tree target_tree merged_tree
+  local repository=$1 head=$2 target=$3 head_tree target_tree merged_tree patch_id cache_key
   if git -C "$repository" merge-base --is-ancestor "$head" "$target" 2>/dev/null; then
     return 0
   fi
@@ -175,8 +178,21 @@ is_integrated() {
   if [[ $head_tree == "$target_tree" ]]; then
     return 0
   fi
-  merged_tree=$(git -C "$repository" merge-tree --write-tree "$target" "$head" 2>/dev/null) || return 1
-  [[ $merged_tree == "$target_tree" ]]
+  if merged_tree=$(git -C "$repository" merge-tree --write-tree "$target" "$head" 2>/dev/null) &&
+    [[ $merged_tree == "$target_tree" ]]; then
+    return 0
+  fi
+  # Later edits can make an already integrated squash merge conflict.
+  # Match the complete branch patch against recent destination commits.
+  patch_id=$(git -C "$repository" diff "$target...$head" -- |
+    git patch-id --stable | awk '{print $1}') || return 1
+  [[ -n $patch_id ]] || return 1
+  cache_key="$repository:$target_tree"
+  if [[ -z ${target_patch_ids[$cache_key]+present} ]]; then
+    target_patch_ids[$cache_key]=$(git -C "$repository" log --max-count=256 --no-merges --format=medium -p "$target" -- |
+      git patch-id --stable | awk '{print $1}') || return 1
+  fi
+  [[ $'\n'${target_patch_ids[$cache_key]}$'\n' == *$'\n'"$patch_id"$'\n'* ]]
 }
 
 has_live_claim() {
@@ -185,10 +201,19 @@ has_live_claim() {
   for claim in "$common_git_dir"/wolfstar-agent-kit/worktree-claims/*.json; do
     [[ -f $claim ]] || continue
     if "$jq_bin" -e --arg path "$("$realpath_bin" "$path")" --argjson now "$now" \
-      '.worktree == $path and (.expires_epoch // 0) > $now' "$claim" >/dev/null 2>&1; then
+      '.worktree == $path and (.durable == true or (.expires_epoch // 0) > $now)' "$claim" >/dev/null 2>&1; then
       return 0
     fi
   done
+  return 1
+}
+
+has_live_process() {
+  local path=$1 cwd
+  while IFS= read -r cwd; do
+    [[ $cwd == "$path" || $cwd == "$path/"* ]] && return 0
+  # Processes can exit during this scan. Ignore vanished or inaccessible entries.
+  done < <("$readlink_bin" /proc/[0-9]*/cwd 2>/dev/null || true)
   return 1
 }
 
@@ -286,6 +311,10 @@ inspect_repository() {
       keep "$path" claimed
       continue
     fi
+    if has_live_process "$path"; then
+      keep "$path" active-process
+      continue
+    fi
     if [[ $locked == true ]]; then
       keep "$path" locked
       continue
@@ -352,6 +381,11 @@ inspect_repository() {
     fi
     if has_live_claim "$path"; then
       keep "$path" claimed
+      continue
+    fi
+
+    if has_live_process "$path"; then
+      keep "$path" active-process
       continue
     fi
 

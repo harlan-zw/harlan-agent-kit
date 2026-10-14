@@ -57,8 +57,6 @@ export type ReviewFindingThreadsOutcome =
 
 export interface ReviewFindingThreadMirror {
   source: ReviewFindingThreadSource
-  /** The findings one Review run recorded, or null when the journal no longer holds the run. */
-  findings: (repository: string, pullRequestNumber: number, reviewRunId: string) => ReviewFinding[] | null
   /** Hears every sync, so a failure always reaches a person. */
   report: (repository: string, outcome: ReviewFindingThreadsOutcome) => void
 }
@@ -180,6 +178,7 @@ export async function mirrorReviewFindingThreads(
   findings: ReviewFinding[],
   signal: AbortSignal,
   authorize: ReviewPublicationAuthority,
+  state: 'open' | 'merged' = 'open',
 ): Promise<ReviewFindingThreadsOutcome> {
   const outcome = await syncReviewFindingThreads(
     mirror.source,
@@ -189,6 +188,7 @@ export async function mirrorReviewFindingThreads(
     findings,
     signal,
     authorize,
+    state,
   )
   mirror.report(repository.github, outcome)
   return outcome
@@ -202,13 +202,14 @@ async function syncReviewFindingThreads(
   findings: ReviewFinding[],
   signal: AbortSignal,
   authorize: ReviewPublicationAuthority,
+  state: 'open' | 'merged',
 ): Promise<ReviewFindingThreadsOutcome> {
   const threads = await source.listReviewFindingThreads(repository, pullRequestNumber, signal)
   if (threads._tag === 'Err') return { _tag: 'Failed', message: threads.error }
   const plan = planReviewFindingThreads(headSha, findings, threads.value)
   let posted = 0
   let outsideDiff = 0
-  for (const comment of plan.post) {
+  for (const comment of state === 'merged' ? [] : plan.post) {
     const result = await source.postReviewFindingComment(repository, pullRequestNumber, comment, signal, authorize)
     if (result._tag === 'Err') return { _tag: 'Failed', message: result.error }
     if (result.value._tag === 'Posted') posted++

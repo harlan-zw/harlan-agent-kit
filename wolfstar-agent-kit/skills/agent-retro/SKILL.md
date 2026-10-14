@@ -19,7 +19,7 @@ Do not run the interactive export, analysts, or publish steps in scheduled mode.
 Service worker evidence is on Hogwild. Desktop Codex sessions also exist locally. Read only.
 
 - Journal: `~/.local/share/wolfstar-github-agent/state.sqlite`. Tables `tasks` (resolve_conflict, review_fix, baseline_repair, issue_work), `worker_tasks` (adversarial_review, issue_triage), `review_runs`, `task_transitions`, `pull_request_triage_runs`, `routine_runs`, `incidents`.
-- Transcripts: `~/.local/share/opencode/opencode.db`. Tables `session`, `message`, `part`. Each session's `directory` is the agent worktree, and its slug names the goal: `wolfstar-agent-review-`, `-fix-`, `-pull-`, `-baseline-`, `-issue-`, `-routine-`. Pull request triage sessions have no worktree and use the worktrees root as their directory.
+- Transcripts: `~/.local/share/opencode/opencode.db`. V2 tables: `session_v2` and `session_message`. The exporter also reads retained V1 history. Each session's `directory` is the agent worktree, and its slug names the goal: `wolfstar-agent-review-`, `-fix-`, `-pull-`, `-baseline-`, `-issue-`, `-routine-`. Pull request triage sessions have no worktree and use the worktrees root as their directory.
 - Codex transcripts: `~/.codex/sessions` on desktop and `~/.local/share/wolfstar-agent-kit/worker-home/.codex/sessions` on Hogwild. The exporter reads both default roots. Use `--codex-root PATH` to select explicit roots.
 - The Codex reader supports completed command events and older tool calls. It counts malformed records and distinguishes completed from incomplete sessions.
 - The exporter joins Codex sessions to the same Journal outcomes. Missing Journal evidence remains a stated limit.
@@ -35,10 +35,10 @@ If you see a live secret anyway, report it as urgent and redact the local copy b
 
 ## Run
 
-1. Export. Copy `export-sessions.py` and `codex-sessions.ts` from this Skill's `scripts/` directory to Hogwild. Run the exporter there. It writes one directory per goal with `INDEX.md` and one compact transcript per session, then joins each session to its journal outcome. Sync the output to the scratchpad.
+1. Export. Copy `export-sessions.py`, `codex-sessions.ts`, and `opencode-sessions.ts` from this Skill's `scripts/` directory to Hogwild. Run the exporter there. It writes one directory per goal with `INDEX.md` and one compact transcript per session, then joins each session to its journal outcome. Sync the output to the scratchpad.
 
    ```bash
-   scp wolfstar-agent-kit/skills/agent-retro/scripts/{export-sessions.py,codex-sessions.ts} hogwild:/tmp/
+   scp wolfstar-agent-kit/skills/agent-retro/scripts/{export-sessions.py,codex-sessions.ts,opencode-sessions.ts} hogwild:/tmp/
    # Add one --redact-env-file argument per identified source. Never paste secret values into this command.
    ssh hogwild 'python3 /tmp/export-sessions.py /tmp/retro-out --days 7 --per-goal 10 --redact-env-file /path/to/repository/.env'
    rsync -a --delete hogwild:/tmp/retro-out/ "$RUN_DIR/"

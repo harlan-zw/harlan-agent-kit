@@ -205,6 +205,11 @@ describe('selection mode route', () => {
       dashboardRoot: join(import.meta.dirname, 'fixtures', 'dashboard'),
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
+        getTask: () => null,
+        listTasks: () => [],
+        listCompletionTasks: () => [],
+        listIncidents: () => [],
+        getOpenPullRequest: () => null,
         finishUpdatePreparation: () => null,
         resolveIncident: () => ({ _tag: 'Ok', value: { _tag: 'Resolved' } }),
         requestIssueTriageRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),

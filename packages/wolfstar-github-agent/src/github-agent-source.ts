@@ -314,6 +314,9 @@ export interface ExistingReviewLabelSource {
 /** Synchronous, so no await separates current authority from the GitHub write. */
 export type ReviewPublicationAuthority = () => Result<void, string>
 
+/** A caller cancellation, or a deadline created when the queued write starts. */
+export type LabelWriteSignal = AbortSignal | (() => AbortSignal)
+
 /** Review publishers must supply current authority to every mutation helper. */
 export interface ReviewPublicationSource {
   stampAgentLabel: (
@@ -410,7 +413,7 @@ export interface GitHubAgentSource {
     repository: RepositoryMapping,
     itemNumber: number,
     state: AgentLabelState,
-    signal: AbortSignal,
+    signal: LabelWriteSignal,
     authorize?: ReviewPublicationAuthority,
   ) => Promise<Result<void, string>>
   /**
@@ -427,7 +430,7 @@ export interface GitHubAgentSource {
   clearRunningLabel: (
     repository: RepositoryMapping,
     itemNumber: number,
-    signal: AbortSignal,
+    signal: LabelWriteSignal,
   ) => Promise<Result<void, string>>
   listRunningLabelledItems: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<number[], string>>
   getIssueTriageSnapshot: (
@@ -817,22 +820,28 @@ export function createGitHubAgentSource(
           .catch((error: unknown): GitHubChecksSnapshot => ({ _tag: 'Unavailable', reason: message(error) }))
   }
 
-  const approvalLabelWrites = new Map<string, Promise<void>>()
-  const serializeApprovalLabel = (
+  // Approval, Running, and Review labels share one read and write sequence per Item.
+  // Separate queues let a sweep remove a label while another writer confirms it.
+  const itemLabelWrites = new Map<string, Promise<void>>()
+  const serializeItemLabels = (
     repository: string,
     number: number,
-    write: () => Promise<Result<void, string>>,
+    cancellation: LabelWriteSignal,
+    write: (signal: AbortSignal) => Promise<Result<void, string>>,
   ): Promise<Result<void, string>> => {
     const key = `${repository.toLowerCase()}:${number}`
-    const active = (approvalLabelWrites.get(key) ?? Promise.resolve()).then(write)
+    const active = (itemLabelWrites.get(key) ?? Promise.resolve()).then(() => {
+      const signal = typeof cancellation === 'function' ? cancellation() : cancellation
+      return signal.aborted ? err(message(signal.reason)) : write(signal)
+    })
     // Each caller receives its failure. A failed write must release the queue.
     const settled = active.then(
       () => undefined,
       () => undefined,
     )
-    approvalLabelWrites.set(key, settled)
+    itemLabelWrites.set(key, settled)
     void settled.then(() => {
-      if (approvalLabelWrites.get(key) === settled) approvalLabelWrites.delete(key)
+      if (itemLabelWrites.get(key) === settled) itemLabelWrites.delete(key)
     })
     return active
   }
@@ -933,7 +942,7 @@ export function createGitHubAgentSource(
     },
 
     async consumeApprovalLabel(repository, _subjectKind, itemNumber, label, signal) {
-      return serializeApprovalLabel(repository.github, itemNumber, async () => {
+      return serializeItemLabels(repository.github, itemNumber, signal, async () => {
         const octokit = await client(repository.github, 'item_write', signal)
         if (octokit._tag === 'Err') return octokit
         const { owner, repo } = repositoryParts(repository.github)
@@ -954,30 +963,32 @@ export function createGitHubAgentSource(
     },
 
     async clearAgentLabels(repository, pullRequestNumber, signal) {
-      const octokit = await client(repository.github, 'item_write', signal)
-      if (octokit._tag === 'Err') return octokit
-      const { owner, repo } = repositoryParts(repository.github)
-      const request = { owner, repo, issue_number: pullRequestNumber, request: { signal } }
-      const current = await octokit.value.rest.issues
-        .get(request)
-        .then((response) => labelNames(response.data.labels, 'issues.get'))
-        .catch((error: unknown): Result<string[], string> => err(message(error)))
-      if (current._tag === 'Err') return current
-      const stale = staleAgentLabels(current.value)
-      if (stale.length === 0) return ok(undefined)
-      // A label another writer already removed answers this call.
-      const removals = await Promise.all(
-        stale.map((label) =>
-          octokit.value.rest.issues
-            .removeLabel({ ...request, name: label })
-            .then((): Result<void, string> => ok(undefined))
-            .catch((error: unknown): Result<void, string> =>
-              errorStatus(error) === 404 ? ok(undefined) : err(message(error)),
-            ),
-        ),
-      )
-      const failed = removals.find((removal) => removal._tag === 'Err')
-      return failed ?? ok(undefined)
+      return serializeItemLabels(repository.github, pullRequestNumber, signal, async () => {
+        const octokit = await client(repository.github, 'item_write', signal)
+        if (octokit._tag === 'Err') return octokit
+        const { owner, repo } = repositoryParts(repository.github)
+        const request = { owner, repo, issue_number: pullRequestNumber, request: { signal } }
+        const current = await octokit.value.rest.issues
+          .get(request)
+          .then((response) => labelNames(response.data.labels, 'issues.get'))
+          .catch((error: unknown): Result<string[], string> => err(message(error)))
+        if (current._tag === 'Err') return current
+        const stale = staleAgentLabels(current.value)
+        if (stale.length === 0) return ok(undefined)
+        // A label another writer already removed answers this call.
+        const removals = await Promise.all(
+          stale.map((label) =>
+            octokit.value.rest.issues
+              .removeLabel({ ...request, name: label })
+              .then((): Result<void, string> => ok(undefined))
+              .catch((error: unknown): Result<void, string> =>
+                errorStatus(error) === 404 ? ok(undefined) : err(message(error)),
+              ),
+          ),
+        )
+        const failed = removals.find((removal) => removal._tag === 'Err')
+        return failed ?? ok(undefined)
+      })
     },
 
     /** Every open Item GitHub still shows the Running label on. */
@@ -1004,18 +1015,20 @@ export function createGitHubAgentSource(
      * A settled Review stamps its verdict just before the Task settles, so a
      * blanket clear here would wipe the verdict it had just written.
      */
-    async clearRunningLabel(repository, itemNumber, signal) {
-      const octokit = await client(repository.github, 'item_write', signal)
-      if (octokit._tag === 'Err') return octokit
-      const { owner, repo } = repositoryParts(repository.github)
-      const request = { owner, repo, issue_number: itemNumber, request: { signal } }
-      // A label another writer already removed answers this call.
-      return octokit.value.rest.issues
-        .removeLabel({ ...request, name: AGENT_LABELS.RUNNING.name })
-        .then((): Result<void, string> => ok(undefined))
-        .catch((error: unknown): Result<void, string> =>
-          errorStatus(error) === 404 ? ok(undefined) : err(message(error)),
-        )
+    async clearRunningLabel(repository, itemNumber, cancellation) {
+      return serializeItemLabels(repository.github, itemNumber, cancellation, async (signal) => {
+        const octokit = await client(repository.github, 'item_write', signal)
+        if (octokit._tag === 'Err') return octokit
+        const { owner, repo } = repositoryParts(repository.github)
+        const request = { owner, repo, issue_number: itemNumber, request: { signal } }
+        // A label another writer already removed answers this call.
+        return octokit.value.rest.issues
+          .removeLabel({ ...request, name: AGENT_LABELS.RUNNING.name })
+          .then((): Result<void, string> => ok(undefined))
+          .catch((error: unknown): Result<void, string> =>
+            errorStatus(error) === 404 ? ok(undefined) : err(message(error)),
+          )
+      })
     },
 
     async readExistingReviewLabel(repository, pullRequestNumber, commentId, headSha, baseRef, signal) {
@@ -1080,83 +1093,85 @@ export function createGitHubAgentSource(
         )
     },
 
-    async stampAgentLabel(repository, itemNumber, state, signal, authorize) {
-      const octokit = await client(repository.github, 'item_write', signal)
-      if (octokit._tag === 'Err') return octokit
-      const { owner, repo } = repositoryParts(repository.github)
-      const request = { owner, repo, issue_number: itemNumber, request: { signal } }
-      const current = await octokit.value.rest.issues
-        .get(request)
-        .then((response) => labelNames(response.data.labels, 'issues.get'))
-        .catch((error: unknown): Result<string[], string> => err(message(error)))
-      if (current._tag === 'Err') return current
-      const plan = planAgentLabels(state, current.value)
-      if (plan.add === null && plan.remove.length === 0) return ok(undefined)
-      // Every label write answers with the labels GitHub then held, so the last
-      // write confirms this call. A fresh read does not: the Running label is
-      // taken off the moment a Task settles, and a Task that settles at once
-      // reported a failed write for a write that had landed.
-      let held = current.value
-      if (plan.add !== null) {
-        const creationAuthority = authorize?.()
-        if (creationAuthority?._tag === 'Err') return creationAuthority
-        const created = await octokit.value.rest.issues
-          .createLabel({
-            owner,
-            repo,
-            name: plan.add.name,
-            color: plan.add.color,
-            description: plan.add.description,
-            request: { signal },
-          })
-          .then((): Result<void, string> => ok(undefined))
-          .catch((error: unknown): Result<void, string> =>
-            errorStatus(error) === 422 ? ok(undefined) : err(message(error)),
-          )
-        if (created._tag === 'Err') return created
-        const additionAuthority = authorize?.()
-        if (additionAuthority?._tag === 'Err') return additionAuthority
-        const added = await octokit.value.rest.issues
-          .addLabels({ ...request, labels: [plan.add.name] })
-          .then((response) =>
-            confirmedLabelNames(response.data, 'addLabels', () =>
-              octokit.value.rest.issues.get(request).then((current) => current.data.labels),
-            ),
-          )
+    async stampAgentLabel(repository, itemNumber, state, cancellation, authorize) {
+      return serializeItemLabels(repository.github, itemNumber, cancellation, async (signal) => {
+        const octokit = await client(repository.github, 'item_write', signal)
+        if (octokit._tag === 'Err') return octokit
+        const { owner, repo } = repositoryParts(repository.github)
+        const request = { owner, repo, issue_number: itemNumber, request: { signal } }
+        const current = await octokit.value.rest.issues
+          .get(request)
+          .then((response) => labelNames(response.data.labels, 'issues.get'))
           .catch((error: unknown): Result<string[], string> => err(message(error)))
-        if (added._tag === 'Err') return added
-        held = added.value
-      }
-      // One at a time, so the last answer names every label GitHub still holds.
-      for (const label of plan.remove) {
-        const removalAuthority = authorize?.()
-        if (removalAuthority?._tag === 'Err') return removalAuthority
-        // A label another writer already removed answers this call.
-        const removed = await octokit.value.rest.issues
-          .removeLabel({ ...request, name: label })
-          .then((response) =>
-            confirmedLabelNames(response.data, 'removeLabel', () =>
-              octokit.value.rest.issues.get(request).then((current) => current.data.labels),
-            ),
-          )
-          .catch((error: unknown): Result<string[], string> =>
-            errorStatus(error) === 404
-              ? ok(held.filter((value) => value.toLowerCase() !== label.toLowerCase()))
-              : err(message(error)),
-          )
-        if (removed._tag === 'Err') return removed
-        held = removed.value
-      }
-      const settled = planAgentLabels(state, held)
-      return settled.add === null && settled.remove.length === 0
-        ? ok(undefined)
-        : err(
-            `GitHub did not stamp the ${AGENT_LABELS[state].name} label. GitHub answered with ${held.length === 0 ? 'no labels' : held.join(', ')}.`,
-          )
+        if (current._tag === 'Err') return current
+        const plan = planAgentLabels(state, current.value)
+        if (plan.add === null && plan.remove.length === 0) return ok(undefined)
+        // Every label write answers with the labels GitHub then held, so the last
+        // write confirms this call. A fresh read does not: the Running label is
+        // taken off the moment a Task settles, and a Task that settles at once
+        // reported a failed write for a write that had landed.
+        let held = current.value
+        if (plan.add !== null) {
+          const creationAuthority = authorize?.()
+          if (creationAuthority?._tag === 'Err') return creationAuthority
+          const created = await octokit.value.rest.issues
+            .createLabel({
+              owner,
+              repo,
+              name: plan.add.name,
+              color: plan.add.color,
+              description: plan.add.description,
+              request: { signal },
+            })
+            .then((): Result<void, string> => ok(undefined))
+            .catch((error: unknown): Result<void, string> =>
+              errorStatus(error) === 422 ? ok(undefined) : err(message(error)),
+            )
+          if (created._tag === 'Err') return created
+          const additionAuthority = authorize?.()
+          if (additionAuthority?._tag === 'Err') return additionAuthority
+          const added = await octokit.value.rest.issues
+            .addLabels({ ...request, labels: [plan.add.name] })
+            .then((response) =>
+              confirmedLabelNames(response.data, 'addLabels', () =>
+                octokit.value.rest.issues.get(request).then((current) => current.data.labels),
+              ),
+            )
+            .catch((error: unknown): Result<string[], string> => err(message(error)))
+          if (added._tag === 'Err') return added
+          held = added.value
+        }
+        // One at a time, so the last answer names every label GitHub still holds.
+        for (const label of plan.remove) {
+          const removalAuthority = authorize?.()
+          if (removalAuthority?._tag === 'Err') return removalAuthority
+          // A label another writer already removed answers this call.
+          const removed = await octokit.value.rest.issues
+            .removeLabel({ ...request, name: label })
+            .then((response) =>
+              confirmedLabelNames(response.data, 'removeLabel', () =>
+                octokit.value.rest.issues.get(request).then((current) => current.data.labels),
+              ),
+            )
+            .catch((error: unknown): Result<string[], string> =>
+              errorStatus(error) === 404
+                ? ok(held.filter((value) => value.toLowerCase() !== label.toLowerCase()))
+                : err(message(error)),
+            )
+          if (removed._tag === 'Err') return removed
+          held = removed.value
+        }
+        const settled = planAgentLabels(state, held)
+        return settled.add === null && settled.remove.length === 0
+          ? ok(undefined)
+          : err(
+              `GitHub did not stamp the ${AGENT_LABELS[state].name} label. GitHub answered with ${held.length === 0 ? 'no labels' : held.join(', ')}.`,
+            )
+      })
     },
 
     async addApprovalLabel(repository, pullRequestNumber, label, signal) {
-      return serializeApprovalLabel(repository.github, pullRequestNumber, async () => {
+      return serializeItemLabels(repository.github, pullRequestNumber, signal, async () => {
         const octokit = await client(repository.github, 'item_write', signal)
         if (octokit._tag === 'Err') return octokit
         const { owner, repo } = repositoryParts(repository.github)
@@ -1824,7 +1839,7 @@ export function createGitHubAgentSource(
     },
 
     async resolveReviewFindingThread(repository, threadId, signal, authorize) {
-      const octokit = await client(repository.github, 'item_write', signal)
+      const octokit = await client(repository.github, 'review_thread_write', signal)
       if (octokit._tag === 'Err') return octokit
       const authorized = authorize()
       if (authorized._tag === 'Err') return authorized

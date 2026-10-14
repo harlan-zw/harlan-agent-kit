@@ -59,12 +59,40 @@ describe('built-in Routine contracts', () => {
     })
   })
 
-  it('enforces Agent feedback paths before commit', () => {
+  it('requires the repaired skill and its bounded replay before commit', () => {
     const target = 'wolfstar-agent-kit/skills/pr/SKILL.md'
     const definition = getRoutine('agent-feedback')
-    expect(definition.issueWork.verifyChanges(target, [target])).toEqual({ _tag: 'Ok', value: undefined })
+    const replay = [
+      'wolfstar-agent-kit/evals/feedback-pr/prompt.md',
+      'wolfstar-agent-kit/evals/feedback-pr/graders/criteria.md',
+    ]
+    expect(definition.issueWork.verifyChanges(target, [target, ...replay])).toEqual({ _tag: 'Ok', value: undefined })
+    expect(definition.issueWork.verifyChanges(target, [target])._tag).toBe('Err')
+    expect(definition.issueWork.verifyChanges(target, [target, replay[0]!])._tag).toBe('Err')
+    expect(definition.issueWork.verifyChanges(target, [target, replay[0]!, replay[0]!])._tag).toBe('Err')
+    expect(definition.issueWork.verifyChanges(target, [target, ...replay, 'src/other.ts'])._tag).toBe('Err')
+    expect(
+      definition.issueWork.verifyChanges(target, [
+        target,
+        'wolfstar-agent-kit/evals/feedback-other/prompt.md',
+        replay[1]!,
+      ])._tag,
+    ).toBe('Err')
     expect(definition.issueWork.verifyChanges(target, [target, 'src/other.ts'])._tag).toBe('Err')
     expect(definition.issueWork.verifyChanges(target, ['src/other.ts'])._tag).toBe('Err')
+  })
+
+  it('selects one precise skill repair with its replay files', () => {
+    const target = 'wolfstar-agent-kit/skills/pr/SKILL.md'
+    expect(
+      getRoutine('agent-feedback').selectCandidates([
+        { ...candidate, target, estimatedChangedFiles: 1 },
+        { ...candidate, target, estimatedChangedFiles: 4 },
+        { ...candidate, target: 'src/controller.ts', estimatedChangedFiles: 3 },
+        { ...candidate, target, estimatedChangedFiles: 3 },
+        { ...candidate, target: 'wolfstar-agent-kit/skills/other/SKILL.md', estimatedChangedFiles: 3 },
+      ]),
+    ).toEqual([{ ...candidate, target, estimatedChangedFiles: 3 }])
   })
 
   it('gives dependency version sets one open issue identity', () => {

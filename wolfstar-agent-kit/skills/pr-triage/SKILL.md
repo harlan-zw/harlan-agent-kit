@@ -22,7 +22,7 @@ Read these completely before discovery:
 
 1. `../adversarial-review/SKILL.md`, the complete workflow for one PR.
 
-The `adversarial-review` Skill loads personal `pr`, `humanize-writing`, and `unit-tests` when required. Do not duplicate those rules here.
+The `adversarial-review` Skill loads personal `pr`, Brundlefly `im-part-human`, and `unit-tests` when required. Do not duplicate those rules here.
 
 ## Discover
 
@@ -53,6 +53,9 @@ Finish repairs across the backlog, then revisit `PENDING` pull requests once. Ne
 When required CI also fails on the current base of an owned repository, dispatch one focused baseline repair worker. Open its repair pull request, link it from the original PR status, and revisit the original after merge.
 
 ## Return the merge queue
+
+Predict attention for this handoff. Lead with the consequential merge decision or blocker, with its required dependencies.
+Keep routine proof brief and link detailed evidence. Preserve the complete queue and every safety reason.
 
 List `READY` pull requests first, sorted by confidence. Then list `PENDING` and
 `BLOCKED` pull requests without confidence scores.

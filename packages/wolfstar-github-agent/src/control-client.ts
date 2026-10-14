@@ -46,7 +46,15 @@ export type ControlApiError =
   | { _tag: 'HttpFailure'; status: number; message: string }
   | { _tag: 'InvalidResponse'; message: string }
 
-export type ControlClientError = ControlApiError | { _tag: 'TaskNotFound'; taskId: string }
+export type ControlClientError =
+  | ControlApiError
+  | { _tag: 'TaskNotFound'; taskId: string; message: string }
+  | { _tag: 'TaskActivityUnavailable'; taskId: string; state: DashboardTask['state']['_tag']; message: string }
+
+export interface ControlTaskList {
+  tasks: DashboardTask[]
+  completionTasks: NonNullable<DashboardSnapshot['completionTasks']>
+}
 
 export interface ControlClientOptions {
   baseUrl: string
@@ -84,7 +92,7 @@ export interface ControlClient {
   health: () => Promise<Result<ControlHealth, ControlApiError>>
   state: () => Promise<Result<DashboardSnapshot, ControlApiError>>
   status: () => Promise<Result<ControlStatus, ControlApiError>>
-  tasks: () => Promise<Result<DashboardTask[], ControlApiError>>
+  tasks: () => Promise<Result<ControlTaskList, ControlApiError>>
   resolveIncident: (request: IncidentResolutionRequest) => Promise<Result<IncidentResolutionReceipt, ControlApiError>>
   incidents: () => Promise<Result<Incident[], ControlApiError>>
   activity: (taskId: string) => Promise<Result<AgentActivityItem[], ControlClientError>>
@@ -121,6 +129,92 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function integer(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0
+}
+
+function validActivityItem(value: unknown): value is AgentActivityItem {
+  const item = record(value)
+  if (item === undefined || typeof item.at !== 'string') return false
+  switch (item._tag) {
+    case 'Command':
+      return (
+        typeof item.command === 'string' &&
+        typeof item.output === 'string' &&
+        (item.exitCode === null || Number.isInteger(item.exitCode))
+      )
+    case 'Reasoning':
+      return typeof item.text === 'string'
+    case 'Progress':
+      return (
+        typeof item.text === 'string' &&
+        typeof item.percent === 'number' &&
+        Number.isFinite(item.percent) &&
+        item.percent >= 0 &&
+        item.percent <= 100
+      )
+    case 'FileChange':
+      return (
+        Array.isArray(item.changes) &&
+        item.changes.every((value) => {
+          const change = record(value)
+          return (
+            change !== undefined &&
+            typeof change.path === 'string' &&
+            typeof change.kind === 'string' &&
+            ['add', 'delete', 'update'].includes(change.kind)
+          )
+        })
+      )
+    default:
+      return false
+  }
+}
+
+function parseActivity(value: unknown, taskId: string): Parsed<Result<AgentActivityItem[], ControlClientError>> {
+  const input = record(value)
+  const success = record(input?.value)
+  if (
+    input?._tag === 'Ok' &&
+    success?.taskId === taskId &&
+    Array.isArray(success.activity) &&
+    success.activity.every(validActivityItem)
+  )
+    return ok(ok(success.activity))
+  const failure = record(input?.error)
+  if (input?._tag === 'Err' && failure?.taskId === taskId && typeof failure.message === 'string') {
+    if (failure._tag === 'TaskNotFound') return ok(err({ _tag: 'TaskNotFound', taskId, message: failure.message }))
+    if (
+      failure._tag === 'TaskActivityUnavailable' &&
+      typeof failure.state === 'string' &&
+      ['Queued', 'Running', 'Publishing', 'Completed', 'Failed', 'ActionRequired', 'Superseded'].includes(failure.state)
+    ) {
+      return ok(
+        err({
+          _tag: 'TaskActivityUnavailable',
+          taskId,
+          state: failure.state as DashboardTask['state']['_tag'],
+          message: failure.message,
+        }),
+      )
+    }
+  }
+  return err('The Service returned invalid Task activity.')
+}
+
+function parseTasks(value: unknown): Parsed<ControlTaskList> {
+  const input = record(value)
+  return input !== undefined && Array.isArray(input.tasks) && Array.isArray(input.completionTasks)
+    ? ok({
+        tasks: input.tasks as DashboardTask[],
+        completionTasks: input.completionTasks as ControlTaskList['completionTasks'],
+      })
+    : err('The Service returned invalid Tasks.')
+}
+
+function parseIncidents(value: unknown): Parsed<Incident[]> {
+  const input = record(value)
+  return Array.isArray(input?.incidents)
+    ? ok(input.incidents as Incident[])
+    : err('The Service returned invalid Incidents.')
 }
 
 function parseReviews(value: unknown): Parsed<{ runs: ControlReviewRun[] }> {
@@ -424,10 +518,7 @@ export function createControlClient(
       const stateResult = await state()
       return stateResult._tag === 'Err' ? stateResult : ok({ health: healthResult.value, state: stateResult.value })
     },
-    async tasks() {
-      const result = await state()
-      return result._tag === 'Err' ? result : ok(result.value.tasks)
-    },
+    tasks: () => request({ method: 'GET', path: 'api/tasks', parse: parseTasks }),
     async resolveIncident(input) {
       const parsed = parseIncidentResolutionRequest(input)
       if (parsed._tag === 'Err') return err({ _tag: 'InvalidResponse', message: parsed.error })
@@ -438,15 +529,14 @@ export function createControlClient(
         parse: parseIncidentResolutionReceipt,
       })
     },
-    async incidents() {
-      const result = await state()
-      return result._tag === 'Err' ? result : ok(result.value.incidents)
-    },
+    incidents: () => request({ method: 'GET', path: 'api/incidents', parse: parseIncidents }),
     async activity(taskId) {
-      const result = await state()
-      if (result._tag === 'Err') return result
-      const agent = result.value.agents.find((candidate) => candidate._tag === 'ActiveAgent' && candidate.id === taskId)
-      return agent?._tag === 'ActiveAgent' ? ok(agent.activity) : err({ _tag: 'TaskNotFound', taskId })
+      const result = await request({
+        method: 'GET',
+        path: `api/tasks/activity?${new URLSearchParams({ task: taskId })}`,
+        parse: (value) => parseActivity(value, taskId),
+      })
+      return result._tag === 'Err' ? result : result.value
     },
     workflowEvents(query = {}) {
       const search = new URLSearchParams()

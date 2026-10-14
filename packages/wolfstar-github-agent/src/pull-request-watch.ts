@@ -1,6 +1,6 @@
 import type { ControlApiError } from './control-client.ts'
 import type { Result } from './result.ts'
-import type { AgentTask, GitHubPullRequestItem } from './types.ts'
+import type { AgentStartState, AgentTask, GitHubPullRequestItem } from './types.ts'
 import { err, ok } from './result.ts'
 
 export interface PullRequestWatchTarget {
@@ -11,6 +11,8 @@ export interface PullRequestWatchTarget {
 interface ObservedPullRequest {
   pullRequest: GitHubPullRequestItem
   tasks: AgentTask[]
+  /** Present while this pull request has a queued Task. It does not change watch completion. */
+  agentStart?: AgentStartState
 }
 
 /** A closure is terminal only after an exact GitHub read confirms it. */
@@ -94,6 +96,18 @@ export function parsePullRequestWatchState(value: unknown): Result<PullRequestWa
     (pull.mergedAt !== null && typeof pull.mergedAt !== 'string') ||
     !Array.isArray(input.tasks) ||
     !input.tasks.every((task) => validTask(task, pull.repository!, pull.number!)) ||
+    (input.agentStart !== undefined &&
+      (typeof input.agentStart !== 'object' ||
+        input.agentStart === null ||
+        typeof (input.agentStart as Record<string, unknown>)._tag !== 'string' ||
+        ![
+          'Available',
+          'Paused',
+          'RestartRequested',
+          'WritesDisabled',
+          'ReserveReached',
+          'CapacityUnavailable',
+        ].includes(String((input.agentStart as Record<string, unknown>)._tag)))) ||
     !['Open', 'Ready', 'PendingClosure', 'Merged', 'Closed', 'Dismissed', 'ActionRequired'].includes(
       String(input._tag),
     ) ||

@@ -1,4 +1,5 @@
 import type { AgentActivityLog } from './agent-activity.ts'
+import type { BrowserAuth } from './browser-auth.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
 import type { AgentHost, AgentSlotLimits, HostAgentPool, HostCapacity } from './host-capacity.ts'
 import type { createPullRequestDiffSource } from './pull-request-diff.ts'
@@ -49,6 +50,11 @@ export interface AgentAppOptions {
   hostSlotPolicy?: () => { hogwild: number; desktop: number }
   store: Pick<
     JournalStore,
+    | 'getTask'
+    | 'listTasks'
+    | 'listCompletionTasks'
+    | 'listIncidents'
+    | 'getOpenPullRequest'
     | 'approveIssue'
     | 'approvePullRequest'
     | 'cancelTask'
@@ -84,6 +90,7 @@ export interface AgentAppOptions {
    */
   listenOrigin?: string
   dashboardPassword: string
+  browserAuth?: { private: BrowserAuth; public?: BrowserAuth }
   /** Origins allowed to frame the dashboard, such as a talk deck. Empty denies framing. */
   frameAncestors?: readonly string[]
   dashboardRoot?: string
@@ -432,26 +439,69 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       .map((origin) => [new URL(origin).host, new URL(origin).origin]),
   )
   const framing = framingHeaders(options.frameAncestors ?? [])
+  function machineDashboardAccess(request: Request) {
+    if (
+      request.headers.get('x-wolfstar-agent-ingress') === 'public' &&
+      options.browserAuth?.public?.bootstrapKind === 'passkey'
+    )
+      return false
+    return hasDashboardAccess(request, options.dashboardPassword)
+  }
+  function browserStream(request: Request, revoked: () => void) {
+    if (machineDashboardAccess(request)) return { valid: () => true, close: () => {} }
+    const authority =
+      request.headers.get('x-wolfstar-agent-ingress') === 'public'
+        ? options.browserAuth?.public
+        : options.browserAuth?.private
+    const session = authority?.session(request.headers)
+    const valid = () => Boolean(authority?.session(request.headers))
+    if (!session || !authority) return { valid, close: () => {} }
+    const unsubscribe = authority.onSessionRevocation((hash) => {
+      if (hash === session.hash) revoked()
+    })
+    const interval = setInterval(() => {
+      if (!valid()) revoked()
+    }, 1000)
+    interval.unref()
+    return {
+      valid,
+      close() {
+        unsubscribe()
+        clearInterval(interval)
+      },
+    }
+  }
   const app = new H3({
     onRequest(event) {
       const expectedOrigin = originByHost.get(event.req.headers.get('host') ?? '')
       if (expectedOrigin === undefined)
         throw createError({ status: 421, statusText: 'Misdirected Request', message: 'Host is not allowed.' })
-      if (!hasDashboardAccess(event.req, options.dashboardPassword)) {
-        throw createError({
-          status: 401,
-          statusText: 'Unauthorized',
-          message: 'Dashboard credentials are required.',
-          headers: { 'www-authenticate': 'Basic realm="wolfstar-github-agent", charset="UTF-8"' },
-        })
-      }
+      event.context.dashboardNonce = randomBytes(18).toString('base64')
       if (
         event.req.method !== 'GET' &&
         event.req.method !== 'HEAD' &&
         event.req.headers.get('origin') !== expectedOrigin
       )
         throw createError({ status: 403, statusText: 'Forbidden', message: 'Request origin is not allowed.' })
-      event.context.dashboardNonce = randomBytes(18).toString('base64')
+      const publicIngress = event.req.headers.get('x-wolfstar-agent-ingress') === 'public'
+      const authority = publicIngress ? options.browserAuth?.public : options.browserAuth?.private
+      const path = new URL(event.req.url).pathname
+      if (authority && path.startsWith('/api/browser-auth/')) return
+      const browserShell =
+        options.browserAuth &&
+        (event.req.method === 'GET' || event.req.method === 'HEAD') &&
+        !path.startsWith('/api/') &&
+        path !== '/health'
+      if (!browserShell && !machineDashboardAccess(event.req) && !authority?.session(event.req.headers)) {
+        throw createError({
+          status: 401,
+          statusText: 'Unauthorized',
+          message: 'Dashboard credentials are required.',
+          ...(options.browserAuth
+            ? {}
+            : { headers: { 'www-authenticate': 'Basic realm="wolfstar-github-agent", charset="UTF-8"' } }),
+        })
+      }
     },
     onResponse(response, event) {
       Object.entries(framing.securityHeaders).forEach(([name, value]) => response.headers.set(name, value))
@@ -462,6 +512,14 @@ export function createAgentApp(options: AgentAppOptions): H3 {
         `default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; frame-ancestors ${framing.frameAncestors}; img-src 'self' data: https://github.com https://avatars.githubusercontent.com; object-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'`,
       )
     },
+  })
+  app.all('/api/browser-auth/**', (event) => {
+    const publicIngress = event.req.headers.get('x-wolfstar-agent-ingress') === 'public'
+    const authority = publicIngress ? options.browserAuth?.public : options.browserAuth?.private
+    return (
+      authority?.handle(event.req, publicIngress ? options.allowedOrigin : undefined) ??
+      new Response(JSON.stringify({ _tag: 'Err', reason: 'AuthenticationRequired' }), { status: 401 })
+    )
   })
 
   if (options.sessions !== undefined) {
@@ -492,6 +550,44 @@ export function createAgentApp(options: AgentAppOptions): H3 {
 
   app.get('/api/state', () => dashboardSnapshot(options))
 
+  app.get('/api/tasks', () => ({
+    tasks: options.store.listTasks(),
+    completionTasks: options.store.listCompletionTasks(),
+  }))
+  app.get('/api/incidents', () => ({ incidents: options.store.listIncidents() }))
+  app.get('/api/tasks/activity', (event) => {
+    const taskId = new URL(event.req.url).searchParams.get('task')
+    if (taskId === null || taskId.length === 0 || taskId.length > 128)
+      throw createError({ status: 400, message: 'Provide one Task ID.' })
+    const task = options.store.getTask(taskId)
+    if (task === null)
+      return {
+        _tag: 'Err',
+        error: { _tag: 'TaskNotFound', taskId, message: 'The Service has no record of this Task.' },
+      }
+    if (task.state._tag !== 'Running' && task.state._tag !== 'Publishing')
+      return {
+        _tag: 'Err',
+        error: {
+          _tag: 'TaskActivityUnavailable',
+          taskId,
+          state: task.state._tag,
+          message: `This Task is ${task.state._tag}. Live activity is available while a Task runs.`,
+        },
+      }
+    if (options.activityLog === undefined)
+      return {
+        _tag: 'Err',
+        error: {
+          _tag: 'TaskActivityUnavailable',
+          taskId,
+          state: task.state._tag,
+          message: 'Live activity is unavailable for this Task.',
+        },
+      }
+    return { _tag: 'Ok', value: { taskId, activity: options.activityLog.read(taskId) } }
+  })
+
   app.get('/api/items/pull-request-diff', async (event) => {
     if (event.req.headers.get('x-wolfstar-agent-ingress') === 'public')
       throw createError({ status: 403, message: 'Connect through private ingress to view the diff.' })
@@ -501,16 +597,8 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !Number.isSafeInteger(number) || number < 1)
       return { _tag: 'Err', error: 'InvalidRequest' }
     if (options.pullRequestDiff === undefined) return { _tag: 'Err', error: 'Unavailable' }
-    const item = options.store
-      .getDashboardSnapshot(options.now().toISOString())
-      .items.find(
-        (item) =>
-          item.kind === 'pull_request' &&
-          item.repository === repository &&
-          item.number === number &&
-          item.state === 'open',
-      )
-    if (item?.kind !== 'pull_request') return { _tag: 'Err', error: 'Unavailable' }
+    const item = options.store.getOpenPullRequest(repository, number)
+    if (item === null) return { _tag: 'Err', error: 'Unavailable' }
     const snapshot = query.get('snapshot')
     const path = query.get('path')
     if (snapshot !== null || path !== null) {
@@ -1136,7 +1224,12 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     })
     if (target._tag === 'Err') throw createError({ status: 400, message: target.error })
     const { repository, number } = target.value
-    let initial = watch.state(repository, number)
+    const readState = (): PullRequestWatchState | null => {
+      const state = watch.state(repository, number)
+      if (state?._tag !== 'Open' || !state.tasks.some((task) => task.state._tag === 'Queued')) return state
+      return { ...state, agentStart: options.store.getDashboardSnapshot(options.now().toISOString()).agentStart }
+    }
+    let initial = readState()
     if (initial === null) throw createError({ status: 404, message: 'The repository is not enabled in this service.' })
     if (initial._tag === 'NotObserved' || initial._tag === 'PendingClosure') {
       const observed = await watch.observe(
@@ -1144,7 +1237,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
         AbortSignal.any([event.req.signal, AbortSignal.timeout(60_000)]),
       )
       if (observed._tag === 'Err') throw createError({ status: 502, message: observed.error })
-      initial = watch.state(repository, number)
+      initial = readState()
       if (initial === null || initial._tag === 'NotObserved')
         throw createError({ status: 404, message: 'The service cannot observe this pull request.' })
     }
@@ -1152,7 +1245,11 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     let previous = JSON.stringify(initial)
     let stopped = false
     const interval = setInterval(() => {
-      const next = watch.state(repository, number)
+      if (!authorization.valid()) {
+        shutdown()
+        return
+      }
+      const next = readState()
       if (next === null) {
         stop()
         void stream.close()
@@ -1172,15 +1269,17 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       stopped = true
       clearInterval(interval)
       clearInterval(heartbeat)
+      authorization.close()
       options.shutdownSignal?.removeEventListener('abort', shutdown)
     }
     function shutdown(): void {
       stop()
       void stream.close()
     }
+    const authorization = browserStream(event.req, shutdown)
     stream.onClosed(stop)
     options.shutdownSignal?.addEventListener('abort', shutdown, { once: true })
-    if (options.shutdownSignal?.aborted) shutdown()
+    if (options.shutdownSignal?.aborted || !authorization.valid()) shutdown()
     else void stream.push({ event: 'pull-request', data: previous }).catch(stop)
     return stream
   })
@@ -1191,12 +1290,17 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const stream = createEventStream(event)
     let previous = dashboardEvent(options).observable
     const update = (sample: ReturnType<typeof dashboardEvent>): void => {
+      if (!authorization.valid()) {
+        shutdown()
+        return
+      }
       if (sample.observable === previous) return
       previous = sample.observable
       // Each subscriber owns its write. One slow or closed stream cannot block the others.
       void stream.push({ event: 'state', data: sample.serialize() }).catch(stop)
     }
     const stop = (): void => {
+      authorization.close()
       dashboardSubscribers.delete(update)
       if (dashboardSubscribers.size === 0 && dashboardInterval !== undefined) {
         clearInterval(dashboardInterval)
@@ -1208,8 +1312,9 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       stop()
       void stream.close()
     }
+    const authorization = browserStream(event.req, shutdown)
     stream.onClosed(stop)
-    if (options.shutdownSignal?.aborted) {
+    if (options.shutdownSignal?.aborted || !authorization.valid()) {
       shutdown()
     } else {
       dashboardSubscribers.add(update)

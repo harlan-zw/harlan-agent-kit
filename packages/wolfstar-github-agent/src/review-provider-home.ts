@@ -140,21 +140,25 @@ function namedOpencodeLogin(source: string | null): Record<string, unknown> | un
   } catch {
     throw new Error('The named OpenCode login configuration requires JSON.')
   }
-  if (typeof parsed !== 'object' || parsed === null || !('provider' in parsed)) return undefined
-  const provider = parsed.provider
-  if (typeof provider !== 'object' || provider === null || !('zai-coding-plan' in provider)) return undefined
-  const named = provider['zai-coding-plan']
-  if (typeof named !== 'object' || named === null || !('options' in named)) return undefined
-  const options = named.options
-  if (
-    typeof options !== 'object' ||
-    options === null ||
-    !('apiKey' in options) ||
-    typeof options.apiKey !== 'string' ||
-    options.apiKey.length === 0
-  )
-    return undefined
-  return { 'zai-coding-plan': { options: { apiKey: options.apiKey } } }
+  if (typeof parsed !== 'object' || parsed === null || !('providers' in parsed)) return undefined
+  const providers = parsed.providers
+  if (typeof providers !== 'object' || providers === null) return undefined
+  const selected: Record<string, unknown> = {}
+  for (const id of ['zai-coding-plan', 'opencode-go']) {
+    const named = (providers as Record<string, unknown>)[id]
+    if (typeof named !== 'object' || named === null || !('settings' in named)) continue
+    const settings = named.settings
+    if (
+      typeof settings !== 'object' ||
+      settings === null ||
+      !('apiKey' in settings) ||
+      typeof settings.apiKey !== 'string' ||
+      settings.apiKey.length === 0
+    )
+      continue
+    selected[id] = { settings: { apiKey: settings.apiKey } }
+  }
+  return Object.keys(selected).length === 0 ? undefined : selected
 }
 
 /** Copies named provider login files. All executable configuration comes from the controller. */
@@ -193,7 +197,11 @@ export async function createReviewProviderHome(input: {
       await writeFile(join(home, name), original!, { mode: 0o600 })
       await writeFile(join(home, '.codex/config.toml'), input.configuration, { mode: 0o600 })
       await mkdir(join(home, '.config/opencode'), { recursive: true, mode: 0o700 })
-      await writeFile(join(home, '.config/opencode/opencode.json'), '{"permission":{"*":"deny"}}', { mode: 0o600 })
+      await writeFile(
+        join(home, '.config/opencode/opencode.json'),
+        '{"permissions":[{"action":"*","resource":"*","effect":"deny"}]}',
+        { mode: 0o600 },
+      )
     } else {
       await Promise.all([
         mkdir(join(home, '.local/share/opencode'), { recursive: true, mode: 0o700 }),
@@ -210,7 +218,7 @@ export async function createReviewProviderHome(input: {
       const configuration = JSON.parse(input.configuration) as Record<string, unknown>
       await writeFile(
         join(home, '.config/opencode/opencode.json'),
-        JSON.stringify({ ...configuration, ...(provider === undefined ? {} : { provider }) }),
+        JSON.stringify({ ...configuration, ...(provider === undefined ? {} : { providers: provider }) }),
         { mode: 0o600 },
       )
     }

@@ -305,7 +305,10 @@ describe('issue work worker', () => {
       new AbortController().signal,
     )
 
-    expect(result).toEqual({ _tag: 'Err', error: 'Agent feedback issue work changed files outside its skill target.' })
+    expect(result).toEqual({
+      _tag: 'Err',
+      error: 'Agent feedback issue work requires exactly its skill, replay prompt, and replay criteria.',
+    })
     expect(committed).toBe(false)
   })
 

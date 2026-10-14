@@ -225,6 +225,28 @@ describe('required checks and the CI Review gate', () => {
     expect(requiredCheckContexts({ message: 'Not Found' })).toEqual([])
   })
 
+  // The Nuxt SEO reusable workflow skips its jobs on a docs-only change. GitHub
+  // then reports `ci / changes` passed and every required job skipped.
+  it.each<RequiredChecks>([
+    { _tag: 'Declared', contexts: ['ci / build', 'ci / lint', 'ci / test', 'ci / typecheck'] },
+    { _tag: 'None' },
+  ])('passes a docs-only head whose jobs skipped, required checks $_tag', async (requiredChecks) => {
+    const test = reviewWith({
+      headChecks: [
+        check(1, 'ci / changes', 'success'),
+        ...['ci / build', 'ci / lint', 'ci / test', 'ci / typecheck'].map((name, index) =>
+          check(index + 2, name, 'skipped'),
+        ),
+      ],
+      requiredChecks,
+    })
+
+    await test.run()
+
+    expect(terminal(test.comments)).toContain('READY')
+    expect(test.runs[0]?.gates.ci._tag).toBe('Passed')
+  })
+
   it('waits when a required check has not reported', async () => {
     const test = reviewWith({
       headChecks: [check(1, 'ci / test', 'success')],

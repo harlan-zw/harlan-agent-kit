@@ -30,8 +30,21 @@ Return at most one Candidate.
 
 Target one exact `wolfstar-agent-kit/skills/<skill>/SKILL.md` path.
 
-Change only that file. Keep the edit small and general.
+Keep the skill edit small and general.
 
-State the behavior that should change. Name the replay case that proves it.
+Include exactly two companion files under `wolfstar-agent-kit/evals/feedback-<skill>/`:
+
+- `prompt.md`: replay the observed failure. Preserve existing cases when extending it.
+- `graders/criteria.md`: grade the full transcript against observable behavior.
+
+Set `estimatedChangedFiles` to 3. No other paths may change.
+
+During the read-only scan, state the behavior and propose a replay plan. Do not run repairs or replays.
+
+During issue work, run the replay with old and repaired instructions.
+Use the same provider and settings. Keep installed current skills out of the baseline context.
+The old instructions must fail the case. The repaired instructions must pass it.
+Record duration, usage, and provider failures separately under `~/scratch/`.
+If the replay cannot run, return blocked. Never report a provider failure as a behavior failure.
 
 Never propose automatic merge. A person reviews every resulting pull request.

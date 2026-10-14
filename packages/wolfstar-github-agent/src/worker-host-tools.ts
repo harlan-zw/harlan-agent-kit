@@ -67,6 +67,13 @@ export async function resolveWorkerHostTools(
           if (native === undefined) throw new Error(`The installed Codex native executable is missing: ${target}`)
           binary = native
         }
+        const host = join(dirname(binary), 'codex-code-mode-host')
+        await access(host, constants.X_OK).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.code === 'EACCES')
+            throw new Error(`The installed Codex command host is missing: ${host}`)
+          throw error
+        })
+        tools['codex-code-mode-host'] = await realpath(host)
       }
       tools[name] = binary
       break

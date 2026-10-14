@@ -1,8 +1,11 @@
 import type { Result } from './result.ts'
+import { execFile } from 'node:child_process'
 import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, delimiter, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
+import { promisify } from 'node:util'
+import skillManifest from '../../../.skills/skilld.json' with { type: 'json' }
 import { err, ok } from './result.ts'
 
 export interface AgentContextPaths {
@@ -11,6 +14,12 @@ export interface AgentContextPaths {
   instructionsPath: string
   skillsRoot: string
   requiredSkillDirectories: readonly string[]
+  declaredSkills?: {
+    binary: string
+    manifest: string
+    dataRoot: string
+    environment: NodeJS.ProcessEnv
+  }
 }
 
 export interface AgentContext {
@@ -61,12 +70,42 @@ export function defaultAgentContextPaths(
     claudeHome,
     instructionsPath: join(codexHome, 'AGENTS.md'),
     skillsRoot: join(workingDirectory, 'wolfstar-agent-kit', 'skills'),
-    requiredSkillDirectories: [],
+    requiredSkillDirectories: Object.keys(skillManifest.skills).map((name) =>
+      join(environment.HOME ?? homedir(), '.local/share/wolfstar-agent-kit/skilld/skills', name),
+    ),
+    declaredSkills: {
+      binary: environment.WOLFSTAR_AGENT_SKILLD_BINARY ?? 'skilld',
+      manifest: join(workingDirectory, '.skills/skilld.json'),
+      dataRoot: join(environment.HOME ?? homedir(), '.local/share/wolfstar-agent-kit/skilld'),
+      environment,
+    },
   }
 }
 
 /** Loads every canonical Wolfstar skill, or refuses to start with partial context. */
 export async function loadAgentContext(paths: AgentContextPaths): Promise<Result<AgentContext, string>> {
+  if (paths.declaredSkills) {
+    const declaration = paths.declaredSkills
+    const checked = await promisify(execFile)(
+      declaration.binary,
+      ['sync', '--manifest', declaration.manifest, '--global', '--check', '--plain'],
+      {
+        env: {
+          ...declaration.environment,
+          SKILLD_DATA_DIR: declaration.dataRoot,
+          SKILLD_NO_UPGRADE: '1',
+          SKILLD_NO_WEEKLY: '1',
+        },
+        timeout: 30_000,
+        maxBuffer: 1024 * 1024,
+      },
+    )
+      .then(() => ok(true))
+      .catch((error: unknown) =>
+        err(`The declared Skill check failed. Run pnpm sync:skills before starting the Agent. ${errorMessage(error)}`),
+      )
+    if (checked._tag === 'Err') return checked
+  }
   const instructions = await stat(paths.instructionsPath)
     .then((metadata) => ok(metadata.isFile()))
     .catch((error: unknown) =>
@@ -109,7 +148,8 @@ export async function loadAgentContext(paths: AgentContextPaths): Promise<Result
           : err(`The required Skill could not be read: ${directory}: ${errorMessage(error)}`),
       )
     if (installed._tag === 'Err') return installed
-    if (!installed.value) return err(`The required Skill is missing: ${directory}.`)
+    if (!installed.value)
+      return err(`The required Skill is missing: ${directory}. Run pnpm sync:skills before starting the Agent.`)
     skillDirectories.push(directory)
   }
 
@@ -144,20 +184,14 @@ function mergedConfiguration(input: {
   const configuration = parsed.value
   const instructions = stringList(configuration.instructions, 'instructions')
   if (instructions._tag === 'Err') return instructions
-  if (configuration.skills !== undefined && !isRecord(configuration.skills))
-    return err('OPENCODE_CONFIG_CONTENT skills must contain one JSON object.')
-  const skills = (configuration.skills ?? {}) as Record<string, unknown>
-  const paths = stringList(skills.paths, 'skills.paths')
-  if (paths._tag === 'Err') return paths
+  const skills = stringList(configuration.skills, 'skills')
+  if (skills._tag === 'Err') return skills
 
   return ok(
     JSON.stringify({
       ...configuration,
       instructions: unique([...instructions.value, ...input.instructionPaths]),
-      skills: {
-        ...skills,
-        paths: unique([...paths.value, ...input.skillDirectories]),
-      },
+      skills: unique([...skills.value, ...input.skillDirectories]),
     }),
   )
 }

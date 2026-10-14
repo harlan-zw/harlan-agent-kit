@@ -7,11 +7,18 @@ import { build } from 'esbuild'
 import { wasmPath } from 'ghostty-terminal-bindings'
 import { verifyTerminalArtifact } from './terminal-systemd.ts'
 
-export async function buildTerminalArtifact(options: { source: string; directory: string }): Promise<TerminalArtifact> {
+export async function buildTerminalArtifact(options: {
+  source: string
+  directory: string
+  claimScript: string
+}): Promise<TerminalArtifact> {
   const require = createRequire(import.meta.url)
   const nodePtyDirectory = dirname(require.resolve('node-pty/package.json'))
   const wasm = await readFile(wasmPath())
   const wasmDigest = createHash('sha256').update(wasm).digest('hex')
+  // The claim tool is standalone Bash. Its remaining dependencies are system executables.
+  const claim = await readFile(options.claimScript)
+  const claimDigest = createHash('sha256').update(claim).digest('hex')
   const nativeDigest = createHash('sha256')
   async function hashDirectory(directory: string) {
     const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))
@@ -34,7 +41,7 @@ export async function buildTerminalArtifact(options: { source: string; directory
     write: false,
     external: ['node-pty'],
     minifyWhitespace: true,
-    banner: { js: `// Ghostty:${wasmDigest}; node-pty:${digest}` },
+    banner: { js: `// Ghostty:${wasmDigest}; node-pty:${digest}; claim:${claimDigest}` },
     logLevel: 'silent',
   })
   const output = result.outputFiles?.[0]
@@ -46,6 +53,8 @@ export async function buildTerminalArtifact(options: { source: string; directory
     digest: helperDigest,
     wasm: join(directory, 'ghostty-vt.wasm'),
     wasmDigest,
+    claimScript: join(directory, 'worktree-claim.sh'),
+    claimDigest,
   }
   await mkdir(options.directory, { recursive: true, mode: 0o700 })
   const existing = await readFile(artifact.entry).catch((cause: NodeJS.ErrnoException) => {
@@ -62,6 +71,7 @@ export async function buildTerminalArtifact(options: { source: string; directory
     mode: 0o500,
   })
   await writeFile(join(temporary, 'ghostty-vt.wasm'), wasm, { mode: 0o400 })
+  await writeFile(join(temporary, 'worktree-claim.sh'), claim, { mode: 0o400 })
   await cp(nodePtyDirectory, join(temporary, 'node_modules', 'node-pty'), {
     recursive: true,
     dereference: true,

@@ -50,7 +50,35 @@ interface Hooks {
 /** Loads the plugin the way opencode does, over a chosen hooks directory. */
 async function loadPlugin(directory: string, hooks = hooksDirectory): Promise<Hooks> {
   process.env.WOLFSTAR_AGENT_HOOKS_DIR = hooks
-  return (await (wolfstarHooks as any)({ directory })) as Hooks
+  const callbacks: Record<string, (event: any) => Promise<void>> = {}
+  await (wolfstarHooks as any).setup({
+    location: { directory },
+    tool: {
+      hook: async (name: string, callback: (event: any) => Promise<void>) => {
+        callbacks[name] = callback
+      },
+    },
+  })
+  return {
+    'tool.execute.before': async (input, output) =>
+      callbacks['execute.before']!({
+        ...input,
+        tool: input.tool === 'bash' ? 'shell' : input.tool,
+        input: output.args,
+      }),
+    'tool.execute.after': async (input, output) => {
+      const result = { content: [{ type: 'text', text: output?.output ?? '' }] }
+      const event = {
+        ...input,
+        tool: input.tool === 'bash' ? 'shell' : input.tool,
+        input: input.args,
+        status: 'completed',
+        result,
+      }
+      await callbacks['execute.after']!(event)
+      if (output) output.output = event.result.content.map((part) => part.text).join('\n')
+    },
+  }
 }
 
 /** Runs the shell hook and returns the command opencode would then run. */

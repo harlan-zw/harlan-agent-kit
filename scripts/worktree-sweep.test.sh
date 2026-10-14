@@ -6,7 +6,8 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 sweep="$script_dir/worktree-sweep.sh"
 claim="$script_dir/../wolfstar-agent-kit/scripts/worktree-claim.sh"
 test_root=$(mktemp -d)
-trap 'rm -rf "$test_root"' EXIT
+running_pid=''
+trap 'if [[ -n $running_pid ]]; then kill "$running_pid" 2>/dev/null || true; fi; rm -rf "$test_root"' EXIT
 real_worktrunk=$(command -v wt)
 
 export HOME="$test_root/home"
@@ -71,9 +72,15 @@ dirty=$(create_worktree dirty)
 printf '%s\n' dirty > "$dirty/dirty.txt"
 
 claimed=$(create_worktree claimed)
+durably_claimed=$(create_worktree durably-claimed)
+running=$(create_worktree running)
+mkdir "$running/nested"
+(cd "$running/nested" && exec sleep 300) &
+running_pid=$!
 desktop_session=$(create_worktree agent/session-12345678-1234-1234-1234-123456789abc)
 claim_session=$(bash "$claim" new-session)
 bash "$claim" acquire --path "$claimed" --session "$claim_session" >/dev/null
+bash "$claim" acquire --path "$durably_claimed" --session "$claim_session" --durable >/dev/null
 
 dry_run=$(WORKTREE_SWEEP_WT="$test_root/bin/sweep-wt" WORKTREE_SWEEP_JQ="$(command -v jq)" \
   bash "$sweep" --days 0 "$test_root")
@@ -82,6 +89,8 @@ grep -F -- "ready"$'\t'"$integrated" <<< "$dry_run" >/dev/null
 grep -F -- "kept"$'\t'"$unintegrated"$'\t'"reason=not-integrated" <<< "$dry_run" >/dev/null
 grep -F -- "kept"$'\t'"$dirty"$'\t'"reason=dirty" <<< "$dry_run" >/dev/null
 grep -F -- "kept"$'\t'"$claimed"$'\t'"reason=claimed" <<< "$dry_run" >/dev/null
+grep -F -- "kept"$'\t'"$durably_claimed"$'\t'"reason=claimed" <<< "$dry_run" >/dev/null
+grep -F -- "kept"$'\t'"$running"$'\t'"reason=active-process" <<< "$dry_run" >/dev/null
 grep -F -- "kept"$'\t'"$desktop_session"$'\t'"reason=desktop-session" <<< "$dry_run" >/dev/null
 
 WORKTREE_SWEEP_WT="$test_root/bin/sweep-wt" WORKTREE_SWEEP_JQ="$(command -v jq)" \
@@ -91,6 +100,11 @@ test ! -e "$integrated"
 test -d "$unintegrated"
 test -d "$dirty"
 test -d "$claimed"
+test -d "$durably_claimed"
+test -d "$running"
+kill "$running_pid"
+wait "$running_pid" 2>/dev/null || true
+running_pid=''
 test -d "$desktop_session"
 git -C "$repository" show-ref --verify --quiet refs/heads/unintegrated
 if git -C "$repository" show-ref --verify --quiet refs/remotes/origin/unintegrated; then
@@ -120,12 +134,27 @@ test -d "$claimed"
 
 printf '%s\n' 'Worktree sweep tests passed'
 
+# A complete patch can remain integrated after later edits change its files.
+patch_matched=$(create_worktree patch-matched)
+printf '%s\n' original > "$patch_matched/patch.txt"
+git -C "$patch_matched" add patch.txt
+git -C "$patch_matched" commit --quiet -m original
+git -C "$repository" merge --squash patch-matched >/dev/null
+git -C "$repository" commit --quiet -m squash-patch
+printf '%s\n' revised > "$repository/patch.txt"
+git -C "$repository" commit --quiet -am revise-patch
+git -C "$repository" push --quiet origin main
+patch_run=$(bash "$sweep" --apply --days 0 "$test_root")
+test ! -e "$patch_matched"
+
 # A squash merge followed by edits must not strand the original worktree.
 squashed=$(create_worktree squashed)
 printf '%s\n' feature > "$squashed/base.txt"
 git -C "$squashed" commit --quiet -am feature
 squashed_head=$(git -C "$squashed" rev-parse HEAD)
 git -C "$repository" merge --squash squashed >/dev/null
+printf '%s\n' reviewer-adjusted > "$repository/base.txt"
+git -C "$repository" add base.txt
 git -C "$repository" commit --quiet -m squash
 squash_commit=$(git -C "$repository" rev-parse HEAD)
 printf '%s\n' later > "$repository/base.txt"
@@ -224,7 +253,7 @@ for scenario in open foreign failure fetch-failure newer missing-destination del
     incomplete) export SWEEP_TEST_MORE=true ;;
   esac
   bash "$sweep" --apply --days 0 "$test_root" > "$test_root/$scenario.log" 2>&1 || true
-  test -d "$squashed" || { printf 'Removed protected case: %s\n' "$scenario" >&2; exit 1; }
+  test -d "$squashed" || { cat "$test_root/$scenario.log" >&2; printf 'Removed protected case: %s\n' "$scenario" >&2; exit 1; }
   if [[ $scenario == newer ]]; then
     git -C "$squashed" reset --hard --quiet "$squashed_head"
   fi

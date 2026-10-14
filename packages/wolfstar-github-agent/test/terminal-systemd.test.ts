@@ -22,8 +22,10 @@ it('starts helpers with launcher tools available when the user manager has a dif
     await mkdir(directory)
     const entry = join(directory, 'helper.ts')
     const wasm = join(directory, 'engine.wasm')
+    const claimScript = join(directory, 'worktree-claim.sh')
     await writeFile(entry, source)
     await writeFile(wasm, 'fixture-engine')
+    await writeFile(claimScript, 'fixture-claim')
     // This command boundary models the user manager's environment, not the launcher's environment.
     const managerRun = (async (_file: string, args: readonly string[]) => {
       const env: NodeJS.ProcessEnv = { PATH: '/usr/bin:/bin' }
@@ -38,12 +40,36 @@ it('starts helpers with launcher tools available when the user manager has a dif
     const host = createTerminalSystemdHost(process.execPath, `${tools}:relative-tools:`, managerRun)
     await host.start({
       unit: 'wolfstar-terminal-000000000000000000000000.service',
-      artifact: { entry, digest, wasm, wasmDigest: createHash('sha256').update('fixture-engine').digest('hex') },
+      artifact: {
+        entry,
+        digest,
+        wasm,
+        wasmDigest: createHash('sha256').update('fixture-engine').digest('hex'),
+        claimScript,
+        claimDigest: createHash('sha256').update('fixture-claim').digest('hex'),
+      },
       config: join(root, 'config.json'),
       reservationId: 'fixture-reservation',
       memoryGiB: 1,
     })
     expect(await readFile(result, 'utf8')).toBe('managed-tool')
+    await writeFile(claimScript, 'changed-claim')
+    await expect(
+      host.start({
+        unit: 'wolfstar-terminal-000000000000000000000000.service',
+        artifact: {
+          entry,
+          digest,
+          wasm,
+          wasmDigest: createHash('sha256').update('fixture-engine').digest('hex'),
+          claimScript,
+          claimDigest: createHash('sha256').update('fixture-claim').digest('hex'),
+        },
+        config: join(root, 'config.json'),
+        reservationId: 'fixture-reservation',
+        memoryGiB: 1,
+      }),
+    ).rejects.toThrow('Terminal artifact changed')
   } finally {
     await rm(root, { recursive: true, force: true })
   }

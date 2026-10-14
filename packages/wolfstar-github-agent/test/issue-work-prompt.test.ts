@@ -103,7 +103,7 @@ describe('issueWorkPrompt', () => {
       '> 🤖 AI disclosure: [Wolfstar Agent Kit](https://github.com/wolfstar-project/wolfstar-agent-kit) modified this description.',
     )
     expect(prompt).toContain('Read these repository instruction files before you change code: AGENTS.md.')
-    expect(prompt).not.toMatch(/Apply the (?:PR|unit-tests|im-not-a-fly) skill/)
+    expect(prompt).not.toMatch(/Apply the (?:PR|unit-tests|im-part-human) skill/)
   })
 })
 

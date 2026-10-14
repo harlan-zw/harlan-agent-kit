@@ -1,6 +1,7 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { BatchStore } from './batch-store.ts'
 import type { TransientKind } from './failure.ts'
+import type { FindingThreadSyncStore } from './finding-thread-sync-store.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { AgentHost, AgentSlotSetting } from './host-capacity.ts'
 import type {
@@ -151,6 +152,7 @@ import {
   nextRecoveryAt,
   REVIEW_REPAIR_REFUSALS,
 } from './failure.ts'
+import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
@@ -811,7 +813,16 @@ export type StoredIssueTriageRun =
     }
 
 export interface JournalStore
-  extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore {
+  extends
+    BatchStore,
+    PackageReleaseStore,
+    LoggedFindingStore,
+    TakeOwnershipStore,
+    ReviewProofStore,
+    FindingThreadSyncStore {
+  getTask: (taskId: string) => DashboardTask | null
+  listTasks: () => DashboardTask[]
+  getOpenPullRequest: (repository: string, number: number) => GitHubPullRequestItem | null
   inspectRepairRecovery: (taskId: string, commitSha: string) => Result<RepairRecoveryTarget, string>
   claimRepairRecovery: (
     target: RepairRecoveryTarget,
@@ -8237,7 +8248,11 @@ function installSchema(database: DatabaseSync): void {
     )
     version = 91
   }
-  if (version === 91) return
+  if (version === 91) {
+    applyMigration(database, `${findingThreadSyncSchema} PRAGMA user_version = 92;`)
+    version = 92
+  }
+  if (version === 92) return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
 
@@ -8260,7 +8275,14 @@ function openDatabase(path: string): DatabaseSync {
   return database
 }
 
-function taskRows(database: DatabaseSync, subjectId?: number): TaskRow[] {
+function taskRows(
+  database: DatabaseSync,
+  filter: { _tag: 'Dashboard' } | { _tag: 'Subject'; id: number } | { _tag: 'Task'; id: string } = {
+    _tag: 'Dashboard',
+  },
+): TaskRow[] {
+  const predicate = (table: string) =>
+    filter._tag === 'Dashboard' ? '' : `${table}.${filter._tag === 'Subject' ? 'subject_id' : 'id'} = ?`
   const rows = (table: 'tasks' | 'worker_tasks', current: boolean): TaskRow[] =>
     database
       .prepare(`
@@ -8290,18 +8312,19 @@ function taskRows(database: DatabaseSync, subjectId?: number): TaskRow[] {
          WHERE ${table}.revision_id = subjects.current_revision_id
            AND repositories.enabled = 1
            AND json_extract(revisions.payload, '$.state') = 'open'
-           ${subjectId === undefined ? '' : `AND ${table}.subject_id = ?`}`
-        : subjectId === undefined
+           ${filter._tag === 'Dashboard' ? '' : `AND ${predicate(table)}`}`
+        : filter._tag === 'Dashboard'
           ? ''
-          : `WHERE ${table}.subject_id = ?`
+          : `WHERE ${predicate(table)}`
     }
     ORDER BY ${table}.updated_at DESC
-    ${current || subjectId !== undefined ? '' : 'LIMIT 100'}
+    ${current || filter._tag !== 'Dashboard' ? '' : 'LIMIT 100'}
   `)
-      .all(...(subjectId === undefined ? [] : [subjectId])) as unknown as TaskRow[]
+      .all(...(filter._tag === 'Dashboard' ? [] : [filter.id])) as unknown as TaskRow[]
+  if (filter._tag === 'Task') return [...rows('tasks', false), ...rows('worker_tasks', false)]
   const current = [...rows('tasks', true), ...rows('worker_tasks', true)]
   const currentIds = new Set(current.map((row) => row.id))
-  const historyLimit = subjectId === undefined ? Math.max(0, 100 - current.length) : Number.POSITIVE_INFINITY
+  const historyLimit = filter._tag === 'Dashboard' ? Math.max(0, 100 - current.length) : Number.POSITIVE_INFINITY
   const history = [...rows('tasks', false), ...rows('worker_tasks', false)]
     .filter((row) => !currentIds.has(row.id))
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at) || left.id.localeCompare(right.id))
@@ -8540,6 +8563,7 @@ export function openJournalStore(
   const reviewProofStore = createReviewProofStore(database)
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
+  const findingThreadSyncStore = createFindingThreadSyncStore(database, repositoryWriteAuthoritySql)
   const loggedFindingStore = createLoggedFindingStore(database, {
     writeAuthoritySql: repositoryWriteAuthoritySql,
     digest,
@@ -9089,7 +9113,7 @@ export function openJournalStore(
           database
             .prepare(`
           SELECT 1 FROM tasks WHERE subject_id = ? AND kind = 'issue_work'
-            AND state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
+            AND state_tag IN ('Queued', 'Running', 'Publishing')
         `)
             .get(row.subject_id) !== undefined
         ) {
@@ -9100,6 +9124,34 @@ export function openJournalStore(
       if (reason !== undefined || row === undefined) {
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: reason ?? { _tag: 'ItemNotFound' } }
+      }
+      const stoppedWork = database
+        .prepare(`
+        SELECT id, state_tag, fence FROM tasks
+        WHERE subject_id = ? AND revision_id = ? AND kind = 'issue_work'
+          AND state_tag IN ('ActionRequired', 'Failed')
+      `)
+        .all(row.subject_id, input.revisionId) as unknown as Array<{
+        id: string
+        state_tag: 'ActionRequired' | 'Failed'
+        fence: number
+      }>
+      for (const work of stoppedWork) {
+        // An explicit rerun requires a fresh route before the same work may resume.
+        database
+          .prepare(`
+          UPDATE tasks SET state_tag = 'Superseded', reason = ?, updated_at = ?
+          WHERE id = ? AND state_tag = ?
+        `)
+          .run(freshIssueTriageReason, input.at, work.id, work.state_tag)
+        recordTransition(database, {
+          taskId: work.id,
+          from: work.state_tag,
+          to: 'Superseded',
+          reason: freshIssueTriageReason,
+          fence: work.fence,
+          at: input.at,
+        })
       }
       if (row.task_id !== null && (row.state_tag === 'Queued' || row.state_tag === 'Running')) {
         database.exec('COMMIT')
@@ -9977,6 +10029,26 @@ export function openJournalStore(
     return row === undefined ? null : { revisionId: row.revision_id, dismissed: row.dismissed === 1 }
   }
 
+  const getTask: JournalStore['getTask'] = (taskId) => {
+    const row = taskRows(database, { _tag: 'Task', id: taskId })[0]
+    return row === undefined ? null : taskFromRow(row)
+  }
+  const listTasks: JournalStore['listTasks'] = () => taskRows(database).map(taskFromRow)
+  const getOpenPullRequest: JournalStore['getOpenPullRequest'] = (github, number) => {
+    const row = database
+      .prepare(`
+      SELECT revisions.payload
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE repositories.github = ? AND repositories.enabled = 1
+        AND subjects.kind = 'pull_request' AND subjects.github_number = ?
+        AND json_extract(revisions.payload, '$.state') = 'open'
+    `)
+      .get(github, number) as { payload: string } | undefined
+    return row === undefined ? null : (JSON.parse(row.payload) as GitHubPullRequestItem)
+  }
+
   const getOpenPullRequestStatus: JournalStore['getOpenPullRequestStatus'] = (github, pullRequestNumber) => {
     const row = database
       .prepare(`
@@ -10025,7 +10097,7 @@ export function openJournalStore(
           .all(row.id, pullRequest.headSha) as unknown as Array<{ id: string }>
       ).map((row) => row.id),
     )
-    const tasks = taskRows(database, row.id)
+    const tasks = taskRows(database, { _tag: 'Subject', id: row.id })
       .filter(
         (task) =>
           task.repository === repository.github &&
@@ -14240,9 +14312,9 @@ export function openJournalStore(
       if (changed) {
         const command = database
           .prepare(`
-          SELECT review_run_id, body FROM review_status_commands WHERE id = ?
+          SELECT review_run_id, body, phase, task_kind FROM review_status_commands WHERE id = ?
         `)
-          .get(input.commandId) as { review_run_id: string | null; body: string }
+          .get(input.commandId) as { review_run_id: string | null; body: string; phase: string; task_kind: string }
         if (command.review_run_id !== null) {
           const publicationResult = { _tag: 'Published' as const, githubCommentId: input.commentId, url: input.url }
           // A drift repair republishes the same command id, so the row already
@@ -14279,6 +14351,12 @@ export function openJournalStore(
               ),
             )
         }
+        if (
+          command.review_run_id !== null &&
+          command.phase === 'terminal' &&
+          command.task_kind === 'adversarial_review'
+        )
+          findingThreadSyncStore.queueReviewFindingThreadSync(command.review_run_id, input.at)
         recordReviewStatusEvent(database, {
           commandId: input.commandId,
           event: 'Published',
@@ -19420,6 +19498,7 @@ export function openJournalStore(
 
   return {
     ...takeOwnershipStore,
+    ...findingThreadSyncStore,
     ...reviewProofStore,
     ...loggedFindingStore,
     approveIssue,
@@ -19582,6 +19661,9 @@ export function openJournalStore(
     isSafeToRestart,
     dismissItem,
     getOpenPullRequestStatus,
+    getOpenPullRequest,
+    getTask,
+    listTasks,
     getOpenIssueStatus,
     getPullRequestWatchState,
     restoreItem,

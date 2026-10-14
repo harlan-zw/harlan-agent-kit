@@ -35,6 +35,49 @@ afterEach(async () => {
 })
 
 describe('wolfstar GitHub Agent control CLI', () => {
+  it.each(['Completed', 'Missing', 'Running'])('reads focused Task activity: %s', async (state) => {
+    const directory = await mkdtemp(join(tmpdir(), 'wolfstar-activity-cli-'))
+    temporaryDirectories.push(directory)
+    const passwordFile = join(directory, 'password')
+    await writeFile(passwordFile, 'test-password-with-at-least-32-bytes\n', { mode: 0o600 })
+    const taskId = 'a'.repeat(64)
+    const error =
+      state === 'Missing'
+        ? { _tag: 'TaskNotFound', taskId, message: 'The Service has no record of this Task.' }
+        : { _tag: 'TaskActivityUnavailable', taskId, state, message: `This Task is ${state}.` }
+    const activity = [{ _tag: 'Reasoning', at: '2026-10-13T00:00:00.000Z', text: 'Reading.' }]
+    const requests: string[] = []
+    const server = createServer((request, response) => {
+      requests.push(request.url!)
+      response.setHeader('content-type', 'application/json')
+      response.end(
+        JSON.stringify(state === 'Running' ? { _tag: 'Ok', value: { taskId, activity } } : { _tag: 'Err', error }),
+      )
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address() as AddressInfo
+    const result = await runControlCli([
+      'control',
+      'activity',
+      '--task',
+      taskId,
+      '--url',
+      `http://127.0.0.1:${address.port}`,
+      '--password-file',
+      passwordFile,
+    ]).finally(
+      () =>
+        new Promise<void>((resolve, reject) =>
+          server.close((error) => (error === undefined ? resolve() : reject(error))),
+        ),
+    )
+    expect(requests).toEqual([`/api/tasks/activity?task=${taskId}`])
+    expect(result.code).toBe(state === 'Running' ? 0 : 1)
+    expect(JSON.parse(state === 'Running' ? result.stdout : result.stderr)).toEqual(
+      state === 'Running' ? { taskId, activity } : error,
+    )
+  })
+
   it.each(['valid', 'invalid', 'current'])('reruns triage only for an exact Issue Revision: %s', async (mode) => {
     const directory = await mkdtemp(join(tmpdir(), 'wolfstar-triage-cli-'))
     temporaryDirectories.push(directory)

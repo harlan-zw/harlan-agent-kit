@@ -6,6 +6,7 @@ import {
   createGitHubAppTokenProvider,
   createRepositoryTokenProvider,
 } from '../src/github-auth.ts'
+import { createGitHubResponseCache } from '../src/github-response-cache.ts'
 import { ok } from '../src/result.ts'
 
 afterEach(() => vi.restoreAllMocks())
@@ -111,6 +112,7 @@ describe('gitHub App authentication', () => {
     ['contents_write', { contents: 'write', metadata: 'read' }],
     ['item_write', { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }],
     ['pull_request_merge', { contents: 'write', metadata: 'read', pull_requests: 'write' }],
+    ['review_thread_write', { contents: 'write', metadata: 'read', pull_requests: 'write' }],
     ['workflows_write', { contents: 'write', metadata: 'read', workflows: 'write' }],
   ] as const)('mints one repository-scoped %s token', async (access, permissions) => {
     const requests: unknown[] = []
@@ -324,6 +326,55 @@ describe('rejected credential recovery', () => {
 })
 
 describe('createAuthenticatedClient', () => {
+  it.each(['read', 'item_write'] as const)(
+    'checks request permission after refreshing a %s credential',
+    async (access) => {
+      let allowed = true
+      const stopped = new Error('Request stopped')
+      const requests: boolean[] = []
+      const octokit = createAuthenticatedClient({
+        access,
+        repository: 'wolfstar-project/example',
+        token: 'stale-token',
+        userAgent: 'test',
+        responseCache: createGitHubResponseCache(),
+        assertRequest: () => {
+          if (!allowed) throw stopped
+        },
+        tokens: {
+          getToken: async () => {
+            allowed = false
+            return ok({ token: 'fresh-token', expiresAt: '2126-01-01T00:00:00.000Z' })
+          },
+          invalidate: () => {},
+        },
+        createClient: (clientOptions) =>
+          new Octokit({
+            ...clientOptions,
+            retry: { enabled: false },
+            throttle: { enabled: false },
+            request: {
+              fetch: async () => {
+                requests.push(allowed)
+                return requests.length === 1
+                  ? Response.json({ message: 'Bad credentials' }, { status: 401 })
+                  : Response.json({ id: 99 })
+              },
+            },
+          }),
+      })
+      await expect(
+        octokit.request(
+          access === 'read'
+            ? 'GET /repos/wolfstar-project/example/issues'
+            : 'POST /repos/wolfstar-project/example/issues/24/comments',
+          { body: 'status' },
+        ),
+      ).rejects.toBe(stopped)
+      expect(requests).toEqual([true])
+    },
+  )
+
   function tokenProvider(tokens: string[]) {
     const invalidated: string[] = []
     let index = 0

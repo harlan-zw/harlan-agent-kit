@@ -89,7 +89,7 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 - Find and search files: ripgrep (`rg`).
 - Rename, move, or import update spanning 2+ files: use `ripide` through the launcher selected by its Skill. The retired `@ripast/cli` package stays stale. Dry run is the default; use `--apply` to write.
-- Before using Ripast, read its `ripast` Skill.
+- Before using Ripast, read its skilld-managed `ripast` Skill. Use `pnpm check:skills` to check the shared installation.
 - Browser testing and automation: `dev-browser` (`--help`). Always pass `--headless` for unattended tests, even with `$DISPLAY`.
 - Launch dedicated Agent and Clients Chrome headless with `wolfstar-browser open <identity>`. Visible work requires an explicit user request.
 - `--headless` does not hide attached Chrome. Use `wolfstar-browser connect` to enforce headless connections. Never bring tabs to the foreground.
@@ -161,7 +161,11 @@ Self-hosted runners run on Hogwild (`hogwild-github-runner.service`) and on the 
 
 Every change opens a pull request. A Markdown-only change is no exception.
 Never push to `origin/main` directly.
-Test, build, and deploy workflow events ignore `**/*.md` by default.
+Test, build, and deploy workflows skip Markdown-only changes by default.
+If the default branch requires checks, skip at the job level, never at the event.
+A `changes` job decides, and each other job skips through `if:`. GitHub passes a skipped required check.
+An event-level filter starts no run, so a required check never reports and the pull request blocks.
+If the default branch requires no checks, an event-level `paths-ignore` for `**/*.md` is fine.
 A workflow opts in only when its `paths` list includes Markdown.
 Never combine `paths` and `paths-ignore` on one event.
 
@@ -192,5 +196,8 @@ Every commit subject follows Conventional Commits: `type(scope): description`.
 ## Reference material
 
 Personal rubrics and procedures live in `~/pkg/wolfstar-agent-kit/wolfstar-agent-kit/skills/*/SKILL.md`.
+Brundlefly and Ripast provide the portable Skills declared in `.skills/skilld.json`.
+Run `pnpm sync:skills` in Wolfstar Agent Kit to install them through skilld.
+Run `pnpm check:skills` to check their sources, Agent targets, and required Skills.
 Use personal `pr` for delivery. Its Hooks and Service policy take precedence over general pull request guidance.
 Load the installed Skill that matches the task. Trust its file, not memory.

@@ -41,7 +41,7 @@ async function main(): Promise<void> {
       transport!.once('error', reject)
       transport!.listen(4097, '127.0.0.1', resolve)
     })
-    const attach = args.indexOf('--attach')
+    const attach = args.indexOf('--server')
     if (attach === -1) throw new Error('The OpenCode client needs its turn server.')
     args[attach + 1] = 'http://127.0.0.1:4097'
   }

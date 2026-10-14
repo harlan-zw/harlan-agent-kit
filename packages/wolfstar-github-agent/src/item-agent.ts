@@ -919,7 +919,9 @@ function githubCiAbsent(snapshot: PullRequestReviewSnapshot): boolean {
  * GitHub starts workflow runs seconds after a push, and a Review turn already
  * takes minutes. Past this bound an empty head check set means the
  * repository's own trigger filters skipped CI for this change. A docs only
- * pull request under `paths-ignore` reads exactly like that.
+ * pull request under an event-level `paths-ignore` reads exactly like that.
+ * A workflow that skips its jobs through `if:` reports skipped check runs
+ * instead. Those pass the head gate as soon as they report, with no grace.
  */
 export const HEAD_CI_GRACE_MILLISECONDS = 15 * 60_000
 

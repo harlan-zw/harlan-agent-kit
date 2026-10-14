@@ -24,6 +24,7 @@ export function isRepositoryWriteQuarantineReason(message: string): boolean {
 const writeAccess = new Set<GitHubRepositoryAccess>([
   'contents_write',
   'item_write',
+  'review_thread_write',
   'pull_request_merge',
   'workflows_write',
 ])

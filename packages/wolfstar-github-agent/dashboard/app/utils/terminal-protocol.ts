@@ -13,7 +13,16 @@ import type {
 
 const MAX_FRAME_BYTES = 8 * 1024 * 1024
 const MAX_CELLS = 20_000
-const states: readonly TerminalState[] = ['Starting', 'Running', 'Stopping', 'Exited', 'Interrupted', 'Unknown']
+const states: readonly TerminalState[] = [
+  'Queued',
+  'Starting',
+  'Running',
+  'Stopping',
+  'Exited',
+  'Interrupted',
+  'Unknown',
+  'Cancelled',
+]
 const failures: readonly TerminalFailure[] = [
   'InvalidRequest',
   'AuthenticationRequired',

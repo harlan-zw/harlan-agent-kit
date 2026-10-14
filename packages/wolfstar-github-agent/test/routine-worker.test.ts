@@ -206,15 +206,30 @@ describe('building the scan prompt', () => {
     }
   })
 
-  it('keeps Agent feedback proposals inside one skill file', () => {
+  it('keeps Agent feedback proposals inside one skill and its replay', () => {
     expect(
       getRoutine('agent-feedback').selectCandidates([
         { ...candidate, target: 'src/controller.ts' },
-        { ...candidate, fingerprint: 'skill-a', target: 'wolfstar-agent-kit/skills/adversarial-review/SKILL.md' },
-        { ...candidate, fingerprint: 'skill-b', target: 'wolfstar-agent-kit/skills/pr-triage/SKILL.md' },
+        {
+          ...candidate,
+          estimatedChangedFiles: 3,
+          fingerprint: 'skill-a',
+          target: 'wolfstar-agent-kit/skills/adversarial-review/SKILL.md',
+        },
+        {
+          ...candidate,
+          estimatedChangedFiles: 3,
+          fingerprint: 'skill-b',
+          target: 'wolfstar-agent-kit/skills/pr-triage/SKILL.md',
+        },
       ]),
     ).toEqual([
-      { ...candidate, fingerprint: 'skill-a', target: 'wolfstar-agent-kit/skills/adversarial-review/SKILL.md' },
+      {
+        ...candidate,
+        estimatedChangedFiles: 3,
+        fingerprint: 'skill-a',
+        target: 'wolfstar-agent-kit/skills/adversarial-review/SKILL.md',
+      },
     ])
   })
 

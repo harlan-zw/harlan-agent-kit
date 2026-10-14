@@ -87,17 +87,16 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
           }
           return
         }
+        const model = `${request.model}${request.reasoningEffort === undefined ? '' : `#${request.reasoningEffort}`}`
         const args = [
           'run',
+          '--standalone',
           '--format',
           'json',
           '--auto',
           '--model',
-          request.model,
-          '--dir',
-          request.workspace,
+          model,
           ...(request.sessionId === null ? [] : ['--session', request.sessionId]),
-          ...(request.reasoningEffort === undefined ? [] : ['--variant', request.reasoningEffort]),
         ]
         // The desktop executor owns this process group and recovers it after crashes.
         const childOptions: SpawnOptionsWithoutStdio = {
@@ -138,6 +137,7 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
         if (request.signal.aborted) stop()
         child.stdin?.end(request.prompt)
         let completed = false
+        let answered = false
         let failed = false
         let sessionId = request.sessionId
         try {
@@ -148,6 +148,7 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
             if (typeof raw !== 'object' || raw === null || !('type' in raw) || typeof raw.type !== 'string')
               throw new Error('The opencode session returned an invalid event.')
             const value = raw as Parameters<typeof opencodeAgentEvent>[0]
+            answered ||= value.type === 'text' && typeof value.part?.text === 'string' && value.part.text.trim() !== ''
             if (typeof value.sessionID === 'string' && value.sessionID !== sessionId) {
               if (sessionId !== null) throw new Error('The opencode session changed its conversation identity.')
               sessionId = value.sessionID
@@ -168,7 +169,8 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
           }
           const exit = await closed
           if (request.signal.aborted) request.signal.throwIfAborted()
-          if (exit.code !== 0 || pipeError !== undefined || !completed) {
+          // V2 reconciles text before a successful exit even when its final step event arrives late.
+          if (exit.code !== 0 || pipeError !== undefined || (!completed && !answered)) {
             if (!failed)
               yield {
                 _tag: 'Failed',

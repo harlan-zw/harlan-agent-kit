@@ -1,9 +1,61 @@
 import { describe, expect, it } from 'vitest'
 import { repositoryQuarantineReason } from '../src/github-write-gate.ts'
-import { createPassIncidentRecorder } from '../src/service.ts'
+import { createPassIncidentRecorder, reportAgentCapacity } from '../src/service.ts'
 import { openJournalStore } from '../src/store.ts'
+import { dashboardSnapshot, issueItem, repositoryMapping } from './fixtures.ts'
 
 const now = () => new Date('2026-08-27T06:00:00.000Z')
+
+describe('reporting live Agent capacity', () => {
+  it.each(['Available', 'ReserveReached', 'CapacityUnavailable'] as const)('reports %s from live readings', (state) => {
+    const store = openJournalStore(':memory:')
+    try {
+      store.syncRepositories([repositoryMapping()], now().toISOString())
+      store.recordObservation({
+        externalId: 'capacity-fixture',
+        observedAt: now().toISOString(),
+        source: 'poll',
+        subject: issueItem({ author: 'wolfstar-project' }),
+      })
+      const stored = store.getDashboardSnapshot(now().toISOString())
+      expect(stored.tasks.some((task) => task.state._tag === 'Queued')).toBe(true)
+      const snapshot = dashboardSnapshot({
+        ...stored,
+        mutationsEnabled: true,
+        agentSelection: { _tag: 'Automatic', order: ['codex'] },
+        providerCapacities: [
+          {
+            provider: 'codex',
+            reservePercent: 20,
+            capacity:
+              state === 'CapacityUnavailable'
+                ? { _tag: 'Unavailable', reason: 'The provider timed out.' }
+                : { _tag: 'Available', usedPercent: state === 'Available' ? 37 : 90, resetsAt: now().toISOString() },
+          },
+        ],
+      })
+      const messages: string[] = []
+      const record = createPassIncidentRecorder({ now, signal: new AbortController().signal, store })
+      record('agent_capacity', ['An earlier reading failed.'])
+
+      reportAgentCapacity(snapshot, {
+        log: (message) => messages.push(message),
+        record: (errors) => record('agent_capacity', errors),
+      })
+
+      expect(store.listIncidents().map((incident) => incident.operation)).toEqual(
+        state === 'CapacityUnavailable' ? ['agent_capacity'] : [],
+      )
+      expect(messages).toEqual(
+        state === 'Available'
+          ? []
+          : [expect.stringContaining(state === 'ReserveReached' ? 'reached its Reserve' : 'did not report a limit')],
+      )
+    } finally {
+      store.close()
+    }
+  })
+})
 
 describe('recording one poll pass failures', () => {
   it('does not project write quarantine as an Incident', () => {

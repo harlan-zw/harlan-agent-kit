@@ -276,4 +276,35 @@ describe('issue triage rerun', () => {
     finish(store, 'READY_TO_IMPLEMENT')
     expect(store.requestIssueTriageRerun(request)).toMatchObject({ _tag: 'Rejected', reason: { _tag: 'WorkActive' } })
   })
+
+  it.each(['READY_TO_IMPLEMENT', 'NEEDS_INFO'])(
+    'reassesses stopped implementation before continuing with %s',
+    (route) => {
+      const { store, request } = setup()
+      finish(store, 'READY_TO_IMPLEMENT')
+      const work = store.claimNextIssueWorkTask('implementer', '2026-08-13T01:02:00.000Z', 60_000)!
+      store.needsAttentionTask({
+        taskId: work.id,
+        workerId: work.state.workerId,
+        fence: work.state.fence,
+        at: '2026-08-13T01:02:30.000Z',
+        reason: 'The command host is missing.',
+        evidence: 'Command execution was unavailable.',
+      })
+      expect(store.requestIssueTriageRerun(request)).toMatchObject({ _tag: 'Queued' })
+      expect(store.claimNextIssueWorkTask('premature', request.at, 60_000)).toBeNull()
+      const triage = store.claimNextIssueTriageTask('fresh-triage', request.at, 60_000)!
+      store.completeWorkerTask({
+        taskId: triage.id,
+        workerId: triage.state.workerId,
+        fence: triage.state.fence,
+        at: '2026-08-13T02:00:30.000Z',
+        evidence: JSON.stringify({ _tag: route }),
+      })
+      const resumed = store.claimNextIssueWorkTask('retry', '2026-08-13T02:00:31.000Z', 60_000)
+      if (route === 'READY_TO_IMPLEMENT')
+        expect(resumed).toMatchObject({ id: work.id, state: { fence: work.state.fence + 1 } })
+      else expect(resumed).toBeNull()
+    },
+  )
 })

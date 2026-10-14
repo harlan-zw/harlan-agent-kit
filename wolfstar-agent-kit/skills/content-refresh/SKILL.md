@@ -16,7 +16,7 @@ Precise examples should also remain useful to agents.
 Inspect the target repository, its Agent instructions, content configuration, routes, navigation, and existing editorial records.
 Include relevant hidden project records, such as prior SEO research under .claude/, using a bounded search.
 Treat old research as leads to recheck, not current source proof.
-Read its glossary through the [glossary](../glossary/SKILL.md) Skill.
+Read its glossary through the installed Brundlefly `glossary` Skill.
 If no glossary exists, use that Skill to propose terms and resolve naming decisions before dependent copy.
 Do not silently adopt another project's vocabulary.
 Do not transfer another product's facts, terminology, source scores, or rollout claims.
@@ -86,11 +86,11 @@ A new revision invalidates affected approvals. Recheck changed claims and consum
 ## Write and verify
 
 Read [screenshots](references/screenshots.md) before planning visual evidence.
-Research each technical article from primary sources, run its examples, and verify them as a reader would.
+Load the installed Brundlefly `technical-guide` Skill for each technical article's research, examples, and reader verification.
 This Skill owns shared records, the worker pool, and collection publication checks.
-Use the target's article voice and the [humanize-writing](../humanize-writing/SKILL.md) Skill.
+Use the target's article voice and the installed Brundlefly `im-part-human` Skill.
 Run a distinct factual review before the humanize pass.
-Then apply `humanize-writing` under COPY.md.
+Then apply `im-part-human` under COPY.md.
 Record the main writing changes in the brief. Recheck meaning, uncertainty, dates, and examples afterward.
 The final article reviewer reads the humanized revision, not an earlier draft.
 Record useful findings in the brief instead of flooding the user with every worker's writing report.

@@ -131,6 +131,19 @@ Stop requires confirmation from the selected host before another turn starts.
 
 Never: chat, thread. Use Agent session.
 
+### Host memory
+
+Physical memory and charged session memory on the selected host.
+Regular starts follow the root host policy. Waiting sessions retry in request order.
+Force requests bounded manual admission for the same session. The root host can refuse it.
+Host memory differs from provider Capacity and Reserve.
+
+### Initial prompt
+
+Optional text passed once through provider arguments when an Agent session starts.
+It stays with the saved session request while the session waits for Host memory.
+Use Initial prompt instead of Task for this text.
+
 ### Project
 
 One repository checkout on Desktop or Hogwild within `~/pkg` or `~/sites`.

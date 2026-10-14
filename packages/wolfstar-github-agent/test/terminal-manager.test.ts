@@ -1,5 +1,6 @@
 import type { TerminalAdmission, TerminalAdmissionResult } from '../src/terminal-admission.ts'
 import type { TerminalHelperConfig } from '../src/terminal-manager.ts'
+import type { TerminalProvider } from '../src/terminal-protocol.ts'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -10,11 +11,23 @@ import { createTerminalManager } from '../src/terminal.ts'
 
 const managers: Awaited<ReturnType<typeof createTerminalManager>>[] = []
 const directories: string[] = []
+it('reports authoritative aggregate host memory without private broker diagnostics', async () => {
+  const fixture_ = await fixture()
+  const manager = await fixture_.manager()
+  expect(await manager.capacity()).toMatchObject({
+    _tag: 'Available',
+    memoryGiB: 16,
+    reservedGiB: 0,
+    sessionMemoryGiB: 8,
+    manualPolicy: { _tag: 'Enabled', memoryGiB: 32 },
+    regular: { _tag: 'Allowed' },
+  })
+})
 afterEach(async () => {
   for (const manager of managers.splice(0)) manager.close()
   for (const directory of directories.splice(0)) await rm(directory, { recursive: true })
 })
-async function fixture() {
+async function fixture(providerArguments: Partial<Record<TerminalProvider, string[]>> = {}) {
   const root = join(homedir(), 'scratch')
   await mkdir(root, { recursive: true })
   const directory = await mkdtemp(join(root, 'terminal-manager-test-'))
@@ -24,6 +37,8 @@ async function fixture() {
   let ready = true
   let releaseResult: TerminalAdmissionResult = { _tag: 'Empty' }
   let refused = false
+  let manualRefused = false
+  let manualUnavailable = false
   let reserveCount = 0
   let raceRelease = false
   let emptyChecks = 0
@@ -46,15 +61,17 @@ async function fixture() {
     controller: false,
     projects: [{ id: 'project', name: 'Project', path: directory }],
     providers: {
-      codex: { executable: '/bin/fixture', argv: [], available: true },
-      claude: { executable: '/bin/fixture', argv: [], available: true },
-      opencode: { executable: '/bin/fixture', argv: [], available: true },
+      codex: { executable: '/bin/fixture', argv: providerArguments.codex ?? [], available: true },
+      claude: { executable: '/bin/fixture', argv: providerArguments.claude ?? [], available: true },
+      opencode: { executable: '/bin/fixture', argv: providerArguments.opencode ?? [], available: true },
     },
     artifact: {
       entry: '/artifact',
       digest: 'digest',
       wasm: '/wasm',
       wasmDigest: 'wasm',
+      claimScript: '/claim',
+      claimDigest: 'claim-digest',
     },
     admissionCli: '/capacity',
     claimScript: '/claim',
@@ -70,6 +87,20 @@ async function fixture() {
           ? receiptResult
           : { _tag: 'Conflict' },
       status: async () => ({ _tag: 'Unavailable', reason: 'Fixture' }),
+      capacity: async () => ({
+        _tag: 'Capacity',
+        memoryGiB: 16,
+        reservedGiB: 0,
+        agentSlots: 2,
+        agentSlotsUsed: 0,
+        maintenanceReserve: 1,
+        forcedGiB: 0,
+        sessionMemoryGiB: 8,
+        memory: { _tag: 'Physical', totalGiB: 64, availableGiB: 48 },
+        manualPolicy: { _tag: 'Enabled', memoryGiB: 32, agentSlotsMax: 4, physicalReserveGiB: 4 },
+        regular: refused ? { _tag: 'AtCapacity', reason: 'Slots', memoryGiB: 16, reservedGiB: 0 } : { _tag: 'Allowed' },
+        manual: { _tag: 'Allowed' },
+      }),
       reserve: async (value) => {
         reserveCount++
         receipt = {
@@ -79,16 +110,29 @@ async function fixture() {
           reservationId: 'reservation',
           unit: value.unit,
         }
-        return refused
-          ? { _tag: 'AtCapacity', reason: 'Slots' }
-          : {
-              _tag: 'Admitted',
-              reservationId: 'reservation',
-              disposition: 'Created',
-              unit: value.unit,
-              hostId: 'host',
-              bootId: 'boot',
-            }
+        return value.admission === 'ManualOverride'
+          ? manualUnavailable
+            ? { _tag: 'Unavailable', reason: 'Physical memory cannot be verified' }
+            : manualRefused
+              ? { _tag: 'AtCapacity', reason: 'MemoryPressure' }
+              : {
+                  _tag: 'Admitted',
+                  reservationId: 'reservation',
+                  disposition: 'Created',
+                  unit: value.unit,
+                  hostId: 'host',
+                  bootId: 'boot',
+                }
+          : refused
+            ? { _tag: 'AtCapacity', reason: 'Slots' }
+            : {
+                _tag: 'Admitted',
+                reservationId: 'reservation',
+                disposition: 'Created',
+                unit: value.unit,
+                hostId: 'host',
+                bootId: 'boot',
+              }
       },
       bind: async () => ({
         _tag: 'Bound',
@@ -148,6 +192,7 @@ async function fixture() {
   }
   return {
     manager,
+    admission: options.admission,
     deferStop() {
       const gate = Promise.withResolvers<void>()
       const entered = Promise.withResolvers<void>()
@@ -179,6 +224,12 @@ async function fixture() {
     allow: () => {
       refused = false
     },
+    refuseManual: () => {
+      manualRefused = true
+    },
+    unavailableManual: () => {
+      manualUnavailable = true
+    },
     reserveCount: () => reserveCount,
     raceRelease: () => {
       running = false
@@ -195,6 +246,70 @@ const launch = {
   provider: 'codex' as const,
 }
 describe('durable terminal launch and ownership', () => {
+  it('fences ambiguous manual outcomes across restart without replacing the admission request', async () => {
+    const f = await fixture()
+    const manager = await f.manager()
+    f.refuse()
+    const queued = await manager.launch(launch)
+    if (queued._tag !== 'Ok') throw new Error('Fixture queue failed')
+    f.unavailableManual()
+    const requests: Parameters<TerminalAdmission['reserve']>[0][] = []
+    const originalReserve = f.admission.reserve
+    let responseLost = true
+    f.admission.reserve = async (value) => {
+      await originalReserve(value)
+      requests.push(structuredClone(value))
+      return responseLost
+        ? { _tag: 'Unavailable', reason: 'Connection ended after committed admission' }
+        : {
+            _tag: 'Admitted',
+            disposition: 'Existing',
+            reservationId: 'reservation',
+            unit: value.unit,
+            hostId: 'host',
+            bootId: 'boot',
+          }
+    }
+    f.admission.reconcile = async () => ({ _tag: 'Unknown', reason: 'Committed Starting charge has no verified scope' })
+    const cancellations: Parameters<TerminalAdmission['cancel']>[0][] = []
+    f.admission.cancel = async (value) => {
+      cancellations.push(value)
+      return { _tag: 'Unknown' }
+    }
+    expect(await manager.forceQueued(queued.value.id, 'unverified-memory')).toEqual({
+      _tag: 'Err',
+      reason: 'DeliveryUnknown',
+    })
+    expect(manager.intent(queued.value.id)?.admission).toEqual({
+      _tag: 'ManualOverride',
+      requestId: 'manual:unverified-memory',
+    })
+    f.allow()
+    await manager.retryQueued()
+    expect(f.starts).toHaveLength(0)
+    expect(await manager.stop(queued.value.id)).toEqual({ _tag: 'Err', reason: 'DeliveryUnknown' })
+    expect(cancellations).toEqual([])
+    await manager.close()
+    const recovered = await f.manager()
+    expect(await recovered.forceQueued(queued.value.id, 'new-browser-attempt')).toEqual({
+      _tag: 'Err',
+      reason: 'DeliveryUnknown',
+    })
+    await recovered.retryQueued()
+    expect(f.reserveCount()).toBe(3)
+    responseLost = false
+    expect(await recovered.forceQueued(queued.value.id, 'another-browser-attempt')).toMatchObject({
+      _tag: 'Ok',
+      value: { id: queued.value.id, state: 'Unknown' },
+    })
+    expect(requests).toHaveLength(3)
+    expect(
+      requests.every((value) => value.requestId === 'manual:unverified-memory' && value.admission === 'ManualOverride'),
+    ).toBe(true)
+    expect(f.starts).toHaveLength(0)
+    expect(await recovered.stop(queued.value.id)).toEqual({ _tag: 'Err', reason: 'OwnershipUnknown' })
+    expect(cancellations).toEqual([{ key: `terminal:${queued.value.id}`, reservationId: 'reservation' }])
+  })
   it('releases an adopted Worktree after another client sweeps the proven-empty charge', async () => {
     const f = await fixture()
     const original = await f.manager()
@@ -224,13 +339,17 @@ describe('durable terminal launch and ownership', () => {
       expect(f.reserveCount()).toBe(1)
     },
   )
-  it('runs Codex without the shared daemon and keeps other provider arguments', async () => {
-    const fixture_ = await fixture()
-    const manager = await fixture_.manager()
-    await manager.launch(launch)
-    await manager.launch({ ...launch, requestId: 'claude', provider: 'claude' })
-    expect(fixture_.arguments_).toEqual([['--no-daemon'], []])
-  })
+  it.each(['codex', 'claude', 'opencode'] as const)(
+    'launches %s with only its configured provider arguments',
+    async (provider) => {
+      const arguments_ =
+        provider === 'codex' ? ['--ask-for-approval', 'on-request', '--sandbox', 'workspace-write'] : []
+      const fixture_ = await fixture({ [provider]: arguments_ })
+      const manager = await fixture_.manager()
+      await manager.launch({ ...launch, provider })
+      expect(fixture_.arguments_).toEqual([arguments_])
+    },
+  )
   it('drains accepted Stop writes and refuses operations after close', async () => {
     const fixture_ = await fixture()
     const manager = await fixture_.manager()
@@ -265,22 +384,115 @@ describe('durable terminal launch and ownership', () => {
     expect((await manager.sessions())[0]?.state).toBe('Exited')
     expect(fixture_.releases).toHaveLength(1)
   })
-  it('replays definitive capacity refusal without creating a dead session', async () => {
+  it('keeps a refused session queued across restart and starts it once when memory returns', async () => {
     const fixture_ = await fixture()
     fixture_.refuse()
     const manager = await fixture_.manager()
-    expect(await manager.launch(launch)).toEqual({
-      _tag: 'Err',
-      reason: 'CapacityRefused',
-    })
-    fixture_.allow()
-    expect(await manager.launch(launch)).toEqual({
-      _tag: 'Err',
-      reason: 'CapacityRefused',
-    })
-    expect(fixture_.reserveCount()).toBe(1)
+    const queued = await manager.launch(launch)
+    expect(queued._tag === 'Ok' && queued.value.state).toBe('Queued')
     expect(fixture_.starts).toEqual([])
+    await manager.close()
+    const restarted = await fixture_.manager()
+    expect((await restarted.sessions())[0]?.state).toBe('Queued')
+    fixture_.allow()
+    await Promise.all([restarted.retryQueued(), restarted.retryQueued()])
+    expect((await restarted.sessions())[0]?.state).toBe('Running')
+    const replay = await restarted.launch(launch)
+    expect(replay._tag === 'Ok' && replay.value.state).toBe('Running')
+    expect(fixture_.reserveCount()).toBe(2)
+    expect(fixture_.starts).toHaveLength(1)
   })
+  it('cancels queued work durably without preparing or starting a provider', async () => {
+    const f = await fixture()
+    f.refuse()
+    const manager = await f.manager()
+    const queued = await manager.launch(launch)
+    if (queued._tag !== 'Ok') throw new Error('Fixture did not queue')
+    expect((await manager.stop(queued.value.id))._tag).toBe('Ok')
+    await manager.close()
+    const restarted = await f.manager()
+    f.allow()
+    await restarted.retryQueued()
+    const replay = await restarted.launch(launch)
+    expect(replay._tag === 'Ok' && replay.value.state).toBe('Cancelled')
+    expect(f.reserveCount()).toBe(1)
+    expect(f.starts).toEqual([])
+  })
+  it('upgrades the same queued session once when concurrent Force requests repeat', async () => {
+    const f = await fixture()
+    f.refuse()
+    const manager = await f.manager()
+    const queued = await manager.launch(launch)
+    if (queued._tag !== 'Ok') throw new Error('Fixture did not queue')
+    const results = await Promise.all([
+      manager.forceQueued(queued.value.id, 'force'),
+      manager.forceQueued(queued.value.id, 'force'),
+    ])
+    expect(results.map((value) => value._tag === 'Ok' && value.value.id)).toEqual([queued.value.id, queued.value.id])
+    expect(f.starts).toHaveLength(1)
+    expect(f.reserveCount()).toBe(2)
+    f.allow()
+    await manager.retryQueued()
+    expect(f.starts).toHaveLength(1)
+  })
+  it('keeps refused Force eligible for Regular retry and fences the refused attempt across restart', async () => {
+    const f = await fixture()
+    f.refuse()
+    f.refuseManual()
+    const manager = await f.manager()
+    const queued = await manager.launch(launch)
+    if (queued._tag !== 'Ok') throw new Error('Fixture did not queue')
+    const forced = await manager.forceQueued(queued.value.id, 'force')
+    expect(forced._tag === 'Ok' && forced.value.state).toBe('Queued')
+    await manager.close()
+    const restarted = await f.manager()
+    await restarted.forceQueued(queued.value.id, 'force')
+    expect(f.reserveCount()).toBe(2)
+    f.allow()
+    await restarted.retryQueued()
+    expect(f.reserveCount()).toBe(3)
+    expect(f.starts).toHaveLength(1)
+  })
+  it('preserves FIFO and admits only one queued session per retry', async () => {
+    const f = await fixture()
+    f.refuse()
+    const manager = await f.manager()
+    const first = await manager.launch(launch)
+    await manager.launch({ ...launch, requestId: 'second' })
+    f.allow()
+    await manager.launch({ ...launch, requestId: 'third' })
+    expect(f.reserveCount()).toBe(1)
+    await Promise.all([manager.retryQueued(), manager.retryQueued()])
+    expect(f.starts).toEqual([first._tag === 'Ok' ? `wolfstar-terminal-${first.value.id}.service` : 'missing'])
+    await manager.retryQueued()
+    expect(f.starts).toHaveLength(2)
+  })
+  it('serializes Force against automatic Regular admission without duplicating paid work', async () => {
+    const f = await fixture()
+    f.refuse()
+    const manager = await f.manager()
+    const queued = await manager.launch(launch)
+    if (queued._tag !== 'Ok') throw new Error('Fixture did not queue')
+    f.allow()
+    await Promise.all([manager.retryQueued(), manager.forceQueued(queued.value.id, 'force')])
+    expect(f.starts).toHaveLength(1)
+    expect(f.reserveCount()).toBe(2)
+  })
+  it.each(['codex', 'claude', 'opencode'] as const)(
+    'delivers the initial %s prompt as one provider argument',
+    async (provider) => {
+      const f = await fixture()
+      const manager = await f.manager()
+      const initialPrompt = '--help; $(touch secret)\nKeep this exact text.'
+      await manager.launch({ ...launch, provider, initialPrompt })
+      expect(f.arguments_[0]).toEqual(provider === 'opencode' ? [`--prompt=${initialPrompt}`] : ['--', initialPrompt])
+      expect(await manager.launch({ ...launch, provider, initialPrompt: 'Different work' })).toEqual({
+        _tag: 'Err',
+        reason: 'LaunchConflict',
+      })
+      expect(f.starts).toHaveLength(1)
+    },
+  )
   it('coalesces accepted launch requests and adopts the same session after an API restart', async () => {
     const fixture_ = await fixture()
     const first = await fixture_.manager()

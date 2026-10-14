@@ -77,6 +77,10 @@ export interface RepositoryTokenDependencies {
  * `pull_request_merge` carries Contents write for the REST merge endpoint and
  * Pull requests write for GitHub's auto-merge mutation.
  *
+ * `review_thread_write` carries Contents write for `resolveReviewThread`.
+ * GitHub refuses that mutation when Contents is read, even with Pull requests write.
+ * https://github.com/github/gh-aw/issues/35726
+ *
  * `checks_read` carries `actions` because the base gate lists workflow runs
  * to drop the suites a `workflow_run` event attached to the default branch
  * tip. Without it GitHub answers 403 and every CI gate reads PENDING.
@@ -90,6 +94,7 @@ function permissions(access: GitHubRepositoryAccess): Record<string, PermissionL
   if (access === 'checks_read') return { actions: 'read', checks: 'read', metadata: 'read', statuses: 'read' }
   if (access === 'check_write') return { checks: 'write', metadata: 'read' }
   if (access === 'item_write') return { contents: 'read', issues: 'write', metadata: 'read', pull_requests: 'write' }
+  if (access === 'review_thread_write') return { contents: 'write', metadata: 'read', pull_requests: 'write' }
   if (access === 'pull_request_merge') return { contents: 'write', metadata: 'read', pull_requests: 'write' }
   if (access === 'workflows_write') return { contents: 'write', metadata: 'read', workflows: 'write' }
   return { contents: 'write', metadata: 'read' }
@@ -354,6 +359,8 @@ export interface AuthenticatedClientOptions {
   token: string
   userAgent: string
   signal?: AbortSignal | undefined
+  /** Checks the caller's permission before each request, including authentication retries. */
+  assertRequest?: () => void
   /** Injected for tests. Receives the same options the real client is built with. */
   createClient?: (options: {
     authStrategy: () => unknown
@@ -407,6 +414,11 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
   let retried = false
 
   octokit.hook.wrap('request', async (request, requestOptions) => {
+    const send = () => {
+      options.signal?.throwIfAborted()
+      options.assertRequest?.()
+      return request(requestOptions)
+    }
     const read = () =>
       (options.access === 'read' || options.access === 'checks_read' || options.access === 'deployments_read') &&
       options.responseCache !== undefined
@@ -416,7 +428,7 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
               const headers = requestOptions.headers
               requestOptions.headers = { ...headers, ...endpoint.headers }
               try {
-                return await request(requestOptions)
+                return await send()
               } finally {
                 requestOptions.headers = headers
               }
@@ -424,7 +436,7 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
             octokit.request.endpoint(requestOptions),
             credential.token,
           )
-        : request(requestOptions)
+        : send()
     try {
       return await read()
     } catch (error) {

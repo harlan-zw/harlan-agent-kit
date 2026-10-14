@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http'
+import type { BrowserAuth } from './browser-auth.ts'
 import type { TerminalDiffSnapshot, TerminalDiffSource } from './terminal-diff.ts'
 import { timingSafeEqual } from 'node:crypto'
 import { constants } from 'node:fs'
@@ -88,6 +89,8 @@ export async function createControllerTerminals(options: {
   memoryGiB: number
   admissionCli: string
   protectedPaths: string[]
+  browserAuth?: BrowserAuth
+  publicBrowserAuth?: BrowserAuth
 }) {
   const [codex, claude, opencode, projects] = await Promise.all([
     executable('codex'),
@@ -115,6 +118,8 @@ export async function createControllerTerminals(options: {
     protectedPaths: options.protectedPaths,
     memoryGiB: options.memoryGiB,
     authorize: (request) => terminalDashboardAccess(request, options.password),
+    ...(options.browserAuth ? { browserAuth: options.browserAuth } : {}),
+    ...(options.publicBrowserAuth ? { publicBrowserAuth: options.publicBrowserAuth } : {}),
     diff: createTerminalDiffRequests(Date.now),
   })
 }

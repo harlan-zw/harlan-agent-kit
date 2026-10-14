@@ -33,6 +33,10 @@ pnpm --filter wolfstar-github-agent dev control watch-pr \
 The command writes changed states to stderr and one terminal JSON result to stdout.
 It follows the pull request through later pushes and repairs. Read the returned head before acting.
 The result includes current-head Tasks and the merge commit when GitHub supplies it.
+While a Task is queued, events include the Dashboard's `agentStart` state.
+`RestartRequested`, `Paused`, `WritesDisabled`, `ReserveReached`, and `CapacityUnavailable` explain Service start holds.
+The stream reports `Available` when the hold clears, even if the Task stays queued.
+Task eligibility and Agent slots still control when that Task starts.
 A saved closure needs an exact GitHub confirmation before the command returns `Merged` or `Closed`.
 
 ## Wait for Review
@@ -55,6 +59,13 @@ Never treat a timeout or connection error as an empty Queue or successful Review
 
 ## Wait for merge
 
+After readiness, resolve the merge path under the PR Skill's [Auto merge contract](../../../references/auto-merge.md).
+If the current head qualifies for automatic merge, keep a foreground watch through merge and Completion.
+If only Wolfstar's merge decision remains, hand the pull request back and end the turn.
+If Wolfstar requests an active wait for that decision, use a foreground merge watch.
+Retain the exact target and delivery evidence for the next turn.
+Never start a background watch or promise an automatic chat wake-up.
+
 The default stops at merge, closure, Dismissal, or actionable work without an active Service Task.
 It keeps waiting while Service Review, Repair, or Publication owns the work.
 `--until merged` waits through actionable findings. Use it only when Wolfstar wants that wait.
@@ -70,6 +81,10 @@ On `ActionRequired`, inspect the returned reason and Tasks. Follow the existing 
 On `Closed` or `Dismissed`, report the outcome. Do not delete unintegrated work.
 
 ## Recover
+
+After a handoff, read the recorded target's current remote state when Wolfstar reports a merge or requests follow-up.
+Confirm the merge commit before Completion. If the head changed, repeat the PR Skill's current-head checks.
+Acquire the task's worktree claim before mutation. Preserve unintegrated work until integration is confirmed.
 
 If the Service restarts or the connection fails, run the same command again.
 The initial event reads the Journal, so a merge during disconnection still returns immediately.

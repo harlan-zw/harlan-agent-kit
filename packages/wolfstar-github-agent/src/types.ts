@@ -172,6 +172,10 @@ export interface AgentConfig {
     host: string
     port: number
     allowedOrigin: string
+    /** One explicitly configured public browser authority behind the trusted ingress. */
+    browserOrigins?: readonly string[]
+    publicBrowserPasswordLogin?: boolean
+    publicTerminalSessions?: boolean
     /** Enable only after the public ingress denies desktop session routes. */
     agentSessions?: boolean
     /** HTTPS or loopback HTTP origins allowed to frame the dashboard. Empty keeps framing denied. */
@@ -1211,6 +1215,7 @@ export type GitHubRepositoryAccess =
   | 'checks_read'
   | 'contents_write'
   | 'item_write'
+  | 'review_thread_write'
   | 'pull_request_merge'
   | 'workflows_write'
 

@@ -106,7 +106,7 @@ repositories: []
 #     login: im-brundlefly
 #     token_path: /home/wolfstar/.config/wolfstar-github-agent/brundlefly-token
 #     name: Brundlefly
-#     url: https://github.com/wolfstar-project/brundlefly
+#     url: https://github.com/harlan-zw/brundlefly
 #     instructions: |
 #       Use plain English and short sentences.
 #       Explain each finding before a sparse, dry aside.
@@ -164,7 +164,7 @@ repositories: []
 #   version_files: [package.json]
 #   tag_prefix: v
 #   workflow: release.yml
-#   checks: all  # Every GitHub Actions check run must pass.
+#   checks: all  # Every GitHub Actions check run must pass. A skipped one passes.
 # Without release_defaults, package releases need an explicit Repository release policy.
 # Enable webhooks, repository writes, pull_request_review, and automatic selection first.
 # Trust the publishing actor in writable_pr_authors so the version pull request receives Review.

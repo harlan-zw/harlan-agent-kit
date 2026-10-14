@@ -69,6 +69,7 @@ export type {
   ControlHealth,
   ControlReviewRun,
   ControlStatus,
+  ControlTaskList,
   ReviewQuery,
   WorkflowEventQuery,
 } from './control-client.ts'

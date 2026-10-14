@@ -10,7 +10,6 @@ import type {
 import type { NativeReviewMirror } from './native-review.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunMirror } from './review-check-run.ts'
-import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
 import type { JournalStore } from './store.ts'
 import type {
   ClaimedAdversarialReviewTask,
@@ -27,7 +26,6 @@ import { err, ok } from './result.ts'
 import { REVIEW_CANCEL_CONTROL } from './review-cancel.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
-import { mirrorReviewFindingThreads } from './review-finding-threads.ts'
 import { updatedAtLabel } from './text.ts'
 
 export interface ReviewStatusController {
@@ -54,8 +52,6 @@ export interface ReviewStatusControllerOptions {
   commentControls?: (repository: string) => boolean
   loggedFindings?: Pick<JournalStore, 'decorateLoggedFindings'>
   loggedFindingControls?: (repository: string) => boolean
-  /** Puts each finding beside its code. Absent writes the canonical comment alone. */
-  findingThreads?: ReviewFindingThreadMirror
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> &
     ReviewStatusIdentitySource &
     ReviewPublicationSource &
@@ -78,7 +74,6 @@ export interface ReviewStatusControllerOptions {
 export interface ReviewStatusPublicationOptions {
   nativeReviews?: NativeReviewMirror
   checkRuns?: ReviewCheckRunMirror
-  findingThreads?: ReviewFindingThreadMirror
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot'> &
     ReviewStatusIdentitySource &
     ReviewPublicationSource &
@@ -348,28 +343,7 @@ export async function publishClaimedReviewStatus(
         return err('GitHub accepted the Review check run, but its receipt lost the Publication lease.')
     }
   }
-  // Inline threads mirror the comment like the check run: they write after
-  // it, and their failure reaches a person through the mirror's report.
-  const findings =
-    options.findingThreads === undefined ||
-    command.phase !== 'terminal' ||
-    command.taskKind !== 'adversarial_review' ||
-    command.reviewRunId === null
-      ? null
-      : options.findingThreads.findings(command.repository, command.pullRequestNumber, command.reviewRunId)
-  if (options.findingThreads !== undefined && findings !== null) {
-    const threadAuthority = authorizeWrite(options, command)
-    if (threadAuthority._tag === 'Err') return threadAuthority
-    await mirrorReviewFindingThreads(
-      options.findingThreads,
-      command.repositoryMapping,
-      command.pullRequestNumber,
-      command.expectedHeadSha,
-      findings,
-      signal,
-      () => authorizeWrite(options, command),
-    )
-  }
+  // Completing the Publication atomically queues its finding thread sync.
   if (
     options.nativeReviews !== undefined &&
     command.phase === 'terminal' &&

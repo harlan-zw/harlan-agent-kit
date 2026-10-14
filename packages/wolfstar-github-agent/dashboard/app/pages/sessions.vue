@@ -5,6 +5,7 @@ const TerminalWorkspace = defineAsyncComponent(() => import('./_TerminalWorkspac
 const SessionHistory = defineAsyncComponent(() => import('./_SessionHistory.vue'))
 const historyView = computed(
   () =>
+    terminalHost.state.value._tag === 'Dashboard' ||
     terminalHost.state.value._tag === 'Legacy' ||
     (terminalHost.controller.value &&
       (typeof route.query.session === 'string' ||

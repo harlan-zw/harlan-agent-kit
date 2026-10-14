@@ -45,6 +45,126 @@ const record = {
   state: { _tag: 'Queued' as const, requestedBy: 'wolfstar-project' },
 }
 
+it('stops a release comment retry when Pause arrives during authentication refresh', async () => {
+  const database = new DatabaseSync(':memory:')
+  const store = createPackageReleaseStore(database)
+  const signal = new AbortController().signal
+  let allowed = true
+  let tokenCalls = 0
+  let rejected = false
+  const requests: Array<{ method: string; allowed: boolean }> = []
+  const tokens = {
+    getToken: async () => {
+      if (++tokenCalls === 2) allowed = false
+      return { _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }
+    },
+    invalidate: () => {},
+  }
+  const run = () =>
+    reconcilePackageReleases({
+      repository: mapping,
+      webhookReady: true,
+      store,
+      signal,
+      now: () => 1000,
+      mayPublish: () => allowed,
+      source: (assertLease) => ({
+        ...createPackageReleaseSource({
+          repository: mapping,
+          actors: { repository: { login: 'wolfstar-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
+          assertLease,
+          signal,
+          now: () => new Date(),
+          template: async () => '',
+          review: () => ({ _tag: 'None' }),
+          createClient: (clientOptions) =>
+            new Octokit({
+              ...clientOptions,
+              retry: { enabled: false },
+              throttle: { enabled: false },
+              request: {
+                fetch: async (input: string | URL | Request, init?: RequestInit) => {
+                  const method = new Request(input, init).method
+                  requests.push({ method, allowed })
+                  if (method === 'GET') return Response.json([])
+                  if (!rejected) {
+                    rejected = true
+                    return Response.json({ message: 'Bad credentials' }, { status: 401 })
+                  }
+                  return Response.json({ id: 99 })
+                },
+              },
+            }),
+        }),
+        candidates: async () => [24],
+        inspect: async () => plan,
+      }),
+    })
+  try {
+    expect(await run()).toEqual({ _tag: 'Paused' })
+    expect(requests).toEqual([
+      { method: 'GET', allowed: true },
+      { method: 'POST', allowed: true },
+    ])
+    expect(store.listPackageReleases(mapping.github)).toEqual([])
+    allowed = true
+    expect(await run()).toEqual({ _tag: 'Completed' })
+    expect(requests.filter((request) => !request.allowed)).toEqual([])
+    expect(store.listPackageReleases(mapping.github)[0]?.commentId).toBe(99)
+    expect(store.claimPackageReleaseLease(mapping.github, 1000)).not.toBeNull()
+  } finally {
+    database.close()
+  }
+})
+
+it('stops the Octokit request when Pause arrives during credential acquisition', async () => {
+  const database = new DatabaseSync(':memory:')
+  const store = createPackageReleaseStore(database)
+  const signal = new AbortController().signal
+  let allowed = true
+  const requests = vi.fn(async () => Response.json([]))
+  const tokens = {
+    getToken: async () => {
+      allowed = false
+      return { _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }
+    },
+    invalidate: () => {},
+  }
+  try {
+    const result = await reconcilePackageReleases({
+      repository: mapping,
+      webhookReady: true,
+      store,
+      signal,
+      now: () => 1000,
+      mayPublish: () => allowed,
+      source: (assertLease) =>
+        createPackageReleaseSource({
+          repository: mapping,
+          actors: { repository: { login: 'wolfstar-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
+          assertLease,
+          signal,
+          now: () => new Date(),
+          template: async () => '',
+          review: () => ({ _tag: 'None' }),
+          createClient: (clientOptions) =>
+            new Octokit({
+              ...clientOptions,
+              retry: { enabled: false },
+              throttle: { enabled: false },
+              request: { fetch: requests },
+            }),
+        }),
+    })
+    expect(result).toEqual({ _tag: 'Paused' })
+    expect(requests).not.toHaveBeenCalled()
+    expect(store.listPackageReleases(mapping.github)).toEqual([])
+    expect(store.claimPackageReleaseLease(mapping.github, 1000)).not.toBeNull()
+  } finally {
+    database.close()
+  }
+})
+
 it('revalidates release candidates across passes and observes changed pull requests', async () => {
   const cache = createGitHubResponseCache()
   const seen: Array<string | null> = []
@@ -161,7 +281,7 @@ function fixture(
   let sourceOpen = false
   let sourceTitle = 'fix: handle input'
   let mainChecks = true
-  let extraCheckPassed = true
+  let extraCheckConclusion = 'success'
   let checkEvent = 'push'
   let checkBranch = 'main'
   let sourceHead = 'f'.repeat(40)
@@ -259,7 +379,7 @@ function fixture(
         conclusion: 'success',
       }
       const tag = { ...main, id: 20, check_suite: { id: 20 } }
-      const extra = { ...main, id: 11, name: 'lint', conclusion: extraCheckPassed ? 'success' : 'failure' }
+      const extra = { ...main, id: 11, name: 'lint', conclusion: extraCheckConclusion }
       const checkRuns = refs.has('tags/v1.0.1')
         ? url.searchParams.get('filter') === 'all'
           ? [tag, main, extra]
@@ -399,8 +519,8 @@ function fixture(
       checkEvent = event
       checkBranch = branch
     },
-    setExtraCheck: (passed: boolean) => {
-      extraCheckPassed = passed
+    setExtraCheck: (conclusion: string) => {
+      extraCheckConclusion = conclusion
     },
     allowReview: () => {
       ready = true
@@ -455,6 +575,7 @@ it('keeps one manual release comment across restarts and replaces it when a patc
     reconcilePackageReleases({
       repository: mapping,
       webhookReady: true,
+      mayPublish: () => true,
       store: createPackageReleaseStore(database),
       source: () => task.source,
       now: () => Date.now(),
@@ -577,6 +698,7 @@ it.each(['failure', 'cancelled', 'timed_out'])(
       reconcilePackageReleases({
         webhookReady: true,
         repository: mapping,
+        mayPublish: () => true,
         store: createPackageReleaseStore(database),
         source: () => source,
         now: () => 1000,
@@ -656,6 +778,7 @@ it('recreates a deleted release comment so one pass still advances the record', 
   await reconcilePackageReleases({
     webhookReady: true,
     repository: mapping,
+    mayPublish: () => true,
     store,
     source: () => task.source,
     now: () => 1000,
@@ -750,11 +873,23 @@ it.each(['pending', 'pull_request', 'other-branch'])(
 
 it('waits for every GitHub Actions check run under an inherited policy', async () => {
   const task = fixture({ ...mapping, release: { ...mapping.release, checks: 'all' } })
-  task.setExtraCheck(false)
+  task.setExtraCheck('failure')
   expect(await task.source.prepare(record)).toBeNull()
-  task.setExtraCheck(true)
+  task.setExtraCheck('success')
   expect(await task.source.prepare(record)).toMatchObject({ _tag: 'Prepared' })
 })
+
+// nuxt-modules/robots reports `ci / test-redis` as skipped on every commit, and
+// a docs-only commit skips every job behind its `changes` job. GitHub reads a
+// skipped required check as passed, so a release must too.
+it.each<{ checks: 'all' | string[] }>([{ checks: 'all' }, { checks: ['test', 'lint'] }])(
+  'passes a skipped check run under checks $checks',
+  async ({ checks }) => {
+    const task = fixture({ ...mapping, release: { ...mapping.release, checks } })
+    task.setExtraCheck('skipped')
+    expect(await task.source.prepare(record)).toMatchObject({ _tag: 'Prepared' })
+  },
+)
 
 it('releases a preselected pull request only after merge and passing default branch checks', async () => {
   const task = fixture()
@@ -765,6 +900,7 @@ it('releases a preselected pull request only after merge and passing default bra
     reconcilePackageReleases({
       webhookReady: true,
       repository: mapping,
+      mayPublish: () => true,
       store: createPackageReleaseStore(db),
       source: () => task.source,
       now: () => 1000,

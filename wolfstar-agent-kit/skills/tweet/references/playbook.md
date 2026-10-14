@@ -24,7 +24,7 @@ They are editorial suggestions, not verified engagement benchmarks.
 [Brief description, 1-2 sentences max]
 
 [Link or "link below"]
-+ polished screenshot/demo
+[Optional: screenshot/demo that explains the point]
 ```
 
 ### Version Update / Changelog
@@ -37,7 +37,7 @@ Happy Friday! [Project] v[X.Y] just dropped:
 - [Feature 3: framed as benefit]
 
 [Link]
-+ screenshot of headline feature
+[Optional: screenshot of headline feature]
 ```
 
 ### Technical Insight
@@ -57,7 +57,7 @@ Happy Friday! [Project] v[X.Y] just dropped:
 
 [One interesting detail or challenge]
 
-[Screenshot of current state, even if rough]
+[Optional: screenshot of current state, even if rough]
 ```
 
 ### Curated Share

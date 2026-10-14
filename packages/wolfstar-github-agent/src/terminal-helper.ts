@@ -61,6 +61,7 @@ export async function runTerminalHelper(config: TerminalHelperConfig) {
   const sandbox = await prepareTerminalSandbox({
     cwd,
     executable: config.executable,
+    provider: config.intent.session.provider,
     argv: config.argv,
     environment: process.env,
     writable: [commonGit],

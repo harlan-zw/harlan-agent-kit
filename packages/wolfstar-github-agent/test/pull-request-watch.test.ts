@@ -43,6 +43,77 @@ function streamClient(states: unknown[]) {
 }
 
 describe('pull request watch', () => {
+  it.each(['RestartRequested', 'Paused', 'WritesDisabled', 'CapacityUnavailable'] as const)(
+    'reports %s and clears a hold without changing the queued Task',
+    async (initialStart) => {
+      const store = openJournalStore(':memory:', true)
+      store.syncRepositories([repositoryMapping()], '2026-10-05T00:00:00.000Z')
+      store.setRepositoryWritesEnabled(target.repository, true)
+      store.recordPollObservation({ observedAt: '2026-10-05T00:00:00.000Z', subject: pullRequestItem() })
+      let start: typeof initialStart | 'ReserveReached' | 'Available' = initialStart
+      let finished = false
+      let observations = 0
+      const shutdown = new AbortController()
+      const app = createAgentApp({
+        allowedOrigin: 'https://agent.example.test',
+        dashboardPassword: 'secret',
+        now: () => new Date(),
+        eventIntervalMilliseconds: 1,
+        shutdownSignal: shutdown.signal,
+        store: {
+          ...store,
+          getDashboardSnapshot: (at) => ({ ...store.getDashboardSnapshot(at), agentStart: { _tag: start } }),
+        },
+        pullRequestWatch: {
+          state: () => (finished ? merged : store.getPullRequestWatchState(target.repository, target.number)),
+          observe: async () => {
+            observations++
+            return ok(undefined)
+          },
+        },
+      })
+      const client = createControlClient({
+        baseUrl: 'https://agent.example.test',
+        authentication: { _tag: 'Basic', password: 'secret' },
+        fetch: async (input, init) => {
+          const headers = new Headers(init?.headers)
+          headers.set('host', 'agent.example.test')
+          return app.fetch(new Request(input, { ...init, headers }))
+        },
+      })
+      if (client._tag === 'Err') throw new Error(client.error.message)
+      const starts: unknown[] = []
+      try {
+        const result = await client.value.watchPullRequest(target, {
+          signal: AbortSignal.timeout(500),
+          onUpdate: (state) => {
+            if (state._tag !== 'Open') return
+            starts.push(state.agentStart)
+            if (start === initialStart) start = 'ReserveReached'
+            else if (start === 'ReserveReached') start = 'Available'
+            else finished = true
+          },
+        })
+        expect(result).toMatchObject({ _tag: 'Ok', value: { _tag: 'Merged' } })
+        expect(starts).toEqual([{ _tag: initialStart }, { _tag: 'ReserveReached' }, { _tag: 'Available' }])
+        expect(observations).toBe(0)
+      } finally {
+        shutdown.abort()
+        store.close()
+      }
+    },
+  )
+
+  it.each([{ _tag: 'Unknown' }, { _tag: ['Paused'] }, null])(
+    'rejects an invalid start reason %j from the Service stream',
+    async (agentStart) => {
+      expect(await streamClient([{ ...open, agentStart }, merged]).watchPullRequest(target)).toMatchObject({
+        _tag: 'Err',
+        error: { _tag: 'InvalidResponse' },
+      })
+    },
+  )
+
   it('streams a merge to the caller without polling another endpoint', async () => {
     const requests: Request[] = []
     let cancelled = false
@@ -476,13 +547,22 @@ describe('pull request watch', () => {
     const server = await startAgentServer({ app: gateway, hostname: '127.0.0.1', port: 0 })
     const url = server.url
     if (url === undefined) throw new Error('The test server has no URL.')
+    store.recordPollObservation({ observedAt: '2026-10-05T00:00:00.000Z', subject: pullRequestItem() })
+    let reads = 0
     app = createAgentApp({
       allowedOrigin: url,
       dashboardPassword: password,
       now: () => new Date(),
-      store,
+      store: {
+        ...store,
+        getDashboardSnapshot: (at) => ({ ...store.getDashboardSnapshot(at), agentStart: { _tag: 'ReserveReached' } }),
+      },
+      eventIntervalMilliseconds: 1,
       shutdownSignal: shutdown.signal,
-      pullRequestWatch: { state: () => merged, observe: async () => ok(undefined) },
+      pullRequestWatch: {
+        state: () => (reads++ === 0 ? store.getPullRequestWatchState(target.repository, target.number) : merged),
+        observe: async () => ok(undefined),
+      },
     })
     try {
       const result = await promisify(execFile)(
@@ -510,6 +590,7 @@ describe('pull request watch', () => {
         pullRequest: { number: 24, headSha: 'abc123' },
       })
       expect(result.stderr).toContain('"status":"Merged"')
+      expect(result.stderr).toContain('"agentStart":{"_tag":"ReserveReached"}')
     } finally {
       shutdown.abort()
       await server.close()

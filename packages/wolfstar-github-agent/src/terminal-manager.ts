@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
+import { parseHostTerminalCapacity } from './terminal-capacity.ts'
 import {
   initializeTerminalStorage,
   readTerminalIntents,
@@ -62,8 +63,10 @@ export async function createTerminalManager(options: {
   const intents = new Map((await readTerminalIntents(options.directory)).map((intent) => [intent.session.id, intent]))
   const launches = new Map<string, Promise<TerminalResult<TerminalSession>>>()
   const operations = new Map<string, Promise<unknown>>()
+  let queueOrder = Math.max(0, ...[...intents.values()].map((intent) => intent.queueOrder))
   let closed = false
   let closing: Promise<void> | undefined
+  let queueRetry: Promise<void> | undefined
   function owned<T>(id: string, task: () => Promise<T>): Promise<T> {
     const previous = operations.get(id)
     // Each caller receives its own error. Later independent work can reconcile that session.
@@ -81,6 +84,7 @@ export async function createTerminalManager(options: {
     return { ...intent.session }
   }
   async function reconcile(intent: TerminalIntent) {
+    if (intent.decision._tag === 'Queued' || intent.decision._tag === 'Cancelled') return
     if (intent.session.state === 'Exited' || intent.session.state === 'Interrupted') {
       return
     }
@@ -93,7 +97,7 @@ export async function createTerminalManager(options: {
     if (reservation._tag === 'Missing' && intent.reservationId && intent.decision._tag === 'Accepted') {
       reservation = await options.admission
         .completedReceipt({
-          requestId: intent.launch.requestId,
+          requestId: intent.admission.requestId,
           fingerprint: intent.fingerprint,
           key: `terminal:${intent.session.id}`,
           reservationId: intent.reservationId,
@@ -148,14 +152,21 @@ export async function createTerminalManager(options: {
       await persist(intent)
     }
   }
-  async function launch(request: TerminalLaunch): Promise<TerminalResult<TerminalSession>> {
+  async function launch(request: TerminalLaunch, manual = false): Promise<TerminalResult<TerminalSession>> {
     if (options.active && !options.active()) return { _tag: 'Err', reason: 'OwnershipUnknown' }
     const identity = terminalIdentity(host.hostId, request)
     const existing = intents.get(identity.id)
     if (existing) {
       if (existing.fingerprint !== identity.fingerprint) return { _tag: 'Err', reason: 'LaunchConflict' }
+      if (existing.decision._tag === 'Queued') {
+        return manual ? forceIntent(existing, `manual:${request.requestId}`) : { _tag: 'Ok', value: session(existing) }
+      }
+      if (existing.decision._tag === 'Cancelled') return { _tag: 'Ok', value: session(existing) }
       if (existing.decision._tag === 'Rejected') return { _tag: 'Err', reason: existing.decision.reason }
-      if (existing.decision._tag === 'Pending') return { _tag: 'Err', reason: 'OwnershipUnknown' }
+      if (existing.decision._tag === 'Pending')
+        return manual && existing.admission._tag === 'ManualOverride'
+          ? forceIntent(existing, existing.admission.requestId)
+          : { _tag: 'Err', reason: 'OwnershipUnknown' }
       await reconcile(existing)
       return { _tag: 'Ok', value: session(existing) }
     }
@@ -166,7 +177,10 @@ export async function createTerminalManager(options: {
     const provider = options.providers[request.provider]
     if (!provider.available) return { _tag: 'Err', reason: 'ProviderUnavailable' }
     const intent: TerminalIntent = {
-      decision: { _tag: 'Pending' },
+      decision: { _tag: 'Queued', reason: 'Requested' },
+      admission: { _tag: 'Regular', requestId: request.requestId },
+      queueOrder: ++queueOrder,
+      manualAttempts: {},
       protocol: 1,
       fingerprint: identity.fingerprint,
       launch: request,
@@ -183,7 +197,7 @@ export async function createTerminalManager(options: {
         provider: request.provider,
         hostId: host.hostId,
         bootId: host.bootId,
-        state: 'Starting',
+        state: 'Queued',
         createdAt: options.now().toISOString(),
         worktree: null,
       },
@@ -193,9 +207,38 @@ export async function createTerminalManager(options: {
       recursive: true,
     })
     await persist(intent)
+    if (manual) return forceIntent(intent, `manual:${request.requestId}`)
+    if (
+      [...intents.values()].some(
+        (other) =>
+          other !== intent &&
+          other.decision._tag === 'Queued' &&
+          other.admission._tag === 'Regular' &&
+          other.queueOrder < intent.queueOrder,
+      )
+    )
+      return { _tag: 'Ok', value: session(intent) }
+    return admit(intent)
+  }
+  async function admit(intent: TerminalIntent): Promise<TerminalResult<TerminalSession>> {
+    if (closed || (options.active && !options.active())) return { _tag: 'Err', reason: 'OwnershipUnknown' }
+    const request = intent.launch
+    const identity = terminalIdentity(host.hostId, request)
+    const project = options.projects.find((project) => project.id === request.projectId)
+    const provider = options.providers[request.provider]
+    if (!project || !provider.available) {
+      intent.decision = { _tag: 'Rejected', reason: !project ? 'ProjectUnavailable' : 'ProviderUnavailable' }
+      intent.session.state = 'Interrupted'
+      await persist(intent)
+      return { _tag: 'Err', reason: intent.decision.reason }
+    }
+    intent.decision = { _tag: 'Pending' }
+    intent.session.state = 'Starting'
+    await persist(intent)
     const admission = await options.admission
       .reserve({
-        requestId: request.requestId,
+        requestId: intent.admission.requestId,
+        admission: intent.admission._tag,
         fingerprint: identity.fingerprint,
         key: `terminal:${identity.id}`,
         role: 'interactive',
@@ -207,21 +250,34 @@ export async function createTerminalManager(options: {
         return { _tag: 'Unknown' } as const
       })
     if (admission._tag !== 'Admitted') {
+      if (admission._tag === 'AtCapacity') {
+        if (intent.admission._tag === 'ManualOverride') {
+          intent.manualAttempts[intent.admission.requestId] = { _tag: 'Refused', reason: admission.reason }
+          // A refused manual attempt has no root receipt. Keep this same intent eligible for Regular retry.
+          intent.admission = { _tag: 'Regular', requestId: request.requestId }
+        }
+        intent.decision = { _tag: 'Queued', reason: admission.reason }
+        intent.session.state = 'Queued'
+        await persist(intent)
+        return { _tag: 'Ok', value: session(intent) }
+      }
       intent.session.state = admission._tag === 'Completed' ? 'Exited' : 'Unknown'
-      if (admission._tag === 'AtCapacity' || admission._tag === 'Completed' || admission._tag === 'Conflict') {
+      if (admission._tag === 'Completed' || admission._tag === 'Conflict') {
         intent.decision = {
           _tag: 'Rejected',
-          reason: admission._tag === 'AtCapacity' ? 'CapacityRefused' : 'LaunchConflict',
+          reason: 'LaunchConflict',
         }
         intent.session.state = 'Interrupted'
       }
       await persist(intent)
       return {
         _tag: 'Err',
-        reason: admission._tag === 'AtCapacity' ? 'CapacityRefused' : 'CapacityUnavailable',
+        reason: intent.admission._tag === 'ManualOverride' ? 'DeliveryUnknown' : 'CapacityUnavailable',
       }
     }
     intent.reservationId = admission.reservationId
+    if (intent.admission._tag === 'ManualOverride')
+      intent.manualAttempts[intent.admission.requestId] = { _tag: 'Accepted' }
     intent.decision = { _tag: 'Accepted' }
     await persist(intent)
     if (admission.disposition === 'Existing') {
@@ -234,7 +290,14 @@ export async function createTerminalManager(options: {
       directory: options.directory,
       intent,
       executable: provider.executable,
-      argv: request.provider === 'codex' ? [...provider.argv, '--no-daemon'] : [...provider.argv],
+      argv: [
+        ...provider.argv,
+        ...(request.initialPrompt === undefined
+          ? []
+          : request.provider === 'opencode'
+            ? [`--prompt=${request.initialPrompt}`]
+            : ['--', request.initialPrompt]),
+      ],
       project,
       wasm: options.artifact.wasm,
       wasmDigest: options.artifact.wasmDigest,
@@ -259,6 +322,47 @@ export async function createTerminalManager(options: {
     await reconcile(intent)
     return { _tag: 'Ok', value: session(intent) }
   }
+  async function forceIntent(intent: TerminalIntent, requestId: string): Promise<TerminalResult<TerminalSession>> {
+    // An explicit retry resolves the exact root request. It never replaces an uncertain charge.
+    if (intent.decision._tag === 'Pending' && intent.admission._tag === 'ManualOverride') return admit(intent)
+    const previous = Object.hasOwn(intent.manualAttempts, requestId) ? intent.manualAttempts[requestId] : undefined
+    if (previous)
+      return previous._tag === 'Pending'
+        ? { _tag: 'Err', reason: 'DeliveryUnknown' }
+        : { _tag: 'Ok', value: session(intent) }
+    if (intent.decision._tag !== 'Queued') return { _tag: 'Err', reason: 'LaunchConflict' }
+    if (Object.keys(intent.manualAttempts).length >= 128) return { _tag: 'Err', reason: 'SizeLimit' }
+    intent.manualAttempts[requestId] = { _tag: 'Pending' }
+    intent.admission = { _tag: 'ManualOverride', requestId }
+    // Fence cancellation and automatic retry before the potentially admitted root request starts.
+    intent.decision = { _tag: 'Pending' }
+    intent.session.state = 'Starting'
+    await persist(intent)
+    return admit(intent)
+  }
+  function retryQueued(): Promise<void> {
+    if (queueRetry) return queueRetry
+    queueRetry = (async () => {
+      if (closed || (options.active && !options.active())) return
+      const next = [...intents.values()]
+        .filter((intent) => intent.decision._tag === 'Queued' && intent.admission._tag === 'Regular')
+        .sort((a, b) => a.queueOrder - b.queueOrder || a.session.id.localeCompare(b.session.id))[0]
+      if (!next) return
+      const capacity = await options.admission.capacity()
+      if (capacity._tag !== 'Capacity' || capacity.regular._tag !== 'Allowed') return
+      await owned(next.session.id, async () => {
+        if (closed || next.decision._tag !== 'Queued' || next.admission._tag !== 'Regular') return
+        await admit(next)
+      })
+    })().finally(() => {
+      queueRetry = undefined
+    })
+    return queueRetry
+  }
+  const queueTimer = setInterval(() => {
+    void retryQueued().catch((cause) => options.log('Queued session retry failed', cause))
+  }, 10000)
+  queueTimer.unref()
   const housekeeping = setInterval(
     () => {
       void (async () => {
@@ -279,38 +383,39 @@ export async function createTerminalManager(options: {
   housekeeping.unref()
   return {
     async capacity(): Promise<TerminalCapacity> {
-      const status = await options.admission.status().catch((cause) => {
+      const result = await options.admission.capacity().catch((cause) => {
         options.log('Host admission unavailable', cause)
         return { _tag: 'Unavailable' } as const
       })
-      if (status._tag !== 'Status') return { _tag: 'Unavailable' }
-      const agents = Object.values(status.reservations).filter((reservation) => reservation.kind === 'agent')
-      const maintenance = agents.filter((reservation) => reservation.role !== 'interactive').length
-      return {
-        _tag: 'Available',
-        agentSlots: status.policy.agentSlots,
-        maintenanceReserve: status.policy.maintenanceReserve,
-        interactiveFree: Math.min(
-          Math.floor(Math.max(0, status.memoryGiB - status.reservedGiB) / options.memoryGiB),
-          Math.max(
-            0,
-            status.policy.agentSlots - agents.length - Math.max(0, status.policy.maintenanceReserve - maintenance),
-          ),
-        ),
-        memoryGiB: status.memoryGiB,
-        reservedGiB: status.reservedGiB,
-      }
+      const parsed = parseHostTerminalCapacity(result)
+      return parsed._tag === 'Ok' ? parsed.value : { _tag: 'Unavailable' }
     },
     close() {
       if (!closing) {
         closed = true
         clearInterval(housekeeping)
-        closing = Promise.allSettled([...operations.values()]).then(() => {})
+        clearInterval(queueTimer)
+        closing = Promise.allSettled([...operations.values(), ...(queueRetry ? [queueRetry] : [])]).then(() => {})
       }
       return closing
     },
     host,
     directory: options.directory,
+    retryQueued,
+    forceQueued(id: string, requestId: string) {
+      if (closed) return Promise.resolve({ _tag: 'Err', reason: 'OwnershipUnknown' } as const)
+      return owned(id, async () => {
+        const intent = intents.get(id)
+        return intent
+          ? forceIntent(intent, `manual:${requestId}`)
+          : ({ _tag: 'Err', reason: 'SessionUnavailable' } as const)
+      })
+    },
+    launchForce(request: TerminalLaunch) {
+      if (closed) return Promise.resolve({ _tag: 'Err', reason: 'OwnershipUnknown' } as const)
+      const identity = terminalIdentity(host.hostId, request)
+      return owned(identity.id, () => launch(request, true))
+    },
     capabilities(): TerminalCapabilities {
       return {
         protocol: 1,
@@ -364,10 +469,23 @@ export async function createTerminalManager(options: {
       return owned(id, async () => {
         const intent = intents.get(id)
         if (!intent) return { _tag: 'Err', reason: 'SessionUnavailable' }
+        if (intent.decision._tag === 'Queued' || intent.decision._tag === 'Cancelled') {
+          intent.decision = { _tag: 'Cancelled' }
+          intent.session.state = 'Cancelled'
+          await persist(intent)
+          return { _tag: 'Ok', value: session(intent) }
+        }
         await reconcile(intent)
         if (intent.session.state === 'Exited' || intent.session.state === 'Interrupted') {
           return { _tag: 'Ok', value: session(intent) }
         }
+        if (
+          intent.decision._tag === 'Pending' &&
+          intent.admission._tag === 'ManualOverride' &&
+          !intent.reservationId &&
+          !intent.invocationId
+        )
+          return { _tag: 'Err', reason: 'DeliveryUnknown' }
         if (!intent.invocationId && intent.reservationId) {
           const cancelled = await options.admission.cancel({
             key: `terminal:${id}`,

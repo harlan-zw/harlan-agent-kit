@@ -55,7 +55,10 @@ The project type selects the rule set. Package-only rules (exports, obuild, test
 - **`pnpm install` after catalog changes** -- lockfile must be regenerated. If you edit `pnpm-workspace.yaml` catalogs, always run `pnpm install` before running any other commands.
 - **Nuxt module `dev:prepare` order** -- must run before `typecheck` or `test`. Missing this causes confusing "module not found" errors from auto-generated types.
 - **Site vs Package misdetection** -- path-based detection (`*/pkg/*` vs `*/sites/*`) can fail for unusual directory structures. Always verify the detected type before applying rules.
-- **Markdown-only CI**: Test, build, and deploy events ignore `**/*.md` by default.
+- **Markdown-only CI**: Test, build, and deploy workflows skip Markdown-only changes by default.
+  If the default branch requires checks, skip at the job level, never at the event.
+  An event filter starts no run, so a required check never reports and the pull request blocks.
+  If the branch requires no checks, `paths-ignore: ['**/*.md']` at the event is fine.
   An explicit `paths` list may include Markdown.
   GitHub forbids `paths` and `paths-ignore` on the same event.
 
@@ -204,7 +207,7 @@ See `references/` for detailed templates:
 19. [ ] `.editorconfig` - 2-space indent, LF, UTF-8, trim trailing whitespace (except `.md`)
 20. [ ] `content.config.ts` - Zod schemas for content collections (if using `@nuxt/content`)
 21. [ ] `app/` directory - Nuxt 4 structure (`app.vue`, `pages/`, `layouts/`, `components/`, `composables/`)
-22. [ ] `.github/workflows/ci.yml` - calls the shared gate and ignores Markdown-only changes. See `references/site-github-actions.md`.
+22. [ ] `.github/workflows/ci.yml` - calls the shared gate and skips Markdown-only changes in the shape its required checks allow. See `references/site-github-actions.md`.
 
 ### Additional Nuxt Module Checklist
 

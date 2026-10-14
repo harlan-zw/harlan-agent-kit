@@ -233,7 +233,9 @@ Limit the Repair Agent to its worktree. Only the controller may publish a verifi
 
 Available empty base and head GitHub Actions check sets mean the repository has no CI. This passes the CI Review gate and permits Repair. An unavailable, running, or failed base check set does not permit Repair.
 
-If GitHub reports no Actions check run on the head commit 15 minutes after the Review started, the head ran no CI. The trigger filters of the repository skipped it, as `paths-ignore` does for a docs only change. This passes the CI Review gate unless the base branch failed.
+If GitHub reports no Actions check run on the head commit 15 minutes after the Review started, the head ran no CI. The trigger filters of the repository skipped it, as an event-level `paths-ignore` does for a docs only change. This passes the CI Review gate unless the base branch failed.
+
+A workflow that skips its jobs through `if:` reports them as skipped check runs instead. Read a skipped check run as passed, as GitHub reads a required check. This holds for the CI Review gate, the base commit, and the package release check gate. A base commit with skipped check runs ends the walk back to earlier commits.
 
 Ignore a base check run that a `workflow_run`, `dynamic`, or an unfinished `schedule` event attached to the base commit. The first reports on another commit's workflow. The second is Dependabot's updater, which fails when an update is not possible. A cron run GitHub has not reported `completed` stalls the base gate on a timer, in any of its unfinished statuses, so drop it too. A cron run reported `completed` executed on the base commit tip: keep it as base evidence, so a failed one holds the gate red and queues a Baseline repair.
 
@@ -336,7 +338,7 @@ Bind a selection before merge to the exact pull request head, package version, a
 Allow Wolfstar to clear the checkbox before merge. Keep selections across service restarts.
 A changed head or release version clears the selection. Never promote patch to minor automatically.
 After merge, recheck the full release range and pin the default branch commit.
-Require passing checks from a default branch push before preparing the release.
+Require passing checks from a default branch push before preparing the release. A skipped check passes.
 Passing pull request checks cannot satisfy that requirement.
 Prepare configured JSON version files through a separate pull request.
 Merge only that exact revision after current Review, required checks, and branch protection pass.

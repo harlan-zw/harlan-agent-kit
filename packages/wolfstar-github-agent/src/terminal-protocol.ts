@@ -5,7 +5,15 @@ export interface TerminalProject {
   name: string
   path: string
 }
-export type TerminalState = 'Starting' | 'Running' | 'Stopping' | 'Exited' | 'Interrupted' | 'Unknown'
+export type TerminalState =
+  | 'Queued'
+  | 'Starting'
+  | 'Running'
+  | 'Stopping'
+  | 'Exited'
+  | 'Interrupted'
+  | 'Unknown'
+  | 'Cancelled'
 export interface TerminalSession {
   id: string
   generation: string
@@ -21,6 +29,7 @@ export interface TerminalLaunch {
   requestId: string
   projectId: string
   provider: TerminalProvider
+  initialPrompt?: string
 }
 export interface TerminalCell {
   codepoint: number
@@ -165,16 +174,7 @@ export interface TerminalCapabilities {
     focus: true
   }
 }
-export type TerminalCapacity =
-  | {
-      _tag: 'Available'
-      agentSlots: number
-      maintenanceReserve: number
-      interactiveFree: number
-      memoryGiB: number
-      reservedGiB: number
-    }
-  | { _tag: 'Unavailable' }
+export type { TerminalCapacity } from './terminal-capacity.ts'
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -197,9 +197,13 @@ export function parseTerminalLaunch(value: unknown): TerminalResult<TerminalLaun
   if (
     !record(value) ||
     !text(value.requestId, 128) ||
+    /[\r\n]/.test(value.requestId) ||
     !text(value.projectId, 128) ||
+    /[\r\n]/.test(value.projectId) ||
     typeof value.provider !== 'string' ||
-    !['codex', 'claude', 'opencode'].includes(value.provider)
+    !['codex', 'claude', 'opencode'].includes(value.provider) ||
+    (value.initialPrompt !== undefined && !text(value.initialPrompt, 8192)) ||
+    (value.mode !== undefined && value.mode !== 'Regular' && value.mode !== 'Force')
   ) {
     return { _tag: 'Err', reason: 'InvalidRequest' }
   }
@@ -209,8 +213,22 @@ export function parseTerminalLaunch(value: unknown): TerminalResult<TerminalLaun
       requestId: value.requestId,
       projectId: value.projectId,
       provider: value.provider as TerminalProvider,
+      ...(value.initialPrompt === undefined ? {} : { initialPrompt: value.initialPrompt as string }),
     },
   }
+}
+export function parseTerminalStart(
+  value: unknown,
+): TerminalResult<{ _tag: 'Regular'; launch: TerminalLaunch } | { _tag: 'ManualOverride'; launch: TerminalLaunch }> {
+  const launch = parseTerminalLaunch(value)
+  if (launch._tag === 'Err') return launch
+  if (!record(value)) return { _tag: 'Err', reason: 'InvalidRequest' }
+  return { _tag: 'Ok', value: { _tag: value.mode === 'Force' ? 'ManualOverride' : 'Regular', launch: launch.value } }
+}
+export function parseTerminalForce(value: unknown): TerminalResult<{ requestId: string }> {
+  if (!record(value) || !text(value.requestId, 128) || /[\r\n]/.test(value.requestId))
+    return { _tag: 'Err', reason: 'InvalidRequest' }
+  return { _tag: 'Ok', value: { requestId: value.requestId } }
 }
 export function parseTerminalClientMessage(value: unknown): TerminalResult<TerminalClientMessage> {
   if (!record(value)) return { _tag: 'Err', reason: 'InvalidRequest' }

@@ -39,6 +39,11 @@ function statsSnapshot(range: StatsRange, generatedAt: string): StatsSnapshot {
   }
 }
 const agentControls = {
+  getTask: () => null,
+  listTasks: () => [],
+  listCompletionTasks: () => [],
+  listIncidents: () => [],
+  getOpenPullRequest: () => null,
   finishUpdatePreparation: () => null,
   resolveIncident: () => ({ _tag: 'Ok' as const, value: { _tag: 'Resolved' as const } }),
   getOpenIssueStatus: () => null,
@@ -96,6 +101,14 @@ function createApp(
       approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
       cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
       getDashboardSnapshot: () => snapshot,
+      getOpenPullRequest: (repository, number) =>
+        (snapshot.items.find(
+          (item) =>
+            item.kind === 'pull_request' &&
+            item.repository === repository &&
+            item.number === number &&
+            item.state === 'open',
+        ) as ReturnType<AgentAppOptions['store']['getOpenPullRequest']>) ?? null,
       listReviewRuns: () => [],
       requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
       ...overrides,

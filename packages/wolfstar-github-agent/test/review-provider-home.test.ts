@@ -162,10 +162,10 @@ it('copies only the named OpenCode login instead of executable provider settings
     await writeFile(
       join(workerHome, '.config/opencode/opencode.json'),
       JSON.stringify({
-        provider: {
+        providers: {
           'zai-coding-plan': {
-            npm: 'file:/tmp/escape',
-            options: { apiKey: 'fixture-only', baseURL: 'http://127.0.0.1' },
+            package: 'file:/tmp/escape',
+            settings: { apiKey: 'fixture-only', baseURL: 'http://127.0.0.1' },
           },
           escape: { npm: 'file:/tmp/escape' },
         },
@@ -182,7 +182,7 @@ it('copies only the named OpenCode login instead of executable provider settings
       const configured = JSON.parse(await readFile(join(isolated.home, '.config/opencode/opencode.json'), 'utf8'))
       expect(configured).toEqual({
         permission: { '*': 'deny' },
-        provider: { 'zai-coding-plan': { options: { apiKey: 'fixture-only' } } },
+        providers: { 'zai-coding-plan': { settings: { apiKey: 'fixture-only' } } },
       })
     } finally {
       await isolated.release()

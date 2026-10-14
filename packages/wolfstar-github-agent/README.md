@@ -70,6 +70,40 @@ The dashboard denies framing. If another page must frame it, list its origin in 
 
 Save the dashboard password in `dashboard-password` beside the config file. Use at least 32 bytes and restrict the file to mode `600`.
 
+Sign in with that password, then select `Manage Passkeys` and `Add Passkey`.
+Use `Sign in with Passkey` on later visits. The password remains available for recovery and machine clients.
+Removing a Passkey revokes its signed-in sessions. Signing out closes authenticated browser streams.
+The Service stores Passkeys and opaque sessions in private SQLite files beside its configured database.
+Passkeys remain available after a restart.
+
+If a public proxy rewrites the private address, configure its exact browser address explicitly:
+
+```yaml
+server:
+  browser_origins: [https://agent.example.com]
+```
+
+Configure one public address. Its Passkeys remain separate from the private address.
+The public proxy must set `X-Wolfstar-Agent-Ingress: public` and preserve the existing trusted Host and Origin mapping.
+The public address refuses terminals unless you enable them explicitly.
+
+Enroll a public Passkey before disabling its password login.
+Then enable public terminals with persistent storage and private Agent sessions:
+
+```yaml
+server:
+  browser_origins: [https://agent.example.com]
+  public_browser_password_login: false
+  agent_sessions: true
+  public_terminal_sessions: true
+```
+
+Open `/sessions` at the public address, or select Sessions from the Board.
+Public terminals use the public browser session and run on Hogwild.
+The proxy must forward terminal HTTP and WebSocket paths with the trusted ingress headers.
+Desktop session routes and pull request diffs remain private.
+Terminal diffs show only the authenticated Agent session's Worktree.
+
 Configure your normal global Git profile before starting. The controller uses its identity and commit-signing settings for every commit it creates.
 
 Install the configured GitHub App only on selected repositories. `github.allowed_owners` is the first remote boundary. The service ignores public installations from every other GitHub owner. It then matches allowed repositories to trusted checkouts under `~/pkg` and `~/sites`. Optional repository entries override default policy.
@@ -423,7 +457,7 @@ release_defaults:
   checks: all
 ```
 
-The default applies only to matching owned checkouts. Every GitHub Actions check run must pass.
+The default applies only to matching owned checkouts. Every GitHub Actions check run must pass. A skipped check run passes, as GitHub reads a required check.
 An explicit Repository `release` block replaces the default. Set `release: false` to exclude one Repository.
 Private packages, prereleases, monorepos, and repositories without a matching tag workflow need separate policy or setup.
 Each npm package still needs a trusted publisher for its workflow.

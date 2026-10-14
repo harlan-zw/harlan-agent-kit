@@ -11,6 +11,8 @@ it('runs current regression evidence through the built package export', () => {
   try {
     mkdirSync(path, { recursive: true })
     const source = resolve(import.meta.dirname, '..')
+    mkdirSync(join(root, '.skills'))
+    cpSync(resolve(source, '../../.skills/skilld.json'), join(root, '.skills/skilld.json'))
     cpSync(join(source, 'src'), join(path, 'src'), { recursive: true })
     for (const file of ['package.json', 'build.config.ts']) cpSync(join(source, file), join(path, file))
     symlinkSync(join(source, 'node_modules'), join(path, 'node_modules'))

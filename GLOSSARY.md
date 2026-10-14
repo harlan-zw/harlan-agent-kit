@@ -17,24 +17,26 @@ Where the two files disagree about a service word, the package glossary wins.
 
 ## Map
 
-| Term                                                    | Lives in                                                                         | Read by                              | Relationship                                   | Customer word        |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------------- | -------------------- |
-| Wolfstar Agent Kit                                      | this repository                                                                  | Claude Code, Codex, git, `wt`        | 1 Plugin, 1 Service                            | "agent kit"          |
-| Plugin                                                  | `wolfstar-agent-kit/`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` | Claude Code, Codex                   | 1 to N Skills, 1 to N Hooks                    | "plugin"             |
-| Marketplace                                             | `.claude-plugin/marketplace.json`                                                | Claude Code                          | 1 Marketplace, 1 Plugin                        | "marketplace"        |
-| Skill                                                   | `wolfstar-agent-kit/skills/<name>/SKILL.md`                                      | Claude Code, Codex                   | 1 to N References, 1 to N templates            | "Skill"              |
-| Reference                                               | `skills/<name>/references/`, `wolfstar-agent-kit/references/`                    | one Skill, mid-task                  | N to 1 Skill, or shared across Skills          | "reference"          |
-| Hook                                                    | `wolfstar-agent-kit/hooks/*.sh`                                                  | Claude Code, Codex, per event        | N per event, disabled by `.claude/hooks.json`  | "hook"               |
-| Git hook                                                | `agent-context/git-hooks/commit-msg`                                             | git, for every Agent provider        | 1 per commit, under `~/pkg` and `~/sites`      | "commit hook"        |
-| Agent instructions                                      | `agent-context/CLAUDE.md`, `AGENTS.md`, `context.md`                             | Claude Code, Codex, at session start | 1 tracked source, 2 installed copies           | "Agent instructions" |
-| Root docs                                               | every repository root, `references/root-docs.md`                                 | every Agent, on demand               | 1 set per repository                           | "root docs"          |
-| Brief                                                   | `docs/work/EXECUTE-<topic>.md`                                                   | every Agent, Wolfstar                | 1 per open initiative                          | "brief"              |
-| Check                                                   | `bin/check`, `wolfstar-agent-kit/hooks/check.sh`                                 | `pre-commit-push.sh`, Wolfstar       | 1 per commit or push                           | "`check`"            |
-| Worktree                                                | `<parent>/<repo>.<branch-slug>`                                                  | `wt`, `scripts/worktree-sweep.sh`    | 1 per task-owned branch                        | "worktree"           |
-| Commit scope                                            | the `type(scope):` subject prefix                                                | `agent-context/git-hooks/commit-msg` | 1 per commit, retired spellings in `## Scopes` | "scope"              |
-| Service                                                 | `packages/wolfstar-github-agent`, systemd `wolfstar-github-agent`                | Wolfstar, GitHub                     | 1 Dashboard, 1 Control API                     | "GitHub agent"       |
-| Dashboard                                               | `packages/wolfstar-github-agent/dashboard/`                                      | a browser                            | 1 per Service                                  | "dashboard"          |
-| Agent, Task, Routine, Review run, Incident, and 52 more | `packages/wolfstar-github-agent/GLOSSARY.md`                                     | the Service                          | defined there, not here                        | see that file        |
+| Term                                                    | Lives in                                                                         | Read by                              | Relationship                                                    | Customer word        |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------------------- | -------------------- |
+| Wolfstar Agent Kit                                      | this repository                                                                  | Claude Code, Codex, git, `wt`        | 1 Plugin, 1 Service                                             | "agent kit"          |
+| Passkey                                                 | browser authentication, private credential storage                               | local Workspace, hosted Dashboard    | N per browser authority; signs in without the recovery password | "Passkey"            |
+| Plugin                                                  | `wolfstar-agent-kit/`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` | Claude Code, Codex                   | 1 to N Skills, 1 to N Hooks                                     | "plugin"             |
+| Marketplace                                             | `.claude-plugin/marketplace.json`                                                | Claude Code                          | 1 Marketplace, 1 Plugin                                         | "marketplace"        |
+| Skill                                                   | `wolfstar-agent-kit/skills/<name>/SKILL.md`                                      | Claude Code, Codex                   | 1 to N References, 1 to N templates                             | "Skill"              |
+| Brundlefly                                              | `.skills/skilld.json`                                                            | `sync:skills`, Agent providers       | pinned sources, selected portable Skills                        | "Brundlefly"         |
+| Reference                                               | `skills/<name>/references/`, `wolfstar-agent-kit/references/`                    | one Skill, mid-task                  | N to 1 Skill, or shared across Skills                           | "reference"          |
+| Hook                                                    | `wolfstar-agent-kit/hooks/*.sh`                                                  | Claude Code, Codex, per event        | N per event, disabled by `.claude/hooks.json`                   | "hook"               |
+| Git hook                                                | `agent-context/git-hooks/commit-msg`                                             | git, for every Agent provider        | 1 per commit, under `~/pkg` and `~/sites`                       | "commit hook"        |
+| Agent instructions                                      | `agent-context/CLAUDE.md`, `AGENTS.md`, `context.md`                             | Claude Code, Codex, at session start | 1 tracked source, 2 installed copies                            | "Agent instructions" |
+| Root docs                                               | every repository root, `references/root-docs.md`                                 | every Agent, on demand               | 1 set per repository                                            | "root docs"          |
+| Brief                                                   | `docs/work/EXECUTE-<topic>.md`                                                   | every Agent, Wolfstar                | 1 per open initiative                                           | "brief"              |
+| Check                                                   | `bin/check`, `wolfstar-agent-kit/hooks/check.sh`                                 | `pre-commit-push.sh`, Wolfstar       | 1 per commit or push                                            | "`check`"            |
+| Worktree                                                | `<parent>/<repo>.<branch-slug>`                                                  | `wt`, `scripts/worktree-sweep.sh`    | 1 per task-owned branch                                         | "worktree"           |
+| Commit scope                                            | the `type(scope):` subject prefix                                                | `agent-context/git-hooks/commit-msg` | 1 per commit, retired spellings in `## Scopes`                  | "scope"              |
+| Service                                                 | `packages/wolfstar-github-agent`, systemd `wolfstar-github-agent`                | Wolfstar, GitHub                     | 1 Dashboard, 1 Control API                                      | "GitHub agent"       |
+| Dashboard                                               | `packages/wolfstar-github-agent/dashboard/`                                      | a browser                            | 1 per Service                                                   | "dashboard"          |
+| Agent, Task, Routine, Review run, Incident, and 52 more | `packages/wolfstar-github-agent/GLOSSARY.md`                                     | the Service                          | defined there, not here                                         | see that file        |
 
 Collisions
 
@@ -75,7 +77,7 @@ below cover the plugin surface only.
 
 ### Skill
 
-**Is:** one `SKILL.md`, plus its References and templates. Personal Skills live under `wolfstar-agent-kit/skills/`.
+**Is:** one `SKILL.md`, plus its References and templates. Personal Skills live under `wolfstar-agent-kit/skills/`. Portable Skills use the sources declared in `.skills/skilld.json`.
 **Use for:** the README Skill table, every skill directory name, prose about invoking one.
 **Never:** command, slash command, playbook, recipe, prompt, workflow, agent.
 **Casing:** `Skill` in prose, kebab-case in directory names, `SKILL.md` for the file.
@@ -89,6 +91,13 @@ Claude Code and Codex both load Skills by directory.
 more Skills share it.
 **Never:** doc, guide, appendix, addendum, sub-skill.
 **Casing:** `Reference` in prose, `references/` as the directory.
+
+### Brundlefly
+
+**Is:** the separate collection at `harlan-zw/brundlefly`, which supplies selected portable Skills to Wolfstar Agent Kit.
+**Use for:** portable Skills whose declared sources in `.skills/skilld.json` point to `harlan-zw/brundlefly`.
+**Never:** a second personal Plugin or a copy of personal host policy.
+**Casing:** `Brundlefly` in prose, `brundlefly` in paths.
 
 ### Root docs
 
@@ -218,7 +227,7 @@ the replacement when it refuses a commit.
 
 Scopes that look like drift and are not: `dashboard` names
 `packages/wolfstar-github-agent/dashboard/`, a real directory with its own design system.
-`hooks`, `skills`, and `pr` each name a local directory. `glossary` names a Skill. These scopes remain allowed.
+`hooks`, `skills`, and `pr` each name a local directory. `glossary` names an imported Brundlefly Skill. These scopes remain allowed.
 
 ## Open questions
 

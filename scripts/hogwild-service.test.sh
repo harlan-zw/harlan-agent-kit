@@ -22,6 +22,7 @@ export HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH=''
 export HOGWILD_SERVICE_TEST_ENV_STAGE=/home/wolfstar/.cache/wolfstar-repository-env.fixture
 export HOGWILD_SERVICE_TEST_RESTART_AFTER=1
 export HOGWILD_SERVICE_TEST_STATE_POLLS="$test_root/state-polls"
+export HOGWILD_SERVICE_TEST_TASKS='[{"id":"task-review","repository":"fixture/site","pullRequestNumber":287,"progress":{"label":"Editing files"},"state":{"_tag":"Running"}},{"id":"task-issue","repository":"fixture/package","issueNumber":91,"state":{"_tag":"Publishing"}},{"id":"task-queued","repository":"fixture/queued","pullRequestNumber":5,"state":{"_tag":"Queued"}},{"id":"task-done","repository":"fixture/done","pullRequestNumber":6,"state":{"_tag":"Completed"}}]'
 # Present once this deploy files its own Restart request. Before that, the
 # controller reports whatever restart an earlier deploy left behind.
 export HOGWILD_SERVICE_TEST_RESTART_FILED="$test_root/restart-filed"
@@ -162,7 +163,10 @@ printf '%s\n' \
   '  status=Requested' \
   '  if ((polls >= HOGWILD_SERVICE_TEST_RESTART_AFTER)); then status=Completed; fi' \
   '  if [ "$status" = Completed ] && [ -e "$HOGWILD_SERVICE_TEST_UPDATE_READY" ]; then printf '\''controller prepare-update\n'\'' >> "$HOGWILD_SERVICE_TEST_CALLS"; rm -f "$HOGWILD_SERVICE_TEST_UPDATE_READY" "$HOGWILD_SERVICE_TEST_UPDATE_PENDING"; fi' \
-  '  printf '\''{"desktop":{"connected":true,"current":true,"seenAt":%s},"agentControl":{"_tag":"Running"},"hostCapacity":{"localActive":2,"desktopActive":1},"tasks":[{"state":{"_tag":"Running"}},{"state":{"_tag":"Publishing"}},{"state":{"_tag":"Queued"}}],"restartRequest":{"_tag":"%s","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}}\n'\'' "$polls" "$status"' \
+  '  tasks=$HOGWILD_SERVICE_TEST_TASKS' \
+  '  if [[ "${HOGWILD_SERVICE_TEST_TASK_CHANGE:-}" == replace ]] && ((polls >= 2)); then tasks=$(jq '\''.[0].id="task-new" | .[0].pullRequestNumber=288'\'' <<< "$tasks"); fi' \
+  '  if [[ "${HOGWILD_SERVICE_TEST_TASK_CHANGE:-}" == reorder ]] && ((polls % 2 == 0)); then tasks=$(jq '\''reverse'\'' <<< "$tasks"); fi' \
+  '  printf '\''{"desktop":{"connected":true,"current":true,"seenAt":%s},"agentControl":{"_tag":"Running"},"hostCapacity":{"localActive":2,"desktopActive":1},"tasks":%s,"restartRequest":{"_tag":"%s","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}}\n'\'' "$polls" "$tasks" "$status"' \
   'fi' \
   > "$test_root/bin/curl"
 printf '%s\n' '#!/usr/bin/env bash' \
@@ -223,6 +227,10 @@ if ! ((resolve_line < restart_line && restart_line < claude_copy_line && claude_
 fi
 if grep -F "bash -s -- 'prepare-update'" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
   printf '%s\n' 'The helper prepared Hogwild outside the durable Update.' >&2
+  exit 1
+fi
+if grep -F 'tools.lock' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+  printf '%s\n' 'The update replaced Agent tools before the durable drain.' >&2
   exit 1
 fi
 if grep -E '/api/agents/(pause|resume)' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
@@ -478,6 +486,39 @@ if ! grep -E '2 active Tasks.*3 occupied Agent slots.*Elapsed: [0-9]+s' "$test_r
 fi
 if [ "$(grep -c 'Waiting for Restart' "$test_root/progress.log")" != 1 ]; then
   printf '%s\n' 'Restart repeated unchanged progress on every poll.' >&2
+  regression_failures=$((regression_failures + 1))
+fi
+if ! grep -F 'Task task-review: fixture/site pull request #287, Running, Editing files' "$test_root/progress.log" >/dev/null ||
+  ! grep -F 'Task task-issue: fixture/package issue #91, Publishing' "$test_root/progress.log" >/dev/null; then
+  printf '%s\n' 'Restart did not identify the Tasks holding the drain.' >&2
+  regression_failures=$((regression_failures + 1))
+fi
+if grep -E 'task-queued|task-done' "$test_root/progress.log" >/dev/null; then
+  printf '%s\n' 'Restart listed Tasks that do not hold the drain.' >&2
+  regression_failures=$((regression_failures + 1))
+fi
+
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+HOGWILD_SERVICE_TEST_TASK_CHANGE=replace PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/hogwild-service.sh" restart > "$test_root/changed-task.log"
+if ! grep -F 'Task task-new: fixture/site pull request #288' "$test_root/changed-task.log" >/dev/null; then
+  printf '%s\n' 'Restart hid a changed Task when counts stayed equal.' >&2
+  regression_failures=$((regression_failures + 1))
+fi
+
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+HOGWILD_SERVICE_TEST_TASK_CHANGE=reorder PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/hogwild-service.sh" restart > "$test_root/reordered-tasks.log"
+if [ "$(grep -c 'Waiting for Restart' "$test_root/reordered-tasks.log")" != 1 ]; then
+  printf '%s\n' 'Restart repeated progress when only Task order changed.' >&2
+  regression_failures=$((regression_failures + 1))
+fi
+
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+HOGWILD_SERVICE_TEST_TASKS=$(jq '.[0].progress.label="Editing\nfiles"' <<< "$HOGWILD_SERVICE_TEST_TASKS") \
+  PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" restart > "$test_root/task-label.log"
+if ! grep -F 'Task task-review: fixture/site pull request #287, Running, Editing files' "$test_root/task-label.log" >/dev/null; then
+  printf '%s\n' 'Restart did not keep the Task progress label on one line.' >&2
   regression_failures=$((regression_failures + 1))
 fi
 

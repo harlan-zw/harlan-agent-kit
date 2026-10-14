@@ -1,10 +1,13 @@
+import type { TerminalProvider } from './terminal-protocol.ts'
 import { execFile } from 'node:child_process'
-import { lstat, mkdir, realpath } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { access, lstat, mkdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 
 const execute = promisify(execFile)
+const preparationClaim = '/tmp/wolfstar-terminal-preparation/worktree-claim.sh'
 const isolation = [
   '--die-with-parent',
   '--unshare-user',
@@ -49,6 +52,8 @@ export async function prepareTerminalSandbox(options: {
   writable?: string[]
   denied?: string[]
   home?: string
+  preparationTool?: string
+  provider?: TerminalProvider
 }) {
   // node-pty establishes the controlling session. Nested setsid would break interactive terminal ownership.
   await execute('/usr/bin/bwrap', [...isolation, '/usr/bin/true'], {
@@ -123,6 +128,17 @@ export async function prepareTerminalSandbox(options: {
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
     PNPM_HOME: packageManagerHome,
+    // pnpm layouts use either PNPM_HOME or its bin directory for updated provider launchers.
+    PATH: (options.provider
+      ? [join(packageManagerHome, 'bin'), packageManagerHome, options.environment.PATH ?? '/usr/bin:/bin']
+      : [options.environment.PATH ?? '/usr/bin:/bin', join(packageManagerHome, 'bin'), packageManagerHome]
+    ).join(':'),
+  }
+  if (options.preparationTool) {
+    const tool = await realpath(options.preparationTool)
+    if (!(await lstat(tool)).isFile()) throw new Error('Terminal preparation requires an ordinary claim tool')
+    // Re-expose one immutable tool after private masks. Its host parent stays hidden.
+    args.push('--dir', dirname(preparationClaim), '--ro-bind', tool, preparationClaim)
   }
   for (const name of [
     'DBUS_SESSION_BUS_ADDRESS',
@@ -136,7 +152,23 @@ export async function prepareTerminalSandbox(options: {
     'NOTIFY_SOCKET',
   ])
     delete environment[name]
-  args.push('--chdir', cwd, '--', options.executable, ...options.argv)
+  let executable = options.executable
+  if (options.provider) {
+    for (const directory of [join(packageManagerHome, 'bin'), packageManagerHome]) {
+      const candidate = join(directory, options.provider)
+      const available = await access(candidate, constants.X_OK)
+        .then(() => true)
+        .catch((cause: NodeJS.ErrnoException) => {
+          if (cause.code === 'ENOENT' || cause.code === 'EACCES' || cause.code === 'ENOTDIR') return false
+          throw cause
+        })
+      if (available) {
+        executable = candidate
+        break
+      }
+    }
+  }
+  args.push('--chdir', cwd, '--', executable, ...options.argv)
   return { executable: '/usr/bin/bwrap', argv: args, environment }
 }
 
@@ -166,8 +198,7 @@ export async function createTerminalPreparationRunner(
   const common = await execute('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: project })
   const writable = [parent, common.stdout.trim(), join(home, '.local/state'), join(home, '.cache')]
   // The claim store belongs to this user. No hook can reach the user manager through /run or DBus.
-  const claimDirectory = dirname(claimScript)
-  await realpath(claimDirectory)
+  const claim = await realpath(claimScript)
   return (async (
     file: string,
     args: readonly string[],
@@ -176,11 +207,15 @@ export async function createTerminalPreparationRunner(
     const sandbox = await prepareTerminalSandbox({
       cwd: settings.cwd ?? project,
       executable: '/usr/bin/env',
-      argv: [file, ...args],
+      argv: [
+        file === claimScript ? preparationClaim : file,
+        ...args.map((argument, index) => (index === 0 && argument === claimScript ? preparationClaim : argument)),
+      ],
       environment: preparationGitEnvironment(environment),
       writable,
       denied,
       home,
+      preparationTool: claim,
     })
     return execute(sandbox.executable, sandbox.argv, {
       ...settings,

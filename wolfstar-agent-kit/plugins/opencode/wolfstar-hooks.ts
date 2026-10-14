@@ -16,12 +16,9 @@
 // `~/.local/share/wolfstar-agent-kit/.claude-plugin/plugin.json`, and this file
 // to `~/.config/opencode/plugins/wolfstar-hooks.ts`.
 //
-// This file exports one value. opencode loads every exported function in a
-// plugin file as its own plugin, and calls it with the plugin input. A second
-// exported function therefore runs with the wrong arguments and breaks the
-// shell tool. Tests drive the default export.
+// V2 loads one definition and registers mutable tool events during setup.
 
-import type { Plugin } from '@opencode-ai/plugin'
+import type { Plugin } from '@opencode/plugin'
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -88,11 +85,8 @@ const defaultTimeoutMilliseconds = 5000
 /** No hooks at all, used when the manifest cannot be read. */
 const emptyChains: HookChains = { command: [], file: [], shellPost: [] }
 
-/**
- * opencode names its shell tool `bash`.
- * Read from `/experimental/tool/ids` on opencode 1.18.27.
- */
-const shellTools = new Set(['bash'])
+/** V2 executes commands through the shell tool. */
+const shellTools = new Set(['shell'])
 
 /**
  * opencode file writers. `write`, `edit` and `apply_patch` are the shipped
@@ -370,54 +364,47 @@ async function suggestForShellOutput(
   return ''
 }
 
-/** Builds the opencode hooks over one installed hooks directory. */
-function createWolfstarHooks(options: WolfstarHookOptions) {
-  return {
-    'tool.execute.before': async (input: { tool: string; sessionID?: string }, output: { args: any }) => {
-      if (!shellTools.has(input.tool)) return
-      const command = typeof output.args?.command === 'string' ? output.args.command : ''
+export default {
+  id: 'wolfstar-agent-kit.hooks',
+  async setup(ctx) {
+    const hooksDirectory = process.env.WOLFSTAR_AGENT_HOOKS_DIR ?? defaultHooksDirectory
+    const read = readChains(manifestPathFor(hooksDirectory))
+    if (read._tag === 'Err') reportHookFailure(read.reason)
+    const options: WolfstarHookOptions = {
+      hooksDirectory,
+      workingDirectory: ctx.location.directory,
+      chains: read._tag === 'Ok' ? read.chains : emptyChains,
+    }
+    await ctx.tool.hook('execute.before', async (event) => {
+      if (!shellTools.has(event.tool)) return
+      const args = event.input as Record<string, unknown>
+      const command = typeof args?.command === 'string' ? args.command : ''
       if (command === '') return
-      const verdict = await decideCommand(command, { ...options, sessionId: input.sessionID })
-      if (verdict._tag === 'Deny') {
-        // Throwing is how a plugin blocks a tool call. Verified on opencode
-        // 1.18.27: the tool never runs, the session survives, and the model
-        // reads this message.
-        throw new Error(verdict.reason)
-      }
-      // opencode hands the same args object to the tool, so mutate it in place.
-      // Assigning a new object to `output.args` changes nothing.
-      if (verdict.command !== command) output.args.command = verdict.command
-    },
-    'tool.execute.after': async (
-      input: { tool: string; sessionID?: string; args: any },
-      output: { output?: string },
-    ) => {
-      if (shellTools.has(input.tool)) {
-        const command = typeof input.args?.command === 'string' ? input.args.command : ''
-        const toolOutput = typeof output?.output === 'string' ? output.output : ''
+      const verdict = await decideCommand(command, { ...options, sessionId: event.sessionID })
+      if (verdict._tag === 'Deny') throw new Error(verdict.reason)
+      args.command = verdict.command
+    })
+    await ctx.tool.hook('execute.after', async (event) => {
+      if (event.status !== 'completed') return
+      const args = (event.input ?? {}) as Record<string, unknown>
+      if (shellTools.has(event.tool)) {
+        const command = typeof args.command === 'string' ? args.command : ''
+        const content =
+          typeof event.result.content === 'string'
+            ? [{ type: 'text' as const, text: event.result.content }]
+            : (event.result.content ?? [])
+        const toolOutput = content
+          .filter((part) => part.type === 'text')
+          .map((part) => part.text)
+          .join('\n')
         if (command === '' || toolOutput === '') return
-        const message = await suggestForShellOutput(command, toolOutput, { ...options, sessionId: input.sessionID })
-        if (message !== '') output.output = `${toolOutput}\n\n${message}`
+        const message = await suggestForShellOutput(command, toolOutput, { ...options, sessionId: event.sessionID })
+        if (message !== '') event.result = { ...event.result, content: [...content, { type: 'text', text: message }] }
         return
       }
-      if (!fileTools.has(input.tool)) return
-      const args = (input.args ?? {}) as Record<string, unknown>
+      if (!fileTools.has(event.tool)) return
       const filePath = firstString(args, ['filePath', 'file_path', 'path', 'file'])
-      if (filePath === '') return
-      await lintWrittenFile(filePath, options)
-    },
-  }
-}
-
-export default (async ({ directory }) => {
-  const hooksDirectory = process.env.WOLFSTAR_AGENT_HOOKS_DIR ?? defaultHooksDirectory
-  const read = readChains(manifestPathFor(hooksDirectory))
-  // A broken enforcement layer must not stop the fleet, so this reports and
-  // runs no hooks. The drift check catches a missing install first.
-  if (read._tag === 'Err') reportHookFailure(read.reason)
-  return createWolfstarHooks({
-    hooksDirectory,
-    workingDirectory: directory,
-    chains: read._tag === 'Ok' ? read.chains : emptyChains,
-  })
-}) satisfies Plugin
+      if (filePath !== '') await lintWrittenFile(filePath, options)
+    })
+  },
+} satisfies Plugin.Plugin

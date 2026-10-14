@@ -1,76 +1,70 @@
 import { describe, expect, it } from 'vitest'
 import { parseTerminalCapacity } from '../dashboard/app/utils/terminal-capacity.ts'
+import { parseHostTerminalCapacity } from '../src/terminal-capacity.ts'
 
 const available = {
   _tag: 'Available',
-  agentSlots: 2,
+  agentSlots: 4,
+  agentSlotsUsed: 4,
   maintenanceReserve: 1,
-  interactiveFree: 1,
-  memoryGiB: 16,
-  reservedGiB: 8,
+  memoryGiB: 42,
+  reservedGiB: 48,
+  forcedGiB: 8,
+  sessionMemoryGiB: 8,
+  memory: { _tag: 'Physical', availableGiB: 58, totalGiB: 96 },
+  manualPolicy: { _tag: 'Enabled', memoryGiB: 56, agentSlotsMax: 6, physicalReserveGiB: 4 },
+  regular: { _tag: 'AtCapacity', reason: 'Slots' },
+  manual: { _tag: 'Allowed' },
 }
 const invalid = { _tag: 'Err', reason: 'InvalidRequest' }
 
-describe('browser terminal capacity boundary', () => {
-  it('parses available capacity into owned data', () => {
-    const input = { ...available }
+describe('aggregate terminal host memory boundary', () => {
+  it('parses manual overcommit into owned aggregate data', () => {
+    const input = structuredClone(available)
     const result = parseTerminalCapacity(input)
-    input.interactiveFree = 0
+    input.memory.availableGiB = 0
     expect(result).toEqual({ _tag: 'Ok', value: available })
   })
-  it('keeps unavailable capacity distinct from malformed data', () => {
+  it('removes private diagnostics and process records from root observations', () => {
+    const root = {
+      ...available,
+      _tag: 'Capacity',
+      memory: { _tag: 'Unknown', reason: '/private/command PID 127' },
+      regular: { _tag: 'Unavailable', reason: 'unit-private' },
+      reservations: { secret: { pid: 127 } },
+    }
+    const parsed = parseHostTerminalCapacity(root)
+    expect(parsed).toEqual({
+      _tag: 'Ok',
+      value: { ...available, memory: { _tag: 'Unknown' }, regular: { _tag: 'Unavailable' } },
+    })
+    expect(JSON.stringify(parsed)).not.toContain('private')
+    expect(JSON.stringify(parsed)).not.toContain('127')
+  })
+  it('keeps unavailable distinct from malformed data', () => {
     expect(parseTerminalCapacity({ _tag: 'Unavailable' })).toEqual({ _tag: 'Ok', value: { _tag: 'Unavailable' } })
     expect(parseTerminalCapacity({ _tag: 'Unknown' })).toEqual(invalid)
   })
-  it('supports disabled slots and fractional memory observations', () => {
-    const value = {
-      ...available,
-      agentSlots: 0,
-      maintenanceReserve: 0,
-      interactiveFree: 0,
-      memoryGiB: 16.5,
-      reservedGiB: 24.125,
-    }
-    expect(parseTerminalCapacity(value)).toEqual({ _tag: 'Ok', value })
-  })
-  it('supports the maximum host policy and zero reserved memory', () => {
-    const value = {
-      ...available,
-      agentSlots: 256,
-      maintenanceReserve: 0,
-      interactiveFree: 256,
-      memoryGiB: 256,
-      reservedGiB: 0,
-    }
-    expect(parseTerminalCapacity(value)).toEqual({ _tag: 'Ok', value })
-  })
-  it.each(['agentSlots', 'maintenanceReserve', 'interactiveFree'] as const)('rejects invalid %s values', (field) => {
+  it.each(['agentSlots', 'agentSlotsUsed', 'maintenanceReserve'] as const)('rejects invalid %s values', (field) => {
     for (const value of [-1, 257, 0.5, Number.NaN, Number.POSITIVE_INFINITY, '2', null, undefined])
       expect(parseTerminalCapacity({ ...available, [field]: value })).toEqual(invalid)
   })
-  it.each(['agentSlots', 'maintenanceReserve', 'interactiveFree', 'memoryGiB', 'reservedGiB'] as const)(
-    'requires %s',
-    (field) => {
-      const input: Record<string, unknown> = { ...available }
-      delete input[field]
-      expect(parseTerminalCapacity(input)).toEqual(invalid)
-    },
-  )
-  it('rejects reserve or free slots beyond the host slot count', () => {
-    expect(parseTerminalCapacity({ ...available, maintenanceReserve: 3 })).toEqual(invalid)
-    expect(parseTerminalCapacity({ ...available, interactiveFree: 3 })).toEqual(invalid)
+  it.each(['memoryGiB', 'reservedGiB', 'forcedGiB'] as const)('rejects invalid %s values', (field) => {
+    for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY, '16', null, undefined])
+      expect(parseTerminalCapacity({ ...available, [field]: value })).toEqual(invalid)
   })
-  it.each([-1, 0, 257, Number.NaN, Number.POSITIVE_INFINITY, '16', null])(
-    'rejects invalid memory budgets',
-    (memoryGiB) => {
-      expect(parseTerminalCapacity({ ...available, memoryGiB })).toEqual(invalid)
-    },
-  )
-  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, '8', null])('rejects invalid reserved memory', (reservedGiB) => {
-    expect(parseTerminalCapacity({ ...available, reservedGiB })).toEqual(invalid)
+  it('rejects mismatched session charge, slot protection, and physical observations', () => {
+    for (const value of [
+      { ...available, sessionMemoryGiB: 1 },
+      { ...available, maintenanceReserve: 5 },
+      { ...available, forcedGiB: 49 },
+      { ...available, memory: { _tag: 'Physical', availableGiB: 100, totalGiB: 96 } },
+      { ...available, manual: { _tag: 'AtCapacity', reason: 'private-process' } },
+    ])
+      expect(parseTerminalCapacity(value)).toEqual(invalid)
   })
   it.each([null, [], 'Available', {}, { ...available, extra: true }, { _tag: 'Unavailable', agentSlots: 2 }])(
-    'rejects malformed response shapes',
+    'rejects malformed browser response shapes',
     (value) => {
       expect(parseTerminalCapacity(value)).toEqual(invalid)
     },

@@ -5,36 +5,53 @@
   "mode": "symlink",
   "skills": {
     "ripast": {
-      "source": "github:wolfstar-project/ripide/packages/cli/skills/ripast#commit:8dfbcce6c44b123e35cdf3440828f78a52d6248e"
+      "source": "github:harlan-zw/ripide/packages/cli/skills/ripast#commit:8dfbcce6c44b123e35cdf3440828f78a52d6248e"
     },
     "skilld": {
       "source": "github:skilld-dev/skilld/skills/skilld#commit:395000f01f4bbe3a681c7dd29fdfced00d609b52"
     },
-    "im-not-a-fly": {
-      "source": "github:wolfstar-project/brundlefly/skills/im-not-a-fly#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+    "im-part-human": {
+      "source": "github:harlan-zw/brundlefly/skills/im-part-human#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
     },
     "technical-guide": {
-      "source": "github:wolfstar-project/brundlefly/skills/technical-guide#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+      "source": "github:harlan-zw/brundlefly/skills/technical-guide#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
     },
-    "im-a-fly": {
-      "source": "github:wolfstar-project/brundlefly/skills/im-a-fly#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+    "im-not-a-human": {
+      "source": "github:harlan-zw/brundlefly/skills/im-not-a-human#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
     },
     "pull-request-summary": {
-      "source": "github:wolfstar-project/brundlefly/skills/pull-request-summary#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+      "source": "github:harlan-zw/brundlefly/skills/pull-request-summary#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
     },
     "glossary": {
-      "source": "github:wolfstar-project/brundlefly/skills/glossary#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+      "source": "github:harlan-zw/brundlefly/skills/glossary#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
     },
     "copywriting": {
-      "source": "github:wolfstar-project/brundlefly/skills/copywriting#commit:0c0cbe5508644e9fc56b8725a193f883043fcad7"
+      "source": "github:harlan-zw/brundlefly/skills/copywriting#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
+    },
+    "release-notes": {
+      "source": "github:harlan-zw/brundlefly/skills/release-notes#commit:18bfab73ba56bb50d77203476b155d04323bb1b8"
+    },
+    "readme": {
+      "source": "github:harlan-zw/brundlefly/skills/readme#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
+    },
+    "clarity": {
+      "source": "github:harlan-zw/brundlefly/skills/clarity#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
+    },
+    "claim-fidelity": {
+      "source": "github:harlan-zw/brundlefly/skills/claim-fidelity#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
+    },
+    "verify-examples": {
+      "source": "github:harlan-zw/brundlefly/skills/verify-examples#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
+    },
+    "slop-naming-recovery": {
+      "source": "github:harlan-zw/brundlefly/skills/slop-naming-recovery#commit:7f7ee237bddfbe5cc6447b1cabc6d397140486be"
     }
   },
   "requires": {
-    "pr": ["pull-request-summary", "im-not-a-fly"],
-    "adversarial-review": ["im-not-a-fly"],
-    "content-refresh": ["technical-guide", "im-not-a-fly", "glossary"],
-    "tweet": ["im-not-a-fly"],
-    "release-notes": ["im-not-a-fly"],
+    "pr": ["pull-request-summary", "im-part-human"],
+    "adversarial-review": ["im-part-human"],
+    "content-refresh": ["technical-guide", "im-part-human", "glossary"],
+    "tweet": ["im-part-human"],
     "improve-ts-pkg-architecture": ["glossary"],
     "nuxt-improve-codebase-architecture": ["glossary"],
     "nuxt-frontend-design": ["copywriting"]

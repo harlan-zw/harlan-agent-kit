@@ -1,5 +1,8 @@
 import type { AgentProviderName } from '../src/agent-provider.ts'
 import type { ProviderCapacity } from '../src/types.ts'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createAgentRuntimeSource, parseAgentSelection, resolveAgentSelection } from '../src/agent-profile.ts'
 import { agentStartBlockedReason, resolveAgentStartState } from '../src/capacity.ts'
@@ -7,6 +10,7 @@ import {
   chooseAgentProvider,
   createProviderCapacitySource,
   hasSpendableCapacity,
+  readOpencodeGoCapacity,
   readZaiApiKey,
   readZaiCapacity,
   WEEKLY_WINDOW_MINUTES,
@@ -566,4 +570,26 @@ describe('reading the GLM Coding Plan quota', () => {
   it('answers no key when opencode declares no plan, which is not a fault', () => {
     expect(readZaiApiKey('/nonexistent/opencode.json')).toBeNull()
   })
+})
+
+it('reads the ZAI quota credential from native OpenCode V2 settings', () => {
+  const root = mkdtempSync(join(tmpdir(), 'zai-v2-'))
+  try {
+    const path = join(root, 'opencode.json')
+    writeFileSync(path, JSON.stringify({ providers: { 'zai-coding-plan': { settings: { apiKey: ' fixture-key ' } } } }))
+    expect(readZaiApiKey(path)).toBe('fixture-key')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+it('recognizes the Go login from native OpenCode V2 provider settings', () => {
+  const root = mkdtempSync(join(tmpdir(), 'go-v2-'))
+  try {
+    const path = join(root, 'opencode.json')
+    writeFileSync(path, JSON.stringify({ providers: { 'opencode-go': { settings: { apiKey: 'fixture-key' } } } }))
+    expect(readOpencodeGoCapacity(path)).toEqual({ _tag: 'Unpublished' })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

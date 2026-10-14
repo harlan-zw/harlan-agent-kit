@@ -20,6 +20,32 @@ function clientWith(responses: Response[], requests: Request[]) {
 }
 
 describe('wolfstar GitHub Agent control client', () => {
+  it.each([
+    { _tag: 'Ok', value: { taskId: 'wrong-task', activity: [] } },
+    {
+      _tag: 'Ok',
+      value: { taskId: 'task', activity: [{ _tag: 'Progress', at: 'now', text: 'Reading.', percent: 101 }] },
+    },
+    {
+      _tag: 'Err',
+      error: { _tag: 'TaskActivityUnavailable', taskId: 'task', state: 'Unknown', message: 'Unavailable.' },
+    },
+    { _tag: 'Err', error: { _tag: 'TaskNotFound', taskId: 'wrong-task', message: 'Missing.' } },
+  ])('rejects invalid focused activity: %j', async (response) => {
+    const created = clientWith([Response.json(response)], [])
+    if (created._tag === 'Err') throw new Error(created.error.message)
+    expect(await created.value.activity('task')).toMatchObject({ _tag: 'Err', error: { _tag: 'InvalidResponse' } })
+  })
+
+  it('encodes a Repair Task ID in the focused activity request', async () => {
+    const requests: Request[] = []
+    const taskId = `logged-finding:${'a'.repeat(64)}`
+    const created = clientWith([Response.json({ _tag: 'Ok', value: { taskId, activity: [] } })], requests)
+    if (created._tag === 'Err') throw new Error(created.error.message)
+    expect(await created.value.activity(taskId)).toEqual({ _tag: 'Ok', value: [] })
+    expect(requests[0]?.url).toBe(`${baseUrl}/api/tasks/activity?task=logged-finding%3A${'a'.repeat(64)}`)
+  })
+
   it('pins a helper Update commit and parses its preparation phase', async () => {
     const requests: Request[] = []
     const targetCommit = 'c'.repeat(40)

@@ -39,12 +39,15 @@ Score each idea from 1 to 5 on these factors:
 | Timeliness           | 2      | Is there a reason to share it now?                     |
 | Distinctive evidence | 1      | Does the user's work support a useful, specific angle? |
 
-Calculate the weighted total. Treat it as editorial ranking, not predicted engagement.
+If imagery adds no value, select **No visual** and omit the Visual factor.
+Compare weighted averages using only applicable factors. Do not penalize an idea for needing no image.
+Treat the score as editorial ranking, not predicted engagement.
 Present up to five ideas:
 
 | Rank | Topic | Hook | Visual | Why now |
 | ---- | ----- | ---- | ------ | ------- |
 
+Omit the Visual column when no recommendation needs an image.
 Recommend one direction. Let the user choose before generating final launch assets.
 If the request already names a direction, continue directly with that direction.
 Continue in `tweet` at Step 1. Preserve the selected angle.
@@ -55,7 +58,7 @@ Read the supplied release material. Identify:
 
 - The most useful change.
 - Who benefits and which problem it solves.
-- What a visual can demonstrate.
+- Whether a visual can demonstrate something useful.
 - Which metrics and product claims have evidence.
 
 Find up to three comparable recent launch posts when research would help the requested strategy.
@@ -69,13 +72,14 @@ Offer up to three approaches:
 2. Demonstration: lead with a screenshot, code example, or short demo.
 3. Milestone or story: use a verified result or an experience the user supplied.
 
-For each, provide draft text, a visual recommendation, and at most two relevant account suggestions.
+For each, provide draft text and at most two relevant account suggestions.
+Recommend a visual only when requested or when it explains the point. Otherwise select **No visual**.
 Include timing only when requested or useful to the launch.
 Keep a single post unless the user wants a thread.
 Avoid dumping the changelog into the post.
 
 After selection, continue in `tweet` at Step 1.
-Use its code-card, stat-card, and screenshot-wrap templates.
+If a visual is selected, use its code-card, stat-card, and screenshot-wrap templates.
 A demo recording or before-and-after visual needs its own capture plan.
 Never imply the screenshot wrapper creates video or split comparisons.
 

@@ -138,17 +138,14 @@ describe('desktop session provider', () => {
     const events = await collect(provider.runTurn({ ...request, sessionId: 'ses_saved123', reasoningEffort: 'high' }))
     expect(args).toEqual([
       'run',
+      '--standalone',
       '--format',
       'json',
       '--auto',
       '--model',
-      'test-model',
-      '--dir',
-      '/tmp',
+      'test-model#high',
       '--session',
       'ses_saved123',
-      '--variant',
-      'high',
     ])
     expect(events).toContainEqual({ _tag: 'Message', text: 'Reply: {"value":1}. Explain this code.' })
     expect(events.at(-1)).toEqual({ _tag: 'TurnCompleted' })
@@ -209,4 +206,25 @@ it('preserves process ownership through context and repository environment for b
   } finally {
     await rm(workspace, { recursive: true, force: true })
   }
+})
+
+it('accepts the successful V2 CLI reply when its terminal step event is absent', async () => {
+  const provider = createDesktopSessionProvider({
+    provider: 'opencode',
+    environment: process.env,
+    launchOpencode: (_args, options) =>
+      spawn(
+        process.execPath,
+        [
+          '-e',
+          'process.stdin.resume(); process.stdin.on("end", () => console.log(JSON.stringify({type:"text",sessionID:"ses_v2",part:{text:"V2 reply"}})))',
+        ],
+        options,
+      ),
+  })
+  expect(await collect(provider.runTurn(request))).toEqual([
+    { _tag: 'SessionStarted', sessionId: 'ses_v2' },
+    { _tag: 'Message', text: 'V2 reply' },
+    { _tag: 'TurnCompleted' },
+  ])
 })

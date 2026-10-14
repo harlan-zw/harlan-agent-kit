@@ -6,9 +6,11 @@ import type {
   TerminalSession,
 } from '../../../src/terminal-protocol.ts'
 import type { TerminalCapacity } from '../utils/terminal-capacity.ts'
+import type { TerminalLaunchIntent } from '../utils/terminal-launch.ts'
 import { useDocumentVisibility, useIntervalFn, useMediaQuery, useStorage } from '@vueuse/core'
 import { parseTerminalCapacity } from '../utils/terminal-capacity.ts'
 import { terminalFailureCopy } from '../utils/terminal-copy.ts'
+import { terminalLaunchIntent } from '../utils/terminal-launch.ts'
 import {
   activeTerminalSession,
   emptyTerminalLayout,
@@ -57,13 +59,16 @@ const narrow = useMediaQuery('(max-width: 767px)')
 const tabList = useTemplateRef<HTMLElement>('tabList')
 const terminalArea = useTemplateRef<HTMLElement>('terminalArea')
 const provider = ref<TerminalProvider>('codex')
+const initialPrompt = ref('')
+const forceConfirmation = shallowRef<{ _tag: 'New' } | { _tag: 'Waiting'; id: string }>()
+const forceAttempts = new Map<string, string>()
 const failure = ref('')
 const pending = ref(false)
 const loading = ref(true)
 const refreshing = ref(false)
 const visibility = useDocumentVisibility()
 const diffOpen = ref(false)
-const launchIntent = shallowRef<{ requestId: string; projectId: string; provider: TerminalProvider }>()
+const launchIntent = shallowRef<TerminalLaunchIntent>()
 const selectedId = computed(() => activeTerminalSession(projectLayout.value))
 const selected = computed(() => sessions.value.find((session) => session.id === selectedId.value))
 const tabSessions = computed(() =>
@@ -93,17 +98,21 @@ const canStart = computed(
   () =>
     !pending.value &&
     capacity.value._tag === 'Available' &&
-    capacity.value.interactiveFree > 0 &&
+    capacity.value.regular._tag !== 'Unavailable' &&
     projects.value.some((project) => project.id === projectId.value) &&
     capabilities.providers[provider.value],
 )
+const canForce = computed(
+  () => !pending.value && capacity.value._tag === 'Available' && capacity.value.manualPolicy._tag === 'Enabled',
+)
+const forceTotal = computed(() => (capacity.value._tag === 'Available' ? capacity.value.reservedGiB + 8 : 8))
 const capacityReason = computed(() =>
   loading.value
     ? 'Connecting to the terminal host.'
     : capacity.value._tag === 'Unavailable'
       ? terminalFailureCopy.CapacityUnavailable
-      : capacity.value.interactiveFree === 0
-        ? terminalFailureCopy.CapacityRefused
+      : capacity.value.regular._tag === 'AtCapacity'
+        ? 'Waiting to start'
         : '',
 )
 
@@ -128,6 +137,7 @@ async function refresh() {
     projects.value = results[0].value.value
     sessions.value = results[1].value.value
     storedLayout.value = reconcileTerminalLayout(layout.value, displayProjects.value, sessions.value)
+    if (loading.value) selectFromRoute()
     if (!capabilities.providers[provider.value]) provider.value = providers.value[0] ?? 'codex'
     failure.value = ''
   } else {
@@ -212,21 +222,26 @@ function focusPane(session: TerminalSession) {
   if (selectedId.value !== session.id) void select(session)
 }
 
-watch([() => route.query.terminal, sessions], () => {
+function selectFromRoute() {
   const id = typeof route.query.terminal === 'string' ? route.query.terminal : undefined
   const session = sessions.value.find((value) => value.id === id)
   if (session && session.id !== selectedId.value) void select(session)
-})
+}
+// Inventory refresh must not replace a selection while its route navigation is still pending.
+watch(() => route.query.terminal, selectFromRoute, { immediate: true })
 
-async function launch() {
+async function launch(mode: 'Regular' | 'Force' = 'Regular') {
   if (!canStart.value) return
   pending.value = true
   failure.value = ''
   const previous = launchIntent.value
-  const intent =
-    previous?.projectId === projectId.value && previous.provider === provider.value
-      ? previous
-      : { requestId: crypto.randomUUID(), projectId: projectId.value, provider: provider.value }
+  const prompt = initialPrompt.value.trim() || undefined
+  const intent = terminalLaunchIntent(
+    previous,
+    { projectId: projectId.value, provider: provider.value, ...(prompt ? { initialPrompt: prompt } : {}) },
+    crypto.randomUUID(),
+    mode,
+  )
   launchIntent.value = intent
   await $fetch<unknown>('/api/terminal/sessions', { method: 'POST', body: intent })
     .then(parseTerminalSessionResult)
@@ -238,6 +253,8 @@ async function launch() {
         return
       }
       launchIntent.value = undefined
+      initialPrompt.value = ''
+      forceConfirmation.value = undefined
       sessions.value = [...sessions.value.filter((session) => session.id !== result.value.id), result.value]
       await select(result.value)
     })
@@ -249,10 +266,46 @@ async function launch() {
     })
 }
 
-async function stop() {
-  if (!selected.value || pending.value) return
+async function forceWaiting(id: string) {
+  if (!canForce.value) return
   pending.value = true
-  await $fetch<unknown>(`/api/terminal/sessions/${encodeURIComponent(selected.value.id)}/stop`, { method: 'POST' })
+  failure.value = ''
+  const requestId = forceAttempts.get(id) ?? crypto.randomUUID()
+  forceAttempts.set(id, requestId)
+  await $fetch<unknown>(`/api/terminal/sessions/${encodeURIComponent(id)}/force`, {
+    method: 'POST',
+    body: { requestId },
+  })
+    .then(parseTerminalSessionResult)
+    .then((result) => {
+      if (result._tag === 'Err') {
+        failure.value = terminalFailureCopy[result.reason]
+        if (!['OwnershipUnknown', 'DeliveryUnknown'].includes(result.reason)) forceAttempts.delete(id)
+      } else {
+        forceAttempts.delete(id)
+        sessions.value = sessions.value.map((session) => (session.id === result.value.id ? result.value : session))
+        if (result.value.state === 'Queued') failure.value = terminalFailureCopy.CapacityRefused
+        forceConfirmation.value = undefined
+      }
+    })
+    .catch(() => {
+      failure.value = 'Could not start the Agent session. Retry.'
+    })
+    .finally(() => {
+      pending.value = false
+    })
+}
+
+async function confirmForce() {
+  const confirmation = forceConfirmation.value
+  if (confirmation?._tag === 'New') await launch('Force')
+  else if (confirmation?._tag === 'Waiting') await forceWaiting(confirmation.id)
+}
+
+async function stop(id = selected.value?.id) {
+  if (!id || pending.value) return
+  pending.value = true
+  await $fetch<unknown>(`/api/terminal/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' })
     .then(parseTerminalSessionResult)
     .then((result) => {
       if (result._tag === 'Err') failure.value = terminalFailureCopy[result.reason]
@@ -339,13 +392,43 @@ watch(
               :class="session.state === 'Running' ? 'bg-success' : 'bg-neutral-500'"
             />
             <span class="flex-1 truncate">{{ providerNames[session.provider] }}</span>
-            <span class="text-[10px]">{{ session.state }}</span>
+            <span class="text-[10px]">{{
+              session.state === 'Queued'
+                ? 'Waiting to start'
+                : session.state === 'Cancelled'
+                  ? 'Session cancelled.'
+                  : session.state
+            }}</span>
           </button>
         </div>
       </div>
       <p v-if="capacityReason" role="status" class="shrink-0 border-t border-default px-3 py-2 text-xs text-muted">
         {{ capacityReason }}
       </p>
+      <div
+        v-if="capacity._tag === 'Available'"
+        class="shrink-0 border-t border-default px-3 py-2 text-xs text-muted"
+        aria-label="Host memory"
+      >
+        <div class="flex justify-between gap-2">
+          <span>Host memory</span><span>{{ capacity.reservedGiB }} / {{ capacity.memoryGiB }} GiB</span>
+        </div>
+        <div class="flex justify-between gap-2">
+          <span>Agent sessions</span><span>{{ capacity.agentSlotsUsed }} / {{ capacity.agentSlots }}</span>
+        </div>
+        <p v-if="capacity.forcedGiB > 0" class="mt-1 text-warning">Force: {{ capacity.forcedGiB }} GiB</p>
+      </div>
+      <div class="shrink-0 border-t border-default p-2">
+        <UTextarea
+          v-model="initialPrompt"
+          aria-label="Initial prompt"
+          placeholder="Initial prompt"
+          :maxlength="8192"
+          :rows="2"
+          class="w-full"
+          :disabled="pending"
+        />
+      </div>
       <div class="flex shrink-0 gap-2 border-t border-default p-2">
         <select
           v-model="provider"
@@ -356,10 +439,20 @@ watch(
             {{ providerNames[value] }}
           </option>
         </select>
-        <UButton icon="i-octicon-plus-16" size="sm" :disabled="!canStart" :loading="pending" @click="launch">
+        <UButton icon="i-octicon-plus-16" size="sm" :disabled="!canStart" :loading="pending" @click="launch()">
           New session
         </UButton>
       </div>
+      <UButton
+        v-if="canForce && canStart"
+        class="mx-2 mb-2 shrink-0 justify-center"
+        color="warning"
+        variant="outline"
+        size="sm"
+        @click="forceConfirmation = { _tag: 'New' }"
+      >
+        Force new session
+      </UButton>
     </aside>
     <section class="flex min-h-0 min-w-0 flex-col">
       <p
@@ -437,6 +530,15 @@ watch(
         </div>
         <div class="flex shrink-0 items-center gap-1 px-1">
           <UButton
+            v-if="canForce && selected?.state === 'Unknown'"
+            color="warning"
+            variant="ghost"
+            size="xs"
+            @click="forceConfirmation = { _tag: 'Waiting', id: selected.id }"
+          >
+            Force start
+          </UButton>
+          <UButton
             v-if="selected && !narrow"
             icon="i-octicon-columns-16"
             :aria-label="projectLayout.view._tag === 'Split' ? 'Show one terminal' : 'Split terminal'"
@@ -461,7 +563,7 @@ watch(
             size="xs"
             color="error"
             :loading="pending"
-            @click="stop"
+            @click="stop()"
           >
             Stop Agent
           </UButton>
@@ -470,6 +572,19 @@ watch(
       <p v-if="failure" role="alert" class="shrink-0 border-b border-error/30 px-3 py-2 text-xs text-error">
         {{ failure }}
       </p>
+      <div v-if="forceConfirmation" role="alert" class="shrink-0 border-b border-warning/30 bg-warning/5 p-3 text-xs">
+        <p>
+          This session reserves 8 GiB of host memory. Total reserved: {{ forceTotal }} GiB. Force can still be refused.
+        </p>
+        <div class="mt-2 flex gap-2">
+          <UButton color="warning" size="sm" :loading="pending" :disabled="!canForce" @click="confirmForce">
+            {{ forceConfirmation._tag === 'New' ? 'Force new session' : 'Force start' }}
+          </UButton>
+          <UButton color="neutral" variant="ghost" size="sm" :disabled="pending" @click="forceConfirmation = undefined">
+            Cancel
+          </UButton>
+        </div>
+      </div>
       <div v-if="selected" ref="terminalArea" class="relative min-h-0 flex-1">
         <!-- Visibility preserves renderer dimensions and attachments while Diff is open. -->
         <div
@@ -497,7 +612,28 @@ watch(
               <span class="truncate">{{ providerNames[session.provider] }}</span
               ><span class="truncate">{{ capabilities.hostLabel }}</span>
             </div>
-            <TerminalView :session="session" class="min-h-0 min-w-0 flex-1" />
+            <div
+              v-if="session.state === 'Queued' || session.state === 'Cancelled'"
+              role="status"
+              class="flex flex-1 flex-col items-center justify-center gap-3 p-4 text-sm text-muted"
+            >
+              <p>{{ session.state === 'Queued' ? 'Waiting to start' : 'Session cancelled.' }}</p>
+              <div v-if="session.state === 'Queued'" class="flex gap-2">
+                <UButton color="neutral" variant="outline" size="sm" :loading="pending" @click="stop(session.id)">
+                  Cancel session
+                </UButton>
+                <UButton
+                  v-if="canForce"
+                  color="warning"
+                  variant="outline"
+                  size="sm"
+                  @click="forceConfirmation = { _tag: 'Waiting', id: session.id }"
+                >
+                  Force start
+                </UButton>
+              </div>
+            </div>
+            <TerminalView v-else :session="session" class="min-h-0 min-w-0 flex-1" />
           </div>
         </div>
         <TerminalDiff

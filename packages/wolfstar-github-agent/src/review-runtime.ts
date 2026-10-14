@@ -125,10 +125,13 @@ export async function createReviewRuntime(input: {
             'omit_tools_from = ["code_mode", "deferred"]',
           ].join('\n')
         : JSON.stringify({
-            plugin: [],
+            plugins: [],
             instructions: request.instructionPaths ?? [],
-            permission: { '*': 'deny', ...Object.fromEntries(REVIEW_TOOL_NAMES.map((name) => [name, 'allow'])) },
-            mcp: { controller_review: { type: 'local', command, enabled: true } },
+            permissions: [
+              { action: '*', resource: '*', effect: 'deny' },
+              ...REVIEW_TOOL_NAMES.map((action) => ({ action, resource: '*', effect: 'allow' })),
+            ],
+            mcp: { servers: { controller_review: { type: 'local', command, disabled: false, codemode: false } } },
           })
     const profilePath = join(input.environment.HOME ?? '/home/wolfstar', '.config/wolfstar-github-agent/worker.json')
     home = await createReviewProviderHome({ profilePath, provider: input.provider, configuration })

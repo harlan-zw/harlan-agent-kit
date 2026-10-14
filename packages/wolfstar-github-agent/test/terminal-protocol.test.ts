@@ -38,6 +38,18 @@ describe('terminal request boundaries', () => {
       value: { requestId: 'one', projectId: 'project', provider: 'codex' },
     })
   })
+  it('refuses control characters in identities and unknown admission modes', () => {
+    for (const fields of [
+      { requestId: 'one\n' },
+      { projectId: 'project\r' },
+      { mode: 'automatic-force' },
+      { initialPrompt: 'invalid\0prompt' },
+    ])
+      expect(parseTerminalLaunch({ requestId: 'one', projectId: 'project', provider: 'codex', ...fields })).toEqual({
+        _tag: 'Err',
+        reason: 'InvalidRequest',
+      })
+  })
   it('refuses malformed JSON without throwing', () => {
     expect(parseTerminalJson('{')).toEqual({
       _tag: 'Err',

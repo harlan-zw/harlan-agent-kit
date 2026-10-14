@@ -5,13 +5,13 @@ import type {
   ReviewFindingThreadMirror,
   ReviewFindingThreadsOutcome,
 } from '../src/review-finding-threads.ts'
-import type { ClaimedReviewStatusCommand, ReviewFinding } from '../src/types.ts'
+import type { ReviewFinding } from '../src/types.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
+import { createRepositoryTokenProvider } from '../src/github-auth.ts'
 import { err, ok } from '../src/result.ts'
 import { mirrorReviewFindingThreads } from '../src/review-finding-threads.ts'
-import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { repositoryMapping } from './fixtures.ts'
 
 const headSha = '5a885d2507bd5c0f86f027c7054fcda215d444f1'
 const lockFingerprint = 'a'.repeat(64)
@@ -44,13 +44,31 @@ function fakeSource(threads: ReviewFindingThread[], outcome: 'Posted' | 'Outside
         return Promise.resolve(ok(undefined))
       },
     },
-    findings: () => null,
     report: (_repository, value) => reports.push(value),
   }
   return { mirror, posted, reports, resolved }
 }
 
 describe('review finding threads', () => {
+  it('resolves obsolete threads after merge without posting or closing a current finding', async () => {
+    const { mirror, posted, resolved } = fakeSource([
+      { threadId: 'obsolete', fingerprint: 'c'.repeat(64), resolved: false },
+      { threadId: 'current', fingerprint: clockFingerprint, resolved: false },
+    ])
+    await mirrorReviewFindingThreads(
+      mirror,
+      repositoryMapping(),
+      497,
+      headSha,
+      [openFinding(lockFingerprint, 'a.ts', 1), openFinding(clockFingerprint, 'b.ts', 2)],
+      new AbortController().signal,
+      authorize,
+      'merged',
+    )
+    expect(posted).toEqual([])
+    expect(resolved).toEqual(['obsolete'])
+  })
+
   it('comments each open finding on its line at the reviewed head', async () => {
     const { mirror, posted, reports } = fakeSource([])
 
@@ -124,109 +142,40 @@ describe('review finding threads', () => {
   })
 })
 
-describe('terminal Review publication', () => {
-  function command(overrides: Partial<ClaimedReviewStatusCommand> = {}): ClaimedReviewStatusCommand {
-    const repository = repositoryMapping()
-    return {
-      id: 'status-command',
-      taskKind: 'adversarial_review',
-      phase: 'terminal',
-      taskId: 'review-task',
-      repository: repository.github,
-      pullRequestNumber: 497,
-      revisionId: 'revision-1',
-      expectedHeadSha: headSha,
-      expectedBaseRef: 'main',
-      body: '<!-- wolfstar-agent-kit:pr-triage -->\n### 🤖 BLOCKED',
-      reviewRunId: 'run-1',
-      desiredOutcome: 'BLOCKED',
-      outcomeUnknown: false,
-      commentId: null,
-      workerId: 'status-worker',
-      fence: 1,
-      leaseExpiresAt: '2026-09-29T04:00:00.000Z',
-      repositoryMapping: repository,
-      ...overrides,
-    } as ClaimedReviewStatusCommand
-  }
-
-  function publish(claimed: ClaimedReviewStatusCommand, mirror: ReviewFindingThreadMirror) {
-    const pullRequest = pullRequestItem({ number: 497, headSha, baseRef: 'main' })
-    return publishClaimedReviewStatus(
-      {
-        findingThreads: mirror,
-        github: {
-          readExistingReviewLabel: () => {
-            throw new Error('Unexpected existing review.')
-          },
-          getPullRequestStatusIdentity: () => {
-            throw new Error('Terminal reads the snapshot.')
-          },
-          getPullRequestReviewSnapshot: () =>
-            Promise.resolve(
-              ok({
-                baseChecks: { _tag: 'Available', checks: [] },
-                body: '',
-                checks: { _tag: 'Available', checks: [] },
-                comments: [],
-                priorAutomatedReview: { _tag: 'None' },
-                pullRequest,
-                findingDiscussions: [],
-                requiredChecks: { _tag: 'None' as const },
-                reviews: [],
-              }),
-            ),
-          upsertReviewStatus: () => Promise.resolve(ok({ commentId: 29, url: pullRequest.url })),
-          stampAgentLabel: () => Promise.resolve(ok(undefined)),
-        },
-        now: () => new Date('2026-09-29T03:25:00.000Z'),
-        store: {
-          authorizeReviewStatus: () => true,
-          completeReviewStatus: () => true,
-          recordReviewStatusReceipt: () => true,
-          deferReviewStatus: () => {
-            throw new Error('Unexpected defer.')
-          },
-          supersedeReviewStatus: () => {
-            throw new Error('Unexpected supersede.')
-          },
-        },
-      },
-      claimed,
-      true,
-      new AbortController().signal,
-    )
-  }
-
-  it('puts the Review run findings beside the code after the comment', async () => {
-    const { mirror, posted } = fakeSource([])
-    mirror.findings = (_repository, _number, runId) =>
-      runId === 'run-1' ? [openFinding(lockFingerprint, 'a.ts', 7)] : null
-
-    expect((await publish(command(), mirror))._tag).toBe('Ok')
-    expect(posted).toEqual([expect.objectContaining({ path: 'a.ts', line: 7 })])
-  })
-
-  it('still completes the comment when the thread sync fails', async () => {
-    const { mirror, reports } = fakeSource([])
-    mirror.findings = () => [openFinding(lockFingerprint, 'a.ts', 7)]
-    mirror.source.postReviewFindingComment = () => Promise.resolve(err('GitHub timed out.'))
-
-    expect((await publish(command(), mirror))._tag).toBe('Ok')
-    expect(reports).toEqual([{ _tag: 'Failed', message: 'GitHub timed out.' }])
-  })
-
-  it('leaves threads alone for a terminal comment with no Review run', async () => {
-    const { mirror, posted, reports } = fakeSource([])
-    mirror.findings = () => [openFinding(lockFingerprint, 'a.ts', 7)]
-
-    expect((await publish(command({ reviewRunId: null }), mirror))._tag).toBe('Ok')
-    expect(posted).toEqual([])
-    expect(reports).toEqual([])
-  })
-})
-
 describe('gitHub review finding threads', () => {
+  it('resolves a finding with repository Contents and Pull requests write access', async () => {
+    const resolved: string[] = []
+    const tokens = createRepositoryTokenProvider({
+      getInstallation: async () => ({ installationId: 42, repositoryName: 'example' }),
+      mintToken: async (input) => ({
+        token: JSON.stringify(input.permissions),
+        permissions: input.permissions,
+        expiresAt: '2126-01-01T00:00:00.000Z',
+      }),
+    })
+    const source = createGitHubAgentSource({
+      actorLogin: () => 'wolfstar-github-agent[bot]',
+      ownAppId: 98114,
+      tokens,
+      createClient: (token) => {
+        const permissions = JSON.parse(token) as Record<string, string>
+        return {
+          graphql: async (_query: string, variables: { threadId: string }) => {
+            if (permissions.contents !== 'write' || permissions.pull_requests !== 'write')
+              throw new Error('Resource not accessible by integration')
+            resolved.push(variables.threadId)
+            return { resolveReviewThread: { thread: { id: variables.threadId } } }
+          },
+        } as unknown as Octokit
+      },
+    })
+
+    expect(
+      await source.resolveReviewFindingThread(repositoryMapping(), 'T1', new AbortController().signal, authorize),
+    ).toEqual(ok(undefined))
+    expect(resolved).toEqual(['T1'])
+  })
+
   function github(responses: Array<number | null>, threads: unknown[] = []) {
     const createReviewComment = vi.fn((_input: Record<string, unknown>) => {
       const status = responses.shift()

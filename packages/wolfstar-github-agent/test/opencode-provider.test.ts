@@ -104,21 +104,19 @@ describe('opencodeArguments', () => {
   it('runs the pinned model in the prepared worktree with permissions answered', () => {
     expect(opencodeArguments(request(), 'http://127.0.0.1:4097')).toEqual([
       'run',
-      '--attach',
+      '--server',
       'http://127.0.0.1:4097',
       '--format',
       'json',
       '--auto',
       '--model',
       'opencode-go/deepseek-v4-flash',
-      '--dir',
-      '/tmp/worktree',
     ])
   })
 
   it('passes the reasoning variant the role pins', () => {
     expect(opencodeArguments(request({ reasoningEffort: 'high' }), 'http://127.0.0.1:4097')).toEqual(
-      expect.arrayContaining(['--variant', 'high']),
+      expect.arrayContaining(['--model', 'opencode-go/deepseek-v4-flash#high']),
     )
   })
 
@@ -221,39 +219,22 @@ describe('attached result recovery', () => {
     sessionID: identity.sessionID,
     part: { id: 'part_start', ...identity, type: 'step-start' },
   }
-  const persisted = [
-    {
-      info: {
+  const persisted = {
+    data: [
+      { id: 'msg_user', type: 'user', text: 'Check', time: { created: 40 } },
+      {
         id: identity.messageID,
-        sessionID: identity.sessionID,
-        role: 'assistant',
-        parentID: 'msg_user',
+        type: 'assistant',
         finish: 'stop',
         time: { created: 50, completed: 100 },
+        content: [{ type: 'text', text: '{"outcome":"resolved"}' }],
+        tokens: { input: 5, output: 3, reasoning: 1, cache: { read: 2, write: 0 } },
       },
-      parts: [
-        { id: 'part_answer', ...identity, type: 'text', text: '{"outcome":"resolved"}', time: { end: 100 } },
-        {
-          id: 'part_finish',
-          ...identity,
-          type: 'step-finish',
-          reason: 'stop',
-          tokens: { input: 5, output: 3, reasoning: 1, cache: { read: 2, write: 0 } },
-        },
-      ],
-    },
-    {
-      info: {
-        id: 'msg_user',
-        sessionID: identity.sessionID,
-        role: 'user',
-        parentID: '',
-        finish: '',
-        time: { created: 40, completed: 40 },
-      },
-      parts: [],
-    },
-  ]
+      { id: 'msg_idle', type: 'idle', outcome: 'succeeded', time: { created: 101 } },
+    ],
+    cursor: {},
+  }
+  const streamedAnswer = { ...identity, type: 'text', text: '{"outcome":"resolved"}' }
 
   it('delivers the persisted answer when the attached CLI exits before completion events', async () => {
     const server = fakeServer(undefined, { _tag: 'Ok', value: persisted })
@@ -273,7 +254,7 @@ describe('attached result recovery', () => {
     const server = fakeServer(undefined, { _tag: 'Ok', value: persisted })
     const provider = createOpencodeProvider({
       startOpencodeServer: server.start,
-      spawnOpencode: replay([start, { type: 'text', sessionID: identity.sessionID, part: persisted[0]!.parts[0] }]),
+      spawnOpencode: replay([start, { type: 'text', sessionID: identity.sessionID, part: streamedAnswer }]),
     })
     const events = await collect(provider.runTurn(request()))
     expect(events.filter((event) => event._tag === 'Message')).toEqual([
@@ -395,7 +376,26 @@ describe('attached result recovery', () => {
       ...identity,
       state: { ...bashLine.part.state, time: { start: 50, end: 75 } },
     }
-    const messages = [{ ...persisted[0], parts: [tool, ...persisted[0]!.parts] }, persisted[1]]
+    const storedTool = {
+      type: 'tool',
+      id: tool.id,
+      name: 'shell',
+      time: { created: 50, completed: 75 },
+      state: {
+        status: 'completed',
+        input: tool.state.input,
+        content: [{ type: 'text', text: tool.state.output }],
+        metadata: { exit: 0 },
+      },
+    }
+    const messages = {
+      data: [
+        persisted.data[0],
+        { ...persisted.data[1], content: [storedTool, ...persisted.data[1]!.content!] },
+        persisted.data[2],
+      ],
+      cursor: {},
+    }
     const server = fakeServer(undefined, { _tag: 'Ok', value: messages })
     const provider = createOpencodeProvider({
       startOpencodeServer: server.start,
@@ -412,18 +412,30 @@ describe('attached result recovery', () => {
     { name: 'read failure', response: { _tag: 'Err', error: 'Read failed.' } },
     {
       name: 'unfinished assistant',
-      response: { _tag: 'Ok', value: [{ ...persisted[0], info: { ...persisted[0]!.info, finish: undefined } }] },
+      response: {
+        _tag: 'Ok',
+        value: {
+          ...persisted,
+          data: [persisted.data[0], { ...persisted.data[1], finish: undefined }, persisted.data[2]],
+        },
+      },
     },
     {
       name: 'another turn',
-      response: { _tag: 'Ok', value: [{ ...persisted[0], info: { ...persisted[0]!.info, id: 'msg_old' } }] },
+      response: {
+        _tag: 'Ok',
+        value: { ...persisted, data: [persisted.data[0], { ...persisted.data[1], id: 'msg_old' }, persisted.data[2]] },
+      },
     },
-    { name: 'missing user', response: { _tag: 'Ok', value: [persisted[0]] } },
+    {
+      name: 'missing user',
+      response: { _tag: 'Ok', value: { ...persisted, data: [persisted.data[1], persisted.data[2]] } },
+    },
     {
       name: 'ambiguous user',
       response: {
         _tag: 'Ok',
-        value: [...persisted, { ...persisted[1], info: { ...persisted[1]!.info, id: 'msg_other' } }],
+        value: { ...persisted, data: [...persisted.data, { ...persisted.data[0], id: 'msg_other' }] },
       },
     },
   ])('fails explicitly on $name instead of accepting exit zero', async ({ response }) => {
@@ -876,7 +888,7 @@ describe('context budget warning', () => {
 
     await collect(provider.runTurn(request()))
 
-    expect(launched).toEqual(expect.arrayContaining(['--attach', 'http://127.0.0.1:4097']))
+    expect(launched).toEqual(expect.arrayContaining(['--server', 'http://127.0.0.1:4097']))
     expect(server.closed()).toBe(true)
   })
 

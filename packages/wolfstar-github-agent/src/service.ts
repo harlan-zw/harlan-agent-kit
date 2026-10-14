@@ -39,6 +39,7 @@ import { retireObsoleteBaselineRepairs } from './baseline-repair-sweep.ts'
 import { createBaselineRepairWorker, inspectWorkspaceFiles } from './baseline-repair-worker.ts'
 import { createBatchScheduler } from './batch-scheduler.ts'
 import { createBatchWorker } from './batch-worker.ts'
+import { createBrowserAuthorities } from './browser-auth-authorities.ts'
 import { createCandidateIssueController } from './candidate-issue-controller.ts'
 import { agentStartBlockedReason, hasSpendableCapacity, resolveAgentStartState } from './capacity.ts'
 import { createClaudeProvider } from './claude-provider.ts'
@@ -49,6 +50,7 @@ import { createDesktopBroker } from './desktop-broker.ts'
 import { DESKTOP_AGENT_SLOT_CEILING } from './desktop-protocol.ts'
 import { createReloadableExternalWatchController, mergeExternalWatchSnapshot } from './external-watch.ts'
 import { classifyFailure, isSubjectMovedReason } from './failure.ts'
+import { createFindingThreadSyncController } from './finding-thread-sync.ts'
 import { createGitHubAccountTokenProvider, readGitHubAccountLogin, readGitHubAccountToken } from './github-account.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
@@ -260,18 +262,21 @@ const REVIEW_CHECK_RUN_OPERATION = 'review_check_run'
 /**
  * Files every inline finding sync against its repository.
  *
- * A failure warns, and the next terminal publication on the pull request
- * syncs again. A sync that lands clears it.
+ * Failures remain queued. Clear the Incident after every pending sync in the repository finishes.
  */
 export function createReviewFindingThreadsReport(
-  store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents'>,
+  store: Pick<JournalStore, 'recordIncident' | 'resolveIncidents' | 'hasPendingReviewFindingThreadSync'>,
   now: () => Date,
 ): ReviewFindingThreadMirror['report'] {
   return (repository, outcome) => {
     const at = now().toISOString()
     const scope: IncidentScope = { _tag: 'Repository', repository }
-    if (outcome._tag === 'Written') store.resolveIncidents(scope, at, REVIEW_FINDING_THREADS_OPERATION)
-    else recordServiceIncident(store, at, REVIEW_FINDING_THREADS_OPERATION, outcome.message, scope)
+    if (outcome._tag === 'Written') {
+      if (!store.hasPendingReviewFindingThreadSync(repository))
+        store.resolveIncidents(scope, at, REVIEW_FINDING_THREADS_OPERATION)
+    } else {
+      recordServiceIncident(store, at, REVIEW_FINDING_THREADS_OPERATION, outcome.message, scope)
+    }
   }
 }
 
@@ -295,6 +300,27 @@ export function createPassIncidentRecorder(options: {
     if (options.signal.aborted) return
     replaceServiceIncidents(options.store, options.now().toISOString(), operation, messages)
   }
+}
+
+/** Reports live capacity. Reaching a Reserve is normal Service state. */
+export function reportAgentCapacity(
+  snapshot: DashboardSnapshot,
+  output: {
+    log: (message: string) => void
+    record: (messages: readonly string[]) => void
+  },
+): void {
+  const startState = resolveAgentStartState(snapshot)
+  const blocked = agentStartBlockedReason({
+    startState,
+    queuedTasks: snapshot.tasks.filter((task) => task.state._tag === 'Queued').length,
+    runningTasks: snapshot.tasks.filter((task) => task.state._tag === 'Running' || task.state._tag === 'Publishing')
+      .length,
+    agentSelection: snapshot.agentSelection,
+    providerCapacities: snapshot.providerCapacities,
+  })
+  if (blocked !== null) output.log(blocked)
+  output.record(startState._tag === 'CapacityUnavailable' && blocked !== null ? [blocked] : [])
 }
 
 /** Reconciles release repositories and records the pass's failures. */
@@ -835,10 +861,15 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const reportCheckRun = createReviewCheckRunReport(store, now)
   const findingThreads: ReviewFindingThreadMirror = {
     source: workerGithub,
-    findings: (repository, pullRequestNumber, reviewRunId) =>
-      store.listReviewRuns(repository, pullRequestNumber).find((run) => run.id === reviewRunId)?.findings ?? null,
     report: createReviewFindingThreadsReport(store, now),
   }
+  const findingThreadSync = createFindingThreadSyncController({
+    store,
+    readPullRequest: github.getPullRequest,
+    mirror: findingThreads,
+    now,
+    workerId: randomUUID(),
+  })
   const pullRequestTriage = createPullRequestTriageController({
     classification,
     github: workerGithub,
@@ -923,8 +954,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
      * The clear takes off the Running label alone. A settled Review stamps its
      * verdict just before its Task settles, and a blanket clear would wipe it.
      *
-     * Each write carries its own deadline, so a slow GitHub cannot hold the
-     * shutdown open on a label nobody is waiting for.
+     * Each write starts its deadline after the queue wait.
+     * Its deadline still bounds slow GitHub operations.
      */
     const labelDeadline = (): AbortSignal => AbortSignal.timeout(30_000)
     const labelWrite = (label: string, write: Promise<Result<void, string>>): void => {
@@ -938,8 +969,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       const item = agentLabelItem(task)
       if (item === undefined) return
       labelWrite(
-        'Running label',
-        workerGithub.stampAgentLabel(item.repositoryMapping, item.itemNumber, 'RUNNING', labelDeadline()),
+        `${item.repositoryMapping.github}#${item.itemNumber}: Running label`,
+        workerGithub.stampAgentLabel(item.repositoryMapping, item.itemNumber, 'RUNNING', labelDeadline),
       )
     }
     const settleTask = (taskId: string, task: object): void => {
@@ -947,8 +978,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       const item = agentLabelItem(task)
       if (item === undefined) return
       labelWrite(
-        'Running label',
-        workerGithub.clearRunningLabel(item.repositoryMapping, item.itemNumber, labelDeadline()),
+        `${item.repositoryMapping.github}#${item.itemNumber}: Running label`,
+        workerGithub.clearRunningLabel(item.repositoryMapping, item.itemNumber, labelDeadline),
       )
     }
     const validateMapping = async (mapping: RepositoryMapping) => {
@@ -998,7 +1029,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         },
       },
       checkRuns: { publisher: workerGithub, report: reportCheckRun },
-      findingThreads,
       commentControls: webhookControls.available,
       loggedFindings: store,
       loggedFindingControls: webhookControls.available,
@@ -1270,7 +1300,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           },
         },
         checkRuns: { publisher: workerGithub, report: reportCheckRun },
-        findingThreads,
         github: workerGithub,
         intervalMilliseconds: 2_000,
         leaseMilliseconds: 2 * 60_000,
@@ -1609,6 +1638,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         // Everything below answers a GitHub observation, so a routines-only
         // machine skips it and never reads or writes another machine's work.
         if (!config.triggers.includes('github')) return
+        if (config.mutationsEnabled) {
+          const synced = await guarded('Finding thread sync', () => findingThreadSync.run(signal), [])
+          synced.forEach(({ repository, number, outcome }) => {
+            if (outcome._tag === 'Failed')
+              options.logger.error(`${repository}#${number}: finding thread sync failed: ${outcome.message}`)
+            else if (outcome.posted > 0 || outcome.resolved > 0)
+              options.logger.info(
+                `${repository}#${number}: synced findings, ${outcome.posted} posted, ${outcome.resolved} resolved.`,
+              )
+          })
+        }
         if (config.mutationsEnabled && config.issueBatches) {
           const batches = await guarded(
             'Batch planning',
@@ -1644,21 +1684,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           'review_rerun',
           reruns.flatMap((result) => (result._tag === 'Err' ? [result.error] : [])),
         )
-        const snapshot = store.getDashboardSnapshot(now().toISOString())
-        // A Reserve or an unreadable provider stops every claim by design, and
-        // said so nowhere outside the Dashboard. Twenty seven Tasks waited seven
-        // hours behind one with no log line and no Incident to read.
-        const blocked = agentStartBlockedReason({
-          startState: resolveAgentStartState(snapshot),
-          queuedTasks: snapshot.tasks.filter((task) => task.state._tag === 'Queued').length,
-          runningTasks: snapshot.tasks.filter(
-            (task) => task.state._tag === 'Running' || task.state._tag === 'Publishing',
-          ).length,
-          agentSelection: snapshot.agentSelection,
-          providerCapacities: snapshot.providerCapacities,
+        const snapshot = getDashboardSnapshot(now().toISOString())
+        reportAgentCapacity(snapshot, {
+          log: (message) => options.logger.info(message),
+          record: (messages) => recordPassIncidents('agent_capacity', messages),
         })
-        if (blocked !== null) options.logger.info(blocked)
-        recordPassIncidents('agent_capacity', blocked === null ? [] : [blocked])
         const statusSync = await guarded('Pull request status sync', () => pullRequestStatuses.sync(snapshot, signal), {
           checked: 0,
           errors: [],
@@ -1682,6 +1712,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                 await reconcilePackageReleases({
                   repository,
                   webhookReady: releaseWebhookReady,
+                  mayPublish: () =>
+                    store.getAgentControl()._tag !== 'Paused' && store.mayPublishPackageRelease(repository.github),
                   store,
                   now: () => now().getTime(),
                   signal,
@@ -1716,14 +1748,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                           ? review
                           : { _tag: 'None' }
                       },
-                      assertLease: () => {
-                        if (
-                          store.getAgentControl()._tag === 'Paused' ||
-                          !store.mayPublishPackageRelease(repository.github)
-                        )
-                          throw new Error('Package releases are paused for this repository.')
-                        assertLease()
-                      },
+                      assertLease,
                     }),
                 })
               },
@@ -2001,7 +2026,65 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           },
         })
       : undefined
+  const browserAuth =
+    config.storage.path !== ':memory:' && new URL(config.server.allowedOrigin).protocol === 'https:'
+      ? createBrowserAuthorities({
+          directory: join(dirname(config.storage.path), 'browser-auth'),
+          origin: config.server.allowedOrigin,
+          privateTerminalHost: config.server.agentSessions === true,
+          publicTerminalHost: config.server.publicTerminalSessions === true,
+          ...(config.server.browserOrigins?.[0] ? { publicOrigin: config.server.browserOrigins[0] } : {}),
+          publicPasswordLogin: config.server.publicBrowserPasswordLogin !== false,
+          password: options.dashboardPassword,
+          now: () => now().getTime(),
+        })
+      : undefined
+  if (config.server.publicBrowserPasswordLogin === false && !browserAuth?.public)
+    throw new Error('Public Passkey login requires persistent storage and an HTTPS private origin.')
+  if (
+    config.server.publicTerminalSessions === true &&
+    (config.server.agentSessions !== true || config.server.publicBrowserPasswordLogin !== false || !browserAuth?.public)
+  )
+    throw new Error('Public terminals require private Agent sessions and public Passkey-only login.')
+  // The poll pass and Control API must read the same live provider capacity.
+  // Stored snapshots carry no provider readings.
+  function getDashboardSnapshot(at: string): DashboardSnapshot {
+    const stored = dashboardSnapshotForTriggers(
+      pullRequestStatuses.apply(mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot())),
+      config.triggers,
+    )
+    const snapshot = { ...stored, agentProfile: runtime().profile }
+    const providerCapacities = AGENT_PROVIDER_NAMES.map((provider) => ({
+      provider,
+      capacity: capacity.read(
+        provider,
+        snapshot.agentSelection._tag === 'Automatic'
+          ? (automaticSelection(provider).model ?? agentProfile(provider).roles.routine_scan.model)
+          : snapshot.agentProfile.provider === provider
+            ? snapshot.agentProfile.roles.routine_scan.model
+            : agentProfile(provider).roles.routine_scan.model,
+      ),
+      reservePercent: config.agent.reservePercent[provider],
+    }))
+    const classification =
+      options.classification === undefined
+        ? undefined
+        : { model: options.classification.model, gatewayId: options.classification.gatewayId ?? 'default' }
+    const current = {
+      ...snapshot,
+      agentProviderOrder: config.agent.order,
+      providerCapacities,
+      agentModelCapacities: {
+        opencodeGo: capacity.read('opencode', 'opencode-go/glm-5.3-flash'),
+        zaiCodingPlan: capacity.read('opencode', 'zai-coding-plan/glm-5.3-flash'),
+      },
+      githubRateLimits: rateLimits.read(),
+      ...(classification === undefined ? {} : { classification }),
+    }
+    return { ...current, agentStart: resolveAgentStartState(current) }
+  }
   const app = createAgentApp({
+    ...(browserAuth ? { browserAuth } : {}),
     pullRequestDiff: createGitHubPullRequestDiff({
       tokens: routedTokens,
       now: () => now().getTime(),
@@ -2067,45 +2150,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       resolveIncident: store.resolveIncident,
       listRoutines: store.listRoutines,
       openRoutineRun: store.openRoutineRun,
-      getDashboardSnapshot: (at) => {
-        const stored = dashboardSnapshotForTriggers(
-          pullRequestStatuses.apply(
-            mergeExternalWatchSnapshot(store.getDashboardSnapshot(at), externalWatch.snapshot()),
-          ),
-          config.triggers,
-        )
-        const snapshot = { ...stored, agentProfile: runtime().profile }
-        const providerCapacities = AGENT_PROVIDER_NAMES.map((provider) => ({
-          provider,
-          capacity: capacity.read(
-            provider,
-            snapshot.agentSelection._tag === 'Automatic'
-              ? (automaticSelection(provider).model ?? agentProfile(provider).roles.routine_scan.model)
-              : snapshot.agentProfile.provider === provider
-                ? snapshot.agentProfile.roles.routine_scan.model
-                : agentProfile(provider).roles.routine_scan.model,
-          ),
-          reservePercent: config.agent.reservePercent[provider],
-        }))
-        const classification =
-          options.classification === undefined
-            ? undefined
-            : { model: options.classification.model, gatewayId: options.classification.gatewayId ?? 'default' }
-        const current = {
-          ...snapshot,
-          agentProviderOrder: config.agent.order,
-          providerCapacities,
-          agentModelCapacities: {
-            opencodeGo: capacity.read('opencode', 'opencode-go/glm-5.3-flash'),
-            zaiCodingPlan: capacity.read('opencode', 'zai-coding-plan/glm-5.3-flash'),
-          },
-          githubRateLimits: rateLimits.read(),
-          ...(classification === undefined ? {} : { classification }),
-        }
-        return { ...current, agentStart: resolveAgentStartState(current) }
-      },
+      getDashboardSnapshot,
       getStats: store.getStats,
       getOpenPullRequestStatus: store.getOpenPullRequestStatus,
+      getOpenPullRequest: store.getOpenPullRequest,
+      getTask: store.getTask,
+      listTasks: store.listTasks,
+      listCompletionTasks: store.listCompletionTasks,
+      listIncidents: store.listIncidents,
       getOpenIssueStatus: store.getOpenIssueStatus,
       listWorkflowEvents: store.listWorkflowEvents,
       listReviewRuns: store.listReviewRuns,
@@ -2138,6 +2190,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           origin: config.server.allowedOrigin,
           listenOrigin,
           password: options.dashboardPassword,
+          ...(browserAuth ? { browserAuth: browserAuth.private } : {}),
+          ...(config.server.publicTerminalSessions === true && browserAuth?.public
+            ? { publicBrowserAuth: browserAuth.public }
+            : {}),
           memoryGiB: config.agent.memoryPerAgentGiB,
           admissionCli: maintenanceAdmission.capacityCommand,
           protectedPaths: [
@@ -2156,6 +2212,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     ...(terminals === undefined ? {} : { terminals: terminals.routes }),
   }).catch((error) => {
     void terminals?.close()
+    browserAuth?.close()
     store.close()
     throw error
   })
@@ -2344,6 +2401,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       dashboardShutdown.abort()
       await terminals?.close()
       await Promise.all([server.close(), webhookServer?.close() ?? Promise.resolve()])
+      browserAuth?.close()
       requestCounts.stop()
       store.close()
     },

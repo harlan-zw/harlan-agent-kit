@@ -5,7 +5,7 @@ handle @agent {
 	redir @agentHttp https://agent.harlanzw.com{uri} 308
 
 	# Interactive desktop sessions are reachable only through Tailscale.
-	@desktopSessions path /api/sessions /api/sessions/* /api/desktop/sessions /api/desktop/sessions/* /api/terminal /api/terminal/* /api/items/pull-request-diff
+	@desktopSessions path /api/sessions /api/sessions/* /api/desktop/sessions /api/desktop/sessions/* /api/items/pull-request-diff
 	handle @desktopSessions {
 		respond "Connect through Tailscale to use desktop sessions." 403
 	}
@@ -18,6 +18,12 @@ handle @agent {
 	}
 
 	handle {
+		@agentForeignWebSocket {
+			header_regexp Upgrade (?i)^websocket$
+			not header Origin https://agent.harlanzw.com
+		}
+		respond @agentForeignWebSocket "Request origin is not allowed." 403
+
 		@agentForeignOrigin {
 			not method GET HEAD
 			not header Origin https://agent.harlanzw.com

@@ -19,6 +19,8 @@ export async function createTerminalRuntime(
     controller: boolean
     origins?: string[]
     authorize?: Parameters<typeof createTerminalServer>[0]['authorize']
+    browserAuth?: Parameters<typeof createTerminalServer>[0]['browserAuth']
+    publicBrowserAuth?: Parameters<typeof createTerminalServer>[0]['publicBrowserAuth']
     diff?: Parameters<typeof createTerminalServer>[0]['diff']
     lockEntry?: string
     observer?: Parameters<typeof createTerminalServer>[0]['observer']
@@ -57,6 +59,7 @@ export async function createTerminalRuntime(
   async function initialize() {
     const artifact = await buildTerminalArtifact({
       source: config.helperSource,
+      claimScript: config.claimScript,
       directory: join(config.directory, 'artifacts'),
     })
     const providers = {} as Record<TerminalProvider, { executable: string; argv: string[]; available: boolean }>
@@ -81,10 +84,11 @@ export async function createTerminalRuntime(
       ),
       providers,
       artifact,
+      claimScript: artifact.claimScript,
       bootId: (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim(),
       admission: createTerminalAdmissionCli(config.admissionCli),
       processHost: createTerminalSystemdHost(process.execPath),
-      ...createTerminalWorktreeAdapter(config.claimScript),
+      ...createTerminalWorktreeAdapter(artifact.claimScript),
       ready: (intent) => probeTerminalHelper(config.directory, intent),
       now: () => new Date(),
       log: (message, cause) => console.error(message, cause instanceof Error ? cause.message : String(cause)),
@@ -97,6 +101,8 @@ export async function createTerminalRuntime(
       staticDirectory: config.staticDirectory,
       ...(config.origins ? { origins: config.origins } : {}),
       ...(config.authorize ? { authorize: config.authorize } : {}),
+      ...(config.browserAuth ? { browserAuth: config.browserAuth } : {}),
+      ...(config.publicBrowserAuth ? { publicBrowserAuth: config.publicBrowserAuth } : {}),
       ...(config.diff ? { diff: config.diff } : {}),
       ...(config.observer ? { observer: config.observer } : {}),
       now: Date.now,

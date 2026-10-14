@@ -20,7 +20,6 @@ from gi.repository import AyatanaAppIndicator3, GLib, Gtk
 
 RUNNER_LABEL = 'rocks.wolfstar.desktop-runner=true'
 RUNNER_HOSTS_ENV = 'WOLFSTAR_GITHUB_RUNNER_HOSTS'
-RUNNER_REPOSITORIES_ENV = 'WOLFSTAR_GITHUB_RUNNER_REPOSITORIES'
 JOBS_REFRESH_SECONDS = 30
 RUNNER_ICON = Path(__file__).resolve().parent.parent / 'assets/github-runner-icon.svg'
 
@@ -52,19 +51,6 @@ def parse_runner_hosts(value):
     if not hosts:
         raise ValueError('Configure at least one self-hosted runner location.')
     return hosts
-
-
-def parse_repositories(value):
-    repositories = []
-    for repository in value.split(','):
-        repository = repository.strip()
-        if not repository:
-            continue
-        if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
-            raise ValueError(f'GitHub repository {repository} must use OWNER/REPOSITORY.')
-        if repository not in repositories:
-            repositories.append(repository)
-    return repositories
 
 
 def host_systemctl_command(host, action):
@@ -250,84 +236,86 @@ def merge_runner_source(previous, current, now=None):
     return {'_tag': 'Available', 'hosts': hosts}
 
 
-WORKFLOW_RUNS_PAGE_SIZE = 50
-WORKFLOW_JOBS_PAGE_SIZE = 100
-
-
-def github_api(path):
-    completed = subprocess.run(
-        ['gh', 'api', path, '--method', 'GET'],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=8,
+def request_runner_snapshot(host, run):
+    docker_url = urlparse(host['dockerHost'])
+    system = host.get('control', {}).get('scope') == 'system'
+    path = '/run/github-runner/wolfstar-desktop-github-runner/status.json' if system else str(
+        Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')) / 'wolfstar-desktop-github-runner/status.json'
     )
-    return json.loads(completed.stdout)
+    command = ['cat', '--', path]
+    if docker_url.scheme == 'ssh':
+        if docker_url.hostname is None or not system:
+            raise ValueError('The remote runner snapshot requires system service control.')
+        target = f'{docker_url.username}@{docker_url.hostname}' if docker_url.username else docker_url.hostname
+        prefix = ['ssh']
+        if docker_url.port is not None:
+            prefix.extend(['-p', str(docker_url.port)])
+        command = [*prefix, target, 'sudo', '-n', *command]
+    elif docker_url.scheme != 'unix':
+        raise ValueError('The runner snapshot requires an SSH or Unix Docker URL.')
+    completed = run(command, check=True, capture_output=True, text=True, timeout=8)
+    snapshot = json.loads(completed.stdout)
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get('workflowJobs'), list):
+        raise ValueError('The runner snapshot has no workflow jobs.')
+    return snapshot['workflowJobs']
 
 
-def collect_workflow_jobs(repository, runs, fetch_jobs):
-    jobs = []
-    for run in runs:
-        if run.get('status') not in ('queued', 'in_progress'):
-            continue
-        for job in fetch_jobs(run['id']):
-            if job.get('status') not in ('queued', 'in_progress') or 'self-hosted' not in job.get('labels', []):
-                continue
-            jobs.append({
-                '_tag': 'Queued' if job['status'] == 'queued' else 'Running',
-                'repository': repository,
-                'workflow': run.get('name', 'Workflow'),
-                'name': job.get('name', 'Job'),
-                'url': job.get('html_url') or run.get('html_url'),
-            })
-    return jobs
+def parse_workflow_observation(observation, now):
+    if not isinstance(observation, dict) or not isinstance(observation.get('repository'), str):
+        raise ValueError('The runner job observation is invalid.')
+    repository = observation['repository']
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
+        raise ValueError('The runner job repository is invalid.')
+    if observation.get('_tag') == 'Unavailable':
+        if not isinstance(observation.get('reason'), str):
+            raise ValueError('The runner job error is invalid.')
+        return observation
+    observed_at = observation.get('observedAt')
+    if observation.get('_tag') != 'Available' or type(observed_at) not in (int, float) or not isinstance(observation.get('jobs'), list):
+        raise ValueError('The runner job observation is invalid.')
+    if not now * 1000 - 600000 <= observed_at <= now * 1000 + 60000:
+        raise ValueError('The runner job observation is stale.')
+    for job in observation['jobs']:
+        if not isinstance(job, dict) or job.get('_tag') not in ('Queued', 'Running') or job.get('repository') != repository:
+            raise ValueError('The runner workflow job is invalid.')
+        if type(job.get('id')) is not int or job['id'] <= 0 or not all(isinstance(job.get(key), str) for key in ('name', 'workflow', 'url')):
+            raise ValueError('The runner workflow job is invalid.')
+        url = urlparse(job['url'])
+        if url.scheme != 'https' or url.hostname != 'github.com' or url.username is not None or url.password is not None:
+            raise ValueError('The runner workflow job URL is invalid.')
+    return observation
 
 
-def request_run_jobs(repository, run_id):
-    jobs = []
-    page = 1
-    while True:
-        fetched = github_api(
-            f'repos/{repository}/actions/runs/{run_id}/jobs?page={page}&per_page={WORKFLOW_JOBS_PAGE_SIZE}',
-        ).get('jobs', [])
-        jobs.extend(fetched)
-        if len(fetched) < WORKFLOW_JOBS_PAGE_SIZE:
-            return jobs
-        page += 1
-
-
-def request_workflow_jobs(repositories, on_error=None):
-    def request_repository(repository):
+def request_workflow_jobs(hosts, on_error=None, run=None, now=None):
+    run = run or subprocess.run
+    now = time.time() if now is None else now
+    observations = {}
+    failures = {}
+    for host in hosts:
         try:
-            jobs = []
-            for status in ('queued', 'in_progress'):
-                page = 1
-                while True:
-                    runs = github_api(
-                        f'repos/{repository}/actions/runs?status={status}&page={page}&per_page={WORKFLOW_RUNS_PAGE_SIZE}',
-                    ).get('workflow_runs', [])
-                    jobs.extend(collect_workflow_jobs(
-                        repository,
-                        runs,
-                        lambda run_id, current=repository: request_run_jobs(current, run_id),
-                    ))
-                    if len(runs) < WORKFLOW_RUNS_PAGE_SIZE:
-                        break
-                    page += 1
-            return jobs, None
+            rows = request_runner_snapshot(host, run)
         except Exception as caught:
-            return [], f'{repository} · Jobs unavailable · {caught}'
-
-    if not repositories:
-        return []
-    with ThreadPoolExecutor(max_workers=min(8, len(repositories))) as executor:
-        results = list(executor.map(request_repository, repositories))
-    jobs = []
-    for repository_jobs, error in results:
-        jobs.extend(repository_jobs)
-        if error is not None and on_error is not None:
-            on_error(error)
-    return jobs
+            if on_error is not None:
+                on_error(f"{host['name']} · Jobs unavailable · {caught}")
+            continue
+        for row in rows:
+            try:
+                observation = parse_workflow_observation(row, now)
+                repository = observation['repository']
+                if observation['_tag'] == 'Unavailable':
+                    failures[repository] = observation['reason']
+                    continue
+                previous = observations.get(repository)
+                if previous is None or observation['observedAt'] > previous['observedAt']:
+                    observations[repository] = observation
+            except Exception as caught:
+                if on_error is not None:
+                    on_error(f"{host['name']} · Jobs unavailable · {caught}")
+    if on_error is not None:
+        for repository, reason in failures.items():
+            if repository not in observations:
+                on_error(f'{repository} · Jobs unavailable · {reason}')
+    return [job for observation in observations.values() for job in observation['jobs']]
 
 
 def source_runners(source):
@@ -578,7 +566,6 @@ def main():
         RUNNER_HOSTS_ENV,
         'Desktop=unix:///var/run/docker.sock',
     ))
-    configured_repositories = parse_repositories(os.environ.get(RUNNER_REPOSITORIES_ENV, ''))
     runtime = Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))
     lock = (runtime / 'wolfstar-github-runner-indicator.lock').open('w')
     try:
@@ -623,16 +610,11 @@ def main():
         current_source = read_runner_source(lambda: request_runner_hosts(runner_hosts))
         source = merge_runner_source(runner_cache['source'], current_source)
         runner_cache['source'] = source
-        repositories = list(configured_repositories)
-        for runner in source_runners(source):
-            repository = runner['RunnerLabels'].get('rocks.wolfstar.desktop-runner.repository')
-            if repository is not None and repository not in repositories:
-                repositories.append(repository)
         stale = time.monotonic() - jobs_cache['updatedAt'] >= JOBS_REFRESH_SECONDS
         if stale:
             GLib.idle_add(apply_state, source, jobs_cache['source'], action_error, False)
             errors = []
-            jobs = request_workflow_jobs(repositories, errors.append)
+            jobs = request_workflow_jobs(runner_hosts, errors.append)
             jobs_cache['source'] = (
                 {'_tag': 'Unavailable', 'message': '\n'.join(errors)}
                 if errors and not jobs

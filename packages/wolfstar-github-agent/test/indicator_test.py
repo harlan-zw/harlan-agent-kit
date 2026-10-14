@@ -76,6 +76,60 @@ def selection_dashboard(selection, provider):
 
 
 class RunnerActivityTest(unittest.TestCase):
+    def test_reads_shared_jobs_without_a_github_request(self):
+        host = {'name': 'Desktop', 'dockerHost': 'unix:///var/run/docker.sock'}
+        job = {'id': 9, '_tag': 'Queued', 'repository': 'wolfstar-project/example', 'workflow': 'Code', 'name': 'test', 'url': 'https://github.com/job/9'}
+        def run(command, **_kwargs):
+            self.assertEqual(command[0], 'cat')
+            return subprocess.CompletedProcess(command, 0, json.dumps({'workflowJobs': [{'_tag': 'Available', 'repository': 'wolfstar-project/example', 'observedAt': 1000000, 'jobs': [job]}]}))
+        self.assertEqual(runner_indicator.request_workflow_jobs([host], run=run, now=1000), [job])
+
+    def test_prefers_the_latest_complete_repository_observation(self):
+        hosts = [{'name': name, 'dockerHost': 'unix:///var/run/docker.sock'} for name in ('Hogwild', 'Desktop')]
+        job = {'id': 9, '_tag': 'Running', 'repository': 'wolfstar-project/example', 'workflow': 'Code', 'name': 'test', 'url': 'https://github.com/job/9'}
+        snapshots = iter([
+            {'workflowJobs': [{'_tag': 'Available', 'repository': 'wolfstar-project/example', 'observedAt': 999000, 'jobs': [job]}]},
+            {'workflowJobs': [{'_tag': 'Available', 'repository': 'wolfstar-project/example', 'observedAt': 1000000, 'jobs': []}]},
+        ])
+        def run(command, **_kwargs):
+            return subprocess.CompletedProcess(command, 0, json.dumps(next(snapshots)))
+        self.assertEqual(runner_indicator.request_workflow_jobs(hosts, run=run, now=1000), [])
+
+    def test_preserves_jobs_when_the_other_host_is_unavailable(self):
+        hosts = [{'name': name, 'dockerHost': 'unix:///var/run/docker.sock'} for name in ('Hogwild', 'Desktop')]
+        job = {'id': 9, '_tag': 'Running', 'repository': 'wolfstar-project/example', 'workflow': 'Code', 'name': 'test', 'url': 'https://github.com/job/9'}
+        calls = []
+        errors = []
+        def run(command, **_kwargs):
+            calls.append(command)
+            if len(calls) == 1:
+                raise subprocess.CalledProcessError(1, command)
+            return subprocess.CompletedProcess(command, 0, json.dumps({'workflowJobs': [{'_tag': 'Available', 'repository': 'wolfstar-project/example', 'observedAt': 1000000, 'jobs': [job]}]}))
+        self.assertEqual(runner_indicator.request_workflow_jobs(hosts, errors.append, run, 1000), [job])
+        self.assertEqual(len(errors), 1)
+
+    def test_reports_stale_and_invalid_observations_without_fetching_github(self):
+        host = {'name': 'Desktop', 'dockerHost': 'unix:///var/run/docker.sock'}
+        for observation in (
+            {'_tag': 'Available', 'repository': 'wolfstar-project/example', 'observedAt': 1, 'jobs': []},
+            {'_tag': 'Available', 'repository': 'wolfstar-project/example', 'observedAt': True, 'jobs': []},
+            {'_tag': 'Available', 'repository': 'wolfstar-project/example', 'observedAt': 1000000, 'jobs': [{'id': 9, '_tag': 'Running', 'repository': 'wolfstar-project/example', 'name': 'test', 'workflow': 'Code', 'url': 'file:///etc/passwd'}]},
+            {'_tag': 'Unavailable', 'repository': 'wolfstar-project/example', 'reason': 'Runner demand is unavailable.'},
+        ):
+            errors = []
+            def run(command, **_kwargs):
+                self.assertEqual(command[0], 'cat')
+                return subprocess.CompletedProcess(command, 0, json.dumps({'workflowJobs': [observation]}))
+            self.assertEqual(runner_indicator.request_workflow_jobs([host], errors.append, run, 1000), [])
+            self.assertEqual(len(errors), 1)
+
+    def test_reads_remote_shared_jobs_with_the_configured_host_identity(self):
+        host = runner_indicator.parse_runner_hosts('Hogwild=ssh://hogwild-admin|system:hogwild-github-runner.service')[0]
+        def run(command, **_kwargs):
+            self.assertEqual(command, ['ssh', 'hogwild-admin', 'sudo', '-n', 'cat', '--', '/run/github-runner/wolfstar-desktop-github-runner/status.json'])
+            return subprocess.CompletedProcess(command, 0, json.dumps({'workflowJobs': []}))
+        self.assertEqual(runner_indicator.request_workflow_jobs([host], run=run), [])
+
     def test_parses_named_runner_hosts_for_future_balancing(self):
         self.assertEqual(runner_indicator.parse_runner_hosts(
             'Hogwild=ssh://hogwild|system:hogwild-github-runner.service,'
@@ -244,138 +298,6 @@ class RunnerActivityTest(unittest.TestCase):
             '_tag': 'Unavailable',
             'message': 'Docker is unavailable',
         })
-
-    def test_lists_only_active_self_hosted_jobs(self):
-        runs = [
-            {'id': 12, 'name': 'Code', 'status': 'in_progress', 'html_url': 'https://github.com/run/12'},
-            {'id': 13, 'name': 'Docs', 'status': 'completed', 'html_url': 'https://github.com/run/13'},
-        ]
-
-        result = runner_indicator.collect_workflow_jobs(
-            'wolfstar-project/example',
-            runs,
-            lambda _run_id: [
-                {
-                    'name': 'test',
-                    'status': 'queued',
-                    'labels': ['self-hosted', 'wolfstar-desktop-ci'],
-                    'html_url': 'https://github.com/job/1',
-                },
-                {
-                    'name': 'cloud',
-                    'status': 'in_progress',
-                    'labels': ['ubuntu-latest'],
-                    'html_url': 'https://github.com/job/2',
-                },
-            ],
-        )
-
-        self.assertEqual(result, [{
-            '_tag': 'Queued',
-            'repository': 'wolfstar-project/example',
-            'workflow': 'Code',
-            'name': 'test',
-            'url': 'https://github.com/job/1',
-        }])
-
-    def test_keeps_jobs_when_one_repository_fails(self):
-        errors = []
-
-        def fake_github_api(path):
-            if path.startswith('repos/broken/repo'):
-                raise RuntimeError('renamed repository')
-            if '/jobs' in path:
-                return {'jobs': [{
-                    'name': 'test',
-                    'status': 'queued',
-                    'labels': ['self-hosted'],
-                    'html_url': 'https://github.com/job/9',
-                }]}
-            if 'status=queued' in path:
-                return {'workflow_runs': [
-                    {'id': 7, 'name': 'Code', 'status': 'in_progress', 'html_url': 'https://github.com/run/7'},
-                ]}
-            return {'workflow_runs': []}
-
-        with patch.object(runner_indicator, 'github_api', side_effect=fake_github_api):
-            jobs = runner_indicator.request_workflow_jobs(['good/repo', 'broken/repo'], errors.append)
-
-        self.assertEqual(jobs, [{
-            '_tag': 'Queued',
-            'repository': 'good/repo',
-            'workflow': 'Code',
-            'name': 'test',
-            'url': 'https://github.com/job/9',
-        }])
-        self.assertEqual(errors, ['broken/repo · Jobs unavailable · renamed repository'])
-
-    def test_follows_pagination_for_queued_jobs_beyond_the_first_page(self):
-        def fake_github_api(path):
-            if path == 'repos/wolfstar-project/example/actions/runs?status=queued&page=1&per_page=50':
-                return {'workflow_runs': [
-                    {'id': index, 'name': 'Recent', 'status': 'in_progress', 'html_url': f'https://github.com/run/{index}'}
-                    for index in range(50)
-                ]}
-            if path == 'repos/wolfstar-project/example/actions/runs?status=queued&page=2&per_page=50':
-                return {'workflow_runs': [
-                    {'id': 99, 'name': 'Old', 'status': 'queued', 'html_url': 'https://github.com/run/99'},
-                ]}
-            if '/runs/99/jobs' in path:
-                return {'jobs': [{
-                    'name': 'test',
-                    'status': 'queued',
-                    'labels': ['self-hosted'],
-                    'html_url': 'https://github.com/job/99',
-                }]}
-            return {'jobs': []}
-
-        with patch.object(runner_indicator, 'github_api', side_effect=fake_github_api):
-            jobs = runner_indicator.request_workflow_jobs(['wolfstar-project/example'])
-
-        self.assertEqual(jobs, [{
-            '_tag': 'Queued',
-            'repository': 'wolfstar-project/example',
-            'workflow': 'Old',
-            'name': 'test',
-            'url': 'https://github.com/job/99',
-        }])
-
-    def test_follows_pagination_for_jobs_within_one_run(self):
-        requests = []
-
-        def job(index):
-            return {
-                'name': f'test {index}',
-                'status': 'in_progress',
-                'labels': ['self-hosted'],
-                'html_url': f'https://github.com/job/{index}',
-            }
-
-        def fake_github_api(path):
-            requests.append(path)
-            if path == 'repos/wolfstar-project/example/actions/runs?status=queued&page=1&per_page=50':
-                return {'workflow_runs': [
-                    {'id': 7, 'name': 'Code', 'status': 'in_progress', 'html_url': 'https://github.com/run/7'},
-                ]}
-            if path == 'repos/wolfstar-project/example/actions/runs?status=in_progress&page=1&per_page=50':
-                return {'workflow_runs': []}
-            if path == 'repos/wolfstar-project/example/actions/runs/7/jobs?page=1&per_page=100':
-                return {'jobs': [job(index) for index in range(100)]}
-            if path == 'repos/wolfstar-project/example/actions/runs/7/jobs?page=2&per_page=100':
-                return {'jobs': [job(index) for index in range(100, 135)]}
-            raise AssertionError(f'unexpected GitHub API request {path}')
-
-        with patch.object(runner_indicator, 'github_api', side_effect=fake_github_api):
-            jobs = runner_indicator.request_workflow_jobs(['wolfstar-project/example'])
-
-        self.assertEqual(len(jobs), 135)
-        self.assertEqual(
-            [path for path in requests if '/jobs' in path],
-            [
-                'repos/wolfstar-project/example/actions/runs/7/jobs?page=1&per_page=100',
-                'repos/wolfstar-project/example/actions/runs/7/jobs?page=2&per_page=100',
-            ],
-        )
 
     def test_stops_a_remote_runner_service_without_waiting_for_jobs(self):
         commands = []

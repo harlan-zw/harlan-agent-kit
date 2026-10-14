@@ -44,8 +44,18 @@ it('resolves the current pnpm Codex package rather than a stored provider versio
   )
   await mkdir(dirname(binary), { recursive: true })
   await writeFile(binary, 'native', { mode: 0o755 })
+  const host = join(dirname(binary), 'codex-code-mode-host')
+  await writeFile(host, 'native host', { mode: 0o755 })
   await writeFile(join(home, '.local/bin/codex'), `#!/bin/sh\n# cmd-shim-target=${packageRoot}/bin/codex.js\n`, {
     mode: 0o755,
   })
   expect((await resolveWorkerHostTools(home, ['/usr/bin'])).codex).toBe(binary)
+  expect((await resolveWorkerHostTools(home, ['/usr/bin']))['codex-code-mode-host']).toBe(host)
+})
+
+it('refuses Codex without its matching command host before an Agent starts', async () => {
+  const home = await fixture()
+  const binary = join(home, '.local/bin/codex')
+  await writeFile(binary, 'native', { mode: 0o755 })
+  await expect(resolveWorkerHostTools(home, [])).rejects.toThrow('Codex command host is missing')
 })

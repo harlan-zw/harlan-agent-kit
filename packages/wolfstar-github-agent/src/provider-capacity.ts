@@ -202,9 +202,9 @@ export function readZaiApiKey(configPath: string = OPENCODE_CONFIG_PATH): string
   try {
     const raw = readFileSync(configPath, 'utf8')
     const config = JSON.parse(raw) as {
-      provider?: Record<string, { options?: { apiKey?: unknown } }>
+      providers?: Record<string, { settings?: { apiKey?: unknown } }>
     }
-    const key = config.provider?.['zai-coding-plan']?.options?.apiKey
+    const key = config.providers?.['zai-coding-plan']?.settings?.apiKey
     return typeof key === 'string' && key.trim() !== '' ? key.trim() : null
   } catch {
     // No opencode configuration means the plan is not set up here. Not a fault.
@@ -280,19 +280,18 @@ export interface ProviderCapacitySourceOptions {
 }
 
 /** Go has no supported limit-reading endpoint. Check its existing credential without exposing it. */
-export function readOpencodeGoCapacity(
-  authPath = join(homedir(), '.local/share/opencode/auth.json'),
-): ProviderCapacity {
+export function readOpencodeGoCapacity(configPath = OPENCODE_CONFIG_PATH): ProviderCapacity {
   let raw: string
   try {
-    raw = readFileSync(authPath, 'utf8')
+    raw = readFileSync(configPath, 'utf8')
   } catch (error) {
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')
       return { _tag: 'Unavailable', reason: 'Connect OpenCode Go before starting a scan.' }
     throw error
   }
-  const auth = JSON.parse(raw) as Record<string, { key?: unknown }>
-  return typeof auth['opencode-go']?.key === 'string' && auth['opencode-go'].key.trim() !== ''
+  const config = JSON.parse(raw) as { providers?: Record<string, { settings?: { apiKey?: unknown } }> }
+  const key = config.providers?.['opencode-go']?.settings?.apiKey
+  return typeof key === 'string' && key.trim() !== ''
     ? { _tag: 'Unpublished' }
     : { _tag: 'Unavailable', reason: 'Connect OpenCode Go before starting a scan.' }
 }

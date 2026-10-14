@@ -563,7 +563,7 @@ export async function prepareAgentSandbox(input: {
       VITEST_MAX_WORKERS: '2',
       // Native watcher startup can block OpenCode's event loop. Controller turns use tools to read current files.
       ...(input.provider === 'opencode'
-        ? { OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true', OPENCODE_DB: '/run/agent/opencode-database/opencode.db' }
+        ? { OPENCODE_FILEWATCHER_DISABLE: 'true', OPENCODE_DB: '/run/agent/opencode-database/opencode.db' }
         : {}),
     }
     // Repository variables belong inside the boundary. Loader variables must

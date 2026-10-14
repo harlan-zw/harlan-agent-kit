@@ -64,6 +64,11 @@ wolfstar-github-agent control reviews --repository OWNER/REPOSITORY --number NUM
 
 Commands print one JSON value. Tagged errors exit with status 1.
 `status` returns `{ health, state }`.
+`tasks`, `incidents`, and `activity` use focused Service reads.
+`activity` returns redacted live activity for a Running or Publishing Task.
+Other known Task states return `TaskActivityUnavailable`, including the current state.
+Only an unknown Task returns `TaskNotFound`.
+Use `reviews` for stored Review findings after a Task completes.
 `reviews` returns `{ runs }`, preserving findings and gates.
 The head filter requires all 40 characters.
 An empty `runs` array means no stored Review matches that query.
@@ -94,7 +99,9 @@ For paired Service updates, run `pnpm service:hogwild:update`.
 The helper holds one local lock through the desktop update.
 Another update or restart on that host fails before it reaches the Service.
 During drain, the helper reports active Tasks, occupied Agent slots, and elapsed seconds.
+It names each active Task, its repository, issue or pull request, state, and available progress label.
 It reports changed counts and a heartbeat every 30 seconds.
+It also reports changed Task details when counts stay equal.
 After desktop restart, it requires a fresh report with the current protocol.
 If that check fails, inspect the desktop unit and Service connection.
 Its durable Update blocks new Tasks before file sync.

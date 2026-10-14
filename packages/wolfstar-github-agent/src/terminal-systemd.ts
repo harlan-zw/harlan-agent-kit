@@ -10,6 +10,8 @@ export interface TerminalArtifact {
   digest: string
   wasm: string
   wasmDigest: string
+  claimScript: string
+  claimDigest: string
 }
 export interface TerminalScope {
   loadState: string
@@ -33,18 +35,27 @@ export async function verifyTerminalArtifact(artifact: TerminalArtifact) {
   if (
     !isAbsolute(artifact.entry) ||
     !isAbsolute(artifact.wasm) ||
+    !isAbsolute(artifact.claimScript) ||
     !/^[a-f\d]{64}$/.test(artifact.digest) ||
-    !/^[a-f\d]{64}$/.test(artifact.wasmDigest)
+    !/^[a-f\d]{64}$/.test(artifact.wasmDigest) ||
+    !/^[a-f\d]{64}$/.test(artifact.claimDigest)
   ) {
     throw new Error('Invalid terminal artifact')
   }
   if (basename(dirname(artifact.entry)) !== artifact.digest)
     throw new Error('Terminal artifact requires a versioned directory')
+  if (
+    dirname(artifact.claimScript) !== dirname(artifact.entry) ||
+    basename(artifact.claimScript) !== 'worktree-claim.sh'
+  )
+    throw new Error('Terminal claim tool requires the helper artifact directory')
   const entry = await readFile(artifact.entry)
   const wasm = await readFile(artifact.wasm)
+  const claim = await readFile(artifact.claimScript)
   if (
     createHash('sha256').update(entry).digest('hex') !== artifact.digest ||
-    createHash('sha256').update(wasm).digest('hex') !== artifact.wasmDigest
+    createHash('sha256').update(wasm).digest('hex') !== artifact.wasmDigest ||
+    createHash('sha256').update(claim).digest('hex') !== artifact.claimDigest
   ) {
     throw new Error('Terminal artifact changed')
   }

@@ -109,15 +109,21 @@ restart_and_verify() {
 #
 # Both paths that start a process run this: a deploy, where the revision is new,
 # and a restart, where the configuration is what moved.
-check_config() {
+resolve_node() {
   local node_bin="$SERVICE_NODE"
   if [ ! -x "$node_bin" ]; then
-    node_bin=$(command -v node)
+    node_bin=$(command -v node || true)
   fi
   if [ -z "$node_bin" ]; then
-    echo "No Node to check the configuration with." >&2
+    echo "No Node runtime is available." >&2
     exit 1
   fi
+  printf '%s\n' "$node_bin"
+}
+
+check_config() {
+  local node_bin
+  node_bin=$(resolve_node)
   if ! (cd "$SERVICE_CHECKOUT" \
     && "$node_bin" --experimental-strip-types packages/wolfstar-github-agent/src/cli.ts \
       check-config --config "$CONFIG_FILE"); then
@@ -129,8 +135,9 @@ check_config() {
 
 prepare_update() {
   require_checkout
-  local pnpm_bin ref before
+  local pnpm_bin node_bin ref before
   pnpm_bin=$(resolve_pnpm)
+  node_bin=$(resolve_node)
   ref="${1:-origin/main}"
   # The checkout is a deployment. Anything local in it is a mistake worth
   # seeing rather than silently overwriting.
@@ -150,6 +157,10 @@ prepare_update() {
   fi
   echo "Installing dependencies"
   (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" install --frozen-lockfile >/dev/null)
+  echo "Restoring Brundlefly Skills"
+  (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" sync:skills)
+  echo "Refreshing OpenCode worker configuration"
+  "$node_bin" --experimental-strip-types "$SERVICE_CHECKOUT/scripts/opencode-v2-migrate.ts" --worker
   echo "Syncing Agent instructions"
   bash "$SERVICE_CHECKOUT/scripts/sync-agent-context.sh" local >/dev/null
   echo "Installing Worktrunk settings"

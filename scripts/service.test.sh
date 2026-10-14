@@ -35,6 +35,8 @@ printf '%s\n' '#!/usr/bin/env bash' 'printf '\''context %s\n'\'' "$*" >> "$SERVI
   > "$WOLFSTAR_GITHUB_AGENT_CHECKOUT/scripts/sync-agent-context.sh"
 printf '%s\n' '#!/usr/bin/env bash' 'printf '\''worktrunk %s\n'\'' "$*" >> "$SERVICE_TEST_SYNC_CALLS"' \
   > "$WOLFSTAR_GITHUB_AGENT_CHECKOUT/scripts/worktrunk-config.sh"
+printf '%s\n' 'process.stdout.write("worker configuration refreshed\n")' \
+  > "$WOLFSTAR_GITHUB_AGENT_CHECKOUT/scripts/opencode-v2-migrate.ts"
 # Stands in for the deployed CLI. Its exit code is the configuration verdict.
 printf '%s\n' \
   'process.exit(Number(process.env.SERVICE_TEST_CLI_EXIT || 0))' \
@@ -95,6 +97,18 @@ if ! grep -F -- 'Host: hogwild.tailcad325.ts.net' "$SERVICE_TEST_CALLS" >/dev/nu
 fi
 
 PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/service.sh" update >/dev/null
+
+# Desktop uses Node from PATH when the controller's dedicated runtime is absent.
+if ! WOLFSTAR_GITHUB_AGENT_NODE="$test_root/missing-node" PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/service.sh" prepare-update >/dev/null 2>&1; then
+  printf '%s\n' 'service refused worker migration without a dedicated Node runtime' >&2
+  exit 1
+fi
+
+if ! grep -Fx -- 'sync:skills' "$SERVICE_TEST_PNPM_CALLS" >/dev/null; then
+  printf '%s\n' 'service did not restore Brundlefly Skills before startup' >&2
+  exit 1
+fi
 
 if ! grep -F -- 'install --frozen-lockfile' "$SERVICE_TEST_PNPM_CALLS" >/dev/null; then
   printf '%s\n' 'service did not use the installed pnpm fallback' >&2
