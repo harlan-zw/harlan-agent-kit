@@ -16,7 +16,7 @@ import { discoverLocalCheckouts } from './repository-discovery.ts'
 import { err } from './result.ts'
 import { describePreflightIssues, loadServiceInputs } from './service-preflight.ts'
 import { combineServiceState } from './service-state.ts'
-import { createGitServiceUpdateSource } from './service-update.ts'
+import { createDeployedServiceUpdateSource, createGitServiceUpdateSource } from './service-update.ts'
 import { startAgentService } from './service.ts'
 import { stopWithin } from './shutdown.ts'
 import { openJournalStore } from './store.ts'
@@ -550,11 +550,18 @@ const command = defineCommand({
     const classification = config.classification
     const webhook = config.webhook
 
-    const serviceUpdate = createGitServiceUpdateSource({
-      repositoryRoot: process.cwd(),
-      now: () => new Date(),
-      onError: (error) => consola.error(error),
-    })
+    // The Cloudflare Container has no checkout to pull. A deploy replaces it.
+    const serviceUpdate =
+      process.env.WOLFSTAR_GITHUB_AGENT_UPDATES === 'deploy'
+        ? createDeployedServiceUpdateSource({
+            deployedCommit: process.env.WOLFSTAR_GITHUB_AGENT_COMMIT ?? 'unknown',
+            now: () => new Date(),
+          })
+        : createGitServiceUpdateSource({
+            repositoryRoot: process.cwd(),
+            now: () => new Date(),
+            onError: (error) => consola.error(error),
+          })
     const service = await startAgentService({
       ...(classification._tag === 'Enabled' && classificationToken !== null
         ? {

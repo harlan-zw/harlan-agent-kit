@@ -39,6 +39,8 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 
 **Two service checkouts**: Hogwild runs the controller from its own clone, and the desktop runs `wolfstar-desktop-agent` from a clone of the same path on the desktop. Both halves of an offloaded turn must speak the same shape, so `pnpm service:hogwild:update` moves both and `DESKTOP_PROTOCOL` in `desktop-protocol.ts` guards the gap. A desktop reporting an older protocol is stood down, and the work stays on Hogwild. Raise that constant whenever the turn or report shape changes.
 
+**Cloudflare deployment** (`packages/wolfstar-github-edge/`): runs the controller with no host of its own. A Worker checks webhook signatures and queues deliveries, so a restarting controller loses none. A `/setup` page creates the GitHub App through the manifest flow and stores its key, the dashboard password, and the provider logins in a Durable Object. The controller runs unchanged in one Cloudflare Container behind that Durable Object. `src/cloudflare-container.ts` in the agent package writes its config from environment variables, clones every installed repository, and saves the journal to R2. The controller keeps every check of its own. Keep `RUNTIME_VARIABLES` in `cloudflare-runtime.ts` and `controllerEnvironment` in the edge `controller.ts` in step.
+
 **Worktrees**: `wt` (worktrunk) owns every worktree, at `<parent>/<repo>.<branch-slug>`. Full rules in `wolfstar-agent-kit/references/worktree-isolation.md`.
 
 ## Adding Components

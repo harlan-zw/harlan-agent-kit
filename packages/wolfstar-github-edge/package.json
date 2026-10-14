@@ -1,0 +1,23 @@
+{
+  "name": "wolfstar-github-edge",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cloudflare Worker in front of the Wolfstar GitHub Agent: queued webhook relay and dashboard proxy.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "deploy": "bash scripts/deploy.sh",
+    "dev": "wrangler dev",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
+}
