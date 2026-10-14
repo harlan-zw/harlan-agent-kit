@@ -299,6 +299,9 @@ export interface ExistingReviewLabelSource {
 /** Synchronous, so no await separates current authority from the GitHub write. */
 export type ReviewPublicationAuthority = () => Result<void, string>
 
+/** A caller cancellation, or a deadline created when the queued write starts. */
+export type LabelWriteSignal = AbortSignal | (() => AbortSignal)
+
 /** Review publishers must supply current authority to every mutation helper. */
 export interface ReviewPublicationSource {
   stampAgentLabel: (repository: RepositoryMapping, itemNumber: number, state: AgentLabelState, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<void, string>>
@@ -342,7 +345,7 @@ export interface GitHubAgentSource {
    * The write is skipped when the pull request already carries the label, so a
    * rerun that reaches the same verdict costs one read.
    */
-  stampAgentLabel: (repository: RepositoryMapping, itemNumber: number, state: AgentLabelState, signal: AbortSignal, authorize?: ReviewPublicationAuthority) => Promise<Result<void, string>>
+  stampAgentLabel: (repository: RepositoryMapping, itemNumber: number, state: AgentLabelState, signal: LabelWriteSignal, authorize?: ReviewPublicationAuthority) => Promise<Result<void, string>>
   /**
    * Takes the verdict off a pull request no Review has answered for.
    *
@@ -350,7 +353,7 @@ export interface GitHubAgentSource {
    * common case, and writes nothing there.
    */
   clearAgentLabels: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<void, string>>
-  clearRunningLabel: (repository: RepositoryMapping, itemNumber: number, signal: AbortSignal) => Promise<Result<void, string>>
+  clearRunningLabel: (repository: RepositoryMapping, itemNumber: number, signal: LabelWriteSignal) => Promise<Result<void, string>>
   listRunningLabelledItems: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<number[], string>>
   getIssueTriageSnapshot: (repository: RepositoryMapping, issueNumber: number, signal: AbortSignal) => Promise<Result<IssueTriageSnapshot, string>>
   getPullRequestTemplate: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<PullRequestTemplate, string>>
@@ -638,9 +641,12 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
   // Approval, Running, and Review labels share one read and write sequence per Item.
   // Separate queues let a sweep remove a label while another writer confirms it.
   const itemLabelWrites = new Map<string, Promise<void>>()
-  const serializeItemLabels = (repository: string, number: number, write: () => Promise<Result<void, string>>): Promise<Result<void, string>> => {
+  const serializeItemLabels = (repository: string, number: number, cancellation: LabelWriteSignal, write: (signal: AbortSignal) => Promise<Result<void, string>>): Promise<Result<void, string>> => {
     const key = `${repository.toLowerCase()}:${number}`
-    const active = (itemLabelWrites.get(key) ?? Promise.resolve()).then(write)
+    const active = (itemLabelWrites.get(key) ?? Promise.resolve()).then(() => {
+      const signal = typeof cancellation === 'function' ? cancellation() : cancellation
+      return signal.aborted ? err(message(signal.reason)) : write(signal)
+    })
     // Each caller receives its failure. A failed write must release the queue.
     const settled = active.then(() => undefined, () => undefined)
     itemLabelWrites.set(key, settled)
@@ -732,7 +738,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async consumeApprovalLabel(repository, _subjectKind, itemNumber, label, signal) {
-      return serializeItemLabels(repository.github, itemNumber, async () => {
+      return serializeItemLabels(repository.github, itemNumber, signal, async () => {
         const octokit = await client(repository.github, 'item_write', signal)
         if (octokit._tag === 'Err')
           return octokit
@@ -753,7 +759,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async clearAgentLabels(repository, pullRequestNumber, signal) {
-      return serializeItemLabels(repository.github, pullRequestNumber, async () => {
+      return serializeItemLabels(repository.github, pullRequestNumber, signal, async () => {
         const octokit = await client(repository.github, 'item_write', signal)
         if (octokit._tag === 'Err')
           return octokit
@@ -801,8 +807,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
      * A settled Review stamps its verdict just before the Task settles, so a
      * blanket clear here would wipe the verdict it had just written.
      */
-    async clearRunningLabel(repository, itemNumber, signal) {
-      return serializeItemLabels(repository.github, itemNumber, async () => {
+    async clearRunningLabel(repository, itemNumber, cancellation) {
+      return serializeItemLabels(repository.github, itemNumber, cancellation, async (signal) => {
         const octokit = await client(repository.github, 'item_write', signal)
         if (octokit._tag === 'Err')
           return octokit
@@ -857,8 +863,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       }).catch((error: unknown): Result<ExistingReviewLabel, ExistingReviewLabelFailure> => err({ _tag: 'Transient', message: message(error) }))
     },
 
-    async stampAgentLabel(repository, itemNumber, state, signal, authorize) {
-      return serializeItemLabels(repository.github, itemNumber, async () => {
+    async stampAgentLabel(repository, itemNumber, state, cancellation, authorize) {
+      return serializeItemLabels(repository.github, itemNumber, cancellation, async (signal) => {
         const octokit = await client(repository.github, 'item_write', signal)
         if (octokit._tag === 'Err')
           return octokit
@@ -926,7 +932,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async addApprovalLabel(repository, pullRequestNumber, label, signal) {
-      return serializeItemLabels(repository.github, pullRequestNumber, async () => {
+      return serializeItemLabels(repository.github, pullRequestNumber, signal, async () => {
         const octokit = await client(repository.github, 'item_write', signal)
         if (octokit._tag === 'Err')
           return octokit
