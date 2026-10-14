@@ -2,9 +2,9 @@
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -105,6 +105,14 @@ export async function syncAgentTool(input: {
   await mkdir(join(root, 'bin'), { recursive: true, mode: 0o700 })
   const staged = `${binary}.${randomUUID()}`
   const bundle = `${staged}.bundle`
+  const previousBundle = input.tool.name === 'codex'
+    ? await realpath(binary).then(dirname).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT')
+          return undefined
+        throw error
+      })
+    : undefined
+  let currentBundle: string | undefined
   try {
     const archive = join(scratch, release.asset.name)
     await writeFile(archive, bytes, { mode: 0o600 })
@@ -126,6 +134,7 @@ export async function syncAgentTool(input: {
       // Resolve Codex and its sibling from one immutable directory, even during sync.
       const installed = await mkdtemp(join(root, 'codex-release-'))
       await rename(bundle, installed)
+      currentBundle = installed
       const hostLink = `${staged}.host`
       await symlink(join(installed, 'codex-code-mode-host'), hostLink)
       await rename(hostLink, join(root, 'bin/codex-code-mode-host'))
@@ -141,6 +150,14 @@ export async function syncAgentTool(input: {
     // The receipt lives on the same filesystem as the installed executable.
     await writeFile(`${staged}.json`, await readFile(stagedReceipt), { mode: 0o600 })
     await rename(`${staged}.json`, receipt)
+    if (currentBundle !== undefined) {
+      // Running namespaces pin both executables. Keep the previous version for startup races.
+      for (const entry of await readdir(root, { withFileTypes: true })) {
+        const path = join(root, entry.name)
+        if (entry.isDirectory() && entry.name.startsWith('codex-release-') && path !== currentBundle && path !== previousBundle)
+          await rm(path, { recursive: true, force: true })
+      }
+    }
     return 'Updated'
   }
   finally {
