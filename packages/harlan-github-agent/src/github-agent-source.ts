@@ -1381,7 +1381,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async resolveReviewFindingThread(repository, threadId, signal, authorize) {
-      const octokit = await client(repository.github, 'item_write', signal)
+      const octokit = await client(repository.github, 'review_thread_write', signal)
       if (octokit._tag === 'Err')
         return octokit
       const authorized = authorize()
