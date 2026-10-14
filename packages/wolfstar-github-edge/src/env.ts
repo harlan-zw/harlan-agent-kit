@@ -21,6 +21,10 @@ export interface RelayedDelivery {
 export interface Env {
   /** Comma separated GitHub owners, or owner/repository entries, the controller may act on. */
   ALLOWED_OWNERS: string
+  /** `https://<team>.cloudflareaccess.com`. With ACCESS_AUD, every route but `/webhook` needs an Access sign-in. */
+  ACCESS_TEAM_DOMAIN?: string
+  /** The Application Audience (AUD) tag of the Access application. */
+  ACCESS_AUD?: string
   CONTROLLER: DurableObjectNamespace<ControllerContainer>
   WEBHOOKS: Queue<WebhookDelivery>
   /** Large webhook bodies under `deliveries/`, and the controller's journal under `controller/`. */

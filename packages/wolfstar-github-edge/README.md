@@ -39,6 +39,23 @@ Then open the deployed URL at `/setup`:
 
 To change providers later, open `/setup/providers` and sign in with the dashboard password. Saving restarts the controller. After you install the App on more repositories, GitHub returns you to `/setup/installed`, which restarts the controller so it clones them.
 
+## Cloudflare Access
+
+Put Access in front of the setup page and the dashboard, so nobody reaches them without signing in first. GitHub cannot sign in, so `/webhook` stays outside Access and keeps its signature check.
+
+1. In Zero Trust, create a self-hosted application for the Worker hostname with an Allow policy for your email.
+2. Create a second self-hosted application for the same hostname with the path `webhook` and a Bypass policy for Everyone. The more specific path wins.
+3. Copy the first application's Application Audience (AUD) tag and your team domain into `wrangler.jsonc`:
+
+```jsonc
+"vars": {
+  "ACCESS_TEAM_DOMAIN": "https://<team>.cloudflareaccess.com",
+  "ACCESS_AUD": "<aud tag>",
+}
+```
+
+With both set, the Worker checks the Access token on every request except `/webhook` and refuses one without a valid token, even if a policy is later edited by mistake. Set only one and every request fails, so a half configuration never leaves the dashboard open. The dashboard password still applies behind Access.
+
 ## What runs where
 
 | Piece                | Where                            | Notes                                                                        |

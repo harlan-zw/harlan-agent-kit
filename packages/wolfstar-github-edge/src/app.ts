@@ -1,4 +1,6 @@
+import type { AccessSettings } from './access.ts'
 import type { ControllerPort, WebhookDelivery } from './env.ts'
+import { hasAccessToken } from './access.ts'
 import { proxyDashboard } from './dashboard.ts'
 import { handleSetup, isReady } from './setup.ts'
 import { acceptWebhook, consumeWebhooks } from './webhook.ts'
@@ -9,6 +11,8 @@ export interface EdgeDependencies {
   webhooks: Queue<WebhookDelivery>
   state: R2Bucket
   allowedOwners: string[]
+  /** Cloudflare Access in front of everything but `/webhook`. Null when Access is not set up. */
+  access: AccessSettings | null
   fetch: typeof fetch
   now: () => number
 }
@@ -36,6 +40,10 @@ export async function handleRequest(request: Request, dependencies: EdgeDependen
       bodies: dependencies.state,
     })
   }
+
+  // Everything past here is for a person, so it needs the Access sign-in when Access is set up.
+  if (dependencies.access !== null && !(await hasAccessToken(request, dependencies.access, dependencies)))
+    return new Response('Sign in through Cloudflare Access.', { status: 403 })
 
   const setup = await handleSetup(request, {
     store: {

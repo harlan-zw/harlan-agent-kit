@@ -1,5 +1,6 @@
 import type { ControllerPort, Env, WebhookDelivery } from './env.ts'
 import { ContainerProxy } from '@cloudflare/containers'
+import { accessSettings } from './access.ts'
 import { handleQueue, handleRequest, parseAllowedOwners } from './app.ts'
 import { ControllerContainer } from './controller.ts'
 
@@ -17,6 +18,8 @@ function dependencies(env: Env) {
     webhooks: env.WEBHOOKS,
     state: env.STATE,
     allowedOwners: parseAllowedOwners(env.ALLOWED_OWNERS),
+    // Half a configuration throws, so a mistake fails closed instead of leaving the dashboard open.
+    access: accessSettings(env.ACCESS_TEAM_DOMAIN, env.ACCESS_AUD),
     fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init),
     now: Date.now,
   }

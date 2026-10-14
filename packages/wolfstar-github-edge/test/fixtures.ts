@@ -114,6 +114,7 @@ export function createTestEdge(
       },
     },
     allowedOwners: ['wolfstar-project'],
+    access: null,
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       github.push({ url, method: init?.method ?? 'GET' })
