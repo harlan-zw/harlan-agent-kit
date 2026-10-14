@@ -29,3 +29,9 @@ packages/notes-viewer/.vitepress/dist/
 
 # Eval runs write results here. They are reproduced by rerunning the suite.
 wolfstar-agent-kit/evals/results/
+
+# The commit a Cloudflare deploy ships, written by packages/wolfstar-github-edge/scripts/deploy.sh
+.deployed-commit
+
+# Wrangler build output and local state
+.wrangler/

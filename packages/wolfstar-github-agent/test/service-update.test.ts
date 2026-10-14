@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createServiceUpdateSource } from '../src/index.ts'
+import { createDeployedServiceUpdateSource } from '../src/service-update.ts'
 
 const deployedCommit = 'a'.repeat(40)
 const latestCommit = 'b'.repeat(40)
@@ -60,5 +61,25 @@ describe('service update', () => {
 
     await expect(source.prepare(latestCommit)).resolves.toEqual({ _tag: 'Ok', value: undefined })
     expect(prepareCommit).toHaveBeenCalledWith(latestCommit)
+  })
+})
+
+describe('deployed service update', () => {
+  it('reports that a deploy updates the instance and refuses to prepare an update', async () => {
+    const source = createDeployedServiceUpdateSource({
+      deployedCommit: 'a'.repeat(40),
+      now: () => new Date('2026-10-14T00:00:00.000Z'),
+    })
+
+    expect(source.read()).toEqual({
+      _tag: 'Unavailable',
+      deployedCommit: 'a'.repeat(40),
+      checkedAt: '2026-10-14T00:00:00.000Z',
+      reason: 'This instance updates with each Cloudflare deploy.',
+    })
+    expect(await source.prepare('b'.repeat(40))).toEqual({
+      _tag: 'Err',
+      error: 'This instance updates with each Cloudflare deploy.',
+    })
   })
 })

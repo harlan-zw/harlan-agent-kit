@@ -1,0 +1,12 @@
+# The Cloudflare Container build context is the repository root.
+**/node_modules
+**/.nuxt
+**/.output
+**/dist
+.git
+.claude
+.pr-lens
+.env
+.env.*
+packages/notes-viewer
+packages/wolfstar-github-edge/.wrangler

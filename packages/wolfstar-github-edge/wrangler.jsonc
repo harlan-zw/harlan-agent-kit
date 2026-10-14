@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "wolfstar-github-edge",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-13",
+  "upload_source_maps": true,
+  "observability": { "enabled": true },
+  // The setup page builds the GitHub App webhook URL from the hostname it is opened on.
+  // A preview URL would register a second hostname, so only the workers.dev route serves.
+  "workers_dev": true,
+  "preview_urls": false,
+  // The only setting a deploy needs: the GitHub owners the agent may act on.
+  // Everything else comes from the setup page at /setup on the deployed URL.
+  "vars": {
+    "ALLOWED_OWNERS": "wolfstar-project",
+  },
+  "containers": [
+    {
+      "class_name": "ControllerContainer",
+      "image": "./container/Dockerfile",
+      "image_build_context": "../..",
+      // 4 vCPU, 12 GiB, 20 GB disk: the largest standard size. The controller runs two Agents at once in it.
+      "instance_type": "standard-4",
+      "max_instances": 1,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "CONTROLLER", "class_name": "ControllerContainer" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ControllerContainer"] }],
+  "queues": {
+    "producers": [{ "binding": "WEBHOOKS", "queue": "wolfstar-github-webhooks" }],
+    "consumers": [
+      {
+        "queue": "wolfstar-github-webhooks",
+        "max_batch_size": 10,
+        "max_batch_timeout": 1,
+        "max_retries": 20,
+        "dead_letter_queue": "wolfstar-github-webhooks-dlq",
+      },
+    ],
+  },
+  "r2_buckets": [{ "binding": "STATE", "bucket_name": "wolfstar-github-agent-state" }],
+  // Starts the controller again after a deploy or a host move.
+  "triggers": { "crons": ["*/5 * * * *"] },
+}

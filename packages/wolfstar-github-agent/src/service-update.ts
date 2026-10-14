@@ -82,6 +82,32 @@ export function createServiceUpdateSource(options: {
   }
 }
 
+/**
+ * The update source for an instance a deploy replaces, such as the Cloudflare Container.
+ *
+ * There is no checkout to pull. The next `wrangler deploy` ships a new image
+ * and the Container restarts on it, so the dashboard says so instead of
+ * offering an update it cannot apply.
+ */
+export function createDeployedServiceUpdateSource(options: {
+  deployedCommit: string
+  now: () => Date
+}): ServiceUpdateSource {
+  const status: ServiceUpdateStatus = {
+    _tag: 'Unavailable',
+    deployedCommit: options.deployedCommit,
+    checkedAt: options.now().toISOString(),
+    reason: 'This instance updates with each Cloudflare deploy.',
+  }
+  return {
+    read: () => status,
+    refresh: () => Promise.resolve(),
+    prepare: () => Promise.resolve(err('This instance updates with each Cloudflare deploy.')),
+    start: () => {},
+    stop: () => Promise.resolve(),
+  }
+}
+
 function readDeployedCommit(repositoryRoot: string): string {
   const commit = execFileSync('git', ['-C', repositoryRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
   if (!COMMIT_PATTERN.test(commit)) throw new Error('The deployed Git commit is invalid.')
