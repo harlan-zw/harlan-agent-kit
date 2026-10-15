@@ -708,6 +708,23 @@ export function createGitHubAgentSource(
   ReviewApprovalSource &
   NativeReviewPublisher {
   const appActorLogin = (options.appActorLogin ?? AGENT_ACTOR_LOGIN).toLowerCase()
+  /**
+   * Whether this controller wrote the comment.
+   *
+   * The bot login follows the App's slug, and a rename changes it, so a login
+   * alone loses track of the controller's own comment. It then writes a new one
+   * on every attempt. The App id never changes, so a comment the App wrote counts
+   * as ours whatever the bot was called then. Only a repository that acts as the
+   * App uses it, because a user credential writes as the user.
+   */
+  const ownComment = (
+    comment: { user?: { login: string } | null; performed_via_github_app?: { id: number } | null },
+    repository: RepositoryMapping,
+  ): boolean =>
+    comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() ||
+    (repository.githubAccount === undefined &&
+      repository.authentication !== 'user' &&
+      comment.performed_via_github_app?.id === options.ownAppId)
   // Review snapshots reread every open pull request and its base branch on
   // each sweep. Revalidated reads answer 304 when nothing changed, and GitHub
   // charges no primary quota for a 304. All read-only access uses the cache.
@@ -1249,8 +1266,7 @@ export function createGitHubAgentSource(
             comments: comments.flatMap((comment) =>
               comment.body === undefined ||
               comment.body === null ||
-              (comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() &&
-                comment.body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
+              (ownComment(comment, repository) && comment.body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
                 ? []
                 : [comment.body],
             ),
@@ -1314,15 +1330,11 @@ export function createGitHubAgentSource(
               ? comments
                   .filter(
                     (comment) =>
-                      comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() &&
-                      comment.body?.includes(AUTOMATED_ISSUE_TRIAGE_MARKER),
+                      ownComment(comment, repository) && comment.body?.includes(AUTOMATED_ISSUE_TRIAGE_MARKER),
                   )
                   .sort((left, right) => right.id - left.id)[0]
               : comments.find((comment) => comment.id === commentId)
-          if (
-            existing !== undefined &&
-            existing.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase()
-          )
+          if (existing !== undefined && !ownComment(existing, repository))
             return err('The stored issue triage comment belongs to another GitHub actor.')
           if (existing !== undefined && existing.body === body && existing.html_url !== undefined)
             return ok({ commentId: existing.id, url: existing.html_url })
@@ -1349,7 +1361,7 @@ export function createGitHubAgentSource(
             ...requestOptions,
           })
           if (
-            confirmed.data.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase() ||
+            !ownComment(confirmed.data, repository) ||
             confirmed.data.body !== body ||
             !confirmed.data.body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER)
           ) {
@@ -1504,16 +1516,14 @@ export function createGitHubAgentSource(
               ...issueComments.flatMap((comment) =>
                 comment.body === undefined ||
                 comment.body === null ||
-                (comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() &&
-                  comment.body.includes(AUTOMATED_REVIEW_MARKER))
+                (ownComment(comment, repository) && comment.body.includes(AUTOMATED_REVIEW_MARKER))
                   ? []
                   : [{ body: comment.body, createdAt: comment.created_at }],
               ),
               ...reviewComments.flatMap((comment) =>
                 comment.body === undefined ||
                 discussed.has(comment.id) ||
-                (comment.user?.login.toLowerCase() === options.actorLogin(repository).toLowerCase() &&
-                  comment.body.includes(AUTOMATED_REVIEW_MARKER))
+                (ownComment(comment, repository) && comment.body.includes(AUTOMATED_REVIEW_MARKER))
                   ? []
                   : [{ body: comment.body, createdAt: comment.created_at }],
               ),
@@ -1580,7 +1590,7 @@ export function createGitHubAgentSource(
             existingHead !== undefined &&
             existingHead === expectedHead &&
             existingHead === nextHead
-          if (existing.data.user?.login.toLowerCase() !== actor && !legacyOwned)
+          if (!ownComment(existing.data, repository) && !legacyOwned)
             return ok({
               _tag: 'Foreign' as const,
               reason: 'The stored automated review comment belongs to another GitHub actor.' as const,
@@ -1616,8 +1626,11 @@ export function createGitHubAgentSource(
             ...requestOptions,
           })
           const writerLogin = legacyOwned && legacyActor !== undefined ? legacyActor.login.toLowerCase() : actor
-          if (confirmed.data.user?.login.toLowerCase() !== writerLogin)
-            return err('GitHub did not confirm the edited automated review comment.')
+          const authoredByWriter =
+            legacyOwned && legacyActor !== undefined
+              ? confirmed.data.user?.login.toLowerCase() === writerLogin
+              : ownComment(confirmed.data, repository)
+          if (!authoredByWriter) return err('GitHub did not confirm the edited automated review comment.')
           if (confirmed.data.body !== body) return ok({ _tag: 'Changed' as const })
           return ok({ _tag: 'Edited' as const, commentId: confirmed.data.id, url: confirmed.data.html_url })
         })
@@ -1681,9 +1694,13 @@ export function createGitHubAgentSource(
                     automatedReviewHead(comment.body)?.toLowerCase() === headSha.toLowerCase(),
                 )
               : undefined
+          const priorComment =
+            priorReview._tag === 'Found' ? comments.find((comment) => comment.html_url === priorReview.url) : undefined
+          const priorIsOwn = priorComment !== undefined && ownComment(priorComment, repository)
           if (
             priorReview._tag === 'Found' &&
             priorReview.authorLogin.toLowerCase() !== actor &&
+            !priorIsOwn &&
             adoptablePrior === undefined &&
             !replacePriorReview
           )
@@ -1702,13 +1719,12 @@ export function createGitHubAgentSource(
               ? (adoptablePrior ??
                 comments
                   .filter(
-                    (comment) =>
-                      comment.user?.login.toLowerCase() === actor && comment.body?.includes(AUTOMATED_REVIEW_MARKER),
+                    (comment) => ownComment(comment, repository) && comment.body?.includes(AUTOMATED_REVIEW_MARKER),
                   )
                   .sort((left, right) => right.id - left.id)[0])
               : comments.find((comment) => comment.id === commentId)
           const adopted = existing !== undefined && existing.id === adoptablePrior?.id
-          if (existing !== undefined && existing.user?.login.toLowerCase() !== actor && !adopted)
+          if (existing !== undefined && !ownComment(existing, repository) && !adopted)
             return err('The stored automated review comment belongs to another GitHub actor.')
           if (
             existing?.body !== undefined &&
@@ -1751,7 +1767,9 @@ export function createGitHubAgentSource(
           })
           const writerLogin = adopted && legacyActor !== undefined ? legacyActor.login.toLowerCase() : actor
           if (
-            confirmed.data.user?.login.toLowerCase() !== writerLogin ||
+            !(adopted && legacyActor !== undefined
+              ? confirmed.data.user?.login.toLowerCase() === writerLogin
+              : ownComment(confirmed.data, repository)) ||
             confirmed.data.body !== body ||
             !confirmed.data.body.includes(AUTOMATED_REVIEW_MARKER)
           ) {

@@ -101,6 +101,7 @@ import {
   discoverLocalCheckouts,
   discoverUserRepositories,
   installedWithoutCheckout,
+  readGitHubAppSlug,
 } from './repository-discovery.ts'
 import { canReleasePackages } from './repository-policy.ts'
 import { createRestartController, restartAllowsTaskClaims } from './restart-request.ts'
@@ -489,8 +490,22 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // ones that do not need it keep working.
   // Package releases need the login as well. Only Wolfstar grants release
   // authority, and a release with the user credential writes as him.
-  // The App's bot login follows its slug, so a deployment with its own App recognises its own comments.
-  const appActorLogin = agentActorLogin(options.config.github.appSlug)
+  // The App's bot login follows its slug, and an App can be renamed after it was created. GitHub knows
+  // the current slug, so it decides. The configured slug only covers a GitHub that cannot answer.
+  const currentAppSlug = await readGitHubAppSlug({
+    appId: options.config.github.appId,
+    allowedOwners: options.config.github.allowedOwners,
+    privateKey: options.githubPrivateKey,
+  })
+  if (
+    currentAppSlug !== undefined &&
+    options.config.github.appSlug !== undefined &&
+    currentAppSlug !== options.config.github.appSlug
+  )
+    options.logger.info(
+      `The GitHub App is now named ${currentAppSlug}, not ${options.config.github.appSlug}. Using ${currentAppSlug}.`,
+    )
+  const appActorLogin = agentActorLogin(currentAppSlug ?? options.config.github.appSlug)
   const needsUserLogin = serviceNeedsUserLogin(options.config, userRepositories.length, options.webhookSecret)
   const resolvedLogin = needsUserLogin
     ? await resolveUserLogin(userAccess, options.logger)

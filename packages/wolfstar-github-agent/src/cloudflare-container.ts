@@ -312,8 +312,8 @@ function startForwarders(): void {
 }
 
 async function main(): Promise<void> {
-  const paths = runtimePaths(homedir())
   const repositoryRoot = process.cwd()
+  const paths = runtimePaths(homedir(), repositoryRoot)
   startForwarders()
 
   const read = readRuntimeInputs(process.env)
@@ -376,6 +376,8 @@ async function main(): Promise<void> {
           ...controllerEnvironment(process.env),
           WOLFSTAR_GITHUB_AGENT_UPDATES: 'deploy',
           WOLFSTAR_GITHUB_AGENT_COMMIT: deployedCommit,
+          // The controller asks a host broker for capacity. This one has a single account to account for.
+          WOLFSTAR_HOST_CAPACITY_COMMAND: paths.hostCapacityCommand,
         },
         stdio: 'inherit',
       },

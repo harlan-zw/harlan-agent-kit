@@ -10,6 +10,7 @@ import {
   discoverLocalCheckouts,
   installedWithoutCheckout,
   isAllowedRepository,
+  readGitHubAppSlug,
 } from '../src/repository-discovery.ts'
 import { canRepairPullRequestHead } from '../src/repository-policy.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -414,5 +415,27 @@ describe('agentActorLogin', () => {
   it('names the bot after the App slug, and keeps the historical bot without one', () => {
     expect(agentActorLogin('Wolfstar-Project-Agent-ABCD')).toBe('wolfstar-project-agent-abcd[bot]')
     expect(agentActorLogin(undefined)).toBe('wolfstar-github-agent[bot]')
+  })
+})
+
+describe('readGitHubAppSlug', () => {
+  const options = { appId: 1, allowedOwners: ['wolfstar-project'], privateKey: 'key' }
+
+  it('returns the slug GitHub reports, lower cased', async () => {
+    expect(await readGitHubAppSlug(options, async () => 'Wolfstar-GitHub-Agent')).toBe('wolfstar-github-agent')
+  })
+
+  it('returns undefined when GitHub cannot answer, so the configured slug stays', async () => {
+    expect(
+      await readGitHubAppSlug(options, async () => {
+        throw new Error('rate limited')
+      }),
+    ).toBeUndefined()
+  })
+
+  it('refuses an answer that is not a slug', async () => {
+    for (const answer of ['', 'agent[bot]', 'two words', '-agent']) {
+      expect(await readGitHubAppSlug(options, async () => answer)).toBeUndefined()
+    }
   })
 })
