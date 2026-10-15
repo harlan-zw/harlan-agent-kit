@@ -93,6 +93,39 @@ export async function discoverLocalCheckouts(roots: string[]): Promise<LocalChec
   return checkouts.flatMap((checkout) => (checkout === undefined ? [] : [checkout]))
 }
 
+async function readAppSlugFromGitHub(options: GitHubAppRepositoryDiscoveryOptions): Promise<string> {
+  const app = new App({
+    appId: options.appId,
+    privateKey: options.privateKey,
+    Octokit: Octokit.defaults({
+      userAgent: options.userAgent ?? 'wolfstar-github-agent/0.0.0',
+      throttle: failFastThrottle,
+    }),
+  })
+  const { data } = await app.octokit.rest.apps.getAuthenticated()
+  return data?.slug ?? ''
+}
+
+/**
+ * The slug the GitHub App has now.
+ *
+ * An App can be renamed after its creation, and its bot then posts under the
+ * new slug. A slug written into a configuration file at creation goes stale,
+ * so the controller asks GitHub instead. Undefined means GitHub could not say,
+ * and the caller keeps the configured slug.
+ */
+export async function readGitHubAppSlug(
+  options: GitHubAppRepositoryDiscoveryOptions,
+  read: (options: GitHubAppRepositoryDiscoveryOptions) => Promise<string> = readAppSlugFromGitHub,
+): Promise<string | undefined> {
+  try {
+    const slug = (await read(options)).trim().toLowerCase()
+    return /^[a-z0-9][a-z0-9-]{0,62}$/.test(slug) ? slug : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export async function discoverGitHubAppRepositories(
   options: GitHubAppRepositoryDiscoveryOptions,
 ): Promise<InstalledRepository[]> {
