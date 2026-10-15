@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useEventListener } from '@vueuse/core'
+import { useEventListener, useMediaQuery, useWindowSize } from '@vueuse/core'
 import { isTypingTarget } from '../utils/keyboard.ts'
 
 /**
@@ -16,6 +16,11 @@ const toast = useToast()
 const keyboardOpen = ref(false)
 const route = useRoute()
 const sessionPage = computed(() => route.path === '/sessions')
+const phoneInput = useMediaQuery('(pointer: coarse)')
+const { height: visualHeight } = useWindowSize({ type: 'visual' })
+const sessionHeight = computed(() => sessionPage.value && phoneInput.value && Number.isFinite(visualHeight.value)
+  ? { height: `${visualHeight.value}px` }
+  : undefined)
 const terminalHost = useTerminalHost()
 
 const tabs = [
@@ -60,7 +65,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex h-dvh min-h-0 overflow-hidden">
+  <div class="flex h-dvh min-h-0 overflow-hidden" :style="sessionHeight">
     <a href="#main" class="skip-link">Skip to content</a>
     <aside class="z-40 hidden w-12 shrink-0 flex-col border-r border-default bg-muted md:flex">
       <NuxtLink to="/sessions" aria-label="Agent" class="flex h-11 shrink-0 items-center justify-center text-highlighted">

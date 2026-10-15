@@ -50,6 +50,10 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Terminal launch failure | Could not start the Agent session. Retry. | Failed start |
 | Terminal stop failure | Could not stop the Agent session. Retry. | Failed Stop |
 | Terminal screen label | Agent terminal | Accessible terminal input name |
+| Terminal phone submit | Send | Send the edited phone draft and press Enter |
+| Terminal phone enter | Enter | Press Enter with an empty phone draft |
+| Terminal phone escape | Esc | Send the Escape key |
+| Terminal phone interrupt | Ctrl+C | Send the terminal interrupt key |
 | Terminal copy failure | Could not copy terminal text. Select it and use the browser menu. | Clipboard write failure |
 | Terminal invalid data | The terminal returned invalid data. Reload. | Invalid terminal frame |
 | Terminal authentication | Open the pairing link from the terminal host. | Authentication failure |

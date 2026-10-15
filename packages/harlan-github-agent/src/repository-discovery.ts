@@ -151,7 +151,7 @@ function defaultMapping(repository: InstalledRepository, checkout: string, relea
     ...(release === undefined ? {} : { release }),
     defaultBranch: repository.defaultBranch,
     writablePullRequestAuthors: ['harlan-zw', AGENT_ACTOR_LOGIN],
-    writablePullRequestHeadPrefixes: ['fix/', 'feat/', 'chore/', 'docs/', 'refactor/', 'perf/', 'test/', 'ci/'],
+    writablePullRequestHeadPrefixes: ['fix/', 'feat/', 'chore/', 'docs/', 'refactor/', 'perf/', 'test/', 'ci/', 'terminal/'],
     issueWork: ownership === 'owned',
     maxOpenPullRequests: null,
     pullRequestReview: true,
