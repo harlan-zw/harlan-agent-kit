@@ -25,6 +25,8 @@
       // 4 vCPU, 12 GiB, 20 GB disk: the largest standard size. The controller runs two Agents at once in it.
       "instance_type": "standard-4",
       "max_instances": 1,
+      // Debugging through `wrangler containers ssh <instance>`. Only listed keys connect, and only through Wrangler.
+      "authorized_keys": [{ "name": "redstar-debug", "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ8jxFkElZEn21sfrkv4yeYwyfMl1o+QZmS+J1HCD3mb wolfstar-github-edge debug" }],
     },
   ],
   "durable_objects": {
