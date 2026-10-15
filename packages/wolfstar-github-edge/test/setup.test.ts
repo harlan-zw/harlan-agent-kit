@@ -404,3 +404,39 @@ describe('Workers AI setup', () => {
     expect(edge.github).toHaveLength(0)
   })
 })
+
+describe('GitHub maintainer token', () => {
+  async function save(edge: ReturnType<typeof createTestEdge>, form: Record<string, string>) {
+    return handleRequest(
+      new Request(`${ORIGIN}/setup/providers`, {
+        method: 'POST',
+        headers: { authorization: `Basic ${btoa(`agent:${DASHBOARD_PASSWORD}`)}`, origin: ORIGIN },
+        body: new URLSearchParams(form),
+      }),
+      edge.dependencies,
+    )
+  }
+
+  const github = async (url: string, init?: RequestInit): Promise<Response> =>
+    url === 'https://api.github.com/user' && new Headers(init?.headers).get('authorization') === 'Bearer ghp_valid'
+      ? Response.json({ login: 'RedStar071' })
+      : new Response(null, { status: 401 })
+
+  it('saves a token GitHub accepts, with the login it belongs to', async () => {
+    const edge = createTestEdge({ setup: READY_SETUP, github })
+
+    expect((await save(edge, { github_user_token: 'ghp_valid' })).status).toBe(200)
+    expect(edge.setup().githubUser).toEqual({ token: 'ghp_valid', login: 'RedStar071' })
+  })
+
+  it('refuses a token GitHub rejects, and keeps a saved one when the field is empty', async () => {
+    const edge = createTestEdge({
+      setup: { ...READY_SETUP, githubUser: { token: 'ghp_valid', login: 'RedStar071' } },
+      github,
+    })
+
+    expect((await save(edge, { github_user_token: 'ghp_wrong' })).status).toBe(400)
+    expect((await save(edge, { claude_token: 'sk-ant-oat01-other' })).status).toBe(200)
+    expect(edge.setup().githubUser).toEqual({ token: 'ghp_valid', login: 'RedStar071' })
+  })
+})

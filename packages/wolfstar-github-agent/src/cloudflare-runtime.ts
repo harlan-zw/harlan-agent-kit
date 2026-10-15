@@ -27,6 +27,12 @@ export interface CloudflareRuntimeInputs {
   gitName: string
   gitEmail: string
   mutationsEnabled: boolean
+  /**
+   * The maintainer's own GitHub token, for the GitHub CLI login Hogwild has.
+   * The controller reads that login for comment commands, fork workflow merges,
+   * and pull request diagrams. Absent, those features report it instead.
+   */
+  githubUserToken: string | null
   /** Issues older than this date are left alone, so a first start does not work the whole backlog. */
   issueCutoff: string
   providers: ProviderCredentials
@@ -60,6 +66,7 @@ export const RUNTIME_VARIABLES = {
   zaiApiKey: 'WOLFSTAR_ZAI_API_KEY',
   workersAiToken: 'WOLFSTAR_WORKERS_AI_TOKEN',
   workersAiAccountId: 'WOLFSTAR_WORKERS_AI_ACCOUNT_ID',
+  githubUserToken: 'WOLFSTAR_GITHUB_USER_TOKEN',
 } as const
 
 /**
@@ -145,6 +152,7 @@ export function readRuntimeInputs(
     gitName,
     gitEmail,
     mutationsEnabled: environment[RUNTIME_VARIABLES.mutationsEnabled] === 'true',
+    githubUserToken: optional(environment[RUNTIME_VARIABLES.githubUserToken]),
     issueCutoff,
     providers,
   })

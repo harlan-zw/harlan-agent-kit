@@ -71,6 +71,28 @@ async function writeState(name: string, body: Buffer): Promise<void> {
   if (!response.ok) throw new Error(`Writing ${name} to R2 answered ${response.status}.`)
 }
 
+/**
+ * Signs the GitHub CLI in as the maintainer, as Hogwild's own login is.
+ *
+ * The token goes over stdin, never an argument, and the CLI keeps it in the
+ * controller home. The sandbox mounts none of that home, and the token leaves
+ * the controller's environment with the other secrets.
+ */
+async function loginGitHubCli(token: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('gh', ['auth', 'login', '--hostname', 'github.com', '--with-token'], {
+      stdio: ['pipe', 'ignore', 'pipe'],
+    })
+    let stderr = ''
+    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
+    child.once('error', reject)
+    child.once('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`gh auth login failed: ${stderr.trim() || `exit ${code}`}`)),
+    )
+    child.stdin.end(token)
+  }).catch((error: unknown) => log(error instanceof Error ? error.message : String(error)))
+}
+
 async function writeInputs(inputs: CloudflareRuntimeInputs, paths: RuntimePaths): Promise<void> {
   await writeSecret(paths.config, renderRuntimeConfig(inputs, paths))
   await writeSecret(paths.privateKey, inputs.privateKey)
@@ -81,6 +103,7 @@ async function writeInputs(inputs: CloudflareRuntimeInputs, paths: RuntimePaths)
   await mkdir(paths.sitesRoot, { recursive: true })
   await mkdir(dirname(paths.storage), { recursive: true, mode: 0o700 })
 
+  if (inputs.githubUserToken !== null) await loginGitHubCli(inputs.githubUserToken)
   await execFileAsync('git', ['config', '--global', 'user.name', inputs.gitName])
   await execFileAsync('git', ['config', '--global', 'user.email', inputs.gitEmail])
 

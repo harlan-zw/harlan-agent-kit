@@ -132,5 +132,6 @@ export function controllerEnvironment(record: SetupRecord, allowedOwners: string
     WOLFSTAR_ZAI_API_KEY: record.providers.zaiApiKey ?? '',
     WOLFSTAR_WORKERS_AI_TOKEN: record.providers.workersAiToken ?? '',
     WOLFSTAR_WORKERS_AI_ACCOUNT_ID: record.providers.workersAiAccountId ?? '',
+    WOLFSTAR_GITHUB_USER_TOKEN: record.githubUser?.token ?? '',
   }
 }

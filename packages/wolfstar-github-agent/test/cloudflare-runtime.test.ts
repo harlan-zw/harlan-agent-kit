@@ -223,3 +223,13 @@ describe('controller environment', () => {
     })
   })
 })
+
+describe('GitHub maintainer token', () => {
+  it('reads the token and keeps it away from the Agents', () => {
+    const withToken = { ...environment, [RUNTIME_VARIABLES.githubUserToken]: 'ghp_maintainer' }
+    const inputs = readRuntimeInputs(withToken)
+
+    expect(inputs._tag === 'Ok' && inputs.value.githubUserToken).toBe('ghp_maintainer')
+    expect(controllerEnvironment(withToken)).not.toHaveProperty(RUNTIME_VARIABLES.githubUserToken)
+  })
+})

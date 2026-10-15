@@ -30,6 +30,12 @@ export interface ProviderCredentials {
   workersAiAccountId: string | null
 }
 
+/** The maintainer's own GitHub login, which Hogwild has through the GitHub CLI. */
+export interface GitHubUserLogin {
+  token: string
+  login: string
+}
+
 export interface SetupRecord {
   app: GitHubAppRecord | null
   dashboardPassword: string | null
@@ -39,6 +45,7 @@ export interface SetupRecord {
   providers: ProviderCredentials
   mutationsEnabled: boolean
   issueCutoff: string | null
+  githubUser: GitHubUserLogin | null
 }
 
 export const EMPTY_SETUP: SetupRecord = {
@@ -49,6 +56,7 @@ export const EMPTY_SETUP: SetupRecord = {
   providers: { claudeToken: null, codexAuth: null, zaiApiKey: null, workersAiToken: null, workersAiAccountId: null },
   mutationsEnabled: true,
   issueCutoff: null,
+  githubUser: null,
 }
 
 export interface SetupStore {
@@ -362,6 +370,7 @@ ${saved ? '<p><strong>Saved.</strong> The controller is restarting with these se
 <label>opencode <small>GLM Coding Plan API key</small>${set(record.providers.zaiApiKey)}<input type="password" name="zai_api_key" autocomplete="off"></label>
 <label>Cloudflare Workers AI <small>an API token with the Workers AI Read permission. Runs through opencode, billed to your Cloudflare account</small>${set(record.providers.workersAiToken)}<input type="password" name="workers_ai_token" autocomplete="off"></label>
 <label>Workers AI account ID <small>optional, found from the token when it can see one account</small>${record.providers.workersAiAccountId === null ? '' : ` <small>(${escapeHtml(record.providers.workersAiAccountId)})</small>`}<input type="text" name="workers_ai_account_id" autocomplete="off" pattern="[0-9a-f]{32}"></label>
+<label>GitHub maintainer token <small>optional. A token for your own GitHub account, the login Hogwild has through <code>gh</code>. Comment commands, diagrams in pull requests, and workflow merges on contributor forks need it</small>${record.githubUser === null ? '' : ` <small>(signed in as ${escapeHtml(record.githubUser.login)}, leave empty to keep)</small>`}<input type="password" name="github_user_token" autocomplete="off"></label>
 <label><input type="checkbox" name="mutations_enabled"${record.mutationsEnabled ? ' checked' : ''}> Let the agent write to GitHub <small>comments, labels, pull requests, pushes</small></label>
 <button type="submit">Save and start</button>
 </form>
@@ -469,8 +478,30 @@ async function saveProviders(
       )
     workersAiAccountId = account.accountId
   }
+  let githubUser = record.githubUser
+  const githubUserToken = text('github_user_token')
+  if (githubUserToken !== null) {
+    const user = await dependencies
+      .fetch('https://api.github.com/user', {
+        headers: {
+          authorization: `Bearer ${githubUserToken}`,
+          accept: 'application/vnd.github+json',
+          'user-agent': USER_AGENT,
+        },
+      })
+      .then(async (response) => (response.ok ? ((await response.json()) as { login?: unknown }) : null))
+      .catch(() => null)
+    if (typeof user?.login !== 'string')
+      return page(
+        'GitHub token refused',
+        '<h1>GitHub token refused</h1><p>GitHub did not accept the maintainer token. <a href="/setup/providers">Back</a>.</p>',
+        { status: 400 },
+      )
+    githubUser = { token: githubUserToken, login: user.login }
+  }
   const next: SetupRecord = {
     ...record,
+    githubUser,
     providers: {
       claudeToken: text('claude_token') ?? record.providers.claudeToken,
       codexAuth: codexAuth ?? record.providers.codexAuth,
