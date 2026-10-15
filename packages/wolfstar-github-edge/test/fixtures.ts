@@ -90,6 +90,13 @@ export function createTestEdge(
       return options.relay === undefined ? 204 : options.relay(delivery)
     },
     proxyDashboard: async (request) => {
+      // The controller's own sign in: a session cookie of its own, or the dashboard password.
+      if (new URL(request.url).pathname === '/health') {
+        const signedIn =
+          (request.headers.get('cookie') ?? '').includes('controller_session=valid') ||
+          request.headers.get('authorization') === `Basic ${btoa(`agent:${DASHBOARD_PASSWORD}`)}`
+        return signedIn ? Response.json({ status: 'ready' }) : new Response('Unauthorized', { status: 401 })
+      }
       dashboard.push({
         url: request.url,
         method: request.method,

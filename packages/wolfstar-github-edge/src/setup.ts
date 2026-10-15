@@ -9,6 +9,8 @@
  * issues, or the dashboard password it generates.
  */
 
+import { applyProviderChanges, parseProviderChanges, settingsView, USER_AGENT } from './settings.ts'
+
 export interface GitHubAppRecord {
   id: number
   slug: string
@@ -72,6 +74,12 @@ export interface SetupDependencies {
   allowedOwners: string[]
   fetch: typeof fetch
   now: () => number
+  /**
+   * Asks the controller whether this request is signed in to its dashboard,
+   * by password or by passkey. The Worker keeps the secrets, and the controller
+   * decides who may change them, so the Settings page needs no second login.
+   */
+  authenticate?: (request: Request) => Promise<boolean>
 }
 
 /** The controller can run once it has an App and at least one Agent provider. */
@@ -89,7 +97,6 @@ const SESSION_COOKIE = 'wolfstar_setup'
 const STATE_COOKIE = 'wolfstar_setup_state'
 const MANIFEST_STATE_SECONDS = 60 * 60
 const GITHUB_API = 'https://api.github.com'
-const USER_AGENT = 'wolfstar-github-edge'
 
 /** The permissions and events the controller documents in its README. */
 export function appManifest(origin: string, owner: string, suffix: string): Record<string, unknown> {
@@ -362,6 +369,7 @@ function providersPage(record: SetupRecord, origin: string, saved: boolean): Res
     'Agent providers',
     `<h1>Agent providers</h1>
 ${saved ? '<p><strong>Saved.</strong> The controller is restarting with these settings.</p>' : ''}
+${isReady(record) ? '<p>Once the dashboard is up, manage these in <a href="/settings">Settings</a>. This page stays as a fallback.</p>' : ''}
 <p>1. <a href="${escapeHtml(app.htmlUrl)}/installations/new">Install the GitHub App</a> on the repositories the agent should work on.</p>
 <p>2. Add at least one Agent provider. Each one runs on that provider's own subscription.</p>
 <form method="post" action="/setup/providers">
@@ -378,47 +386,6 @@ ${saved ? '<p><strong>Saved.</strong> The controller is restarting with these se
 <p>Open <a href="${escapeHtml(origin)}/">${escapeHtml(origin)}/</a> and sign in as <code>${DASHBOARD_USER}</code> with this password. Save it now. This page shows it again only after you sign in with it.</p>
 <p class="box"><code>${escapeHtml(record.dashboardPassword ?? '')}</code></p>`,
   )
-}
-
-type WorkersAiCheck = { _tag: 'Accepted'; accountId: string } | { _tag: 'Refused'; reason: string }
-
-/**
- * Finds the account a Workers AI token bills and proves the token can reach Workers AI.
- *
- * A wrong token fails here, on the setup page, instead of on the first Agent turn.
- */
-async function checkWorkersAi(
-  dependencies: SetupDependencies,
-  token: string,
-  typedAccount: string | null,
-): Promise<WorkersAiCheck> {
-  const call = async (path: string): Promise<{ ok: boolean; body: { result?: unknown } }> => {
-    const response = await dependencies.fetch(`https://api.cloudflare.com/client/v4${path}`, {
-      headers: { authorization: `Bearer ${token}`, 'user-agent': USER_AGENT },
-    })
-    return { ok: response.ok, body: (await response.json().catch(() => ({}))) as { result?: unknown } }
-  }
-
-  let accountId = typedAccount
-  if (accountId !== null && !/^[0-9a-f]{32}$/.test(accountId))
-    return { _tag: 'Refused', reason: 'The account ID must have 32 hexadecimal characters.' }
-  if (accountId === null) {
-    const accounts = await call('/accounts?per_page=50')
-    const ids = Array.isArray(accounts.body.result)
-      ? accounts.body.result.flatMap((account: { id?: unknown }) =>
-          typeof account.id === 'string' ? [account.id] : [],
-        )
-      : []
-    if (!accounts.ok || ids.length === 0)
-      return { _tag: 'Refused', reason: 'The token cannot list any account. Enter the account ID as well.' }
-    if (ids.length > 1)
-      return { _tag: 'Refused', reason: 'The token can see more than one account. Enter the account ID as well.' }
-    accountId = ids[0]!
-  }
-  const models = await call(`/accounts/${accountId}/ai/models/search?per_page=1`)
-  if (!models.ok)
-    return { _tag: 'Refused', reason: 'The token cannot read Workers AI on that account. Give it Workers AI Read.' }
-  return { _tag: 'Accepted', accountId }
 }
 
 async function canEditProviders(request: Request, record: SetupRecord): Promise<boolean> {
@@ -446,74 +413,69 @@ async function saveProviders(
   // A form post from another site must not change the controller's credentials.
   if (!isSameOrigin(request)) return new Response('Request origin is not allowed.', { status: 403 })
   const form = await request.formData()
-  const text = (name: string): string | null => {
+  const text = (name: string): string | undefined => {
     const value = form.get(name)
-    return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+    return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
   }
 
-  const codexAuth = text('codex_auth')
-  if (codexAuth !== null) {
-    try {
-      JSON.parse(codexAuth)
-    } catch {
-      return page(
-        'Codex login is not JSON',
-        '<h1>Codex login is not JSON</h1><p>Paste the whole <code>~/.codex/auth.json</code>. <a href="/setup/providers">Back</a>.</p>',
-        {
-          status: 400,
-        },
-      )
-    }
-  }
-  const workersAiToken = text('workers_ai_token') ?? record.providers.workersAiToken
-  const typedAccount = text('workers_ai_account_id')
-  let workersAiAccountId = typedAccount ?? record.providers.workersAiAccountId
-  if (workersAiToken !== null && (text('workers_ai_token') !== null || typedAccount !== null)) {
-    const account = await checkWorkersAi(dependencies, workersAiToken, typedAccount)
-    if (account._tag === 'Refused')
-      return page(
-        'Workers AI login refused',
-        `<h1>Workers AI login refused</h1><p>${escapeHtml(account.reason)} <a href="/setup/providers">Back</a>.</p>`,
-        { status: 400 },
-      )
-    workersAiAccountId = account.accountId
-  }
-  let githubUser = record.githubUser
-  const githubUserToken = text('github_user_token')
-  if (githubUserToken !== null) {
-    const user = await dependencies
-      .fetch('https://api.github.com/user', {
-        headers: {
-          authorization: `Bearer ${githubUserToken}`,
-          accept: 'application/vnd.github+json',
-          'user-agent': USER_AGENT,
-        },
-      })
-      .then(async (response) => (response.ok ? ((await response.json()) as { login?: unknown }) : null))
-      .catch(() => null)
-    if (typeof user?.login !== 'string')
-      return page(
-        'GitHub token refused',
-        '<h1>GitHub token refused</h1><p>GitHub did not accept the maintainer token. <a href="/setup/providers">Back</a>.</p>',
-        { status: 400 },
-      )
-    githubUser = { token: githubUserToken, login: user.login }
-  }
-  const next: SetupRecord = {
-    ...record,
-    githubUser,
-    providers: {
-      claudeToken: text('claude_token') ?? record.providers.claudeToken,
-      codexAuth: codexAuth ?? record.providers.codexAuth,
-      zaiApiKey: text('zai_api_key') ?? record.providers.zaiApiKey,
-      workersAiToken,
-      workersAiAccountId,
+  const outcome = await applyProviderChanges(
+    record,
+    {
+      claudeToken: text('claude_token'),
+      codexAuth: text('codex_auth'),
+      zaiApiKey: text('zai_api_key'),
+      workersAiToken: text('workers_ai_token'),
+      workersAiAccountId: text('workers_ai_account_id'),
+      githubUserToken: text('github_user_token'),
+      mutationsEnabled: form.get('mutations_enabled') === 'on',
     },
-    mutationsEnabled: form.get('mutations_enabled') === 'on',
+    dependencies,
+  )
+  if (outcome._tag === 'Refused')
+    return page(
+      outcome.title,
+      `<h1>${escapeHtml(outcome.title)}</h1><p>${escapeHtml(outcome.message)} <a href="/setup/providers">Back</a>.</p>`,
+      { status: outcome.status },
+    )
+
+  await dependencies.store.write(outcome.record)
+  await dependencies.store.restart({ forgetCodexLogin: outcome.forgetCodexLogin })
+  return providersPage(outcome.record, new URL(request.url).origin, true)
+}
+
+function json(body: unknown, status = 200): Response {
+  return Response.json(body, { status, headers: { 'cache-control': 'no-store' } })
+}
+
+/** The Settings page's own door: JSON in, JSON out, no secret ever leaves. */
+async function settingsApi(
+  request: Request,
+  dependencies: SetupDependencies,
+  record: SetupRecord,
+  pathname: string,
+): Promise<Response> {
+  const allowed = (await canEditProviders(request, record)) || (await dependencies.authenticate?.(request)) === true
+  if (!allowed) return json({ error: 'Sign in to the dashboard first.' }, 401)
+
+  if (request.method === 'GET' && pathname === '/setup/api/state') return json(settingsView(record, isReady(record)))
+
+  if (request.method === 'POST' && pathname === '/setup/api/providers') {
+    if (!isSameOrigin(request)) return json({ error: 'Request origin is not allowed.' }, 403)
+    // A form post from another site cannot send this type without a preflight.
+    if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json'))
+      return json({ error: 'Send application/json.' }, 415)
+    const parsed = parseProviderChanges(await request.json().catch(() => undefined))
+    if (parsed._tag === 'Err') return json({ error: parsed.message }, 400)
+
+    const outcome = await applyProviderChanges(record, parsed.changes, dependencies)
+    if (outcome._tag === 'Refused') return json({ error: outcome.message, title: outcome.title }, outcome.status)
+
+    await dependencies.store.write(outcome.record)
+    await dependencies.store.restart({ forgetCodexLogin: outcome.forgetCodexLogin })
+    return json({ ...settingsView(outcome.record, isReady(outcome.record)), restarting: true })
   }
-  await dependencies.store.write(next)
-  await dependencies.store.restart({ forgetCodexLogin: codexAuth !== null })
-  return providersPage(next, new URL(request.url).origin, true)
+
+  return json({ error: 'Not found.' }, 404)
 }
 
 /** Every `/setup` route. Returns null for any other path. */
@@ -521,6 +483,11 @@ export async function handleSetup(request: Request, dependencies: SetupDependenc
   const url = new URL(request.url)
   if (url.pathname !== '/setup' && !url.pathname.startsWith('/setup/')) return null
   const record = await dependencies.store.read()
+
+  if (url.pathname.startsWith('/setup/api/')) {
+    if (record.app === null) return json({ error: 'Setup is not complete.' }, 409)
+    return settingsApi(request, dependencies, record, url.pathname)
+  }
 
   switch (`${request.method} ${url.pathname}`) {
     case 'GET /setup':
