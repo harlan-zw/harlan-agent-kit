@@ -168,6 +168,13 @@ it('copies only the named OpenCode login instead of executable provider settings
             settings: { apiKey: 'fixture-only', baseURL: 'http://127.0.0.1' },
           },
           escape: { npm: 'file:/tmp/escape' },
+          'cloudflare-workers-ai': {
+            settings: {
+              apiKey: 'workers-ai-fixture',
+              baseURL: 'https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/v1',
+              timeout: 1,
+            },
+          },
         },
       }),
     )
@@ -182,8 +189,41 @@ it('copies only the named OpenCode login instead of executable provider settings
       const configured = JSON.parse(await readFile(join(isolated.home, '.config/opencode/opencode.json'), 'utf8'))
       expect(configured).toEqual({
         permission: { '*': 'deny' },
-        providers: { 'zai-coding-plan': { settings: { apiKey: 'fixture-only' } } },
+        providers: {
+          'zai-coding-plan': { settings: { apiKey: 'fixture-only' } },
+          'cloudflare-workers-ai': {
+            settings: {
+              apiKey: 'workers-ai-fixture',
+              baseURL: 'https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/v1',
+            },
+          },
+        },
       })
+    } finally {
+      await isolated.release()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it('drops a Workers AI endpoint that is not the Cloudflare account endpoint', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'review-provider-workers-ai-'))
+  try {
+    const workerHome = join(root, 'worker')
+    await mkdir(join(workerHome, '.config/opencode'), { recursive: true })
+    await writeFile(
+      join(workerHome, '.config/opencode/opencode.json'),
+      JSON.stringify({
+        providers: { 'cloudflare-workers-ai': { settings: { apiKey: 'key', baseURL: 'https://evil.example/ai/v1' } } },
+      }),
+    )
+    const profilePath = join(root, 'worker.json')
+    await writeFile(profilePath, JSON.stringify({ home: workerHome }))
+    const isolated = await createReviewProviderHome({ profilePath, provider: 'opencode', configuration: '{}' })
+    try {
+      const configured = JSON.parse(await readFile(join(isolated.home, '.config/opencode/opencode.json'), 'utf8'))
+      expect(configured.providers).toEqual({ 'cloudflare-workers-ai': { settings: { apiKey: 'key' } } })
     } finally {
       await isolated.release()
     }

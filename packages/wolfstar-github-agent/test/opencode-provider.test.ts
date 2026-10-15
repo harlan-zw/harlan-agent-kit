@@ -120,6 +120,27 @@ describe('opencodeArguments', () => {
     )
   })
 
+  it('maps the role effort onto a variant the Workers AI model exposes', () => {
+    const model = (name: string, reasoningEffort?: string) =>
+      opencodeArguments(
+        request({ model: name, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) }),
+        'http://127.0.0.1:4097',
+      ).at(-1)
+
+    expect(model('cloudflare-workers-ai/@cf/openai/gpt-oss-120b', 'high')).toBe(
+      'cloudflare-workers-ai/@cf/openai/gpt-oss-120b#high',
+    )
+    expect(model('cloudflare-workers-ai/@cf/openai/gpt-oss-120b', 'max')).toBe(
+      'cloudflare-workers-ai/@cf/openai/gpt-oss-120b#high',
+    )
+    expect(model('cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code', 'high')).toBe(
+      'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code',
+    )
+    expect(model('cloudflare-workers-ai/@cf/zai-org/glm-5.3', undefined)).toBe(
+      'cloudflare-workers-ai/@cf/zai-org/glm-5.3',
+    )
+  })
+
   it('never resumes a saved session, because a resumed run ignores the prepared worktree', () => {
     expect(opencodeArguments(request({ sessionId: 'ses_abc12345' }), 'http://127.0.0.1:4097')).not.toContain(
       '--session',

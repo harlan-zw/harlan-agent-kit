@@ -11,6 +11,7 @@ import type {
   RoleReasoningEfforts,
 } from './types.ts'
 import { err, ok } from './result.ts'
+import { WORKERS_AI_MODELS } from './workers-ai.ts'
 
 export const CODEX_AGENT_PROFILE = {
   provider: 'codex',
@@ -129,6 +130,7 @@ export const AGENT_MODELS = {
     'opencode-go/qwen3.6-plus',
     'opencode-go/qwen3.7-max',
     'opencode-go/qwen3.7-plus',
+    ...WORKERS_AI_MODELS,
   ],
 } as const satisfies Record<AgentProviderName, readonly AgentModel[]>
 

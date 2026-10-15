@@ -214,6 +214,8 @@ describe('provider setup', () => {
       claudeToken: 'sk-ant-oat01-token',
       codexAuth: '{"tokens":{}}',
       zaiApiKey: null,
+      workersAiToken: null,
+      workersAiAccountId: null,
     })
     expect(edge.setup().mutationsEnabled).toBe(true)
     expect(isReady(edge.setup())).toBe(true)
@@ -231,6 +233,8 @@ describe('provider setup', () => {
       claudeToken: 'sk-ant-oat01-token',
       codexAuth: '{"tokens":{}}',
       zaiApiKey: 'zai-key',
+      workersAiToken: null,
+      workersAiAccountId: null,
     })
     expect(edge.setup().mutationsEnabled).toBe(false)
     expect(edge.restarts.at(-1)).toEqual({ forgetCodexLogin: false })
@@ -314,5 +318,125 @@ describe('provider setup', () => {
     )
     expect(response.headers.get('location')).toBe('/')
     expect(edge.restarts).toEqual([{ forgetCodexLogin: false }])
+  })
+})
+
+describe('Workers AI setup', () => {
+  const ACCOUNT = '0123456789abcdef0123456789abcdef'
+
+  function cloudflare(accounts: string[], modelsStatus = 200) {
+    return async (url: string, init?: RequestInit): Promise<Response> => {
+      const authorization = new Headers(init?.headers).get('authorization')
+      if (authorization !== 'Bearer cf-token') return new Response(null, { status: 403 })
+      if (url === 'https://api.cloudflare.com/client/v4/accounts?per_page=50')
+        return Response.json({ result: accounts.map((id) => ({ id })) })
+      if (url.startsWith('https://api.cloudflare.com/client/v4/accounts/') && url.includes('/ai/models/search'))
+        return Response.json({ result: [] }, { status: modelsStatus })
+      return new Response(null, { status: 404 })
+    }
+  }
+
+  async function save(edge: ReturnType<typeof createTestEdge>, form: Record<string, string>) {
+    return handleRequest(
+      new Request(`${ORIGIN}/setup/providers`, {
+        method: 'POST',
+        headers: { authorization: `Basic ${btoa(`agent:${DASHBOARD_PASSWORD}`)}`, origin: ORIGIN },
+        body: new URLSearchParams(form),
+      }),
+      edge.dependencies,
+    )
+  }
+
+  it('finds the account from the token, checks Workers AI, and saves both', async () => {
+    const edge = createTestEdge({ setup: READY_SETUP, github: cloudflare([ACCOUNT]) })
+
+    const response = await save(edge, { workers_ai_token: 'cf-token' })
+
+    expect(response.status).toBe(200)
+    expect(edge.setup().providers).toMatchObject({ workersAiToken: 'cf-token', workersAiAccountId: ACCOUNT })
+    expect(edge.github.map((call) => call.url)).toEqual([
+      'https://api.cloudflare.com/client/v4/accounts?per_page=50',
+      `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/ai/models/search?per_page=1`,
+    ])
+  })
+
+  it('runs on Workers AI alone', async () => {
+    const edge = createTestEdge({
+      setup: { ...READY_SETUP, providers: { ...READY_SETUP.providers, claudeToken: null } },
+      github: cloudflare([ACCOUNT]),
+    })
+
+    await save(edge, { workers_ai_token: 'cf-token' })
+
+    expect(isReady(edge.setup())).toBe(true)
+  })
+
+  it('asks for the account ID when the token sees several accounts, and accepts it typed', async () => {
+    const other = 'fedcba9876543210fedcba9876543210'
+    const edge = createTestEdge({ setup: READY_SETUP, github: cloudflare([ACCOUNT, other]) })
+
+    expect((await save(edge, { workers_ai_token: 'cf-token' })).status).toBe(400)
+    expect(edge.setup().providers.workersAiToken).toBeNull()
+
+    expect((await save(edge, { workers_ai_token: 'cf-token', workers_ai_account_id: other })).status).toBe(200)
+    expect(edge.setup().providers.workersAiAccountId).toBe(other)
+  })
+
+  it('refuses a token that cannot read Workers AI, or an account ID that is not one', async () => {
+    const edge = createTestEdge({ setup: READY_SETUP, github: cloudflare([ACCOUNT], 403) })
+
+    expect((await save(edge, { workers_ai_token: 'cf-token' })).status).toBe(400)
+    expect((await save(edge, { workers_ai_token: 'wrong-token' })).status).toBe(400)
+    expect((await save(edge, { workers_ai_token: 'cf-token', workers_ai_account_id: 'nope' })).status).toBe(400)
+    expect(edge.setup().providers.workersAiToken).toBeNull()
+  })
+
+  it('keeps a saved Workers AI login when another field changes', async () => {
+    const edge = createTestEdge({
+      setup: {
+        ...READY_SETUP,
+        providers: { ...READY_SETUP.providers, workersAiToken: 'cf-token', workersAiAccountId: ACCOUNT },
+      },
+    })
+
+    expect((await save(edge, { zai_api_key: 'zai-key' })).status).toBe(200)
+    expect(edge.setup().providers).toMatchObject({ workersAiToken: 'cf-token', workersAiAccountId: ACCOUNT })
+    expect(edge.github).toHaveLength(0)
+  })
+})
+
+describe('GitHub maintainer token', () => {
+  async function save(edge: ReturnType<typeof createTestEdge>, form: Record<string, string>) {
+    return handleRequest(
+      new Request(`${ORIGIN}/setup/providers`, {
+        method: 'POST',
+        headers: { authorization: `Basic ${btoa(`agent:${DASHBOARD_PASSWORD}`)}`, origin: ORIGIN },
+        body: new URLSearchParams(form),
+      }),
+      edge.dependencies,
+    )
+  }
+
+  const github = async (url: string, init?: RequestInit): Promise<Response> =>
+    url === 'https://api.github.com/user' && new Headers(init?.headers).get('authorization') === 'Bearer ghp_valid'
+      ? Response.json({ login: 'RedStar071' })
+      : new Response(null, { status: 401 })
+
+  it('saves a token GitHub accepts, with the login it belongs to', async () => {
+    const edge = createTestEdge({ setup: READY_SETUP, github })
+
+    expect((await save(edge, { github_user_token: 'ghp_valid' })).status).toBe(200)
+    expect(edge.setup().githubUser).toEqual({ token: 'ghp_valid', login: 'RedStar071' })
+  })
+
+  it('refuses a token GitHub rejects, and keeps a saved one when the field is empty', async () => {
+    const edge = createTestEdge({
+      setup: { ...READY_SETUP, githubUser: { token: 'ghp_valid', login: 'RedStar071' } },
+      github,
+    })
+
+    expect((await save(edge, { github_user_token: 'ghp_wrong' })).status).toBe(400)
+    expect((await save(edge, { claude_token: 'sk-ant-oat01-other' })).status).toBe(200)
+    expect(edge.setup().githubUser).toEqual({ token: 'ghp_valid', login: 'RedStar071' })
   })
 })

@@ -1,4 +1,5 @@
-import { homedir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -9,11 +10,14 @@ import {
   renderOpencodeConfig,
   renderRuntimeConfig,
   runtimePaths,
+  workersAiOnlySelection,
 } from '../src/cloudflare-runtime.ts'
 import { parseConfigText } from '../src/config.ts'
+import { readZaiApiKey } from '../src/provider-capacity.ts'
 
 const environment = {
   [RUNTIME_VARIABLES.appId]: '123456',
+  [RUNTIME_VARIABLES.appSlug]: 'wolfstar-project-agent-abcd',
   [RUNTIME_VARIABLES.privateKey]: '-----BEGIN RSA PRIVATE KEY-----\nkey\n-----END RSA PRIVATE KEY-----\n',
   [RUNTIME_VARIABLES.webhookSecret]: 'w'.repeat(40),
   [RUNTIME_VARIABLES.dashboardPassword]: 'p'.repeat(43),
@@ -76,6 +80,7 @@ describe('Cloudflare runtime configuration', () => {
       memoryPerAgentGiB: 4,
       hostReserveGiB: 2,
     })
+    expect(parsed.value.github.appSlug).toBe('wolfstar-project-agent-abcd')
     expect(parsed.value.github.privateKeyPath).toBe(join(homedir(), '.config/wolfstar-github-agent/app.pem'))
     expect(parsed.value.webhook).toEqual({
       _tag: 'Enabled',
@@ -101,19 +106,81 @@ describe('Cloudflare runtime configuration', () => {
 })
 
 describe('opencode configuration', () => {
-  it('sets the GLM Coding Plan key and keeps everything else', () => {
-    const existing = JSON.stringify({ theme: 'dark', provider: { other: { options: { apiKey: 'x' } } } })
+  const workersAi = { apiToken: 'cf-token', accountId: '0123456789abcdef0123456789abcdef' }
 
-    expect(JSON.parse(renderOpencodeConfig(existing, 'zai-key'))).toEqual({
+  it('writes both logins in the opencode v2 shape and keeps everything else', () => {
+    const existing = JSON.stringify({ theme: 'dark', providers: { other: { settings: { apiKey: 'x' } } } })
+
+    expect(JSON.parse(renderOpencodeConfig(existing, { zaiApiKey: 'zai-key', workersAi }))).toEqual({
       theme: 'dark',
-      provider: { other: { options: { apiKey: 'x' } }, 'zai-coding-plan': { options: { apiKey: 'zai-key' } } },
+      providers: {
+        other: { settings: { apiKey: 'x' } },
+        'zai-coding-plan': { settings: { apiKey: 'zai-key' } },
+        'cloudflare-workers-ai': {
+          settings: {
+            apiKey: 'cf-token',
+            baseURL: 'https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/v1',
+          },
+        },
+      },
     })
   })
 
+  it('writes the GLM Coding Plan key where the service reads it', () => {
+    const path = join(tmpdir(), `opencode-${process.pid}.json`)
+    writeFileSync(path, renderOpencodeConfig(null, { zaiApiKey: 'zai-key', workersAi: null }))
+    try {
+      expect(readZaiApiKey(path)).toBe('zai-key')
+    } finally {
+      rmSync(path, { force: true })
+    }
+  })
+
   it('replaces a file that is not JSON', () => {
-    expect(JSON.parse(renderOpencodeConfig('{', 'zai-key'))).toEqual({
-      provider: { 'zai-coding-plan': { options: { apiKey: 'zai-key' } } },
+    expect(JSON.parse(renderOpencodeConfig('{', { zaiApiKey: 'zai-key', workersAi: null }))).toEqual({
+      providers: { 'zai-coding-plan': { settings: { apiKey: 'zai-key' } } },
     })
+  })
+})
+
+describe('Workers AI in the Container', () => {
+  const onlyWorkersAi = {
+    ...environment,
+    [RUNTIME_VARIABLES.claudeToken]: '',
+    [RUNTIME_VARIABLES.workersAiToken]: 'cf-token',
+    [RUNTIME_VARIABLES.workersAiAccountId]: '0123456789abcdef0123456789abcdef',
+  }
+
+  it('runs opencode on Workers AI alone and pins a Workers AI model', () => {
+    const inputs = readRuntimeInputs(onlyWorkersAi)
+    if (inputs._tag !== 'Ok') throw new Error(inputs.error.join('\n'))
+
+    const parsed = parseConfigText(renderRuntimeConfig(inputs.value, runtimePaths(homedir())))
+
+    expect(parsed._tag === 'Ok' && parsed.value.agent.provider).toBe('opencode')
+    expect(workersAiOnlySelection(inputs.value.providers)).toEqual({
+      provider: 'opencode',
+      model: 'cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code',
+      reasoningEffort: null,
+    })
+  })
+
+  it('leaves the selection alone when another route exists', () => {
+    const inputs = readRuntimeInputs({ ...onlyWorkersAi, [RUNTIME_VARIABLES.zaiApiKey]: 'zai-key' })
+    if (inputs._tag !== 'Ok') throw new Error(inputs.error.join('\n'))
+
+    expect(workersAiOnlySelection(inputs.value.providers)).toBeNull()
+  })
+
+  it('refuses a Workers AI token without a valid account ID', () => {
+    for (const accountId of ['', 'not-an-account']) {
+      const inputs = readRuntimeInputs({ ...onlyWorkersAi, [RUNTIME_VARIABLES.workersAiAccountId]: accountId })
+      expect(inputs._tag).toBe('Err')
+    }
+  })
+
+  it('keeps the Workers AI token away from the Agents', () => {
+    expect(controllerEnvironment(onlyWorkersAi)).not.toHaveProperty(RUNTIME_VARIABLES.workersAiToken)
   })
 })
 
@@ -154,5 +221,15 @@ describe('controller environment', () => {
       PATH: '/usr/bin',
       HOME: '/home/node',
     })
+  })
+})
+
+describe('GitHub maintainer token', () => {
+  it('reads the token and keeps it away from the Agents', () => {
+    const withToken = { ...environment, [RUNTIME_VARIABLES.githubUserToken]: 'ghp_maintainer' }
+    const inputs = readRuntimeInputs(withToken)
+
+    expect(inputs._tag === 'Ok' && inputs.value.githubUserToken).toBe('ghp_maintainer')
+    expect(controllerEnvironment(withToken)).not.toHaveProperty(RUNTIME_VARIABLES.githubUserToken)
   })
 })

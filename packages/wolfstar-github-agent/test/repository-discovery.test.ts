@@ -1,4 +1,5 @@
 import type { InstalledRepository } from '../src/repository-discovery.ts'
+import { agentActorLogin } from '../src/review-comment.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -376,5 +377,42 @@ describe('repository discovery', () => {
         }),
       ),
     ).toBe(true)
+  })
+})
+
+describe('the App bot as a writable pull request author', () => {
+  const installed = [
+    {
+      github: 'wolfstar-project/example',
+      defaultBranch: 'main',
+      archived: false,
+      fork: false,
+      topics: [],
+      authentication: { _tag: 'App' as const, installationId: 1 },
+      owner: { login: 'wolfstar-project', type: 'Organization' as const },
+    },
+  ] as unknown as Parameters<typeof buildRepositoryMappings>[0]
+  const checkouts = [{ github: 'wolfstar-project/example', checkout: '/home/agent/pkg/example' }]
+
+  it('trusts the configured App bot, and the default bot without one', () => {
+    const named = buildRepositoryMappings(
+      installed,
+      checkouts,
+      [],
+      ['wolfstar-project'],
+      undefined,
+      agentActorLogin('wolfstar-project-agent-abcd'),
+    )
+    const fallback = buildRepositoryMappings(installed, checkouts, [], ['wolfstar-project'])
+
+    expect(named[0]?.writablePullRequestAuthors).toEqual(['wolfstar-project', 'wolfstar-project-agent-abcd[bot]'])
+    expect(fallback[0]?.writablePullRequestAuthors).toEqual(['wolfstar-project', 'wolfstar-github-agent[bot]'])
+  })
+})
+
+describe('agentActorLogin', () => {
+  it('names the bot after the App slug, and keeps the historical bot without one', () => {
+    expect(agentActorLogin('Wolfstar-Project-Agent-ABCD')).toBe('wolfstar-project-agent-abcd[bot]')
+    expect(agentActorLogin(undefined)).toBe('wolfstar-github-agent[bot]')
   })
 })

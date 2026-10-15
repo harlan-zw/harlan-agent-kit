@@ -181,7 +181,8 @@ function inheritedRelease(
 function defaultMapping(
   repository: InstalledRepository,
   checkout: string,
-  releaseDefaults?: PackageReleaseDefaults,
+  releaseDefaults: PackageReleaseDefaults | undefined,
+  appActorLogin: string,
 ): RepositoryMapping {
   const ownership = repository.owner.type === 'User' ? 'owned' : 'maintained'
   const release = inheritedRelease(repository, checkout, releaseDefaults)
@@ -193,7 +194,7 @@ function defaultMapping(
     ownership,
     ...(release === undefined ? {} : { release }),
     defaultBranch: repository.defaultBranch,
-    writablePullRequestAuthors: ['wolfstar-project', AGENT_ACTOR_LOGIN],
+    writablePullRequestAuthors: ['wolfstar-project', appActorLogin],
     writablePullRequestHeadPrefixes: ['fix/', 'feat/', 'chore/', 'docs/', 'refactor/', 'perf/', 'test/', 'ci/'],
     issueWork: ownership === 'owned',
     maxOpenPullRequests: null,
@@ -332,6 +333,7 @@ export function buildRepositoryMappings(
   overrides: RepositoryMapping[],
   allowedOwners: string[],
   releaseDefaults?: PackageReleaseDefaults,
+  appActorLogin: string = AGENT_ACTOR_LOGIN,
 ): RepositoryMapping[] {
   const checkoutByRepository = new Map(checkouts.map((checkout) => [checkout.github.toLowerCase(), checkout.checkout]))
   const overrideByRepository = new Map(overrides.map((mapping) => [mapping.github.toLowerCase(), mapping]))
@@ -342,7 +344,7 @@ export function buildRepositoryMappings(
       if (!isAllowedRepository(repository.github, allowedOwners)) return []
       const checkout = checkoutByRepository.get(repository.github.toLowerCase())
       if (checkout === undefined) return []
-      const defaults = defaultMapping(repository, checkout, releaseDefaults)
+      const defaults = defaultMapping(repository, checkout, releaseDefaults, appActorLogin)
       const override = overrideByRepository.get(repository.github.toLowerCase())
       return [
         {

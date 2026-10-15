@@ -5,6 +5,7 @@ import { constants } from 'node:fs'
 import { lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
+import { isWorkersAiBaseUrl, WORKERS_AI_PROVIDER } from './workers-ai.ts'
 
 export interface ReviewHomeRelease {
   _tag: 'Released'
@@ -144,7 +145,7 @@ function namedOpencodeLogin(source: string | null): Record<string, unknown> | un
   const providers = parsed.providers
   if (typeof providers !== 'object' || providers === null) return undefined
   const selected: Record<string, unknown> = {}
-  for (const id of ['zai-coding-plan', 'opencode-go']) {
+  for (const id of ['zai-coding-plan', 'opencode-go', WORKERS_AI_PROVIDER]) {
     const named = (providers as Record<string, unknown>)[id]
     if (typeof named !== 'object' || named === null || !('settings' in named)) continue
     const settings = named.settings
@@ -156,7 +157,11 @@ function namedOpencodeLogin(source: string | null): Record<string, unknown> | un
       settings.apiKey.length === 0
     )
       continue
-    selected[id] = { settings: { apiKey: settings.apiKey } }
+    // Workers AI needs its account endpoint, and only that exact endpoint is copied with the key.
+    const baseURL = id === WORKERS_AI_PROVIDER && 'baseURL' in settings ? settings.baseURL : undefined
+    selected[id] = {
+      settings: { apiKey: settings.apiKey, ...(isWorkersAiBaseUrl(baseURL) ? { baseURL } : {}) },
+    }
   }
   return Object.keys(selected).length === 0 ? undefined : selected
 }

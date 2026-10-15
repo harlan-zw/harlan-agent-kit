@@ -690,6 +690,31 @@ agent:
     })
   })
 
+  it('reads the GitHub App slug that names its bot', () => {
+    const result = parseConfigText(
+      configText.replace('app_id: 12345', 'app_id: 12345\n  app_slug: wolfstar-project-agent-abcd'),
+    )
+
+    expect(result._tag === 'Ok' && result.value.github.appSlug).toBe('wolfstar-project-agent-abcd')
+    const without = parseConfigText(configText)
+    expect(without._tag === 'Ok' && 'appSlug' in without.value.github).toBe(false)
+  })
+
+  it('rejects a GitHub App slug GitHub could not have issued', () => {
+    for (const slug of ['Wolfstar Agent', '-agent', 'agent[bot]']) {
+      const result = parseConfigText(configText.replace('app_id: 12345', `app_id: 12345\n  app_slug: '${slug}'`))
+      expect(result).toEqual({
+        _tag: 'Err',
+        error: expect.arrayContaining([
+          {
+            path: '$.github.app_slug',
+            message: 'Expected the GitHub App slug: lowercase letters, digits, and dashes.',
+          },
+        ]),
+      })
+    }
+  })
+
   it('rejects an invalid GitHub App boundary', () => {
     const result = parseConfigText(
       configText

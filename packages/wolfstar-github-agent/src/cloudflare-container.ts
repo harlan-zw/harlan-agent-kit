@@ -4,6 +4,7 @@ import type { CloudflareRuntimeInputs, RuntimePaths } from './cloudflare-runtime
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createConnection, createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
@@ -14,12 +15,14 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import { App } from 'octokit'
 import {
+  CONTAINER_DASHBOARD_ORIGIN,
   checkoutDirectories,
   controllerEnvironment,
   readRuntimeInputs,
   renderOpencodeConfig,
   renderRuntimeConfig,
   runtimePaths,
+  workersAiOnlySelection,
 } from './cloudflare-runtime.ts'
 
 /**
@@ -68,6 +71,28 @@ async function writeState(name: string, body: Buffer): Promise<void> {
   if (!response.ok) throw new Error(`Writing ${name} to R2 answered ${response.status}.`)
 }
 
+/**
+ * Signs the GitHub CLI in as the maintainer, as Hogwild's own login is.
+ *
+ * The token goes over stdin, never an argument, and the CLI keeps it in the
+ * controller home. The sandbox mounts none of that home, and the token leaves
+ * the controller's environment with the other secrets.
+ */
+async function loginGitHubCli(token: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('gh', ['auth', 'login', '--hostname', 'github.com', '--with-token'], {
+      stdio: ['pipe', 'ignore', 'pipe'],
+    })
+    let stderr = ''
+    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
+    child.once('error', reject)
+    child.once('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`gh auth login failed: ${stderr.trim() || `exit ${code}`}`)),
+    )
+    child.stdin.end(token)
+  }).catch((error: unknown) => log(error instanceof Error ? error.message : String(error)))
+}
+
 async function writeInputs(inputs: CloudflareRuntimeInputs, paths: RuntimePaths): Promise<void> {
   await writeSecret(paths.config, renderRuntimeConfig(inputs, paths))
   await writeSecret(paths.privateKey, inputs.privateKey)
@@ -78,6 +103,7 @@ async function writeInputs(inputs: CloudflareRuntimeInputs, paths: RuntimePaths)
   await mkdir(paths.sitesRoot, { recursive: true })
   await mkdir(dirname(paths.storage), { recursive: true, mode: 0o700 })
 
+  if (inputs.githubUserToken !== null) await loginGitHubCli(inputs.githubUserToken)
   await execFileAsync('git', ['config', '--global', 'user.name', inputs.gitName])
   await execFileAsync('git', ['config', '--global', 'user.email', inputs.gitEmail])
 
@@ -87,10 +113,100 @@ async function writeInputs(inputs: CloudflareRuntimeInputs, paths: RuntimePaths)
     const saved = await readState('codex-auth.json')
     await writeSecret(paths.codexAuth, saved?.toString('utf8') ?? inputs.providers.codexAuth)
   }
-  if (inputs.providers.zaiApiKey !== null) {
+  if (inputs.providers.zaiApiKey !== null || inputs.providers.workersAi !== null) {
     const existing = existsSync(paths.opencodeConfig) ? await readFile(paths.opencodeConfig, 'utf8') : null
-    await writeSecret(paths.opencodeConfig, renderOpencodeConfig(existing, inputs.providers.zaiApiKey))
+    await writeSecret(paths.opencodeConfig, renderOpencodeConfig(existing, inputs.providers))
   }
+}
+
+/**
+ * Builds the sandboxed worker home codex and opencode turns run in.
+ *
+ * It is the same provisioning a person runs once on Hogwild. Here it runs on
+ * every start, after the logins above, so the worker home always holds the
+ * current ones.
+ */
+async function provisionWorker(paths: RuntimePaths, repositoryRoot: string): Promise<void> {
+  await execFileAsync(
+    process.execPath,
+    [
+      '--experimental-strip-types',
+      join(repositoryRoot, 'scripts/agent-worker.ts'),
+      '--source-home',
+      paths.home,
+      '--worker-home',
+      paths.workerHome,
+      '--config',
+      paths.workerProfile,
+      '--codex',
+      join(paths.toolsBin, 'codex'),
+      '--opencode',
+      join(paths.toolsBin, 'opencode'),
+      '--tool-dir',
+      paths.toolsBin,
+      '--tool-dir',
+      dirname(process.execPath),
+      '--read-only',
+      repositoryRoot,
+    ],
+    { cwd: repositoryRoot },
+  )
+}
+
+function controllerRequest(
+  inputs: CloudflareRuntimeInputs,
+  method: 'GET' | 'POST',
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? undefined : JSON.stringify(body)
+    const request = httpRequest(
+      {
+        host: '127.0.0.1',
+        port: 3210,
+        method,
+        path,
+        headers: {
+          // The controller checks Host and Origin against its own dashboard origin.
+          host: new URL(CONTAINER_DASHBOARD_ORIGIN).host,
+          origin: CONTAINER_DASHBOARD_ORIGIN,
+          authorization: `Basic ${Buffer.from(`agent:${inputs.dashboardPassword}`).toString('base64')}`,
+          ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+      },
+      (response) => {
+        let text = ''
+        response.setEncoding('utf8')
+        response.on('data', (chunk: string) => (text += chunk))
+        response.on('end', () => resolve({ status: response.statusCode ?? 0, body: text }))
+      },
+    )
+    request.on('error', reject)
+    request.end(payload)
+  })
+}
+
+/** Pins a Workers AI model when it is the only route and nobody chose a selection yet. */
+async function pinWorkersAiWhenOnlyRoute(inputs: CloudflareRuntimeInputs): Promise<void> {
+  const selection = workersAiOnlySelection(inputs.providers)
+  if (selection === null) return
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const state = await controllerRequest(inputs, 'GET', '/api/state').catch(() => null)
+    if (state?.status === 200) {
+      const current = (JSON.parse(state.body) as { agentSelection?: { _tag?: string } }).agentSelection
+      if (current?._tag !== 'FollowsConfiguration') return
+      const pinned = await controllerRequest(inputs, 'POST', '/api/agents/select', { _tag: 'Pinned', ...selection })
+      log(
+        pinned.status === 200
+          ? `Pinned ${selection.model}, because Workers AI is the only Agent route.`
+          : `Pinning ${selection.model} answered ${pinned.status}. Pin it from the dashboard.`,
+      )
+      return
+    }
+    await sleep(5_000)
+  }
+  log('The controller did not answer in time. Pin a Workers AI model from the dashboard.')
 }
 
 async function restoreJournal(paths: RuntimePaths): Promise<void> {
@@ -213,6 +329,10 @@ async function main(): Promise<void> {
   const deployedCommit = existsSync(commitFile) ? (await readFile(commitFile, 'utf8')).trim() : 'unknown'
 
   await writeInputs(inputs, paths)
+  await provisionWorker(paths, repositoryRoot).catch((error: unknown) =>
+    // Claude still runs without the worker. codex and opencode turns stop before any tool runs.
+    log(`Provisioning the Agent worker failed: ${error instanceof Error ? error.message : String(error)}`),
+  )
   await restoreJournal(paths)
 
   let child: ChildProcess | null = null
@@ -261,6 +381,7 @@ async function main(): Promise<void> {
       },
     )
     child = running
+    void pinWorkersAiWhenOnlyRoute(inputs)
     const code = await new Promise<number | null>((resolve) => running.once('exit', resolve))
     child = null
     if (stopping) return

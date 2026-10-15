@@ -34,10 +34,20 @@ Then open the deployed URL at `/setup`:
 
 1. **Create the GitHub App.** GitHub shows the manifest with every permission and the webhook already filled in. Only someone who can create Apps for the first owner in `ALLOWED_OWNERS` can finish this step, and an App created under any other owner is refused.
 2. **Install the App** on the repositories the agent should work on.
-3. **Add an Agent provider**: a Claude token from `claude setup-token`, the contents of `~/.codex/auth.json` after `codex login`, or a GLM Coding Plan key for opencode. One is enough.
+3. **Add an Agent provider**: a Claude token from `claude setup-token`, the contents of `~/.codex/auth.json` after `codex login`, a GLM Coding Plan key for opencode, or a Cloudflare API token with Workers AI Read. One is enough. See [Workers AI](#workers-ai).
 4. **Save the dashboard password** the page shows, then open the dashboard and sign in as `agent`.
 
 To change providers later, open `/setup/providers` and sign in with the dashboard password. Saving restarts the controller. After you install the App on more repositories, GitHub returns you to `/setup/installed`, which restarts the controller so it clones them.
+
+## Workers AI
+
+Workers AI runs through opencode, so its models sit under opencode in the Agent selection, each named `cloudflare-workers-ai/@cf/...`. They bill your Cloudflare account per token and publish no quota window, so Reserve does not apply to them.
+
+The setup page takes an API token with the Workers AI Read permission. Leave the account ID empty when the token sees one account, and the Worker finds it. Saving checks the token against Workers AI, so a wrong token fails there instead of on the first turn.
+
+When Workers AI is the only provider, the Container pins `cloudflare-workers-ai/@cf/moonshotai/kimi-k2.7-code` the first time the controller starts, because every opencode role defaults to a GLM Coding Plan model. It leaves a selection you already chose alone. With other providers configured, pin a Workers AI model from the Agent selection yourself.
+
+Each model exposes its own reasoning variants, and opencode refuses one a model lacks. The controller maps a role's effort to the closest variant the model has, and runs `kimi-k2.7-code` without one.
 
 ## Cloudflare Access
 
