@@ -186,9 +186,11 @@ export interface RuntimePaths {
   workerProfile: string
   /** Where `scripts/agent-tools.ts` installs gh, codex, opencode, wt, rg, and fd. */
   toolsBin: string
+  /** The host capacity command for a host with one account. See `wolfstar-host-capacity`. */
+  hostCapacityCommand: string
 }
 
-export function runtimePaths(home: string): RuntimePaths {
+export function runtimePaths(home: string, repositoryRoot: string = join(home, 'wolfstar-agent-kit')): RuntimePaths {
   const configDirectory = join(home, '.config', 'wolfstar-github-agent')
   return {
     home,
@@ -206,6 +208,7 @@ export function runtimePaths(home: string): RuntimePaths {
     workerHome: join(home, '.local', 'share', 'wolfstar-agent-kit', 'worker-home'),
     workerProfile: join(configDirectory, 'worker.json'),
     toolsBin: join(home, '.local', 'share', 'wolfstar-agent-kit', 'tools', 'bin'),
+    hostCapacityCommand: join(repositoryRoot, 'packages/wolfstar-github-edge/container/wolfstar-host-capacity'),
   }
 }
 

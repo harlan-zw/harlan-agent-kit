@@ -1,0 +1,94 @@
+#!/usr/bin/env node
+
+/**
+ * The host capacity command for a host with one account, such as the Container.
+ *
+ * On Hogwild a root broker shares one machine between accounts and GitHub
+ * Actions runners, and decides which maintenance Task may start. A Container
+ * holds one controller and nothing else, and the controller already limits its
+ * own Agents to the slot count it set. So this command keeps the policy the
+ * controller states, reports it back, and runs an admitted command as is.
+ *
+ *   status                          the policy in force
+ *   policy <slots> <reserve>        record the policy, then report it
+ *   run <scope> <GiB> <command...>  run the command, as the broker does once admitted
+ *
+ * The controller checks the answer to `policy` against what it asked, so a
+ * wrong reply stops its start instead of running with a policy nobody set.
+ */
+
+import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { homedir, hostname } from 'node:os'
+import { join } from 'node:path'
+
+const stateDirectory =
+  process.env.WOLFSTAR_HOST_CAPACITY_STATE || join(homedir(), '.local', 'state', 'wolfstar-host-capacity')
+const policyPath = join(stateDirectory, 'policy.json')
+
+function readFirstLine(path) {
+  try {
+    const value = readFileSync(path, 'utf8').trim()
+    return value === '' ? null : value
+  } catch {
+    return null
+  }
+}
+
+function readPolicy() {
+  try {
+    const value = JSON.parse(readFileSync(policyPath, 'utf8'))
+    if (Number.isSafeInteger(value.agentSlots) && Number.isSafeInteger(value.maintenanceReserve)) return value
+  } catch {
+    // No policy yet. The controller sets one before it starts work.
+  }
+  return { agentSlots: 0, maintenanceReserve: 0 }
+}
+
+function status() {
+  return {
+    _tag: 'Status',
+    hostId: readFirstLine('/etc/machine-id') || hostname() || 'container',
+    // A new value after every boot tells the controller its earlier reservations are gone.
+    bootId: readFirstLine('/proc/sys/kernel/random/boot_id') || randomUUID(),
+    policy: readPolicy(),
+  }
+}
+
+function fail(message) {
+  process.stderr.write(`${message}\n`)
+  process.exit(2)
+}
+
+function wholeNumber(text, name) {
+  if (!/^\d{1,3}$/.test(text ?? '')) fail(`${name} must be a whole number.`)
+  return Number(text)
+}
+
+const [command, ...rest] = process.argv.slice(2)
+
+if (command === 'status') {
+  process.stdout.write(`${JSON.stringify(status())}\n`)
+} else if (command === 'policy') {
+  const agentSlots = wholeNumber(rest[0], 'The slot count')
+  const maintenanceReserve = wholeNumber(rest[1], 'The maintenance reserve')
+  if (agentSlots > 256 || maintenanceReserve > agentSlots) fail('The policy is outside what this host can hold.')
+  mkdirSync(stateDirectory, { recursive: true, mode: 0o700 })
+  // Write beside the target and rename, so a reader never sees half a file.
+  const next = `${policyPath}.${process.pid}`
+  writeFileSync(next, JSON.stringify({ agentSlots, maintenanceReserve }), { mode: 0o600 })
+  renameSync(next, policyPath)
+  process.stdout.write(`${JSON.stringify(status())}\n`)
+} else if (command === 'run') {
+  const [scope, memory, ...argv] = rest
+  if (!scope || argv.length === 0) fail('Usage: run <scope> <GiB> <command...>')
+  wholeNumber(memory, 'The memory')
+  // stdio is inherited, so the worker's event stream and the proof channel pass straight through.
+  const child = spawn(argv[0], argv.slice(1), { stdio: 'inherit' })
+  for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => child.kill(signal))
+  child.once('error', (error) => fail(`Could not start the command: ${error.message}`))
+  child.once('close', (code, signal) => process.exit(code ?? (signal === null ? 1 : 128)))
+} else {
+  fail('Usage: status | policy <slots> <reserve> | run <scope> <GiB> <command...>')
+}
