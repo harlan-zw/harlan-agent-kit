@@ -36,6 +36,9 @@ const tabs = [
   { label: 'Stats', to: '/stats', icon: 'i-octicon-graph-16' },
 ]
 
+/** Pages reached from the bottom of the rail, which are not tabs. */
+const pageTitles: Record<string, string> = { '/settings': 'Settings', '/flow': 'How it works' }
+
 const paused = computed(() => snapshot.value.agentControl._tag === 'Paused')
 
 watch(controlError, (error) => {
@@ -104,6 +107,19 @@ onMounted(() => {
         </UTooltip>
       </nav>
       <div v-if="terminalHost.controller.value" class="mt-auto border-t border-default">
+        <UTooltip text="Settings" :content="{ side: 'right' }">
+          <UButton
+            to="/settings"
+            icon="i-octicon-gear-16"
+            aria-label="Settings"
+            exact
+            color="neutral"
+            variant="ghost"
+            class="min-h-11 w-full justify-center rounded-none"
+            active-class="bg-accented text-highlighted border-l-2 border-accented"
+            inactive-class="text-muted"
+          />
+        </UTooltip>
         <UTooltip text="How it works" :content="{ side: 'right' }">
           <UButton
             to="/flow"
@@ -129,7 +145,7 @@ onMounted(() => {
 
           <span
             class="flex h-full shrink-0 items-center border-r border-default border-t-2 border-t-accented bg-default px-2 text-sm font-medium text-highlighted sm:px-4"
-            >{{ tabs.find((tab) => tab.to === route.path)?.label ?? 'Agent' }}</span
+            >{{ tabs.find((tab) => tab.to === route.path)?.label ?? pageTitles[route.path] ?? 'Agent' }}</span
           >
 
           <div class="ms-auto flex items-center gap-1.5">

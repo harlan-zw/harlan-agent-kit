@@ -48,6 +48,7 @@ const items = computed<DropdownMenuItem[][]>(() => {
           { label: 'Watching', to: '/watching', icon: 'i-octicon-broadcast-16' },
           { label: 'Routines', to: '/routines', icon: 'i-octicon-calendar-16' },
           { label: 'Stats', to: '/stats', icon: 'i-octicon-graph-16' },
+          { label: 'Settings', to: '/settings', icon: 'i-octicon-gear-16' },
         ],
         sessionPage.value
           ? []

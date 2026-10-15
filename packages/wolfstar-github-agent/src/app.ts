@@ -101,7 +101,7 @@ export interface AgentAppOptions {
 }
 
 /** Prerendered dashboard routes below `/`, each with its own payload. */
-const DASHBOARD_PAGES = ['sessions', 'history', 'watching', 'routines', 'flow', 'stats'] as const
+const DASHBOARD_PAGES = ['sessions', 'history', 'watching', 'routines', 'flow', 'stats', 'settings'] as const
 
 const securityHeaders = {
   'cache-control': 'no-store',

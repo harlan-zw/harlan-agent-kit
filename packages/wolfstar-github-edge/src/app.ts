@@ -1,7 +1,7 @@
 import type { AccessSettings } from './access.ts'
 import type { ControllerPort, WebhookDelivery } from './env.ts'
 import { hasAccessToken } from './access.ts'
-import { proxyDashboard } from './dashboard.ts'
+import { controllerAuthenticates, proxyDashboard } from './dashboard.ts'
 import { handleSetup, isReady } from './setup.ts'
 import { acceptWebhook, consumeWebhooks } from './webhook.ts'
 
@@ -54,6 +54,7 @@ export async function handleRequest(request: Request, dependencies: EdgeDependen
     allowedOwners: dependencies.allowedOwners,
     fetch: dependencies.fetch,
     now: dependencies.now,
+    authenticate: (candidate) => controllerAuthenticates(candidate, dependencies.controller),
   })
   if (setup !== null) return setup
 

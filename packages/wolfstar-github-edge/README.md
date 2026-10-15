@@ -37,7 +37,7 @@ Then open the deployed URL at `/setup`:
 3. **Add an Agent provider**: a Claude token from `claude setup-token`, the contents of `~/.codex/auth.json` after `codex login`, a GLM Coding Plan key for opencode, or a Cloudflare API token with Workers AI Read. One is enough. See [Workers AI](#workers-ai).
 4. **Save the dashboard password** the page shows, then open the dashboard and sign in as `agent`.
 
-To change providers later, open `/setup/providers` and sign in with the dashboard password. Saving restarts the controller. After you install the App on more repositories, GitHub returns you to `/setup/installed`, which restarts the controller so it clones them.
+To change providers later, open **Settings** in the dashboard, or `/setup/providers` and sign in with the dashboard password. Both save through the same checks, and saving restarts the controller. Settings never shows a saved secret back, only whether one is set. After you install the App on more repositories, GitHub returns you to `/setup/installed`, which restarts the controller so it clones them.
 
 ## Workers AI
 
