@@ -2,6 +2,7 @@ import type { OutboundHandler } from '@cloudflare/containers'
 import type { Env, RelayedDelivery } from './env.ts'
 import type { SetupRecord } from './setup.ts'
 import { Container } from '@cloudflare/containers'
+import { ARTIFACTS_HOST, artifactsAccess } from './artifacts.ts'
 import { EMPTY_SETUP, isReady } from './setup.ts'
 
 const SETUP_KEY = 'setup'
@@ -45,7 +46,10 @@ export class ControllerContainer extends Container<Env> {
   override enableInternet = true
 
   static {
-    this.outboundByHost = { 'state.internal': stateFiles as OutboundHandler }
+    this.outboundByHost = {
+      'state.internal': stateFiles as OutboundHandler,
+      [ARTIFACTS_HOST]: artifactsAccess as OutboundHandler,
+    }
   }
 
   /** The controller polls GitHub and runs Routines on its own clock, so it never sleeps. */

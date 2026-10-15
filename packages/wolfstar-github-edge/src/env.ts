@@ -29,6 +29,8 @@ export interface Env {
   WEBHOOKS: Queue<WebhookDelivery>
   /** Large webhook bodies under `deliveries/`, and the controller's journal under `controller/`. */
   STATE: R2Bucket
+  /** Agent worktree snapshots, one repository per GitHub repository. */
+  ARTIFACTS: Artifacts
 }
 
 /** What the Worker asks of the controller's Durable Object. Tests stand in for it. */
