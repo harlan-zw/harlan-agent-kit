@@ -5,12 +5,14 @@ import type { TerminalLaunchIntent } from '../utils/terminal-launch.ts'
 import { useDocumentVisibility, useIntervalFn, useMediaQuery, useStorage } from '@vueuse/core'
 import { parseTerminalCapacity } from '../utils/terminal-capacity.ts'
 import { terminalFailureCopy } from '../utils/terminal-copy.ts'
+import { createTerminalDraftStore } from '../utils/terminal-draft.ts'
 import { terminalLaunchIntent } from '../utils/terminal-launch.ts'
 import { activeTerminalSession, emptyTerminalLayout, emptyTerminalProjectLayout, parseTerminalLayout, reconcileTerminalLayout, terminalDisplayProjects, updateTerminalProjectLayout } from '../utils/terminal-layout.ts'
 import { parseTerminalProjects, parseTerminalSessionResult, parseTerminalSessions } from '../utils/terminal-protocol.ts'
 import TerminalView from './_TerminalView.vue'
 
 const { capabilities } = defineProps<{ capabilities: TerminalCapabilities }>()
+const drafts = createTerminalDraftStore()
 
 // Diff rendering stays outside the terminal bundle until the user opens it.
 const TerminalDiff = defineAsyncComponent(() => import('../components/_TerminalDiff.vue'))
@@ -362,7 +364,7 @@ watch(visibility, (value) => {
                 </UButton>
               </div>
             </div>
-            <TerminalView v-else :session="session" class="min-h-0 min-w-0 flex-1" />
+            <TerminalView v-else :session="session" :draft="drafts.forSession(session).value" class="min-h-0 min-w-0 flex-1" @update:draft="drafts.forSession(session).value = $event" />
           </div>
         </div>
         <TerminalDiff v-if="diffOpen" id="terminal-diff" :key="selected.id" role="tabpanel" aria-label="Diff" :target="{ _tag: 'Session', sessionId: selected.id }" class="relative z-10 h-full min-h-0 min-w-0 bg-default" @close="diffOpen = false" />

@@ -230,7 +230,7 @@ describe('repository discovery', () => {
     expect(mappings[0]?.enabled).toBe(false)
   })
 
-  it('lets the controller repair a CI branch without explicit policy', () => {
+  it.each(['ci/self-hosted-runners', 'terminal/session-123'])('lets the controller repair %s without explicit policy', (headRef) => {
     const mappings = buildRepositoryMappings([{
       github: 'harlan-zw/example',
       defaultBranch: 'main',
@@ -242,7 +242,7 @@ describe('repository discovery', () => {
     }], [{ github: 'harlan-zw/example', checkout: '/home/harlan/pkg/example' }], [], ['harlan-zw'])
 
     expect(canRepairPullRequestHead(mappings[0]!, pullRequestItem({
-      headRef: 'ci/self-hosted-runners',
+      headRef,
     }))).toBe(true)
   })
 })
