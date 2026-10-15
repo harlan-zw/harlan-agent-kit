@@ -29,7 +29,7 @@
       "authorized_keys": [
         {
           "name": "redstar-debug",
-          "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ8jxFkElZEn21sfrkv4yeYwyfMl1o+QZmS+J1HCD3mb wolfstar-github-edge debug",
+          "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ8jxFkElZEn21sfrkv4yeYwyfMl1o+QZmS+J1HCD3mb wolfstar-debug",
         },
       ],
     },
