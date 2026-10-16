@@ -59,6 +59,7 @@
     "ghostty-terminal-bindings": "workspace:*",
     "h3": "catalog:",
     "image-size": "catalog:",
+    "katex": "^0.16.47",
     "node-pty": "catalog:",
     "octokit": "catalog:",
     "saxes": "catalog:",

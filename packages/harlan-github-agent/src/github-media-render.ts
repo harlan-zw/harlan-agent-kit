@@ -1,7 +1,10 @@
+import { createRequire } from 'node:module'
 import process from 'node:process'
 import { Resvg } from '@resvg/resvg-js'
 import { SaxesParser } from 'saxes'
 import { MEDIA_LIMITS } from './github-media-limits.ts'
+
+const fontFile = createRequire(import.meta.url).resolve('katex/dist/fonts/KaTeX_SansSerif-Regular.ttf')
 
 function parseSvg(svg: string): void {
   const reject = () => {
@@ -47,7 +50,7 @@ async function main(): Promise<void> {
   const svg = bytes.toString('utf8')
   // Parse before native rendering: Resvg's default image resolver reads local files.
   parseSvg(svg)
-  const image = new Resvg(svg, { font: { loadSystemFonts: false }, logLevel: 'off' })
+  const image = new Resvg(svg, { font: { loadSystemFonts: false, fontFiles: [fontFile], defaultFontFamily: 'KaTeX Sans Serif' }, logLevel: 'off' })
   if (image.imagesToResolve().length > 0 || image.width < 1 || image.height < 1 || image.width > MEDIA_LIMITS.dimension || image.height > MEDIA_LIMITS.dimension || image.width * image.height > MEDIA_LIMITS.pixels)
     throw new Error('SVG exceeds the pixel limit or references external images.')
   const png = image.render().asPng()

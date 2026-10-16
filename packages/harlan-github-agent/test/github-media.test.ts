@@ -19,6 +19,18 @@ function source(fetch: typeof globalThis.fetch, granted = true) {
 }
 
 describe('controller image evidence', () => {
+  it('renders text in SVG evidence with no host fonts', async () => {
+    const background = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><rect width="160" height="40" fill="white"/></svg>'
+    const labelled = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><rect width="160" height="40" fill="white"/><text x="4" y="30" font-size="30" fill="black">Review</text></svg>'
+    const signal = new AbortController().signal
+    const plain = await renderSvgPixels(Buffer.from(background), signal)
+    const text = await renderSvgPixels(Buffer.from(labelled), signal)
+    expect(plain).toMatchObject({ _tag: 'Ok' })
+    expect(text).toMatchObject({ _tag: 'Ok' })
+    if (plain._tag === 'Ok' && text._tag === 'Ok')
+      expect(text.value).not.toEqual(plain.value)
+  })
+
   it('fetches with read credentials, drops them across redirects, and renders SVG pixels', async () => {
     const requests: Array<{ url: string, authorization: string | null }> = []
     const loader = source(async (input, options) => {
