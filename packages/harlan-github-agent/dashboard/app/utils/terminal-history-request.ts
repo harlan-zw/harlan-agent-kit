@@ -16,6 +16,19 @@ export type TerminalEarlierRequest
   = | { type: 'History', snapshot: string | null, offset: number | null, limit: typeof historyPageLimit }
     | { type: 'Scrollback', offset: number, limit: number }
 
+/** Restores the page a viewer had open when a terminal stream attaches. */
+export function terminalAttachmentHistoryRequest(options: {
+  ended: boolean
+  historySupported: boolean
+  reading: Reading | null
+  retainedSnapshot?: string | null
+  screen?: Pick<TerminalScreen, 'dimensions' | 'scrollbackLength'>
+}): TerminalEarlierRequest | undefined {
+  if (!options.reading?.snapshot && !(options.ended && options.retainedSnapshot))
+    return undefined
+  return terminalEarlierRequest(options)
+}
+
 /** Chooses a stable history page before requiring the live terminal screen. */
 export function terminalEarlierRequest(options: {
   ended: boolean

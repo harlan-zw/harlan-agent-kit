@@ -5,7 +5,7 @@ import { useClipboard, useCssVar, useDocumentVisibility, useEventListener, useIn
 import { browserKeyEvent, CanvasRenderer } from 'ghostty-terminal-bindings/browser'
 import { createSessionImeLatch } from '../utils/session-ime.ts'
 import { terminalFailureCopy } from '../utils/terminal-copy.ts'
-import { terminalEarlierRequest } from '../utils/terminal-history-request.ts'
+import { terminalAttachmentHistoryRequest, terminalEarlierRequest } from '../utils/terminal-history-request.ts'
 import { createTerminalInputChannel } from '../utils/terminal-input.ts'
 import { parseTerminalFrame } from '../utils/terminal-protocol.ts'
 import { terminalReadingPosition } from '../utils/terminal-reading.ts'
@@ -200,17 +200,9 @@ function latest() {
     container.value.scrollTop = 0
 }
 
-function earlier() {
+function loadEarlier(request: ReturnType<typeof terminalEarlierRequest>) {
   if (historyRequest || historyExpired.value)
     return
-  const request = terminalEarlierRequest({
-    ended: ended.value,
-    history: history.value,
-    historySupported: historySupported.value,
-    reading: reading.value,
-    retainedSnapshot: snapshot.value,
-    screen: screen.value,
-  })
   if (!request)
     return
   requestedHistoryOffset = request.offset ?? undefined
@@ -226,6 +218,17 @@ function earlier() {
     historyTimeout.start()
   else
     historyFailure.value = 'Could not load earlier output. Retry.'
+}
+
+function earlier() {
+  loadEarlier(terminalEarlierRequest({
+    ended: ended.value,
+    history: history.value,
+    historySupported: historySupported.value,
+    reading: reading.value,
+    retainedSnapshot: snapshot.value,
+    screen: screen.value,
+  }))
 }
 
 function showHistory(page: NonNullable<typeof history.value>) {
@@ -338,8 +341,17 @@ function connect() {
       channel?.setWriter(message.writer)
       processState.value = message.session.state
       failure.value = ''
-      if (reading.value?.snapshot && !history.value && !historyRequest)
-        earlier()
+      if (!history.value && !historyRequest) {
+        const request = terminalAttachmentHistoryRequest({
+          ended: ended.value,
+          historySupported: historySupported.value,
+          reading: reading.value,
+          retainedSnapshot: snapshot.value,
+          screen: screen.value,
+        })
+        if (request)
+          loadEarlier(request)
+      }
       // Reconnecting viewers keep their read intent. Takeover requires Use terminal.
       if (initialAttachment && message.writer === null && ['Starting', 'Running'].includes(message.session.state))
         send({ type: 'AcquireWriter' })

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { terminalEarlierRequest } from '../dashboard/app/utils/terminal-history-request.ts'
+import { terminalAttachmentHistoryRequest, terminalEarlierRequest } from '../dashboard/app/utils/terminal-history-request.ts'
 
 it('restores a saved history page for an ended session without a cached screen', () => {
   expect(terminalEarlierRequest({
@@ -7,6 +7,15 @@ it('restores a saved history page for an ended session without a cached screen',
     historySupported: true,
     reading: { snapshot: 'saved-copy', offset: 1113 },
   })).toEqual({ type: 'History', snapshot: 'saved-copy', offset: 1113, limit: 200 })
+})
+
+it('restores a retained snapshot when an ended viewer attaches after reload', () => {
+  expect(terminalAttachmentHistoryRequest({
+    ended: true,
+    historySupported: true,
+    reading: null,
+    retainedSnapshot: 'saved-copy',
+  })).toEqual({ type: 'History', snapshot: 'saved-copy', offset: null, limit: 200 })
 })
 
 it('does not request a replacement from an ended helper after returning to the last screen', () => {
