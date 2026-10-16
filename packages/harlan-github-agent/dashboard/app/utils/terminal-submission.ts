@@ -24,6 +24,11 @@ export function advanceTerminalSubmission(state: TerminalSubmission, sequence: n
     : { state: { _tag: 'Acknowledged', text: state.text } }
 }
 
+/** A confirmed paste cannot be submitted after its process has ended. Keep the draft editable. */
+export function endTerminalSubmission(state: TerminalSubmission): TerminalSubmission {
+  return state._tag === 'Pasted' ? { _tag: 'Editing' } : interruptTerminalSubmission(state)
+}
+
 /** Disconnects and timeouts never replay terminal input. The person checks the screen. */
 export function interruptTerminalSubmission(state: TerminalSubmission): TerminalSubmission {
   return state._tag === 'Pending' ? { _tag: 'Unknown', text: state.text } : state

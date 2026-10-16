@@ -1,6 +1,6 @@
 import type { TerminalInput } from '../src/terminal-protocol.ts'
 import { describe, expect, it } from 'vitest'
-import { advanceTerminalSubmission, beginTerminalSubmission, interruptTerminalSubmission } from '../dashboard/app/utils/terminal-submission.ts'
+import { advanceTerminalSubmission, beginTerminalSubmission, endTerminalSubmission, interruptTerminalSubmission } from '../dashboard/app/utils/terminal-submission.ts'
 
 const enter: TerminalInput = { type: 'Key', event: { action: 1, key: 58, mods: 0 } }
 describe('phone terminal delivery', () => {
@@ -36,4 +36,10 @@ describe('phone terminal delivery', () => {
     const pending = beginTerminalSubmission('', enter, 'writer', { _tag: 'Ok', value: 1 })
     expect(advanceTerminalSubmission(pending, 1, 'writer')).toEqual({ state: { _tag: 'Acknowledged', text: '' } })
   })
+})
+
+it('makes an ended Session draft recoverable after paste or interrupted delivery', () => {
+  expect(endTerminalSubmission({ _tag: 'Pasted', text: 'Keep this', enter })).toEqual({ _tag: 'Editing' })
+  const pending = beginTerminalSubmission('Check first', enter, 'writer', { _tag: 'Ok', value: 1 })
+  expect(endTerminalSubmission(pending)).toEqual({ _tag: 'Unknown', text: 'Check first' })
 })

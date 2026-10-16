@@ -23,7 +23,7 @@ function cacheScreen(session: TerminalSession, screen: TerminalScreen) {
   const entries = Object.entries(screens.value).filter(([key]) => key !== screenKey(session)).slice(-9)
   screens.value = Object.fromEntries([...entries, [screenKey(session), markRaw(screen)]])
 }
-const memories = useSessionStorage<Record<string, { submission: TerminalSubmission, reading: { offset: number, top: number } | null }>>(`agent-terminal-reading:${capabilities.hostId}`, {})
+const memories = useSessionStorage<Record<string, { submission: TerminalSubmission, reading: { snapshot?: string, offset: number, top: number } | null }>>(`agent-terminal-reading:${capabilities.hostId}`, {})
 function memory(session: TerminalSession) {
   const key = JSON.stringify([session.id, session.generation])
   return memories.value[key] ??= { submission: { _tag: 'Editing' }, reading: null }

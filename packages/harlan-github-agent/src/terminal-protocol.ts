@@ -95,6 +95,7 @@ export type TerminalClientMessage
     | { type: 'ReleaseWriter' }
     | { type: 'RenewWriter', lease: string }
     | { type: 'Scrollback', offset: number, limit: number }
+    | { type: 'History', requestId: string, snapshot: string | null, offset: number | null, limit: number }
     | {
       type: 'Resize'
       lease: string
@@ -135,9 +136,16 @@ export interface TerminalRows {
   modes: TerminalScreen['modes']
   scrollbackLength: number
 }
+export interface TerminalHistoryPage {
+  snapshot: string
+  total: number
+  offset: number
+  lines: string[]
+}
 export type TerminalServerMessage
   = | {
     type: 'Attached'
+    history?: true
     protocol: 1
     session: TerminalSession
     writer: TerminalWriter
@@ -152,6 +160,7 @@ export type TerminalServerMessage
     lines: TerminalCell[][]
     graphemes: string[][]
   }
+  | { type: 'History', generation: string, requestId: string, result: ({ _tag: 'Page' } & TerminalHistoryPage) | { _tag: 'Expired' } }
   | { type: 'WriterChanged', writer: TerminalWriter }
   | { type: 'InputReceipt', sequence: number, lease: string }
   | { type: 'Process', state: TerminalState }
@@ -267,6 +276,11 @@ export function parseTerminalClientMessage(
     return { _tag: 'Ok', value: { type: value.type } }
   if (value.type === 'RenewWriter' && text(value.lease, 128))
     return { _tag: 'Ok', value: { type: 'RenewWriter', lease: value.lease } }
+  if (value.type === 'History' && text(value.requestId, 128)
+    && (value.snapshot === null || text(value.snapshot, 128))
+    && (value.offset === null || integer(value.offset, 0, 1000)) && integer(value.limit, 1, 200)) {
+    return { _tag: 'Ok', value: { type: 'History', requestId: value.requestId, snapshot: value.snapshot, offset: value.offset, limit: value.limit } }
+  }
   if (
     value.type === 'Scrollback'
     && integer(value.offset, 0, 1000)

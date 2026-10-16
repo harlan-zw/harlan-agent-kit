@@ -64,6 +64,9 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Terminal delivery not sent | Not sent | Restore an uncertain draft after checking the terminal |
 | Terminal earlier output | Earlier output | Open and page terminal scrollback |
 | Terminal latest output | Latest | Return to the live terminal screen |
+| Terminal history expired | Earlier output expired. Refresh to read the retained output. | Saved reading copy expired or was evicted |
+| Terminal history refresh | Refresh earlier output | Explicitly replace an expired reading copy |
+| Terminal history legacy | This session uses live history. New output can move older lines. | Older running helper without stable reading copies |
 | Terminal history failure | Could not load earlier output. Retry. | Failed scrollback read |
 | Session search | Find a project or session | Project, provider and state search |
 | Session search label | Find a session | Accessible search name |

@@ -21,11 +21,11 @@ const session: TerminalSession = {
   createdAt: '2026-10-12T00:00:00Z',
   worktree: '/scratch/worktree',
 }
-async function fixture() {
+async function fixture(historyLimit = 10, scrollbackLimit = 10) {
   const ghostty = await createGhostty(await readFile(wasmPath()), (message) => {
     throw new Error(message)
   })
-  const terminal = ghostty.createTerminal(20, 5, { scrollbackLimit: 10 })
+  const terminal = ghostty.createTerminal(20, 5, { scrollbackLimit })
   const encoder = ghostty.createKeyEncoder()
   const writes: string[] = []
   const sizes: { cols: number, rows: number }[] = []
@@ -45,7 +45,7 @@ async function fixture() {
     },
     now: () => now,
     token: () => `writer-${++token}`,
-    historyLimit: 10,
+    historyLimit,
   })
   const messages: TerminalServerMessage[] = []
   owner.attach('one', 'generation', message => messages.push(message))
@@ -205,4 +205,55 @@ describe('canonical terminal owner', () => {
     )
     owner.dispose()
   })
+})
+
+it('keeps history pages identical after output rolls over and the reader reconnects', async () => {
+  const { owner, messages } = await fixture(1000, 2 * 1024 * 1024)
+  owner.output(Array.from({ length: 1300 }, (_, i) => `line-${i}\r\n`).join(''))
+  expect(owner.message('one', { type: 'History', requestId: 'first', snapshot: null, offset: 0, limit: 10 })).toEqual({ _tag: 'Ok', value: true })
+  const first = messages.at(-1)
+  if (first?.type !== 'History' || first.result._tag !== 'Page')
+    throw new Error('Missing history snapshot')
+  expect(first.result.lines.join('\n')).toContain('line-')
+  const original = first.result
+  expect(original.total).toBe(1000)
+  owner.output(Array.from({ length: 1300 }, (_, i) => `new-${i}\r\n`).join(''))
+  owner.detach('one')
+  owner.attach('reader', 'generation', message => messages.push(message))
+  owner.message('reader', { type: 'History', requestId: 'older', snapshot: original.snapshot, offset: 0, limit: 5 })
+  expect(messages.at(-1)).toMatchObject({ type: 'History', requestId: 'older', result: { _tag: 'Page', snapshot: original.snapshot, offset: 0, lines: original.lines.slice(0, 5) } })
+  owner.message('reader', { type: 'History', requestId: 'newer', snapshot: original.snapshot, offset: 5, limit: 5 })
+  expect(messages.at(-1)).toMatchObject({ result: { lines: original.lines.slice(5, 10) } })
+  owner.dispose()
+})
+
+it('reports expired history explicitly instead of replacing its lines', async () => {
+  const { owner, messages, advance } = await fixture()
+  owner.output('one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix\r\n')
+  owner.message('one', { type: 'History', requestId: 'first', snapshot: null, offset: null, limit: 5 })
+  const first = messages.at(-1)
+  if (first?.type !== 'History' || first.result._tag !== 'Page')
+    throw new Error('Missing history snapshot')
+  advance(15 * 60 * 1000 + 1)
+  owner.message('one', { type: 'History', requestId: 'restore', snapshot: first.result.snapshot, offset: 0, limit: 5 })
+  expect(messages.at(-1)).toEqual({ type: 'History', requestId: 'restore', generation: 'generation', result: { _tag: 'Expired' } })
+  owner.dispose()
+})
+
+it('preserves Unicode history through resize and evicts old reading copies explicitly', async () => {
+  const { owner, messages, lease } = await fixture(1000, 2 * 1024 * 1024)
+  owner.output(Array.from({ length: 40 }).fill('中👩‍💻 retained text\r\n').join(''))
+  owner.message('one', { type: 'History', requestId: 'first', snapshot: null, offset: 0, limit: 200 })
+  const first = messages.at(-1)
+  if (first?.type !== 'History' || first.result._tag !== 'Page')
+    throw new Error('Missing history')
+  const original = first.result
+  expect(original.lines.join('\n')).toContain('中👩‍💻')
+  owner.message('one', { type: 'Resize', cols: 10, rows: 5, lease, sequence: 1 })
+  owner.message('one', { type: 'History', requestId: 'same', snapshot: original.snapshot, offset: 0, limit: 200 })
+  expect(messages.at(-1)).toMatchObject({ result: original })
+  for (let i = 0; i < 4; i++) owner.message('one', { type: 'History', requestId: `new-${i}`, snapshot: null, offset: null, limit: 200 })
+  owner.message('one', { type: 'History', requestId: 'old', snapshot: original.snapshot, offset: 0, limit: 200 })
+  expect(messages.at(-1)).toMatchObject({ requestId: 'old', result: { _tag: 'Expired' } })
+  owner.dispose()
 })

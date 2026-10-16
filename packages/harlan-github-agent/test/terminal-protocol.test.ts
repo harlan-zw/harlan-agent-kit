@@ -72,3 +72,11 @@ describe('terminal request boundaries', () => {
     ).toEqual({ _tag: 'Err', reason: 'SizeLimit' })
   })
 })
+
+it('parses bounded history requests and refuses malformed snapshot identifiers', () => {
+  const request = { type: 'History', requestId: 'read-1', snapshot: null, offset: null, limit: 200 }
+  expect(parseTerminalClientMessage(request)).toEqual({ _tag: 'Ok', value: request })
+  expect(parseTerminalClientMessage({ ...request, snapshot: 'copy-1', offset: 800 })).toMatchObject({ _tag: 'Ok', value: { snapshot: 'copy-1', offset: 800 } })
+  for (const change of [{ requestId: '' }, { snapshot: 5 }, { offset: -1 }, { limit: 201 }])
+    expect(parseTerminalClientMessage({ ...request, ...change })).toEqual({ _tag: 'Err', reason: 'InvalidRequest' })
+})

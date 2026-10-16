@@ -110,3 +110,14 @@ describe('terminal browser boundary', () => {
     expect(parseTerminalFrame(JSON.stringify({ type: 'InputReceipt', sequence: 5, lease: 'lease' }))).toEqual({ _tag: 'Ok', value: { type: 'InputReceipt', sequence: 5, lease: 'lease' } })
   })
 })
+
+it('parses stable history pages and expiry without trusting page bounds', () => {
+  const page = { type: 'History', generation: 'g', requestId: 'r', result: { _tag: 'Page', snapshot: 'copy', total: 1000, offset: 999, lines: ['中👩‍💻'] } }
+  expect(parseTerminalServerMessage(page)).toEqual({ _tag: 'Ok', value: page })
+  for (const change of [{ snapshot: '' }, { offset: 1000 }, { total: 1001 }, { lines: ['bad\nline'] }, { lines: ['\uD800'] }])
+    expect(parseTerminalServerMessage({ ...page, result: { ...page.result, ...change } })).toEqual(error)
+  expect(parseTerminalServerMessage({ ...page, result: { ...page.result, offset: 0, lines: Array.from({ length: 201 }).fill('line') } })).toEqual(size)
+  const expired = { ...page, result: { _tag: 'Expired' } }
+  expect(parseTerminalServerMessage(expired)).toEqual({ _tag: 'Ok', value: expired })
+  expect(parseTerminalServerMessage({ type: 'Attached', protocol: 1, session, writer: null, history: true })).toMatchObject({ _tag: 'Ok', value: { history: true } })
+})
