@@ -61,6 +61,39 @@ function pruneTerminalHistory(
   syncHistoryDirectory(path)
 }
 
+export function pruneExpiredTerminalHistory(
+  directory: string,
+  sessionId: string,
+  now: number,
+) {
+  const path = historyPath(directory, sessionId)
+  const content = (() => {
+    try {
+      return readFileSync(path, 'utf8')
+    }
+    catch (cause: unknown) {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT')
+        return null
+      throw cause
+    }
+  })()
+  if (!content)
+    return
+  const value = (() => {
+    try {
+      return JSON.parse(content) as { snapshots?: unknown }
+    }
+    catch {
+      return null
+    }
+  })()
+  const snapshots = value && Array.isArray(value.snapshots)
+    ? value.snapshots.filter(candidate => isLiveSnapshot(candidate, now))
+    : []
+  if (!value || !Array.isArray(value.snapshots) || snapshots.length !== value.snapshots.length)
+    pruneTerminalHistory(directory, sessionId, snapshots)
+}
+
 export function readTerminalHistory(options: {
   directory: string
   sessionId: string

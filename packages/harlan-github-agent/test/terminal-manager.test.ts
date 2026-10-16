@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { controllerTerminalProviderArguments } from '../src/terminal-controller.ts'
+import { writeTerminalHistory } from '../src/terminal-history.ts'
 import { writeTerminalJson } from '../src/terminal-storage.ts'
 import { createTerminalManager } from '../src/terminal.ts'
 
@@ -17,6 +18,23 @@ it('reports authoritative aggregate host memory without private broker diagnosti
   const fixture_ = await fixture()
   const manager = await fixture_.manager()
   expect(await manager.capacity()).toMatchObject({ _tag: 'Available', memoryGiB: 16, reservedGiB: 0, sessionMemoryGiB: 8, manualPolicy: { _tag: 'Enabled', memoryGiB: 32 }, regular: { _tag: 'Allowed' } })
+})
+it('removes expired helper history during manager startup without a reader', async () => {
+  const fixture_ = await fixture()
+  const helper = await fixture_.manager()
+  const launched = await helper.launch(launch)
+  if (launched._tag !== 'Ok')
+    throw new Error('Fixture launch failed')
+  const path = join(fixture_.directory, 'sessions', launched.value.id)
+  writeTerminalHistory(fixture_.directory, launched.value.id, [
+    { id: 'snapshot', generation: 'generation', expiresAt: 0, lines: ['expired terminal output'] },
+  ])
+  fixture_.empty()
+  await helper.close()
+
+  await fixture_.manager()
+
+  await expect(readFile(join(path, 'history.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
 })
 afterEach(async () => {
   for (const manager of managers.splice(0)) manager.close()
@@ -173,6 +191,7 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
     return result
   }
   return {
+    directory,
     manager,
     admission: options.admission,
     deferStop() {
