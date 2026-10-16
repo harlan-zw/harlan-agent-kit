@@ -15,6 +15,12 @@ catalogs:
     '@coldtea/pr-lens-schema':
       specifier: ^0.7.0
       version: 0.7.0
+    '@expo-google-fonts/noto-emoji':
+      specifier: 0.4.8
+      version: 0.4.8
+    '@fontpkg/unifont':
+      specifier: 15.0.1
+      version: 15.0.1
     '@harlan-zw/jev':
       specifier: ^0.2.0
       version: 0.2.4
@@ -268,6 +274,12 @@ importers:
       '@coldtea/pr-lens-schema':
         specifier: 'catalog:'
         version: 0.7.0
+      '@expo-google-fonts/noto-emoji':
+        specifier: 'catalog:'
+        version: 0.4.8
+      '@fontpkg/unifont':
+        specifier: 'catalog:'
+        version: 15.0.1
       '@openai/codex-sdk':
         specifier: 'catalog:'
         version: 0.160.0
@@ -1315,6 +1327,9 @@ packages:
     resolution: {integrity: sha512-IkO+/KEUvwbVpiURZg+P7zF74z5Jxe0UgJxVni+RtoHQ6IZieXaO02kmadomap/q+l6bc/jdPGGqTjhuZnuz1Q==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
+  '@expo-google-fonts/noto-emoji@0.4.8':
+    resolution: {integrity: sha512-zuq8xBS8nfdgqHXIwfdotQNObA22aMLdPJbFmzJt1AUjbBE4hP/K3az/GftD3e2/JTzRnX30C5lmpuNkVewRlA==}
+
   '@fingerprintjs/botd@2.0.0':
     resolution: {integrity: sha512-yhuz23NKEcBDTHmGz/ULrXlGnbHenO+xZmVwuBkuqHUkqvaZ5TAA0kAgcRy4Wyo5dIBdkIf57UXX8/c9UlMLJg==}
 
@@ -1329,6 +1344,9 @@ packages:
 
   '@floating-ui/vue@1.1.11':
     resolution: {integrity: sha512-HzHKCNVxnGS35r9fCHBc3+uCnjw9IWIlCPL683cGgM9Kgj2BiAl8x1mS7vtvP6F9S/e/q4O6MApwSHj8hNLGfw==}
+
+  '@fontpkg/unifont@15.0.1':
+    resolution: {integrity: sha512-2cOKJsymtBTwb6tgjnsUa3tNoD1/Ubg7NmOxdHzl+wZe3evrkoZyLU2fUWwmWrpM2PLKbiqi+AnwdBgHT8herg==}
 
   '@gar/promise-retry@1.0.3':
     resolution: {integrity: sha512-GmzA9ckNokPypTg10pgpeHNQe7ph+iIKKmhKu3Ob9ANkswreCx7R3cKmY781K8QK3AqVL3xVh9A42JvIAbkkSA==}
@@ -9031,6 +9049,8 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
+  '@expo-google-fonts/noto-emoji@0.4.8': {}
+
   '@fingerprintjs/botd@2.0.0': {}
 
   '@floating-ui/core@1.8.0':
@@ -9052,6 +9072,8 @@ snapshots:
     transitivePeerDependencies:
       - '@vue/composition-api'
       - vue
+
+  '@fontpkg/unifont@15.0.1': {}
 
   '@gar/promise-retry@1.0.3': {}
 
