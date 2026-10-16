@@ -197,6 +197,15 @@ export async function createTerminalManager(options: {
     if (intent.session.state === 'Exited' || intent.session.state === 'Interrupted')
       pruneExpiredTerminalHistory(options.directory, intent.session.id, options.now().getTime())
   }
+  async function reconcileStartup(intent: TerminalIntent) {
+    try {
+      await reconcile(intent)
+    }
+    catch (cause) {
+      options.log('Terminal session startup reconciliation failed', cause)
+    }
+    pruneHistory(intent)
+  }
   async function launch(
     request: TerminalLaunch,
     manual = false,
@@ -425,8 +434,7 @@ export async function createTerminalManager(options: {
   await Promise.all(
     [...intents.values()].map(intent =>
       owned(intent.session.id, async () => {
-        await reconcile(intent)
-        pruneHistory(intent)
+        await reconcileStartup(intent)
       }),
     ),
   )

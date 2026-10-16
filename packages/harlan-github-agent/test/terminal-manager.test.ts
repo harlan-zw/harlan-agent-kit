@@ -58,6 +58,7 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
   let emptyChecks = 0
   let released = false
   let missingAfterStop = false
+  let inspectFailures = 0
   let receiptResult: TerminalAdmissionResult = { _tag: 'Conflict' }
   let receipt: Parameters<TerminalAdmission['completedReceipt']>[0] | null = null
   const starts: string[] = []
@@ -142,13 +143,19 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
       cancel: async () => ({ _tag: 'Conflict' }),
     },
     processHost: {
-      inspect: async () => ({
-        loadState: 'loaded',
-        activeState: running ? 'active' : 'inactive',
-        invocationId: scope.invocationId,
-        controlGroup: scope.controlGroup,
-        mainPid: leader ? 123 : 0,
-      }),
+      inspect: async () => {
+        if (inspectFailures > 0) {
+          inspectFailures--
+          throw new Error('Temporary process inspection failure')
+        }
+        return {
+          loadState: 'loaded',
+          activeState: running ? 'active' : 'inactive',
+          invocationId: scope.invocationId,
+          controlGroup: scope.controlGroup,
+          mainPid: leader ? 123 : 0,
+        }
+      },
       start: async (value) => {
         scope.unit = value.unit
         starts.push(value.unit)
@@ -219,6 +226,9 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
       leader = false
       ready = false
     },
+    rejectInspectOnce: () => {
+      inspectFailures = 1
+    },
     refuse: () => {
       refused = true
     },
@@ -243,6 +253,22 @@ const launch = {
   provider: 'codex' as const,
 }
 describe('durable terminal launch and ownership', () => {
+  it('continues startup after one persisted running session inspection failure', async () => {
+    const f = await fixture()
+    const first = await f.manager()
+    const launched = await first.launch(launch)
+    if (launched._tag !== 'Ok')
+      throw new Error('Fixture launch failed')
+    await first.close()
+    f.rejectInspectOnce()
+
+    const restarted = await f.manager()
+
+    expect((await restarted.sessions())[0]).toMatchObject({
+      id: launched.value.id,
+      state: 'Running',
+    })
+  })
   it('fences ambiguous manual outcomes across restart without replacing the admission request', async () => {
     const f = await fixture()
     const manager = await f.manager()
