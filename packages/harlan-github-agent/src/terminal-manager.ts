@@ -204,7 +204,12 @@ export async function createTerminalManager(options: {
     catch (cause) {
       options.log('Terminal session startup reconciliation failed', cause)
     }
-    pruneHistory(intent)
+    try {
+      pruneHistory(intent)
+    }
+    catch (cause) {
+      options.log('Terminal session startup history pruning failed', cause)
+    }
   }
   async function launch(
     request: TerminalLaunch,

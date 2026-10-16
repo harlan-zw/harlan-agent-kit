@@ -14,6 +14,25 @@ import { createTerminalManager } from '../src/terminal.ts'
 const managers: Awaited<ReturnType<typeof createTerminalManager>>[] = []
 
 const directories: string[] = []
+it('starts when ended-session history cannot be pruned and retries after storage recovers', async () => {
+  const f = await fixture()
+  const original = await f.manager()
+  const launched = await original.launch(launch)
+  if (launched._tag !== 'Ok')
+    throw new Error('Fixture launch failed')
+  f.empty()
+  expect(await original.sessions()).toMatchObject([{ id: launched.value.id, state: 'Exited' }])
+  await original.close()
+  const history = join(f.directory, 'sessions', launched.value.id, 'history.json')
+  await mkdir(history)
+
+  const recovered = await f.manager()
+
+  expect(f.logged).toContainEqual(expect.objectContaining({ code: 'EISDIR' }))
+  await rm(history, { recursive: true })
+  expect(await recovered.sessions()).toMatchObject([{ id: launched.value.id, state: 'Exited' }])
+})
+
 it('reports authoritative aggregate host memory without private broker diagnostics', async () => {
   const fixture_ = await fixture()
   const manager = await fixture_.manager()
@@ -64,6 +83,7 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
   const starts: string[] = []
   const arguments_: string[][] = []
   const releases: string[] = []
+  const logged: unknown[] = []
   const scope = {
     unit: '',
     invocationId: 'owned-invocation',
@@ -190,7 +210,7 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
     renewWorktree: async () => {},
     ready: async () => ready,
     now: () => new Date('2026-10-12T00:00:00Z'),
-    log: () => {},
+    log: (_message, cause) => logged.push(cause),
   }
   async function manager() {
     const result = await createTerminalManager(options)
@@ -201,6 +221,7 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
     directory,
     manager,
     admission: options.admission,
+    logged,
     deferStop() {
       const gate = Promise.withResolvers<void>()
       const entered = Promise.withResolvers<void>()
