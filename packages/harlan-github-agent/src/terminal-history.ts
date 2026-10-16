@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, fsyncSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export interface TerminalHistorySnapshot {
@@ -11,6 +11,24 @@ export interface TerminalHistorySnapshot {
 
 function historyPath(directory: string, sessionId: string) {
   return join(directory, 'sessions', sessionId, 'history.json')
+}
+
+function syncHistoryDirectory(path: string) {
+  const directoryHandle = openSync(join(path, '..'), 'r')
+  fsyncSync(directoryHandle)
+  closeSync(directoryHandle)
+}
+
+function isLiveSnapshot(candidate: unknown, now: number): candidate is TerminalHistorySnapshot {
+  return typeof candidate === 'object'
+    && candidate !== null
+    && typeof (candidate as TerminalHistorySnapshot).id === 'string'
+    && typeof (candidate as TerminalHistorySnapshot).generation === 'string'
+    && Number.isSafeInteger((candidate as TerminalHistorySnapshot).expiresAt)
+    && (candidate as TerminalHistorySnapshot).expiresAt > now
+    && Array.isArray((candidate as TerminalHistorySnapshot).lines)
+    && (candidate as TerminalHistorySnapshot).lines.length <= 1000
+    && (candidate as TerminalHistorySnapshot).lines.every(line => typeof line === 'string')
 }
 
 export function writeTerminalHistory(
@@ -26,9 +44,21 @@ export function writeTerminalHistory(
   fsyncSync(file)
   closeSync(file)
   renameSync(temporary, path)
-  const directoryHandle = openSync(join(path, '..'), 'r')
-  fsyncSync(directoryHandle)
-  closeSync(directoryHandle)
+  syncHistoryDirectory(path)
+}
+
+function pruneTerminalHistory(
+  directory: string,
+  sessionId: string,
+  snapshots: readonly TerminalHistorySnapshot[],
+) {
+  const path = historyPath(directory, sessionId)
+  if (snapshots.length) {
+    writeTerminalHistory(directory, sessionId, snapshots)
+    return
+  }
+  unlinkSync(path)
+  syncHistoryDirectory(path)
 }
 
 export function readTerminalHistory(options: {
@@ -60,19 +90,16 @@ export function readTerminalHistory(options: {
       return null
     }
   })()
-  if (!value || !Array.isArray(value.snapshots))
+  if (!value || !Array.isArray(value.snapshots)) {
+    pruneTerminalHistory(options.directory, options.sessionId, [])
     return { _tag: 'Expired' } as const
-  const snapshot = value.snapshots.find((candidate): candidate is TerminalHistorySnapshot =>
-    typeof candidate === 'object'
-    && candidate !== null
-    && typeof (candidate as TerminalHistorySnapshot).id === 'string'
-    && (candidate as TerminalHistorySnapshot).id === options.snapshot
-    && (candidate as TerminalHistorySnapshot).generation === options.generation
-    && Number.isSafeInteger((candidate as TerminalHistorySnapshot).expiresAt)
-    && (candidate as TerminalHistorySnapshot).expiresAt > options.now
-    && Array.isArray((candidate as TerminalHistorySnapshot).lines)
-    && (candidate as TerminalHistorySnapshot).lines.length <= 1000
-    && (candidate as TerminalHistorySnapshot).lines.every(line => typeof line === 'string'),
+  }
+  const snapshots = value.snapshots.filter(candidate => isLiveSnapshot(candidate, options.now))
+  if (snapshots.length !== value.snapshots.length)
+    pruneTerminalHistory(options.directory, options.sessionId, snapshots)
+  const snapshot = snapshots.find(candidate =>
+    candidate.id === options.snapshot
+    && candidate.generation === options.generation,
   )
   if (!snapshot)
     return { _tag: 'Expired' } as const
