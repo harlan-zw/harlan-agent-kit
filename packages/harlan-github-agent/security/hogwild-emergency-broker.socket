@@ -1,0 +1,12 @@
+[Unit]
+Description=Passkey-authorized Hogwild isolation socket
+
+[Socket]
+ListenStream=/run/hogwild-emergency-broker.sock
+SocketUser=root
+SocketGroup=harlan
+SocketMode=0660
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

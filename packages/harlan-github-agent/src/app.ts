@@ -1,6 +1,7 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { BrowserAuth } from './browser-auth.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
+import type { EmergencyProxy } from './emergency-isolation.ts'
 import type { AgentHost, AgentSlotLimits, HostAgentPool, HostCapacity } from './host-capacity.ts'
 import type { createPullRequestDiffSource } from './pull-request-diff.ts'
 import type { PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
@@ -20,6 +21,7 @@ import { createError, createEventStream, H3, setResponseStatus } from 'h3'
 import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
 import { parseDesktopEvents, parseDesktopFailure, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
+import { registerEmergencyRoutes } from './emergency-routes.ts'
 import { parseAgentSlots } from './host-capacity.ts'
 import { parseIncidentResolutionRequest } from './incident-resolution.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
@@ -28,6 +30,7 @@ import { registerSessionRoutes } from './session-routes.ts'
 import { parseStatsRange } from './stats.ts'
 
 export interface AgentAppOptions {
+  emergencyIsolation?: EmergencyProxy
   pullRequestDiff?: ReturnType<typeof createPullRequestDiffSource>
   repairRecovery?: (request: RepairRecoveryRequest) => Promise<Result<RepairRecoveryResponse, string>>
   pullRequestWatch?: {
@@ -425,6 +428,15 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     return authority?.handle(event.req, publicIngress ? options.allowedOrigin : undefined)
       ?? new Response(JSON.stringify({ _tag: 'Err', reason: 'AuthenticationRequired' }), { status: 401 })
   })
+
+  if (options.emergencyIsolation) {
+    registerEmergencyRoutes(app, options.emergencyIsolation, (headers) => {
+      if (headers.get('x-harlan-agent-ingress') !== 'public')
+        return null
+      const authority = options.browserAuth?.public
+      return authority?.bootstrapKind === 'passkey' ? authority.session(headers)?.credentialId ?? null : null
+    })
+  }
 
   if (options.sessions !== undefined) {
     registerSessionRoutes(app, options.sessions)
