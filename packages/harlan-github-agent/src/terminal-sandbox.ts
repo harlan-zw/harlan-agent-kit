@@ -11,7 +11,7 @@ const execute = promisify(execFile)
 /** Trust this generated Codex worktree for this invocation without changing user config. */
 export function withCodexProjectTrust(argv: string[], cwd: string): string[] {
   const delimiter = argv.indexOf('--')
-  const options = ['-c', `projects.${JSON.stringify(cwd)}.trust_level="trusted"`]
+  const options = ['-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`]
   return delimiter < 0
     ? [...argv, ...options]
     : [...argv.slice(0, delimiter), ...options, ...argv.slice(delimiter)]

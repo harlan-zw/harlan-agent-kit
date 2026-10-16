@@ -57,6 +57,14 @@ watch(draft, () => {
 })
 const processState = ref(session.state)
 const ended = computed(() => ['Exited', 'Interrupted'].includes(processState.value))
+const earlierRequest = computed(() => terminalEarlierRequest({
+  ended: ended.value,
+  history: history.value,
+  historySupported: historySupported.value,
+  reading: reading.value,
+  retainedSnapshot: retainedSnapshot.value,
+  screen: screen.value,
+}))
 const writable = computed(() => connected.value && ['Starting', 'Running'].includes(processState.value) && !deliveryBlocked.value && writer.value?.viewId === viewId)
 const canAcquireWriter = computed(() => connected.value && ['Starting', 'Running'].includes(processState.value) && !writable.value && writer.value === null)
 const connectionCopy = computed(() => processState.value === 'Exited'
@@ -222,14 +230,7 @@ function loadEarlier(request: ReturnType<typeof terminalEarlierRequest>) {
 }
 
 function earlier() {
-  loadEarlier(terminalEarlierRequest({
-    ended: ended.value,
-    history: history.value,
-    historySupported: historySupported.value,
-    reading: reading.value,
-    retainedSnapshot: retainedSnapshot.value,
-    screen: screen.value,
-  }))
+  loadEarlier(earlierRequest.value)
 }
 
 function showHistory(page: NonNullable<typeof history.value>) {
@@ -637,7 +638,7 @@ onScopeDispose(() => {
   <div class="flex min-h-0 flex-col">
     <div class="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-x-2 border-b border-default px-3 text-sm text-muted">
       <span role="status" class="min-w-0 flex-1 break-words">{{ history ? 'Earlier output' : connectionCopy }}</span>
-      <UTooltip v-if="(screen?.scrollbackLength || history) && (!ended || history?.snapshot || reading?.snapshot || retainedSnapshot)" text="Earlier output">
+      <UTooltip v-if="earlierRequest" text="Earlier output">
         <UButton icon="i-octicon-history-16" aria-label="Earlier output" color="neutral" variant="ghost" class="min-h-11 min-w-11 justify-center" :loading="historyLoading" :disabled="!connected || historyExpired || history?.offset === 0" @click="earlier" />
       </UTooltip>
       <UButton v-if="history || historyExpired" icon="i-octicon-arrow-down-16" color="neutral" variant="outline" class="min-h-11" @click="latest">

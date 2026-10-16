@@ -1,8 +1,9 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
@@ -10,24 +11,61 @@ import { createTerminalPreparationRunner, prepareTerminalSandbox, withCodexProje
 
 const execute = promisify(execFile)
 
-it('trusts only the exact Codex Session worktree in this invocation and preserves a prompt delimiter', () => {
-  const cwd = '/home/harlan/pkg/gscdump.terminal-3460d48ea906090c9b6ac6ec'
-  expect(withCodexProjectTrust(['--sandbox', 'danger-full-access', '--', 'inspect this'], cwd)).toEqual([
-    '--sandbox',
-    'danger-full-access',
-    '-c',
-    `projects.${JSON.stringify(cwd)}.trust_level="trusted"`,
-    '--',
-    'inspect this',
-  ])
-})
-
-it('quotes unusual worktree names as TOML keys without invoking a shell', () => {
-  const cwd = '/tmp/session. "review" \\ path'
-  expect(withCodexProjectTrust([], cwd)).toEqual([
-    '-c',
-    `projects.${JSON.stringify(cwd)}.trust_level="trusted"`,
-  ])
+const codexAvailable = spawnSync('codex', ['--version'], { timeout: 3000 }).status === 0
+it.skipIf(!codexAvailable).each(['project.with.dots', 'project. "review" \\ path'])('loads only the exact worktree project config with Codex: %s', async (name) => {
+  const root = await mkdtemp(join(tmpdir(), 'terminal-codex-trust-'))
+  const cwd = join(root, name)
+  const home = join(root, 'codex')
+  const unrelated = join(root, 'unrelated.project')
+  const userConfig = `[projects.${JSON.stringify(unrelated)}]\ntrust_level = "untrusted"\n`
+  await Promise.all([mkdir(join(cwd, '.codex'), { recursive: true }), mkdir(home)])
+  await writeFile(join(home, 'config.toml'), userConfig)
+  await writeFile(join(cwd, '.codex/config.toml'), 'model = "fixture-project-model"\n')
+  const child = spawn('codex', withCodexProjectTrust(['app-server', '--listen', 'stdio://', '--'], cwd), {
+    cwd,
+    env: { ...process.env, CODEX_HOME: home },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  const closed = new Promise<void>(resolve => child.once('close', () => resolve()))
+  const lines = createInterface({ input: child.stdout })
+  let diagnostics = ''
+  child.stderr.on('data', bytes => diagnostics += bytes.toString())
+  try {
+    const result = await new Promise<{ config: { model: string, projects: Record<string, { trust_level: string }> } }>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Codex config probe timed out: ${diagnostics}`)), 8000)
+      child.once('error', (cause) => {
+        clearTimeout(timer)
+        reject(cause)
+      })
+      child.once('exit', () => {
+        clearTimeout(timer)
+        reject(new Error(`Codex config probe exited: ${diagnostics}`))
+      })
+      lines.on('line', (line) => {
+        const message = JSON.parse(line)
+        if (message.id === 1) {
+          child.stdin.write(`${JSON.stringify({ method: 'notifications/initialized' })}\n`)
+          child.stdin.write(`${JSON.stringify({ id: 2, method: 'config/read', params: { cwd, includeLayers: true } })}\n`)
+        }
+        if (message.id === 2) {
+          clearTimeout(timer)
+          if (message.error)
+            reject(new Error(JSON.stringify(message.error)))
+          else resolve(message.result)
+        }
+      })
+      child.stdin.write(`${JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'terminal-trust-test', version: '1.0.0' } } })}\n`)
+    })
+    expect(result.config.projects).toEqual({ [cwd]: { trust_level: 'trusted' }, [unrelated]: { trust_level: 'untrusted' } })
+    expect(result.config.model).toBe('fixture-project-model')
+    expect(await readFile(join(home, 'config.toml'), 'utf8')).toBe(userConfig)
+  }
+  finally {
+    lines.close()
+    child.kill('SIGKILL')
+    await closed
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 it('installs and runs a provider update inside isolated package manager state', async () => {
