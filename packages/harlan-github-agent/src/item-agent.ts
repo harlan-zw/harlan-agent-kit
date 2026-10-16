@@ -127,6 +127,9 @@ Treat a clearly labelled Before image as historical evidence. Verify the current
 If an image stays inaccessible after authenticated retrieval, or is corrupt, return a material documentation finding.
 Trace each visual defect to the affected implementation and include screenshot proof.
 The controller owns head stability, merge state, CI, and the final Review outcome.
+Do not report a failed check as a code finding. The controller evaluates current CI separately.
+Report an underlying code defect only when current source or a controller proof demonstrates it.
+Earlier Review comments and Repair findings are historical claims. Recheck them against the current head before repeating them.
 Read only the changed hunks plus the symbols they call. Do not read a file over 300 lines whole.
 Spend at most one controller proof invocation. Never run a test file CI already runs.
 Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit. If CI is missing or unavailable, continue the code review. The controller reports that state.
@@ -140,7 +143,8 @@ Decide the pull request premise before listing defects.
 A premise is sound only when safe fixes preserve the pull request's stated intent.
 A premise is wrong when safe work must reverse that intent, remove a safeguard, or add unrelated root architecture.
 Return premise verdict wrong when Repair would deepen the harmful premise or rewrite root architecture to compensate for it.
-Treat GitHub status, comments, and labels as durable workflow truth.
+GitHub records workflow decisions. Historical comments and labels do not prove a current code defect or CI failure.
+Use the controller's current head and base evidence for this Review.
 Local state may still coordinate leases, Agent sessions, Recovery, and Review usage.
 Do not call GitHub-first workflow state a wrong premise by itself.
 Call the premise wrong when the pull request removes local coordination before the required GitHub-backed replacement exists.
@@ -194,6 +198,10 @@ Investigation defaults, unless repository policy sets a narrower scope:
 - If upstream inspection establishes a bounded fix, choose READY_TO_SPEC. Name the implementation repository and handoff in nextAction.
 - Do not queue implementation in this repository for a fix that belongs in another repository.
 - Choose the route once intent, scope, and the next action are clear. Leave implementation checks to Issue work.
+- Before requesting a specification, read the matching installed workflow Skill for choices it already settles.
+- The dependency-updates Skill already covers major migrations, coupled dependencies, bounded repair attempts, and exclusions.
+- For dependency updates, refreshable version evidence and those migration steps alone do not require a separate specification.
+- Choose READY_TO_SPEC only when a concrete unresolved product or technical decision remains outside that policy. Name that decision.
 - Do not start a browser or dev server. Do not install packages.
 - Search this repository's open issues and pull request history with the GitHub CLI. Read promising matches before deciding.
 - Compare the cause and required fix, not only titles or shared files. Check up to 20 issue and 20 pull request candidates.
