@@ -5,11 +5,13 @@ import { useClipboard, useCssVar, useDocumentVisibility, useEventListener, useIn
 import { browserKeyEvent, CanvasRenderer } from 'ghostty-terminal-bindings/browser'
 import { createSessionImeLatch } from '../utils/session-ime.ts'
 import { terminalFailureCopy } from '../utils/terminal-copy.ts'
+import { terminalHistoryAfterExpiry, terminalHistoryAfterLatest, terminalHistoryAfterPage } from '../utils/terminal-history-memory.ts'
+import { terminalAttachmentHistoryRequest, terminalEarlierRequest } from '../utils/terminal-history-request.ts'
 import { createTerminalInputChannel } from '../utils/terminal-input.ts'
 import { parseTerminalFrame } from '../utils/terminal-protocol.ts'
 import { terminalReadingPosition } from '../utils/terminal-reading.ts'
 import { applyTerminalScreen } from '../utils/terminal-screen.ts'
-import { advanceTerminalSubmission, beginTerminalSubmission, interruptTerminalSubmission } from '../utils/terminal-submission.ts'
+import { advanceTerminalSubmission, beginTerminalSubmission, endTerminalSubmission, interruptTerminalSubmission } from '../utils/terminal-submission.ts'
 
 const { session, cachedScreen } = defineProps<{ session: TerminalSession, cachedScreen?: TerminalScreen }>()
 const emit = defineEmits<{ screen: [value: TerminalScreen] }>()
@@ -21,7 +23,8 @@ const input = useTemplateRef('input')
 const phoneInput = useMediaQuery('(pointer: coarse)')
 const draft = defineModel<string>('draft', { default: '' })
 const submission = defineModel<TerminalSubmission>('submission', { default: () => ({ _tag: 'Editing' }) })
-const reading = defineModel<{ offset: number, top: number } | null>('reading', { default: null })
+const reading = defineModel<{ snapshot?: string, offset: number, top: number } | null>('reading', { default: null })
+const retainedSnapshot = defineModel<string | null>('retainedSnapshot', { default: null })
 submission.value = interruptTerminalSubmission(submission.value)
 const phoneDraft = useTemplateRef<HTMLTextAreaElement>('phoneDraft')
 useTextareaAutosize({ element: phoneDraft, input: draft })
@@ -41,7 +44,9 @@ const online = useOnline()
 let viewId = ''
 const writer = shallowRef<TerminalWriter>(null)
 const screen = shallowRef<TerminalScreen | undefined>(cachedScreen)
-const history = shallowRef<{ total: number, offset: number, lines: TerminalScreen['lines'], graphemes: string[][] }>()
+const history = shallowRef<{ snapshot?: string, total: number, offset: number, lines: string[] }>()
+const historySupported = ref(false)
+const historyExpired = ref(false)
 const connected = ref(false)
 const uncertain = ref(false)
 const deliveryBlocked = ref(false)
@@ -52,7 +57,16 @@ watch(draft, () => {
 })
 const processState = ref(session.state)
 const ended = computed(() => ['Exited', 'Interrupted'].includes(processState.value))
+const earlierRequest = computed(() => terminalEarlierRequest({
+  ended: ended.value,
+  history: history.value,
+  historySupported: historySupported.value,
+  reading: reading.value,
+  retainedSnapshot: retainedSnapshot.value,
+  screen: screen.value,
+}))
 const writable = computed(() => connected.value && ['Starting', 'Running'].includes(processState.value) && !deliveryBlocked.value && writer.value?.viewId === viewId)
+const canAcquireWriter = computed(() => connected.value && ['Starting', 'Running'].includes(processState.value) && !writable.value && writer.value === null)
 const connectionCopy = computed(() => processState.value === 'Exited'
   ? 'Agent session exited.'
   : processState.value === 'Interrupted'
@@ -71,6 +85,7 @@ let channel: ReturnType<typeof createTerminalInputChannel> | undefined
 let lastSize = ''
 let historyRequest = false
 let requestedHistoryOffset: number | undefined
+let historyRequestId: string | undefined
 const historyLoading = ref(false)
 const historyFailure = ref('')
 const historyTimeout = useTimeoutFn(() => {
@@ -88,17 +103,47 @@ const { copy } = useClipboard()
 const textLines = computed(() => {
   if (visibility.value !== 'visible')
     return ''
-  const source = history.value ?? screen.value
+  if (history.value)
+    return history.value.lines.join('\n')
+  const source = screen.value
   return source?.lines.map((line, row) => line.map((cell, col) => cell.width === 0 ? '' : source.graphemes[row]?.[col] || String.fromCodePoint(cell.codepoint || 32)).join('')).join('\n') ?? ''
 })
 const historyLineHeight = 20
 const selectionStyle = { fontFamily: 'JetBrains Mono, monospace', fontSize: '14px', lineHeight: `${historyLineHeight}px` }
 const reconnect = useTimeoutFn(connect, 1500, { immediate: false })
 const connectTimeout = useTimeoutFn(() => socket?.close(), 10000, { immediate: false })
+const copyAcknowledged = ref(false)
+const copyAcknowledgementTimeout = useTimeoutFn(() => {
+  copyAcknowledged.value = false
+}, 1800, { immediate: false })
+const selectedTerminalText = computed(() => {
+  const selected = selection.text.value
+  const currentSelection = typeof window === 'undefined' ? null : window.getSelection()
+  if (!selected || !currentSelection || !container.value || !currentSelection.anchorNode || !currentSelection.focusNode)
+    return ''
+  return container.value.contains(currentSelection.anchorNode) && container.value.contains(currentSelection.focusNode) ? selected : ''
+})
+const hasCopyableOutput = computed(() => Boolean(selectedTerminalText.value || textLines.value))
+const copyLabel = computed(() => selectedTerminalText.value ? 'Copy selection' : 'Copy output')
+const terminalMenuItems = computed(() => [
+  ...(hasCopyableOutput.value ? [[{ label: copyLabel.value, icon: 'i-octicon-copy-16', class: 'min-h-11', onSelect: copyTerminalOutput }]] : []),
+  ...(history.value && canAcquireWriter.value ? [[{ label: 'Use terminal', class: 'min-h-11', onSelect: () => send({ type: 'AcquireWriter' }) }]] : []),
+  ...(writable.value ? [[{ label: 'Release terminal', class: 'min-h-11', onSelect: () => send({ type: 'ReleaseWriter' }) }]] : []),
+])
 useIntervalFn(() => {
   if (writable.value && writer.value)
     send({ type: 'RenewWriter', lease: writer.value.lease })
 }, 15000)
+
+function copyTerminalOutput() {
+  const text = selectedTerminalText.value || textLines.value
+  if (!text)
+    return
+  void copy(text).then(() => {
+    copyAcknowledged.value = true
+    copyAcknowledgementTimeout.start()
+  }).catch(() => { failure.value = 'Could not copy terminal text. Select it and use the browser menu.' })
+}
 
 function send(message: TerminalClientMessage) {
   if (socket?.readyState !== WebSocket.OPEN)
@@ -148,11 +193,15 @@ function resolveDelivery(clear: boolean) {
 
 function latest() {
   requestedHistoryOffset = undefined
+  historyRequestId = undefined
+  historyExpired.value = false
   historyRequest = false
   historyLoading.value = false
   historyTimeout.stop()
   history.value = undefined
-  reading.value = null
+  const next = terminalHistoryAfterLatest({ reading: reading.value, retainedSnapshot: retainedSnapshot.value })
+  reading.value = next.reading
+  retainedSnapshot.value = next.retainedSnapshot
   historyFailure.value = ''
   if (screen.value)
     render(screen.value)
@@ -160,13 +209,19 @@ function latest() {
     container.value.scrollTop = 0
 }
 
-function earlier() {
-  if (!screen.value || historyRequest)
+function loadEarlier(request: ReturnType<typeof terminalEarlierRequest>) {
+  if (historyRequest || historyExpired.value)
     return
-  const limit = Math.min(200, Math.floor(20000 / screen.value.dimensions.cols))
-  const offset = history.value ? Math.max(0, history.value.offset - limit) : reading.value?.offset ?? Math.max(0, screen.value.scrollbackLength - limit)
-  requestedHistoryOffset = offset
-  historyRequest = send({ type: 'Scrollback', offset, limit })
+  if (!request)
+    return
+  requestedHistoryOffset = request.offset ?? undefined
+  if (request.type === 'History') {
+    historyRequestId = crypto.randomUUID()
+    historyRequest = send({ ...request, requestId: historyRequestId })
+  }
+  else {
+    historyRequest = send(request)
+  }
   historyLoading.value = historyRequest
   if (historyRequest)
     historyTimeout.start()
@@ -174,9 +229,33 @@ function earlier() {
     historyFailure.value = 'Could not load earlier output. Retry.'
 }
 
+function earlier() {
+  loadEarlier(earlierRequest.value)
+}
+
+function showHistory(page: NonNullable<typeof history.value>) {
+  const prior = history.value
+  const added = prior && page.snapshot === prior.snapshot && page.offset < prior.offset && page.offset + page.lines.length >= prior.offset ? prior.offset - page.offset : 0
+  const top = added ? (container.value?.scrollTop ?? 0) + added * historyLineHeight : reading.value?.top
+  history.value = added && prior ? { ...page, lines: [...page.lines.slice(0, added), ...prior.lines] } : page
+  retainedSnapshot.value = terminalHistoryAfterPage({ reading: reading.value, retainedSnapshot: retainedSnapshot.value }, page.snapshot).retainedSnapshot
+  void nextTick(() => {
+    if (container.value) {
+      container.value.scrollTop = top ?? container.value.scrollHeight
+      rememberScroll()
+    }
+  })
+}
+
+async function refreshHistory() {
+  latest()
+  await nextTick()
+  earlier()
+}
+
 function rememberScroll() {
   if (history.value && container.value) {
-    reading.value = terminalReadingPosition(history.value.offset, container.value.scrollTop, historyLineHeight)
+    reading.value = { ...terminalReadingPosition(history.value.offset, container.value.scrollTop, historyLineHeight), snapshot: history.value.snapshot }
     if (container.value.scrollTop < 40 && history.value.offset > 0 && !historyRequest)
       earlier()
   }
@@ -228,7 +307,7 @@ function render(value: TerminalScreen, dirtyRows?: ReadonlySet<number>) {
 }
 
 function connect() {
-  if (disposed || invalidFrame || !online.value || ['Exited', 'Interrupted'].includes(processState.value))
+  if (disposed || invalidFrame || !online.value)
     return
   viewId = crypto.randomUUID()
   channel = createTerminalInputChannel({ send, viewId })
@@ -257,10 +336,24 @@ function connect() {
       const initialAttachment = !attachedOnce
       attachedOnce = true
       connected.value = true
+      historySupported.value = message.history === true
+      if (historySupported.value && reading.value && !reading.value.snapshot)
+        reading.value = null
       writer.value = message.writer
       channel?.setWriter(message.writer)
       processState.value = message.session.state
       failure.value = ''
+      if (!history.value && !historyRequest) {
+        const request = terminalAttachmentHistoryRequest({
+          ended: ended.value,
+          historySupported: historySupported.value,
+          reading: reading.value,
+          retainedSnapshot: retainedSnapshot.value,
+          screen: screen.value,
+        })
+        if (request)
+          loadEarlier(request)
+      }
       // Reconnecting viewers keep their read intent. Takeover requires Use terminal.
       if (initialAttachment && message.writer === null && ['Starting', 'Running'].includes(message.session.state))
         send({ type: 'AcquireWriter' })
@@ -309,6 +402,22 @@ function connect() {
     else if (message.type === 'Process') {
       processState.value = message.state
     }
+    else if (message.type === 'History' && message.generation === session.generation) {
+      if (message.requestId !== historyRequestId)
+        return
+      historyRequestId = undefined
+      historyRequest = false
+      historyLoading.value = false
+      historyTimeout.stop()
+      if (message.result._tag === 'Expired') {
+        historyExpired.value = true
+        retainedSnapshot.value = terminalHistoryAfterExpiry({ reading: reading.value, retainedSnapshot: retainedSnapshot.value }).retainedSnapshot
+        historyFailure.value = ended.value ? 'Earlier output expired. This session has ended.' : 'Earlier output expired. Refresh to read the retained output.'
+        return
+      }
+      historyFailure.value = ''
+      showHistory(message.result)
+    }
     else if (message.type === 'Scrollback' && message.generation === session.generation) {
       if (requestedHistoryOffset !== message.offset)
         return
@@ -317,18 +426,7 @@ function connect() {
       historyLoading.value = false
       historyTimeout.stop()
       historyFailure.value = ''
-      const prior = history.value
-      const added = prior && message.offset < prior.offset ? prior.offset - message.offset : 0
-      const top = added ? (container.value?.scrollTop ?? 0) + added * (historyLineHeight) : reading.value?.top
-      history.value = added && prior
-        ? { ...message, lines: [...message.lines.slice(0, added), ...prior.lines], graphemes: [...message.graphemes.slice(0, added), ...prior.graphemes] }
-        : message
-      void nextTick(() => {
-        if (container.value) {
-          container.value.scrollTop = top ?? container.value.scrollHeight
-          rememberScroll()
-        }
-      })
+      showHistory({ total: message.total, offset: message.offset, lines: message.lines.map((line, row) => line.map((cell, col) => cell.width === 0 ? '' : message.graphemes[row]?.[col] || String.fromCodePoint(cell.codepoint || 32)).join('')) })
     }
     else if (message.type === 'Failure') {
       failure.value = terminalFailureCopy[message.reason]
@@ -463,13 +561,14 @@ watch(visibility, (value) => {
 watch(() => session.state, (state) => {
   processState.value = state
 })
-watch(ended, (value) => {
+watch([ended, submission], ([value]) => {
   if (value) {
+    submission.value = endTerminalSubmission(submission.value)
     reconnect.stop()
     if (failure.value === 'Reconnecting to the terminal.')
       failure.value = ''
   }
-})
+}, { immediate: true })
 useEventListener(input, 'keydown', key)
 useEventListener(input, 'keyup', key)
 useEventListener(input, 'input', commit)
@@ -526,6 +625,7 @@ onScopeDispose(() => {
   connectTimeout.stop()
   deliveryTimeout.stop()
   historyTimeout.stop()
+  copyAcknowledgementTimeout.stop()
   submission.value = interruptTerminalSubmission(submission.value)
   if (screen.value)
     emit('screen', screen.value)
@@ -538,30 +638,39 @@ onScopeDispose(() => {
   <div class="flex min-h-0 flex-col">
     <div class="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-x-2 border-b border-default px-3 text-sm text-muted">
       <span role="status" class="min-w-0 flex-1 break-words">{{ history ? 'Earlier output' : connectionCopy }}</span>
-      <UTooltip v-if="screen?.scrollbackLength || history" text="Earlier output">
-        <UButton icon="i-octicon-history-16" aria-label="Earlier output" color="neutral" variant="ghost" class="min-h-11 min-w-11 justify-center" :loading="historyLoading" :disabled="!connected || history?.offset === 0" @click="earlier" />
+      <UTooltip v-if="earlierRequest" text="Earlier output">
+        <UButton icon="i-octicon-history-16" aria-label="Earlier output" color="neutral" variant="ghost" class="min-h-11 min-w-11 justify-center" :loading="historyLoading" :disabled="!connected || historyExpired || history?.offset === 0" @click="earlier" />
       </UTooltip>
-      <UButton v-if="history" icon="i-octicon-arrow-down-16" color="neutral" variant="outline" class="min-h-11" @click="latest">
+      <UButton v-if="history || historyExpired" icon="i-octicon-arrow-down-16" color="neutral" variant="outline" class="min-h-11" @click="latest">
         Latest
       </UButton>
-      <UButton v-if="connected && ['Starting', 'Running'].includes(processState) && !writable && writer === null" size="xs" variant="ghost" @click="send({ type: 'AcquireWriter' })">
+      <UButton v-if="canAcquireWriter && !history" size="xs" variant="ghost" class="min-h-11" @click="send({ type: 'AcquireWriter' })">
         Use terminal
       </UButton>
-      <UDropdownMenu v-if="writable" :items="[{ label: 'Release terminal', onSelect: () => send({ type: 'ReleaseWriter' }) }]">
+      <UDropdownMenu v-if="writable || hasCopyableOutput || (history && canAcquireWriter)" :items="terminalMenuItems">
         <UButton icon="i-octicon-kebab-horizontal-16" aria-label="Terminal controls" size="sm" variant="ghost" class="min-h-11 min-w-11 justify-center" />
       </UDropdownMenu>
     </div>
+    <p v-if="copyAcknowledged" role="status" class="shrink-0 px-3 py-1 text-xs text-muted">
+      Copied
+    </p>
     <p v-if="uncertain && !reviewDelivery" role="alert" class="shrink-0 px-3 py-2 text-sm text-warning">
       Input delivery is unknown. Check the terminal before sending again.
     </p>
     <p v-if="failure" role="alert" class="shrink-0 px-3 py-1 text-xs text-error">
       {{ failure }}
     </p>
-    <p v-if="historyFailure" role="alert" class="px-3 py-2 text-sm text-error">
-      {{ historyFailure }}
+    <div v-if="historyFailure" role="alert" class="shrink-0 px-3 py-2 text-sm text-error">
+      <p>{{ historyFailure }}</p>
+      <UButton v-if="historyExpired && !ended" color="neutral" variant="outline" class="mt-2 min-h-11" :disabled="!connected" @click="refreshHistory">
+        Refresh earlier output
+      </UButton>
+    </div>
+    <p v-if="history && !historySupported" class="shrink-0 px-3 py-1 text-xs text-muted">
+      This session uses live history. New output can move older lines.
     </p>
     <div ref="container" class="terminal-viewport relative min-h-0 flex-1 overflow-auto overscroll-contain" :tabindex="history ? 0 : undefined" :aria-label="history ? 'Earlier terminal output' : undefined" @click="!phoneInput && !history && input?.focus({ preventScroll: true })">
-      <p v-if="ended && !screen" class="p-4 text-sm text-muted">
+      <p v-if="ended && !screen && !history" class="p-4 text-sm text-muted">
         This terminal has ended. Its work remains in the project.
       </p>
       <canvas v-show="!history" ref="canvas" aria-hidden="true" class="block" @mousedown="mouse($event, 'down')" @mouseup="mouse($event, 'up')" @mousemove="mouse($event, 'move')" />

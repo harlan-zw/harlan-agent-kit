@@ -1,6 +1,6 @@
-import type { Socket } from 'node:net'
+import type { AddressInfo, Socket } from 'node:net'
 import { once } from 'node:events'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,7 +11,7 @@ import { openBrowserAuthStore } from '../src/browser-auth-store.ts'
 import { createBrowserAuth } from '../src/browser-auth.ts'
 import { createTerminalServer } from '../src/terminal-server.ts'
 
-async function fixture(machine = false, race = false) {
+async function fixture(machine = false, race = false, state = 'Running') {
   const directory = mkdtempSync(join(tmpdir(), 'passkey-stream-'))
   const id = 'a'.repeat(24)
   mkdirSync(join(directory, 'sessions', id), { recursive: true })
@@ -36,7 +36,7 @@ async function fixture(machine = false, race = false) {
   await once(helper, 'listening')
   const action = async (name: string, body: unknown = {}) => auth.handle(new Request(`${origin}/api/browser-auth/${name}`, { method: 'POST', headers: { host: 'localhost:43829', origin, cookie }, body: JSON.stringify(body) }))
   const api = createTerminalServer({
-    manager: { directory, intent: () => ({ session: { id, state: 'Running' }, helperToken: 'fixture' }) } as never,
+    manager: { directory, intent: () => ({ session: { id, state }, helperToken: 'fixture' }) } as never,
     origin,
     browserAuth: auth,
     now: () => now,
@@ -67,6 +67,52 @@ async function fixture(machine = false, race = false) {
     },
   }
 }
+
+it('restores a saved history page after its helper has stopped', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ended-history-stream-'))
+  const id = 'b'.repeat(24)
+  const generation = 'generation'
+  mkdirSync(join(directory, 'sessions', id), { recursive: true })
+  writeFileSync(
+    join(directory, 'sessions', id, 'history.json'),
+    JSON.stringify({ snapshots: [{ id: 'saved-copy', generation, expiresAt: Date.now() + 60000, lines: ['line 100', 'line 101', 'line 102'] }] }),
+    { mode: 0o600 },
+  )
+  const store = openBrowserAuthStore(join(directory, 'auth.sqlite'))
+  const origin = 'http://localhost:43830'
+  const auth = createBrowserAuth({ origin, rpId: 'localhost', store, now: Date.now, surface: { _tag: 'TerminalHost' }, bootstrapKind: 'pairing', bootstrap: () => false })
+  store.addCredential({ id: 'credential', label: 'Fixture', created: Date.now(), credential: { id: 'credential', publicKey: new Uint8Array([1]), counter: 0 } })
+  const cookie = auth.issueSession('credential').split(';')[0]!
+  const api = createTerminalServer({
+    manager: { directory, intent: () => ({ session: { id, generation, state: 'Exited' }, helperToken: 'fixture' }) } as never,
+    origin,
+    browserAuth: auth,
+    now: Date.now,
+    log: () => {},
+  })
+  api.server.listen(0, '127.0.0.1')
+  await once(api.server, 'listening')
+  const port = (api.server.address() as AddressInfo).port
+  const socket = new WebSocket(`ws://localhost:${port}/api/terminal/sessions/${id}/stream`, { headers: { origin, cookie, host: new URL(origin).host } })
+  const received: unknown[] = []
+  socket.on('message', bytes => received.push(JSON.parse(bytes.toString())))
+  try {
+    await once(socket, 'open')
+    socket.send(JSON.stringify({ type: 'Attach', protocol: 1, viewId: 'reader', generation }))
+    socket.send(JSON.stringify({ type: 'History', requestId: 'restore', snapshot: 'saved-copy', offset: 1, limit: 2 }))
+    await expect.poll(() => received).toContainEqual(expect.objectContaining({
+      type: 'History',
+      requestId: 'restore',
+      result: { _tag: 'Page', snapshot: 'saved-copy', total: 3, offset: 1, lines: ['line 101', 'line 102'] },
+    }))
+  }
+  finally {
+    socket.terminate()
+    await api.close()
+    store.close()
+    rmSync(directory, { recursive: true })
+  }
+})
 
 it.each(['logout', 'credentials/remove', 'expiry'])('revokes established terminal input and output after %s', async (action) => {
   const proof = await fixture()

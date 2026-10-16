@@ -18,6 +18,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
 import { parseHostTerminalCapacity } from './terminal-capacity.ts'
+import { pruneExpiredTerminalHistory } from './terminal-history.ts'
 import {
   initializeTerminalStorage,
   readTerminalIntents,
@@ -190,6 +191,24 @@ export async function createTerminalManager(options: {
     else {
       intent.session.state = 'Unknown'
       await persist(intent)
+    }
+  }
+  function pruneHistory(intent: TerminalIntent) {
+    if (intent.session.state === 'Exited' || intent.session.state === 'Interrupted')
+      pruneExpiredTerminalHistory(options.directory, intent.session.id, options.now().getTime())
+  }
+  async function reconcileStartup(intent: TerminalIntent) {
+    try {
+      await reconcile(intent)
+    }
+    catch (cause) {
+      options.log('Terminal session startup reconciliation failed', cause)
+    }
+    try {
+      pruneHistory(intent)
+    }
+    catch (cause) {
+      options.log('Terminal session startup history pruning failed', cause)
     }
   }
   async function launch(
@@ -417,6 +436,13 @@ export async function createTerminalManager(options: {
     void retryQueued().catch(cause => options.log('Queued session retry failed', cause))
   }, 10000)
   queueTimer.unref()
+  await Promise.all(
+    [...intents.values()].map(intent =>
+      owned(intent.session.id, async () => {
+        await reconcileStartup(intent)
+      }),
+    ),
+  )
   const housekeeping = setInterval(
     () => {
       void (async () => {
@@ -424,6 +450,7 @@ export async function createTerminalManager(options: {
           [...intents.values()].map(intent =>
             owned(intent.session.id, async () => {
               await reconcile(intent)
+              pruneHistory(intent)
               if (
                 intent.session.worktree
                 && !['Exited', 'Interrupted'].includes(intent.session.state)
@@ -507,7 +534,10 @@ export async function createTerminalManager(options: {
         return [...intents.values()].map(session)
       await Promise.all(
         [...intents.values()].map(intent =>
-          owned(intent.session.id, () => reconcile(intent)),
+          owned(intent.session.id, async () => {
+            await reconcile(intent)
+            pruneHistory(intent)
+          }),
         ),
       )
       return [...intents.values()].map(session)

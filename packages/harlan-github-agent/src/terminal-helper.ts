@@ -14,6 +14,7 @@ import {
 } from 'ghostty-terminal-bindings'
 import { spawn } from 'node-pty'
 import { createTerminalAdmissionCli } from './terminal-admission.ts'
+import { writeTerminalHistory } from './terminal-history.ts'
 import { createTerminalOwner } from './terminal-owner.ts'
 import {
   parseTerminalClientMessage,
@@ -22,6 +23,7 @@ import {
 import {
   createTerminalPreparationRunner,
   prepareTerminalSandbox,
+  withCodexProjectTrust,
 } from './terminal-sandbox.ts'
 import { writeTerminalJson } from './terminal-storage.ts'
 import { createTerminalSystemdHost } from './terminal-systemd.ts'
@@ -87,7 +89,9 @@ export async function runTerminalHelper(config: TerminalHelperConfig) {
     cwd,
     executable: config.executable,
     provider: config.intent.session.provider,
-    argv: config.argv,
+    argv: config.intent.session.provider === 'codex'
+      ? withCodexProjectTrust(config.argv, cwd)
+      : config.argv,
     environment: process.env,
     writable: [commonGit],
     denied: config.protectedPaths,
@@ -117,6 +121,16 @@ export async function runTerminalHelper(config: TerminalHelperConfig) {
     pty,
     now: Date.now,
     token: randomUUID,
+    history: {
+      save: (snapshots) => {
+        try {
+          writeTerminalHistory(config.directory, config.intent.session.id, snapshots)
+        }
+        catch (cause) {
+          console.error('Terminal history save failed', cause instanceof Error ? cause.message : String(cause))
+        }
+      },
+    },
   })
   pty.onData(bytes => owner.output(bytes))
   pty.onExit(() => {

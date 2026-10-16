@@ -1,12 +1,21 @@
 import type { TerminalProvider } from './terminal-protocol.ts'
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
-import { access, lstat, mkdir, realpath } from 'node:fs/promises'
+import { access, chmod, copyFile, lstat, mkdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 
 const execute = promisify(execFile)
+
+/** Trust this generated Codex worktree for this invocation without changing user config. */
+export function withCodexProjectTrust(argv: string[], cwd: string): string[] {
+  const delimiter = argv.indexOf('--')
+  const options = ['-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`]
+  return delimiter < 0
+    ? [...argv, ...options]
+    : [...argv.slice(0, delimiter), ...options, ...argv.slice(delimiter)]
+}
 const preparationClaim = '/tmp/harlan-terminal-preparation/worktree-claim.sh'
 const isolation = [
   '--die-with-parent',
@@ -64,6 +73,16 @@ export async function prepareTerminalSandbox(options: {
   const cwd = await realpath(options.cwd)
   const home = options.home ?? homedir()
   const packageManagerHome = await preparePackageManagerHome(home)
+  const useDefaultClaudeConfig = options.provider === 'claude' && options.environment.CLAUDE_CONFIG_DIR === undefined
+  const claudeConfigDirectory = join(home, '.claude')
+  if (useDefaultClaudeConfig) {
+    await mkdir(claudeConfigDirectory, { recursive: true, mode: 0o700 }).catch((cause: NodeJS.ErrnoException) => {
+      if (cause.code !== 'EEXIST')
+        throw cause
+    })
+    if (!(await lstat(claudeConfigDirectory)).isDirectory() || await realpath(claudeConfigDirectory) !== claudeConfigDirectory)
+      throw new Error('Claude state requires an ordinary host directory')
+  }
   const args = [...isolation, '--bind', cwd, cwd, '--bind', packageManagerHome, packageManagerHome]
   // Host resolver symlinks commonly enter /run. Preserve only their read-only file, never its directory.
   const resolver = await realpath('/etc/resolv.conf')
@@ -109,7 +128,26 @@ export async function prepareTerminalSandbox(options: {
   if (claudeMetadata) {
     if (!claudeMetadata.isFile() || (await realpath(claudeFile)) !== claudeFile)
       throw new Error('Claude state requires an ordinary host file')
-    args.push('--bind', claudeFile, claudeFile)
+    if (useDefaultClaudeConfig) {
+      const migratedFile = join(claudeConfigDirectory, '.claude.json')
+      let migrated = false
+      try {
+        await copyFile(claudeFile, migratedFile, constants.COPYFILE_EXCL)
+        migrated = true
+      }
+      catch (cause) {
+        if ((cause as NodeJS.ErrnoException).code !== 'EEXIST')
+          throw cause
+      }
+      const migratedMetadata = await lstat(migratedFile)
+      if (!migratedMetadata.isFile() || await realpath(migratedFile) !== migratedFile)
+        throw new Error('Claude config requires an ordinary host file')
+      if (migrated)
+        await chmod(migratedFile, 0o600)
+    }
+    else {
+      args.push('--bind', claudeFile, claudeFile)
+    }
   }
   for (const path of [
     ...(options.denied ?? []),
@@ -148,6 +186,8 @@ export async function prepareTerminalSandbox(options: {
       ? [join(packageManagerHome, 'bin'), packageManagerHome, options.environment.PATH ?? '/usr/bin:/bin']
       : [options.environment.PATH ?? '/usr/bin:/bin', join(packageManagerHome, 'bin'), packageManagerHome]).join(':'),
   }
+  if (useDefaultClaudeConfig)
+    environment.CLAUDE_CONFIG_DIR = claudeConfigDirectory
   if (options.preparationTool) {
     const tool = await realpath(options.preparationTool)
     if (!(await lstat(tool)).isFile())

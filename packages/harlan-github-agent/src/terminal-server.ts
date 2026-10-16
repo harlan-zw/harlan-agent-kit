@@ -16,6 +16,7 @@ import { WebSocketServer } from 'ws'
 import { openBrowserAuthStore } from './browser-auth-store.ts'
 import { createBrowserAuth } from './browser-auth.ts'
 import { connectTerminalHelper } from './terminal-helper-client.ts'
+import { readTerminalHistory } from './terminal-history.ts'
 import {
   parseTerminalClientMessage,
   parseTerminalForce,
@@ -384,7 +385,7 @@ export function createTerminalServer(options: {
     const intent = match?.[1] ? options.manager.intent(match[1]) : undefined
     if (
       !intent
-      || intent.session.state !== 'Running'
+      || !['Running', 'Exited', 'Interrupted'].includes(intent.session.state)
       || sockets.clients.size >= 32
     ) {
       socket.end('HTTP/1.1 409 Conflict\r\n\r\n', () => socket.destroy())
@@ -395,6 +396,63 @@ export function createTerminalServer(options: {
       return
     }
     sockets.handleUpgrade(request, socket, head, (websocket) => {
+      let detach: (() => void) | undefined
+      websocket.on('error', cause =>
+        options.log('Terminal stream failed', cause))
+      websocket.on('close', () => detach?.())
+      const ended = ['Exited', 'Interrupted'].includes(intent.session.state)
+      if (ended) {
+        let attached = false
+        websocket.on('message', (bytes) => {
+          if (!browserAccess() || closed || (options.active && !options.active())) {
+            websocket.close(1008, 'Authentication required')
+            return
+          }
+          const decoded = parseTerminalJson(bytes.toString())
+          const parsed = decoded._tag === 'Ok'
+            ? parseTerminalClientMessage(decoded.value)
+            : decoded
+          if (parsed._tag === 'Err') {
+            websocket.send(JSON.stringify({ type: 'Failure', reason: parsed.reason }))
+            return
+          }
+          if (parsed.value.type === 'Attach') {
+            if (attached || parsed.value.generation !== intent.session.generation) {
+              websocket.send(JSON.stringify({ type: 'Failure', reason: attached ? 'InvalidRequest' : 'StaleGeneration' }))
+              return
+            }
+            attached = true
+            websocket.send(JSON.stringify({
+              type: 'Attached',
+              history: true,
+              protocol: 1,
+              session: intent.session,
+              writer: null,
+            }))
+            return
+          }
+          if (!attached || parsed.value.type !== 'History' || parsed.value.snapshot === null) {
+            websocket.send(JSON.stringify({ type: 'Failure', reason: 'SessionUnavailable' }))
+            return
+          }
+          const result = readTerminalHistory({
+            directory: options.manager.directory,
+            sessionId: intent.session.id,
+            generation: intent.session.generation,
+            snapshot: parsed.value.snapshot,
+            offset: parsed.value.offset,
+            limit: parsed.value.limit,
+            now: options.now(),
+          })
+          websocket.send(JSON.stringify({
+            type: 'History',
+            generation: intent.session.generation,
+            requestId: parsed.value.requestId,
+            result,
+          }))
+        })
+        return
+      }
       const expired = () => {
         helper.close()
         websocket.close(1008, 'Authentication required')
@@ -455,14 +513,12 @@ export function createTerminalServer(options: {
           )
         }
       })
-      websocket.on('error', cause =>
-        options.log('Terminal stream failed', cause))
-      websocket.on('close', () => {
+      detach = () => {
         revoke?.()
         if (expiry)
           clearInterval(expiry)
-      })
-      websocket.on('close', () => helper.close())
+        helper.close()
+      }
     })
   }
   return {

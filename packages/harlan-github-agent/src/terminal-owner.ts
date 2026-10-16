@@ -1,3 +1,4 @@
+import type { TerminalHistorySnapshot } from './terminal-history.ts'
 import type {
   TerminalClientMessage,
   TerminalInput,
@@ -50,12 +51,65 @@ export function createTerminalOwner(options: {
   now: () => number
   token: () => string
   historyLimit?: number
+  history?: { save: (snapshots: readonly TerminalHistorySnapshot[]) => void }
 }) {
   const { emulator, encoder, pty } = options
   const attachments = new Map<
     string,
     { send: (message: TerminalServerMessage) => void, revision: number }
   >()
+  // Reading copies outlive attachments, but never grow with the live terminal.
+  const histories = new Map<string, { lines: string[], expiresAt: number }>()
+  function saveHistory() {
+    options.history?.save(
+      [...histories].map(([id, copy]) => ({
+        id,
+        generation: options.session.generation,
+        expiresAt: copy.expiresAt,
+        lines: [...copy.lines],
+      })),
+    )
+  }
+  function history(message: Extract<TerminalClientMessage, { type: 'History' }>): Extract<TerminalServerMessage, { type: 'History' }>['result'] {
+    let changed = false
+    for (const [id, copy] of histories) {
+      if (copy.expiresAt <= options.now()) {
+        histories.delete(id)
+        changed = true
+      }
+    }
+    let id = message.snapshot
+    if (id === null) {
+      emulator.update()
+      const total = emulator.getScrollbackLength()
+      const lines: string[] = []
+      let characters = 0
+      for (let row = total - 1; row >= Math.max(0, total - historyLimit); row--) {
+        const line = (emulator.getScrollbackLine(row) ?? []).map((cell, col) => cell.width === 0 ? '' : cell.grapheme_len ? emulator.getScrollbackGraphemeString(row, col) : String.fromCodePoint(cell.codepoint || 32)).join('').trimEnd()
+        if (characters + line.length > 1_000_000)
+          break
+        lines.push(line)
+        characters += line.length
+      }
+      id = options.token()
+      while (histories.size >= 4) histories.delete(histories.keys().next().value!)
+      histories.set(id, { lines: lines.reverse(), expiresAt: options.now() + 15 * 60 * 1000 })
+      changed = true
+    }
+    const copy = histories.get(id)
+    if (!copy) {
+      if (changed)
+        saveHistory()
+      return { _tag: 'Expired' }
+    }
+    // Refresh this copy's idle lease and least-recently-used position.
+    copy.expiresAt = options.now() + 15 * 60 * 1000
+    histories.delete(id)
+    histories.set(id, copy)
+    saveHistory()
+    const offset = Math.min(message.offset ?? Math.max(0, copy.lines.length - message.limit), copy.lines.length)
+    return { _tag: 'Page', snapshot: id, total: copy.lines.length, offset, lines: copy.lines.slice(offset, offset + message.limit) }
+  }
   let writer: TerminalWriter = null
   let sequence = 0
   let revision = 1
@@ -272,6 +326,7 @@ export function createTerminalOwner(options: {
       attachments.set(viewId, { send, revision })
       send({
         type: 'Attached',
+        history: true,
         protocol: 1,
         session: options.session,
         writer: writer ? { ...writer } : null,
@@ -306,6 +361,10 @@ export function createTerminalOwner(options: {
           type: 'WriterChanged',
           writer: { ...writer },
         })
+        return { _tag: 'Ok', value: true }
+      }
+      if (message.type === 'History') {
+        attachments.get(viewId)?.send({ type: 'History', generation: options.session.generation, requestId: message.requestId, result: history(message) })
         return { _tag: 'Ok', value: true }
       }
       if (message.type === 'Scrollback') {
@@ -403,6 +462,7 @@ export function createTerminalOwner(options: {
       broadcast({ type: 'Process', state: 'Stopping' })
     },
     dispose() {
+      histories.clear()
       attachments.clear()
       emulator.free()
       encoder.dispose()

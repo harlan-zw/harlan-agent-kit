@@ -9,6 +9,7 @@ import { terminalFailureCopy } from '../utils/terminal-copy.ts'
 import { createTerminalDraftStore } from '../utils/terminal-draft.ts'
 import { terminalLaunchIntent } from '../utils/terminal-launch.ts'
 import { activeTerminalSession, emptyTerminalLayout, emptyTerminalProjectLayout, parseTerminalLayout, reconcileTerminalLayout, terminalDisplayProjects, updateTerminalProjectLayout } from '../utils/terminal-layout.ts'
+import { terminalProjectGroups } from '../utils/terminal-project-groups.ts'
 import { parseTerminalProjects, parseTerminalSessionResult, parseTerminalSessions } from '../utils/terminal-protocol.ts'
 import TerminalView from './_TerminalView.vue'
 
@@ -23,10 +24,30 @@ function cacheScreen(session: TerminalSession, screen: TerminalScreen) {
   const entries = Object.entries(screens.value).filter(([key]) => key !== screenKey(session)).slice(-9)
   screens.value = Object.fromEntries([...entries, [screenKey(session), markRaw(screen)]])
 }
-const memories = useSessionStorage<Record<string, { submission: TerminalSubmission, reading: { offset: number, top: number } | null }>>(`agent-terminal-reading:${capabilities.hostId}`, {})
-function memory(session: TerminalSession) {
+interface TerminalMemory {
+  submission: TerminalSubmission
+  reading: { snapshot?: string, offset: number, top: number } | null
+  retainedSnapshot?: string | null
+  snapshot?: string | null
+}
+interface ActiveTerminalMemory {
+  submission: TerminalSubmission
+  reading: { snapshot?: string, offset: number, top: number } | null
+  retainedSnapshot: string | null
+}
+const memories = useSessionStorage<Record<string, TerminalMemory>>(`agent-terminal-reading:${capabilities.hostId}`, {})
+function memory(session: TerminalSession): ActiveTerminalMemory {
   const key = JSON.stringify([session.id, session.generation])
-  return memories.value[key] ??= { submission: { _tag: 'Editing' }, reading: null }
+  const prior = memories.value[key]
+  if (prior?.retainedSnapshot !== undefined)
+    return prior as ActiveTerminalMemory
+  const next: ActiveTerminalMemory = {
+    submission: prior?.submission ?? { _tag: 'Editing' } as TerminalSubmission,
+    reading: prior?.reading ?? null,
+    retainedSnapshot: prior?.retainedSnapshot ?? prior?.snapshot ?? null,
+  }
+  memories.value[key] = next
+  return next
 }
 
 // Diff rendering stays outside the terminal bundle until the user opens it.
@@ -38,6 +59,8 @@ const sessions = shallowRef<TerminalSession[]>([])
 const displayProjects = computed(() => terminalDisplayProjects(projects.value, sessions.value))
 const capacity = shallowRef<TerminalCapacity>({ _tag: 'Unavailable' })
 const filter = ref('')
+const showAllProjects = ref(false)
+const projectVisits = useStorage<unknown>(`agent-terminal-project-visits:${capabilities.hostId}`, {}, undefined, { initOnMounted: true })
 const storedLayout = useStorage<unknown>(`agent-terminal-layout:${capabilities.hostId}`, emptyTerminalLayout(), undefined, { initOnMounted: true })
 const layout = computed(() => {
   const parsed = parseTerminalLayout(storedLayout.value)
@@ -93,6 +116,19 @@ function projectSessions(id: string) {
     .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 const visibleProjects = computed(() => displayProjects.value.filter(project => project.name.toLowerCase().includes(filter.value.toLowerCase().trim()) || projectSessions(project.id).length > 0))
+const projectGroups = computed(() => terminalProjectGroups({
+  projects: visibleProjects.value,
+  sessions: sessions.value,
+  visited: projectVisits.value,
+  now: Date.now(),
+  all: showAllProjects.value || Boolean(filter.value.trim()),
+  selected: selected.value?.projectId ?? (launchOpen.value ? projectId.value : undefined),
+}))
+function rememberProject(id: string) {
+  const prior = typeof projectVisits.value === 'object' && projectVisits.value !== null ? projectVisits.value : {}
+  const entries = Object.entries(prior).filter(([key, at]) => key !== id && typeof at === 'number' && Number.isFinite(at)).toSorted((a, b) => Number(a[1]) - Number(b[1])).slice(-63)
+  projectVisits.value = Object.fromEntries([...entries, [id, Date.now()]])
+}
 const selectedProjectName = computed(() => displayProjects.value.find(project => project.id === projectId.value)?.name ?? 'Projects')
 const navigationVisible = computed(() => !narrow.value || projectsOpen.value || !selected.value)
 const selectedProjectUnavailable = computed(() => Boolean(projectId.value) && !projects.value.some(project => project.id === projectId.value))
@@ -138,6 +174,7 @@ async function refresh() {
 }
 
 async function select(session: TerminalSession) {
+  rememberProject(session.projectId)
   projectsOpen.value = false
   launchOpen.value = false
   diffOpen.value = false
@@ -147,6 +184,7 @@ async function select(session: TerminalSession) {
 }
 
 async function selectProject(id: string) {
+  rememberProject(id)
   projectId.value = id
   launchOpen.value = true
   diffOpen.value = false
@@ -318,30 +356,41 @@ watch(visibility, (value) => {
       <div class="shrink-0 p-3">
         <UInput ref="projectFilter" v-model="filter" aria-label="Find a session" placeholder="Find a project or session" icon="i-octicon-search-16" class="w-full" :ui="{ base: 'min-h-11 text-base' }" />
       </div>
+      <div v-if="!filter.trim()" class="flex min-h-11 shrink-0 items-center justify-between gap-2 px-3 text-sm">
+        <span class="text-muted">{{ showAllProjects ? 'All projects' : 'Recent projects' }}</span>
+        <UButton v-if="projectGroups.hidden || showAllProjects" color="neutral" variant="link" class="min-h-11" @click="showAllProjects = !showAllProjects">
+          {{ showAllProjects ? 'Show recent' : 'Show all' }}<span v-if="!showAllProjects" class="text-muted">({{ projectGroups.hidden }})</span>
+        </UButton>
+      </div>
       <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2" aria-label="Session list">
         <p v-if="loading" role="status" class="p-3 text-sm text-muted">
           Connecting to the terminal host.
         </p>
-        <p v-else-if="!visibleProjects.length" role="status" class="p-3 text-sm text-muted">
-          No projects or sessions match.
+        <p v-else-if="!projectGroups.groups.length" role="status" class="p-3 text-sm text-muted">
+          {{ filter.trim() ? 'No projects or sessions match.' : 'No recent projects. Search or show all.' }}
         </p>
-        <div v-for="project in visibleProjects" :key="project.id" class="mb-3">
-          <button class="flex min-h-11 w-full items-center gap-2 rounded px-2 text-left text-sm font-medium hover:bg-elevated focus-visible:outline-2 focus-visible:outline-primary" :class="projectId === project.id ? 'text-highlighted' : 'text-muted'" :aria-pressed="projectId === project.id" @click="selectProject(project.id)">
-            <UIcon name="i-octicon-repo-16" class="size-4 shrink-0" aria-hidden="true" />
-            <span class="min-w-0 break-words">{{ project.name }}</span>
-          </button>
-          <p v-if="!projects.some(value => value.id === project.id)" class="px-2 pb-1 text-sm text-muted">
-            {{ terminalFailureCopy.ProjectUnavailable }}
-          </p>
-          <button v-for="session in projectSessions(project.id)" :key="session.id" class="flex min-h-14 w-full items-center gap-3 rounded py-2 pr-3 pl-4 text-left text-sm hover:bg-elevated focus-visible:outline-2 focus-visible:outline-primary" :class="selectedId === session.id ? 'bg-accented text-highlighted' : 'text-default'" :aria-current="selectedId === session.id ? 'page' : undefined" @click="select(session)">
-            <span class="size-2 shrink-0 rounded-full" :class="session.state === 'Running' ? 'bg-success' : session.state === 'Interrupted' || session.state === 'Unknown' ? 'bg-warning' : 'bg-neutral-500'" aria-hidden="true" />
-            <span class="min-w-0 flex-1">
-              <span class="block">{{ sessionLabel(session) }}</span>
-              <span class="block text-sm text-muted">{{ new Date(session.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' }) }}</span>
-            </span>
-            <span class="max-w-28 text-right text-sm text-muted">{{ sessionState(session) }}</span>
-          </button>
-        </div>
+        <section v-for="group in projectGroups.groups" :key="group.id" :aria-labelledby="`project-group-${group.id}`" class="mb-4">
+          <h3 :id="`project-group-${group.id}`" class="px-2 py-2 text-xs font-semibold text-muted">
+            {{ group.label }}
+          </h3>
+          <div v-for="project in group.projects" :key="project.id" class="mb-3">
+            <button class="flex min-h-11 w-full items-center gap-2 rounded px-2 text-left text-sm font-medium hover:bg-elevated focus-visible:outline-2 focus-visible:outline-primary" :class="projectId === project.id ? 'text-highlighted' : 'text-muted'" :aria-pressed="projectId === project.id" @click="selectProject(project.id)">
+              <UIcon name="i-octicon-repo-16" class="size-4 shrink-0" aria-hidden="true" />
+              <span class="min-w-0 break-words">{{ project.name }}</span>
+            </button>
+            <p v-if="!projects.some(value => value.id === project.id)" class="px-2 pb-1 text-sm text-muted">
+              {{ terminalFailureCopy.ProjectUnavailable }}
+            </p>
+            <button v-for="session in projectSessions(project.id)" :key="session.id" class="flex min-h-14 w-full items-center gap-3 rounded py-2 pr-3 pl-4 text-left text-sm hover:bg-elevated focus-visible:outline-2 focus-visible:outline-primary" :class="selectedId === session.id ? 'bg-accented text-highlighted' : 'text-default'" :aria-current="selectedId === session.id ? 'page' : undefined" @click="select(session)">
+              <span class="size-2 shrink-0 rounded-full" :class="session.state === 'Running' ? 'bg-success' : session.state === 'Interrupted' || session.state === 'Unknown' ? 'bg-warning' : 'bg-neutral-500'" aria-hidden="true" />
+              <span class="min-w-0 flex-1">
+                <span class="block">{{ sessionLabel(session) }}</span>
+                <span class="block text-sm text-muted">{{ new Date(session.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' }) }}</span>
+              </span>
+              <span class="max-w-28 text-right text-sm text-muted">{{ sessionState(session) }}</span>
+            </button>
+          </div>
+        </section>
       </div>
       <div class="max-h-[60%] shrink-0 overflow-y-auto border-t border-default bg-muted p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <div v-if="failure" role="alert" class="mb-2 flex items-center gap-2 text-sm text-error">
@@ -417,7 +466,7 @@ watch(visibility, (value) => {
             Force start
           </UButton>
           <UButton v-if="selected && !narrow" icon="i-octicon-columns-16" :aria-label="projectLayout.view._tag === 'Split' ? 'Show one terminal' : 'Split terminal'" variant="ghost" size="xs" :disabled="tabSessions.length < 2" :aria-pressed="projectLayout.view._tag === 'Split'" @click="split" />
-          <UButton v-if="selected" :icon="diffOpen ? 'i-octicon-terminal-16' : 'i-octicon-diff-16'" :aria-label="diffOpen ? 'Show terminal' : 'Show diff'" variant="ghost" size="xs" :aria-pressed="diffOpen" @click="diffOpen = !diffOpen" />
+          <UButton v-if="selected" :icon="diffOpen ? 'i-octicon-terminal-16' : 'i-octicon-diff-16'" :aria-label="diffOpen ? 'Show terminal' : 'Show diff'" variant="ghost" size="xs" :aria-pressed="diffOpen" class="min-h-11 min-w-11 justify-center" @click="diffOpen = !diffOpen" />
           <UButton v-if="selected && !narrow && ['Starting', 'Running', 'Unknown'].includes(selected.state)" variant="ghost" size="xs" color="error" :loading="pending" @click="requestStop(selected)">
             Stop Agent
           </UButton>
@@ -447,7 +496,7 @@ watch(visibility, (value) => {
                 </UButton>
               </div>
             </div>
-            <TerminalView v-else v-model:submission="memory(session).submission" v-model:reading="memory(session).reading" :session="session" :cached-screen="screens[screenKey(session)]" :draft="drafts.forSession(session).value" class="min-h-0 min-w-0 flex-1" @screen="cacheScreen(session, $event)" @update:draft="drafts.forSession(session).value = $event" />
+            <TerminalView v-else v-model:submission="memory(session).submission" v-model:reading="memory(session).reading" v-model:retained-snapshot="memory(session).retainedSnapshot" :session="session" :cached-screen="screens[screenKey(session)]" :draft="drafts.forSession(session).value" class="min-h-0 min-w-0 flex-1" @screen="cacheScreen(session, $event)" @update:draft="drafts.forSession(session).value = $event" />
           </div>
         </div>
         <TerminalDiff v-if="diffOpen" id="terminal-diff" :key="selected.id" role="tabpanel" aria-label="Diff" :target="{ _tag: 'Session', sessionId: selected.id }" class="relative z-10 h-full min-h-0 min-w-0 bg-default" @close="diffOpen = false" />

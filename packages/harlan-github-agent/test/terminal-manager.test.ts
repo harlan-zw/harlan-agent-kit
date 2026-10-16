@@ -6,15 +6,54 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
+import { controllerTerminalProviderArguments } from '../src/terminal-controller.ts'
+import { writeTerminalHistory } from '../src/terminal-history.ts'
 import { writeTerminalJson } from '../src/terminal-storage.ts'
 import { createTerminalManager } from '../src/terminal.ts'
 
 const managers: Awaited<ReturnType<typeof createTerminalManager>>[] = []
+
 const directories: string[] = []
+it('starts when ended-session history cannot be pruned and retries after storage recovers', async () => {
+  const f = await fixture()
+  const original = await f.manager()
+  const launched = await original.launch(launch)
+  if (launched._tag !== 'Ok')
+    throw new Error('Fixture launch failed')
+  f.empty()
+  expect(await original.sessions()).toMatchObject([{ id: launched.value.id, state: 'Exited' }])
+  await original.close()
+  const history = join(f.directory, 'sessions', launched.value.id, 'history.json')
+  await mkdir(history)
+
+  const recovered = await f.manager()
+
+  expect(f.logged).toContainEqual(expect.objectContaining({ code: 'EISDIR' }))
+  await rm(history, { recursive: true })
+  expect(await recovered.sessions()).toMatchObject([{ id: launched.value.id, state: 'Exited' }])
+})
+
 it('reports authoritative aggregate host memory without private broker diagnostics', async () => {
   const fixture_ = await fixture()
   const manager = await fixture_.manager()
   expect(await manager.capacity()).toMatchObject({ _tag: 'Available', memoryGiB: 16, reservedGiB: 0, sessionMemoryGiB: 8, manualPolicy: { _tag: 'Enabled', memoryGiB: 32 }, regular: { _tag: 'Allowed' } })
+})
+it('removes expired helper history during manager startup without a reader', async () => {
+  const fixture_ = await fixture()
+  const helper = await fixture_.manager()
+  const launched = await helper.launch(launch)
+  if (launched._tag !== 'Ok')
+    throw new Error('Fixture launch failed')
+  const path = join(fixture_.directory, 'sessions', launched.value.id)
+  writeTerminalHistory(fixture_.directory, launched.value.id, [
+    { id: 'snapshot', generation: 'generation', expiresAt: 0, lines: ['expired terminal output'] },
+  ])
+  fixture_.empty()
+  await helper.close()
+
+  await fixture_.manager()
+
+  await expect(readFile(join(path, 'history.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
 })
 afterEach(async () => {
   for (const manager of managers.splice(0)) manager.close()
@@ -38,11 +77,13 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
   let emptyChecks = 0
   let released = false
   let missingAfterStop = false
+  let inspectFailures = 0
   let receiptResult: TerminalAdmissionResult = { _tag: 'Conflict' }
   let receipt: Parameters<TerminalAdmission['completedReceipt']>[0] | null = null
   const starts: string[] = []
   const arguments_: string[][] = []
   const releases: string[] = []
+  const logged: unknown[] = []
   const scope = {
     unit: '',
     invocationId: 'owned-invocation',
@@ -122,13 +163,19 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
       cancel: async () => ({ _tag: 'Conflict' }),
     },
     processHost: {
-      inspect: async () => ({
-        loadState: 'loaded',
-        activeState: running ? 'active' : 'inactive',
-        invocationId: scope.invocationId,
-        controlGroup: scope.controlGroup,
-        mainPid: leader ? 123 : 0,
-      }),
+      inspect: async () => {
+        if (inspectFailures > 0) {
+          inspectFailures--
+          throw new Error('Temporary process inspection failure')
+        }
+        return {
+          loadState: 'loaded',
+          activeState: running ? 'active' : 'inactive',
+          invocationId: scope.invocationId,
+          controlGroup: scope.controlGroup,
+          mainPid: leader ? 123 : 0,
+        }
+      },
       start: async (value) => {
         scope.unit = value.unit
         starts.push(value.unit)
@@ -163,7 +210,7 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
     renewWorktree: async () => {},
     ready: async () => ready,
     now: () => new Date('2026-10-12T00:00:00Z'),
-    log: () => {},
+    log: (_message, cause) => logged.push(cause),
   }
   async function manager() {
     const result = await createTerminalManager(options)
@@ -171,8 +218,10 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
     return result
   }
   return {
+    directory,
     manager,
     admission: options.admission,
+    logged,
     deferStop() {
       const gate = Promise.withResolvers<void>()
       const entered = Promise.withResolvers<void>()
@@ -198,6 +247,9 @@ async function fixture(providerArguments: Partial<Record<TerminalProvider, strin
       leader = false
       ready = false
     },
+    rejectInspectOnce: () => {
+      inspectFailures = 1
+    },
     refuse: () => {
       refused = true
     },
@@ -222,6 +274,22 @@ const launch = {
   provider: 'codex' as const,
 }
 describe('durable terminal launch and ownership', () => {
+  it('continues startup after one persisted running session inspection failure', async () => {
+    const f = await fixture()
+    const first = await f.manager()
+    const launched = await first.launch(launch)
+    if (launched._tag !== 'Ok')
+      throw new Error('Fixture launch failed')
+    await first.close()
+    f.rejectInspectOnce()
+
+    const restarted = await f.manager()
+
+    expect((await restarted.sessions())[0]).toMatchObject({
+      id: launched.value.id,
+      state: 'Running',
+    })
+  })
   it('fences ambiguous manual outcomes across restart without replacing the admission request', async () => {
     const f = await fixture()
     const manager = await f.manager()
@@ -298,6 +366,18 @@ describe('durable terminal launch and ownership', () => {
     const manager = await fixture_.manager()
     await manager.launch({ ...launch, provider })
     expect(fixture_.arguments_).toEqual([arguments_])
+  })
+
+  it.each([
+    ['codex', ['--ask-for-approval', 'on-request', '--sandbox', 'workspace-write']],
+    ['claude', []],
+  ] as const)('launches %s with approval-required operations still restricted', async (provider, expectedArguments) => {
+    const fixture_ = await fixture({ [provider]: controllerTerminalProviderArguments[provider] })
+    const manager = await fixture_.manager()
+
+    await manager.launch({ ...launch, provider })
+
+    expect(fixture_.arguments_).toEqual([expectedArguments])
   })
   it('drains accepted Stop writes and refuses operations after close', async () => {
     const fixture_ = await fixture()
