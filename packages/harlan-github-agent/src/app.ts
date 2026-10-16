@@ -210,11 +210,12 @@ function hasDashboardAccess(request: Request, password: string): boolean {
     && timingSafeEqual(expectedBuffer, suppliedBuffer)
 }
 
-function dashboardEvent(options: AgentAppOptions): { observable: string, serialize: () => string } {
+function dashboardEvent(options: AgentAppOptions): { observable: string, heartbeat: string, serialize: () => string } {
   const snapshot = dashboardSnapshot(options)
   let serialized: string | undefined
   return {
     observable: JSON.stringify({ ...snapshot, generatedAt: '' }),
+    heartbeat: JSON.stringify(snapshot.generatedAt),
     serialize: () => serialized ??= JSON.stringify(snapshot),
   }
 }
@@ -1018,14 +1019,17 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   let dashboardInterval: ReturnType<typeof setInterval> | undefined
   app.get('/api/events', (event) => {
     const stream = createEventStream(event)
-    let previous = dashboardEvent(options).observable
+    const initial = dashboardEvent(options)
+    let previous = initial.observable
     const update = (sample: ReturnType<typeof dashboardEvent>): void => {
       if (!authorization.valid()) {
         shutdown()
         return
       }
-      if (sample.observable === previous)
+      if (sample.observable === previous) {
+        void stream.push({ event: 'heartbeat', data: sample.heartbeat }).catch(stop)
         return
+      }
       previous = sample.observable
       // Each subscriber owns its write. One slow or closed stream cannot block the others.
       void stream.push({ event: 'state', data: sample.serialize() }).catch(stop)
@@ -1052,6 +1056,10 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       dashboardSubscribers.add(update)
       options.shutdownSignal?.addEventListener('abort', shutdown, { once: true })
       void stream.pushComment('connected').catch(stop)
+      // A subscriber may have fetched /api/state before this connection while
+      // the service changed. Always resync on attach/reconnect before sending
+      // lightweight freshness-only heartbeats.
+      void stream.push({ event: 'state', data: initial.serialize() }).catch(stop)
       if (dashboardInterval === undefined) {
         dashboardInterval = setInterval(() => {
           const sample = dashboardEvent(options)

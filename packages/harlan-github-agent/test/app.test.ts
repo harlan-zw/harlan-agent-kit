@@ -363,6 +363,7 @@ describe('dashboard HTTP app', () => {
     const response = await app.request(`http://${allowedHost}/api/events`, { headers: { authorization, host: allowedHost } })
     const reader = response.body!.getReader()
     await reader.read()
+    await reader.read() // initial state resync
     activity.push({ _tag: 'Reasoning', at: now().toISOString(), text: 'Reading the changed files.' })
     await vi.advanceTimersByTimeAsync(1_000)
 
@@ -399,22 +400,27 @@ describe('dashboard HTTP app', () => {
       const frame = new TextDecoder().decode((await reader.read()).value)
       return JSON.parse(frame.split('\n').find(line => line.startsWith('data:'))!.slice(5))
     }
+    const readEvent = async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
+      const frame = new TextDecoder().decode((await reader.read()).value)
+      return {
+        event: frame.split('\n').find(line => line.startsWith('event:'))?.slice(6).trim(),
+        data: JSON.parse(frame.split('\n').find(line => line.startsWith('data:'))!.slice(5)),
+      }
+    }
     const first = await connect()
+    expect((await readState(first)).status).toBe('ready')
     current = dashboardSnapshot({ status: 'starting' })
     const second = await connect()
-    const secondRead = readState(second)
-    let secondReceived = false
-    void secondRead.then(() => {
-      secondReceived = true
-    })
+    expect((await readState(second)).status).toBe('starting')
+    const secondHeartbeat = readEvent(second)
     await vi.advanceTimersByTimeAsync(1_000)
     expect((await readState(first)).status).toBe('starting')
-    expect(secondReceived).toBe(false)
+    expect(await secondHeartbeat).toMatchObject({ event: 'heartbeat' })
     expect(getDashboardSnapshot).toHaveBeenCalledTimes(3)
 
     current = dashboardSnapshot({ status: 'degraded' })
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(await secondRead).toEqual(await readState(first))
+    expect(await readEvent(second)).toMatchObject({ event: 'state', data: await readState(first) })
     expect(getDashboardSnapshot).toHaveBeenCalledTimes(4)
     await first.cancel()
     current = dashboardSnapshot({ status: 'ready' })
@@ -425,7 +431,9 @@ describe('dashboard HTTP app', () => {
     await second.cancel()
     await vi.advanceTimersByTimeAsync(3_000)
     expect(getDashboardSnapshot).toHaveBeenCalledTimes(5)
+    current = dashboardSnapshot({ status: 'degraded' })
     const reconnected = await connect()
+    expect((await readState(reconnected)).status).toBe('degraded')
     current = dashboardSnapshot({ status: 'starting' })
     await vi.advanceTimersByTimeAsync(1_000)
     expect((await readState(reconnected)).status).toBe('starting')
@@ -435,6 +443,60 @@ describe('dashboard HTTP app', () => {
     await reconnected.cancel()
     await vi.advanceTimersByTimeAsync(3_000)
     expect(getDashboardSnapshot).toHaveBeenCalledTimes(7)
+  })
+
+  it('sends a freshness heartbeat when an unchanged Dashboard snapshot stays healthy', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-13T01:00:00.000Z'))
+    const shutdown = new AbortController()
+    const getDashboardSnapshot = vi.fn((generatedAt: string) => dashboardSnapshot({ generatedAt }))
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now: () => new Date(),
+      eventIntervalMilliseconds: 2_000,
+      shutdownSignal: shutdown.signal,
+      store: {
+        ...agentControls,
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot,
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+      },
+    })
+    const response = await app.request(`http://${allowedHost}/api/events`, { headers: { authorization, host: allowedHost } })
+    const reader = response.body!.getReader()
+    try {
+      await reader.read()
+      const initialFrame = new TextDecoder().decode((await reader.read()).value)
+      expect(initialFrame).toContain('event: state')
+      let lastHeartbeat = ''
+      for (let tick = 0; tick < 46; tick++) {
+        const pending = reader.read()
+        await vi.advanceTimersByTimeAsync(2_000)
+        const heartbeat = await Promise.race([pending, Promise.resolve(undefined)])
+        expect(heartbeat).toBeDefined()
+        const frame = new TextDecoder().decode(heartbeat?.value)
+        expect(frame).toContain('event: heartbeat')
+        expect(frame).not.toContain('event: state')
+        lastHeartbeat = JSON.parse(frame.split('\n').find(line => line.startsWith('data:'))!.slice(5)) as string
+        expect(lastHeartbeat).toBe(new Date().toISOString())
+      }
+      expect(Date.parse(lastHeartbeat) - Date.parse('2026-08-13T01:00:00.000Z')).toBeGreaterThan(90_000)
+      expect(getDashboardSnapshot).toHaveBeenCalledTimes(47)
+
+      const callsAtDisconnect = getDashboardSnapshot.mock.calls.length
+      await reader.cancel()
+      await vi.advanceTimersByTimeAsync(4_000)
+      expect(getDashboardSnapshot).toHaveBeenCalledTimes(callsAtDisconnect)
+    }
+    finally {
+      shutdown.abort()
+      await reader.cancel()
+    }
   })
 
   it('keeps live Dashboard updates flowing when another subscriber does not read', async () => {
@@ -454,6 +516,7 @@ describe('dashboard HTTP app', () => {
     const stalled = responses[0]!.body!.getReader()
     const active = responses[1]!.body!.getReader()
     await active.read()
+    await active.read() // initial state resync
     for (const status of ['starting', 'degraded', 'ready'] as const) {
       current = dashboardSnapshot({ status })
       await vi.advanceTimersByTimeAsync(1_000)

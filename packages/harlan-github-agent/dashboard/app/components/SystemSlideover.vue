@@ -29,7 +29,7 @@ import HostWork from './system/HostWork.vue'
  *
  * Watch logs opens Sessions from the running Agent. Retained Repairs offer inspection here.
  */
-const { snapshot, incidents, relativeTime, now, requestUpdate, controlPending, controlsUnavailable, loadState, loadError, setAgentSlots } = useDashboard()
+const { snapshot, lastLiveAt, incidents, relativeTime, now, requestUpdate, controlPending, controlsUnavailable, loadState, loadError, setAgentSlots } = useDashboard()
 const { open } = useSystemPane()
 const recoveryOpen = ref(false)
 const recoveryCandidate = ref<Extract<RepairRecoveryRequest, { _tag: 'Plan' }> | null>(null)
@@ -160,7 +160,7 @@ function activityLine(item: AgentActivityItem): string {
           Service data is unavailable. Reload before changing settings or work.
         </p>
         <p v-if="snapshot.generatedAt" class="mt-2 text-sm text-muted">
-          Last update {{ relativeTime(snapshot.generatedAt) }}.
+          Last update {{ relativeTime(lastLiveAt || snapshot.generatedAt) }}.
         </p>
         <p v-if="loadError" class="mt-2 text-sm status-error">
           {{ loadError }}

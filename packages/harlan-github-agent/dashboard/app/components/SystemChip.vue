@@ -6,10 +6,10 @@ import { systemChipState } from '../utils/system.ts'
  * start, red carries the Incident count. Everything else waits in the slideover.
  */
 const { compact = false } = defineProps<{ compact?: boolean }>()
-const { snapshot, now } = useDashboard()
+const { snapshot, now, lastLiveAt } = useDashboard()
 const { show } = useSystemPane()
 
-const chip = computed(() => systemChipState(snapshot.value, now.value))
+const chip = computed(() => systemChipState(snapshot.value, now.value, lastLiveAt.value || snapshot.value.generatedAt))
 
 const tone = computed(() => {
   if (chip.value._tag === 'Incident' || chip.value._tag === 'RepairRecovery')

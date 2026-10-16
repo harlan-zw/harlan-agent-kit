@@ -73,11 +73,11 @@ function manualHoldsQueue(snapshot: DashboardSnapshot): boolean {
  * A placeholder snapshot has no `generatedAt`, so it reports nothing: a reason
  * the controller never sent must not render as amber.
  */
-export function systemChipState(snapshot: DashboardSnapshot, now: Date): SystemChipState {
+export function systemChipState(snapshot: DashboardSnapshot, now: Date, freshnessAt = snapshot.generatedAt): SystemChipState {
   if (snapshot.generatedAt.length === 0)
     return { _tag: 'Loading' }
-  if (isSnapshotStale(snapshot.generatedAt, now))
-    return { _tag: 'Unavailable', lastUpdatedAt: snapshot.generatedAt }
+  if (isSnapshotStale(freshnessAt, now))
+    return { _tag: 'Unavailable', lastUpdatedAt: freshnessAt }
   const active = snapshot.agents.filter(agent => agent._tag === 'ActiveAgent').length
   // Agent slots are a control, so the chip counts the hosts rather than the
   // configured ceiling the schedulers are sized for.

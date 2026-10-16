@@ -7,6 +7,7 @@ import { restartNotice } from '../utils/system.ts'
  */
 const {
   snapshot,
+  lastLiveAt,
   loadError,
   loadState,
   isStale,
@@ -30,7 +31,7 @@ const restart = computed(() => restartNotice(snapshot.value.restartRequest))
     </div>
 
     <div v-if="isStale" role="status" class="mx-auto flex max-w-[100rem] flex-wrap items-center gap-x-4 gap-y-2 px-6 py-2 text-sm xl:px-10">
-      <span class="status-warning">Last update {{ relativeTime(snapshot.generatedAt) }}. Service data is unavailable.</span>
+      <span class="status-warning">Last update {{ relativeTime(lastLiveAt || snapshot.generatedAt) }}. Service data is unavailable.</span>
       <UButton size="xs" color="neutral" variant="outline" @click="loadState">
         Reload
       </UButton>
