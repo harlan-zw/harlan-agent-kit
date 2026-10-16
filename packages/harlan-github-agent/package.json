@@ -47,6 +47,7 @@
   "dependencies": {
     "@coldtea/pr-lens-renderer": "catalog:",
     "@coldtea/pr-lens-schema": "catalog:",
+    "@expo-google-fonts/noto-emoji": "catalog:",
     "@fontpkg/unifont": "catalog:",
     "@openai/codex-sdk": "catalog:",
     "@pierre/diffs": "catalog:",

@@ -15,6 +15,9 @@ catalogs:
     '@coldtea/pr-lens-schema':
       specifier: ^0.7.0
       version: 0.7.0
+    '@expo-google-fonts/noto-emoji':
+      specifier: 0.4.8
+      version: 0.4.8
     '@fontpkg/unifont':
       specifier: 15.0.1
       version: 15.0.1
@@ -271,6 +274,9 @@ importers:
       '@coldtea/pr-lens-schema':
         specifier: 'catalog:'
         version: 0.7.0
+      '@expo-google-fonts/noto-emoji':
+        specifier: 'catalog:'
+        version: 0.4.8
       '@fontpkg/unifont':
         specifier: 'catalog:'
         version: 15.0.1
@@ -1320,6 +1326,9 @@ packages:
   '@eslint/plugin-kit@0.7.3':
     resolution: {integrity: sha512-IkO+/KEUvwbVpiURZg+P7zF74z5Jxe0UgJxVni+RtoHQ6IZieXaO02kmadomap/q+l6bc/jdPGGqTjhuZnuz1Q==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
+
+  '@expo-google-fonts/noto-emoji@0.4.8':
+    resolution: {integrity: sha512-zuq8xBS8nfdgqHXIwfdotQNObA22aMLdPJbFmzJt1AUjbBE4hP/K3az/GftD3e2/JTzRnX30C5lmpuNkVewRlA==}
 
   '@fingerprintjs/botd@2.0.0':
     resolution: {integrity: sha512-yhuz23NKEcBDTHmGz/ULrXlGnbHenO+xZmVwuBkuqHUkqvaZ5TAA0kAgcRy4Wyo5dIBdkIf57UXX8/c9UlMLJg==}
@@ -9150,6 +9159,8 @@ snapshots:
     dependencies:
       '@eslint/core': 1.2.1
       levn: 0.4.1
+
+  '@expo-google-fonts/noto-emoji@0.4.8': {}
 
   '@fingerprintjs/botd@2.0.0': {}
 
