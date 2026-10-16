@@ -12,8 +12,8 @@ import { listTerminalDiff, readTerminalDiff } from './terminal-diff.ts'
 import { createTerminalRuntime } from './terminal-runtime.ts'
 
 export const controllerTerminalProviderArguments = {
-  codex: ['--ask-for-approval', 'never', '--sandbox', 'danger-full-access'],
-  claude: ['--permission-mode', 'auto'],
+  codex: ['--ask-for-approval', 'on-request', '--sandbox', 'workspace-write'],
+  claude: [],
   opencode: [],
 }
 

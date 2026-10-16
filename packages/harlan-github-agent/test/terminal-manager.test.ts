@@ -12,13 +12,6 @@ import { createTerminalManager } from '../src/terminal.ts'
 
 const managers: Awaited<ReturnType<typeof createTerminalManager>>[] = []
 
-it('configures interactive terminal providers for automatic execution modes', () => {
-  expect(controllerTerminalProviderArguments).toEqual({
-    codex: ['--ask-for-approval', 'never', '--sandbox', 'danger-full-access'],
-    claude: ['--permission-mode', 'auto'],
-    opencode: [],
-  })
-})
 const directories: string[] = []
 it('reports authoritative aggregate host memory without private broker diagnostics', async () => {
   const fixture_ = await fixture()
@@ -307,6 +300,18 @@ describe('durable terminal launch and ownership', () => {
     const manager = await fixture_.manager()
     await manager.launch({ ...launch, provider })
     expect(fixture_.arguments_).toEqual([arguments_])
+  })
+
+  it.each([
+    ['codex', ['--ask-for-approval', 'on-request', '--sandbox', 'workspace-write']],
+    ['claude', []],
+  ] as const)('launches %s with approval-required operations still restricted', async (provider, expectedArguments) => {
+    const fixture_ = await fixture({ [provider]: controllerTerminalProviderArguments[provider] })
+    const manager = await fixture_.manager()
+
+    await manager.launch({ ...launch, provider })
+
+    expect(fixture_.arguments_).toEqual([expectedArguments])
   })
   it('drains accepted Stop writes and refuses operations after close', async () => {
     const fixture_ = await fixture()
