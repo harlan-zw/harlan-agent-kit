@@ -56,6 +56,7 @@ watch(draft, () => {
 const processState = ref(session.state)
 const ended = computed(() => ['Exited', 'Interrupted'].includes(processState.value))
 const writable = computed(() => connected.value && ['Starting', 'Running'].includes(processState.value) && !deliveryBlocked.value && writer.value?.viewId === viewId)
+const canAcquireWriter = computed(() => connected.value && ['Starting', 'Running'].includes(processState.value) && !writable.value && writer.value === null)
 const connectionCopy = computed(() => processState.value === 'Exited'
   ? 'Agent session exited.'
   : processState.value === 'Interrupted'
@@ -116,6 +117,7 @@ const hasCopyableOutput = computed(() => Boolean(selectedTerminalText.value || t
 const copyLabel = computed(() => selectedTerminalText.value ? 'Copy selection' : 'Copy output')
 const terminalMenuItems = computed(() => [
   ...(hasCopyableOutput.value ? [[{ label: copyLabel.value, icon: 'i-octicon-copy-16', class: 'min-h-11', onSelect: copyTerminalOutput }]] : []),
+  ...(history.value && canAcquireWriter.value ? [[{ label: 'Use terminal', class: 'min-h-11', onSelect: () => send({ type: 'AcquireWriter' }) }]] : []),
   ...(writable.value ? [[{ label: 'Release terminal', class: 'min-h-11', onSelect: () => send({ type: 'ReleaseWriter' }) }]] : []),
 ])
 useIntervalFn(() => {
@@ -622,10 +624,10 @@ onScopeDispose(() => {
       <UButton v-if="history || historyExpired" icon="i-octicon-arrow-down-16" color="neutral" variant="outline" class="min-h-11" @click="latest">
         Latest
       </UButton>
-      <UButton v-if="connected && ['Starting', 'Running'].includes(processState) && !writable && writer === null" size="xs" variant="ghost" @click="send({ type: 'AcquireWriter' })">
+      <UButton v-if="canAcquireWriter && !history" size="xs" variant="ghost" class="min-h-11" @click="send({ type: 'AcquireWriter' })">
         Use terminal
       </UButton>
-      <UDropdownMenu v-if="writable || hasCopyableOutput" :items="terminalMenuItems">
+      <UDropdownMenu v-if="writable || hasCopyableOutput || (history && canAcquireWriter)" :items="terminalMenuItems">
         <UButton icon="i-octicon-kebab-horizontal-16" aria-label="Terminal controls" size="sm" variant="ghost" class="min-h-11 min-w-11 justify-center" />
       </UDropdownMenu>
     </div>
