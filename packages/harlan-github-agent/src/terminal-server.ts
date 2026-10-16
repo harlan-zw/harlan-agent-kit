@@ -396,6 +396,10 @@ export function createTerminalServer(options: {
       return
     }
     sockets.handleUpgrade(request, socket, head, (websocket) => {
+      let detach: (() => void) | undefined
+      websocket.on('error', cause =>
+        options.log('Terminal stream failed', cause))
+      websocket.on('close', () => detach?.())
       const ended = ['Exited', 'Interrupted'].includes(intent.session.state)
       if (ended) {
         let attached = false
@@ -509,14 +513,12 @@ export function createTerminalServer(options: {
           )
         }
       })
-      websocket.on('error', cause =>
-        options.log('Terminal stream failed', cause))
-      websocket.on('close', () => {
+      detach = () => {
         revoke?.()
         if (expiry)
           clearInterval(expiry)
-      })
-      websocket.on('close', () => helper.close())
+        helper.close()
+      }
     })
   }
   return {
