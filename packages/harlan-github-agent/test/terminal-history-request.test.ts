@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest'
+import { terminalHistoryAfterLatest, terminalHistoryAfterPage } from '../dashboard/app/utils/terminal-history-memory.ts'
 import { terminalAttachmentHistoryRequest, terminalEarlierRequest } from '../dashboard/app/utils/terminal-history-request.ts'
 
 it('restores a saved history page for an ended session without a cached screen', () => {
@@ -15,6 +16,18 @@ it('restores a retained snapshot when an ended viewer attaches after reload', ()
     historySupported: true,
     reading: null,
     retainedSnapshot: 'saved-copy',
+  })).toEqual({ type: 'History', snapshot: 'saved-copy', offset: null, limit: 200 })
+})
+
+it('restores an archive after Latest, exit, and remount without a cached screen', () => {
+  const captured = terminalHistoryAfterPage({ reading: { snapshot: 'saved-copy', offset: 1113, top: 240 }, retainedSnapshot: null }, 'saved-copy')
+  const latest = terminalHistoryAfterLatest(captured)
+
+  expect(terminalAttachmentHistoryRequest({
+    ended: true,
+    historySupported: true,
+    reading: latest.reading,
+    retainedSnapshot: latest.retainedSnapshot,
   })).toEqual({ type: 'History', snapshot: 'saved-copy', offset: null, limit: 200 })
 })
 
