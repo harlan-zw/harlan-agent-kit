@@ -51,6 +51,8 @@
     ],
   },
   "r2_buckets": [{ "binding": "STATE", "bucket_name": "wolfstar-github-agent-state" }],
+  // Worktree snapshots. The namespace is created with its first repository.
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "wolfstar-agent" }],
   // Starts the controller again after a deploy or a host move.
   "triggers": { "crons": ["*/5 * * * *"] },
 }

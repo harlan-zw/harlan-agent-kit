@@ -68,23 +68,27 @@ With both set, the Worker checks the Access token on every request except `/webh
 
 ## What runs where
 
-| Piece                | Where                            | Notes                                                                        |
-| -------------------- | -------------------------------- | ---------------------------------------------------------------------------- |
-| Webhook intake       | Worker                           | Checks the signature with the App's secret, answers 204, queues the delivery |
-| Webhook relay        | Queue consumer                   | Retries from 10 seconds to 15 minutes, 20 times, then the dead letter queue  |
-| Setup and secrets    | Durable Object storage           | The App key, webhook secret, dashboard password, and provider logins         |
-| Controller           | Container, `standard-4`          | 4 vCPU, 12 GiB, 20 GB disk. Two Agents at once                               |
-| Journal              | R2, `controller/state.sqlite`    | Restored at start, saved every 5 minutes and on shutdown                     |
-| Codex login          | R2, `controller/codex-auth.json` | Codex rotates its refresh token, so the newest copy is kept                  |
-| Large webhook bodies | R2, `deliveries/`                | Above 100 KB. Deleted once delivered, expired after 7 days                   |
+| Piece                | Where                                 | Notes                                                                           |
+| -------------------- | ------------------------------------- | ------------------------------------------------------------------------------- |
+| Webhook intake       | Worker                                | Checks the signature with the App's secret, answers 204, queues the delivery    |
+| Webhook relay        | Queue consumer                        | Retries from 10 seconds to 15 minutes, 20 times, then the dead letter queue     |
+| Setup and secrets    | Durable Object storage                | The App key, webhook secret, dashboard password, and provider logins            |
+| Controller           | Container, `standard-4`               | 4 vCPU, 12 GiB, 20 GB disk. Two Agents at once                                  |
+| Journal              | R2, `controller/state.sqlite`         | Restored at start, saved every 5 minutes and on shutdown                        |
+| Codex login          | R2, `controller/codex-auth.json`      | Codex rotates its refresh token, so the newest copy is kept                     |
+| Large webhook bodies | R2, `deliveries/`                     | Above 100 KB. Deleted once delivered, expired after 7 days                      |
+| Worktree snapshots   | Artifacts, `wolfstar-agent` namespace | One repository per GitHub repository, one `snapshots/<branch>` ref per worktree |
 
 The Container reaches R2 through `http://state.internal`, which the Worker answers with its own binding, so the Container holds no storage credential.
+
+Every 5 minutes, and on a clean shutdown, the Container saves each linked worktree that differs from its merge base with the default branch. The save is one commit of the working tree, so an Agent's unpushed work survives a restart. The next Container brings it back as unstaged changes on the merge base, for a branch it does not have, and only within 3 days. A snapshot never carries `.env` files, `*.pem`, `*.key`, ignored files, or a file over 30 MB. The Container asks `http://artifacts.internal` for a 15 minute token per repository, so it holds no Cloudflare credential. A Worker without the `ARTIFACTS` binding turns snapshots off and nothing else changes.
 
 The controller keeps every check it has on Hogwild: the webhook signature, the dashboard password, Host and Origin. The Worker translates the public hostname to the one the controller expects, and refuses a state changing request whose Origin is not the public one.
 
 ## Limits
 
 - **A restart loses up to 5 minutes of journal.** The journal is backed up every 5 minutes and on a clean shutdown. GitHub holds the durable workflow state, and Recovery rebuilds the rest.
+- **Snapshots restore work, not history.** A restored worktree starts at the merge base, so commits made in the lost worktree come back as changes in the working tree, not as commits.
 - **Checkouts are cloned again after a restart.** The Container disk does not survive a restart, so each start clones every repository the App reaches. Large repositories make that start slower.
 - **New repositories need a restart.** The controller matches repositories to checkouts when it starts. Installing the App through GitHub's page restarts it for you.
 - **`gh` inside an Agent is not signed in.** Agents read GitHub through the controller. A provider task that shells out to `gh` for a private repository fails.

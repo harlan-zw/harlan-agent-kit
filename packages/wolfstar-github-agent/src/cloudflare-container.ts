@@ -1,11 +1,13 @@
 import type { ChildProcess } from 'node:child_process'
 import type { Socket } from 'node:net'
 import type { CloudflareRuntimeInputs, RuntimePaths } from './cloudflare-runtime.ts'
+import type { RestoreDependencies, SnapshotAccess } from './cloudflare-snapshots.ts'
+import { pruneFinished, restoreSnapshots, runGit, snapshotRound } from './cloudflare-snapshots.ts'
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createConnection, createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -40,7 +42,12 @@ const execFileAsync = promisify(execFile)
 
 /** The edge Worker answers this hostname from R2, so the Container needs no storage credential. */
 const STATE_ORIGIN = 'http://state.internal'
+/** The edge Worker mints Artifacts tokens at this hostname, so the Container holds no Cloudflare credential. */
+const ARTIFACTS_ORIGIN = 'http://artifacts.internal'
 const BACKUP_INTERVAL_MILLISECONDS = 5 * 60_000
+const SNAPSHOT_INTERVAL_MILLISECONDS = 5 * 60_000
+/** A stop signal must not wait on storage for long: the platform kills a Container that lingers. */
+const SNAPSHOT_STOP_BUDGET_MILLISECONDS = 20_000
 const FORWARDS = [
   { listen: 8080, target: 3210 },
   { listen: 8081, target: 3211 },
@@ -286,6 +293,106 @@ async function syncCheckouts(inputs: CloudflareRuntimeInputs, paths: RuntimePath
   }
 }
 
+/**
+ * Asks the edge Worker for a short lived token to one snapshot repository.
+ *
+ * Answers null when there is nothing saved to read, or when the Worker has no
+ * Artifacts binding, so the Container keeps running without snapshots.
+ */
+async function requestSnapshotAccess(repository: string, scope: 'read' | 'write'): Promise<SnapshotAccess | null> {
+  const response = await fetch(`${ARTIFACTS_ORIGIN}/access`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ repository, scope }),
+  })
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error(`Artifacts access answered ${response.status}.`)
+  return (await response.json()) as SnapshotAccess
+}
+
+/** The repository checkouts the controller manages: directories under the checkout root that hold a `.git` directory. */
+async function listCheckouts(paths: RuntimePaths): Promise<string[]> {
+  const entries = await readdir(paths.checkoutRoot, { withFileTypes: true }).catch(() => [])
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(paths.checkoutRoot, entry.name))
+    .filter((checkout) => existsSync(join(checkout, '.git', 'HEAD')))
+}
+
+/** Creates a worktree where Worktrunk would, so the controller finds it with `wt list`. */
+async function createRestoredWorktree(checkout: string, branch: string, base: string): Promise<string> {
+  await execFileAsync('wt', ['switch', '--create', branch, '--base', base, '--no-cd'], { cwd: checkout })
+  const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: checkout })
+  const block = stdout.split(/\n\s*\n/).find((entry) => entry.includes(`branch refs/heads/${branch}`))
+  const path = block?.split('\n')[0]?.replace(/^worktree /, '')
+  if (path === undefined || path === '') throw new Error(`Worktrunk did not create a worktree for ${branch}.`)
+  return path
+}
+
+function snapshotDependencies(): RestoreDependencies {
+  return {
+    git: runGit,
+    request: requestSnapshotAccess,
+    log,
+    now: () => Math.floor(Date.now() / 1000),
+    createWorktree: createRestoredWorktree,
+  }
+}
+
+/** Branches that have had a linked worktree in this Container, by checkout. A branch that leaves the set finished. */
+const seenWorktrees = new Map<string, Set<string>>()
+let snapshotsUnavailable = false
+let snapshotRunning = false
+
+/**
+ * One snapshot round: save every linked worktree, then drop the snapshots of
+ * worktrees that existed here and are gone, which is what a finished task looks like.
+ */
+async function snapshotQuietly(paths: RuntimePaths): Promise<void> {
+  // A slow push must not stack rounds on top of each other.
+  if (snapshotsUnavailable || snapshotRunning) return
+  snapshotRunning = true
+  try {
+    const dependencies = snapshotDependencies()
+    const checkouts = await listCheckouts(paths)
+    const round = await snapshotRound(dependencies, checkouts)
+    for (const { branch, reason } of round.failed) log(`Snapshot of ${branch} failed: ${reason}`)
+    if (round.saved.length > 0) log(`Saved snapshots: ${round.saved.join(', ')}.`)
+
+    for (const [checkout, now] of round.seen) {
+      const before = seenWorktrees.get(checkout) ?? new Set<string>()
+      const finished = [...before].filter((branch) => !now.has(branch))
+      if (finished.length > 0) await pruneFinished(dependencies, checkout, finished)
+      seenWorktrees.set(checkout, new Set([...before, ...now]).difference(new Set(finished)))
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    // A Worker without the binding answers 502 for every request. One line, then stop asking.
+    if (message.includes('Artifacts access answered')) {
+      snapshotsUnavailable = true
+      log(`Worktree snapshots are off: ${message}`)
+    } else log(`Snapshot round failed: ${message}`)
+  } finally {
+    snapshotRunning = false
+  }
+}
+
+/** Brings back work lost with the previous Container. Runs once, before the controller claims any worktree. */
+async function restoreQuietly(paths: RuntimePaths): Promise<void> {
+  try {
+    const dependencies = snapshotDependencies()
+    for (const checkout of await listCheckouts(paths)) {
+      for (const outcome of await restoreSnapshots(dependencies, checkout)) {
+        if (outcome._tag === 'Failed') log(`Restoring ${outcome.branch} failed: ${outcome.reason}`)
+        if (outcome._tag === 'Restored')
+          seenWorktrees.set(checkout, (seenWorktrees.get(checkout) ?? new Set()).add(outcome.branch))
+      }
+    }
+  } catch (error) {
+    log(`Restoring snapshots failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 /** Answers on the public port while the controller is down, so the dashboard explains instead of hanging. */
 function unavailable(socket: Socket): void {
   const body = `${status}\n`
@@ -342,24 +449,33 @@ async function main(): Promise<void> {
     await backupJournal(paths).catch((error: unknown) => log(`Backup failed: ${String(error)}`))
   }
   const interval = setInterval(() => void backupQuietly(), BACKUP_INTERVAL_MILLISECONDS)
+  const snapshotInterval = setInterval(() => void snapshotQuietly(paths), SNAPSHOT_INTERVAL_MILLISECONDS)
 
   const stop = async (signal: NodeJS.Signals): Promise<void> => {
     if (stopping) return
     stopping = true
     clearInterval(interval)
+    clearInterval(snapshotInterval)
     log(`Received ${signal}. Stopping the controller.`)
     if (child !== null && child.exitCode === null) {
       child.kill('SIGTERM')
       await Promise.race([new Promise((resolve) => child?.once('exit', resolve)), sleep(30_000)])
     }
+    await Promise.race([snapshotQuietly(paths), sleep(SNAPSHOT_STOP_BUDGET_MILLISECONDS)])
     await backupQuietly()
     process.exit(0)
   }
   process.on('SIGTERM', (signal) => void stop(signal))
   process.on('SIGINT', (signal) => void stop(signal))
 
+  let restored = false
   while (!stopping) {
     await syncCheckouts(inputs, paths).catch((error: unknown) => log(`Checkout sync failed: ${String(error)}`))
+    // Once per Container: a controller restart inside it must not bring back work that finished.
+    if (!restored) {
+      restored = true
+      await restoreQuietly(paths)
+    }
     status = 'The controller is starting.'
     const started = Date.now()
     const running = spawn(
