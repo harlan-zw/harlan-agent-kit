@@ -1,5 +1,6 @@
 export default defineNuxtConfig({
   compatibilityDate: '2026-08-13',
+  app: { head: { viewport: 'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content' } },
   pages: { pattern: ['**/*.vue', '!**/_*.vue'] },
   css: ['~/assets/css/main.css'],
   colorMode: { preference: 'dark', fallback: 'dark' },

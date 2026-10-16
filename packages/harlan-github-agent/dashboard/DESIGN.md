@@ -99,7 +99,10 @@ The header uses 40px on desktop and 48px on touch layouts.
 - Closing a view detaches it. Stop remains explicit.
 - Historical structured Sessions and Watch logs stay read-only.
 - Diffs open on demand beside the terminal.
-- Mobile stacks Project controls above the terminal.
+- Below 1024px, Projects is a full-height view; selecting a session returns to its terminal.
+- New session options open on demand. Stop confirms; Close tab only detaches.
+- Phone drafts survive navigation and reload. Clear them only after terminal acknowledgment.
+- Earlier output scrolls natively and keeps reading position. Latest returns to live output.
 - Standalone mode hides maintenance controls and does not subscribe to maintenance events.
 - Keep heavy terminal and diff renderers outside the initial route bundle.
 

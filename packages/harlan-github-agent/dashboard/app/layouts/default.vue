@@ -18,8 +18,17 @@ const route = useRoute()
 const sessionPage = computed(() => route.path === '/sessions')
 const phoneInput = useMediaQuery('(pointer: coarse)')
 const { height: visualHeight } = useWindowSize({ type: 'visual' })
+const viewportTop = ref(0)
+const viewportScale = ref(1)
+function updateViewport() {
+  viewportTop.value = window.visualViewport?.offsetTop ?? 0
+  viewportScale.value = window.visualViewport?.scale ?? 1
+}
+useEventListener(() => window.visualViewport, 'resize', updateViewport)
+useEventListener(() => window.visualViewport, 'scroll', updateViewport)
 const sessionHeight = computed(() => sessionPage.value && phoneInput.value && Number.isFinite(visualHeight.value)
-  ? { height: `${visualHeight.value}px` }
+  && viewportScale.value === 1
+  ? { position: 'fixed' as const, top: `${viewportTop.value}px`, left: '0', right: '0', height: `${visualHeight.value}px` }
   : undefined)
 const terminalHost = useTerminalHost()
 
@@ -65,7 +74,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex h-dvh min-h-0 overflow-hidden" :style="sessionHeight">
+  <div class="flex h-dvh min-h-0 overflow-hidden pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]" :style="sessionHeight">
     <a href="#main" class="skip-link">Skip to content</a>
     <aside class="z-40 hidden w-12 shrink-0 flex-col border-r border-default bg-muted md:flex">
       <NuxtLink to="/sessions" aria-label="Agent" class="flex h-11 shrink-0 items-center justify-center text-highlighted">
@@ -90,7 +99,7 @@ onMounted(() => {
     <div class="flex min-w-0 flex-1 flex-col">
       <header class="workspace-header z-40 shrink-0 border-b border-default bg-muted">
         <div class="flex h-full min-w-0 items-center gap-2 pr-2">
-          <NuxtLink to="/sessions" class="flex shrink-0 items-center gap-2 text-sm font-medium text-highlighted md:hidden">
+          <NuxtLink to="/sessions" class="flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-2 text-sm font-medium text-highlighted md:hidden">
             <UIcon name="i-octicon-hubot-16" class="size-4" aria-hidden="true" />
             <span class="sr-only sm:not-sr-only">Agent</span>
           </NuxtLink>
@@ -100,7 +109,7 @@ onMounted(() => {
           <div class="ms-auto flex items-center gap-1.5">
             <UButton v-if="terminalHost.controller.value && !sessionPage" to="/sessions" label="Sessions" icon="i-octicon-terminal-16" color="neutral" variant="outline" class="min-h-11 md:hidden" />
             <span v-if="terminalHost.readOnly.value" class="sr-only rounded border border-default text-xs text-muted sm:not-sr-only sm:px-2 sm:py-1" role="status">Read-only Service connection.</span>
-            <SystemChip v-if="terminalHost.controller.value" class="max-sm:max-w-28 max-sm:overflow-hidden" />
+            <SystemChip v-if="terminalHost.controller.value" :compact="sessionPage" />
             <div v-if="terminalHost.controller.value && !sessionPage" class="hidden items-center gap-1.5 lg:flex">
               <AgentSelectionMenu />
               <UButton

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import type { TerminalCapabilities, TerminalProject, TerminalProvider, TerminalSession } from '../../../src/terminal-protocol.ts'
+import type { TerminalCapabilities, TerminalProject, TerminalProvider, TerminalScreen, TerminalSession } from '../../../src/terminal-protocol.ts'
 import type { TerminalCapacity } from '../utils/terminal-capacity.ts'
 import type { TerminalLaunchIntent } from '../utils/terminal-launch.ts'
-import { useDocumentVisibility, useIntervalFn, useMediaQuery, useStorage } from '@vueuse/core'
+import type { TerminalSubmission } from '../utils/terminal-submission.ts'
+import { useDocumentVisibility, useEventListener, useIntervalFn, useMediaQuery, useSessionStorage, useStorage } from '@vueuse/core'
 import { parseTerminalCapacity } from '../utils/terminal-capacity.ts'
 import { terminalFailureCopy } from '../utils/terminal-copy.ts'
 import { createTerminalDraftStore } from '../utils/terminal-draft.ts'
@@ -12,7 +13,21 @@ import { parseTerminalProjects, parseTerminalSessionResult, parseTerminalSession
 import TerminalView from './_TerminalView.vue'
 
 const { capabilities } = defineProps<{ capabilities: TerminalCapabilities }>()
-const drafts = createTerminalDraftStore()
+const savedDrafts = useSessionStorage(`agent-terminal-drafts:${capabilities.hostId}`, new Map<string, string>())
+const drafts = createTerminalDraftStore(savedDrafts.value)
+const screens = useState<Record<string, TerminalScreen>>(`agent-terminal-screens:${capabilities.hostId}`, () => ({}))
+function screenKey(session: TerminalSession) {
+  return JSON.stringify([session.id, session.generation])
+}
+function cacheScreen(session: TerminalSession, screen: TerminalScreen) {
+  const entries = Object.entries(screens.value).filter(([key]) => key !== screenKey(session)).slice(-9)
+  screens.value = Object.fromEntries([...entries, [screenKey(session), markRaw(screen)]])
+}
+const memories = useSessionStorage<Record<string, { submission: TerminalSubmission, reading: { offset: number, top: number } | null }>>(`agent-terminal-reading:${capabilities.hostId}`, {})
+function memory(session: TerminalSession) {
+  const key = JSON.stringify([session.id, session.generation])
+  return memories.value[key] ??= { submission: { _tag: 'Editing' }, reading: null }
+}
 
 // Diff rendering stays outside the terminal bundle until the user opens it.
 const TerminalDiff = defineAsyncComponent(() => import('../components/_TerminalDiff.vue'))
@@ -32,12 +47,22 @@ const projectId = computed({ get: () => layout.value.projectId, set: (value) => 
   storedLayout.value = { ...layout.value, projectId: value }
 } })
 const projectLayout = computed(() => Object.hasOwn(layout.value.projects, projectId.value) ? layout.value.projects[projectId.value]! : emptyTerminalProjectLayout())
-const narrow = useMediaQuery('(max-width: 767px)')
+const narrow = useMediaQuery('(max-width: 1023px)')
 const projectsOpen = ref(false)
+const launchOpen = ref(false)
+const projectFilter = useTemplateRef<{ inputRef?: HTMLInputElement }>('projectFilter')
+const stopConfirm = ref(false)
+const stopTarget = ref('')
 const tabList = useTemplateRef<HTMLElement>('tabList')
 const terminalArea = useTemplateRef<HTMLElement>('terminalArea')
 const provider = ref<TerminalProvider>('codex')
-const initialPrompt = ref('')
+const initialDrafts = useSessionStorage<Record<string, string>>(`agent-terminal-initial:${capabilities.hostId}`, {})
+const initialPrompt = computed({
+  get: () => initialDrafts.value[projectId.value] ?? '',
+  set: (value: string) => {
+    initialDrafts.value[projectId.value] = value
+  },
+})
 const forceConfirmation = shallowRef<{ _tag: 'New' } | { _tag: 'Waiting', id: string }>()
 const forceAttempts = new Map<string, string>()
 const failure = ref('')
@@ -55,7 +80,21 @@ const visibleSessions = computed(() => {
   const ids = view._tag === 'Empty' ? [] : view._tag === 'Single' || narrow.value ? [selectedId.value] : [view.left, view.right]
   return ids.map(id => sessions.value.find(session => session.id === id)).filter((session): session is TerminalSession => session !== undefined)
 })
-const visibleProjects = computed(() => displayProjects.value.filter(project => project.name.toLowerCase().includes(filter.value.toLowerCase())))
+function sessionLabel(session: TerminalSession) {
+  return `${providerNames[session.provider]} ${new Date(session.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+}
+function sessionState(session: TerminalSession) {
+  return session.state === 'Queued' ? 'Waiting to start' : session.state === 'Cancelled' ? 'Session cancelled.' : session.state
+}
+function projectSessions(id: string) {
+  const query = filter.value.toLowerCase().trim()
+  const project = displayProjects.value.find(project => project.id === id)
+  return sessions.value.filter(session => session.projectId === id && `${project?.name} ${sessionLabel(session)} ${sessionState(session)}`.toLowerCase().includes(query))
+    .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+const visibleProjects = computed(() => displayProjects.value.filter(project => project.name.toLowerCase().includes(filter.value.toLowerCase().trim()) || projectSessions(project.id).length > 0))
+const selectedProjectName = computed(() => displayProjects.value.find(project => project.id === projectId.value)?.name ?? 'Projects')
+const navigationVisible = computed(() => !narrow.value || projectsOpen.value || !selected.value)
 const selectedProjectUnavailable = computed(() => Boolean(projectId.value) && !projects.value.some(project => project.id === projectId.value))
 const providers = computed(() => (['codex', 'claude', 'opencode'] as const).filter(value => capabilities.providers[value]))
 const providerNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode' }
@@ -74,9 +113,9 @@ async function refresh() {
     return
   refreshing.value = true
   const results = await Promise.allSettled([
-    $fetch<unknown>('/api/terminal/projects').then(parseTerminalProjects),
-    $fetch<unknown>('/api/terminal/sessions').then(parseTerminalSessions),
-    $fetch<unknown>('/api/terminal/capacity').then(parseTerminalCapacity),
+    $fetch<unknown>('/api/terminal/projects', { timeout: 10000 }).then(parseTerminalProjects),
+    $fetch<unknown>('/api/terminal/sessions', { timeout: 10000 }).then(parseTerminalSessions),
+    $fetch<unknown>('/api/terminal/capacity', { timeout: 10000 }).then(parseTerminalCapacity),
   ])
   capacity.value = results[2].status === 'fulfilled' && results[2].value._tag === 'Ok'
     ? results[2].value.value
@@ -100,6 +139,7 @@ async function refresh() {
 
 async function select(session: TerminalSession) {
   projectsOpen.value = false
+  launchOpen.value = false
   diffOpen.value = false
   const current = Object.hasOwn(layout.value.projects, session.projectId) ? layout.value.projects[session.projectId]! : emptyTerminalProjectLayout()
   storedLayout.value = { ...layout.value, projectId: session.projectId, projects: { ...layout.value.projects, [session.projectId]: updateTerminalProjectLayout(current, { _tag: 'Open', sessionId: session.id }) } }
@@ -108,6 +148,7 @@ async function select(session: TerminalSession) {
 
 async function selectProject(id: string) {
   projectId.value = id
+  launchOpen.value = true
   diffOpen.value = false
   await navigateTo({ path: '/sessions', query: selectedId.value ? { terminal: selectedId.value } : {} }, { replace: true })
 }
@@ -157,10 +198,12 @@ async function launch(mode: 'Regular' | 'Force' = 'Regular') {
   pending.value = true
   failure.value = ''
   const previous = launchIntent.value
+  const launchProject = projectId.value
+  const originalPrompt = initialPrompt.value
   const prompt = initialPrompt.value.trim() || undefined
   const intent = terminalLaunchIntent(previous, { projectId: projectId.value, provider: provider.value, ...(prompt ? { initialPrompt: prompt } : {}) }, crypto.randomUUID(), mode)
   launchIntent.value = intent
-  await $fetch<unknown>('/api/terminal/sessions', { method: 'POST', body: intent }).then(parseTerminalSessionResult).then(async (result) => {
+  await $fetch<unknown>('/api/terminal/sessions', { method: 'POST', body: intent, timeout: 15000 }).then(parseTerminalSessionResult).then(async (result) => {
     if (result._tag === 'Err') {
       if (!['DeliveryUnknown', 'OwnershipUnknown', 'LaunchConflict'].includes(result.reason))
         launchIntent.value = undefined
@@ -168,10 +211,12 @@ async function launch(mode: 'Regular' | 'Force' = 'Regular') {
       return
     }
     launchIntent.value = undefined
-    initialPrompt.value = ''
+    if (initialDrafts.value[launchProject] === originalPrompt)
+      initialDrafts.value[launchProject] = ''
     forceConfirmation.value = undefined
     sessions.value = [...sessions.value.filter(session => session.id !== result.value.id), result.value]
-    await select(result.value)
+    if (projectId.value === launchProject)
+      await select(result.value)
   }).catch(() => {
     failure.value = 'Could not start the Agent session. Retry.'
   }).finally(() => { pending.value = false })
@@ -184,7 +229,7 @@ async function forceWaiting(id: string) {
   failure.value = ''
   const requestId = forceAttempts.get(id) ?? crypto.randomUUID()
   forceAttempts.set(id, requestId)
-  await $fetch<unknown>(`/api/terminal/sessions/${encodeURIComponent(id)}/force`, { method: 'POST', body: { requestId } }).then(parseTerminalSessionResult).then((result) => {
+  await $fetch<unknown>(`/api/terminal/sessions/${encodeURIComponent(id)}/force`, { method: 'POST', body: { requestId }, timeout: 15000 }).then(parseTerminalSessionResult).then((result) => {
     if (result._tag === 'Err') {
       failure.value = terminalFailureCopy[result.reason]
       if (!['OwnershipUnknown', 'DeliveryUnknown'].includes(result.reason))
@@ -214,15 +259,38 @@ async function stop(id = selected.value?.id) {
   if (!id || pending.value)
     return
   pending.value = true
-  await $fetch<unknown>(`/api/terminal/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }).then(parseTerminalSessionResult).then((result) => {
-    if (result._tag === 'Err')
+  failure.value = ''
+  await $fetch<unknown>(`/api/terminal/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST', timeout: 15000 }).then(parseTerminalSessionResult).then((result) => {
+    if (result._tag === 'Err') {
       failure.value = terminalFailureCopy[result.reason]
-    else
+    }
+    else {
       sessions.value = sessions.value.map(session => session.id === result.value.id ? result.value : session)
+      stopConfirm.value = false
+    }
   }).catch(() => {
     failure.value = 'Could not stop the Agent session. Retry.'
   }).finally(() => { pending.value = false })
 }
+
+function requestStop(session: TerminalSession) {
+  stopTarget.value = session.id
+  stopConfirm.value = true
+}
+
+watch(projectsOpen, async (open) => {
+  if (open) {
+    await nextTick()
+    if (!window.matchMedia('(pointer: coarse)').matches)
+      projectFilter.value?.inputRef?.focus({ preventScroll: true })
+  }
+})
+useEventListener('keydown', (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && projectsOpen.value) {
+    projectsOpen.value = false
+    event.preventDefault()
+  }
+})
 
 onMounted(refresh)
 const polling = useIntervalFn(refresh, 5000, { immediateCallback: false })
@@ -238,76 +306,99 @@ watch(visibility, (value) => {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col md:grid md:grid-cols-[240px_minmax(0,1fr)] md:grid-rows-1">
-    <aside class="min-h-0 flex-col overflow-y-auto border-b border-default bg-muted md:flex md:border-r md:border-b-0" :class="projectsOpen || !selected ? 'flex max-md:max-h-[45dvh]' : 'hidden'" aria-label="Projects">
-      <div class="flex h-10 shrink-0 items-center justify-between border-b border-default px-3">
-        <span class="text-xs font-semibold tracking-wide">Projects</span>
-        <UButton v-if="capabilities.controller" to="/sessions?view=history" icon="i-octicon-history-16" aria-label="History" variant="ghost" size="xs" />
+  <div class="relative flex h-full min-h-0 flex-col lg:grid lg:grid-cols-[260px_minmax(0,1fr)] lg:grid-rows-1">
+    <aside v-show="navigationVisible" class="absolute inset-0 z-20 flex min-h-0 flex-col bg-default lg:static lg:border-r lg:border-default lg:bg-muted" aria-label="Projects">
+      <div class="flex min-h-12 shrink-0 items-center justify-between gap-2 border-b border-default px-3">
+        <span class="text-sm font-semibold">Projects</span>
+        <div class="flex items-center gap-1">
+          <UButton v-if="capabilities.controller" to="/sessions?view=history" icon="i-octicon-history-16" aria-label="History" variant="ghost" class="min-h-11 min-w-11 justify-center" />
+          <UButton v-if="selected" icon="i-octicon-x-16" aria-label="Back to session" variant="ghost" class="min-h-11 min-w-11 justify-center lg:hidden" @click="projectsOpen = false" />
+        </div>
       </div>
-      <div class="flex shrink-0 gap-2 p-2">
-        <UInput v-model="filter" aria-label="Filter projects" placeholder="Filter projects" icon="i-octicon-search-16" class="w-full" size="sm" />
-        <UButton v-if="failure" icon="i-octicon-sync-16" aria-label="Reload" variant="ghost" @click="refresh" />
+      <div class="shrink-0 p-3">
+        <UInput ref="projectFilter" v-model="filter" aria-label="Find a session" placeholder="Find a project or session" icon="i-octicon-search-16" class="w-full" :ui="{ base: 'min-h-11 text-base' }" />
       </div>
-      <div class="max-h-40 overflow-auto md:max-h-none md:flex-1">
-        <div v-for="project in visibleProjects" :key="project.id">
-          <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-elevated" :class="projectId === project.id ? 'bg-elevated text-highlighted' : 'text-muted'" :aria-pressed="projectId === project.id" @click="selectProject(project.id)">
-            <UIcon name="i-octicon-repo-16" class="size-4 shrink-0" />
-            <span class="truncate">{{ project.name }}</span>
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2" aria-label="Session list">
+        <p v-if="loading" role="status" class="p-3 text-sm text-muted">
+          Connecting to the terminal host.
+        </p>
+        <p v-else-if="!visibleProjects.length" role="status" class="p-3 text-sm text-muted">
+          No projects or sessions match.
+        </p>
+        <div v-for="project in visibleProjects" :key="project.id" class="mb-3">
+          <button class="flex min-h-11 w-full items-center gap-2 rounded px-2 text-left text-sm font-medium hover:bg-elevated focus-visible:outline-2 focus-visible:outline-primary" :class="projectId === project.id ? 'text-highlighted' : 'text-muted'" :aria-pressed="projectId === project.id" @click="selectProject(project.id)">
+            <UIcon name="i-octicon-repo-16" class="size-4 shrink-0" aria-hidden="true" />
+            <span class="min-w-0 break-words">{{ project.name }}</span>
           </button>
-          <p v-if="!projects.some(value => value.id === project.id)" class="px-3 pb-1 text-xs text-muted">
+          <p v-if="!projects.some(value => value.id === project.id)" class="px-2 pb-1 text-sm text-muted">
             {{ terminalFailureCopy.ProjectUnavailable }}
           </p>
-          <button v-for="session in sessions.filter(value => value.projectId === project.id)" :key="session.id" class="flex w-full items-center gap-2 py-1.5 pr-3 pl-8 text-left text-xs hover:bg-elevated" :class="selectedId === session.id ? 'bg-accented text-highlighted' : 'text-muted'" :aria-current="selectedId === session.id ? 'page' : undefined" @click="select(session)">
-            <span class="size-1.5 shrink-0 rounded-full" :class="session.state === 'Running' ? 'bg-success' : 'bg-neutral-500'" />
-            <span class="flex-1 truncate">{{ providerNames[session.provider] }}</span>
-            <span class="text-[10px]">{{ session.state === 'Queued' ? 'Waiting to start' : session.state === 'Cancelled' ? 'Session cancelled.' : session.state }}</span>
+          <button v-for="session in projectSessions(project.id)" :key="session.id" class="flex min-h-14 w-full items-center gap-3 rounded py-2 pr-3 pl-4 text-left text-sm hover:bg-elevated focus-visible:outline-2 focus-visible:outline-primary" :class="selectedId === session.id ? 'bg-accented text-highlighted' : 'text-default'" :aria-current="selectedId === session.id ? 'page' : undefined" @click="select(session)">
+            <span class="size-2 shrink-0 rounded-full" :class="session.state === 'Running' ? 'bg-success' : session.state === 'Interrupted' || session.state === 'Unknown' ? 'bg-warning' : 'bg-neutral-500'" aria-hidden="true" />
+            <span class="min-w-0 flex-1">
+              <span class="block">{{ sessionLabel(session) }}</span>
+              <span class="block text-sm text-muted">{{ new Date(session.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' }) }}</span>
+            </span>
+            <span class="max-w-28 text-right text-sm text-muted">{{ sessionState(session) }}</span>
           </button>
         </div>
       </div>
-      <p v-if="capacityReason" role="status" class="shrink-0 border-t border-default px-3 py-2 text-xs text-muted">
-        {{ capacityReason }}
-      </p>
-      <div v-if="capacity._tag === 'Available'" class="shrink-0 border-t border-default px-3 py-2 text-xs text-muted" aria-label="Host memory">
-        <div class="flex justify-between gap-2">
-          <span>Host memory</span><span>{{ capacity.reservedGiB }} / {{ capacity.memoryGiB }} GiB</span>
+      <div class="max-h-[60%] shrink-0 overflow-y-auto border-t border-default bg-muted p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        <div v-if="failure" role="alert" class="mb-2 flex items-center gap-2 text-sm text-error">
+          <p>{{ failure }}</p><UButton icon="i-octicon-sync-16" aria-label="Reload" color="neutral" variant="ghost" @click="refresh" />
         </div>
-        <div class="flex justify-between gap-2">
-          <span>Agent sessions</span><span>{{ capacity.agentSlotsUsed }} / {{ capacity.agentSlots }}</span>
+        <div v-if="launchOpen" class="space-y-3">
+          <div class="flex min-h-11 items-center justify-between gap-2 text-sm font-medium">
+            <span class="min-w-0 break-words">{{ selectedProjectName }}</span>
+            <UButton icon="i-octicon-x-16" aria-label="Close new session" variant="ghost" class="min-h-11 min-w-11 justify-center" @click="launchOpen = false" />
+          </div>
+          <UTextarea v-model="initialPrompt" aria-label="Initial prompt" placeholder="Initial prompt (optional)" :maxlength="8192" :rows="3" class="w-full" :ui="{ base: 'text-base' }" :disabled="pending" />
+          <div class="flex gap-2">
+            <select v-model="provider" aria-label="Agent provider" class="min-h-11 min-w-0 flex-1 rounded border border-default bg-default px-2 text-base focus-visible:outline-2 focus-visible:outline-primary">
+              <option v-for="value in providers" :key="value" :value="value">
+                {{ providerNames[value] }}
+              </option>
+            </select>
+            <UButton icon="i-octicon-plus-16" class="min-h-11" :disabled="!canStart" :loading="pending" @click="launch()">
+              New session
+            </UButton>
+          </div>
+          <p v-if="capacityReason" role="status" class="text-sm text-muted">
+            {{ capacityReason }}
+          </p>
+          <details v-if="capacity._tag === 'Available'" class="text-sm text-muted">
+            <summary class="flex min-h-11 cursor-pointer items-center focus-visible:outline-2 focus-visible:outline-primary">
+              Host memory
+            </summary>
+            <div class="space-y-2 pb-2">
+              <p>{{ capacity.reservedGiB }} / {{ capacity.memoryGiB }} GiB · {{ capacity.agentSlotsUsed }} / {{ capacity.agentSlots }} Agent sessions</p>
+              <UButton v-if="canForce && canStart" color="warning" variant="outline" class="min-h-11" @click="forceConfirmation = { _tag: 'New' }">
+                Force new session
+              </UButton>
+            </div>
+          </details>
         </div>
-        <p v-if="capacity.forcedGiB > 0" class="mt-1 text-warning">
-          Force: {{ capacity.forcedGiB }} GiB
-        </p>
-      </div>
-      <div class="shrink-0 border-t border-default p-2">
-        <UTextarea v-model="initialPrompt" aria-label="Initial prompt" placeholder="Initial prompt" :maxlength="8192" :rows="2" class="w-full" :disabled="pending" />
-      </div>
-      <div class="flex shrink-0 gap-2 border-t border-default p-2">
-        <select v-model="provider" aria-label="Agent provider" class="min-w-0 flex-1 rounded border border-default bg-default px-2 text-xs">
-          <option v-for="value in providers" :key="value" :value="value">
-            {{ providerNames[value] }}
-          </option>
-        </select>
-        <UButton icon="i-octicon-plus-16" size="sm" :disabled="!canStart" :loading="pending" @click="launch()">
+        <UButton v-else icon="i-octicon-plus-16" class="min-h-11 w-full justify-center" :disabled="loading || !projectId" @click="launchOpen = true">
           New session
         </UButton>
       </div>
-      <UButton v-if="canForce && canStart" class="mx-2 mb-2 shrink-0 justify-center" color="warning" variant="outline" size="sm" @click="forceConfirmation = { _tag: 'New' }">
-        Force new session
-      </UButton>
     </aside>
-    <section class="flex min-h-0 min-w-0 flex-1 flex-col">
+    <section class="flex min-h-0 min-w-0 flex-1 flex-col" :inert="narrow && navigationVisible" :aria-hidden="narrow && navigationVisible">
       <p v-if="selectedProjectUnavailable" role="status" class="shrink-0 border-b border-default px-3 py-2 text-xs text-muted">
         {{ terminalFailureCopy.ProjectUnavailable }}
       </p>
-      <div class="flex h-11 min-w-0 shrink-0 items-center border-b border-default bg-muted md:h-10">
-        <UButton icon="i-octicon-repo-16" aria-label="Projects" :aria-expanded="projectsOpen" variant="ghost" class="min-h-11 shrink-0 md:hidden" @click="projectsOpen = !projectsOpen" />
-        <div ref="tabList" role="tablist" aria-label="Agent sessions" class="flex min-w-0 flex-1 self-stretch overflow-x-auto">
+      <div class="flex h-11 min-w-0 shrink-0 items-center border-b border-default bg-muted lg:h-10">
+        <button aria-label="Projects" :aria-expanded="projectsOpen" class="flex min-h-11 min-w-0 flex-1 items-center gap-2 px-3 text-left focus-visible:outline-2 focus-visible:outline-primary lg:hidden" @click="projectsOpen = true">
+          <UIcon name="i-octicon-chevron-left-16" class="size-4 shrink-0" aria-hidden="true" />
+          <span class="min-w-0"><span class="block truncate text-sm font-medium">{{ selectedProjectName }}</span><span v-if="selected" class="block text-sm text-muted">{{ sessionLabel(selected) }}</span></span>
+        </button>
+        <div ref="tabList" role="tablist" aria-label="Agent sessions" class="hidden min-w-0 flex-1 self-stretch overflow-x-auto lg:flex">
           <div v-for="(session, index) in tabSessions" :key="session.id" role="presentation" class="flex shrink-0 items-center border-r border-default" :class="!diffOpen && selectedId === session.id ? 'border-t-2 border-t-accented bg-default text-highlighted' : 'text-muted'">
             <button :id="`terminal-tab-${session.id}`" role="tab" :data-tab="session.id" :aria-selected="!diffOpen && selectedId === session.id" :aria-controls="visibleSessions.some(value => value.id === session.id) ? `terminal-pane-${session.id}` : undefined" :tabindex="!diffOpen && selectedId === session.id ? 0 : -1" class="flex h-full max-w-48 min-w-0 items-center gap-2 px-3 text-xs focus-visible:outline-2 focus-visible:outline-primary" @click="select(session)" @keydown="tabKey($event, index)">
               <UIcon name="i-octicon-terminal-16" class="size-3 shrink-0" />
-              <span class="truncate">{{ providerNames[session.provider] }} {{ index + 1 }}</span>
+              <span class="truncate">{{ sessionLabel(session) }}</span>
             </button>
-            <button aria-label="Close tab" class="flex size-11 shrink-0 items-center justify-center text-dimmed hover:bg-elevated hover:text-highlighted focus-visible:outline-2 focus-visible:outline-primary md:size-8" @click="closeTab(session.id)">
+            <button aria-label="Close tab" class="flex size-11 shrink-0 items-center justify-center text-dimmed hover:bg-elevated hover:text-highlighted focus-visible:outline-2 focus-visible:outline-primary lg:size-8" @click="closeTab(session.id)">
               <UIcon name="i-octicon-x-16" class="size-3" />
             </button>
           </div>
@@ -327,25 +418,17 @@ watch(visibility, (value) => {
           </UButton>
           <UButton v-if="selected && !narrow" icon="i-octicon-columns-16" :aria-label="projectLayout.view._tag === 'Split' ? 'Show one terminal' : 'Split terminal'" variant="ghost" size="xs" :disabled="tabSessions.length < 2" :aria-pressed="projectLayout.view._tag === 'Split'" @click="split" />
           <UButton v-if="selected" :icon="diffOpen ? 'i-octicon-terminal-16' : 'i-octicon-diff-16'" :aria-label="diffOpen ? 'Show terminal' : 'Show diff'" variant="ghost" size="xs" :aria-pressed="diffOpen" @click="diffOpen = !diffOpen" />
-          <UButton v-if="selected && ['Starting', 'Running', 'Unknown'].includes(selected.state)" variant="ghost" size="xs" color="error" :loading="pending" @click="stop()">
+          <UButton v-if="selected && !narrow && ['Starting', 'Running', 'Unknown'].includes(selected.state)" variant="ghost" size="xs" color="error" :loading="pending" @click="requestStop(selected)">
             Stop Agent
           </UButton>
+          <UDropdownMenu v-if="selected && narrow" :items="[[{ label: 'Close tab', icon: 'i-octicon-x-16', onSelect: () => closeTab(selected!.id) }], ...(['Starting', 'Running', 'Unknown'].includes(selected.state) ? [[{ label: 'Stop Agent', icon: 'i-octicon-stop-16', color: 'error' as const, onSelect: () => requestStop(selected!) }]] : [])]">
+            <UButton icon="i-octicon-kebab-horizontal-16" aria-label="Session actions" color="neutral" variant="ghost" class="min-h-11 min-w-11 justify-center" />
+          </UDropdownMenu>
         </div>
       </div>
       <p v-if="failure" role="alert" class="shrink-0 border-b border-error/30 px-3 py-2 text-xs text-error">
         {{ failure }}
       </p>
-      <div v-if="forceConfirmation" role="alert" class="shrink-0 border-b border-warning/30 bg-warning/5 p-3 text-xs">
-        <p>This session reserves 8 GiB of host memory. Total reserved: {{ forceTotal }} GiB. Force can still be refused.</p>
-        <div class="mt-2 flex gap-2">
-          <UButton color="warning" size="sm" :loading="pending" :disabled="!canForce" @click="confirmForce">
-            {{ forceConfirmation._tag === 'New' ? 'Force new session' : 'Force start' }}
-          </UButton>
-          <UButton color="neutral" variant="ghost" size="sm" :disabled="pending" @click="forceConfirmation = undefined">
-            Cancel
-          </UButton>
-        </div>
-      </div>
       <div v-if="selected" ref="terminalArea" class="relative min-h-0 flex-1">
         <!-- Visibility preserves renderer dimensions and attachments while Diff is open. -->
         <div class="absolute inset-0 grid min-h-0 min-w-0" :class="[visibleSessions.length === 2 ? 'grid-cols-2' : 'grid-cols-1', diffOpen ? 'invisible' : '']" :inert="diffOpen">
@@ -364,7 +447,7 @@ watch(visibility, (value) => {
                 </UButton>
               </div>
             </div>
-            <TerminalView v-else :session="session" :draft="drafts.forSession(session).value" class="min-h-0 min-w-0 flex-1" @update:draft="drafts.forSession(session).value = $event" />
+            <TerminalView v-else v-model:submission="memory(session).submission" v-model:reading="memory(session).reading" :session="session" :cached-screen="screens[screenKey(session)]" :draft="drafts.forSession(session).value" class="min-h-0 min-w-0 flex-1" @screen="cacheScreen(session, $event)" @update:draft="drafts.forSession(session).value = $event" />
           </div>
         </div>
         <TerminalDiff v-if="diffOpen" id="terminal-diff" :key="selected.id" role="tabpanel" aria-label="Diff" :target="{ _tag: 'Session', sessionId: selected.id }" class="relative z-10 h-full min-h-0 min-w-0 bg-default" @close="diffOpen = false" />
@@ -373,5 +456,16 @@ watch(visibility, (value) => {
         {{ loading ? 'Connecting to the terminal host.' : 'Choose a project to start.' }}
       </div>
     </section>
+    <ConfirmModal v-model:open="stopConfirm" title="Stop Agent?" consequence="This stops the Agent. The session and its work remain available." confirm-label="Stop Agent" :pending="pending" :error="failure || null" @confirm="stop(stopTarget)" />
+    <UModal :open="Boolean(forceConfirmation)" title="Force start" :description="`This session reserves 8 GiB of host memory. Total reserved: ${forceTotal} GiB. Force can still be refused.`" @update:open="!$event && (forceConfirmation = undefined)">
+      <template #footer>
+        <UButton color="neutral" variant="ghost" :disabled="pending" @click="forceConfirmation = undefined">
+          Cancel
+        </UButton>
+        <UButton color="warning" :loading="pending" :disabled="!canForce" @click="confirmForce">
+          {{ forceConfirmation?._tag === 'New' ? 'Force new session' : 'Force start' }}
+        </UButton>
+      </template>
+    </UModal>
   </div>
 </template>
