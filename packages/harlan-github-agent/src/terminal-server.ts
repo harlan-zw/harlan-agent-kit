@@ -384,7 +384,7 @@ export function createTerminalServer(options: {
     const intent = match?.[1] ? options.manager.intent(match[1]) : undefined
     if (
       !intent
-      || intent.session.state !== 'Running'
+      || !['Running', 'Exited', 'Interrupted'].includes(intent.session.state)
       || sockets.clients.size >= 32
     ) {
       socket.end('HTTP/1.1 409 Conflict\r\n\r\n', () => socket.destroy())

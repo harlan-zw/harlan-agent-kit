@@ -11,7 +11,7 @@ import { openBrowserAuthStore } from '../src/browser-auth-store.ts'
 import { createBrowserAuth } from '../src/browser-auth.ts'
 import { createTerminalServer } from '../src/terminal-server.ts'
 
-async function fixture(machine = false, race = false) {
+async function fixture(machine = false, race = false, state = 'Running') {
   const directory = mkdtempSync(join(tmpdir(), 'passkey-stream-'))
   const id = 'a'.repeat(24)
   mkdirSync(join(directory, 'sessions', id), { recursive: true })
@@ -36,7 +36,7 @@ async function fixture(machine = false, race = false) {
   await once(helper, 'listening')
   const action = async (name: string, body: unknown = {}) => auth.handle(new Request(`${origin}/api/browser-auth/${name}`, { method: 'POST', headers: { host: 'localhost:43829', origin, cookie }, body: JSON.stringify(body) }))
   const api = createTerminalServer({
-    manager: { directory, intent: () => ({ session: { id, state: 'Running' }, helperToken: 'fixture' }) } as never,
+    manager: { directory, intent: () => ({ session: { id, state }, helperToken: 'fixture' }) } as never,
     origin,
     browserAuth: auth,
     now: () => now,
@@ -67,6 +67,21 @@ async function fixture(machine = false, race = false) {
     },
   }
 }
+
+it.each(['Exited', 'Interrupted'])('allows a %s session to restore earlier output without acquiring a writer', async (state) => {
+  const proof = await fixture(false, false, state)
+  try {
+    await once(proof.socket, 'open')
+    proof.socket.send(JSON.stringify({ type: 'Attach', protocol: 1, viewId: 'reader', generation: 'generation' }))
+    proof.socket.send(JSON.stringify({ type: 'History', requestId: 'restore', snapshot: 'saved-copy', offset: 100, limit: 200 }))
+    await expect.poll(() => proof.forwarded.join('')).toContain('"type":"Attach"')
+    expect(proof.forwarded.join('')).toContain('"type":"History"')
+    expect(proof.forwarded.join('')).not.toContain('"type":"AcquireWriter"')
+  }
+  finally {
+    await proof.close()
+  }
+})
 
 it.each(['logout', 'credentials/remove', 'expiry'])('revokes established terminal input and output after %s', async (action) => {
   const proof = await fixture()

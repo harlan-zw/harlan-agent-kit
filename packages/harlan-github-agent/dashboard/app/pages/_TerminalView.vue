@@ -260,7 +260,7 @@ function render(value: TerminalScreen, dirtyRows?: ReadonlySet<number>) {
 }
 
 function connect() {
-  if (disposed || invalidFrame || !online.value || ['Exited', 'Interrupted'].includes(processState.value))
+  if (disposed || invalidFrame || !online.value)
     return
   viewId = crypto.randomUUID()
   channel = createTerminalInputChannel({ send, viewId })
