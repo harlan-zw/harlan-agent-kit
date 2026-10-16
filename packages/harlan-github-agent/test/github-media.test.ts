@@ -31,6 +31,26 @@ describe('controller image evidence', () => {
       expect(text.value).not.toEqual(plain.value)
   })
 
+  it('renders distinct CJK, Arabic, and emoji labels with no host fonts', async () => {
+    const render = (label: string) => renderSvgPixels(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><rect width="160" height="40" fill="white"/><text x="4" y="30" font-size="30" fill="black">${label}</text></svg>`), new AbortController().signal)
+    const [empty, cjk, arabic, emoji] = await Promise.all([
+      render(''),
+      render('漢'),
+      render('ب'),
+      render('☕'),
+    ])
+    expect(empty).toMatchObject({ _tag: 'Ok' })
+    expect(cjk).toMatchObject({ _tag: 'Ok' })
+    expect(arabic).toMatchObject({ _tag: 'Ok' })
+    expect(emoji).toMatchObject({ _tag: 'Ok' })
+    if (empty._tag === 'Ok' && cjk._tag === 'Ok' && arabic._tag === 'Ok' && emoji._tag === 'Ok') {
+      expect(cjk.value).not.toEqual(empty.value)
+      expect(arabic.value).not.toEqual(empty.value)
+      expect(emoji.value).not.toEqual(empty.value)
+      expect(new Set([cjk.value.toString('base64'), arabic.value.toString('base64'), emoji.value.toString('base64')]).size).toBe(3)
+    }
+  })
+
   it('fetches with read credentials, drops them across redirects, and renders SVG pixels', async () => {
     const requests: Array<{ url: string, authorization: string | null }> = []
     const loader = source(async (input, options) => {
