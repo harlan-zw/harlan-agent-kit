@@ -33,6 +33,7 @@ import { createBaselineRepairWorker, inspectWorkspaceFiles } from './baseline-re
 import { createBatchScheduler } from './batch-scheduler.ts'
 import { createBatchWorker } from './batch-worker.ts'
 import { createBrowserAuthorities } from './browser-auth-authorities.ts'
+import { emergencyIsolationRequest } from './emergency-isolation.ts'
 import { createCandidateIssueController } from './candidate-issue-controller.ts'
 import { agentStartBlockedReason, hasSpendableCapacity, resolveAgentStartState } from './capacity.ts'
 import { createClassificationSource } from './classification.ts'
@@ -1693,6 +1694,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
   const app = createAgentApp({
     ...(browserAuth ? { browserAuth } : {}),
+    ...(browserAuth?.public?.bootstrapKind === 'passkey' ? { emergencyIsolation: emergencyIsolationRequest } : {}),
     pullRequestDiff: createGitHubPullRequestDiff({ tokens: routedTokens, now: () => now().getTime(), log: message => options.logger.error(message) }),
     ...(sessions === undefined ? {} : { sessions }),
     ...(mutationSchedulers === undefined ? {} : { repairRecovery: mutationSchedulers.repairRecovery.run }),

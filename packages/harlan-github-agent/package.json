@@ -33,7 +33,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "pnpm --filter ghostty-terminal-bindings build && pnpm dashboard:build && obuild",
+    "build": "pnpm --filter ghostty-terminal-bindings build && pnpm dashboard:build && obuild && node security/build.ts dist/emergency",
     "dashboard:build": "nuxt generate dashboard",
     "dashboard:dev": "nuxt dev dashboard",
     "dev": "node --experimental-strip-types src/cli.ts",

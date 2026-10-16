@@ -22,6 +22,7 @@ import { hostTasks } from '../utils/host-tasks.ts'
 import { batchRow, capacityRow, circuitNotice, desktopPresentation, nextRoutineInstant, retryDeadline, serviceUpdatePresentation } from '../utils/system.ts'
 import GitHubRateLimits from './system/GitHubRateLimits.vue'
 import HostWork from './system/HostWork.vue'
+import EmergencyIsolation from './system/EmergencyIsolation.vue'
 
 /**
  * Reference material behind one chip: Capacity, Incidents, Routines, Host.
@@ -153,6 +154,7 @@ function activityLine(item: AgentActivityItem): string {
 <template>
   <USlideover v-model:open="open" title="System" :ui="{ body: 'space-y-10 wrap-anywhere' }">
     <template #body>
+      <EmergencyIsolation :active="open" />
       <section v-if="controlsUnavailable" role="status" aria-label="Service data unavailable">
         <p class="text-sm status-warning">
           Service data is unavailable. Reload before changing settings or work.
