@@ -19,6 +19,18 @@ function source(fetch: typeof globalThis.fetch, granted = true) {
 }
 
 describe('controller image evidence', () => {
+  it.each(['𝐀', '𐌀', '𠀀', '&#x1D400;', '<![CDATA[𠀀]]>', '<tspan>&#x10300;</tspan>', '<textPath>𠀀</textPath>'])('reports unavailable SVG text instead of omitting unsupported glyphs: %s', async (label) => {
+    const input = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><text x="4" y="30">${label}</text></svg>`
+    const result = await renderSvgPixels(Buffer.from(input), new AbortController().signal)
+    expect(result).toEqual({ _tag: 'Err', error: 'SVG text contains characters unavailable in the bundled fonts.' })
+  })
+
+  it('ignores metadata characters and accepts whitespace and default-ignorable text characters', async () => {
+    const input = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><title>𠀀</title><desc>𝐀</desc><metadata>𐌀</metadata><text x="4" y="30"> Review &#x200D;☕&#xFE0F; </text></svg>'
+    const result = await renderSvgPixels(Buffer.from(input), new AbortController().signal)
+    expect(result._tag).toBe('Ok')
+  })
+
   it('renders text in SVG evidence with no host fonts', async () => {
     const background = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><rect width="160" height="40" fill="white"/></svg>'
     const labelled = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><rect width="160" height="40" fill="white"/><text x="4" y="30" font-size="30" fill="black">Review</text></svg>'
@@ -44,12 +56,11 @@ describe('controller image evidence', () => {
     expect(cjk).toMatchObject({ _tag: 'Ok' })
     expect(arabic).toMatchObject({ _tag: 'Ok' })
     expect(emoji).toMatchObject({ _tag: 'Ok' })
-    expect(missing).toMatchObject({ _tag: 'Ok' })
-    if (empty._tag === 'Ok' && cjk._tag === 'Ok' && arabic._tag === 'Ok' && emoji._tag === 'Ok' && missing._tag === 'Ok') {
+    expect(missing).toEqual({ _tag: 'Err', error: 'SVG text contains characters unavailable in the bundled fonts.' })
+    if (empty._tag === 'Ok' && cjk._tag === 'Ok' && arabic._tag === 'Ok' && emoji._tag === 'Ok') {
       expect(cjk.value).not.toEqual(empty.value)
       expect(arabic.value).not.toEqual(empty.value)
       expect(emoji.value).not.toEqual(empty.value)
-      expect(emoji.value).not.toEqual(missing.value)
       expect(new Set([cjk.value.toString('base64'), arabic.value.toString('base64'), emoji.value.toString('base64')]).size).toBe(3)
     }
   })

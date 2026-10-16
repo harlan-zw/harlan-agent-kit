@@ -144,7 +144,7 @@ export function renderSvgPixels(bytes: Buffer, signal: AbortSignal, options: { e
         return
       }
       const reason = stderr.toString()
-      const known = ['SVG contains unsupported external resources.', 'SVG exceeds the pixel limit or references external images.', 'Rendered image exceeds the byte limit.', 'Image exceeds the byte limit.']
+      const known = ['SVG text contains characters unavailable in the bundled fonts.', 'SVG contains unsupported external resources.', 'SVG exceeds the pixel limit or references external images.', 'Rendered image exceeds the byte limit.', 'Image exceeds the byte limit.']
       resolve(err(known.includes(reason) ? reason : 'SVG rendering failed or exceeded its time limit.'))
     })
     // A timeout can close stdin during transfer. The completion callback owns that failure.

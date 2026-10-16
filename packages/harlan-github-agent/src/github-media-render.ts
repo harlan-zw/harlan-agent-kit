@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import process from 'node:process'
 import { Resvg } from '@resvg/resvg-js'
@@ -10,7 +11,55 @@ const fontFiles = [
   require.resolve('@fontpkg/unifont/unifont-15.0.01.ttf'),
 ]
 
+// Both pinned fonts contain a full-repertoire Unicode cmap (format 12).
+// Read only those trusted files; never inspect a host font directory.
+function fontCoverage(font: Buffer): (codepoint: number) => boolean {
+  let cmap = 0
+  for (let index = 0; index < font.readUInt16BE(4); index++) {
+    const record = 12 + index * 16
+    if (font.toString('ascii', record, record + 4) === 'cmap')
+      cmap = font.readUInt32BE(record + 8)
+  }
+  if (!cmap)
+    throw new Error('Bundled font has no Unicode cmap.')
+  for (let index = 0; index < font.readUInt16BE(cmap + 2); index++) {
+    const record = cmap + 4 + index * 8
+    const platform = font.readUInt16BE(record)
+    const encoding = font.readUInt16BE(record + 2)
+    if (platform !== 0 && !(platform === 3 && encoding === 10))
+      continue
+    const table = cmap + font.readUInt32BE(record + 4)
+    if (font.readUInt16BE(table) !== 12)
+      continue
+    const length = font.readUInt32BE(table + 4)
+    const groups = font.readUInt32BE(table + 12)
+    if (length < 16 || table + length > font.length || groups > (length - 16) / 12)
+      throw new Error('Bundled font has an invalid Unicode cmap.')
+    return (codepoint) => {
+      let low = 0
+      let high = groups - 1
+      while (low <= high) {
+        const middle = (low + high) >>> 1
+        const group = table + 16 + middle * 12
+        const start = font.readUInt32BE(group)
+        const end = font.readUInt32BE(group + 4)
+        if (codepoint < start)
+          high = middle - 1
+        else if (codepoint > end)
+          low = middle + 1
+        else
+          return font.readUInt32BE(group + 8) + codepoint - start !== 0
+      }
+      return false
+    }
+  }
+  throw new Error('Bundled font has no full-repertoire Unicode cmap.')
+}
+const coverage = fontFiles.map(file => fontCoverage(readFileSync(file)))
+
 function parseSvg(svg: string): void {
+  const elements: string[] = []
+  const checked = new Set<number>()
   const reject = () => {
     throw new Error('SVG contains unsupported external resources.')
   }
@@ -27,6 +76,7 @@ function parseSvg(svg: string): void {
   parser.on('error', reject)
   parser.on('opentag', (tag) => {
     const name = tag.local.toLowerCase()
+    elements.push(name)
     if (['image', 'feimage', 'foreignobject', 'script'].includes(name))
       reject()
     for (const attribute of Object.values(tag.attributes)) {
@@ -35,8 +85,26 @@ function parseSvg(svg: string): void {
       css(attribute.value)
     }
   })
-  parser.on('text', css)
-  parser.on('cdata', css)
+  parser.on('closetag', () => elements.pop())
+  const text = (value: string) => {
+    css(value)
+    if (!elements.includes('text') || elements.some(name => ['title', 'desc', 'metadata', 'style'].includes(name)))
+      return
+    for (const character of value) {
+      // Shaping controls and whitespace need no visible standalone glyph.
+      if (/^[\p{White_Space}\p{Default_Ignorable_Code_Point}]$/u.test(character))
+        continue
+      const codepoint = character.codePointAt(0)!
+      if (checked.has(codepoint))
+        continue
+      if (!coverage.some(covers => covers(codepoint)))
+        throw new Error('SVG text contains characters unavailable in the bundled fonts.')
+      checked.add(codepoint)
+    }
+  }
+  // Saxes decodes character references and reports CDATA through the same guard.
+  parser.on('text', text)
+  parser.on('cdata', text)
   parser.write(svg).close()
 }
 
@@ -63,7 +131,7 @@ async function main(): Promise<void> {
   process.stdout.write(png)
 }
 main().catch((error: unknown) => {
-  const known = ['SVG contains unsupported external resources.', 'SVG exceeds the pixel limit or references external images.', 'Rendered image exceeds the byte limit.', 'Image exceeds the byte limit.']
+  const known = ['SVG text contains characters unavailable in the bundled fonts.', 'SVG contains unsupported external resources.', 'SVG exceeds the pixel limit or references external images.', 'Rendered image exceeds the byte limit.', 'Image exceeds the byte limit.']
   process.stderr.write(error instanceof Error && known.includes(error.message) ? error.message : 'SVG rendering failed.')
   process.exitCode = 1
 })
