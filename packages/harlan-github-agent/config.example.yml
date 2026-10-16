@@ -38,6 +38,11 @@ github:
 server:
   # Install the Tailscale session ingress before enabling host credentials.
   agent_sessions: false
+  # restricted keeps approval prompts and workspace-write. full_access removes
+  # Codex prompts inside the existing terminal sandbox for every Codex session,
+  # including all enrolled public Passkey users. Network, provider state, and
+  # existing writable mounts stay available; no host access is added.
+  agent_sessions_codex_mode: restricted
   host: 127.0.0.1
   port: 3210
   allowed_origin: https://harlan-github-agent.localhost
