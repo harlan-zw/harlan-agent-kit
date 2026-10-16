@@ -56,6 +56,13 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Terminal phone enter | Enter | Press Enter with an empty phone draft |
 | Terminal phone escape | Esc | Send the Escape key |
 | Terminal phone interrupt | Ctrl+C | Send the terminal interrupt key |
+| Terminal phone keys | Keys | Open arrow and Tab keys for a phone terminal |
+| Terminal phone arrow up | Arrow up | Send the ArrowUp terminal key |
+| Terminal phone arrow down | Arrow down | Send the ArrowDown terminal key |
+| Terminal phone arrow left | Arrow left | Send the ArrowLeft terminal key |
+| Terminal phone arrow right | Arrow right | Send the ArrowRight terminal key |
+| Terminal phone tab | Tab | Send the Tab terminal key |
+| Terminal phone reverse tab | Shift+Tab | Send the reverse Tab terminal key |
 | Terminal draft placeholder | Message the Agent… | Editable phone input |
 | Terminal send pending | Sending… | Waiting for terminal input receipts |
 | Terminal send acknowledged | Sent to terminal | Both paste and Enter acknowledged, not task completion |

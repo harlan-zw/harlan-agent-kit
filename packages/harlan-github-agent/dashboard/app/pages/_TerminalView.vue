@@ -34,6 +34,27 @@ watch(draft, (value) => {
 })
 const sendPending = computed(() => submission.value._tag === 'Pending')
 const reviewDelivery = computed(() => submission.value._tag === 'Unknown')
+const phoneInputDisabled = computed(() => !writable.value || draftComposing.value || sendPending.value || reviewDelivery.value)
+const phoneKeysOpen = ref(false)
+watch(() => session.id, () => {
+  phoneKeysOpen.value = false
+})
+const phoneKeys = [
+  { key: 'ArrowUp', code: 'ArrowUp', shiftKey: false, label: '↑', ariaLabel: 'Arrow up' },
+  { key: 'ArrowLeft', code: 'ArrowLeft', shiftKey: false, label: '←', ariaLabel: 'Arrow left' },
+  { key: 'ArrowDown', code: 'ArrowDown', shiftKey: false, label: '↓', ariaLabel: 'Arrow down' },
+  { key: 'ArrowRight', code: 'ArrowRight', shiftKey: false, label: '→', ariaLabel: 'Arrow right' },
+  { key: 'Tab', code: 'Tab', shiftKey: false, label: 'Tab', ariaLabel: 'Tab' },
+  { key: 'Tab', code: 'Tab', shiftKey: true, label: 'Shift+Tab', ariaLabel: 'Shift+Tab' },
+]
+const phoneArrowKeys = computed(() => phoneKeys.filter(item => item.key.startsWith('Arrow')))
+const phoneModifierKeys = computed(() => phoneKeys.filter(item => !item.key.startsWith('Arrow')))
+const phoneArrowPlacement: Record<string, string> = {
+  ArrowUp: 'col-start-2 row-start-1',
+  ArrowLeft: 'col-start-1 row-start-2',
+  ArrowDown: 'col-start-2 row-start-2',
+  ArrowRight: 'col-start-3 row-start-2',
+}
 const submissionCopy = computed(() => sendPending.value ? 'Sending…' : submission.value._tag === 'Acknowledged' ? 'Sent to terminal' : submission.value._tag === 'Pasted' ? 'Text pasted. Press Enter to submit.' : '')
 const deliveryTimeout = useTimeoutFn(() => {
   submission.value = interruptTerminalSubmission(submission.value)
@@ -261,10 +282,15 @@ function rememberScroll() {
   }
 }
 
-function phoneKey(key: string, code: string, ctrlKey = false) {
+function preventPhoneKeysAutoFocus(event: Event) {
+  if (document.activeElement === phoneDraft.value)
+    event.preventDefault()
+}
+
+function phoneKey(key: string, code: string, ctrlKey = false, shiftKey = false) {
   if (draftComposing.value || !writable.value || sendPending.value || reviewDelivery.value)
     return
-  const encoded = browserKeyEvent(new KeyboardEvent('keydown', { key, code, ctrlKey }), keyboardLayout)
+  const encoded = browserKeyEvent(new KeyboardEvent('keydown', { key, code, ctrlKey, shiftKey }), keyboardLayout)
   if (!encoded)
     return
   latest()
@@ -696,10 +722,29 @@ onScopeDispose(() => {
         {{ submissionCopy }}
       </p>
       <div class="flex gap-2">
-        <UButton color="neutral" variant="outline" class="min-h-11" :disabled="!writable || draftComposing || sendPending || reviewDelivery" @click="phoneKey('Escape', 'Escape')">
+        <UPopover v-model:open="phoneKeysOpen" :reference="phoneDraft" :content="{ side: 'top', align: 'start', onOpenAutoFocus: preventPhoneKeysAutoFocus }">
+          <UButton color="neutral" variant="outline" class="min-h-11 min-w-11 justify-center" :disabled="phoneInputDisabled" aria-label="Keys" @pointerdown.prevent>
+            Keys
+          </UButton>
+          <template #content>
+            <div role="group" aria-label="Terminal keys" class="space-y-1 p-2">
+              <div class="grid grid-cols-3 gap-1">
+                <UButton v-for="phoneKeyItem in phoneArrowKeys" :key="phoneKeyItem.ariaLabel" color="neutral" variant="outline" class="min-h-11 min-w-11 justify-center" :class="phoneArrowPlacement[phoneKeyItem.key]" :aria-label="phoneKeyItem.ariaLabel" :disabled="phoneInputDisabled" @pointerdown.prevent @click="phoneKey(phoneKeyItem.key, phoneKeyItem.code, false, phoneKeyItem.shiftKey)">
+                  {{ phoneKeyItem.label }}
+                </UButton>
+              </div>
+              <div class="flex gap-1">
+                <UButton v-for="phoneKeyItem in phoneModifierKeys" :key="phoneKeyItem.ariaLabel" color="neutral" variant="outline" class="min-h-11 flex-1 justify-center" :aria-label="phoneKeyItem.ariaLabel" :disabled="phoneInputDisabled" @pointerdown.prevent @click="phoneKey(phoneKeyItem.key, phoneKeyItem.code, false, phoneKeyItem.shiftKey)">
+                  {{ phoneKeyItem.label }}
+                </UButton>
+              </div>
+            </div>
+          </template>
+        </UPopover>
+        <UButton color="neutral" variant="outline" class="min-h-11" :disabled="!writable || draftComposing || sendPending || reviewDelivery" @pointerdown.prevent @click="phoneKey('Escape', 'Escape')">
           Esc
         </UButton>
-        <UButton color="neutral" variant="outline" class="min-h-11" :disabled="!writable || draftComposing || sendPending || reviewDelivery" @click="phoneKey('c', 'KeyC', true)">
+        <UButton color="neutral" variant="outline" class="min-h-11" :disabled="!writable || draftComposing || sendPending || reviewDelivery" @pointerdown.prevent @click="phoneKey('c', 'KeyC', true)">
           Ctrl+C
         </UButton>
         <UButton class="ml-auto min-h-11 min-w-16 justify-center" :disabled="!writable || draftComposing || sendPending || reviewDelivery" @pointerdown.prevent @click="phoneKey('Enter', 'Enter')">
