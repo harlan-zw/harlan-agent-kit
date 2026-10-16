@@ -18,6 +18,25 @@ it('does not request a replacement from an ended helper after returning to the l
   })).toBeUndefined()
 })
 
+it('restores the retained snapshot after Latest for an ended session', () => {
+  expect(terminalEarlierRequest({
+    ended: true,
+    historySupported: true,
+    reading: null,
+    retainedSnapshot: 'saved-copy',
+  })).toEqual({ type: 'History', snapshot: 'saved-copy', offset: null, limit: 200 })
+})
+
+it('does not restore retained output for a running session', () => {
+  expect(terminalEarlierRequest({
+    ended: false,
+    historySupported: true,
+    reading: null,
+    retainedSnapshot: 'saved-copy',
+    screen: { dimensions: { cols: 80, rows: 24 }, scrollbackLength: 1000 },
+  })).toEqual({ type: 'History', snapshot: null, offset: null, limit: 200 })
+})
+
 it('pages the saved copy without a screen and keeps the live scrollback cell limit', () => {
   expect(terminalEarlierRequest({
     ended: true,

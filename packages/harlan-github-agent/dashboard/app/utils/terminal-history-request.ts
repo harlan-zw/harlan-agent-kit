@@ -22,16 +22,17 @@ export function terminalEarlierRequest(options: {
   history?: History
   historySupported: boolean
   reading: Reading | null
+  retainedSnapshot?: string | null
   screen?: Pick<TerminalScreen, 'dimensions' | 'scrollbackLength'>
 }): TerminalEarlierRequest | undefined {
-  const snapshot = options.history?.snapshot ?? options.reading?.snapshot
+  const snapshot = options.history?.snapshot ?? options.reading?.snapshot ?? (options.ended ? options.retainedSnapshot : undefined)
   if (options.ended && !snapshot)
     return undefined
   if (options.historySupported) {
     if (snapshot) {
       const offset = options.history
         ? Math.max(0, options.history.offset - historyPageLimit)
-        : options.reading!.offset
+        : options.reading?.offset ?? null
       return { type: 'History', snapshot, offset, limit: historyPageLimit }
     }
     if (!options.screen)

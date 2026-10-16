@@ -23,6 +23,7 @@ const phoneInput = useMediaQuery('(pointer: coarse)')
 const draft = defineModel<string>('draft', { default: '' })
 const submission = defineModel<TerminalSubmission>('submission', { default: () => ({ _tag: 'Editing' }) })
 const reading = defineModel<{ snapshot?: string, offset: number, top: number } | null>('reading', { default: null })
+const snapshot = defineModel<string | null>('snapshot', { default: null })
 submission.value = interruptTerminalSubmission(submission.value)
 const phoneDraft = useTemplateRef<HTMLTextAreaElement>('phoneDraft')
 useTextareaAutosize({ element: phoneDraft, input: draft })
@@ -190,6 +191,8 @@ function latest() {
   historyTimeout.stop()
   history.value = undefined
   reading.value = null
+  if (!ended.value)
+    snapshot.value = null
   historyFailure.value = ''
   if (screen.value)
     render(screen.value)
@@ -205,6 +208,7 @@ function earlier() {
     history: history.value,
     historySupported: historySupported.value,
     reading: reading.value,
+    retainedSnapshot: snapshot.value,
     screen: screen.value,
   })
   if (!request)
@@ -229,6 +233,7 @@ function showHistory(page: NonNullable<typeof history.value>) {
   const added = prior && page.snapshot === prior.snapshot && page.offset < prior.offset && page.offset + page.lines.length >= prior.offset ? prior.offset - page.offset : 0
   const top = added ? (container.value?.scrollTop ?? 0) + added * historyLineHeight : reading.value?.top
   history.value = added && prior ? { ...page, lines: [...page.lines.slice(0, added), ...prior.lines] } : page
+  snapshot.value = page.snapshot ?? snapshot.value
   void nextTick(() => {
     if (container.value) {
       container.value.scrollTop = top ?? container.value.scrollHeight
@@ -392,6 +397,7 @@ function connect() {
       historyTimeout.stop()
       if (message.result._tag === 'Expired') {
         historyExpired.value = true
+        snapshot.value = null
         historyFailure.value = ended.value ? 'Earlier output expired. This session has ended.' : 'Earlier output expired. Refresh to read the retained output.'
         return
       }
@@ -618,7 +624,7 @@ onScopeDispose(() => {
   <div class="flex min-h-0 flex-col">
     <div class="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-x-2 border-b border-default px-3 text-sm text-muted">
       <span role="status" class="min-w-0 flex-1 break-words">{{ history ? 'Earlier output' : connectionCopy }}</span>
-      <UTooltip v-if="(screen?.scrollbackLength || history) && (!ended || history?.snapshot || reading?.snapshot)" text="Earlier output">
+      <UTooltip v-if="(screen?.scrollbackLength || history) && (!ended || history?.snapshot || reading?.snapshot || snapshot)" text="Earlier output">
         <UButton icon="i-octicon-history-16" aria-label="Earlier output" color="neutral" variant="ghost" class="min-h-11 min-w-11 justify-center" :loading="historyLoading" :disabled="!connected || historyExpired || history?.offset === 0" @click="earlier" />
       </UTooltip>
       <UButton v-if="history || historyExpired" icon="i-octicon-arrow-down-16" color="neutral" variant="outline" class="min-h-11" @click="latest">

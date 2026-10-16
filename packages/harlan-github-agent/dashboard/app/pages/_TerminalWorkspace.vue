@@ -24,10 +24,10 @@ function cacheScreen(session: TerminalSession, screen: TerminalScreen) {
   const entries = Object.entries(screens.value).filter(([key]) => key !== screenKey(session)).slice(-9)
   screens.value = Object.fromEntries([...entries, [screenKey(session), markRaw(screen)]])
 }
-const memories = useSessionStorage<Record<string, { submission: TerminalSubmission, reading: { snapshot?: string, offset: number, top: number } | null }>>(`agent-terminal-reading:${capabilities.hostId}`, {})
+const memories = useSessionStorage<Record<string, { submission: TerminalSubmission, reading: { snapshot?: string, offset: number, top: number } | null, snapshot: string | null }>>(`agent-terminal-reading:${capabilities.hostId}`, {})
 function memory(session: TerminalSession) {
   const key = JSON.stringify([session.id, session.generation])
-  return memories.value[key] ??= { submission: { _tag: 'Editing' }, reading: null }
+  return memories.value[key] ??= { submission: { _tag: 'Editing' }, reading: null, snapshot: null }
 }
 
 // Diff rendering stays outside the terminal bundle until the user opens it.
@@ -476,7 +476,7 @@ watch(visibility, (value) => {
                 </UButton>
               </div>
             </div>
-            <TerminalView v-else v-model:submission="memory(session).submission" v-model:reading="memory(session).reading" :session="session" :cached-screen="screens[screenKey(session)]" :draft="drafts.forSession(session).value" class="min-h-0 min-w-0 flex-1" @screen="cacheScreen(session, $event)" @update:draft="drafts.forSession(session).value = $event" />
+            <TerminalView v-else v-model:submission="memory(session).submission" v-model:reading="memory(session).reading" v-model:snapshot="memory(session).snapshot" :session="session" :cached-screen="screens[screenKey(session)]" :draft="drafts.forSession(session).value" class="min-h-0 min-w-0 flex-1" @screen="cacheScreen(session, $event)" @update:draft="drafts.forSession(session).value = $event" />
           </div>
         </div>
         <TerminalDiff v-if="diffOpen" id="terminal-diff" :key="selected.id" role="tabpanel" aria-label="Diff" :target="{ _tag: 'Session', sessionId: selected.id }" class="relative z-10 h-full min-h-0 min-w-0 bg-default" @close="diffOpen = false" />
