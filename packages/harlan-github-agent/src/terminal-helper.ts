@@ -14,6 +14,7 @@ import {
 } from 'ghostty-terminal-bindings'
 import { spawn } from 'node-pty'
 import { createTerminalAdmissionCli } from './terminal-admission.ts'
+import { writeTerminalHistory } from './terminal-history.ts'
 import { createTerminalOwner } from './terminal-owner.ts'
 import {
   parseTerminalClientMessage,
@@ -117,6 +118,16 @@ export async function runTerminalHelper(config: TerminalHelperConfig) {
     pty,
     now: Date.now,
     token: randomUUID,
+    history: {
+      save: (snapshots) => {
+        try {
+          writeTerminalHistory(config.directory, config.intent.session.id, snapshots)
+        }
+        catch (cause) {
+          console.error('Terminal history save failed', cause instanceof Error ? cause.message : String(cause))
+        }
+      },
+    },
   })
   pty.onData(bytes => owner.output(bytes))
   pty.onExit(() => {

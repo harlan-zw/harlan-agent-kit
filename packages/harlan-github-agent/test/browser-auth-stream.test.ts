@@ -1,6 +1,6 @@
 import type { Socket } from 'node:net'
 import { once } from 'node:events'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -68,18 +68,48 @@ async function fixture(machine = false, race = false, state = 'Running') {
   }
 }
 
-it.each(['Exited', 'Interrupted'])('allows a %s session to restore earlier output without acquiring a writer', async (state) => {
-  const proof = await fixture(false, false, state)
+it('restores a saved history page after its helper has stopped', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ended-history-stream-'))
+  const id = 'b'.repeat(24)
+  const generation = 'generation'
+  mkdirSync(join(directory, 'sessions', id), { recursive: true })
+  writeFileSync(
+    join(directory, 'sessions', id, 'history.json'),
+    JSON.stringify({ snapshots: [{ id: 'saved-copy', generation, expiresAt: Date.now() + 60000, lines: ['line 100', 'line 101', 'line 102'] }] }),
+    { mode: 0o600 },
+  )
+  const store = openBrowserAuthStore(join(directory, 'auth.sqlite'))
+  const origin = 'http://localhost:43830'
+  const auth = createBrowserAuth({ origin, rpId: 'localhost', store, now: Date.now, surface: { _tag: 'TerminalHost' }, bootstrapKind: 'pairing', bootstrap: () => false })
+  store.addCredential({ id: 'credential', label: 'Fixture', created: Date.now(), credential: { id: 'credential', publicKey: new Uint8Array([1]), counter: 0 } })
+  const cookie = auth.issueSession('credential').split(';')[0]!
+  const api = createTerminalServer({
+    manager: { directory, intent: () => ({ session: { id, generation, state: 'Exited' }, helperToken: 'fixture' }) } as never,
+    origin,
+    browserAuth: auth,
+    now: Date.now,
+    log: () => {},
+  })
+  api.server.listen(43830, '127.0.0.1')
+  await once(api.server, 'listening')
+  const socket = new WebSocket(`ws://localhost:43830/api/terminal/sessions/${id}/stream`, { headers: { origin, cookie } })
+  const received: unknown[] = []
+  socket.on('message', bytes => received.push(JSON.parse(bytes.toString())))
   try {
-    await once(proof.socket, 'open')
-    proof.socket.send(JSON.stringify({ type: 'Attach', protocol: 1, viewId: 'reader', generation: 'generation' }))
-    proof.socket.send(JSON.stringify({ type: 'History', requestId: 'restore', snapshot: 'saved-copy', offset: 100, limit: 200 }))
-    await expect.poll(() => proof.forwarded.join('')).toContain('"type":"Attach"')
-    expect(proof.forwarded.join('')).toContain('"type":"History"')
-    expect(proof.forwarded.join('')).not.toContain('"type":"AcquireWriter"')
+    await once(socket, 'open')
+    socket.send(JSON.stringify({ type: 'Attach', protocol: 1, viewId: 'reader', generation }))
+    socket.send(JSON.stringify({ type: 'History', requestId: 'restore', snapshot: 'saved-copy', offset: 1, limit: 2 }))
+    await expect.poll(() => received).toContainEqual(expect.objectContaining({
+      type: 'History',
+      requestId: 'restore',
+      result: { _tag: 'Page', snapshot: 'saved-copy', total: 3, offset: 1, lines: ['line 101', 'line 102'] },
+    }))
   }
   finally {
-    await proof.close()
+    socket.terminate()
+    await api.close()
+    store.close()
+    rmSync(directory, { recursive: true })
   }
 })
 

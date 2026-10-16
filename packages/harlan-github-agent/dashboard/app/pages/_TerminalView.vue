@@ -296,6 +296,8 @@ function connect() {
       channel?.setWriter(message.writer)
       processState.value = message.session.state
       failure.value = ''
+      if (reading.value?.snapshot && !history.value && !historyRequest)
+        earlier()
       // Reconnecting viewers keep their read intent. Takeover requires Use terminal.
       if (initialAttachment && message.writer === null && ['Starting', 'Running'].includes(message.session.state))
         send({ type: 'AcquireWriter' })

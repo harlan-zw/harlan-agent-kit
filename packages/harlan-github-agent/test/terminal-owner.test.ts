@@ -1,4 +1,5 @@
 import type { KeyEvent } from 'ghostty-terminal-bindings'
+import type { TerminalHistorySnapshot } from '../src/terminal-history.ts'
 import type { TerminalServerMessage, TerminalSession } from '../src/terminal.ts'
 import { readFile } from 'node:fs/promises'
 import {
@@ -21,7 +22,7 @@ const session: TerminalSession = {
   createdAt: '2026-10-12T00:00:00Z',
   worktree: '/scratch/worktree',
 }
-async function fixture(historyLimit = 10, scrollbackLimit = 10) {
+async function fixture(historyLimit = 10, scrollbackLimit = 10, saved?: TerminalHistorySnapshot[][]) {
   const ghostty = await createGhostty(await readFile(wasmPath()), (message) => {
     throw new Error(message)
   })
@@ -46,6 +47,7 @@ async function fixture(historyLimit = 10, scrollbackLimit = 10) {
     now: () => now,
     token: () => `writer-${++token}`,
     historyLimit,
+    ...(saved ? { history: { save: snapshots => saved.push([...snapshots]) } } : {}),
   })
   const messages: TerminalServerMessage[] = []
   owner.attach('one', 'generation', message => messages.push(message))
@@ -225,6 +227,22 @@ it('keeps history pages identical after output rolls over and the reader reconne
   owner.message('reader', { type: 'History', requestId: 'newer', snapshot: original.snapshot, offset: 5, limit: 5 })
   expect(messages.at(-1)).toMatchObject({ result: { lines: original.lines.slice(5, 10) } })
   owner.dispose()
+})
+
+it('exports a bounded reading copy before the terminal owner is disposed', async () => {
+  const saved: TerminalHistorySnapshot[][] = []
+  const { owner, messages } = await fixture(1000, 2 * 1024 * 1024, saved)
+  owner.output(Array.from({ length: 20 }, (_, index) => `line-${index}\r\n`).join(''))
+  owner.message('one', { type: 'History', requestId: 'save', snapshot: null, offset: 5, limit: 2 })
+  const page = messages.at(-1)
+  if (page?.type !== 'History' || page.result._tag !== 'Page')
+    throw new Error('Missing history snapshot')
+  owner.dispose()
+  expect(saved.at(-1)).toEqual([expect.objectContaining({
+    id: page.result.snapshot,
+    generation: 'generation',
+    lines: expect.arrayContaining(['line-5']),
+  })])
 })
 
 it('reports expired history explicitly instead of replacing its lines', async () => {

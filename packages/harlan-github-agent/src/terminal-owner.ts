@@ -1,3 +1,4 @@
+import type { TerminalHistorySnapshot } from './terminal-history.ts'
 import type {
   TerminalClientMessage,
   TerminalInput,
@@ -50,6 +51,7 @@ export function createTerminalOwner(options: {
   now: () => number
   token: () => string
   historyLimit?: number
+  history?: { save: (snapshots: readonly TerminalHistorySnapshot[]) => void }
 }) {
   const { emulator, encoder, pty } = options
   const attachments = new Map<
@@ -58,10 +60,23 @@ export function createTerminalOwner(options: {
   >()
   // Reading copies outlive attachments, but never grow with the live terminal.
   const histories = new Map<string, { lines: string[], expiresAt: number }>()
+  function saveHistory() {
+    options.history?.save(
+      [...histories].map(([id, copy]) => ({
+        id,
+        generation: options.session.generation,
+        expiresAt: copy.expiresAt,
+        lines: [...copy.lines],
+      })),
+    )
+  }
   function history(message: Extract<TerminalClientMessage, { type: 'History' }>): Extract<TerminalServerMessage, { type: 'History' }>['result'] {
+    let changed = false
     for (const [id, copy] of histories) {
-      if (copy.expiresAt <= options.now())
+      if (copy.expiresAt <= options.now()) {
         histories.delete(id)
+        changed = true
+      }
     }
     let id = message.snapshot
     if (id === null) {
@@ -79,14 +94,19 @@ export function createTerminalOwner(options: {
       id = options.token()
       while (histories.size >= 4) histories.delete(histories.keys().next().value!)
       histories.set(id, { lines: lines.reverse(), expiresAt: options.now() + 15 * 60 * 1000 })
+      changed = true
     }
     const copy = histories.get(id)
-    if (!copy)
+    if (!copy) {
+      if (changed)
+        saveHistory()
       return { _tag: 'Expired' }
+    }
     // Refresh this copy's idle lease and least-recently-used position.
     copy.expiresAt = options.now() + 15 * 60 * 1000
     histories.delete(id)
     histories.set(id, copy)
+    saveHistory()
     const offset = Math.min(message.offset ?? Math.max(0, copy.lines.length - message.limit), copy.lines.length)
     return { _tag: 'Page', snapshot: id, total: copy.lines.length, offset, lines: copy.lines.slice(offset, offset + message.limit) }
   }
