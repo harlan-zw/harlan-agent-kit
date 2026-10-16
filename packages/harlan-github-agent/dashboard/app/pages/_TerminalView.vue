@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import type { TerminalClientMessage, TerminalInput, TerminalScreen, TerminalSession, TerminalWriter } from '../../../src/terminal-protocol.ts'
-import { useClipboard, useCssVar, useDocumentVisibility, useEventListener, useIntervalFn, useMediaQuery, useResizeObserver, useTextSelection, useTimeoutFn } from '@vueuse/core'
+import type { TerminalClientMessage, TerminalInput, TerminalResult, TerminalScreen, TerminalSession, TerminalWriter } from '../../../src/terminal-protocol.ts'
+import type { TerminalSubmission } from '../utils/terminal-submission.ts'
+import { useClipboard, useCssVar, useDocumentVisibility, useEventListener, useIntervalFn, useMediaQuery, useOnline, useResizeObserver, useTextareaAutosize, useTextSelection, useTimeoutFn } from '@vueuse/core'
 import { browserKeyEvent, CanvasRenderer } from 'ghostty-terminal-bindings/browser'
 import { createSessionImeLatch } from '../utils/session-ime.ts'
 import { terminalFailureCopy } from '../utils/terminal-copy.ts'
-import { submitTerminalDraft } from '../utils/terminal-draft.ts'
 import { createTerminalInputChannel } from '../utils/terminal-input.ts'
 import { parseTerminalFrame } from '../utils/terminal-protocol.ts'
+import { terminalReadingPosition } from '../utils/terminal-reading.ts'
 import { applyTerminalScreen } from '../utils/terminal-screen.ts'
+import { advanceTerminalSubmission, beginTerminalSubmission, interruptTerminalSubmission } from '../utils/terminal-submission.ts'
 
-const { session } = defineProps<{ session: TerminalSession }>()
+const { session, cachedScreen } = defineProps<{ session: TerminalSession, cachedScreen?: TerminalScreen }>()
+const emit = defineEmits<{ screen: [value: TerminalScreen] }>()
 const container = useTemplateRef('container')
 const terminalBackground = useCssVar('--terminal-bg', container)
 const terminalForeground = useCssVar('--terminal-fg', container)
@@ -17,16 +20,36 @@ const canvas = useTemplateRef('canvas')
 const input = useTemplateRef('input')
 const phoneInput = useMediaQuery('(pointer: coarse)')
 const draft = defineModel<string>('draft', { default: '' })
+const submission = defineModel<TerminalSubmission>('submission', { default: () => ({ _tag: 'Editing' }) })
+const reading = defineModel<{ offset: number, top: number } | null>('reading', { default: null })
+submission.value = interruptTerminalSubmission(submission.value)
+const phoneDraft = useTemplateRef<HTMLTextAreaElement>('phoneDraft')
+useTextareaAutosize({ element: phoneDraft, input: draft })
+watch(draft, (value) => {
+  if (value && submission.value._tag === 'Acknowledged')
+    submission.value = { _tag: 'Editing' }
+})
+const sendPending = computed(() => submission.value._tag === 'Pending')
+const reviewDelivery = computed(() => submission.value._tag === 'Unknown')
+const submissionCopy = computed(() => sendPending.value ? 'Sending…' : submission.value._tag === 'Acknowledged' ? 'Sent to terminal' : submission.value._tag === 'Pasted' ? 'Text pasted. Press Enter to submit.' : '')
+const deliveryTimeout = useTimeoutFn(() => {
+  submission.value = interruptTerminalSubmission(submission.value)
+}, 10000, { immediate: false })
 const draftComposing = ref(false)
 const visibility = useDocumentVisibility()
+const online = useOnline()
 let viewId = ''
 const writer = shallowRef<TerminalWriter>(null)
-const screen = shallowRef<TerminalScreen>()
+const screen = shallowRef<TerminalScreen | undefined>(cachedScreen)
 const history = shallowRef<{ total: number, offset: number, lines: TerminalScreen['lines'], graphemes: string[][] }>()
 const connected = ref(false)
 const uncertain = ref(false)
 const deliveryBlocked = ref(false)
 const failure = ref('')
+watch(draft, () => {
+  if (failure.value === terminalFailureCopy.SizeLimit)
+    failure.value = ''
+})
 const processState = ref(session.state)
 const ended = computed(() => ['Exited', 'Interrupted'].includes(processState.value))
 const writable = computed(() => connected.value && ['Starting', 'Running'].includes(processState.value) && !deliveryBlocked.value && writer.value?.viewId === viewId)
@@ -38,7 +61,7 @@ const connectionCopy = computed(() => processState.value === 'Exited'
       ? 'Stopping Agent.'
       : processState.value === 'Unknown'
         ? terminalFailureCopy.OwnershipUnknown
-        : connected.value ? (writable.value ? 'Terminal connected' : 'Read-only viewer') : 'Reconnecting to the terminal.')
+        : !online.value ? 'Offline. Your draft is saved.' : connected.value ? (writable.value ? 'Terminal connected' : 'Read-only viewer') : 'Reconnecting to the terminal.')
 let renderer: CanvasRenderer | undefined
 let socket: WebSocket | undefined
 let disposed = false
@@ -47,6 +70,16 @@ let attachedOnce = false
 let channel: ReturnType<typeof createTerminalInputChannel> | undefined
 let lastSize = ''
 let historyRequest = false
+let requestedHistoryOffset: number | undefined
+const historyLoading = ref(false)
+const historyFailure = ref('')
+const historyTimeout = useTimeoutFn(() => {
+  historyRequest = false
+  historyLoading.value = false
+  historyFailure.value = 'Could not load earlier output. Retry.'
+}, 8000, { immediate: false })
+let touchY = 0
+let touchX = 0
 const ime = createSessionImeLatch()
 let composing = false
 let keyboardLayout: ReadonlyMap<string, string> | undefined
@@ -58,11 +91,10 @@ const textLines = computed(() => {
   const source = history.value ?? screen.value
   return source?.lines.map((line, row) => line.map((cell, col) => cell.width === 0 ? '' : source.graphemes[row]?.[col] || String.fromCodePoint(cell.codepoint || 32)).join('')).join('\n') ?? ''
 })
-const selectionStyle = computed(() => {
-  const metrics = renderer?.getMetrics()
-  return { fontFamily: 'JetBrains Mono, monospace', fontSize: '14px', lineHeight: `${metrics?.height ?? 20}px` }
-})
+const historyLineHeight = 20
+const selectionStyle = { fontFamily: 'JetBrains Mono, monospace', fontSize: '14px', lineHeight: `${historyLineHeight}px` }
 const reconnect = useTimeoutFn(connect, 1500, { immediate: false })
+const connectTimeout = useTimeoutFn(() => socket?.close(), 10000, { immediate: false })
 useIntervalFn(() => {
   if (writable.value && writer.value)
     send({ type: 'RenewWriter', lease: writer.value.lease })
@@ -75,10 +107,10 @@ function send(message: TerminalClientMessage) {
   return true
 }
 
-function transmit(message: TerminalInput | { type: 'Resize', cols: number, rows: number }) {
+function transmitTracked(message: TerminalInput | { type: 'Resize', cols: number, rows: number }): TerminalResult<number> {
   if (!writable.value || !writer.value)
-    return false
-  const result = channel?.transmit(message)
+    return { _tag: 'Err', reason: 'StaleWriter' }
+  const result = channel?.transmit(message) ?? { _tag: 'Err', reason: 'StaleWriter' }
   if (result?._tag === 'Err') {
     failure.value = terminalFailureCopy[result.reason]
     if (result.reason === 'DeliveryUnknown') {
@@ -87,22 +119,79 @@ function transmit(message: TerminalInput | { type: 'Resize', cols: number, rows:
       send({ type: 'ReleaseWriter' })
     }
   }
-  return result?._tag === 'Ok'
+  return result
+}
+
+function transmit(message: TerminalInput | { type: 'Resize', cols: number, rows: number }) {
+  return transmitTracked(message)._tag === 'Ok'
+}
+
+function submitPhone(enter: TerminalInput, state = submission.value) {
+  if (!writer.value || state._tag === 'Pending' || state._tag === 'Unknown')
+    return
+  const pasted = state._tag === 'Pasted'
+  const text = pasted ? state.text : draft.value
+  const lease = writer.value.lease
+  const result = transmitTracked(text && !pasted ? { type: 'Paste', text } : enter)
+  const next = beginTerminalSubmission(text, enter, lease, result, pasted)
+  submission.value = next
+  if (next._tag === 'Pending')
+    deliveryTimeout.start()
+}
+
+function resolveDelivery(clear: boolean) {
+  if (clear)
+    draft.value = ''
+  submission.value = { _tag: 'Editing' }
+  uncertain.value = false
+}
+
+function latest() {
+  requestedHistoryOffset = undefined
+  historyRequest = false
+  historyLoading.value = false
+  historyTimeout.stop()
+  history.value = undefined
+  reading.value = null
+  historyFailure.value = ''
+  if (screen.value)
+    render(screen.value)
+  if (container.value)
+    container.value.scrollTop = 0
+}
+
+function earlier() {
+  if (!screen.value || historyRequest)
+    return
+  const limit = Math.min(200, Math.floor(20000 / screen.value.dimensions.cols))
+  const offset = history.value ? Math.max(0, history.value.offset - limit) : reading.value?.offset ?? Math.max(0, screen.value.scrollbackLength - limit)
+  requestedHistoryOffset = offset
+  historyRequest = send({ type: 'Scrollback', offset, limit })
+  historyLoading.value = historyRequest
+  if (historyRequest)
+    historyTimeout.start()
+  else
+    historyFailure.value = 'Could not load earlier output. Retry.'
+}
+
+function rememberScroll() {
+  if (history.value && container.value) {
+    reading.value = terminalReadingPosition(history.value.offset, container.value.scrollTop, historyLineHeight)
+    if (container.value.scrollTop < 40 && history.value.offset > 0 && !historyRequest)
+      earlier()
+  }
 }
 
 function phoneKey(key: string, code: string, ctrlKey = false) {
-  if (draftComposing.value || !writable.value)
+  if (draftComposing.value || !writable.value || sendPending.value || reviewDelivery.value)
     return
   const encoded = browserKeyEvent(new KeyboardEvent('keydown', { key, code, ctrlKey }), keyboardLayout)
   if (!encoded)
     return
-  history.value = undefined
-  if (screen.value)
-    render(screen.value)
+  latest()
   const message: TerminalInput = { type: 'Key', event: encoded }
   if (key === 'Enter') {
-    if (submitTerminalDraft(draft.value, message, transmit) !== 'Rejected')
-      draft.value = ''
+    submitPhone(message)
   }
   else {
     transmit(message)
@@ -139,7 +228,7 @@ function render(value: TerminalScreen, dirtyRows?: ReadonlySet<number>) {
 }
 
 function connect() {
-  if (disposed || invalidFrame || ['Exited', 'Interrupted'].includes(processState.value))
+  if (disposed || invalidFrame || !online.value || ['Exited', 'Interrupted'].includes(processState.value))
     return
   viewId = crypto.randomUUID()
   channel = createTerminalInputChannel({ send, viewId })
@@ -147,6 +236,7 @@ function connect() {
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   const next = new WebSocket(url)
   socket = next
+  connectTimeout.start()
   next.onopen = () => {
     if (socket === next)
       send({ type: 'Attach', protocol: 1, viewId, generation: session.generation })
@@ -163,6 +253,7 @@ function connect() {
     }
     const message = decoded.value
     if (message.type === 'Attached') {
+      connectTimeout.stop()
       const initialAttachment = !attachedOnce
       attachedOnce = true
       connected.value = true
@@ -185,6 +276,8 @@ function connect() {
         return
       }
       render(result.value, message.type === 'Rows' ? new Set(message.rows.map(row => row.index)) : undefined)
+      if (reading.value && !history.value && !historyRequest)
+        earlier()
     }
     else if (message.type === 'WriterChanged') {
       const prior = writer.value?.lease
@@ -201,29 +294,45 @@ function connect() {
       }
     }
     else if (message.type === 'InputReceipt') {
-      channel?.receipt(message.sequence, message.lease)
+      if (channel?.receipt(message.sequence, message.lease)) {
+        const next = advanceTerminalSubmission(submission.value, message.sequence, message.lease)
+        submission.value = next.state
+        if (next.send)
+          submitPhone(next.send, next.state)
+        if (next.state._tag === 'Acknowledged') {
+          deliveryTimeout.stop()
+          if (draft.value === next.state.text)
+            draft.value = ''
+        }
+      }
     }
     else if (message.type === 'Process') {
       processState.value = message.state
     }
     else if (message.type === 'Scrollback' && message.generation === session.generation) {
+      if (requestedHistoryOffset !== message.offset)
+        return
+      requestedHistoryOffset = undefined
       historyRequest = false
-      history.value = message
-      if (renderer && screen.value) {
-        const cols = screen.value.dimensions.cols
-        renderer.resize(cols, Math.max(2, message.lines.length))
-        renderer.render({
-          getLine: row => message.lines[row] ?? null,
-          getCursor: () => ({ x: 0, y: 0, visible: false }),
-          getDimensions: () => ({ cols, rows: Math.max(2, message.lines.length) }),
-          isRowDirty: () => true,
-          clearDirty: () => {},
-          getGraphemeString: (row, col) => message.graphemes[row]?.[col] ?? '',
-        }, true)
-      }
+      historyLoading.value = false
+      historyTimeout.stop()
+      historyFailure.value = ''
+      const prior = history.value
+      const added = prior && message.offset < prior.offset ? prior.offset - message.offset : 0
+      const top = added ? (container.value?.scrollTop ?? 0) + added * (historyLineHeight) : reading.value?.top
+      history.value = added && prior
+        ? { ...message, lines: [...message.lines.slice(0, added), ...prior.lines], graphemes: [...message.graphemes.slice(0, added), ...prior.graphemes] }
+        : message
+      void nextTick(() => {
+        if (container.value) {
+          container.value.scrollTop = top ?? container.value.scrollHeight
+          rememberScroll()
+        }
+      })
     }
     else if (message.type === 'Failure') {
       failure.value = terminalFailureCopy[message.reason]
+      submission.value = interruptTerminalSubmission(submission.value)
       if (message.reason === 'DeliveryUnknown') {
         uncertain.value = true
         deliveryBlocked.value = true
@@ -240,11 +349,15 @@ function connect() {
     if (socket !== next)
       return
     connected.value = false
+    connectTimeout.stop()
     writer.value = null
     historyRequest = false
+    historyLoading.value = false
+    historyTimeout.stop()
+    submission.value = interruptTerminalSubmission(submission.value)
     uncertain.value ||= channel?.detach().unconfirmed ?? false
     lastSize = ''
-    if (!disposed && !invalidFrame && !['Exited', 'Interrupted'].includes(processState.value))
+    if (!disposed && !invalidFrame && online.value && !['Exited', 'Interrupted'].includes(processState.value))
       reconnect.start()
   }
   next.onerror = () => {
@@ -274,15 +387,15 @@ function key(event: KeyboardEvent) {
   const encoded = browserKeyEvent(event, keyboardLayout)
   if (encoded) {
     event.preventDefault()
-    history.value = undefined
-    if (screen.value)
-      render(screen.value)
+    latest()
     transmit({ type: 'Key', event: encoded })
   }
 }
 
 function wheel(event: WheelEvent) {
   if (!screen.value || !renderer || !canvas.value)
+    return
+  if (history.value)
     return
   if (screen.value.modes.mouse && !event.shiftKey) {
     event.preventDefault()
@@ -291,17 +404,10 @@ function wheel(event: WheelEvent) {
     transmit({ type: 'Mouse', action: 'wheel', button: event.deltaY < 0 ? 64 : 65, col: Math.max(1, Math.min(screen.value.dimensions.cols, Math.floor((event.clientX - bounds.left) / metrics.width) + 1)), row: Math.max(1, Math.min(screen.value.dimensions.rows, Math.floor((event.clientY - bounds.top) / metrics.height) + 1)), mods: (event.shiftKey ? 1 : 0) | (event.altKey ? 2 : 0) | (event.ctrlKey ? 4 : 0) })
     return
   }
-  if (historyRequest || screen.value.scrollbackLength === 0)
-    return
-  if (history.value && event.deltaY > 0 && history.value.offset + history.value.lines.length >= history.value.total) {
-    history.value = undefined
-    render(screen.value)
-    return
+  if (event.deltaY < 0 && screen.value.scrollbackLength > 0) {
+    event.preventDefault()
+    earlier()
   }
-  const offset = history.value
-    ? Math.max(0, Math.min(history.value.total - 1, history.value.offset + (event.deltaY < 0 ? -20 : 20)))
-    : Math.max(0, screen.value.scrollbackLength - 100)
-  historyRequest = send({ type: 'Scrollback', offset, limit: 100 })
 }
 
 function commit(event: Event) {
@@ -340,6 +446,16 @@ function mouse(event: MouseEvent, action: 'down' | 'up' | 'move') {
 }
 
 useResizeObserver(container, resize)
+watch(online, (value) => {
+  if (!value) {
+    reconnect.stop()
+    socket?.close()
+  }
+  else if (!connected.value) {
+    reconnect.stop()
+    connect()
+  }
+})
 watch(visibility, (value) => {
   if (value === 'visible' && screen.value)
     render(screen.value)
@@ -368,6 +484,16 @@ useEventListener(input, 'compositionend', (event: CompositionEvent) => {
 })
 useEventListener(input, 'paste', paste)
 useEventListener(container, 'wheel', wheel, { passive: false })
+useEventListener(container, 'scroll', rememberScroll, { passive: true })
+useEventListener(container, 'touchstart', (event: TouchEvent) => {
+  touchY = event.touches[0]?.clientY ?? 0
+  touchX = event.touches[0]?.clientX ?? 0
+}, { passive: true })
+useEventListener(container, 'touchend', (event: TouchEvent) => {
+  const touch = event.changedTouches[0]
+  if (touch && !history.value && !selection.text.value && touch.clientY - touchY > 50 && Math.abs(touch.clientX - touchX) < 60)
+    earlier()
+}, { passive: true })
 useEventListener(window, 'pagehide', () => send({ type: 'ReleaseWriter' }))
 
 async function start() {
@@ -382,6 +508,8 @@ async function start() {
   if (disposed || !canvas.value)
     return
   renderer = new CanvasRenderer(canvas.value, { fontFamily: 'JetBrains Mono, monospace', fontSize: 14, cursorBlink: false, theme: { background: terminalBackground.value, foreground: terminalForeground.value } })
+  if (screen.value)
+    render(screen.value)
   connect()
 }
 
@@ -395,6 +523,12 @@ onScopeDispose(() => {
   disposed = true
   ime.reset()
   reconnect.stop()
+  connectTimeout.stop()
+  deliveryTimeout.stop()
+  historyTimeout.stop()
+  submission.value = interruptTerminalSubmission(submission.value)
+  if (screen.value)
+    emit('screen', screen.value)
   send({ type: 'ReleaseWriter' })
   socket?.close()
 })
@@ -402,37 +536,65 @@ onScopeDispose(() => {
 
 <template>
   <div class="flex min-h-0 flex-col">
-    <div class="flex shrink-0 items-center justify-between border-b border-default px-3 py-1 text-xs text-muted">
-      <span role="status">{{ connectionCopy }}</span>
+    <div class="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-x-2 border-b border-default px-3 text-sm text-muted">
+      <span role="status" class="min-w-0 flex-1 break-words">{{ history ? 'Earlier output' : connectionCopy }}</span>
+      <UTooltip v-if="screen?.scrollbackLength || history" text="Earlier output">
+        <UButton icon="i-octicon-history-16" aria-label="Earlier output" color="neutral" variant="ghost" class="min-h-11 min-w-11 justify-center" :loading="historyLoading" :disabled="!connected || history?.offset === 0" @click="earlier" />
+      </UTooltip>
+      <UButton v-if="history" icon="i-octicon-arrow-down-16" color="neutral" variant="outline" class="min-h-11" @click="latest">
+        Latest
+      </UButton>
       <UButton v-if="connected && ['Starting', 'Running'].includes(processState) && !writable && writer === null" size="xs" variant="ghost" @click="send({ type: 'AcquireWriter' })">
         Use terminal
       </UButton>
-      <UButton v-if="writable" size="xs" variant="ghost" @click="send({ type: 'ReleaseWriter' })">
-        Release terminal
-      </UButton>
+      <UDropdownMenu v-if="writable" :items="[{ label: 'Release terminal', onSelect: () => send({ type: 'ReleaseWriter' }) }]">
+        <UButton icon="i-octicon-kebab-horizontal-16" aria-label="Terminal controls" size="sm" variant="ghost" class="min-h-11 min-w-11 justify-center" />
+      </UDropdownMenu>
     </div>
-    <p v-if="uncertain" role="alert" class="shrink-0 px-3 py-2 text-xs text-warning">
+    <p v-if="uncertain && !reviewDelivery" role="alert" class="shrink-0 px-3 py-2 text-sm text-warning">
       Input delivery is unknown. Check the terminal before sending again.
     </p>
     <p v-if="failure" role="alert" class="shrink-0 px-3 py-1 text-xs text-error">
       {{ failure }}
     </p>
-    <div ref="container" class="terminal-viewport relative min-h-0 flex-1 overflow-auto" @click="!phoneInput && input?.focus({ preventScroll: true })">
-      <canvas ref="canvas" aria-hidden="true" class="block" @mousedown="mouse($event, 'down')" @mouseup="mouse($event, 'up')" @mousemove="mouse($event, 'move')" />
+    <p v-if="historyFailure" role="alert" class="px-3 py-2 text-sm text-error">
+      {{ historyFailure }}
+    </p>
+    <div ref="container" class="terminal-viewport relative min-h-0 flex-1 overflow-auto overscroll-contain" :tabindex="history ? 0 : undefined" :aria-label="history ? 'Earlier terminal output' : undefined" @click="!phoneInput && !history && input?.focus({ preventScroll: true })">
+      <p v-if="ended && !screen" class="p-4 text-sm text-muted">
+        This terminal has ended. Its work remains in the project.
+      </p>
+      <canvas v-show="!history" ref="canvas" aria-hidden="true" class="block" @mousedown="mouse($event, 'down')" @mouseup="mouse($event, 'up')" @mousemove="mouse($event, 'move')" />
       <textarea ref="input" aria-label="Agent terminal" :readonly="!writable || phoneInput" :tabindex="phoneInput ? -1 : 0" :aria-hidden="phoneInput" autocapitalize="off" autocomplete="off" autocorrect="off" :spellcheck="false" class="absolute top-0 left-0 size-px resize-none border-0 p-0 text-base opacity-0 outline-none" @focus="focus(true)" @blur="focus(false)" />
-      <pre :style="selectionStyle" class="terminal-selection absolute top-0 left-0 m-0 select-text whitespace-pre text-transparent" aria-label="Agent terminal output" @mousedown="mouse($event, 'down')" @mouseup="mouse($event, 'up')" @mousemove="mouse($event, 'move')">{{ textLines }}</pre>
+      <pre :style="selectionStyle" class="terminal-selection m-0 select-text whitespace-pre" :class="history ? 'text-default' : 'absolute top-0 left-0 text-transparent'" aria-label="Agent terminal output" @mousedown="!history && mouse($event, 'down')" @mouseup="!history && mouse($event, 'up')" @mousemove="!history && mouse($event, 'move')">{{ textLines }}</pre>
     </div>
-    <div v-if="phoneInput" class="shrink-0 space-y-2 border-t border-default bg-default p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-      <textarea v-model="draft" aria-label="Agent terminal" :readonly="!writable" rows="2" class="block max-h-32 min-h-11 w-full resize-none rounded border border-default bg-default p-2 text-base outline-none focus:border-primary" @compositionstart="draftComposing = true" @compositionend="draftComposing = false" @focus="focus(true)" @blur="focus(false)" />
+    <div v-if="phoneInput && (!ended || draft)" class="terminal-composer shrink-0 space-y-2 border-t border-default bg-default p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      <div v-if="reviewDelivery" role="alert" class="space-y-2 text-sm">
+        <p class="text-warning">
+          Input delivery is unknown. Check the terminal before sending again.
+        </p>
+        <div class="flex gap-2">
+          <UButton color="neutral" variant="outline" @click="resolveDelivery(true)">
+            Already sent
+          </UButton>
+          <UButton color="neutral" variant="outline" @click="resolveDelivery(false)">
+            Not sent
+          </UButton>
+        </div>
+      </div>
+      <textarea ref="phoneDraft" v-model="draft" aria-label="Agent terminal" placeholder="Message the Agent…" :readonly="sendPending || reviewDelivery || submission._tag === 'Pasted'" rows="2" class="block max-h-32 min-h-11 w-full resize-y rounded border border-default bg-default p-2 text-base outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" @compositionstart="draftComposing = true" @compositionend="draftComposing = false" @focus="focus(true)" @blur="focus(false)" />
+      <p v-if="submissionCopy" role="status" class="text-sm text-muted">
+        {{ submissionCopy }}
+      </p>
       <div class="flex gap-2">
-        <UButton color="neutral" variant="outline" class="min-h-11" :disabled="!writable || draftComposing" @click="phoneKey('Escape', 'Escape')">
+        <UButton color="neutral" variant="outline" class="min-h-11" :disabled="!writable || draftComposing || sendPending || reviewDelivery" @click="phoneKey('Escape', 'Escape')">
           Esc
         </UButton>
-        <UButton color="neutral" variant="outline" class="min-h-11" :disabled="!writable || draftComposing" @click="phoneKey('c', 'KeyC', true)">
+        <UButton color="neutral" variant="outline" class="min-h-11" :disabled="!writable || draftComposing || sendPending || reviewDelivery" @click="phoneKey('c', 'KeyC', true)">
           Ctrl+C
         </UButton>
-        <UButton class="ml-auto min-h-11" :disabled="!writable || draftComposing" @click="phoneKey('Enter', 'Enter')">
-          {{ draft ? 'Send' : 'Enter' }}
+        <UButton class="ml-auto min-h-11 min-w-16 justify-center" :disabled="!writable || draftComposing || sendPending || reviewDelivery" @pointerdown.prevent @click="phoneKey('Enter', 'Enter')">
+          {{ sendPending ? 'Sending…' : submission._tag === 'Pasted' || !draft ? 'Enter' : 'Send' }}
         </UButton>
       </div>
     </div>
@@ -442,6 +604,11 @@ onScopeDispose(() => {
 <style scoped>
 .terminal-viewport {
   background: var(--terminal-bg);
+}
+
+@media (max-height: 500px) and (pointer: coarse) {
+  .terminal-composer { padding-top: 0.25rem; }
+  .terminal-composer textarea { height: 44px; }
 }
 
 .terminal-viewport:focus-within {

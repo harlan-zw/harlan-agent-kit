@@ -31,6 +31,9 @@ const host = useSessionStorage<SessionHost>('agent-session-history-host', 'deskt
 })
 const filter = ref('')
 const sidebarOpen = ref(false)
+const stopConfirm = ref(false)
+const stopTarget = ref('')
+const positions = useSessionStorage<Record<string, { top: number, following: boolean }>>('agent-history-positions', {})
 const conversation = useTemplateRef<HTMLElement>('conversation')
 const content = useTemplateRef<HTMLElement>('content')
 const following = ref(true)
@@ -72,16 +75,29 @@ function onScroll(): void {
   following.value = sessionFollowOnScroll({ geometry: element, lastWriteTop, previousTop, following: following.value })
   previousTop = element.scrollTop
   atBottom.value = sessionDistanceFromBottom(element) <= 32
+  if (selected.value)
+    positions.value[selected.value.id] = { top: element.scrollTop, following: following.value }
 }
 
-watch(() => selected.value?.id, async () => {
+watch(() => selected.value?.id, async (id, previous) => {
+  if (previous && conversation.value)
+    positions.value[previous] = { top: conversation.value.scrollTop, following: following.value }
   if (selected.value)
     host.value = selected.value.host
-  following.value = true
+  const saved = id ? positions.value[id] : undefined
+  following.value = saved?.following ?? true
   lastWriteTop = -1
   disclosures.reset()
   await nextTick()
-  scrollLatest()
+  if (saved && !saved.following && conversation.value) {
+    conversation.value.scrollTop = saved.top
+    lastWriteTop = conversation.value.scrollTop
+    previousTop = lastWriteTop
+    atBottom.value = sessionDistanceFromBottom(conversation.value) <= 32
+  }
+  else {
+    scrollLatest()
+  }
 })
 watch(() => timeline.value.length, async () => {
   await nextTick()
@@ -100,7 +116,7 @@ async function refresh(): Promise<void> {
   refreshPending = true
   if (terminalHost.state.value._tag === 'Checking')
     await terminalHost.start()
-  await $fetch<SessionViewSnapshot>(controllerPath('/api/sessions')).then((value) => {
+  await $fetch<SessionViewSnapshot>(controllerPath('/api/sessions'), { timeout: 10000 }).then((value) => {
     data.value = value
     loadFailure.value = ''
   }).catch((error: unknown) => {
@@ -145,10 +161,15 @@ async function stop(): Promise<void> {
   }
   if (!selected.value || pending.value)
     return
-  const sessionId = selected.value.id
+  const sessionId = stopTarget.value
+  if (!sessionId)
+    return
   pending.value = true
   failure.value = undefined
-  await $fetch<DesktopSession>(`/api/sessions/${sessionId}/stop`, { method: 'POST' }).then(remember).catch((error: unknown) => {
+  await $fetch<DesktopSession>(`/api/sessions/${sessionId}/stop`, { method: 'POST', timeout: 15000 }).then((session) => {
+    remember(session)
+    stopConfirm.value = false
+  }).catch((error: unknown) => {
     if (selected.value?.id === sessionId)
       failure.value = { message: sessionFailureMessage(error, 'Could not stop the Agent. Retry.') }
   })
@@ -168,6 +189,9 @@ usePageTitle('History')
   <div class="session-workspace grid min-h-0 md:grid-cols-[16rem_minmax(0,1fr)]">
     <aside id="session-projects" :class="sidebarOpen ? 'flex' : 'hidden md:flex'" class="min-h-0 flex-col border-b border-default bg-muted md:border-b-0 md:border-r" aria-label="Projects and sessions">
       <div class="space-y-3 p-4">
+        <UButton to="/sessions" color="neutral" variant="ghost" icon="i-octicon-arrow-left-16" class="min-h-11">
+          Sessions
+        </UButton>
         <UButton class="md:hidden" color="neutral" variant="ghost" icon="i-octicon-x-16" aria-label="Close projects" @click="sidebarOpen = false">
           Close projects
         </UButton>
@@ -227,7 +251,7 @@ usePageTitle('History')
             {{ selected.project.name }} <span class="mx-1">/</span> {{ sessionHostLabels[selected.host] }} <span class="mx-1">/</span> {{ selected.status }}
           </p>
         </div>
-        <UButton v-if="!readOnly && (running || selected?.status === 'interrupted')" color="neutral" variant="outline" :loading="pending" :disabled="selected?.status === 'stopping'" icon="i-octicon-square-fill-16" @click="stop">
+        <UButton v-if="!readOnly && (running || selected?.status === 'interrupted')" color="neutral" variant="outline" :loading="pending" :disabled="selected?.status === 'stopping'" icon="i-octicon-square-fill-16" @click="stopTarget = selected!.id; stopConfirm = true">
           {{ selected?.status === 'stopping' ? 'Stopping' : 'Stop Agent' }}
         </UButton>
       </header>
@@ -276,6 +300,7 @@ usePageTitle('History')
         </UButton>
       </div>
     </section>
+    <ConfirmModal v-model:open="stopConfirm" title="Stop Agent?" consequence="This stops the Agent. The session and its work remain available." confirm-label="Stop Agent" :pending="pending" :error="failure?.message ?? null" @confirm="stop" />
   </div>
 </template>
 
@@ -283,6 +308,6 @@ usePageTitle('History')
 .session-workspace { height: 100%; min-height: 0; }
 @media (max-width: 767px) {
   .session-workspace { position: relative; }
-  .session-workspace > aside { position: absolute; inset: 0 3rem 0 0; z-index: 20; border-right: 1px solid var(--ui-border); }
+  .session-workspace > aside { position: absolute; inset: 0; z-index: 20; border-right: 1px solid var(--ui-border); }
 }
 </style>

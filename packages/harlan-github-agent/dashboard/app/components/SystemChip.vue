@@ -5,6 +5,7 @@ import { systemChipState } from '../utils/system.ts'
  * `n/max` agents and one state dot. Grey is normal, amber names why work cannot
  * start, red carries the Incident count. Everything else waits in the slideover.
  */
+const { compact = false } = defineProps<{ compact?: boolean }>()
 const { snapshot, now } = useDashboard()
 const { show } = useSystemPane()
 
@@ -44,23 +45,26 @@ const ariaLabel = computed(() => {
 </script>
 
 <template>
-  <UButton color="neutral" variant="outline" size="sm" :aria-label="ariaLabel" title="System" @click="show">
+  <UButton color="neutral" variant="outline" size="sm" class="min-h-11 whitespace-nowrap" :aria-label="ariaLabel" title="System" @click="show">
     <LiveDot :tone="tone" :live="chip._tag !== 'Loading' && chip._tag !== 'Unavailable' && chip.live" />
-    <span v-if="chip._tag === 'Loading'" class="font-mono text-dimmed">…</span>
-    <span v-else-if="chip._tag === 'Unavailable'" class="status-warning">Unavailable</span>
-    <span v-else class="font-mono">{{ chip.active }}/{{ chip.maximum }}</span>
-    <span v-if="chip._tag === 'CannotStart'" class="status-warning">{{ chip.reason }}</span>
-    <span v-else-if="chip._tag === 'DesktopUpdateRequired'" class="status-warning">
-      <span class="sm:hidden">Update required</span><span class="hidden sm:inline">Desktop update required</span>
-    </span>
-    <template v-else-if="chip._tag === 'GitHubRateLimited'">
-      <span class="whitespace-nowrap status-warning">GitHub rate limit</span>
-      <span v-if="chip.incidents > 0" class="whitespace-nowrap status-error" :title="`${chip.incidents} other Incidents`">
-        {{ chip.incidents }}<span class="hidden sm:inline"> other Incidents</span>
+    <span v-if="compact" class="sm:hidden">System</span>
+    <span :class="compact ? 'hidden items-center gap-1.5 sm:inline-flex' : 'contents'">
+      <span v-if="chip._tag === 'Loading'" class="font-mono text-dimmed">…</span>
+      <span v-else-if="chip._tag === 'Unavailable'" class="status-warning">Unavailable</span>
+      <span v-else class="font-mono">{{ chip.active }}/{{ chip.maximum }}</span>
+      <span v-if="chip._tag === 'CannotStart'" class="status-warning">{{ chip.reason }}</span>
+      <span v-else-if="chip._tag === 'DesktopUpdateRequired'" class="status-warning">
+        <span class="sm:hidden">Update required</span><span class="hidden sm:inline">Desktop update required</span>
       </span>
-    </template>
+      <template v-else-if="chip._tag === 'GitHubRateLimited'">
+        <span class="whitespace-nowrap status-warning">GitHub rate limit</span>
+        <span v-if="chip.incidents > 0" class="whitespace-nowrap status-error" :title="`${chip.incidents} other Incidents`">
+          {{ chip.incidents }}<span class="hidden sm:inline"> other Incidents</span>
+        </span>
+      </template>
 
-    <span v-else-if="chip._tag === 'Incident'" class="status-error">{{ incidentLabel }}</span>
-    <span v-else-if="chip._tag === 'RepairRecovery'" class="status-error">{{ recoveryLabel }}</span>
+      <span v-else-if="chip._tag === 'Incident'" class="status-error">{{ incidentLabel }}</span>
+      <span v-else-if="chip._tag === 'RepairRecovery'" class="status-error">{{ recoveryLabel }}</span>
+    </span>
   </UButton>
 </template>

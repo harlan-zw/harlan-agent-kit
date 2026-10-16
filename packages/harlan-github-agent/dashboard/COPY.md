@@ -34,10 +34,12 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Terminal pairing | Open the pairing link from the terminal host. | Local authentication guidance |
 | Terminal writer | Terminal connected | Agent session with input authority |
 | Terminal exited | Agent session exited. | Exited terminal process |
+| Terminal ended without screen | This terminal has ended. Its work remains in the project. | Ended terminal without a screen cached in this browser |
 | Terminal interrupted | Agent session interrupted. | Interrupted terminal process |
 | Terminal stopping | Stopping Agent. | Stop in progress |
 | Terminal observer | Read-only viewer | Agent session without input authority |
 | Terminal reconnect | Reconnecting to the terminal. | Detached Agent session |
+| Terminal offline | Offline. Your draft is saved. | Browser reports no network connection |
 | Terminal uncertain input | Input delivery is unknown. Check the terminal before sending again. | Disconnect with unconfirmed input |
 | Terminal input control | Use terminal | Acquire available input authority |
 | Terminal release control | Release terminal | Release input authority |
@@ -54,6 +56,24 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Terminal phone enter | Enter | Press Enter with an empty phone draft |
 | Terminal phone escape | Esc | Send the Escape key |
 | Terminal phone interrupt | Ctrl+C | Send the terminal interrupt key |
+| Terminal draft placeholder | Message the Agent… | Editable phone input |
+| Terminal send pending | Sending… | Waiting for terminal input receipts |
+| Terminal send acknowledged | Sent to terminal | Both paste and Enter acknowledged, not task completion |
+| Terminal paste acknowledged | Text pasted. Press Enter to submit. | Enter was refused after a confirmed paste |
+| Terminal delivery confirmed | Already sent | Clear an uncertain draft after checking the terminal |
+| Terminal delivery not sent | Not sent | Restore an uncertain draft after checking the terminal |
+| Terminal earlier output | Earlier output | Open and page terminal scrollback |
+| Terminal latest output | Latest | Return to the live terminal screen |
+| Terminal history failure | Could not load earlier output. Retry. | Failed scrollback read |
+| Session search | Find a project or session | Project, provider and state search |
+| Session search label | Find a session | Accessible search name |
+| Session search empty | No projects or sessions match. | Empty filtered list |
+| Session return | Back to session | Close phone project navigation |
+| Session actions | Session actions | Close tab and Stop controls |
+| Terminal controls | Terminal controls | Terminal input ownership menu |
+| Session launch close | Close new session | Collapse launch options |
+| Session stop heading | Stop Agent? | Stop confirmation |
+| Session stop consequence | This stops the Agent. The session and its work remain available. | Stop confirmation consequence |
 | Terminal copy failure | Could not copy terminal text. Select it and use the browser menu. | Clipboard write failure |
 | Terminal invalid data | The terminal returned invalid data. Reload. | Invalid terminal frame |
 | Terminal authentication | Open the pairing link from the terminal host. | Authentication failure |
