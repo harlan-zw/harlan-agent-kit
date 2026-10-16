@@ -86,7 +86,9 @@ const resultMessage = computed(() => outcome.value === 'accepted'
     <p v-if="error && !open" role="status" class="text-sm status-warning">
       {{ error }}
     </p>
-    <p v-if="outcome !== 'idle' && !open" role="status" class="text-sm">{{ resultMessage }}</p>
+    <p v-if="outcome !== 'idle' && !open" role="status" class="text-sm">
+      {{ resultMessage }}
+    </p>
     <UButton color="error" variant="outline" :disabled="!ready || outcome !== 'idle'" class="min-h-11" @click="open = true">
       Isolate Hogwild
     </UButton>
@@ -120,7 +122,9 @@ const resultMessage = computed(() => outcome.value === 'accepted'
             Confirm with Passkey
           </UButton>
         </div>
-        <UButton v-else color="neutral" variant="ghost" class="min-h-11" @click="open = false">Close</UButton>
+        <UButton v-else color="neutral" variant="ghost" class="min-h-11" @click="open = false">
+          Close
+        </UButton>
       </template>
     </UModal>
   </section>

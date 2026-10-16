@@ -20,9 +20,9 @@ import {
 } from '../utils/hogwild-status.ts'
 import { hostTasks } from '../utils/host-tasks.ts'
 import { batchRow, capacityRow, circuitNotice, desktopPresentation, nextRoutineInstant, retryDeadline, serviceUpdatePresentation } from '../utils/system.ts'
+import EmergencyIsolation from './system/EmergencyIsolation.vue'
 import GitHubRateLimits from './system/GitHubRateLimits.vue'
 import HostWork from './system/HostWork.vue'
-import EmergencyIsolation from './system/EmergencyIsolation.vue'
 
 /**
  * Reference material behind one chip: Capacity, Incidents, Routines, Host.

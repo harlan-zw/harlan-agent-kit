@@ -78,7 +78,10 @@ export function createEmergencyBroker(options: {
       verifying = true
       try {
         const credential: WebAuthnCredential = { id: pinned.id, publicKey: new Uint8Array(Buffer.from(pinned.publicKey, 'base64url')), counter: pinned.counter }
-        const result = await verifyAuthenticationResponse({ response: assertion, credential, expectedChallenge: ceremony.challenge, expectedOrigin: emergencyOrigin, expectedRPID: emergencyRPID, requireUserVerification: true }).catch(() => null)
+        const result = await verifyAuthenticationResponse({ response: assertion, credential, expectedChallenge: ceremony.challenge, expectedOrigin: emergencyOrigin, expectedRPID: emergencyRPID, requireUserVerification: true }).catch(() => {
+          // Malformed or invalid assertions become the same refusal below; no action runs.
+          return null
+        })
         if (!result?.verified)
           return reply(403, { error: 'Passkey verification failed.' })
         // Durable monotonic counter precedes the action, including for non-synced keys.

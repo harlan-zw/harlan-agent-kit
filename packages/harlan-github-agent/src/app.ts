@@ -431,7 +431,8 @@ export function createAgentApp(options: AgentAppOptions): H3 {
 
   if (options.emergencyIsolation) {
     registerEmergencyRoutes(app, options.emergencyIsolation, (headers) => {
-      if (headers.get('x-harlan-agent-ingress') !== 'public') return null
+      if (headers.get('x-harlan-agent-ingress') !== 'public')
+        return null
       const authority = options.browserAuth?.public
       return authority?.bootstrapKind === 'passkey' ? authority.session(headers)?.credentialId ?? null : null
     })
