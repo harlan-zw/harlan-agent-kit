@@ -369,10 +369,14 @@ describe('durable terminal launch and ownership', () => {
   })
 
   it.each([
-    ['codex', ['--ask-for-approval', 'on-request', '--sandbox', 'workspace-write']],
-    ['claude', []],
-  ] as const)('launches %s with approval-required operations still restricted', async (provider, expectedArguments) => {
-    const fixture_ = await fixture({ [provider]: controllerTerminalProviderArguments[provider] })
+    ['restricted', 'codex', ['--ask-for-approval', 'on-request', '--sandbox', 'workspace-write']],
+    ['full_access', 'codex', ['--ask-for-approval', 'never', '--sandbox', 'danger-full-access']],
+    ['restricted', 'claude', []],
+    ['full_access', 'claude', []],
+    ['restricted', 'opencode', []],
+    ['full_access', 'opencode', []],
+  ] as const)('launches %s-mode %s with the configured provider policy', async (mode, provider, expectedArguments) => {
+    const fixture_ = await fixture({ [provider]: controllerTerminalProviderArguments(mode)[provider] })
     const manager = await fixture_.manager()
 
     await manager.launch({ ...launch, provider })

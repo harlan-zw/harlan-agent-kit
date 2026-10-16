@@ -1797,6 +1797,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         ...(config.server.publicTerminalSessions === true && browserAuth?.public ? { publicBrowserAuth: browserAuth.public } : {}),
         memoryGiB: config.agent.memoryPerAgentGiB,
         admissionCli: maintenanceAdmission.capacityCommand,
+        codexMode: config.server.agentSessionsCodexMode,
         protectedPaths: [
           dirname(config.storage.path),
           config.github.privateKeyPath,

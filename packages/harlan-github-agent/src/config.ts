@@ -1,7 +1,7 @@
 import type { AgentProviderName } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { Result } from './result.ts'
-import type { AgentConfig, AgentRole, ClassificationConfig, CodexReasoningEffort, ExternalRepositoryWatch, GitHubAccount, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
+import type { AgentConfig, AgentRole, AgentSessionsCodexMode, ClassificationConfig, CodexReasoningEffort, ExternalRepositoryWatch, GitHubAccount, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
 import { execFile } from 'node:child_process'
 import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -810,6 +810,16 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   const publicBrowserPasswordLogin = server?.public_browser_password_login === undefined ? true : requiredBoolean(server, 'public_browser_password_login', '$.server', issues)
   const publicTerminalSessions = server?.public_terminal_sessions === undefined ? false : requiredBoolean(server, 'public_terminal_sessions', '$.server', issues)
   const agentSessions = server?.agent_sessions === undefined ? false : requiredBoolean(server, 'agent_sessions', '$.server', issues)
+  const codexModeValue = server?.agent_sessions_codex_mode
+  const agentSessionsCodexMode: AgentSessionsCodexMode | undefined = codexModeValue === undefined
+    ? 'restricted'
+    : codexModeValue === 'restricted' || codexModeValue === 'full_access'
+      ? codexModeValue
+      : undefined
+  if (agentSessionsCodexMode === undefined)
+    issues.push({ path: '$.server.agent_sessions_codex_mode', message: 'Expected restricted or full_access.' })
+  else if (agentSessionsCodexMode === 'full_access' && agentSessions !== true)
+    issues.push({ path: '$.server.agent_sessions_codex_mode', message: 'Codex full access requires server.agent_sessions: true.' })
   if (server?.desktop_sessions !== undefined)
     issues.push({ path: '$.server.desktop_sessions', message: 'Replace desktop_sessions with agent_sessions.' })
   const frameAncestors = server === undefined
@@ -931,7 +941,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     || allowedOwners === undefined
     || port === undefined
     || allowedOrigin === undefined
-    || agentSessions === undefined || publicBrowserPasswordLogin === undefined || publicTerminalSessions === undefined
+    || agentSessions === undefined || agentSessionsCodexMode === undefined || publicBrowserPasswordLogin === undefined || publicTerminalSessions === undefined
     || frameAncestors === undefined
     || storagePath === undefined
     || pollIntervalSeconds === undefined
@@ -949,7 +959,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   return ok({
     agent,
     github: { appId, privateKeyPath, allowedOwners },
-    server: { host, port, allowedOrigin, frameAncestors, agentSessions, browserOrigins: browserOrigins ?? [], publicBrowserPasswordLogin, publicTerminalSessions },
+    server: { host, port, allowedOrigin, frameAncestors, agentSessions, agentSessionsCodexMode, browserOrigins: browserOrigins ?? [], publicBrowserPasswordLogin, publicTerminalSessions },
     webhook,
     classification,
     triggers,

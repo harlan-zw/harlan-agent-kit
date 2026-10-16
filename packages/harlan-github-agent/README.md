@@ -388,6 +388,14 @@ Each Agent session uses its host's credentials, tools, instructions, and persist
 Tabs and split terminals control browser views. Closing them keeps the Agent running.
 Use `Stop Agent` to stop its process. The Worktree remains available for inspection.
 Provider prompts, approvals, and model selection stay in the native terminal.
+Codex defaults to approval prompts and `workspace-write`. An operator can set
+`server.agent_sessions: true` and `server.agent_sessions_codex_mode: full_access`
+to remove Codex approval prompts
+and use `danger-full-access` inside the existing terminal sandbox. The default is
+`restricted`; restart the service for a changed setting to affect new Codex
+sessions. This service-wide setting applies to every enrolled public Passkey
+user. Existing writable mounts, network access, and provider state remain
+available, and Claude and OpenCode keep their current launch behavior.
 Follow [Local Agent terminals](../../docs/agent-terminal.md) for installation, pairing, and safe removal.
 
 History preserves older Agent sessions as read-only records.

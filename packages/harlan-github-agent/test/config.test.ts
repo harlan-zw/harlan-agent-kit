@@ -102,6 +102,19 @@ describe('configuration boundary', () => {
     const retired = parseConfigText(configText.replace('server:', 'server:\n  desktop_sessions: true'))
     expect(retired._tag === 'Err' && retired.error.map(issue => issue.path)).toContain('$.server.desktop_sessions')
   })
+  it('keeps Codex Session permissions restricted unless full access is explicitly enabled with Sessions', () => {
+    const defaultMode = parseConfigText(configText)
+    expect(defaultMode._tag === 'Ok' && defaultMode.value.server.agentSessionsCodexMode).toBe('restricted')
+
+    const fullWithoutSessions = parseConfigText(configText.replace('server:', 'server:\n  agent_sessions_codex_mode: full_access'))
+    expect(fullWithoutSessions._tag === 'Err' && fullWithoutSessions.error.map(issue => issue.path)).toContain('$.server.agent_sessions_codex_mode')
+
+    const fullAccess = parseConfigText(configText.replace('server:', 'server:\n  agent_sessions: true\n  agent_sessions_codex_mode: full_access'))
+    expect(fullAccess._tag === 'Ok' && fullAccess.value.server.agentSessionsCodexMode).toBe('full_access')
+
+    const invalid = parseConfigText(configText.replace('server:', 'server:\n  agent_sessions_codex_mode: unrestricted'))
+    expect(invalid._tag === 'Err' && invalid.error.map(issue => issue.path)).toContain('$.server.agent_sessions_codex_mode')
+  })
   it('scopes release defaults to an allowed owner and trusted checkout root', () => {
     const block = `release_defaults:\n  owner: harlan-zw\n  checkout_root: ${homedir()}/pkg\n  manifest: package.json\n  version_files: [package.json]\n  tag_prefix: v\n  workflow: release.yml\n  checks: all\n`
     const parsed = parseConfigText(`${block}${configText}`)

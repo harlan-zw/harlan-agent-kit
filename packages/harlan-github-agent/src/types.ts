@@ -12,6 +12,7 @@ import type { RoutineName } from './routines/index.ts'
 import type { CompletionTask } from './take-ownership-store.ts'
 
 export type RepositoryOwnership = 'owned' | 'maintained' | 'external'
+export type AgentSessionsCodexMode = 'restricted' | 'full_access'
 
 export type TakeOwnershipConfig
   = | { _tag: 'Disabled' }
@@ -180,6 +181,8 @@ export interface AgentConfig {
     publicTerminalSessions?: boolean
     /** Enable only after the public ingress denies desktop session routes. */
     agentSessions?: boolean
+    /** Codex CLI permissions for Agent sessions. Full access remains inside the host's terminal sandbox. */
+    agentSessionsCodexMode: AgentSessionsCodexMode
     /** HTTPS or loopback HTTP origins allowed to frame the dashboard. Empty keeps framing denied. */
     frameAncestors: readonly string[]
   }
