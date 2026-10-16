@@ -11,6 +11,12 @@ import { discoverDesktopSessionProjects } from './desktop-session-projects.ts'
 import { listTerminalDiff, readTerminalDiff } from './terminal-diff.ts'
 import { createTerminalRuntime } from './terminal-runtime.ts'
 
+export const controllerTerminalProviderArguments = {
+  codex: ['--ask-for-approval', 'never', '--sandbox', 'danger-full-access'],
+  claude: ['--permission-mode', 'auto'],
+  opencode: [],
+}
+
 export function terminalDashboardAccess(request: IncomingMessage, password: string): boolean {
   if (request.headers['x-harlan-agent-ingress'] === 'public')
     return false
@@ -93,7 +99,11 @@ export async function createControllerTerminals(options: { directory: string, or
     hostLabel: 'Hogwild',
     controller: true,
     projects: projects.map(({ id, name, path }) => ({ id, name, path })),
-    providers: { codex: { executable: codex, argv: ['--ask-for-approval', 'on-request', '--sandbox', 'workspace-write'] }, claude: { executable: claude, argv: [] }, opencode: { executable: opencode, argv: [] } },
+    providers: {
+      codex: { executable: codex, argv: controllerTerminalProviderArguments.codex },
+      claude: { executable: claude, argv: controllerTerminalProviderArguments.claude },
+      opencode: { executable: opencode, argv: controllerTerminalProviderArguments.opencode },
+    },
     helperSource: fileURLToPath(new URL(`./terminal-helper.${extension}`, import.meta.url)),
     claimScript: fileURLToPath(new URL('../../../harlan-agent-kit/scripts/worktree-claim.sh', import.meta.url)),
     staticDirectory: fileURLToPath(new URL('../dashboard/.output/public', import.meta.url)),

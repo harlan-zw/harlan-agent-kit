@@ -1,4 +1,4 @@
-import type { Socket } from 'node:net'
+import type { AddressInfo, Socket } from 'node:net'
 import { once } from 'node:events'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
@@ -90,9 +90,10 @@ it('restores a saved history page after its helper has stopped', async () => {
     now: Date.now,
     log: () => {},
   })
-  api.server.listen(43830, '127.0.0.1')
+  api.server.listen(0, '127.0.0.1')
   await once(api.server, 'listening')
-  const socket = new WebSocket(`ws://localhost:43830/api/terminal/sessions/${id}/stream`, { headers: { origin, cookie } })
+  const port = (api.server.address() as AddressInfo).port
+  const socket = new WebSocket(`ws://localhost:${port}/api/terminal/sessions/${id}/stream`, { headers: { origin, cookie, host: new URL(origin).host } })
   const received: unknown[] = []
   socket.on('message', bytes => received.push(JSON.parse(bytes.toString())))
   try {

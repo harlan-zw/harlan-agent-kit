@@ -1,14 +1,34 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
-import { createTerminalPreparationRunner, prepareTerminalSandbox } from '../src/terminal-sandbox.ts'
+import { createTerminalPreparationRunner, prepareTerminalSandbox, withCodexProjectTrust } from '../src/terminal-sandbox.ts'
 
 const execute = promisify(execFile)
+
+it('trusts only the exact Codex Session worktree in this invocation and preserves a prompt delimiter', () => {
+  const cwd = '/home/harlan/pkg/gscdump.terminal-3460d48ea906090c9b6ac6ec'
+  expect(withCodexProjectTrust(['--sandbox', 'danger-full-access', '--', 'inspect this'], cwd)).toEqual([
+    '--sandbox',
+    'danger-full-access',
+    '-c',
+    `projects.${JSON.stringify(cwd)}.trust_level="trusted"`,
+    '--',
+    'inspect this',
+  ])
+})
+
+it('quotes unusual worktree names as TOML keys without invoking a shell', () => {
+  const cwd = '/tmp/session. "review" \\ path'
+  expect(withCodexProjectTrust([], cwd)).toEqual([
+    '-c',
+    `projects.${JSON.stringify(cwd)}.trust_level="trusted"`,
+  ])
+})
 
 it('installs and runs a provider update inside isolated package manager state', async () => {
   const root = await mkdtemp(join(homedir(), 'scratch/terminal-provider-update-test-'))
@@ -179,6 +199,86 @@ console.log(JSON.stringify({ key: existsSync(home + '/.ssh/control-key'), socket
   finally {
     if (server.listening)
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    await rm(root, { recursive: true, force: true })
+  }
+})
+it('gives Claude a writable default config directory and migrates legacy state once', async () => {
+  const root = await mkdtemp(join(homedir(), 'scratch/terminal-claude-state-test-'))
+  const home = join(root, 'home')
+  const project = join(root, 'project')
+  const ssh = join(home, '.ssh')
+  const legacy = JSON.stringify({ firstStartTime: 'legacy-start', machineID: 'legacy-machine' })
+  try {
+    await Promise.all([mkdir(home), mkdir(project)])
+    await mkdir(ssh)
+    await writeFile(join(home, '.claude.json'), legacy)
+    await writeFile(join(home, 'host-marker'), 'host-state')
+    await writeFile(join(ssh, 'private-key'), 'fake-private-key')
+    const probe = join(project, 'probe.mjs')
+    await writeFile(probe, `import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+const home = ${JSON.stringify(home)}
+const config = process.env.CLAUDE_CONFIG_DIR
+const migrated = readFileSync(config + '/.claude.json', 'utf8')
+const credential = readFileSync(config + '/.credentials.json', 'utf8')
+writeFileSync(config + '/.claude.json.tmp', JSON.stringify({ firstStartTime: 'new-start' }))
+renameSync(config + '/.claude.json.tmp', config + '/.claude.json')
+let hostWriteError = null
+try { writeFileSync(home + '/host-marker', 'changed') } catch (error) { hostWriteError = error.code }
+console.log(JSON.stringify({ config, migrated, credential, deniedKeyVisible: existsSync(home + '/.ssh/private-key'), hostWriteError }))
+`)
+    const environment: NodeJS.ProcessEnv = { ...process.env, HOME: home }
+    delete environment.CLAUDE_CONFIG_DIR
+    const sandbox = await prepareTerminalSandbox({ cwd: project, executable: process.execPath, argv: [probe], environment, home, provider: 'claude' })
+    await writeFile(join(home, '.claude/.credentials.json'), 'fake-claude-login')
+    const { stdout } = await execute(sandbox.executable, sandbox.argv, { env: sandbox.environment })
+    expect(JSON.parse(stdout)).toEqual({ config: join(home, '.claude'), migrated: legacy, credential: 'fake-claude-login', deniedKeyVisible: false, hostWriteError: 'EROFS' })
+    expect(sandbox.environment.CLAUDE_CONFIG_DIR).toBe(join(home, '.claude'))
+    expect((await stat(join(home, '.claude'))).mode & 0o777).toBe(0o700)
+    expect(await readFile(join(home, '.claude.json'), 'utf8')).toBe(legacy)
+    expect(await readFile(join(home, 'host-marker'), 'utf8')).toBe('host-state')
+    expect(await readFile(join(ssh, 'private-key'), 'utf8')).toBe('fake-private-key')
+    expect(JSON.parse(await readFile(join(home, '.claude/.claude.json'), 'utf8'))).toEqual({ firstStartTime: 'new-start' })
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it('does not replace an existing Claude config with legacy global state', async () => {
+  const root = await mkdtemp(join(homedir(), 'scratch/terminal-claude-config-existing-'))
+  const home = join(root, 'home')
+  const project = join(root, 'project')
+  const current = JSON.stringify({ machineID: 'current' })
+  const legacy = JSON.stringify({ machineID: 'legacy' })
+  try {
+    await Promise.all([mkdir(join(home, '.claude'), { recursive: true }), mkdir(project)])
+    await writeFile(join(home, '.claude/.claude.json'), current)
+    await writeFile(join(home, '.claude.json'), legacy)
+    const environment: NodeJS.ProcessEnv = { ...process.env, HOME: home }
+    delete environment.CLAUDE_CONFIG_DIR
+    const sandbox = await prepareTerminalSandbox({ cwd: project, executable: '/usr/bin/true', argv: [], environment, home, provider: 'claude' })
+    expect(sandbox.environment.CLAUDE_CONFIG_DIR).toBe(join(home, '.claude'))
+    expect(await readFile(join(home, '.claude/.claude.json'), 'utf8')).toBe(current)
+    expect(await readFile(join(home, '.claude.json'), 'utf8')).toBe(legacy)
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it('preserves an explicitly configured Claude config directory', async () => {
+  const root = await mkdtemp(join(homedir(), 'scratch/terminal-claude-config-explicit-'))
+  const home = join(root, 'home')
+  const project = join(root, 'project')
+  const configured = join(home, '.custom-claude')
+  try {
+    await Promise.all([mkdir(configured, { recursive: true }), mkdir(project)])
+    const environment = { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: configured }
+    const sandbox = await prepareTerminalSandbox({ cwd: project, executable: '/usr/bin/true', argv: [], environment, home, provider: 'claude' })
+    expect(sandbox.environment.CLAUDE_CONFIG_DIR).toBe(configured)
+    await expect(stat(join(home, '.claude'))).rejects.toMatchObject({ code: 'ENOENT' })
+  }
+  finally {
     await rm(root, { recursive: true, force: true })
   }
 })

@@ -23,6 +23,7 @@ import {
 import {
   createTerminalPreparationRunner,
   prepareTerminalSandbox,
+  withCodexProjectTrust,
 } from './terminal-sandbox.ts'
 import { writeTerminalJson } from './terminal-storage.ts'
 import { createTerminalSystemdHost } from './terminal-systemd.ts'
@@ -88,7 +89,9 @@ export async function runTerminalHelper(config: TerminalHelperConfig) {
     cwd,
     executable: config.executable,
     provider: config.intent.session.provider,
-    argv: config.argv,
+    argv: config.intent.session.provider === 'codex'
+      ? withCodexProjectTrust(config.argv, cwd)
+      : config.argv,
     environment: process.env,
     writable: [commonGit],
     denied: config.protectedPaths,

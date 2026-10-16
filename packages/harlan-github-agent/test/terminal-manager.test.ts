@@ -6,10 +6,19 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
+import { controllerTerminalProviderArguments } from '../src/terminal-controller.ts'
 import { writeTerminalJson } from '../src/terminal-storage.ts'
 import { createTerminalManager } from '../src/terminal.ts'
 
 const managers: Awaited<ReturnType<typeof createTerminalManager>>[] = []
+
+it('configures interactive terminal providers for automatic execution modes', () => {
+  expect(controllerTerminalProviderArguments).toEqual({
+    codex: ['--ask-for-approval', 'never', '--sandbox', 'danger-full-access'],
+    claude: ['--permission-mode', 'auto'],
+    opencode: [],
+  })
+})
 const directories: string[] = []
 it('reports authoritative aggregate host memory without private broker diagnostics', async () => {
   const fixture_ = await fixture()

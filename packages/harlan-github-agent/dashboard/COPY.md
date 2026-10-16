@@ -65,9 +65,21 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Terminal earlier output | Earlier output | Open and page terminal scrollback |
 | Terminal latest output | Latest | Return to the live terminal screen |
 | Terminal history expired | Earlier output expired. Refresh to read the retained output. | Saved reading copy expired or was evicted |
+| Terminal ended history expired | Earlier output expired. This session has ended. | Ended Session cannot create a fresh reading copy |
 | Terminal history refresh | Refresh earlier output | Explicitly replace an expired reading copy |
 | Terminal history legacy | This session uses live history. New output can move older lines. | Older running helper without stable reading copies |
 | Terminal history failure | Could not load earlier output. Retry. | Failed scrollback read |
+| Project packages | Packages | Project picker for pkg folders |
+| Project sites | Sites | Project picker for sites folders |
+| Project other | Other projects | Projects outside pkg and sites |
+| Project recent | Recent projects | Up to eight recent or active projects, plus the selected project |
+| Project all | All projects | Full project inventory |
+| Project show all | Show all | Expand the project inventory |
+| Project show recent | Show recent | Return to recent projects |
+| Project recent empty | No recent projects. Search or show all. | No recent starts or local visits |
+| Terminal copy output | Copy output | Terminal output menu without a terminal selection |
+| Terminal copy selection | Copy selection | Terminal output menu when the selected text belongs to terminal output |
+| Terminal copied | Copied | Terminal clipboard success status |
 | Session search | Find a project or session | Project, provider and state search |
 | Session search label | Find a session | Accessible search name |
 | Session search empty | No projects or sessions match. | Empty filtered list |
@@ -177,6 +189,7 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Asset | String |
 | --- | --- |
 | Browser sign in | Sign in to Agent |
+| Browser opening | Opening Agent |
 | Passkey sign in | Sign in with Passkey |
 | Password sign in | Sign in with password |
 | Browser password label | Password |

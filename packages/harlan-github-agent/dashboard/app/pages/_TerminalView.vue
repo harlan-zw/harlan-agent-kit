@@ -5,6 +5,7 @@ import { useClipboard, useCssVar, useDocumentVisibility, useEventListener, useIn
 import { browserKeyEvent, CanvasRenderer } from 'ghostty-terminal-bindings/browser'
 import { createSessionImeLatch } from '../utils/session-ime.ts'
 import { terminalFailureCopy } from '../utils/terminal-copy.ts'
+import { terminalEarlierRequest } from '../utils/terminal-history-request.ts'
 import { createTerminalInputChannel } from '../utils/terminal-input.ts'
 import { parseTerminalFrame } from '../utils/terminal-protocol.ts'
 import { terminalReadingPosition } from '../utils/terminal-reading.ts'
@@ -100,10 +101,37 @@ const historyLineHeight = 20
 const selectionStyle = { fontFamily: 'JetBrains Mono, monospace', fontSize: '14px', lineHeight: `${historyLineHeight}px` }
 const reconnect = useTimeoutFn(connect, 1500, { immediate: false })
 const connectTimeout = useTimeoutFn(() => socket?.close(), 10000, { immediate: false })
+const copyAcknowledged = ref(false)
+const copyAcknowledgementTimeout = useTimeoutFn(() => {
+  copyAcknowledged.value = false
+}, 1800, { immediate: false })
+const selectedTerminalText = computed(() => {
+  const selected = selection.text.value
+  const currentSelection = typeof window === 'undefined' ? null : window.getSelection()
+  if (!selected || !currentSelection || !container.value || !currentSelection.anchorNode || !currentSelection.focusNode)
+    return ''
+  return container.value.contains(currentSelection.anchorNode) && container.value.contains(currentSelection.focusNode) ? selected : ''
+})
+const hasCopyableOutput = computed(() => Boolean(selectedTerminalText.value || textLines.value))
+const copyLabel = computed(() => selectedTerminalText.value ? 'Copy selection' : 'Copy output')
+const terminalMenuItems = computed(() => [
+  ...(hasCopyableOutput.value ? [[{ label: copyLabel.value, icon: 'i-octicon-copy-16', class: 'min-h-11', onSelect: copyTerminalOutput }]] : []),
+  ...(writable.value ? [[{ label: 'Release terminal', class: 'min-h-11', onSelect: () => send({ type: 'ReleaseWriter' }) }]] : []),
+])
 useIntervalFn(() => {
   if (writable.value && writer.value)
     send({ type: 'RenewWriter', lease: writer.value.lease })
 }, 15000)
+
+function copyTerminalOutput() {
+  const text = selectedTerminalText.value || textLines.value
+  if (!text)
+    return
+  void copy(text).then(() => {
+    copyAcknowledged.value = true
+    copyAcknowledgementTimeout.start()
+  }).catch(() => { failure.value = 'Could not copy terminal text. Select it and use the browser menu.' })
+}
 
 function send(message: TerminalClientMessage) {
   if (socket?.readyState !== WebSocket.OPEN)
@@ -168,17 +196,24 @@ function latest() {
 }
 
 function earlier() {
-  if (!screen.value || historyRequest || historyExpired.value)
+  if (historyRequest || historyExpired.value)
     return
-  const limit = Math.min(200, Math.floor(20000 / screen.value.dimensions.cols))
-  const offset = history.value ? Math.max(0, history.value.offset - limit) : reading.value?.offset ?? Math.max(0, screen.value.scrollbackLength - limit)
-  requestedHistoryOffset = offset
-  if (historySupported.value) {
+  const request = terminalEarlierRequest({
+    ended: ended.value,
+    history: history.value,
+    historySupported: historySupported.value,
+    reading: reading.value,
+    screen: screen.value,
+  })
+  if (!request)
+    return
+  requestedHistoryOffset = request.offset ?? undefined
+  if (request.type === 'History') {
     historyRequestId = crypto.randomUUID()
-    historyRequest = send({ type: 'History', requestId: historyRequestId, snapshot: history.value?.snapshot ?? reading.value?.snapshot ?? null, offset: history.value || reading.value?.snapshot ? offset : null, limit: 200 })
+    historyRequest = send({ ...request, requestId: historyRequestId })
   }
   else {
-    historyRequest = send({ type: 'Scrollback', offset, limit })
+    historyRequest = send(request)
   }
   historyLoading.value = historyRequest
   if (historyRequest)
@@ -355,7 +390,7 @@ function connect() {
       historyTimeout.stop()
       if (message.result._tag === 'Expired') {
         historyExpired.value = true
-        historyFailure.value = 'Earlier output expired. Refresh to read the retained output.'
+        historyFailure.value = ended.value ? 'Earlier output expired. This session has ended.' : 'Earlier output expired. Refresh to read the retained output.'
         return
       }
       historyFailure.value = ''
@@ -568,6 +603,7 @@ onScopeDispose(() => {
   connectTimeout.stop()
   deliveryTimeout.stop()
   historyTimeout.stop()
+  copyAcknowledgementTimeout.stop()
   submission.value = interruptTerminalSubmission(submission.value)
   if (screen.value)
     emit('screen', screen.value)
@@ -580,7 +616,7 @@ onScopeDispose(() => {
   <div class="flex min-h-0 flex-col">
     <div class="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-x-2 border-b border-default px-3 text-sm text-muted">
       <span role="status" class="min-w-0 flex-1 break-words">{{ history ? 'Earlier output' : connectionCopy }}</span>
-      <UTooltip v-if="screen?.scrollbackLength || history" text="Earlier output">
+      <UTooltip v-if="(screen?.scrollbackLength || history) && (!ended || history?.snapshot || reading?.snapshot)" text="Earlier output">
         <UButton icon="i-octicon-history-16" aria-label="Earlier output" color="neutral" variant="ghost" class="min-h-11 min-w-11 justify-center" :loading="historyLoading" :disabled="!connected || historyExpired || history?.offset === 0" @click="earlier" />
       </UTooltip>
       <UButton v-if="history || historyExpired" icon="i-octicon-arrow-down-16" color="neutral" variant="outline" class="min-h-11" @click="latest">
@@ -589,10 +625,13 @@ onScopeDispose(() => {
       <UButton v-if="connected && ['Starting', 'Running'].includes(processState) && !writable && writer === null" size="xs" variant="ghost" @click="send({ type: 'AcquireWriter' })">
         Use terminal
       </UButton>
-      <UDropdownMenu v-if="writable" :items="[{ label: 'Release terminal', onSelect: () => send({ type: 'ReleaseWriter' }) }]">
+      <UDropdownMenu v-if="writable || hasCopyableOutput" :items="terminalMenuItems">
         <UButton icon="i-octicon-kebab-horizontal-16" aria-label="Terminal controls" size="sm" variant="ghost" class="min-h-11 min-w-11 justify-center" />
       </UDropdownMenu>
     </div>
+    <p v-if="copyAcknowledged" role="status" class="shrink-0 px-3 py-1 text-xs text-muted">
+      Copied
+    </p>
     <p v-if="uncertain && !reviewDelivery" role="alert" class="shrink-0 px-3 py-2 text-sm text-warning">
       Input delivery is unknown. Check the terminal before sending again.
     </p>
@@ -601,7 +640,7 @@ onScopeDispose(() => {
     </p>
     <div v-if="historyFailure" role="alert" class="shrink-0 px-3 py-2 text-sm text-error">
       <p>{{ historyFailure }}</p>
-      <UButton v-if="historyExpired" color="neutral" variant="outline" class="mt-2 min-h-11" :disabled="!connected" @click="refreshHistory">
+      <UButton v-if="historyExpired && !ended" color="neutral" variant="outline" class="mt-2 min-h-11" :disabled="!connected" @click="refreshHistory">
         Refresh earlier output
       </UButton>
     </div>
@@ -609,7 +648,7 @@ onScopeDispose(() => {
       This session uses live history. New output can move older lines.
     </p>
     <div ref="container" class="terminal-viewport relative min-h-0 flex-1 overflow-auto overscroll-contain" :tabindex="history ? 0 : undefined" :aria-label="history ? 'Earlier terminal output' : undefined" @click="!phoneInput && !history && input?.focus({ preventScroll: true })">
-      <p v-if="ended && !screen" class="p-4 text-sm text-muted">
+      <p v-if="ended && !screen && !history" class="p-4 text-sm text-muted">
         This terminal has ended. Its work remains in the project.
       </p>
       <canvas v-show="!history" ref="canvas" aria-hidden="true" class="block" @mousedown="mouse($event, 'down')" @mouseup="mouse($event, 'up')" @mousemove="mouse($event, 'move')" />
