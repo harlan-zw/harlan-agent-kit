@@ -1,17 +1,52 @@
 minimumReleaseAgeExcludePrune: true
 minimumReleaseAgeExclude:
-  - '@iconify-json/octicon@1.2.37'
-  - '@iconify-json/simple-icons@1.2.98'
-  - '@harlan-zw/jev@0.2.4'
   - '@opencode/ai@2.0.27'
   - '@opencode/client@2.0.27'
   - '@opencode/plugin@2.0.27'
   - '@opencode/protocol@2.0.27'
   - '@opencode/schema@2.0.27'
   - '@opencode/util@2.0.27'
+  - '@nuxt/kit@4.6.2'
+  - '@nuxt/nitro-server@4.6.2'
+  - '@nuxt/schema@4.6.2'
+  - '@nuxt/vite-builder@4.6.2'
+  - '@nuxt/vite-server@4.6.2'
+  - nuxt@4.6.2
 
 trustPolicy: no-downgrade
 trustPolicyIgnoreAfter: 262800
+# Nuxt 4.6 requires this cssnano release. Its SLSA provenance names cssnano/cssnano.
+trustPolicyExclude:
+  - cssnano@9.8.0
+  - cssnano-preset-default@9.8.0
+  - cssnano-utils@9.0.0
+  - postcss-calc@11.2.2
+  - postcss-colormin@9.0.8
+  - postcss-convert-values@9.1.0
+  - postcss-discard-comments@9.0.8
+  - postcss-discard-duplicates@9.0.7
+  - postcss-discard-empty@9.0.8
+  - postcss-discard-overridden@9.0.6
+  - postcss-merge-longhand@9.4.0
+  - postcss-merge-rules@9.1.5
+  - postcss-minify-font-values@9.0.9
+  - postcss-minify-gradients@9.0.8
+  - postcss-minify-params@9.1.0
+  - postcss-minify-selectors@9.0.8
+  - postcss-normalize-charset@9.0.6
+  - postcss-normalize-display-values@9.0.7
+  - postcss-normalize-positions@9.0.8
+  - postcss-normalize-repeat-style@9.0.7
+  - postcss-normalize-string@9.0.7
+  - postcss-normalize-timing-functions@9.0.7
+  - postcss-normalize-unicode@9.1.1
+  - postcss-normalize-url@10.0.0
+  - postcss-normalize-whitespace@9.0.8
+  - postcss-ordered-values@9.0.9
+  - postcss-reduce-initial@9.0.7
+  - postcss-reduce-transforms@9.0.6
+  - postcss-unique-selectors@9.0.6
+  - stylehacks@9.0.8
 
 peerDependencyRules:
   allowedVersions:
@@ -78,19 +113,19 @@ catalog:
   '@coldtea/pr-lens-schema': ^0.7.0
   '@expo-google-fonts/noto-emoji': 0.4.8
   '@fontpkg/unifont': 15.0.1
-  '@harlan-zw/jev': ^0.2.0
-  '@iconify-json/octicon': ^1.2.37
-  '@iconify-json/simple-icons': ^1.2.98
+  '@harlan-zw/jev': ^0.3.0
+  '@iconify-json/octicon': ^1.2.39
+  '@iconify-json/simple-icons': ^1.2.100
   '@nuxt/fonts': ^0.14.0
   '@nuxt/icon': ^2.5.1
   '@nuxt/ui': ^4.11.3
-  '@openai/codex-sdk': ^0.160.0
+  '@openai/codex-sdk': ^0.163.0
   '@opencode/plugin': 2.0.27
   '@pierre/diffs': 1.2.0
   '@resvg/resvg-js': ^2.6.2
   '@simplewebauthn/browser': ^14.0.0
   '@simplewebauthn/server': ^14.0.3
-  '@types/node': ^26.6.4
+  '@types/node': ^26.6.5
   '@types/semver': ^7.7.1
   '@types/ws': 8.18.2
   '@vueuse/nuxt': ^15.0.0
@@ -100,15 +135,15 @@ catalog:
   eslint: ^10.12.0
   eslint-plugin-harlanzw: ^0.23.0
   ghostty-web: 0.4.0
-  h3: ^2.0.1
+  h3: ^2.0.2
   image-size: ^2.0.4
-  marked: ^17.0.6
+  marked: ^18.1.1
   mermaid: ^12.1.0
   node-gyp: 13.1.0
   node-pty: 1.1.0
-  nuxt: ^4.5.2
-  nuxt-skew-protection: ^1.6.1
-  obuild: ^0.4.43
+  nuxt: ^4.6.2
+  nuxt-skew-protection: ^2.0.3
+  obuild: ^0.4.45
   octokit: ^5.0.5
   saxes: ^6.0.0
   semver: ^7.7.3
@@ -118,6 +153,6 @@ catalog:
   vitepress-plugin-mermaid: ^2.0.17
   vitest: ^5.0.3
   vue: ^3.5.43
-  vue-tsc: ^3.3.12
+  vue-tsc: ^3.3.13
   ws: 8.22.0
   yaml: ^2.9.1

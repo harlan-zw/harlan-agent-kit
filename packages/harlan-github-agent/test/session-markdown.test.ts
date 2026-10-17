@@ -21,7 +21,7 @@ describe('agent Markdown', () => {
   it('keeps HTML as plain text and refuses active links', () => {
     const blocks = sessionMarkdown('<img src=x onerror=alert(1)>\n\n[bad](javascript:alert(1))')
     expect(blocks).toEqual([
-      { kind: 'paragraph', content: [{ kind: 'text', text: '<img src=x onerror=alert(1)>\n\n' }] },
+      { kind: 'paragraph', content: [{ kind: 'text', text: '<img src=x onerror=alert(1)>' }] },
       { kind: 'paragraph', content: [{ kind: 'link', href: null, content: [{ kind: 'text', text: 'bad' }] }] },
     ])
   })
