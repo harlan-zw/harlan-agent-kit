@@ -194,8 +194,14 @@ export async function createTerminalManager(options: {
     }
   }
   function pruneHistory(intent: TerminalIntent) {
-    if (intent.session.state === 'Exited' || intent.session.state === 'Interrupted')
-      pruneExpiredTerminalHistory(options.directory, intent.session.id, options.now().getTime())
+    if (intent.session.state === 'Exited' || intent.session.state === 'Interrupted') {
+      try {
+        pruneExpiredTerminalHistory(options.directory, intent.session.id, options.now().getTime())
+      }
+      catch (cause) {
+        options.log('Terminal session history pruning failed', cause)
+      }
+    }
   }
   async function reconcileStartup(intent: TerminalIntent) {
     try {
@@ -204,12 +210,7 @@ export async function createTerminalManager(options: {
     catch (cause) {
       options.log('Terminal session startup reconciliation failed', cause)
     }
-    try {
-      pruneHistory(intent)
-    }
-    catch (cause) {
-      options.log('Terminal session startup history pruning failed', cause)
-    }
+    pruneHistory(intent)
   }
   async function launch(
     request: TerminalLaunch,

@@ -435,15 +435,23 @@ export function createTerminalServer(options: {
             websocket.send(JSON.stringify({ type: 'Failure', reason: 'SessionUnavailable' }))
             return
           }
-          const result = readTerminalHistory({
-            directory: options.manager.directory,
-            sessionId: intent.session.id,
-            generation: intent.session.generation,
-            snapshot: parsed.value.snapshot,
-            offset: parsed.value.offset,
-            limit: parsed.value.limit,
-            now: options.now(),
-          })
+          let result: ReturnType<typeof readTerminalHistory>
+          try {
+            result = readTerminalHistory({
+              directory: options.manager.directory,
+              sessionId: intent.session.id,
+              generation: intent.session.generation,
+              snapshot: parsed.value.snapshot,
+              offset: parsed.value.offset,
+              limit: parsed.value.limit,
+              now: options.now(),
+            })
+          }
+          catch (cause) {
+            options.log('Terminal history read failed', cause)
+            websocket.send(JSON.stringify({ type: 'Failure', reason: 'SessionUnavailable' }))
+            return
+          }
           websocket.send(JSON.stringify({
             type: 'History',
             generation: intent.session.generation,

@@ -14,6 +14,39 @@ import { createTerminalManager } from '../src/terminal.ts'
 const managers: Awaited<ReturnType<typeof createTerminalManager>>[] = []
 
 const directories: string[] = []
+it('keeps session inventory and valid history cleanup available when an ended archive fails', async () => {
+  const f = await fixture()
+  const manager = await f.manager()
+  const first = await manager.launch(launch)
+  if (first._tag !== 'Ok')
+    throw new Error('Fixture launch failed')
+  f.empty()
+  await manager.sessions()
+  const second = await manager.launch({ ...launch, requestId: 'second' })
+  if (second._tag !== 'Ok')
+    throw new Error('Fixture launch failed')
+  f.empty()
+  await manager.sessions()
+  const damaged = join(f.directory, 'sessions', first.value.id, 'history.json')
+  await mkdir(damaged)
+  writeTerminalHistory(f.directory, second.value.id, [
+    { id: 'expired', generation: second.value.generation, expiresAt: 0, lines: ['expired'] },
+  ])
+
+  expect(await manager.sessions()).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: first.value.id, state: 'Exited' }),
+    expect.objectContaining({ id: second.value.id, state: 'Exited' }),
+  ]))
+  expect(f.logged).toContainEqual(expect.objectContaining({ code: 'EISDIR' }))
+  await expect(readFile(join(f.directory, 'sessions', second.value.id, 'history.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+  await rm(damaged, { recursive: true })
+  writeTerminalHistory(f.directory, first.value.id, [
+    { id: 'recovered', generation: first.value.generation, expiresAt: 0, lines: ['expired'] },
+  ])
+  expect(await manager.sessions()).toHaveLength(2)
+  await expect(readFile(damaged)).rejects.toMatchObject({ code: 'ENOENT' })
+})
+
 it('starts when ended-session history cannot be pruned and retries after storage recovers', async () => {
   const f = await fixture()
   const original = await f.manager()
