@@ -1,4 +1,4 @@
-# Hogwild emergency isolation from a phone
+# Hogwild host controls from a phone
 
 At `https://agent.harlanzw.com`, sign in with a Passkey, open **System**, choose
 **Isolate Hogwild**, then **Confirm with Passkey**. The second Passkey prompt
@@ -19,18 +19,32 @@ Inspect the host before restarting workloads. This website cannot restore itself
 after isolation. Keep Tailscale and the separate recovery SSH credential available.
 Never test real isolation on a host without a viable recovery connection.
 
+## Power off when finished
+
+At `https://agent.harlanzw.com`, open **System**, then **Power off Hogwild**.
+Acknowledge that someone must physically turn Hogwild back on, then confirm with your Passkey.
+This queues a normal systemd shutdown after five seconds. It interrupts running work.
+Both `agent.harlanzw.com` and `hogwild.harlanzw.com` become unavailable, along with recovery SSH.
+The response confirms scheduling, not that power is already off.
+If the response is lost, inspect through admin recovery before submitting another request.
+
+Use this only when you no longer need the server. No remote power-on control is installed.
+Use isolation for recoverable workload containment. Never test power off on production before travelling.
+
 ## Trust boundary
 
 The dashboard requires a public Passkey session and its normal same-origin POST
 check. Basic credentials and private/password browser sessions cannot invoke this
-control. The Agent forwards only status, challenge, and isolation requests over a
-fixed Unix socket. It receives no sudo, restore, power, or arbitrary-command access.
+control. The Agent forwards only status, challenge, isolation, and power-off requests over a
+fixed Unix socket. It receives no sudo, restore, reboot, or arbitrary-command access.
 
 A separate root-owned broker uses SimpleWebAuthn to verify a fresh, signed assertion
 for the exact public origin and RP ID, requiring user verification. Challenges
 expire after two minutes, are single use, and are bound to an administrator-approved
-credential. The broker persists counters before invoking the existing root-owned
-isolation controller. The socket has no network listener and admits only root and
+credential and action. An isolation proof cannot authorize power off, or the reverse.
+The broker persists counters before invoking the existing root-owned isolation controller
+or scheduling one fixed systemd power-off command. It refuses further host actions after submission.
+The socket has no network listener and admits only root and
 the `harlan` group. Root code and verification keys are not writable by the Agent.
 
 Compromise of root can disable this control. The public tunnel and dashboard must
@@ -69,6 +83,10 @@ systemctl daemon-reload
 systemctl enable --now hogwild-emergency-broker.socket
 ```
 
+For an upgrade, replace the broker bundle and unit, then restart only
+`hogwild-emergency-broker.service`. Keep the approved Passkey snapshot and counter state.
+The Power off control appears only when the installed broker advertises support.
+
 Deploy the dashboard commit through the normal durable Service update. After
 adding or revoking a Passkey, an administrator must explicitly replace the approved
 root snapshot and restart only `hogwild-emergency-broker.service`. Preserve
@@ -81,7 +99,7 @@ Changing keys in the dashboard does not change the root snapshot automatically.
 curl --fail --unix-socket /run/hogwild-emergency-broker.sock http://localhost/status
 ```
 
-Status validates controller readiness without requesting isolation. Automated tests
-exercise real signed synthetic assertions and mock the final isolation operation.
+Status validates controller readiness without requesting isolation or power off. Automated tests
+exercise real signed synthetic assertions and mock the final host operations.
 Browser checks use a local fixture with a fake action endpoint, never production
-activation. An actual end-to-end outage and post-isolation recovery remain untested.
+activation. An actual shutdown, end-to-end outage, and post-isolation recovery remain untested.

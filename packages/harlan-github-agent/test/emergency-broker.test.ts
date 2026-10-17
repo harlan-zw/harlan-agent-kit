@@ -11,10 +11,10 @@ function fixture() {
   const userId = Buffer.from('test-user').toString('base64url')
   const pins = { userId, credentials: [{ id, publicKey: cose.toString('base64url'), counter: 0 }] }
   let now = 1000
-  const dependencies = { pins, now: () => now, check: vi.fn(), locked: () => false, persistCounter: vi.fn(), isolate: vi.fn() }
+  const dependencies = { pins, now: () => now, check: vi.fn(), locked: () => false, persistCounter: vi.fn(), isolate: vi.fn(), poweroff: vi.fn() }
   const broker = createEmergencyBroker(dependencies)
-  async function prepare() {
-    const response = await broker('options', { credentialId: id })
+  async function prepare(operation = 'options') {
+    const response = await broker(operation, { credentialId: id })
     expect(response.status).toBe(200)
     return await response.json() as { ceremonyId: string, options: { challenge: string, userVerification: string } }
   }
@@ -62,15 +62,57 @@ describe('root-owned emergency Passkey authority', () => {
     expect((await f.broker('isolate', { ceremonyId: prepared.ceremonyId, confirmation: 'ISOLATE-HOGWILD', response: f.assertion(prepared.options.challenge) })).status).toBe(403)
     expect(f.dependencies.isolate).not.toHaveBeenCalled()
   })
-  it('refuses isolation if counter persistence fails and never accepts recovery or power commands', async () => {
+  it('refuses isolation if counter persistence fails and never accepts recovery or arbitrary commands', async () => {
     const f = fixture()
     const prepared = await f.prepare()
     f.dependencies.persistCounter.mockImplementation(() => {
       throw new Error('read-only')
     })
     expect((await f.broker('isolate', { ceremonyId: prepared.ceremonyId, confirmation: 'ISOLATE-HOGWILD', response: f.assertion(prepared.options.challenge) })).status).toBe(503)
-    for (const operation of ['recover', 'poweroff', 'reboot', 'command']) expect((await f.broker(operation)).status).toBe(404)
+    for (const operation of ['recover', 'reboot', 'command']) expect((await f.broker(operation)).status).toBe(404)
     expect(f.dependencies.isolate).not.toHaveBeenCalled()
+  })
+  it('queues power off once, only with its own signed confirmation and a persisted counter', async () => {
+    const f = fixture()
+    const prepared = await f.prepare('poweroff-options')
+    const request = { ceremonyId: prepared.ceremonyId, confirmation: 'POWER-OFF-HOGWILD', response: f.assertion(prepared.options.challenge) }
+    expect((await f.broker('poweroff', request)).status).toBe(202)
+    expect(f.dependencies.poweroff).toHaveBeenCalledTimes(1)
+    expect(f.dependencies.isolate).not.toHaveBeenCalled()
+    expect(f.dependencies.persistCounter.mock.invocationCallOrder[0]).toBeLessThan(f.dependencies.poweroff.mock.invocationCallOrder[0]!)
+    expect((await f.broker('poweroff', request)).status).toBe(403)
+    expect((await f.broker('options', { credentialId: f.id })).status).toBe(409)
+    expect((await f.broker('poweroff-options', { credentialId: f.id })).status).toBe(409)
+  })
+  it.each([['options', 'poweroff', 'POWER-OFF-HOGWILD'], ['poweroff-options', 'isolate', 'ISOLATE-HOGWILD']])('rejects cross-action confirmation from %s to %s', async (prepare, action, confirmation) => {
+    const f = fixture()
+    const prepared = await f.prepare(prepare)
+    expect((await f.broker(action, { ceremonyId: prepared.ceremonyId, confirmation, response: f.assertion(prepared.options.challenge) })).status).toBe(403)
+    expect(f.dependencies.isolate).not.toHaveBeenCalled()
+    expect(f.dependencies.poweroff).not.toHaveBeenCalled()
+  })
+  it.each(['expired', 'wrong-origin', 'missing-uv', 'wrong-confirmation', 'persistence-failed'])('refuses power off for %s', async (failure) => {
+    const f = fixture()
+    const prepared = await f.prepare('poweroff-options')
+    if (failure === 'expired')
+      f.advance()
+    if (failure === 'persistence-failed')
+      f.dependencies.persistCounter.mockImplementation(() => { throw new Error('read-only') })
+    const response = f.assertion(prepared.options.challenge, failure === 'wrong-origin' ? { origin: 'https://evil.example' } : failure === 'missing-uv' ? { flags: 1 } : {})
+    expect((await f.broker('poweroff', { ceremonyId: prepared.ceremonyId, confirmation: failure === 'wrong-confirmation' ? 'ISOLATE-HOGWILD' : 'POWER-OFF-HOGWILD', response })).status).toBe(failure === 'persistence-failed' ? 503 : 403)
+    expect(f.dependencies.poweroff).not.toHaveBeenCalled()
+  })
+  it('blocks another action when shutdown scheduling has an uncertain result', async () => {
+    const f = fixture()
+    const isolation = await f.prepare()
+    const prepared = await f.prepare('poweroff-options')
+    f.dependencies.poweroff.mockImplementation(() => {
+      throw new Error('scheduler connection lost')
+    })
+    expect((await f.broker('poweroff', { ceremonyId: prepared.ceremonyId, confirmation: 'POWER-OFF-HOGWILD', response: f.assertion(prepared.options.challenge) })).status).toBe(503)
+    expect((await f.broker('isolate', { ceremonyId: isolation.ceremonyId, confirmation: 'ISOLATE-HOGWILD', response: f.assertion(isolation.options.challenge, { counter: 2 }) })).status).toBe(409)
+    expect(f.dependencies.isolate).not.toHaveBeenCalled()
+    expect(f.dependencies.poweroff).toHaveBeenCalledTimes(1)
   })
   it('requires a new assertion after failed verification and rejects counter rollback', async () => {
     const f = fixture()

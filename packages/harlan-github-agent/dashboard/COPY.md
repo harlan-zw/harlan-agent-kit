@@ -162,6 +162,9 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Desktop warning | Desktop update required | System chip and pane summary |
 | Operation recovery | The next Controller operation checks recovery. | Incident with no scheduled retry |
 | Agent recovery | The next Agent request checks recovery. | Capacity after the circuit deadline |
+| Host power off | Power off Hogwild | System pane power control |
+| Host power-off acknowledgement | I understand someone must physically turn Hogwild back on. | Required power-off confirmation |
+| Host power-off consequence | This stops all work and takes agent.harlanzw.com and hogwild.harlanzw.com offline. Someone must physically turn Hogwild back on. | Power-off dialog |
 
 ## Register by context
 

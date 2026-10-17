@@ -35,6 +35,14 @@ it('requires a public Passkey session and same-origin POST, bounds input, and bi
     expect(proxy).not.toHaveBeenCalled()
     expect((await request('options', {}, '{"credentialId":"attacker-selected"}')).status).toBe(200)
     expect(proxy).toHaveBeenLastCalledWith('options', { credentialId: 'fixture-key' })
+    expect((await request('poweroff-options', { cookie: passwordCookie })).status).toBe(403)
+    expect((await request('poweroff', { origin: 'https://evil.example' })).status).toBe(403)
+    expect((await request('poweroff-options', {}, '{"credentialId":"attacker-selected"}')).status).toBe(200)
+    expect(proxy).toHaveBeenLastCalledWith('poweroff-options', { credentialId: 'fixture-key' })
+    const poweroff = { ceremonyId: 'poweroff-proof', response: { id: 'fixture-key' }, confirmation: 'POWER-OFF-HOGWILD' }
+    await request('poweroff', {}, JSON.stringify(poweroff))
+    expect(proxy).toHaveBeenLastCalledWith('poweroff', poweroff)
+    expect((await request('poweroff', {}, '', 'GET')).status).toBe(404)
     const forwarded = { ceremonyId: 'one-shot', response: { id: 'fixture-key' }, confirmation: 'ISOLATE-HOGWILD' }
     await request('isolate', {}, JSON.stringify(forwarded))
     expect(proxy).toHaveBeenLastCalledWith('isolate', forwarded)

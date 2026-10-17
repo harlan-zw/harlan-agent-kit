@@ -1,5 +1,5 @@
 [Unit]
-Description=Verify fresh Passkey proof for Hogwild isolation
+Description=Verify fresh Passkey proof for Hogwild host controls
 Requires=hogwild-emergency-broker.socket
 After=hogwild-emergency-broker.socket
 
