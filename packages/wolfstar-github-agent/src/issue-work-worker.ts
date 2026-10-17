@@ -416,7 +416,14 @@ export function issueWorkPrompt(input: IssueWorkPromptInput): string {
   return `Continue working on the approved GitHub issue ${task.repository}#${task.issueNumber}.
 
 ${storedTriageLines(input.triage)}
+Validate the issue against the current code before making changes.
 Plan, implement, and verify the complete fix.
+After validation, plan the affected code changes and verification steps before implementing them.
+Read the supplied issue and comments, check the expected behavior, and confirm the reported problem still exists on this worktree's base.
+For a bug, reproduce it with a focused failing test or a concrete code path before applying the fix. For a feature, confirm the requested behavior is missing and its acceptance criteria are clear.
+Apply this validation to every combined issue as well. Stored triage is a starting point, not proof that the current code still needs the fix.
+If the issue is already resolved, contradicted by the code, or cannot be validated with available evidence, return blocked with the evidence and exact next action. Do not invent a change.
+Include the validation evidence and the post-fix verification in checks.
 Work as a normal local agent session inside this Git worktree. Use the user's global agent context and installed skills.
 This worktree was prepared fresh for this turn. No work from an earlier turn of this session is present in it. Redo the whole change here before returning a result.
 ${instructionFilesLine(input.instructionFiles)}
@@ -481,6 +488,17 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (snapshot.value.state !== 'open' || snapshot.value.title !== task.issue.title)
         return err('The issue changed before work started.')
 
+      const triage = parseStoredIssueTriage(
+        options.store.getIssueTriageEvidence(task.repository, task.issueNumber, task.revisionId),
+      )
+      if (triage?._tag !== 'READY_TO_IMPLEMENT') {
+        return ok({
+          _tag: 'ActionRequired',
+          reason: 'Validate the current issue with Issue triage before implementation.',
+          evidence: triage === null ? 'No valid triage exists for this issue revision.' : JSON.stringify(triage),
+        })
+      }
+
       const candidates = options.store.listOpenAgentPullRequests(task.repository)
       const routineSource = options.store.getRoutineIssueSource?.(task.repository, task.issueNumber) ?? null
       // A Batch plan names the exact head this unit stacks on. Without one, an
@@ -500,9 +518,6 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
         options.claudeHome === undefined
           ? null
           : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: validated.value.checkout })
-      const triage = parseStoredIssueTriage(
-        options.store.getIssueTriageEvidence(task.repository, task.issueNumber, task.revisionId),
-      )
 
       // The triage session is keyed on the issue alone, so neither stacking nor
       // a moved default branch loses the session that triaged it.

@@ -67,6 +67,9 @@ describe('issueWorkPrompt', () => {
       'Triage next action: Keep the trailing byte in src/parser.ts and cover it in test/parser.test.ts.',
     )
     expect(prompt).toContain('Do not triage the issue again.')
+    expect(prompt).toContain('Validate the issue against the current code before making changes')
+    expect(prompt).toContain('Apply this validation to every combined issue as well.')
+    expect(prompt).toContain('Include the validation evidence and the post-fix verification in checks.')
   })
 
   it('says when no triage is stored instead of pointing at an absent one', () => {
