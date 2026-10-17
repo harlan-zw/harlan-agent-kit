@@ -10,6 +10,7 @@ interface Reading {
 interface History {
   snapshot?: string
   offset: number
+  lines?: readonly string[]
 }
 
 export type TerminalEarlierRequest
@@ -52,7 +53,7 @@ export function terminalEarlierRequest(options: {
       return undefined
     return { type: 'History', snapshot: null, offset: null, limit: historyPageLimit }
   }
-  if (!options.screen)
+  if (!options.screen || options.screen.scrollbackLength === 0 || options.history?.lines?.length === 0)
     return undefined
   const limit = Math.min(historyPageLimit, Math.floor(20_000 / options.screen.dimensions.cols))
   const offset = options.history
