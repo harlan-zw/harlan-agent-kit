@@ -3,7 +3,7 @@ import type { EmergencyOperation, EmergencyProxy } from './emergency-isolation.t
 import { createError } from 'h3'
 
 export function registerEmergencyRoutes(app: H3, proxy: EmergencyProxy, credential: (headers: Headers) => string | null) {
-  for (const operation of ['status', 'options', 'isolate'] as const) {
+  for (const operation of ['status', 'options', 'isolate', 'poweroff-options', 'poweroff'] as const) {
     const handle = async (request: Request) => {
       const credentialId = credential(request.headers)
       if (!credentialId)
@@ -35,7 +35,7 @@ export function registerEmergencyRoutes(app: H3, proxy: EmergencyProxy, credenti
         catch { throw createError({ status: 400, message: 'Invalid isolation request.' }) }
       }
       try {
-        return await proxy(operation as EmergencyOperation, operation === 'status' ? undefined : operation === 'options' ? { credentialId } : body)
+        return await proxy(operation as EmergencyOperation, operation === 'status' ? undefined : operation === 'options' || operation === 'poweroff-options' ? { credentialId } : body)
       }
       catch { throw createError({ status: 503, message: 'Emergency isolation is unavailable. Use admin recovery to inspect.' }) }
     }

@@ -30,20 +30,25 @@ export function createEmergencyBroker(options: {
   locked: () => boolean
   persistCounter: (id: string, counter: number) => void
   isolate: () => void
+  poweroff?: () => void
 }) {
-  const challenges = new Map<string, { challenge: string, credentialId: string, expires: number }>()
+  const challenges = new Map<string, { challenge: string, credentialId: string, expires: number, action: 'isolate' | 'poweroff' }>()
   let verifying = false
+  let requested = false
   const reply = (status: number, value: unknown) => Response.json(value, { status, headers: { 'cache-control': 'no-store' } })
   return async (operation: string, body: unknown = {}): Promise<Response> => {
     try {
       if (operation === 'status') {
         options.check()
-        return reply(200, { available: true, locked: options.locked() })
+        return reply(200, { available: true, locked: options.locked() || requested, poweroffAvailable: !!options.poweroff })
       }
       const input = body as Record<string, unknown> | null
       if (!input || typeof input !== 'object' || Array.isArray(input))
         return reply(400, { error: 'Invalid request.' })
-      if (operation === 'options') {
+      if (operation === 'options' || operation === 'poweroff-options') {
+        const action = operation === 'poweroff-options' ? 'poweroff' : 'isolate'
+        if (action === 'poweroff' && !options.poweroff)
+          return reply(503, { error: 'Power off is unavailable.' })
         const credential = options.pins.credentials.find(key => key.id === input.credentialId)
         if (!credential)
           return reply(403, { error: 'This Passkey is not approved for emergency isolation.' })
@@ -54,23 +59,24 @@ export function createEmergencyBroker(options: {
         if (challenges.size >= 16)
           return reply(429, { error: 'Too many Passkey requests. Wait two minutes.' })
         options.check()
-        if (options.locked())
-          return reply(409, { error: 'Isolation has already been requested.' })
+        if (options.locked() || requested)
+          return reply(409, { error: 'A host action has already been requested.' })
         const authentication = await generateAuthenticationOptions({ rpID: emergencyRPID, allowCredentials: [{ id: credential.id }], userVerification: 'required', timeout: 120_000 })
         const ceremonyId = randomUUID()
-        challenges.set(ceremonyId, { challenge: authentication.challenge, credentialId: credential.id, expires: options.now() + 120_000 })
+        challenges.set(ceremonyId, { challenge: authentication.challenge, credentialId: credential.id, expires: options.now() + 120_000, action })
         return reply(200, { ceremonyId, options: authentication })
       }
-      if (operation !== 'isolate')
+      if (operation !== 'isolate' && operation !== 'poweroff')
         return reply(404, { error: 'Unknown operation.' })
       const ceremony = typeof input.ceremonyId === 'string' ? challenges.get(input.ceremonyId) : undefined
       // Consume before verification; failed and concurrent requests cannot replay it.
       if (typeof input.ceremonyId === 'string')
         challenges.delete(input.ceremonyId)
-      if (!ceremony || ceremony.expires <= options.now() || input.confirmation !== 'ISOLATE-HOGWILD')
-        return reply(403, { error: 'Fresh isolation confirmation required.' })
-      if (verifying)
-        return reply(409, { error: 'An isolation confirmation is already running.' })
+      const confirmation = operation === 'poweroff' ? 'POWER-OFF-HOGWILD' : 'ISOLATE-HOGWILD'
+      if (!ceremony || ceremony.action !== operation || ceremony.expires <= options.now() || input.confirmation !== confirmation)
+        return reply(403, { error: 'Fresh confirmation for this action is required.' })
+      if (verifying || requested || options.locked())
+        return reply(409, { error: 'A host action is already running.' })
       const assertion = input.response as AuthenticationResponseJSON | undefined
       const pinned = options.pins.credentials.find(key => key.id === ceremony.credentialId)
       if (!pinned || assertion?.id !== pinned.id || assertion.response?.userHandle !== options.pins.userId)
@@ -87,14 +93,19 @@ export function createEmergencyBroker(options: {
         // Durable monotonic counter precedes the action, including for non-synced keys.
         options.persistCounter(pinned.id, result.authenticationInfo.newCounter)
         pinned.counter = result.authenticationInfo.newCounter
-        options.isolate()
+        const action = operation === 'poweroff' ? options.poweroff : options.isolate
+        if (!action)
+          return reply(503, { error: 'This host action is unavailable.' })
+        // An indeterminate command failure must not authorize another host action.
+        requested = true
+        action()
         return reply(202, { accepted: true })
       }
       finally { verifying = false }
     }
     catch {
       // Do not leak root command output, paths or credential material to the browser.
-      return reply(503, { error: 'Could not confirm emergency isolation. Inspect through admin recovery.' })
+      return reply(503, { error: 'Could not confirm the host action. Inspect through admin recovery.' })
     }
   }
 }

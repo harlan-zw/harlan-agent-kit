@@ -3,6 +3,7 @@ import { closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, re
 import { createServer } from 'node:http'
 import process from 'node:process'
 import { createEmergencyBroker, parseEmergencyPins } from './emergency-broker.ts'
+import { queueEmergencyPowerOff } from './emergency-poweroff.ts'
 
 const pinsPath = '/etc/hogwild-emergency/public-passkeys.json'
 const stateDirectory = '/var/lib/hogwild-emergency'
@@ -46,6 +47,11 @@ const handle = createEmergencyBroker({
   check: () => control('check'),
   locked: () => existsSync(`${stateDirectory}/requested.json`),
   isolate: () => control('isolate'),
+  poweroff: () => queueEmergencyPowerOff((file, args) => {
+    const result = spawnSync(file, args, { env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C' }, timeout: 10_000, maxBuffer: 65536 })
+    if (result.error || result.status !== 0)
+      throw new Error('Power off could not be queued.')
+  }),
   persistCounter(id, counter) {
     counters[id] = counter
     const temporary = `${countersPath}.next`
@@ -68,7 +74,7 @@ const handle = createEmergencyBroker({
 const server = createServer(async (request, response) => {
   try {
     const path = request.url
-    if (!((path === '/status' && request.method === 'GET') || ((path === '/options' || path === '/isolate') && request.method === 'POST'))) {
+    if (!((path === '/status' && request.method === 'GET') || ((path === '/options' || path === '/isolate' || path === '/poweroff-options' || path === '/poweroff') && request.method === 'POST'))) {
       response.writeHead(404).end()
       return
     }

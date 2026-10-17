@@ -1,7 +1,7 @@
 import { request } from 'node:http'
 
 export const emergencySocket = '/run/hogwild-emergency-broker.sock'
-export type EmergencyOperation = 'status' | 'options' | 'isolate'
+export type EmergencyOperation = 'status' | 'options' | 'isolate' | 'poweroff-options' | 'poweroff'
 export type EmergencyProxy = (operation: EmergencyOperation, body?: unknown) => Promise<Response>
 
 /** Fixed Unix socket and operations: this bridge conveys no shell or recovery authority. */
