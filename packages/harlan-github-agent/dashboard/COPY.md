@@ -49,6 +49,9 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Terminal show control | Show terminal | Return from Diff to the terminal |
 | Terminal diff control | Show diff | Open Diff for the active Agent session |
 | Terminal inventory failure | Could not load projects or sessions. Reload. | Inventory request failure |
+| Sessions loading | Opening Sessions… | Lazy Sessions screen is loading |
+| Sessions screen failure | Could not open Sessions. Retry. | Lazy Sessions screen failed or timed out |
+| Sessions screen retry | Retry | Retry loading the Sessions screen |
 | Terminal launch failure | Could not start the Agent session. Retry. | Failed start |
 | Terminal stop failure | Could not stop the Agent session. Retry. | Failed Stop |
 | Terminal screen label | Agent terminal | Accessible terminal input name |

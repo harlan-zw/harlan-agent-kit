@@ -1,8 +1,12 @@
 <script setup lang="ts">
+import { createRetryableSessionScreen } from '../utils/sessions-screen-loader.ts'
+import SessionScreenState from './_SessionScreenState.vue'
+
 const route = useRoute()
 const terminalHost = useTerminalHost()
-const TerminalWorkspace = defineAsyncComponent(() => import('./_TerminalWorkspace.vue'))
-const SessionHistory = defineAsyncComponent(() => import('./_SessionHistory.vue'))
+const reloadPage = () => window.location.reload()
+const TerminalWorkspace = createRetryableSessionScreen(() => import('./_TerminalWorkspace.vue').then(module => module.default), SessionScreenState, reloadPage)
+const SessionHistory = createRetryableSessionScreen(() => import('./_SessionHistory.vue').then(module => module.default), SessionScreenState, reloadPage)
 const historyView = computed(() => terminalHost.state.value._tag === 'Dashboard' || terminalHost.state.value._tag === 'Legacy'
   || (terminalHost.controller.value && (typeof route.query.session === 'string' || typeof route.query.task === 'string' || route.query.view === 'history')))
 usePageTitle('Sessions')
