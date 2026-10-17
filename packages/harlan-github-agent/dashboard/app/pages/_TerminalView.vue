@@ -699,6 +699,9 @@ onScopeDispose(() => {
       <p v-if="ended && !screen && !history" class="p-4 text-sm text-muted">
         This terminal has ended. Its work remains in the project.
       </p>
+      <p v-if="history && history.lines.length === 0" role="status" class="p-4 text-sm text-muted">
+        No earlier output is saved for this terminal.
+      </p>
       <canvas v-show="!history" ref="canvas" aria-hidden="true" class="block" @mousedown="mouse($event, 'down')" @mouseup="mouse($event, 'up')" @mousemove="mouse($event, 'move')" />
       <textarea ref="input" aria-label="Agent terminal" :readonly="!writable || phoneInput" :tabindex="phoneInput ? -1 : 0" :aria-hidden="phoneInput" autocapitalize="off" autocomplete="off" autocorrect="off" :spellcheck="false" class="absolute top-0 left-0 size-px resize-none border-0 p-0 text-base opacity-0 outline-none" @focus="focus(true)" @blur="focus(false)" />
       <pre :style="selectionStyle" class="terminal-selection m-0 select-text whitespace-pre" :class="history ? 'text-default' : 'absolute top-0 left-0 text-transparent'" aria-label="Agent terminal output" @mousedown="!history && mouse($event, 'down')" @mouseup="!history && mouse($event, 'up')" @mousemove="!history && mouse($event, 'move')">{{ textLines }}</pre>

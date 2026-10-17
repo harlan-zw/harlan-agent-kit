@@ -73,3 +73,31 @@ it('pages the saved copy without a screen and keeps the live scrollback cell lim
     screen: { dimensions: { cols: 500, rows: 24 }, scrollbackLength: 1000 },
   })).toEqual({ type: 'Scrollback', offset: 960, limit: 40 })
 })
+
+it('does not enter legacy history when the terminal has no scrollback', () => {
+  expect(terminalEarlierRequest({
+    ended: false,
+    historySupported: false,
+    reading: null,
+    screen: { dimensions: { cols: 80, rows: 24 }, scrollbackLength: 0 },
+  })).toBeUndefined()
+})
+
+it('does not page past an empty legacy history response', () => {
+  expect(terminalEarlierRequest({
+    ended: false,
+    history: { offset: 0, lines: [] },
+    historySupported: false,
+    reading: null,
+    screen: { dimensions: { cols: 80, rows: 24 }, scrollbackLength: 200 },
+  })).toBeUndefined()
+})
+
+it('keeps snapshot history available even when live scrollback is empty', () => {
+  expect(terminalEarlierRequest({
+    ended: false,
+    historySupported: true,
+    reading: null,
+    screen: { dimensions: { cols: 80, rows: 24 }, scrollbackLength: 0 },
+  })).toEqual({ type: 'History', snapshot: null, offset: null, limit: 200 })
+})
