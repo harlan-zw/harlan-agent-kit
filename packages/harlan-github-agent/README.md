@@ -20,7 +20,7 @@ Current:
 - authenticated [H3](https://h3.dev) and [srvx](https://srvx.h3.dev) dashboard
 - safe merge conflict commits and pushes
 - two agent providers: [Codex](https://developers.openai.com/codex/sdk/) and [opencode](https://opencode.ai). Set `agent.provider` to `codex` or `opencode`
-- role-specific Codex profiles: `gpt-5.6-sol` with high reasoning for adversarial review, and `gpt-5.6-terra` with medium reasoning for other work
+- Codex uses `gpt-6.1-sol` for every role, with high reasoning for adversarial review and medium reasoning for other work
 - the opencode profile runs `zai-coding-plan/glm-5.3-flash` at the high reasoning effort for every role
 - switch the Agent provider, model, and reasoning effort from the dashboard or the tray, with no restart
 - `Automatic` Agent selection picks the provider with capacity left, and keeps a reserve of each published window for your own terminal

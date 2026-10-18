@@ -75,6 +75,8 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 ## Tools
 
+- When using Claude, default to `claude-opus-5-5` (Opus 5.5), unless Harlan explicitly selects another model.
+
 - For public GitHub reads, use `agent-gh`. It uses `harlan-agent-beep` and a separate API quota.
 - GitHub Agent workers route `gh` reads through the same CLI automatically.
 - The token file is `~/.config/harlan-agent-kit/github-public-token`. Keep it owner-only with mode `600`.

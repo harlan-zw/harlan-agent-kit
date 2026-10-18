@@ -6446,7 +6446,7 @@ describe('agent selection', () => {
     const store = createStore()
 
     expect(store.getAgentSelection()).toEqual({ _tag: 'FollowsConfiguration' })
-    expect(store.getDashboardSnapshot('2026-08-18T01:00:00.000Z').agentProfile.roles.issue_work.model).toBe('gpt-5.6-terra')
+    expect(store.getDashboardSnapshot('2026-08-18T01:00:00.000Z').agentProfile.roles.issue_work.model).toBe('gpt-6.1-sol')
   })
 
   it('applies a switch to the dashboard profile and keeps agent capacity', () => {
@@ -6483,7 +6483,7 @@ describe('agent selection', () => {
 
     expect(cleared).toEqual({ _tag: 'FollowsConfiguration' })
     expect(profile.provider).toBe('codex')
-    expect(profile.roles.issue_work).toEqual({ model: 'gpt-5.6-terra', reasoningEffort: 'medium' })
+    expect(profile.roles.issue_work).toEqual({ model: 'gpt-6.1-sol', reasoningEffort: 'medium' })
   })
 
   it('reads the configured Agent provider again after a restart', () => {
