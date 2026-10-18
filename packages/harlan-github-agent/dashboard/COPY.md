@@ -19,6 +19,11 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Public terminals | Public terminals require private Agent sessions and public Passkey-only login. | Configuration and startup error |
 | Start control | New session | Navigation and session sidebar |
 | Terminal start | Start session | Submit a launch when regular capacity is available |
+| Terminal uncertain start | The host may have started this session. Retry the same request to confirm. | Unconfirmed session admission, not terminal input delivery |
+| Terminal earlier start | An earlier start is unconfirmed. Retry it before starting another session. Your edited prompt is saved. | Edited launch fields while the previous request remains uncertain |
+| Terminal retry earlier | Retry earlier start | Recover the original launch without overwriting edited fields |
+| Terminal retry start | Retry start | Recover an unresolved launch with the same request ID |
+| Terminal retry explanation | This retries the same request. It does not create another session. | Explicit retry after a launch acknowledgment is uncertain |
 | Terminal queue | Queue session | Submit a launch that may wait for capacity |
 | Terminal slots full | All session slots are in use. | Regular admission has no free slot |
 | Terminal maintenance reserve | The remaining slot is reserved for host maintenance. | Regular admission preserves the maintenance slot |

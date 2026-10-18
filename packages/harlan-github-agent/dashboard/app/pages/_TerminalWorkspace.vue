@@ -4,10 +4,10 @@ import type { TerminalCapacity } from '../utils/terminal-capacity.ts'
 import type { TerminalLaunchIntent } from '../utils/terminal-launch.ts'
 import type { TerminalSubmission } from '../utils/terminal-submission.ts'
 import { useDocumentVisibility, useEventListener, useIntervalFn, useMediaQuery, useSessionStorage, useStorage } from '@vueuse/core'
-import { parseTerminalCapacity } from '../utils/terminal-capacity.ts'
+import { parseTerminalCapacity, terminalForceAvailable } from '../utils/terminal-capacity.ts'
 import { terminalFailureCopy } from '../utils/terminal-copy.ts'
 import { createTerminalDraftStore } from '../utils/terminal-draft.ts'
-import { terminalLaunchIntent } from '../utils/terminal-launch.ts'
+import { retainedTerminalLaunch, terminalLaunchBlocked, terminalLaunchIntent } from '../utils/terminal-launch.ts'
 import { activeTerminalSession, emptyTerminalLayout, emptyTerminalProjectLayout, parseTerminalLayout, reconcileTerminalLayout, reconcileTerminalSessions, terminalDisplayProjects, updateTerminalProjectLayout } from '../utils/terminal-layout.ts'
 import { terminalProjectGroups } from '../utils/terminal-project-groups.ts'
 import { parseTerminalProjects, parseTerminalSessionResult, parseTerminalSessions } from '../utils/terminal-protocol.ts'
@@ -87,7 +87,7 @@ const initialPrompt = computed({
   },
 })
 const forceConfirmation = shallowRef<{ _tag: 'New' } | { _tag: 'Waiting', id: string }>()
-const forceAttempts = new Map<string, string>()
+const forceAttempts = reactive(new Map<string, string>())
 const failure = ref('')
 const inventoryFailure = ref('')
 const launchNotice = shallowRef<TerminalSession>()
@@ -138,9 +138,14 @@ const navigationVisible = computed(() => !narrow.value || projectsOpen.value || 
 const selectedProjectUnavailable = computed(() => Boolean(projectId.value) && !projects.value.some(project => project.id === projectId.value))
 const providers = computed(() => (['codex', 'claude', 'opencode'] as const).filter(value => capabilities.providers[value]))
 const providerNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode' }
-const canStart = computed(() => !pending.value && capacity.value._tag === 'Available' && capacity.value.regular._tag !== 'Unavailable'
+const launchSelection = computed(() => ({ projectId: projectId.value, provider: provider.value, initialPrompt: initialPrompt.value.trim() || undefined }))
+const launchBlocked = computed(() => terminalLaunchBlocked(launchIntent.value, launchSelection.value))
+const canStart = computed(() => !pending.value && !launchBlocked.value && capacity.value._tag === 'Available' && capacity.value.regular._tag !== 'Unavailable'
   && projects.value.some(project => project.id === projectId.value) && capabilities.providers[provider.value])
-const canForce = computed(() => !pending.value && capacity.value._tag === 'Available' && capacity.value.manualPolicy._tag === 'Enabled' && capacity.value.manual._tag === 'Allowed')
+const canForce = computed(() => !pending.value && terminalForceAvailable(capacity.value))
+const retryLaunch = computed(() => pending.value ? undefined : retainedTerminalLaunch(launchIntent.value, launchSelection.value))
+const retryForce = computed(() => forceConfirmation.value?._tag === 'New' ? retryLaunch.value?.mode === 'Force' : forceConfirmation.value?._tag === 'Waiting' && forceAttempts.has(forceConfirmation.value.id))
+const canConfirmForce = computed(() => !pending.value && (retryForce.value || (canForce.value && (forceConfirmation.value?._tag !== 'New' || canStart.value))))
 const forceTotal = computed(() => capacity.value._tag === 'Available' ? capacity.value.reservedGiB + 8 : 8)
 const capacityReason = computed(() => loading.value
   ? 'Connecting to the terminal host.'
@@ -256,23 +261,24 @@ function selectFromRoute() {
 // Inventory refresh must not replace a selection while its route navigation is still pending.
 watch(() => route.query.terminal, selectFromRoute, { immediate: true })
 
-async function launch(mode: 'Regular' | 'Force' = 'Regular') {
-  if (!canStart.value || (mode === 'Force' && !canForce.value))
+async function launch(mode: 'Regular' | 'Force' = 'Regular', recovery?: TerminalLaunchIntent) {
+  const recovering = recovery !== undefined && recovery === launchIntent.value
+  if (pending.value || (!recovering && (launchBlocked.value || ((!canStart.value || (mode === 'Force' && !canForce.value)) && retryLaunch.value?.mode !== mode))))
     return
   pending.value = true
   failure.value = ''
   const previous = launchIntent.value
-  const launchProject = projectId.value
+  const launchProject = recovering ? recovery.projectId : projectId.value
   const launchSelection = selectedId.value
-  const originalPrompt = initialPrompt.value
+  const originalPrompt = recovering ? recovery.initialPrompt ?? '' : initialPrompt.value
   const prompt = initialPrompt.value.trim() || undefined
-  const intent = terminalLaunchIntent(previous, { projectId: projectId.value, provider: provider.value, ...(prompt ? { initialPrompt: prompt } : {}) }, crypto.randomUUID(), mode)
+  const intent = recovering ? recovery : terminalLaunchIntent(previous, { projectId: projectId.value, provider: provider.value, ...(prompt ? { initialPrompt: prompt } : {}) }, crypto.randomUUID(), mode)
   launchIntent.value = intent
   await $fetch<unknown>('/api/terminal/sessions', { method: 'POST', body: intent, timeout: 15000 }).then(parseTerminalSessionResult).then(async (result) => {
     if (result._tag === 'Err') {
       if (!['DeliveryUnknown', 'OwnershipUnknown', 'LaunchConflict'].includes(result.reason))
         launchIntent.value = undefined
-      failure.value = terminalFailureCopy[result.reason]
+      failure.value = result.reason === 'DeliveryUnknown' ? 'The host may have started this session. Retry the same request to confirm.' : terminalFailureCopy[result.reason]
       return
     }
     launchIntent.value = undefined
@@ -294,7 +300,7 @@ async function launch(mode: 'Regular' | 'Force' = 'Regular') {
 }
 
 async function forceWaiting(id: string) {
-  if (!canForce.value)
+  if (pending.value || !terminalForceAvailable(capacity.value, forceAttempts.get(id)))
     return
   pending.value = true
   failure.value = ''
@@ -302,7 +308,7 @@ async function forceWaiting(id: string) {
   forceAttempts.set(id, requestId)
   await $fetch<unknown>(`/api/terminal/sessions/${encodeURIComponent(id)}/force`, { method: 'POST', body: { requestId }, timeout: 15000 }).then(parseTerminalSessionResult).then((result) => {
     if (result._tag === 'Err') {
-      failure.value = terminalFailureCopy[result.reason]
+      failure.value = result.reason === 'DeliveryUnknown' ? 'The host may have started this session. Retry the same request to confirm.' : terminalFailureCopy[result.reason]
       if (!['OwnershipUnknown', 'DeliveryUnknown'].includes(result.reason))
         forceAttempts.delete(id)
     }
@@ -450,11 +456,22 @@ watch(visibility, (value) => {
                 {{ providerNames[value] }}
               </option>
             </select>
-            <UButton icon="i-octicon-plus-16" class="min-h-11" :disabled="!canStart" :loading="pending" @click="launch()">
-              {{ willQueue ? 'Queue session' : 'Start session' }}
+            <UButton icon="i-octicon-plus-16" class="min-h-11" :disabled="!canStart && !retryLaunch" :loading="pending" @click="launch(retryLaunch?.mode)">
+              {{ retryLaunch ? 'Retry start' : willQueue ? 'Queue session' : 'Start session' }}
             </UButton>
           </div>
-          <p v-if="capacityReason" role="status" class="text-sm text-muted">
+          <div v-if="launchBlocked" class="space-y-2">
+            <p role="status" class="text-sm text-muted">
+              An earlier start is unconfirmed. Retry it before starting another session. Your edited prompt is saved.
+            </p>
+            <UButton class="min-h-11" color="neutral" variant="outline" :disabled="pending" @click="launchIntent && launch(launchIntent.mode, launchIntent)">
+              Retry earlier start
+            </UButton>
+          </div>
+          <p v-else-if="retryLaunch" role="status" class="text-sm text-muted">
+            This retries the same request. It does not create another session.
+          </p>
+          <p v-else-if="capacityReason" role="status" class="text-sm text-muted">
             {{ capacityReason }}<template v-if="willQueue">
               Queue a session to start automatically when capacity is available.
             </template>
@@ -506,8 +523,8 @@ watch(visibility, (value) => {
           <span v-if="tabSessions.length === 0" class="flex items-center px-3 text-xs text-muted">Sessions</span>
         </div>
         <div class="flex shrink-0 items-center gap-1 px-1">
-          <UButton v-if="canForce && selected?.state === 'Unknown'" color="warning" variant="ghost" size="xs" @click="forceConfirmation = { _tag: 'Waiting', id: selected.id }">
-            Force start
+          <UButton v-if="selected?.state === 'Unknown' && (canForce || forceAttempts.has(selected.id))" color="warning" variant="ghost" size="xs" :disabled="pending" @click="forceAttempts.has(selected.id) ? forceWaiting(selected.id) : forceConfirmation = { _tag: 'Waiting', id: selected.id }">
+            {{ forceAttempts.has(selected.id) ? 'Retry start' : 'Force start' }}
           </UButton>
           <UButton v-if="selected && !narrow" icon="i-octicon-columns-16" :aria-label="projectLayout.view._tag === 'Split' ? 'Show one terminal' : 'Split terminal'" variant="ghost" size="xs" :disabled="tabSessions.length < 2" :aria-pressed="projectLayout.view._tag === 'Split'" @click="split" />
           <UButton v-if="selected" :icon="diffOpen ? 'i-octicon-terminal-16' : 'i-octicon-diff-16'" :aria-label="diffOpen ? 'Show terminal' : 'Show diff'" variant="ghost" size="xs" :aria-pressed="diffOpen" class="min-h-11 min-w-11 justify-center" @click="diffOpen = !diffOpen" />
@@ -563,8 +580,8 @@ watch(visibility, (value) => {
                   <UButton color="neutral" variant="ghost" class="min-h-11" :loading="pending" @click="stop(session.id)">
                     Cancel session
                   </UButton>
-                  <UButton v-if="canForce" color="warning" variant="outline" class="min-h-11" @click="forceConfirmation = { _tag: 'Waiting', id: session.id }">
-                    Force start
+                  <UButton v-if="canForce || forceAttempts.has(session.id)" color="warning" variant="outline" class="min-h-11" :disabled="pending" @click="forceAttempts.has(session.id) ? forceWaiting(session.id) : forceConfirmation = { _tag: 'Waiting', id: session.id }">
+                    {{ forceAttempts.has(session.id) ? 'Retry start' : 'Force start' }}
                   </UButton>
                 </div>
                 <UButton v-else class="min-h-11" :disabled="selectedProjectUnavailable" @click="prepareNew(session, launchPrompts[session.id])">
@@ -582,14 +599,21 @@ watch(visibility, (value) => {
       </div>
     </section>
     <ConfirmModal v-model:open="stopConfirm" title="Stop Agent?" consequence="This stops the Agent. The session and its work remain available." confirm-label="Stop Agent" :pending="pending" :error="failure || null" @confirm="stop(stopTarget)" />
-    <UModal :open="Boolean(forceConfirmation)" title="Force start" :description="`This session reserves 8 GiB of host memory. Total reserved: ${forceTotal} GiB. Force can still be refused.`" @update:open="!$event && (forceConfirmation = undefined)">
+    <UModal :open="Boolean(forceConfirmation)" :title="retryForce ? 'Retry start' : 'Force start'" :description="retryForce ? 'This retries the same request. It does not create another session.' : `This session reserves 8 GiB of host memory. Total reserved: ${forceTotal} GiB. Force can still be refused.`" @update:open="!$event && (forceConfirmation = undefined)">
       <template #footer>
-        <UButton color="neutral" variant="ghost" :disabled="pending" @click="forceConfirmation = undefined">
-          Cancel
-        </UButton>
-        <UButton color="warning" :loading="pending" :disabled="!canForce" @click="confirmForce">
-          {{ forceConfirmation?._tag === 'New' ? 'Force new session' : 'Force start' }}
-        </UButton>
+        <div class="w-full space-y-3">
+          <p v-if="failure" role="alert" class="text-sm text-error">
+            {{ failure }}
+          </p>
+          <div class="flex justify-end gap-2">
+            <UButton color="neutral" variant="ghost" class="min-h-11" :disabled="pending" @click="forceConfirmation = undefined">
+              Cancel
+            </UButton>
+            <UButton color="warning" class="min-h-11" :loading="pending" :disabled="!canConfirmForce" @click="confirmForce">
+              {{ retryForce ? 'Retry start' : forceConfirmation?._tag === 'New' ? 'Force new session' : 'Force start' }}
+            </UButton>
+          </div>
+        </div>
       </template>
     </UModal>
   </div>
