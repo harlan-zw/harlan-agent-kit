@@ -24,13 +24,13 @@ Maintained by [Wolfstar Project](https://github.com/wolfstar-project). Contact: 
 - ✍️ **Writing**: PRs, changelogs, tweets. Plus a pass that strips the AI tells back out
 - 📋 **Triage**: Issues, the PR backlog, [Sentry](https://sentry.io), and the inbox
 - 🪝 **Hooks**: [pnpm](https://pnpm.io) only. Lint on save. Checks before every push
-- 🤖 **GitHub agent**: A local service that opens the work on issues and PRs while I do something else
+- 🤖 **GitHub agent**: A local service that reads and validates issues, implements fixes, and reviews PRs while I do something else
 
 ## How I use it
 
 My main checkout stays clean, I never work in it. Every task gets its own worktree with [worktrunk](https://github.com/max-sixty/worktrunk). The agent works in there and it can't commit or push until [`check`](./bin/check) passes, so lint, typecheck and tests. Then the [`pr` Skill](./wolfstar-agent-kit/skills/pr/SKILL.md) opens the PR. The [hooks](./wolfstar-agent-kit/hooks) block the command if any of that gets skipped, which is good, because I skip things when I'm tired.
 
-The other part runs on its own. [The service](./packages/wolfstar-github-agent/README.md) checks configured repositories, finds an issue or pull request that has been waiting, and gives it to [Claude](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://developers.openai.com/codex/sdk/), or [opencode](https://opencode.ai). It reviews the change but [can't touch the code](./wolfstar-agent-kit/skills/adversarial-review/SKILL.md). If it finds something real, a second agent does the fix, then the whole thing gets reviewed again.
+The other part runs on its own. [The service](./packages/wolfstar-github-agent/README.md) checks configured repositories for issues and pull requests that have been waiting. It reads each issue and validates it against the code before deciding whether it is ready to implement or needs more information or a spec. Once ready, and approved when required, the agent implements the fix, verifies it, and opens a pull request. Pull requests go through a [read-only review](./wolfstar-agent-kit/skills/adversarial-review/SKILL.md). If the reviewer finds something real, a second agent does the fix, then the whole thing gets reviewed again.
 
 The bit I still have to do is read all of it. That's the slow part, not the agents. So I make them show me something first: a test that was failing and now passes, a typecheck, or for frontend work [the page running in a browser](./wolfstar-agent-kit/skills/nuxt-frontend-review/SKILL.md). [Small stuff like dependency bumps](./wolfstar-agent-kit/references/auto-merge.md) merges without me. If there's a real decision in it, it waits.
 

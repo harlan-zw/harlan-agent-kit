@@ -1770,6 +1770,9 @@ describe('subject Workers', () => {
       'Verify that the target file and symbol exist. Do not run test suites. Do not prove library types exist.',
     )
     expect(capture.requests[0]?.prompt).toContain('Use pnpm for every package command. Never use npx.')
+    expect(capture.requests[0]?.prompt).toContain(
+      'Only choose READY_TO_IMPLEMENT when this validation supports a necessary change.',
+    )
     expect(triageResult).toEqual({
       _tag: 'READY_TO_IMPLEMENT',
       difficulty: 2,
