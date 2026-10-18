@@ -29,6 +29,8 @@ describe('issue work worker', () => {
   it.each([
     null,
     '{invalid',
+    '{}',
+    '',
     ...['NEEDS_INFO', 'READY_TO_SPEC', 'WAIT_TO_IMPLEMENT'].map((route) =>
       JSON.stringify({ ...JSON.parse(readyTriage), _tag: route }),
     ),
@@ -85,9 +87,11 @@ describe('issue work worker', () => {
         _tag: 'ActionRequired',
         reason: 'Validate the current issue with Issue triage before implementation.',
         evidence:
-          evidence === null || evidence === '{invalid'
-            ? 'No valid triage exists for this issue revision.'
-            : expect.any(String),
+          evidence === null
+            ? 'No triage exists for this issue revision.'
+            : ['{invalid', '{}', ''].includes(evidence)
+              ? 'Stored triage for this issue revision is malformed or has an invalid schema.'
+              : expect.any(String),
       }),
     )
   })

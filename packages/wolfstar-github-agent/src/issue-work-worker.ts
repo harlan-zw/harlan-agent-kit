@@ -488,14 +488,18 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       if (snapshot.value.state !== 'open' || snapshot.value.title !== task.issue.title)
         return err('The issue changed before work started.')
 
-      const triage = parseStoredIssueTriage(
-        options.store.getIssueTriageEvidence(task.repository, task.issueNumber, task.revisionId),
-      )
+      const rawTriage = options.store.getIssueTriageEvidence(task.repository, task.issueNumber, task.revisionId)
+      const triage = parseStoredIssueTriage(rawTriage)
       if (triage?._tag !== 'READY_TO_IMPLEMENT') {
         return ok({
           _tag: 'ActionRequired',
           reason: 'Validate the current issue with Issue triage before implementation.',
-          evidence: triage === null ? 'No valid triage exists for this issue revision.' : JSON.stringify(triage),
+          evidence:
+            rawTriage === null
+              ? 'No triage exists for this issue revision.'
+              : triage === null
+                ? 'Stored triage for this issue revision is malformed or has an invalid schema.'
+                : JSON.stringify(triage),
         })
       }
 
