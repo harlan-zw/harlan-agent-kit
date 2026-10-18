@@ -133,6 +133,14 @@ describe('canonical terminal owner', () => {
     expect(writes).toEqual(['once'])
     owner.dispose()
   })
+  it('broadcasts normalized process exit details to attached readers', async () => {
+    const { owner, messages } = await fixture()
+
+    owner.exited({ code: 17 })
+
+    expect(messages.at(-1)).toEqual({ type: 'Process', state: 'Stopping', exit: { code: 17 } })
+    owner.dispose()
+  })
   it('renews a current writer without extending an expired writer', async () => {
     const { owner, lease, advance } = await fixture()
     advance(15000)

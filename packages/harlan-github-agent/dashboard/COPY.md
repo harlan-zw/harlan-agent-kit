@@ -18,10 +18,32 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Final Passkey | Add another Passkey before removing the last Passkey. | Passkey management without password login |
 | Public terminals | Public terminals require private Agent sessions and public Passkey-only login. | Configuration and startup error |
 | Start control | New session | Navigation and session sidebar |
+| Terminal start | Start session | Submit a launch when regular capacity is available |
+| Terminal queue | Queue session | Submit a launch that may wait for capacity |
+| Terminal slots full | All session slots are in use. | Regular admission has no free slot |
+| Terminal maintenance reserve | The remaining slot is reserved for host maintenance. | Regular admission preserves the maintenance slot |
+| Terminal memory full | The host needs more available memory. | Regular admission is limited by memory |
+| Terminal queue explanation | Queue a session to start automatically when capacity is available. | Full-capacity launch form |
+| Terminal queue heading | Waiting for capacity | Selected queued session |
+| Terminal queue checking | The host is checking capacity. | Queued session without a current capacity reason |
+| Terminal queue continuity | It will start automatically when there is room. You can leave this view. | Selected queued session |
+| Terminal view sessions | View sessions | Return from a queued session to the phone session list |
+| Terminal cancel recovery | The Agent did not start. You can edit the prompt and try again. | Cancelled queued session |
+| Terminal launch notice | Session added. | Launch completed after the person left the launch form |
+| Terminal open launch | Open session | Open an acknowledged launch without moving the current view automatically |
+| Terminal saved initial draft | A new-session draft is already saved. Your earlier input is still in the previous session. | Recovery preserves an existing initial prompt |
+| Terminal ended draft | Your draft is saved in this session. | Ended session with retained input |
+| Terminal ended initial prompt | Your initial prompt is saved. | Ended launch with its initial prompt saved in this browser |
+| Terminal recover initial prompt | Review initial prompt | Open the previous launch prompt for editing before explicitly starting another session |
+| Terminal ended work | Your work remains in the project. | Ended session without a draft |
+| Terminal recover draft | Use draft in new session | Review unsent input in a new launch form |
+| Terminal clean exit | Session ended. | Provider reported exit code zero; does not imply task completion |
+| Terminal error exit | Agent exited with code {code}. | Provider reported a nonzero exit code |
+| Terminal signal exit | Agent stopped by signal {signal}. | Provider reported termination by a signal |
 | Terminal host memory | Host memory | Terminal host memory and session admission |
 | Terminal waiting | Waiting to start | Session waiting for host admission |
 | Terminal cancellation | Cancel session | Cancel a session waiting to start |
-| Terminal cancelled | Session cancelled. | Cancelled session |
+| Terminal cancelled | Session cancelled | Cancelled session heading |
 | Terminal force new | Force new session | Explicit manual host admission |
 | Terminal force waiting | Force start | Explicit manual admission for the same waiting session |
 | Terminal force warning | This session reserves 8 GiB of host memory. Total reserved: {total} GiB. Force can still be refused. | Manual host admission confirmation |

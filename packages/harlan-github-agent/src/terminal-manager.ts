@@ -21,6 +21,7 @@ import { parseHostTerminalCapacity } from './terminal-capacity.ts'
 import { pruneExpiredTerminalHistory } from './terminal-history.ts'
 import {
   initializeTerminalStorage,
+  readTerminalExit,
   readTerminalIntents,
   readTerminalPrepared,
   terminalIdentity,
@@ -80,6 +81,7 @@ export async function createTerminalManager(options: {
     ]),
   )
   const launches = new Map<string, Promise<TerminalResult<TerminalSession>>>()
+  const exitChecked = new Set([...intents.values()].filter(intent => intent.session.exit && ['Exited', 'Interrupted'].includes(intent.session.state)).map(intent => intent.session.id))
   const operations = new Map<string, Promise<unknown>>()
   let queueOrder = Math.max(0, ...[...intents.values()].map(intent => intent.queueOrder))
   let closed = false
@@ -96,6 +98,8 @@ export async function createTerminalManager(options: {
     return next
   }
   async function persist(intent: TerminalIntent) {
+    if (intent.session.exit && ['Exited', 'Interrupted'].includes(intent.session.state))
+      exitChecked.add(intent.session.id)
     intents.set(intent.session.id, intent)
     await writeTerminalJson(
       join(options.directory, 'sessions', intent.session.id, 'intent.json'),
@@ -108,12 +112,20 @@ export async function createTerminalManager(options: {
   async function reconcile(intent: TerminalIntent) {
     if (intent.decision._tag === 'Queued' || intent.decision._tag === 'Cancelled')
       return
-    if (
-      intent.session.state === 'Exited'
-      || intent.session.state === 'Interrupted'
-    ) {
-      return
+    const ended = ['Exited', 'Interrupted'].includes(intent.session.state)
+    if (!intent.session.exit && (!ended || !exitChecked.has(intent.session.id))) {
+      const exit = await readTerminalExit(
+        options.directory,
+        intent.session.id,
+        intent.session.generation,
+      )
+      if (exit)
+        intent.session.exit = exit
+      if (ended)
+        exitChecked.add(intent.session.id)
     }
+    if (ended)
+      return
     const prepared = await readTerminalPrepared(options.directory, intent)
     if (prepared)
       intent.session.worktree = prepared.worktree
@@ -179,7 +191,7 @@ export async function createTerminalManager(options: {
         intent.controlGroup = scope.controlGroup
         intent.session.state
           = scope.mainPid && (await options.ready(intent))
-            ? intent.session.state === 'Stopping'
+            ? intent.session.exit || intent.session.state === 'Stopping'
               ? 'Stopping'
               : 'Running'
             : scope.mainPid && !intent.session.worktree

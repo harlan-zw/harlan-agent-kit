@@ -8,7 +8,7 @@ import { parseTerminalCapacity } from '../utils/terminal-capacity.ts'
 import { terminalFailureCopy } from '../utils/terminal-copy.ts'
 import { createTerminalDraftStore } from '../utils/terminal-draft.ts'
 import { terminalLaunchIntent } from '../utils/terminal-launch.ts'
-import { activeTerminalSession, emptyTerminalLayout, emptyTerminalProjectLayout, parseTerminalLayout, reconcileTerminalLayout, terminalDisplayProjects, updateTerminalProjectLayout } from '../utils/terminal-layout.ts'
+import { activeTerminalSession, emptyTerminalLayout, emptyTerminalProjectLayout, parseTerminalLayout, reconcileTerminalLayout, reconcileTerminalSessions, terminalDisplayProjects, updateTerminalProjectLayout } from '../utils/terminal-layout.ts'
 import { terminalProjectGroups } from '../utils/terminal-project-groups.ts'
 import { parseTerminalProjects, parseTerminalSessionResult, parseTerminalSessions } from '../utils/terminal-protocol.ts'
 import TerminalView from './_TerminalView.vue'
@@ -89,6 +89,10 @@ const initialPrompt = computed({
 const forceConfirmation = shallowRef<{ _tag: 'New' } | { _tag: 'Waiting', id: string }>()
 const forceAttempts = new Map<string, string>()
 const failure = ref('')
+const inventoryFailure = ref('')
+const launchNotice = shallowRef<TerminalSession>()
+const recoveryNotice = ref('')
+const launchPrompts = useSessionStorage<Record<string, string>>(`agent-terminal-launch-prompts:${capabilities.hostId}`, {})
 const pending = ref(false)
 const loading = ref(true)
 const refreshing = ref(false)
@@ -136,18 +140,28 @@ const providers = computed(() => (['codex', 'claude', 'opencode'] as const).filt
 const providerNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode' }
 const canStart = computed(() => !pending.value && capacity.value._tag === 'Available' && capacity.value.regular._tag !== 'Unavailable'
   && projects.value.some(project => project.id === projectId.value) && capabilities.providers[provider.value])
-const canForce = computed(() => !pending.value && capacity.value._tag === 'Available' && capacity.value.manualPolicy._tag === 'Enabled')
+const canForce = computed(() => !pending.value && capacity.value._tag === 'Available' && capacity.value.manualPolicy._tag === 'Enabled' && capacity.value.manual._tag === 'Allowed')
 const forceTotal = computed(() => capacity.value._tag === 'Available' ? capacity.value.reservedGiB + 8 : 8)
 const capacityReason = computed(() => loading.value
   ? 'Connecting to the terminal host.'
   : capacity.value._tag === 'Unavailable'
     ? terminalFailureCopy.CapacityUnavailable
-    : capacity.value.regular._tag === 'AtCapacity' ? 'Waiting to start' : '')
+    : capacity.value.regular._tag === 'Unavailable'
+      ? terminalFailureCopy.CapacityUnavailable
+      : capacity.value.regular._tag === 'AtCapacity'
+        ? capacity.value.regular.reason === 'MaintenanceReserve'
+          ? 'The remaining slot is reserved for host maintenance.'
+          : ['Memory', 'MemoryPressure', 'OverrideMemory'].includes(capacity.value.regular.reason)
+              ? 'The host needs more available memory.'
+              : 'All session slots are in use.'
+        : '')
+const willQueue = computed(() => capacity.value._tag === 'Available' && capacity.value.regular._tag === 'AtCapacity')
 
 async function refresh() {
   if (refreshing.value)
     return
   refreshing.value = true
+  const startedWith = sessions.value
   const results = await Promise.allSettled([
     $fetch<unknown>('/api/terminal/projects', { timeout: 10000 }).then(parseTerminalProjects),
     $fetch<unknown>('/api/terminal/sessions', { timeout: 10000 }).then(parseTerminalSessions),
@@ -158,22 +172,23 @@ async function refresh() {
     : { _tag: 'Unavailable' }
   if (results[0].status === 'fulfilled' && results[0].value._tag === 'Ok' && results[1].status === 'fulfilled' && results[1].value._tag === 'Ok') {
     projects.value = results[0].value.value
-    sessions.value = results[1].value.value
+    sessions.value = reconcileTerminalSessions(startedWith, sessions.value, results[1].value.value)
     storedLayout.value = reconcileTerminalLayout(layout.value, displayProjects.value, sessions.value)
     if (loading.value)
       selectFromRoute()
     if (!capabilities.providers[provider.value])
       provider.value = providers.value[0] ?? 'codex'
-    failure.value = ''
+    inventoryFailure.value = ''
   }
   else {
-    failure.value = 'Could not load projects or sessions. Reload.'
+    inventoryFailure.value = 'Could not load projects or sessions. Reload.'
   }
   loading.value = false
   refreshing.value = false
 }
 
 async function select(session: TerminalSession) {
+  launchNotice.value = undefined
   rememberProject(session.projectId)
   projectsOpen.value = false
   launchOpen.value = false
@@ -184,11 +199,22 @@ async function select(session: TerminalSession) {
 }
 
 async function selectProject(id: string) {
+  recoveryNotice.value = ''
   rememberProject(id)
   projectId.value = id
   launchOpen.value = true
   diffOpen.value = false
   await navigateTo({ path: '/sessions', query: selectedId.value ? { terminal: selectedId.value } : {} }, { replace: true })
+}
+
+async function prepareNew(session: TerminalSession, prompt = '') {
+  await selectProject(session.projectId)
+  provider.value = session.provider
+  if (prompt && !initialPrompt.value)
+    initialPrompt.value = prompt
+  else if (prompt && initialPrompt.value !== prompt)
+    recoveryNotice.value = 'A new-session draft is already saved. Your earlier input is still in the previous session.'
+  projectsOpen.value = true
 }
 
 async function closeTab(id: string) {
@@ -231,12 +257,13 @@ function selectFromRoute() {
 watch(() => route.query.terminal, selectFromRoute, { immediate: true })
 
 async function launch(mode: 'Regular' | 'Force' = 'Regular') {
-  if (!canStart.value)
+  if (!canStart.value || (mode === 'Force' && !canForce.value))
     return
   pending.value = true
   failure.value = ''
   const previous = launchIntent.value
   const launchProject = projectId.value
+  const launchSelection = selectedId.value
   const originalPrompt = initialPrompt.value
   const prompt = initialPrompt.value.trim() || undefined
   const intent = terminalLaunchIntent(previous, { projectId: projectId.value, provider: provider.value, ...(prompt ? { initialPrompt: prompt } : {}) }, crypto.randomUUID(), mode)
@@ -249,12 +276,18 @@ async function launch(mode: 'Regular' | 'Force' = 'Regular') {
       return
     }
     launchIntent.value = undefined
+    if (originalPrompt) {
+      const saved = Object.entries(launchPrompts.value).filter(([id]) => id !== result.value.id).slice(-63)
+      launchPrompts.value = Object.fromEntries([...saved, [result.value.id, originalPrompt]])
+    }
     if (initialDrafts.value[launchProject] === originalPrompt)
       initialDrafts.value[launchProject] = ''
     forceConfirmation.value = undefined
     sessions.value = [...sessions.value.filter(session => session.id !== result.value.id), result.value]
-    if (projectId.value === launchProject)
+    if (launchOpen.value && projectId.value === launchProject && selectedId.value === launchSelection)
       await select(result.value)
+    else
+      launchNotice.value = result.value
   }).catch(() => {
     failure.value = 'Could not start the Agent session. Retry.'
   }).finally(() => { pending.value = false })
@@ -393,27 +426,38 @@ watch(visibility, (value) => {
         </section>
       </div>
       <div class="max-h-[60%] shrink-0 overflow-y-auto border-t border-default bg-muted p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-        <div v-if="failure" role="alert" class="mb-2 flex items-center gap-2 text-sm text-error">
-          <p>{{ failure }}</p><UButton icon="i-octicon-sync-16" aria-label="Reload" color="neutral" variant="ghost" @click="refresh" />
+        <div v-if="failure || inventoryFailure" role="alert" class="mb-2 flex items-center gap-2 text-sm text-error">
+          <p>{{ failure || inventoryFailure }}</p><UButton icon="i-octicon-sync-16" aria-label="Reload" color="neutral" variant="ghost" @click="refresh" />
+        </div>
+        <div v-if="launchNotice" role="status" class="mb-2 flex flex-wrap items-center gap-2 text-sm">
+          <span>Session added.</span>
+          <UButton color="neutral" variant="outline" class="min-h-11" @click="select(launchNotice)">
+            Open session
+          </UButton>
         </div>
         <div v-if="launchOpen" class="space-y-3">
           <div class="flex min-h-11 items-center justify-between gap-2 text-sm font-medium">
             <span class="min-w-0 break-words">{{ selectedProjectName }}</span>
             <UButton icon="i-octicon-x-16" aria-label="Close new session" variant="ghost" class="min-h-11 min-w-11 justify-center" @click="launchOpen = false" />
           </div>
+          <p v-if="recoveryNotice" role="status" class="text-sm text-muted">
+            {{ recoveryNotice }}
+          </p>
           <UTextarea v-model="initialPrompt" aria-label="Initial prompt" placeholder="Initial prompt (optional)" :maxlength="8192" :rows="3" class="w-full" :ui="{ base: 'text-base' }" :disabled="pending" />
           <div class="flex gap-2">
-            <select v-model="provider" aria-label="Agent provider" class="min-h-11 min-w-0 flex-1 rounded border border-default bg-default px-2 text-base focus-visible:outline-2 focus-visible:outline-primary">
+            <select v-model="provider" :disabled="pending" aria-label="Agent provider" class="min-h-11 min-w-0 flex-1 rounded border border-default bg-default px-2 text-base focus-visible:outline-2 focus-visible:outline-primary">
               <option v-for="value in providers" :key="value" :value="value">
                 {{ providerNames[value] }}
               </option>
             </select>
             <UButton icon="i-octicon-plus-16" class="min-h-11" :disabled="!canStart" :loading="pending" @click="launch()">
-              New session
+              {{ willQueue ? 'Queue session' : 'Start session' }}
             </UButton>
           </div>
           <p v-if="capacityReason" role="status" class="text-sm text-muted">
-            {{ capacityReason }}
+            {{ capacityReason }}<template v-if="willQueue">
+              Queue a session to start automatically when capacity is available.
+            </template>
           </p>
           <details v-if="capacity._tag === 'Available'" class="text-sm text-muted">
             <summary class="flex min-h-11 cursor-pointer items-center focus-visible:outline-2 focus-visible:outline-primary">
@@ -475,9 +519,15 @@ watch(visibility, (value) => {
           </UDropdownMenu>
         </div>
       </div>
-      <p v-if="failure" role="alert" class="shrink-0 border-b border-error/30 px-3 py-2 text-xs text-error">
-        {{ failure }}
+      <p v-if="failure || inventoryFailure" role="alert" class="shrink-0 border-b border-error/30 px-3 py-2 text-sm text-error">
+        {{ failure || inventoryFailure }}
       </p>
+      <div v-if="launchNotice" role="status" class="flex shrink-0 flex-wrap items-center gap-2 border-b border-default px-3 py-2 text-sm lg:hidden">
+        <span>Session added.</span>
+        <UButton color="neutral" variant="outline" class="min-h-11" @click="select(launchNotice)">
+          Open session
+        </UButton>
+      </div>
       <div v-if="selected" ref="terminalArea" class="relative min-h-0 flex-1">
         <!-- Visibility preserves renderer dimensions and attachments while Diff is open. -->
         <div class="absolute inset-0 grid min-h-0 min-w-0" :class="[visibleSessions.length === 2 ? 'grid-cols-2' : 'grid-cols-1', diffOpen ? 'invisible' : '']" :inert="diffOpen">
@@ -485,18 +535,44 @@ watch(visibility, (value) => {
             <div v-if="visibleSessions.length === 2" class="flex h-7 shrink-0 items-center justify-between gap-2 border-b border-default bg-muted px-2 text-[10px] text-muted">
               <span class="truncate">{{ providerNames[session.provider] }}</span><span class="truncate">{{ capabilities.hostLabel }}</span>
             </div>
-            <div v-if="session.state === 'Queued' || session.state === 'Cancelled'" role="status" class="flex flex-1 flex-col items-center justify-center gap-3 p-4 text-sm text-muted">
-              <p>{{ session.state === 'Queued' ? 'Waiting to start' : 'Session cancelled.' }}</p>
-              <div v-if="session.state === 'Queued'" class="flex gap-2">
-                <UButton color="neutral" variant="outline" size="sm" :loading="pending" @click="stop(session.id)">
-                  Cancel session
-                </UButton>
-                <UButton v-if="canForce" color="warning" variant="outline" size="sm" @click="forceConfirmation = { _tag: 'Waiting', id: session.id }">
-                  Force start
+            <div v-if="session.state === 'Queued' || session.state === 'Cancelled'" class="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-4">
+              <div class="m-auto w-full max-w-sm space-y-4 py-4 text-sm">
+                <div role="status" class="space-y-2">
+                  <h2 class="text-base font-semibold">
+                    {{ session.state === 'Queued' ? 'Waiting for capacity' : 'Session cancelled' }}
+                  </h2>
+                  <p v-if="session.state === 'Queued'" class="text-muted">
+                    {{ capacityReason || 'The host is checking capacity.' }} It will start automatically when there is room. You can leave this view.
+                  </p>
+                  <p v-else class="text-muted">
+                    The Agent did not start. You can edit the prompt and try again.
+                  </p>
+                </div>
+                <details v-if="launchPrompts[session.id]" class="text-muted">
+                  <summary class="flex min-h-11 cursor-pointer items-center focus-visible:outline-2 focus-visible:outline-primary">
+                    Initial prompt
+                  </summary>
+                  <p class="max-h-40 overflow-y-auto whitespace-pre-wrap break-words">
+                    {{ launchPrompts[session.id] }}
+                  </p>
+                </details>
+                <div v-if="session.state === 'Queued'" class="flex flex-wrap gap-2">
+                  <UButton v-if="narrow" color="neutral" variant="outline" class="min-h-11" @click="projectsOpen = true">
+                    View sessions
+                  </UButton>
+                  <UButton color="neutral" variant="ghost" class="min-h-11" :loading="pending" @click="stop(session.id)">
+                    Cancel session
+                  </UButton>
+                  <UButton v-if="canForce" color="warning" variant="outline" class="min-h-11" @click="forceConfirmation = { _tag: 'Waiting', id: session.id }">
+                    Force start
+                  </UButton>
+                </div>
+                <UButton v-else class="min-h-11" :disabled="selectedProjectUnavailable" @click="prepareNew(session, launchPrompts[session.id])">
+                  New session
                 </UButton>
               </div>
             </div>
-            <TerminalView v-else v-model:submission="memory(session).submission" v-model:reading="memory(session).reading" v-model:retained-snapshot="memory(session).retainedSnapshot" :session="session" :cached-screen="screens[screenKey(session)]" :draft="drafts.forSession(session).value" class="min-h-0 min-w-0 flex-1" @screen="cacheScreen(session, $event)" @update:draft="drafts.forSession(session).value = $event" />
+            <TerminalView v-else v-model:submission="memory(session).submission" v-model:reading="memory(session).reading" v-model:retained-snapshot="memory(session).retainedSnapshot" :session="session" :initial-prompt="launchPrompts[session.id]" :cached-screen="screens[screenKey(session)]" :draft="drafts.forSession(session).value" class="min-h-0 min-w-0 flex-1" @new-session="prepareNew(session, $event)" @screen="cacheScreen(session, $event)" @update:draft="drafts.forSession(session).value = $event" />
           </div>
         </div>
         <TerminalDiff v-if="diffOpen" id="terminal-diff" :key="selected.id" role="tabpanel" aria-label="Diff" :target="{ _tag: 'Session', sessionId: selected.id }" class="relative z-10 h-full min-h-0 min-w-0 bg-default" @close="diffOpen = false" />

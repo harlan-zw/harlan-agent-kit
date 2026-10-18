@@ -1,4 +1,5 @@
 import type {
+  TerminalExit,
   TerminalFailure,
   TerminalLaunch,
   TerminalSession,
@@ -6,6 +7,7 @@ import type {
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readdir, readFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
+import { normalizeTerminalExit } from './terminal-protocol.ts'
 
 export interface TerminalIntent {
   admission: { _tag: 'Regular', requestId: string } | { _tag: 'ManualOverride', requestId: string }
@@ -38,6 +40,44 @@ export async function writeTerminalJson(path: string, value: unknown) {
   const directory = await open(join(path, '..'), 'r')
   await directory.sync()
   await directory.close()
+}
+export async function writeTerminalExit(directory: string, sessionId: string, generation: string, exit: TerminalExit) {
+  if (!/^[a-f\d]{24}$/.test(sessionId) || !generation || generation.length > 256)
+    throw new Error('Invalid terminal session identity')
+  const normalized = normalizeTerminalExit({ exitCode: exit.code, signal: exit.signal })
+  if (!normalized)
+    throw new Error('Invalid terminal process exit')
+  await writeTerminalJson(
+    join(directory, 'sessions', sessionId, 'exit.json'),
+    { generation, exit: normalized },
+  )
+}
+export async function readTerminalExit(directory: string, sessionId: string, generation: string): Promise<TerminalExit | undefined> {
+  if (!/^[a-f\d]{24}$/.test(sessionId) || !generation || generation.length > 256)
+    return undefined
+  const content = await readFile(
+    join(directory, 'sessions', sessionId, 'exit.json'),
+    'utf8',
+  ).catch((cause: NodeJS.ErrnoException) => {
+    if (cause.code === 'ENOENT')
+      return null
+    throw cause
+  })
+  if (content === null)
+    return undefined
+  try {
+    const value = JSON.parse(content) as { generation?: unknown, exit?: unknown }
+    if (value.generation !== generation)
+      return undefined
+    const exit = value.exit
+    if (typeof exit !== 'object' || exit === null || Array.isArray(exit))
+      return undefined
+    const record = exit as Record<string, unknown>
+    return normalizeTerminalExit({ exitCode: record.code, signal: record.signal })
+  }
+  catch {
+    return undefined
+  }
 }
 export async function initializeTerminalStorage(
   directory: string,

@@ -1,6 +1,7 @@
 import type {
   TerminalCapabilities,
   TerminalCell,
+  TerminalExit,
   TerminalFailure,
   TerminalProject,
   TerminalResult,
@@ -59,6 +60,16 @@ function unicode(value: string): boolean {
   }
   return true
 }
+function exitDetails(value: unknown): TerminalResult<TerminalExit | undefined> {
+  if (value === undefined)
+    return ok(undefined)
+  if (!record(value) || (value.code === undefined && value.signal === undefined)
+    || (value.code !== undefined && !integer(value.code, 0, 255))
+    || (value.signal !== undefined && !integer(value.signal, 1, 255))) {
+    return invalid()
+  }
+  return ok({ ...(value.code !== undefined ? { code: value.code as number } : {}), ...(value.signal !== undefined ? { signal: value.signal as number } : {}) })
+}
 function session(value: unknown): TerminalResult<TerminalSession> {
   if (!record(value) || !text(value.id) || !text(value.generation) || !text(value.projectId)
     || !text(value.hostId) || !text(value.bootId) || !member(value.provider, ['codex', 'claude', 'opencode'] as const)
@@ -67,7 +78,10 @@ function session(value: unknown): TerminalResult<TerminalSession> {
     || !Number.isFinite(Date.parse(value.createdAt)) || !(value.worktree === null || text(value.worktree, 4096))) {
     return invalid()
   }
-  return ok({ id: value.id, generation: value.generation, projectId: value.projectId, provider: value.provider, hostId: value.hostId, bootId: value.bootId, state: value.state, createdAt: value.createdAt, worktree: value.worktree })
+  const exit = exitDetails(value.exit)
+  if (exit._tag === 'Err')
+    return exit
+  return ok({ ...(exit.value ? { exit: exit.value } : {}), id: value.id, generation: value.generation, projectId: value.projectId, provider: value.provider, hostId: value.hostId, bootId: value.bootId, state: value.state, createdAt: value.createdAt, worktree: value.worktree })
 }
 function writer(value: unknown): TerminalResult<TerminalWriter> {
   if (value === null)
@@ -278,8 +292,10 @@ export function parseTerminalServerMessage(value: unknown): TerminalResult<Termi
   }
   if (value.type === 'InputReceipt' && integer(value.sequence, 1) && text(value.lease))
     return ok({ type: 'InputReceipt', sequence: value.sequence, lease: value.lease })
-  if (value.type === 'Process' && member(value.state, states))
-    return ok({ type: 'Process', state: value.state })
+  if (value.type === 'Process' && member(value.state, states)) {
+    const exit = exitDetails(value.exit)
+    return exit._tag === 'Err' ? exit : ok({ type: 'Process', state: value.state, ...(exit.value ? { exit: exit.value } : {}) })
+  }
   if (value.type === 'Failure' && member(value.reason, failures))
     return ok({ type: 'Failure', reason: value.reason })
   return invalid()

@@ -17,6 +17,7 @@ import { createTerminalAdmissionCli } from './terminal-admission.ts'
 import { writeTerminalHistory } from './terminal-history.ts'
 import { createTerminalOwner } from './terminal-owner.ts'
 import {
+  normalizeTerminalExit,
   parseTerminalClientMessage,
   parseTerminalJson,
 } from './terminal-protocol.ts'
@@ -25,7 +26,7 @@ import {
   prepareTerminalSandbox,
   withCodexProjectTrust,
 } from './terminal-sandbox.ts'
-import { writeTerminalJson } from './terminal-storage.ts'
+import { writeTerminalExit, writeTerminalJson } from './terminal-storage.ts'
 import { createTerminalSystemdHost } from './terminal-systemd.ts'
 import { createTerminalWorktreeAdapter } from './terminal-worktree.ts'
 
@@ -133,17 +134,26 @@ export async function runTerminalHelper(config: TerminalHelperConfig) {
     },
   })
   pty.onData(bytes => owner.output(bytes))
-  pty.onExit(() => {
-    owner.exited()
-    // systemd stops the whole owned cgroup, including surviving provider descendants.
-    void execute('systemctl', ['--user', 'stop', config.intent.unit], {
-      timeout: 15000,
-    }).catch((cause) => {
-      console.error(
-        'Terminal scope stop failed',
-        cause instanceof Error ? cause.message : String(cause),
-      )
-    })
+  pty.onExit(({ exitCode, signal }) => {
+    const exit = normalizeTerminalExit({ exitCode, signal })
+    owner.exited(exit)
+    const persistExit = exit
+      ? writeTerminalExit(config.directory, config.intent.session.id, config.intent.session.generation, exit)
+      : Promise.resolve()
+    // Persist the diagnosis before systemd collects the completed unit.
+    void persistExit
+      .catch(() => {
+        console.error('Terminal exit metadata save failed')
+      })
+      .then(() => execute('systemctl', ['--user', 'stop', config.intent.unit], {
+        timeout: 15000,
+      }))
+      .catch((cause) => {
+        console.error(
+          'Terminal scope stop failed',
+          cause instanceof Error ? cause.message : String(cause),
+        )
+      })
   })
   const sockets = new Set<import('node:net').Socket>()
   const server = createServer((socket) => {
