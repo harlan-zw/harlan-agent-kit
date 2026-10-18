@@ -3,6 +3,7 @@ import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node
 import type { Duplex } from 'node:stream'
 import type { Server } from 'srvx'
 import { serve } from 'srvx'
+import { compressResponse } from './response-compression.ts'
 
 export interface AgentServerOptions {
   app: H3
@@ -17,7 +18,7 @@ export interface AgentServerOptions {
 
 export async function startAgentServer(options: AgentServerOptions): Promise<Server> {
   const server = serve({
-    fetch: request => options.app.fetch(request),
+    fetch: async request => compressResponse(request, await options.app.fetch(request)),
     hostname: options.hostname,
     port: options.port,
     manual: true,
