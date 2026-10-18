@@ -72,6 +72,17 @@ describe('single account host capacity command', () => {
     expect(failed.status).toBe(7)
   })
 
+  it('hands each admitted command its own host reservation, which the maintenance worker requires', () => {
+    const args = ['run', 'maintenance:abc', '4', process.execPath, '-e', 'console.log(process.env.WOLFSTAR_HOST_RESERVATION)']
+    const first = spawnSync(command, args, { env: { ...process.env, WOLFSTAR_HOST_RESERVATION: '' } })
+    const second = spawnSync(command, args)
+
+    const reservations = [first, second].map((result) => result.stdout.toString().trim())
+    expect(reservations[0]).not.toBe('')
+    expect(reservations[1]).not.toBe('')
+    expect(reservations[0]).not.toBe(reservations[1])
+  })
+
   it('passes the proof channel through stdin', () => {
     const echoed = spawnSync(
       command,

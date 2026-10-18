@@ -84,8 +84,13 @@ if (command === 'status') {
   const [scope, memory, ...argv] = rest
   if (!scope || argv.length === 0) fail('Usage: run <scope> <GiB> <command...>')
   wholeNumber(memory, 'The memory')
+  // The worker refuses to start without proof of admission, which the Hogwild broker also hands over
+  // as a reservation. Nothing queues here, so each admitted command is its own reservation.
   // stdio is inherited, so the worker's event stream and the proof channel pass straight through.
-  const child = spawn(argv[0], argv.slice(1), { stdio: 'inherit' })
+  const child = spawn(argv[0], argv.slice(1), {
+    stdio: 'inherit',
+    env: { ...process.env, WOLFSTAR_HOST_RESERVATION: randomUUID() },
+  })
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => child.kill(signal))
   child.once('error', (error) => fail(`Could not start the command: ${error.message}`))
   child.once('close', (code, signal) => process.exit(code ?? (signal === null ? 1 : 128)))
