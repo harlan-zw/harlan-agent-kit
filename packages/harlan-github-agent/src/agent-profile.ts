@@ -8,15 +8,15 @@ export const CODEX_AGENT_PROFILE = {
   authentication: 'chatgpt',
   maximumActiveAgents: 4,
   roles: {
-    adversarial_review: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
-    baseline_repair: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
-    conflict_resolution: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
-    issue_triage: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
-    issue_work: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
-    batch_plan: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
-    review_fix: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
-    routine_scan: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
-    routine_fix: { model: 'gpt-5.6-terra', reasoningEffort: 'medium' },
+    adversarial_review: { model: 'gpt-6.1-sol', reasoningEffort: 'high' },
+    baseline_repair: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+    conflict_resolution: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+    issue_triage: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+    issue_work: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+    batch_plan: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+    review_fix: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+    routine_scan: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+    routine_fix: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
   },
 } as const satisfies AgentProfile
 
@@ -62,7 +62,7 @@ export const AGENT_ROLES = [
 
 /** Every model an Agent provider answers with, in the order the controls list them. */
 export const AGENT_MODELS = {
-  codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6.1-sol'],
+  codex: ['gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
   opencode: [
     'zai-coding-plan/glm-5.3-flash',
     'zai-coding-plan/glm-5.3',

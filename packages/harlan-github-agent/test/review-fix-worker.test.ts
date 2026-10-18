@@ -213,7 +213,7 @@ describe('review fix Worker', () => {
     expect(committedMessage).toBe('fix(parser): preserve buffered bytes')
     expect(capture.requests).toEqual([expect.objectContaining({
       sessionId: null,
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-sol',
       prompt: expect.stringContaining(ownerRequest ? 'Change trailingSlash to false.' : 'Split one UTF-8 sequence across two chunks'),
     })])
     if (ownerRequest) {

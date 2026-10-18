@@ -120,7 +120,7 @@ A pinned Agent selection overrides it. Harlan switches the Agent provider, model
 
 Automatic selection picks the Agent provider by remaining capacity. It walks `order` and takes the first provider whose window has more than its own Reserve left. `order` defaults to opencode first, because opencode answers on the GLM Coding Plan. Codex publishes a seven-day window. opencode publishes the GLM Coding Plan five-hour and weekly windows, and the fuller window decides. When no provider may spend, the service stops claiming new agent Tasks and shows `Reserve reached` in the System pane. Active agents and Publications finish. Reaching a Reserve is normal state, not an Incident.
 
-For `codex`, use `gpt-5.6-sol` with high reasoning for adversarial review. Use `gpt-5.6-terra` with medium reasoning for Repair, conflict resolution, issue triage, issue work, and Baseline repair. Pull request triage needs no Agent: Classification answers it through the `advocaat` package over the Cloudflare AI endpoint.
+For `codex`, use `gpt-6.1-sol` with high reasoning for adversarial review. Use `gpt-6.1-sol` with medium reasoning for Repair, conflict resolution, issue triage, issue work, and Baseline repair. Pull request triage needs no Agent: Classification answers it through the `advocaat` package over the Cloudflare AI endpoint.
 
 For `opencode`, use `zai-coding-plan/glm-5.3-flash` at the `high` Reasoning effort for every role. `agent.reasoning_effort.<provider>.<role>` in the configuration replaces one role's default, for example `agent.reasoning_effort.opencode.review_fix: medium`. A pinned Agent selection with an explicit Reasoning effort still wins over the file.
 

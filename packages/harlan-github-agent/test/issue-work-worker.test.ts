@@ -287,7 +287,7 @@ Closes #12.`,
     }, new AbortController().signal)
 
     expect(capture.requests).toEqual([expect.objectContaining({
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-sol',
       reasoningEffort: 'medium',
       sessionId: fence === 1 ? 'triage-session' : null,
       workspace: '/tmp/issue-work',
