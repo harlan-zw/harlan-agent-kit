@@ -14,6 +14,18 @@ export type TerminalState
     | 'Interrupted'
     | 'Unknown'
     | 'Cancelled'
+export interface TerminalExit {
+  code?: number
+  signal?: number
+}
+export function normalizeTerminalExit(value: { exitCode?: unknown, signal?: unknown }): TerminalExit | undefined {
+  const exit: TerminalExit = {}
+  if (Number.isSafeInteger(value.exitCode) && Number(value.exitCode) >= 0 && Number(value.exitCode) <= 255)
+    exit.code = Number(value.exitCode)
+  if (Number.isSafeInteger(value.signal) && Number(value.signal) > 0 && Number(value.signal) <= 255)
+    exit.signal = Number(value.signal)
+  return Object.keys(exit).length ? exit : undefined
+}
 export interface TerminalSession {
   id: string
   generation: string
@@ -24,6 +36,7 @@ export interface TerminalSession {
   state: TerminalState
   createdAt: string
   worktree: string | null
+  exit?: TerminalExit
 }
 export interface TerminalLaunch {
   requestId: string
@@ -163,7 +176,7 @@ export type TerminalServerMessage
   | { type: 'History', generation: string, requestId: string, result: ({ _tag: 'Page' } & TerminalHistoryPage) | { _tag: 'Expired' } }
   | { type: 'WriterChanged', writer: TerminalWriter }
   | { type: 'InputReceipt', sequence: number, lease: string }
-  | { type: 'Process', state: TerminalState }
+  | { type: 'Process', state: TerminalState, exit?: TerminalExit }
   | { type: 'Failure', reason: TerminalFailure }
 export type TerminalResult<T>
   = | { _tag: 'Ok', value: T }

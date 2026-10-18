@@ -65,6 +65,14 @@ export function terminalDisplayProjects(projects: readonly TerminalProject[], se
   }
   return display
 }
+/** Keep launches and stops acknowledged after this inventory request began. */
+export function reconcileTerminalSessions(startedWith: readonly TerminalSession[], current: readonly TerminalSession[], incoming: readonly TerminalSession[]): TerminalSession[] {
+  const previous = new Map(startedWith.map(session => [session.id, session]))
+  const changed = new Map(current.filter(session => previous.get(session.id) !== session).map(session => [session.id, session]))
+  const next = incoming.map(session => changed.get(session.id) ?? session)
+  const received = new Set(incoming.map(session => session.id))
+  return [...next, ...[...changed.values()].filter(session => !received.has(session.id))]
+}
 export function reconcileTerminalLayout(layout: TerminalLayout, projects: readonly TerminalProject[], sessions: readonly TerminalSession[]): TerminalLayout {
   const validSessions = new Map(sessions.map(session => [session.id, session.projectId]))
   const next = projects.map((project): [string, TerminalProjectLayout] => {

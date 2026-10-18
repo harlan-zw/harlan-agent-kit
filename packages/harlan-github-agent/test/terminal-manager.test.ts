@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { controllerTerminalProviderArguments } from '../src/terminal-controller.ts'
 import { writeTerminalHistory } from '../src/terminal-history.ts'
-import { writeTerminalJson } from '../src/terminal-storage.ts'
+import { writeTerminalExit, writeTerminalJson } from '../src/terminal-storage.ts'
 import { createTerminalManager } from '../src/terminal.ts'
 
 const managers: Awaited<ReturnType<typeof createTerminalManager>>[] = []
@@ -307,6 +307,28 @@ const launch = {
   provider: 'codex' as const,
 }
 describe('durable terminal launch and ownership', () => {
+  it('returns persisted exit diagnostics in the session inventory after helper exit', async () => {
+    const f = await fixture()
+    const manager = await f.manager()
+    const launched = await manager.launch(launch)
+    if (launched._tag !== 'Ok')
+      throw new Error('Fixture launch failed')
+    await writeTerminalExit(f.directory, launched.value.id, launched.value.generation, { code: 23 })
+    expect(await manager.sessions()).toMatchObject([
+      { id: launched.value.id, state: 'Stopping', exit: { code: 23 } },
+    ])
+    await manager.close()
+    const recovered = await f.manager()
+    expect(recovered.intent(launched.value.id)).toMatchObject({
+      invocationId: 'owned-invocation',
+      controlGroup: '/owned/cgroup',
+    })
+    f.empty()
+
+    expect(await recovered.sessions()).toMatchObject([
+      { id: launched.value.id, state: 'Exited', exit: { code: 23 } },
+    ])
+  })
   it('continues startup after one persisted running session inspection failure', async () => {
     const f = await fixture()
     const first = await f.manager()

@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  normalizeTerminalExit,
   parseTerminalClientMessage,
   parseTerminalJson,
   parseTerminalLaunch,
 } from '../src/terminal.ts'
 
 describe('terminal request boundaries', () => {
+  it('normalizes bounded PTY exit codes and signals without exposing other data', () => {
+    expect(normalizeTerminalExit({ exitCode: 0, signal: 0 })).toEqual({ code: 0 })
+    expect(normalizeTerminalExit({ exitCode: 23, signal: 0 })).toEqual({ code: 23 })
+    expect(normalizeTerminalExit({ exitCode: -1, signal: 9 })).toEqual({ signal: 9 })
+    expect(normalizeTerminalExit({ exitCode: 300, signal: 999 })).toBeUndefined()
+  })
   it('rejects provider arrays rather than coercing them into provider names', () => {
     expect(
       parseTerminalLaunch({

@@ -1,6 +1,7 @@
 import type { TerminalHistorySnapshot } from './terminal-history.ts'
 import type {
   TerminalClientMessage,
+  TerminalExit,
   TerminalInput,
   TerminalResult,
   TerminalScreen,
@@ -454,12 +455,12 @@ export function createTerminalOwner(options: {
       })
       return { _tag: 'Ok', value: true }
     },
-    exited() {
+    exited(exit?: TerminalExit) {
       publish()
       ended = true
       writer = null
       broadcast({ type: 'WriterChanged', writer: null })
-      broadcast({ type: 'Process', state: 'Stopping' })
+      broadcast({ type: 'Process', state: 'Stopping', ...(exit ? { exit } : {}) })
     },
     dispose() {
       histories.clear()
