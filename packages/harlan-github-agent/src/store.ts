@@ -11807,14 +11807,22 @@ export function openJournalStore(
         state_tag: 'Pending' | 'Running' | 'Published' | 'Superseded'
         fence: number
       } | undefined
-      if (existing !== undefined && (existing.state_tag === 'Pending' || existing.state_tag === 'Running')) {
+      // Gate evidence digests change with every CI read while the comment body
+      // stays the same. Requeueing that identical Published body republished
+      // the same comment every sweep pass. It stays on GitHub until another
+      // body replaces it or a drift reconciliation sees it lost or changed.
+      const latest = database.prepare('SELECT command_id FROM review_gate_projections WHERE review_run_id = ?')
+        .get(input.reviewRunId) as { command_id: string | null } | undefined
+      const settled = existing !== undefined && (existing.state_tag === 'Pending' || existing.state_tag === 'Running'
+        || (existing.state_tag === 'Published' && input.reconciliationId === undefined && latest?.command_id === existing.id))
+      if (settled) {
         database.prepare('UPDATE review_gate_projections SET command_id = ? WHERE review_run_id = ?').run(existing.id, input.reviewRunId)
         database.exec('COMMIT')
         return { _tag: 'Duplicate', commandId: existing.id }
       }
       if (existing !== undefined) {
-        // The identical body already went through Publication, so this restage
-        // means GitHub lost the comment. Requeue the same command, keeping its
+        // A drift reconciliation saw GitHub lose or change the comment, or a
+        // superseded status is due again. Requeue the same command, keeping its
         // comment id, so the publisher repairs the existing comment.
         const reason = existing.state_tag === 'Published'
           ? 'The published gate comment needs repair.'

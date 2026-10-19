@@ -389,6 +389,26 @@ describe('review work follows the head commit', () => {
     }
   })
 
+  it('republishes an identical gate comment only when drift reconciliation asks for it', () => {
+    const store = createStore()
+    recordRetryingReview(store)
+    const input = retainedGateInput(store)
+    const staged = store.stageReviewGateStatus(input)
+    if (staged._tag !== 'Staged')
+      throw new Error('Expected staged retained gates.')
+    const publication = store.claimNextTerminalReviewStatus('publisher', input.at, 60_000)!
+    expect(store.completeReviewStatus({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at: '2026-08-13T02:02:01.000Z', commentId: 42, url: 'url' })).toBe(true)
+
+    // Fresh CI evidence changes the gates, never the comment body.
+    const gates = { ...passedReviewGates(), ci: { _tag: 'Passed' as const, evidence: [{ label: 'required-ci', sha256: 'd'.repeat(64) }] } }
+    expect(store.stageReviewGateStatus({ ...input, gates, at: '2026-08-13T02:03:00.000Z' })).toEqual({ _tag: 'Duplicate', commandId: publication.id })
+    expect(store.claimNextTerminalReviewStatus('publisher', '2026-08-13T02:03:00.000Z', 60_000)).toBeNull()
+    expect(store.listReviewGateRefreshes()).toEqual([expect.objectContaining({ gates, gatePublication: { _tag: 'Published', publicationId: publication.id } })])
+
+    expect(store.stageReviewGateStatus({ ...input, gates, reconciliationId: 'Missing:42:2026-08-13T02:04:00.000Z', at: '2026-08-13T02:04:00.000Z' })).toEqual({ _tag: 'Staged', commandId: publication.id })
+    expect(store.claimNextTerminalReviewStatus('publisher', '2026-08-13T02:04:00.000Z', 60_000)).toMatchObject({ id: publication.id })
+  })
+
   it('rejects retained gate staging after explicit Cancel', () => {
     const store = createStore()
     const task = recordRetryingReview(store)
