@@ -46,6 +46,11 @@ export interface CircuitProtectedProviderOptions {
 
 /** Classifies a provider failure without keeping random request identifiers. */
 export function stableProviderFailureClass(reason: string): ProviderFailureClass {
+  // Matched first. The provider rejected the model configuration the Task
+  // pinned, not the provider's health, and no later pattern owns that
+  // wording. Aligned with the provider_config kind in failure.ts.
+  if (/\bvariant unavailable\b/i.test(reason))
+    return 'provider_config'
   if (/\b(?:limit exhausted|usage limit|quota exceeded|credits? exhausted|weekly\/monthly limit)\b/i.test(reason))
     return 'usage_limit'
   if (/\b(?:network|ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed)\b/i.test(reason))

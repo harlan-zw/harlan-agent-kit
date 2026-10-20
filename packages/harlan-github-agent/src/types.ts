@@ -1136,6 +1136,8 @@ export type ProviderFailureClass
     | 'stalled'
     | 'process_exit'
     | 'authentication'
+    /** The provider rejected the model configuration the Task pinned. */
+    | 'provider_config'
     | 'unknown'
 
 export type ProviderCircuitState

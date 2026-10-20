@@ -13,6 +13,9 @@ describe('agent provider circuit boundary', () => {
   it('recognizes exhausted subscription windows', () => {
     expect(stableProviderFailureClass('Weekly/Monthly Limit Exhausted')).toBe('usage_limit')
   })
+  it('classifies a rejected model variant as provider configuration', () => {
+    expect(stableProviderFailureClass('Variant unavailable for zai-coding-plan/glm-5.3-flash: medium')).toBe('provider_config')
+  })
   it.each(['host-cancelled', 'sandbox-setup', 'resource-limit'] as const)('excludes %s events from model health with a live controller signal', async (cause) => {
     const failures: unknown[] = []
     const successes: unknown[] = []

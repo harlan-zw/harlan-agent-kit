@@ -1005,6 +1005,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   }) => ProviderStartReservation
   /** Releases a host-interrupted canary without claiming provider health evidence. */
   releaseProviderStart: (input: { circuitId: string, workerId: string, fence: number, at: string }) => boolean
+  /** Ill-health opens and counts. A provider_config rejection claims no health evidence and releases only the canary it holds. */
   recordProviderFailure: (input: {
     provider: AgentProviderName
     credential: string
@@ -1015,7 +1016,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     canaryCircuitId?: string
     canaryFence?: number
     at: string
-  }) => ProviderCircuit
+  }) => ProviderCircuit | null
   recordProviderSuccess: (input: {
     provider: AgentProviderName
     credential: string
@@ -13815,6 +13816,37 @@ export function openJournalStore(
   }
 
   const recordProviderFailure: JournalStore['recordProviderFailure'] = (input) => {
+    // A rejected model variant fails identically on every attempt, so it says
+    // nothing about provider health. It must not open a circuit, count a
+    // failure, or keep the half-open canary it won: the release moves the
+    // circuit back to an immediately claimable Open, so the probe stays
+    // recoverable instead of pausing provider starts for another cooldown.
+    if (input.failureClass === 'provider_config') {
+      if (input.canaryCircuitId === undefined)
+        return null
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        const released = database.prepare(`
+          UPDATE provider_circuits
+          SET state_tag = 'Open', retry_at = ?, canary_worker_id = NULL,
+            canary_lease_expires_at = NULL, last_detail = ?, updated_at = ?
+          WHERE id = ? AND state_tag = 'HalfOpen' AND canary_worker_id = ? AND canary_fence = ?
+        `).run(input.at, input.detail, input.at, input.canaryCircuitId, input.workerId ?? null, input.canaryFence ?? null).changes === 1
+        if (!released) {
+          database.exec('COMMIT')
+          return null
+        }
+        const row = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
+          .get(input.canaryCircuitId) as unknown as ProviderCircuitRow
+        recordProviderCircuitEvent(database, row, 'CanaryReleased', 'HalfOpen', 'Open', input.at, input.detail)
+        database.exec('COMMIT')
+        return providerCircuitFromRow(row)
+      }
+      catch (error) {
+        database.exec('ROLLBACK')
+        throw error
+      }
+    }
     const id = input.canaryCircuitId ?? digest(`${input.provider}:${input.credential}:${input.model}:${input.failureClass}`)
     const usageLimit = input.failureClass === 'usage_limit'
     const detail = usageLimit ? 'The Agent provider reached its usage limit.' : `The Agent provider reported a ${input.failureClass.replace('_', ' ')} failure.`

@@ -278,6 +278,52 @@ describe('persistent Agent provider circuits', () => {
       .toEqual(['Opened', 'CanaryClaimed', 'Opened', 'FailureObserved', 'FailureObserved'])
   })
 
+  it('releases the canary without reopening the circuit when a rejected variant fails it', () => {
+    const journal = store()
+    for (const at of ['2026-08-13T01:00:00.000Z', '2026-08-13T01:00:01.000Z', '2026-08-13T01:00:02.000Z'])
+      journal.recordProviderFailure({ ...circuit, detail: 'Network error.', at })
+    const canary = journal.reserveProviderStart({
+      ...circuit,
+      workerId: 'variant-canary',
+      at: '2026-08-13T01:05:02.000Z',
+      leaseMilliseconds: 60_000,
+    })
+    if (canary._tag !== 'Allowed' || canary.canary === null)
+      throw new Error('Expected one half-open canary.')
+
+    journal.recordProviderFailure({
+      ...circuit,
+      failureClass: 'provider_config',
+      detail: 'Variant unavailable for zai-coding-plan/glm-5.3-flash: medium',
+      workerId: canary.canary.workerId,
+      canaryCircuitId: canary.canary.circuitId,
+      canaryFence: canary.canary.fence,
+      at: '2026-08-13T01:05:12.000Z',
+    })
+
+    expect(journal.listProviderCircuits()[0]).toMatchObject({
+      failures: 3,
+      state: { _tag: 'Open', retryAt: '2026-08-13T01:05:12.000Z' },
+    })
+    expect(journal.listWorkflowEvents({ stream: 'provider_circuit', limit: 20 }).map(event => event.event))
+      .toEqual(['CanaryReleased', 'CanaryClaimed', 'Opened', 'FailureObserved', 'FailureObserved'])
+    const next = journal.reserveProviderStart({ ...circuit, workerId: 'variant-canary-2', at: '2026-08-13T01:05:13.000Z', leaseMilliseconds: 60_000 })
+    expect(next).toMatchObject({ _tag: 'Allowed', canary: { workerId: 'variant-canary-2', fence: 2 } })
+  })
+
+  it('claims no health evidence for a rejected variant on a closed circuit', () => {
+    const journal = store()
+    journal.recordProviderFailure({
+      ...circuit,
+      failureClass: 'provider_config',
+      detail: 'Variant unavailable for zai-coding-plan/glm-5.3-flash: medium',
+      workerId: 'task-1',
+      at: '2026-08-13T01:00:00.000Z',
+    })
+    expect(journal.listProviderCircuits()).toEqual([])
+    expect(journal.providerCanStart({ ...circuit, at: '2026-08-13T01:00:01.000Z' })).toBe(true)
+  })
+
   it('closes only the failure class owned by a half-open canary', () => {
     const journal = store()
     for (const failureClass of ['network', 'authentication'] as const) {
