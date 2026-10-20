@@ -523,6 +523,7 @@ const incidentKindLabels: Record<IncidentKind, string> = {
   installation_access: 'Installation access',
   network: 'Network',
   policy: 'Repository policy',
+  provider_config: 'Provider config',
   rate_limit: 'Rate limit',
   resource_limit: 'Memory limit',
   runner_lost: 'Runner lost',

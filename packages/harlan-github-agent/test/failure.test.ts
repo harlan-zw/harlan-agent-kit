@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyCheckFailure, classifyFailure, contextBudgetExhaustedReason, isSubjectMovedReason, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, recoveryDelayMilliseconds, REVIEW_REPAIR_REFUSALS } from '../src/failure.ts'
+import { canRecoverFailure, classifyCheckFailure, classifyFailure, contextBudgetExhaustedReason, isSubjectMovedReason, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, recoveryDelayMilliseconds, REVIEW_REPAIR_REFUSALS } from '../src/failure.ts'
 
 describe('classifyFailure', () => {
   it('defers memory exhaustion to bounded recovery instead of immediate attempts', () => {
@@ -53,6 +53,18 @@ describe('classifyFailure', () => {
     // slipped into a Transient pattern would spend an agent turn per pass.
     expect(classifyFailure({ message: reason })).toEqual({ _tag: 'Permanent', kind: 'policy' })
     expect(mayRetryFailure({ message: reason })).toBe(false)
+  })
+
+  it.each([
+    'The opencode session failed: Variant unavailable for zai-coding-plan/glm-5.3-flash: medium',
+    'The codex session failed: Variant unavailable for openai/gpt-5.2: high',
+  ])('never retries %s, because the variant the role pinned does not exist', (message) => {
+    // The owned-agent prefix wraps reasons the provider produced. A rejected
+    // variant is one of them that no retry can fix, so it must stop before the
+    // provider kind wins its unbounded recovery budget back.
+    expect(classifyFailure({ message })).toEqual({ _tag: 'Permanent', kind: 'provider_config' })
+    expect(mayRetryFailure({ message })).toBe(false)
+    expect(canRecoverFailure({ message }, 0)).toBe(false)
   })
 
   it('keeps the attempts of a failure nobody has classified', () => {
