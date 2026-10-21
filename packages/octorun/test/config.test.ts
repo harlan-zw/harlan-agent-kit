@@ -33,6 +33,7 @@ it.each([
   [{ ...input(), github: { ...input().github, appId: '9007199254740992' } }, 'appId'],
   [{ ...input(), repositories: [] }, 'repositories'],
   [{ ...input(), repositories: [{ id: 7, fullName: '../example', installationId: 8 }] }, 'fullName'],
+  [{ ...input(), repositories: [{ ...input().repositories[0], defaultBranch: 'untrusted-override' }] }, 'defaultBranch'],
   [{ ...input(), repositories: [{ id: 7, fullName: 'team/example', installationId: 8 }, { id: 7, fullName: 'team/example', installationId: 8 }] }, 'duplicate'],
   [{ ...input(), provider: { ...input().provider, apiKey: 'must-never-be-stored' } }, 'apiKey'],
   [{ ...input(), provider: { ...input().provider, baseUrl: 'http://example.test/v1' } }, 'HTTPS'],

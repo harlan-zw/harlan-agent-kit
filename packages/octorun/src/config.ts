@@ -13,7 +13,6 @@ export type WorkflowSource
     | { _tag: 'Repository', path: string }
 
 export interface ConfiguredRepository extends RepositoryRef {
-  defaultBranch: string
   policy: RepositoryPolicy
   workflowSource: WorkflowSource
 }
@@ -99,16 +98,13 @@ function parseSource(value: unknown): Result<WorkflowSource> {
 function parseRepository(value: unknown): Result<ConfiguredRepository> {
   if (!record(value))
     return invalid('Each repositories entry must be an object.')
-  const unknown = keys(value, ['id', 'installationId', 'fullName', 'defaultBranch', 'policy', 'workflowSource'])
+  const unknown = keys(value, ['id', 'installationId', 'fullName', 'policy', 'workflowSource'])
   if (unknown)
     return invalid(`Unknown repository setting: ${unknown}.`)
   if (!integer(value.id, 1, Number.MAX_SAFE_INTEGER) || !integer(value.installationId, 1, Number.MAX_SAFE_INTEGER))
     return invalid('Repository id and installationId must be positive integers.')
   if (!text(value.fullName) || !/^[\w.-]+\/[\w.-]+$/.test(value.fullName) || value.fullName.split('/').some(part => part === '.' || part === '..'))
     return invalid('Repository fullName must use owner/repository.')
-  const defaultBranch = value.defaultBranch ?? 'main'
-  if (!text(defaultBranch) || defaultBranch.startsWith('/') || defaultBranch.includes('..') || /[\s~^:?*[\\]/.test(defaultBranch))
-    return invalid('Repository defaultBranch must be a valid branch name.')
   const policy = value.policy ?? { enabled: true, capabilities: defaultCapabilities, maxConcurrency: 1 }
   if (!record(policy) || keys(policy, ['enabled', 'capabilities', 'maxConcurrency']) || typeof policy.enabled !== 'boolean' || !integer(policy.maxConcurrency, 1, 100))
     return invalid('Repository policy needs enabled, capabilities, and maxConcurrency.')
@@ -121,7 +117,6 @@ function parseRepository(value: unknown): Result<ConfiguredRepository> {
     id: value.id,
     installationId: value.installationId,
     fullName: value.fullName,
-    defaultBranch,
     policy: { enabled: policy.enabled, capabilities: [...new Set(policy.capabilities)] as Capability[], maxConcurrency: policy.maxConcurrency },
     workflowSource: source.value,
   })

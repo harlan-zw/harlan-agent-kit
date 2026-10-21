@@ -12,7 +12,6 @@ repositories:
   - id: 456
     fullName: your-org/your-repository
     installationId: 789
-    defaultBranch: main
     policy:
       enabled: true
       capabilities:
