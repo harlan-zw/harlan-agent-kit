@@ -246,7 +246,7 @@ function parseRestartRequest(value: unknown): Parsed<RestartRequest> {
   if (input === undefined
     || !['Requested', 'Restarting', 'Completed', 'ActionRequired'].includes(String(input._tag))
     || typeof input.id !== 'string'
-    || (input.source !== 'dashboard' && input.source !== 'tray' && input.source !== 'helper')
+    || (input.source !== 'dashboard' && input.source !== 'tray' && input.source !== 'helper' && input.source !== 'schedule')
     || !validOperation
     || typeof input.requestedAt !== 'string') {
     return err('The service returned an invalid Restart request.')

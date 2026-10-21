@@ -207,6 +207,8 @@ export interface AgentConfig {
   maxOpenPullRequests: number
   /** Whether Ready Routine-filed issues are planned as Batches before Issue work starts. */
   issueBatches: boolean
+  /** When the service installs an available update by itself. Absent waits for a person. */
+  serviceUpdate?: ServiceUpdateSchedule
   pollIntervalSeconds: number
   issueCutoff: string
   externalRepositories: ExternalRepositoryWatch[]
@@ -1695,7 +1697,14 @@ export type ServiceUpdateStatus
     | { _tag: 'Available', deployedCommit: string, latestCommit: string, checkedAt: string }
     | { _tag: 'Unavailable', deployedCommit: string, checkedAt: string, reason: string }
 
-export type RestartRequestSource = 'dashboard' | 'tray' | 'helper'
+export type RestartRequestSource = 'dashboard' | 'tray' | 'helper' | 'schedule'
+
+/** The local time each day the service may install an available update. */
+export interface ServiceUpdateSchedule {
+  /** Minutes after local midnight. */
+  minuteOfDay: number
+  timeZone: string
+}
 
 export type RestartOperation
   = | { _tag: 'Restart' }

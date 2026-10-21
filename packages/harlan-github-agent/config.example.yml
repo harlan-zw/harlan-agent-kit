@@ -92,6 +92,13 @@ max_open_pull_requests: 8
 # issues, and its units run as sub agents under one Agent permit. Set false to
 # run every issue alone.
 issue_batches: true
+# Install an available update once a day, in the hour after this local time.
+# The update waits for active work, like Update in the dashboard. It moves only
+# this checkout. If an update fails, the next try is the following day. Omit
+# this block to leave every update to a person.
+# service_update:
+#   at: "03:00"
+#   time_zone: Australia/Melbourne
 # With webhooks on, polling only has to catch what a delivery missed.
 poll_interval_seconds: 60
 issue_cutoff: 2026-07-14

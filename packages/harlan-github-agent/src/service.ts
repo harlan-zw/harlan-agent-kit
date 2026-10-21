@@ -98,6 +98,7 @@ import { createRoutineScanWorker } from './routine-worker.ts'
 import { resolveRecoveredRunnerIncidents } from './runner-lost-recovery.ts'
 import { clearAbandonedRunningLabels } from './running-label-sweep.ts'
 import { startAgentServer } from './server.ts'
+import { createServiceUpdateScheduler } from './service-update-schedule.ts'
 import { createSessionController } from './session-controller.ts'
 import { openJournalStore } from './store.ts'
 import { runCompletionTask } from './take-ownership-completion.ts'
@@ -1825,6 +1826,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
   restartController.start()
   options.serviceUpdate.start()
+  // Absent leaves every Update to the dashboard, the tray, or the helper.
+  const updateScheduler = config.serviceUpdate === undefined
+    ? undefined
+    : createServiceUpdateScheduler({
+        schedule: config.serviceUpdate,
+        now,
+        readStatus: options.serviceUpdate.read,
+        store,
+        onRequested: request => options.logger.info(`Queued the scheduled Update as Restart request ${request.id}.`),
+      })
+  updateScheduler?.start()
   capacity.start()
   // Webhooks refresh only their repository. Timers still recover missed deliveries.
   // Global maintenance and Routine reads keep their own timer.
@@ -1958,6 +1970,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     waitForRestart: restartController.waitForRestart,
     stop: async () => {
       restartController.stop()
+      updateScheduler?.stop()
       await Promise.all([
         capacity.stop(),
         options.serviceUpdate.stop(),
