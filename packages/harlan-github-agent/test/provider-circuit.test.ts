@@ -22,6 +22,7 @@ describe('agent provider circuit boundary', () => {
       now: () => new Date(),
       provider: { name: 'opencode', async* runTurn() { yield { _tag: 'Failed', reason: 'The host stopped the turn.', cause } } },
       store: {
+        renewProviderStart: () => true,
         releaseProviderStart: (input) => {
           released.push(input)
           return true
@@ -53,6 +54,7 @@ describe('agent provider circuit boundary', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       provider,
       store: {
+        renewProviderStart: () => true,
         releaseProviderStart: () => false,
         reserveProviderStart: () => ({ _tag: 'Allowed', canary: null }),
         recordProviderFailure: input => recorded.push(input),
@@ -91,6 +93,7 @@ describe('agent provider circuit boundary', () => {
         },
       },
       store: {
+        renewProviderStart: () => true,
         releaseProviderStart: () => false,
         reserveProviderStart: () => ({ _tag: 'Allowed', canary: null }),
         recordProviderFailure: input => failures.push(input),
@@ -127,6 +130,7 @@ describe('agent provider circuit boundary', () => {
         },
       },
       store: {
+        renewProviderStart: () => true,
         releaseProviderStart: () => false,
         reserveProviderStart: () => ({ _tag: 'Allowed', canary: null }),
         recordProviderFailure: () => failures += 1,

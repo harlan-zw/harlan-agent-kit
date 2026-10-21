@@ -1031,6 +1031,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     at: string
     leaseMilliseconds: number
   }) => ProviderStartReservation
+  /** Extends only the current, unexpired canary reservation. */
+  renewProviderStart: (input: { circuitId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   /** Releases a host-interrupted canary without claiming provider health evidence. */
   releaseProviderStart: (input: { circuitId: string, workerId: string, fence: number, at: string }) => boolean
   recordProviderFailure: (input: {
@@ -13840,6 +13842,16 @@ export function openJournalStore(
     }
   }
 
+  const renewProviderStart: JournalStore['renewProviderStart'] = (input) => {
+    const leaseExpiresAt = new Date(Date.parse(input.at) + input.leaseMilliseconds).toISOString()
+    return database.prepare(`
+      UPDATE provider_circuits
+      SET canary_lease_expires_at = ?, updated_at = ?
+      WHERE id = ? AND state_tag = 'HalfOpen' AND canary_worker_id = ? AND canary_fence = ?
+        AND canary_lease_expires_at > ?
+    `).run(leaseExpiresAt, input.at, input.circuitId, input.workerId, input.fence, input.at).changes === 1
+  }
+
   const releaseProviderStart: JournalStore['releaseProviderStart'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -16902,6 +16914,7 @@ export function openJournalStore(
     providerCanStart,
     reserveProviderStart,
     releaseProviderStart,
+    renewProviderStart,
     recordProviderFailure,
     recordProviderSuccess,
     listProviderCircuits,
