@@ -10,6 +10,11 @@ export const findingMarker = (fingerprint: string): string => `<!-- octorun:find
 
 const bodyWith = (body: string, ...markers: string[]): string => `${body.trim()}\n\n${markers.join('\n')}`
 const ownedBy = (value: unknown, actorId: number): boolean => githubObject(githubObject(value)?.user)?.id === actorId
+export function isOctorunFinding(value: unknown, actorId: number): boolean {
+  const comment = githubObject(value)
+  return ownedBy(value, actorId) && !githubId(comment?.in_reply_to_id) && typeof comment?.body === 'string'
+    && /\n<!-- octorun:finding:[a-f0-9]{64} -->\n<!-- octorun:publication:[a-f0-9]{64} -->$/.test(comment.body.trimEnd())
+}
 function hasFinding(value: unknown, actorId: number, fingerprint: string, path: string): boolean {
   const object = githubObject(value)
   return ownedBy(value, actorId) && !githubId(object?.in_reply_to_id) && object?.path === path && typeof object.body === 'string' && object.body.trimEnd().split('\n').at(-2) === findingMarker(fingerprint)
@@ -179,7 +184,7 @@ export function createGitHubPublisher(options: { client: GitHubClient, authorize
       if (bot._tag === 'Err')
         return bot
       const pullRequestUrl = String(githubObject(parent.value)?.pull_request_url)
-      if (!ownedBy(parent.value, bot.value.id) || !pullRequestUrl.endsWith(`${root}/pulls/${effect.number}`))
+      if (!isOctorunFinding(parent.value, bot.value.id) || !pullRequestUrl.endsWith(`${root}/pulls/${effect.number}`))
         return err({ _tag: 'Authorization', message: 'Replies require an App-owned finding in this pull request.' })
       path = `${root}/pulls/${effect.number}/comments/${rootId}/replies`
       body = { body: bodyWith(effect.body, marker) }

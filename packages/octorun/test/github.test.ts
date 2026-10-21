@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer'
 import { createHmac, generateKeyPairSync, verify } from 'node:crypto'
 import { createServer } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createGitHubAppAuth, createGitHubClient, createGitHubPublisher, createGitHubSnapshotReader, normalizeGitHubWebhook, overviewMarker, pollGitHubEvents, publicationMarker, verifyWebhookSignature } from '../src/github.ts'
+import { createGitHubAppAuth, createGitHubClient, createGitHubPublisher, createGitHubSnapshotReader, findingMarker, normalizeGitHubWebhook, overviewMarker, pollGitHubEvents, publicationMarker, verifyWebhookSignature } from '../src/github.ts'
 
 const now = Date.parse('2026-10-21T00:00:00.000Z')
 const head = 'a'.repeat(40)
@@ -303,7 +303,7 @@ describe('gitHub publication reconciliation', () => {
     const replies: unknown[] = []
     const test = await fixture((request) => {
       if (request.path === '/repos/acme/project/pulls/comments/5')
-        return { body: { id: 5, user: bot, pull_request_url: 'https://api.github.com/repos/acme/project/pulls/1' } }
+        return { body: { id: 5, user: bot, body: `Finding.\n\n${findingMarker('old-finding')}\n${publicationMarker('old-publication')}`, pull_request_url: 'https://api.github.com/repos/acme/project/pulls/1' } }
       if (request.path === '/repos/acme/project/pulls/1/comments/5/replies') {
         replies.push(request.body)
         return { body: { id: 6, user: bot, body: request.body.body } }
@@ -314,6 +314,13 @@ describe('gitHub publication reconciliation', () => {
     expect(await publisher.publish(publication({ _tag: 'Reply', repository: 'acme/project', number: 1, commentId: 5, body: 'This check permits an invalid value.' }))).toMatchObject({ _tag: 'Ok', value: { id: '6' } })
     expect(replies).toEqual([{ body: `This check permits an invalid value.\n\n${publicationMarker('result')}` }])
     expect(test.reviews).toEqual([])
+  })
+
+  it('refuses to adopt another controller comment from the same App', async () => {
+    const test = await fixture(request => request.path === '/repos/acme/project/pulls/comments/5' ? { body: { id: 5, user: bot, body: 'An older controller wrote this review.', pull_request_url: 'https://api.github.com/repos/acme/project/pulls/1' } } : undefined)
+    const publisher = createGitHubPublisher({ client: test.client })
+    expect(await publisher.publish(publication({ _tag: 'Reply', repository: 'acme/project', number: 1, commentId: 5, body: 'Answer.' }))).toMatchObject({ _tag: 'Err', error: { _tag: 'Authorization' } })
+    expect(test.requests.some(request => request.method === 'POST' && request.path.endsWith('/replies'))).toBe(false)
   })
 })
 

@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { parseDocument } from 'yaml'
 import { resolveSecrets } from './config.ts'
 import { githubId, githubObject } from './github-auth.ts'
+import { isOctorunFinding } from './github-publication.ts'
 import { authorizeGitHubCommand, createGitHubAppAuth, createGitHubClient, createGitHubPublisher, createGitHubSnapshotReader, githubDigest, githubRepositoryPath, normalizeGitHubWebhook, parseGitHubCommand, pollGitHubEvents, verifyWebhookSignature } from './github.ts'
 import { createOpenAICompatibleProvider } from './providers.ts'
 import { adversarialReviewPreset, changeSummaryPreset, conversationPreset, createReviewTaskTypes } from './review.ts'
@@ -268,7 +269,7 @@ export async function createOctorun(options: OctorunServiceOptions) {
         if (bot._tag === 'Err')
           return bot
         const rootComment = githubObject(root.value)
-        if (!rootComment || githubObject(rootComment.user)?.id !== bot.value.id)
+        if (!rootComment || !isOctorunFinding(rootComment, bot.value.id))
           return ok({ ignored: true })
         const comments = await client.paginate(event.repository.fullName, `${githubRepositoryPath(event.repository.fullName)}/pulls/${event.target.number}/comments`)
         if (comments._tag === 'Err')
