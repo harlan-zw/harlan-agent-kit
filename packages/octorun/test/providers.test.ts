@@ -80,6 +80,15 @@ describe('agent provider over HTTP', () => {
     expect(await provider.value.generate(request())).toMatchObject({ _tag: 'Err', error: { _tag: 'Permanent', code: 'invalid-response' } })
   })
 
+  it.each([null, []])('accepts an empty tool field on a text response', async (toolCalls) => {
+    const provider = createOpenAICompatibleProvider({ baseUrl: 'https://models.example/v1', model: 'review-model', apiKey: 'secret' }, {
+      fetch: async () => Response.json({ choices: [{ message: { content: 'Text response.', tool_calls: toolCalls, function_call: null }, finish_reason: 'stop' }], usage: { prompt_tokens: 2, completion_tokens: 3 } }),
+    })
+    if (provider._tag === 'Err')
+      throw new Error(provider.error.message)
+    expect(await provider.value.generate(request())).toMatchObject({ _tag: 'Ok', value: { text: 'Text response.' } })
+  })
+
   it('cancels an oversized streamed response before parsing', async () => {
     let cancelled = false
     const provider = createOpenAICompatibleProvider({ baseUrl: 'https://models.example/v1', model: 'review-model', apiKey: 'secret', maxResponseBytes: 1024 }, {

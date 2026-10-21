@@ -45,7 +45,8 @@ function parseResponse(value: unknown, maxOutputTokens: number): Result<AgentRes
   if (!record(choice) || choice.finish_reason !== 'stop' || !record(choice.message))
     return invalid()
   const message = choice.message
-  if (typeof message.content !== 'string' || message.tool_calls !== undefined || message.function_call !== undefined || message.refusal)
+  const hasTools = Array.isArray(message.tool_calls) ? message.tool_calls.length > 0 : message.tool_calls !== undefined && message.tool_calls !== null
+  if (typeof message.content !== 'string' || hasTools || (message.function_call !== undefined && message.function_call !== null) || message.refusal)
     return invalid()
   if (!usage || usage.outputTokens > maxOutputTokens) {
     return invalid()
