@@ -1,5 +1,5 @@
 import type { EventEnvelope } from '../src/index.ts'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -9,6 +9,24 @@ import { createRunner, ok, openStore, parseWorkflow, restoreStoreBackup } from '
 const event = (id = 'one'): EventEnvelope => ({ id, semanticKey: id, source: 'webhook', name: 'pull_request', action: 'opened', repository: { id: 1, fullName: 'acme/project', installationId: 2 }, actor: null, target: { _tag: 'PullRequest', number: 4, headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40) }, occurredAt: '2026-10-21T00:00:00.000Z', receivedAt: '2026-10-21T00:00:00.000Z', data: {} })
 
 describe('durable workflow storage', () => {
+  it('keeps state and SQLite sidecars private inside an existing directory', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'octorun-state-permissions-'))
+    await chmod(directory, 0o755)
+    const previousMask = process.umask(0o022)
+    const path = join(directory, 'state.sqlite')
+    const store = openStore({ path })
+    try {
+      store.recordEvent({ ...event(), data: { private: 'repository source' } })
+      expect((await stat(directory)).mode & 0o777).toBe(0o700)
+      for (const file of [path, `${path}-wal`, `${path}-shm`, `${path}.lock`])
+        expect((await stat(file)).mode & 0o777).toBe(0o600)
+    }
+    finally {
+      store.close()
+      process.umask(previousMask)
+      await rm(directory, { recursive: true })
+    }
+  })
   it('deduplicates a delivery and refuses request ID reuse with different data', () => {
     const store = openStore({ path: ':memory:' })
     expect(store.recordEvent(event())).toEqual({ _tag: 'Ok', value: { eventId: 'one', duplicate: false } })

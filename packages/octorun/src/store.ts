@@ -1,8 +1,8 @@
 import type { EventEnvelope, JsonValue, PublicationRecord, Result, RunRecord, TaskFailure } from './types.ts'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, realpathSync } from 'node:fs'
 import { chmod, copyFile, rename, rm } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { backup, DatabaseSync } from 'node:sqlite'
 import { err, ok } from './types.ts'
 import { digest } from './workflow.ts'
@@ -36,10 +36,29 @@ const terminalStates = ['Succeeded', 'Failed', 'Cancelled', 'Superseded', 'Skipp
 const json = <T>(value: unknown): T => JSON.parse(String(value)) as T
 const failure = (message: string): Result<never> => err({ _tag: 'Configuration', message })
 
+function privateDirectory(path: string): string {
+  const directory = dirname(resolve(path))
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  const canonical = realpathSync(directory)
+  if (process.getuid && lstatSync(canonical).uid !== process.getuid())
+    throw new Error('Choose a state or backup directory owned by the controller.')
+  chmodSync(canonical, 0o700)
+  return `${canonical}/${basename(path)}`
+}
+
+function privateFile(path: string): void {
+  if (existsSync(path)) {
+    const stat = lstatSync(path)
+    if (!stat.isFile() || (process.getuid && stat.uid !== process.getuid()))
+      throw new Error('State and backup files must be owned regular files, without symbolic links.')
+  }
+  closeSync(openSync(path, 'a', 0o600))
+  chmodSync(path, 0o600)
+}
+
 function acquireLock(path: string): () => void {
   const lockPath = `${path}.lock`
-  if (existsSync(lockPath) && (lstatSync(lockPath).isSymbolicLink() || (process.getuid && lstatSync(lockPath).uid !== process.getuid())))
-    throw new Error('The controller lock must be an owned regular file, without symbolic links.')
+  privateFile(lockPath)
   const lock = new DatabaseSync(lockPath)
   try {
     chmodSync(lockPath, 0o600)
@@ -64,11 +83,12 @@ export function openStore(options: StoreOptions) {
   const memory = options.path === ':memory:'
   let path = options.path
   if (!memory) {
-    path = resolve(path)
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-    path = `${realpathSync(dirname(path))}/${path.slice(path.lastIndexOf('/') + 1)}`
-    if (existsSync(path) && (lstatSync(path).isSymbolicLink() || (process.getuid && lstatSync(path).uid !== process.getuid())))
-      throw new Error('The state database must be an owned regular file, without symbolic links.')
+    path = privateDirectory(path)
+    privateFile(path)
+    for (const suffix of ['-wal', '-shm']) {
+      if (existsSync(`${path}${suffix}`))
+        privateFile(`${path}${suffix}`)
+    }
   }
   const release = memory ? () => {} : acquireLock(path)
   const db = (() => {
@@ -349,8 +369,10 @@ export function openStore(options: StoreOptions) {
       return rows.map(row => ({ id: Number(row.id), at: String(row.at), runId: row.run_id === null ? null : String(row.run_id), kind: String(row.kind), data: json<JsonValue>(row.data) }))
     },
     async backup(destination: string): Promise<void> {
+      destination = privateDirectory(destination)
       if (resolve(destination) === path)
         throw new Error('Choose a backup path outside the live database.')
+      privateFile(destination)
       await backup(db, destination)
       await chmod(destination, 0o600)
     },
@@ -409,7 +431,7 @@ export function openStore(options: StoreOptions) {
 export type WorkflowStore = ReturnType<typeof openStore>
 
 export async function restoreStoreBackup(options: { source: string, destination: string }): Promise<void> {
-  const destination = resolve(options.destination)
+  const destination = privateDirectory(options.destination)
   if (resolve(options.source) === destination)
     throw new Error('Choose separate source and destination paths for restore.')
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 })
