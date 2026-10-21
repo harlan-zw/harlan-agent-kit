@@ -73,6 +73,7 @@ describe('durable workflow storage', () => {
     const store = openStore({ path: ':memory:' })
     store.setPause('acme/project', '1:pull_request:4', true)
     expect(store.paused('acme/project', '1:pull_request:4')).toBe(true)
+    expect(store.paused('ACME/Project', '1:pull_request:4')).toBe(true)
     expect(store.paused('acme/project', '1:pull_request:5')).toBe(false)
     expect(store.operatorPaused()).toBe(false)
     store.setOperatorPause(true)

@@ -331,10 +331,10 @@ export function openStore(options: StoreOptions) {
       db.prepare('INSERT INTO cursors(key, data) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET data=excluded.data').run(key, JSON.stringify(value))
     },
     paused(repository: string, target: string): boolean {
-      return control(`pause:${repository}:*`) === true || control(`pause:${repository}:${target}`) === true
+      return control(`pause:${repository.toLowerCase()}:*`) === true || control(`pause:${repository.toLowerCase()}:${target}`) === true
     },
     setPause(repository: string, target: string | null, value: boolean): void {
-      setControl(`pause:${repository}:${target ?? '*'}`, value)
+      setControl(`pause:${repository.toLowerCase()}:${target ?? '*'}`, value)
       log('control.pause', { repository, target, paused: value })
     },
     operatorPaused: (): boolean => control('operator.pause') === true,
