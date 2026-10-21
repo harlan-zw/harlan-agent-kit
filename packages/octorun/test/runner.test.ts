@@ -23,6 +23,33 @@ function start(runner: ReturnType<typeof createRunner>, input = event(), workflo
 }
 
 describe('durable workflow execution', () => {
+  it('recovers a task failure committed before its workflow failure transition', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'octorun-failed-transition-'))
+    await (async () => {
+      const path = join(directory, 'state.sqlite')
+      const store = openStore({ path })
+      const first = createRunner({ store, taskTypes: [type(async () => ({ _tag: 'Succeeded', output: null }))] })
+      const run = start(first)
+      const error = { _tag: 'Permanent' as const, message: 'The recorded provider result is invalid.' }
+      store.updateRun(run.id, value => ({ ...value, state: { _tag: 'Running' }, tasks: value.tasks.map(task => ({ ...task, state: { _tag: 'Failed', error }, failures: 1 })) }))
+      await first.close()
+      let calls = 0
+      let successes = 0
+      const recovered = createRunner({ store: openStore({ path }), taskTypes: [type(async () => {
+        calls++
+        return { _tag: 'Succeeded', output: null }
+      })], onRunChanged: (value) => {
+        if (value.state._tag === 'Succeeded')
+          successes++
+      } })
+      await recovered.drain()
+      expect(recovered.inspect(run.id)?.state).toEqual({ _tag: 'Failed', error })
+      expect(calls).toBe(0)
+      expect(successes).toBe(0)
+      await recovered.close()
+    })().finally(() => rm(directory, { recursive: true, force: true }))
+  })
+
   it('does not resurrect a run cancelled while its admission policy is resolving', async () => {
     let release: (() => void) | undefined
     let entered: (() => void) | undefined
