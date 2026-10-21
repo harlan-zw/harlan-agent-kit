@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeExportManifest, resolveExportDestination } from '../scripts/export.ts'
+import { shouldCheckChanges } from '../scripts/ci-changes.ts'
+import { normalizeExportManifest, pruneExportLock, resolveExportDestination } from '../scripts/export.ts'
 
 describe('standalone source export', () => {
   it('pins catalog dependencies and provides independent package commands', () => {
@@ -15,5 +16,18 @@ describe('standalone source export', () => {
     expect(resolveExportDestination('/work/project', '/work/project/packages/octorun', '/scratch/octorun')).toEqual({ _tag: 'Ok', value: '/scratch/octorun' })
     expect(resolveExportDestination('/work/project', '/work/project/packages/octorun', '/work/project/output')).toMatchObject({ _tag: 'Err', error: { _tag: 'Configuration' } })
     expect(resolveExportDestination('/work/project', '/work/project/packages/octorun', '/work/project')).toMatchObject({ _tag: 'Err', error: { _tag: 'Configuration' } })
+  })
+
+  it('checks agent instructions while skipping ordinary Markdown changes', () => {
+    expect(shouldCheckChanges(['README.md', 'docs/quickstart.md'])).toBe(false)
+    for (const path of ['AGENTS.md', 'CLAUDE.md', 'GLOSSARY.md', 'COPY.md', 'skills/example/SKILL.md', '.github/PULL_REQUEST_TEMPLATE.md', 'agent-context/context.md'])
+      expect(shouldCheckChanges([path])).toBe(true)
+    expect(shouldCheckChanges(['README.md', 'src/index.ts'])).toBe(true)
+  })
+
+  it('exports only the resolved dependency graph of the standalone package', () => {
+    const importer = { dependencies: { yaml: { specifier: '2.9.1', version: '2.9.1' } } }
+    const lock = { lockfileVersion: '9.0', settings: {}, packages: { 'yaml@2.9.1': { resolution: { integrity: 'yaml-integrity' } }, 'helper@1.0.0': { resolution: { integrity: 'helper-integrity' } }, 'unrelated@1.0.0': { resolution: { integrity: 'unrelated-integrity' } } }, snapshots: { 'yaml@2.9.1': { dependencies: { helper: '1.0.0' } }, 'helper@1.0.0': {}, 'unrelated@1.0.0': {} } }
+    expect(pruneExportLock(lock, importer)).toEqual({ _tag: 'Ok', value: { lockfileVersion: '9.0', settings: {}, importers: { '.': importer }, packages: { 'yaml@2.9.1': lock.packages['yaml@2.9.1'], 'helper@1.0.0': lock.packages['helper@1.0.0'] }, snapshots: { 'yaml@2.9.1': lock.snapshots['yaml@2.9.1'], 'helper@1.0.0': {} } } })
   })
 })

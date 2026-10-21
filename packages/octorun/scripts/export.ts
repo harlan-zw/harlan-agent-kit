@@ -60,6 +60,43 @@ export function resolveExportDestination(workspace: string, source: string, dest
     : ok(target)
 }
 
+export function pruneExportLock(input: unknown, importer: Record<string, unknown>): Result<Record<string, unknown>> {
+  const lock = object(input)
+  const packages = object(lock?.packages) ?? {}
+  const snapshots = object(lock?.snapshots) ?? {}
+  const selectedPackages: Record<string, unknown> = {}
+  const selectedSnapshots: Record<string, unknown> = {}
+  const pending: [string, string][] = []
+  for (const section of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+    for (const [name, value] of Object.entries(object(importer[section]) ?? {})) {
+      const version = object(value)?.version
+      if (typeof version !== 'string')
+        return invalid(`The source lockfile does not resolve ${name}.`)
+      pending.push([name, version])
+    }
+  }
+  while (pending.length) {
+    const [name, version] = pending.pop()!
+    const key = version.startsWith('npm:') ? version.slice(4) : `${name}@${version}`
+    if (selectedSnapshots[key] !== undefined)
+      continue
+    const snapshot = object(snapshots[key])
+    const packageKey = key.split('(')[0]!
+    if (!snapshot || packages[packageKey] === undefined)
+      return invalid(`The source lockfile has no standalone dependency graph for ${name}.`)
+    selectedSnapshots[key] = snapshot
+    selectedPackages[packageKey] = packages[packageKey]
+    for (const section of ['dependencies', 'optionalDependencies']) {
+      for (const [dependency, resolution] of Object.entries(object(snapshot[section]) ?? {})) {
+        if (typeof resolution !== 'string' || /^(?:workspace|link|file):/.test(resolution))
+          return invalid(`The standalone lockfile cannot use a local dependency: ${dependency}.`)
+        pending.push([dependency, resolution])
+      }
+    }
+  }
+  return ok({ lockfileVersion: lock?.lockfileVersion ?? '9.0', settings: lock?.settings, importers: { '.': importer }, packages: selectedPackages, snapshots: selectedSnapshots })
+}
+
 async function optionalFile(path: string): Promise<string | null> {
   return readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT')
@@ -149,23 +186,6 @@ jobs:
       - run: npm publish octorun.tgz --provenance --access public
 `
 
-const changesScript = `import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-
-const path = process.env.GITHUB_EVENT_PATH
-if (!path)
-  throw new Error('GITHUB_EVENT_PATH is required.')
-const event = JSON.parse(readFileSync(path, 'utf8')) as { before?: string, pull_request?: { base?: { sha?: string }, head?: { sha?: string } } }
-const base = event.pull_request?.base?.sha ?? event.before ?? ''
-const head = event.pull_request?.head?.sha ?? process.env.GITHUB_SHA ?? ''
-if (!/^[a-f0-9]{40,64}$/.test(head))
-  throw new Error('GitHub did not provide a valid head commit.')
-const files = !/^[a-f0-9]{40,64}$/.test(base) || /^0+$/.test(base)
-  ? execFileSync('git', ['ls-tree', '-r', '--name-only', head], { encoding: 'utf8' })
-  : execFileSync('git', ['diff', '--name-only', base, head, '--'], { encoding: 'utf8' })
-process.stdout.write(\`code=\${files.split('\\n').some(path => path.length > 0 && !path.endsWith('.md'))}\\n\`)
-`
-
 export async function exportOctorun(options: { destination: string, sourceDirectory?: string }): Promise<Result<{ destination: string, files: number, manifest: Record<string, unknown> }>> {
   const source = await realpath(options.sourceDirectory ?? fileURLToPath(new URL('../', import.meta.url)))
   const workspace = await workspaceRoot(source)
@@ -225,7 +245,6 @@ export async function exportOctorun(options: { destination: string, sourceDirect
     return canonical
   await mkdir(dirname(canonical.value), { recursive: true, mode: 0o700 })
   await mkdir(canonical.value, { mode: 0o700 })
-  let files = 0
   const copy = async (from: string, to: string): Promise<void> => {
     const stat = await lstat(from)
     if (stat.isSymbolicLink())
@@ -239,7 +258,6 @@ export async function exportOctorun(options: { destination: string, sourceDirect
     }
     else if (stat.isFile()) {
       await copyFile(from, to)
-      files++
     }
   }
   const allowed = new Set(['src', 'test', 'examples', 'docs', 'scripts', 'README.md', 'LICENSE.md', 'GLOSSARY.md', 'COPY.md', 'build.config.ts', 'tsconfig.json', 'vitest.config.ts'])
@@ -256,17 +274,26 @@ export async function exportOctorun(options: { destination: string, sourceDirect
       continue
     outputImport[section] = Object.fromEntries(Object.entries(dependencies).map(([name, version]) => [name, { ...object(resolvedDependencies[name]), specifier: version }]))
   }
-  const standaloneLock = { lockfileVersion: lock?.lockfileVersion ?? '9.0', settings: lock?.settings, importers: { '.': outputImport }, packages: lock?.packages, snapshots: lock?.snapshots }
+  const standaloneLock = pruneExportLock(lock, outputImport)
+  if (standaloneLock._tag === 'Err')
+    return standaloneLock
   await writeFile(join(canonical.value, 'package.json'), `${JSON.stringify(manifest.value, null, 2)}\n`, { flag: 'wx' })
-  await writeFile(join(canonical.value, 'pnpm-lock.yaml'), stringify(standaloneLock), { flag: 'wx' })
-  await writeFile(join(canonical.value, 'eslint.config.ts'), 'import antfu from \'@antfu/eslint-config\'\n\nexport default antfu({ typescript: true, ignores: [\'dist/**\', \'coverage/**\'] })\n', { flag: 'wx' })
+  await writeFile(join(canonical.value, 'pnpm-lock.yaml'), stringify(standaloneLock.value), { flag: 'wx' })
+  await writeFile(join(canonical.value, 'eslint.config.ts'), 'import antfu from \'@antfu/eslint-config\'\n\nexport default antfu({ typescript: true, ignores: [\'dist/**\', \'coverage/**\'] }, { rules: { \'node/prefer-global/process\': \'off\', \'node/prefer-global/buffer\': \'off\', \'ts/no-use-before-define\': \'off\', \'jsonc/sort-keys\': \'off\' } })\n', { flag: 'wx' })
   await writeFile(join(canonical.value, '.gitignore'), 'node_modules\ndist\ncoverage\n*.tgz\n.env\n.data\n', { flag: 'wx' })
   await mkdir(join(canonical.value, '.github', 'workflows'), { recursive: true })
   await mkdir(join(canonical.value, 'scripts'), { recursive: true })
+  await copyFile(fileURLToPath(import.meta.url), join(canonical.value, 'scripts', 'export.ts'))
   await writeFile(join(canonical.value, '.github', 'workflows', 'check.yml'), ciWorkflow, { flag: 'wx' })
   await writeFile(join(canonical.value, '.github', 'workflows', 'publish.yml'), releaseWorkflow, { flag: 'wx' })
-  await writeFile(join(canonical.value, 'scripts', 'ci-changes.ts'), changesScript)
-  await writeFile(join(canonical.value, 'scripts', 'check-release.ts'), 'import { readFileSync } from \'node:fs\'\n\nconst manifest = JSON.parse(readFileSync(new URL(\'../package.json\', import.meta.url), \'utf8\')) as { version: string }\nif (process.env.GITHUB_REF_NAME !== \'v\' + manifest.version)\n  throw new Error(\'The release tag must match the package version.\')\n')
+  await copyFile(fileURLToPath(new URL('./ci-changes.ts', import.meta.url)), join(canonical.value, 'scripts', 'ci-changes.ts'))
+  await writeFile(join(canonical.value, 'scripts', 'check-release.ts'), 'import { readFileSync } from \'node:fs\'\n\nconst manifest = JSON.parse(readFileSync(new URL(\'../package.json\', import.meta.url), \'utf8\')) as { version: string }\nif (process.env.GITHUB_REF_NAME !== \'v\'.concat(manifest.version))\n  throw new Error(\'The release tag must match the package version.\')\n')
+  const tsconfigText = await optionalFile(join(canonical.value, 'tsconfig.json'))
+  if (tsconfigText !== null) {
+    const tsconfig = JSON.parse(tsconfigText) as Record<string, unknown>
+    tsconfig.include = [...new Set([...(Array.isArray(tsconfig.include) ? tsconfig.include : []), 'scripts'])]
+    await writeFile(join(canonical.value, 'tsconfig.json'), `${JSON.stringify(tsconfig, null, 2)}\n`)
+  }
   const readme = await optionalFile(join(canonical.value, 'README.md'))
   if (readme !== null)
     await writeFile(join(canonical.value, 'README.md'), readme.replaceAll('pnpm --filter octorun ', 'pnpm ').replaceAll(`pnpm --filter ${String(manifest.value.name)} `, 'pnpm '))
@@ -274,7 +301,12 @@ export async function exportOctorun(options: { destination: string, sourceDirect
   if (glossary !== null)
     await writeFile(join(canonical.value, 'GLOSSARY.md'), glossary.replaceAll('](../harlan-github-agent/GLOSSARY.md)', '](https://github.com/harlan-zw/harlan-agent-kit/blob/main/packages/harlan-github-agent/GLOSSARY.md)'))
   await execute('pnpm', ['install', '--lockfile-only', '--no-frozen-lockfile', '--ignore-scripts', '--ignore-pnpmfile', '--prefer-offline'], { cwd: canonical.value, timeout: 180000, maxBuffer: 1024 * 1024 })
-  return ok({ destination: canonical.value, files: files + 8, manifest: manifest.value })
+  const countFiles = async (path: string): Promise<number> => {
+    const entries = await readdir(path, { withFileTypes: true })
+    const counts = await Promise.all(entries.filter(entry => entry.name !== 'node_modules').map(entry => entry.isDirectory() ? countFiles(join(path, entry.name)) : Promise.resolve(1)))
+    return counts.reduce((sum, count) => sum + count, 0)
+  }
+  return ok({ destination: canonical.value, files: await countFiles(canonical.value), manifest: manifest.value })
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
