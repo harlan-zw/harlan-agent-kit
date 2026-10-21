@@ -399,6 +399,25 @@ importers:
         specifier: 'catalog:'
         version: 2.0.17(mermaid@12.1.0)(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@26.6.5)(change-case@5.4.4)(fuse.js@7.5.0)(jiti@2.7.0)(lightningcss@1.33.0)(postcss@8.5.30)(search-insights@2.17.3)(terser@5.50.0)(typescript@6.0.3)(yaml@2.9.1))
 
+  packages/octorun:
+    dependencies:
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.1
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.5
+      obuild:
+        specifier: 'catalog:'
+        version: 0.4.45(@volar/typescript@2.4.28(typescript@6.0.3))(@vue/language-core@3.3.13)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(magicast@0.5.4)(typescript@6.0.3)(vue-tsc@3.3.13(typescript@6.0.3))
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.3(@opentelemetry/api@1.9.0)(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(yaml@2.9.1))
+
 packages:
 
   '@ai-sdk/provider@3.0.8':
@@ -1992,6 +2011,7 @@ packages:
   '@opentelemetry/sdk-trace-node@2.8.0':
     resolution: {integrity: sha512-nZt9OGufioAc3AfoLTqA9bsAeaMJAictYDdI2VcNQ+PmT+3rfKjAZDZvgPfd8VPX0O5Bw1hdQF6kDK8VSpZiWg==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
