@@ -300,17 +300,33 @@ export async function createOctorun(options: OctorunServiceOptions) {
       return ok({ ignored: true })
     }
     if (event.target._tag === 'PullRequest' && (data?.draft === true || data?.state === 'closed')) {
-      for (const run of runner.runs({ repository: event.repository.fullName })) {
-        if (targetKey(run.event) === targetKey(event) && ['Queued', 'Running', 'Waiting'].includes(run.state._tag))
-          runner.cancel(run.id, data?.draft === true ? 'The pull request is a draft.' : 'The pull request closed.')
-      }
+      store.transaction(() => {
+        const cursorKey = `automatic-activation:${targetKey(event)}`
+        const previous = githubObject(store.cursor(cursorKey))
+        store.setCursor(cursorKey, { _tag: 'Held', activation: typeof previous?.activation === 'string' ? previous.activation : '' })
+        for (const run of runner.runs({ repository: event.repository.fullName })) {
+          if (targetKey(run.event) === targetKey(event) && ['Queued', 'Running', 'Waiting'].includes(run.state._tag))
+            runner.cancel(run.id, data?.draft === true ? 'The pull request is a draft.' : 'The pull request closed.')
+        }
+      })
       return ok({ skipped: true, reason: data?.draft === true ? 'draft' : 'closed' })
     }
     const selected = await definitions(repository.value)
     if (selected._tag === 'Err')
       return selected
-    const accepted = runner.ingest(event, selected.value.workflows, repository.value.policy, selected.value.configuration)
-    return accepted._tag === 'Err' ? accepted : ok({ eventId: accepted.value.eventId, runIds: accepted.value.runIds, duplicate: accepted.value.duplicate })
+    return store.transaction(() => {
+      let automaticEvent = event
+      if (event.target._tag === 'PullRequest') {
+        const cursorKey = `automatic-activation:${targetKey(event)}`
+        const previous = githubObject(store.cursor(cursorKey))
+        const activation = previous?._tag === 'Held' ? randomUUID() : typeof previous?.activation === 'string' ? previous.activation : ''
+        store.setCursor(cursorKey, { _tag: 'Ready', activation })
+        if (activation !== '')
+          automaticEvent = { ...event, semanticKey: `${event.semanticKey}:activation:${activation}`, id: event.source === 'poll' ? `${event.id}:activation:${activation}` : event.id }
+      }
+      const accepted = runner.ingest(automaticEvent, selected.value.workflows, repository.value.policy, selected.value.configuration)
+      return accepted._tag === 'Err' ? accepted : ok({ eventId: accepted.value.eventId, runIds: accepted.value.runIds, duplicate: accepted.value.duplicate })
+    })
   }
 
   const handleWebhook = async (request: WebhookRequest): Promise<Result<JsonValue>> => {

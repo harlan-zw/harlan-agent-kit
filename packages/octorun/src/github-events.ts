@@ -182,7 +182,8 @@ export async function pollGitHubEvents(options: { client: GitHubClient, reposito
     cursor.pullRequests[String(number)] = semanticKey
     if ((!previous && options.includeExisting !== true) || previous?.pullRequests[String(number)] === semanticKey)
       continue
-    events.push({ id: `poll:${semanticKey}`, source: 'poll', name: 'pull_request', action: 'observed', repository: repository.value.ref, actor: null, target, semanticKey, occurredAt: snapshot.value.updatedAt, receivedAt, data: { draft: snapshot.value.draft, state: snapshot.value.state, labels: snapshot.value.labels, title: snapshot.value.title, author: snapshot.value.author.login } })
+    const observation = { repository: repository.value.ref, target, semanticKey, occurredAt: snapshot.value.updatedAt, data: { draft: snapshot.value.draft, state: snapshot.value.state, labels: snapshot.value.labels, title: snapshot.value.title, author: snapshot.value.author.login } }
+    events.push({ id: `poll:${githubDigest(JSON.stringify(observation))}`, source: 'poll', name: 'pull_request', action: 'observed', actor: null, receivedAt, ...observation })
   }
   // Overlap one second so comments with equal timestamps are not lost between passes.
   const since = new Date(Date.parse(previous?.since ?? receivedAt) - 1000).toISOString()

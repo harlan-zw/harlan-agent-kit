@@ -27,6 +27,9 @@ async function setup(options: { failProvider?: boolean, sourceText?: string } = 
   const stateDir = await mkdtemp(join(tmpdir(), 'octorun-service-'))
   const config: OperatorConfig = { version: 1, stateDir, host: '127.0.0.1', port: 0, handle: 'octorun', github: { appId: '7', privateKeyEnv: 'APP_KEY', webhookSecretEnv: 'WEBHOOK_SECRET', apiUrl: 'https://api.github.com' }, provider: { baseUrl: 'https://provider.example/v1', model: 'test-model', apiKeyEnv: 'API_KEY', timeoutMs: 1000, maxResponseBytes: 1024, maxInputCharacters: 100000 }, repositories: [{ ...repo, policy: { enabled: true, capabilities: ['repository:read', 'agent:invoke', 'github:comment', 'github:review', 'github:check'], maxConcurrency: 2 }, workflowSource: options.sourceText ? { _tag: 'Repository', path: '.github/octorun.yml' } : { _tag: 'Presets', presets: ['adversarial-review'] } }], pollIntervalMs: 0, limits: { bodyBytes: 1024 * 1024, requestsPerMinute: 100, concurrency: 2 } }
   let currentHead = head
+  let draft = false
+  let clockMs = now.getTime()
+  let updatedAt = now.toISOString()
   let reads = 0
   let providerCalls = 0
   let nextId = 100
@@ -36,7 +39,7 @@ async function setup(options: { failProvider?: boolean, sourceText?: string } = 
   const reviews: Record<string, unknown>[] = []
   const checkRuns: Record<string, unknown>[] = []
   const inputComments: Record<string, unknown>[] = []
-  const snapshot = (): PullRequestSnapshot => ({ repository: repo, number: 1, headSha: currentHead, baseSha: base, title: 'Change input parser', body: '', author: actor, draft: false, state: 'open', changedFiles: 1, updatedAt: now.toISOString(), labels: [], headRepository: 'outside/fork' })
+  const snapshot = (): PullRequestSnapshot => ({ repository: repo, number: 1, headSha: currentHead, baseSha: base, title: 'Change input parser', body: '', author: actor, draft, state: 'open', changedFiles: 1, updatedAt, labels: [], headRepository: 'outside/fork' })
   const client: GitHubClient = {
     auth: { appId: 7, token: async () => ok({ token: 'fixture', expiresAt: new Date(now.getTime() + 3600000).toISOString(), installationId: 20 }), identity: async () => ok({ id: 7, slug: 'octorun' }), invalidate: () => {} },
     repository: async () => {
@@ -105,7 +108,7 @@ async function setup(options: { failProvider?: boolean, sourceText?: string } = 
     return ok({ text: request.messages[0]!.content.includes('release') ? 'Update the input parser.' : '{"findings":[]}', usage: { inputTokens: 5, outputTokens: 5, costUsd: null } })
   } }
   const create = async (): Promise<OctorunService> => {
-    const created = await createOctorun({ config, env: { APP_KEY: 'fixture-private-key', API_KEY: 'fixture-api-key', WEBHOOK_SECRET: secret }, now: () => now, client, provider })
+    const created = await createOctorun({ config, env: { APP_KEY: 'fixture-private-key', API_KEY: 'fixture-api-key', WEBHOOK_SECRET: secret }, now: () => new Date(clockMs), client, provider })
     if (created._tag === 'Err')
       throw new Error(created.error.message)
     return created.value
@@ -119,7 +122,11 @@ async function setup(options: { failProvider?: boolean, sourceText?: string } = 
     const body = JSON.stringify(payload)
     return service.handleWebhook({ deliveryId, event, body, signature: `sha256=${createHmac('sha256', secret).update(body).digest('hex')}` })
   }
-  return { config, client, comments, reviews, checkRuns, inputComments, snapshot, webhook, service: () => service, reads: () => reads, providerCalls: () => providerCalls, permissionChecks: () => permissionChecks, moveHead: (sha: string) => {
+  return { config, client, comments, reviews, checkRuns, inputComments, snapshot, webhook, service: () => service, reads: () => reads, providerCalls: () => providerCalls, permissionChecks: () => permissionChecks, setDraft: (value: boolean, advanceMs = 1000) => {
+    draft = value
+    clockMs += advanceMs
+    updatedAt = new Date(clockMs).toISOString()
+  }, pullRequestWebhook: (action: string, deliveryId: string) => webhook('pull_request', { action, repository: { id: 10, full_name: repo.fullName }, installation: { id: 20 }, sender: { ...actor, type: 'User' }, pull_request: { number: 1, head: { sha: currentHead }, base: { sha: base }, updated_at: updatedAt } }, deliveryId), moveHead: (sha: string) => {
     currentHead = sha
   }, setPermission: (value: 'read' | 'write') => {
     permission = value
@@ -292,6 +299,41 @@ describe('reactive service composition', () => {
     expect(await test.service().command('poll', { backfill: true })).toMatchObject({ _tag: 'Ok', value: { accepted: 1 } })
     expect(test.providerCalls()).toBe(2)
     expect(await test.service().command('poll', { backfill: true })).toMatchObject({ _tag: 'Ok', value: { accepted: 0 } })
+    expect(test.providerCalls()).toBe(2)
+  })
+
+  it('advances polling after ready, draft, and ready without blocking later comments', async () => {
+    const test = await setup()
+    expect(await test.service().command('poll', { backfill: true })).toMatchObject({ _tag: 'Ok' })
+    test.setDraft(true)
+    expect(await test.service().command('poll', {})).toMatchObject({ _tag: 'Ok' })
+    test.setDraft(false)
+    test.inputComments.push({ id: 999, body: '@octorun status', user: { ...actor, type: 'User' }, issue_url: 'https://api.github.com/repos/acme/project/issues/1', created_at: test.snapshot().updatedAt, updated_at: test.snapshot().updatedAt })
+    expect(await test.service().command('poll', {})).toMatchObject({ _tag: 'Ok', value: { accepted: 2 } })
+    expect(await test.service().command('poll', {})).toMatchObject({ _tag: 'Ok', value: { accepted: 0 } })
+    expect(test.service().runner.runs().find(run => run.definition.id === 'command-response')?.state._tag).toBe('Succeeded')
+  })
+
+  it.each(['poll-first', 'webhook-first'])('resumes a held review once after restart and coalesces %s observations', async (order) => {
+    const test = await setup()
+    expect(await test.service().poll({ backfill: true })).toMatchObject({ _tag: 'Ok' })
+    test.setDraft(true, 0)
+    expect(await test.service().poll()).toMatchObject({ _tag: 'Ok' })
+    expect(test.service().runner.runs().map(run => run.state._tag)).toEqual(['Cancelled'])
+    await test.restart()
+    test.setDraft(false, 0)
+    if (order === 'poll-first') {
+      expect(await test.service().poll()).toMatchObject({ _tag: 'Ok' })
+      await test.pullRequestWebhook('ready_for_review', 'ready-webhook')
+      await test.service().settle()
+    }
+    else {
+      await test.pullRequestWebhook('ready_for_review', 'ready-webhook')
+      await test.service().settle()
+      expect(await test.service().poll()).toMatchObject({ _tag: 'Ok' })
+      await test.service().settle()
+    }
+    expect(test.service().runner.runs().map(run => run.state._tag)).toEqual(['Cancelled', 'Succeeded'])
     expect(test.providerCalls()).toBe(2)
   })
 
