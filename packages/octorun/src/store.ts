@@ -246,6 +246,20 @@ export function openStore(options: StoreOptions) {
       return db.prepare(`SELECT data FROM runs ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY created_at, rowid LIMIT ?`).all(...values).map(row => json<RunRecord>(row.data))
     },
     publication: getPublication,
+    enqueueSystem(publication: PublicationRecord): Result<string> {
+      return transaction(() => {
+        if (publication.taskId !== '__lifecycle' || !getRun(publication.runId))
+          return failure('Lifecycle publication requires an existing workflow run.')
+        const key = `${publication.runId}:${publication.taskId}:${publication.key}`
+        const existing = db.prepare('SELECT data FROM publications WHERE dedupe_key = ?').get(key)
+        if (existing) {
+          const previous = json<PublicationRecord>(existing.data)
+          return digest(previous.effect) === digest(publication.effect) ? ok(previous.id) : failure('The publication key already identifies different output.')
+        }
+        db.prepare('INSERT INTO publications(id, dedupe_key, run_id, task_id, status, data) VALUES (?, ?, ?, ?, ?, ?)').run(publication.id, key, publication.runId, publication.taskId, publication.state._tag, JSON.stringify(publication))
+        return ok(publication.id)
+      })
+    },
     enqueue(publication: PublicationRecord, fence: number): Result<string> {
       return transaction(() => {
         const run = getRun(publication.runId)
