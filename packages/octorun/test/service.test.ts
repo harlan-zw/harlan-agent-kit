@@ -211,6 +211,17 @@ describe('reactive service composition', () => {
     expect(test.service().runner.runs().filter(run => run.definition.id === 'adversarial-review').map(run => run.state._tag)).toEqual(['Succeeded'])
   })
 
+  it('revokes paid execution when the command actor loses write access', async () => {
+    const test = await setup()
+    await test.webhook('issue_comment', issueComment('@octorun review'), 'revoked-one')
+    await test.service().tick()
+    test.setPermission('read')
+    await test.service().settle()
+    expect(test.providerCalls()).toBe(0)
+    expect(test.service().runner.runs().map(run => run.state)).toEqual([{ _tag: 'Failed', error: { _tag: 'Authorization', message: 'Repository policy does not permit this user to start paid work.' } }])
+    expect(test.checkRuns.map(check => check.conclusion)).toEqual(['action_required'])
+  })
+
   it('processes explicit poll backfill and never repeats the same observed head', async () => {
     const test = await setup()
     expect(await test.service().command('poll', { backfill: true })).toMatchObject({ _tag: 'Ok', value: { accepted: 1 } })

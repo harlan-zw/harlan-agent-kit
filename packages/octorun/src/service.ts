@@ -121,7 +121,7 @@ export async function createOctorun(options: OctorunServiceOptions) {
       return metadata
     if (metadata.value.ref.id !== run.event.repository.id || metadata.value.ref.installationId !== run.event.repository.installationId)
       return err({ _tag: 'Authorization', message: 'The workflow repository installation changed.' })
-    if (run.event.action === 'command' || run.event.name === 'octorun.conversation') {
+    if (['Queued', 'Running', 'Waiting'].includes(run.state._tag) && (run.event.action === 'command' || run.event.name === 'octorun.conversation')) {
       const permission = await authorizeGitHubCommand({ command: { _tag: 'Review', full: false }, actor: run.event.actor, repository: repository.value.fullName, resolvePermission: (name, actor) => client.permission(name, actor) })
       if (permission._tag === 'Err')
         return permission
