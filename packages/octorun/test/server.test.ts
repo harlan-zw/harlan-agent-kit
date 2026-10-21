@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto'
+import { request } from 'node:http'
 import { afterEach, expect, it } from 'vitest'
 import { startServer } from '../src/server.ts'
 
@@ -71,4 +72,25 @@ it('limits webhook request admission', async () => {
   const response = await fetch(`${server.url}/webhooks/github`, { method: 'POST', headers: headers('{}'), body: '{}' })
   expect(response.status).toBe(429)
   expect(response.headers.get('retry-after')).toBeTruthy()
+})
+
+it('bounds a chunked body without relying on Content-Length', async () => {
+  const calls: unknown[] = []
+  const server = await startServer({ port: 0, webhookSecret: secret, bodyBytes: 1024, handleWebhook: async (input) => {
+    calls.push(input)
+    return { _tag: 'Ok', value: null }
+  } })
+  servers.push(server)
+  const body = JSON.stringify({ body: 'x'.repeat(2000) })
+  const status = await new Promise<number>((resolve, reject) => {
+    const incoming = request(`${server.url}/webhooks/github`, { method: 'POST', headers: headers(body) }, (response) => {
+      response.resume()
+      resolve(response.statusCode!)
+    })
+    incoming.once('error', reject)
+    incoming.write(body.slice(0, 800))
+    incoming.end(body.slice(800))
+  })
+  expect(status).toBe(413)
+  expect(calls).toEqual([])
 })
