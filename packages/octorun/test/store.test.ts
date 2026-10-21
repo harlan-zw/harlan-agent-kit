@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { openStore, restoreStoreBackup } from '../src/index.ts'
+import { createRunner, ok, openStore, parseWorkflow, restoreStoreBackup } from '../src/index.ts'
 
 const event = (id = 'one'): EventEnvelope => ({ id, semanticKey: id, source: 'webhook', name: 'pull_request', action: 'opened', repository: { id: 1, fullName: 'acme/project', installationId: 2 }, actor: null, target: { _tag: 'PullRequest', number: 4, headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40) }, occurredAt: '2026-10-21T00:00:00.000Z', receivedAt: '2026-10-21T00:00:00.000Z', data: {} })
 
@@ -78,6 +78,32 @@ describe('durable workflow storage', () => {
     store.setOperatorPause(true)
     expect(store.operatorPaused()).toBe(true)
     store.close()
+  })
+
+  it('prunes old terminal run payloads while retaining active evidence and deduplication', async () => {
+    const store = openStore({ path: ':memory:', now: () => new Date('2026-10-21T00:00:00Z') })
+    const parsed = parseWorkflow({ version: 1, id: 'retain', name: 'Retain', on: [{ event: 'pull_request' }], tasks: [{ id: 'snapshot', uses: 'snapshot' }] })
+    if (parsed._tag === 'Err')
+      throw new Error(parsed.error.message)
+    const runner = createRunner({ store, taskTypes: [{ id: 'snapshot', version: '1', capabilities: [], input: value => ok(value as null), output: value => ok(value as null), execute: async () => ({ _tag: 'Succeeded', output: { diff: 'private source text' } }) }], now: () => new Date('2026-10-21T00:00:00Z') })
+    const start = (id: string) => runner.start({ event: { ...event(id), data: { private: 'event text' } }, workflow: parsed.value, policy: { enabled: true, capabilities: [], maxConcurrency: 1 }, configuration: { source: 'test', sha: 'a', digest: 'test' } })
+    const finished = start('finished')
+    if (finished._tag === 'Err')
+      throw new Error(finished.error.message)
+    await runner.drain()
+    const publication = { id: 'old-comment', key: 'summary', runId: finished.value.id, taskId: '__lifecycle', effect: { _tag: 'Comment' as const, repository: 'acme/project', number: 4, namespace: 'review', body: 'private review text' }, state: { _tag: 'Written' as const, receipt: { id: 'remote-comment', url: null, data: {} } }, attempts: 1, createdAt: '2026-10-21T00:00:00Z', updatedAt: '2026-10-21T00:00:00Z' }
+    expect(store.enqueueSystem(publication)._tag).toBe('Ok')
+    const active = start('active')
+    if (active._tag === 'Err')
+      throw new Error(active.error.message)
+    expect(store.prune({ before: '2026-10-22T00:00:00Z' })).toMatchObject({ runPayloads: 1 })
+    expect(store.run(finished.value.id)).toMatchObject({ state: { _tag: 'Succeeded' }, event: { data: null }, tasks: [{ output: null }] })
+    expect(store.run(active.value.id)?.event.data).toEqual({ private: 'event text' })
+    expect(store.publication(publication.id)?.effect).toMatchObject({ body: '' })
+    expect(store.enqueueSystem(publication)).toEqual(ok(publication.id))
+    expect(store.recordEvent({ ...event('finished'), data: { private: 'event text' } })).toMatchObject({ _tag: 'Ok', value: { duplicate: true } })
+    expect(start('finished')).toMatchObject({ _tag: 'Ok', value: { id: finished.value.id } })
+    await runner.close()
   })
 
   it.each(['missing', 'corrupt'])('releases the restore lock after a %s backup fails', async (kind) => {

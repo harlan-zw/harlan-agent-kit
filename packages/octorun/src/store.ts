@@ -103,7 +103,7 @@ export function openStore(options: StoreOptions) {
     CREATE INDEX IF NOT EXISTS runs_status ON runs(status, created_at);
     CREATE TABLE IF NOT EXISTS publications (
       id TEXT PRIMARY KEY, dedupe_key TEXT NOT NULL UNIQUE, run_id TEXT NOT NULL,
-      task_id TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL,
+      task_id TEXT NOT NULL, status TEXT NOT NULL, effect_digest TEXT NOT NULL, data TEXT NOT NULL,
       FOREIGN KEY(run_id) REFERENCES runs(id)
     );
     CREATE INDEX IF NOT EXISTS publications_run ON publications(run_id, status);
@@ -272,12 +272,12 @@ export function openStore(options: StoreOptions) {
         if (publication.taskId !== '__lifecycle' || !getRun(publication.runId))
           return failure('Lifecycle publication requires an existing workflow run.')
         const key = `${publication.runId}:${publication.taskId}:${publication.key}`
-        const existing = db.prepare('SELECT data FROM publications WHERE dedupe_key = ?').get(key)
+        const existing = db.prepare('SELECT data, effect_digest FROM publications WHERE dedupe_key = ?').get(key)
         if (existing) {
           const previous = json<PublicationRecord>(existing.data)
-          return digest(previous.effect) === digest(publication.effect) ? ok(previous.id) : failure('The publication key already identifies different output.')
+          return existing.effect_digest === digest(publication.effect) ? ok(previous.id) : failure('The publication key already identifies different output.')
         }
-        db.prepare('INSERT INTO publications(id, dedupe_key, run_id, task_id, status, data) VALUES (?, ?, ?, ?, ?, ?)').run(publication.id, key, publication.runId, publication.taskId, publication.state._tag, JSON.stringify(publication))
+        db.prepare('INSERT INTO publications(id, dedupe_key, run_id, task_id, status, effect_digest, data) VALUES (?, ?, ?, ?, ?, ?, ?)').run(publication.id, key, publication.runId, publication.taskId, publication.state._tag, digest(publication.effect), JSON.stringify(publication))
         return ok(publication.id)
       })
     },
@@ -288,12 +288,12 @@ export function openStore(options: StoreOptions) {
         if (!run || terminalStates.includes(run.state._tag) || task?.state._tag !== 'Running' || task.fence !== fence)
           return err({ _tag: 'Authorization', message: 'The task no longer owns publication authority.' })
         const key = `${publication.runId}:${publication.taskId}:${publication.key}`
-        const existing = db.prepare('SELECT data FROM publications WHERE dedupe_key = ?').get(key)
+        const existing = db.prepare('SELECT data, effect_digest FROM publications WHERE dedupe_key = ?').get(key)
         if (existing) {
           const previous = json<PublicationRecord>(existing.data)
-          return digest(previous.effect) === digest(publication.effect) ? ok(previous.id) : failure('The publication key already identifies different output.')
+          return existing.effect_digest === digest(publication.effect) ? ok(previous.id) : failure('The publication key already identifies different output.')
         }
-        db.prepare('INSERT INTO publications(id, dedupe_key, run_id, task_id, status, data) VALUES (?, ?, ?, ?, ?, ?)').run(publication.id, key, publication.runId, publication.taskId, publication.state._tag, JSON.stringify(publication))
+        db.prepare('INSERT INTO publications(id, dedupe_key, run_id, task_id, status, effect_digest, data) VALUES (?, ?, ?, ?, ?, ?, ?)').run(publication.id, key, publication.runId, publication.taskId, publication.state._tag, digest(publication.effect), JSON.stringify(publication))
         log('publication.prepared', { publicationId: publication.id, effect: publication.effect._tag }, run.id)
         return ok(publication.id)
       })
@@ -354,7 +354,7 @@ export function openStore(options: StoreOptions) {
       await backup(db, destination)
       await chmod(destination, 0o600)
     },
-    prune(options: { before: string }): { logs: number, eventPayloads: number } {
+    prune(options: { before: string }): { logs: number, eventPayloads: number, runPayloads: number } {
       if (!Number.isFinite(Date.parse(options.before)))
         throw new Error('Retention requires a valid cutoff timestamp.')
       return transaction(() => {
@@ -374,7 +374,26 @@ export function openStore(options: StoreOptions) {
           const delivery = json<StoredDelivery>(row.data)
           db.prepare('UPDATE deliveries SET data = ? WHERE id = ?').run(JSON.stringify({ ...delivery, body: '' }), delivery.id)
         }
-        return { logs, eventPayloads }
+        const completed = db.prepare('SELECT data FROM runs WHERE status IN (\'Succeeded\',\'Failed\',\'Cancelled\',\'Superseded\',\'Skipped\') AND updated_at < ?').all(options.before)
+        let runPayloads = 0
+        for (const row of completed) {
+          const run = json<RunRecord>(row.data)
+          if (run.event.data !== null || run.tasks.some(task => task.output !== null)) {
+            writeRun({ ...run, event: { ...run.event, data: null }, tasks: run.tasks.map(task => ({ ...task, output: null })) })
+            runPayloads++
+          }
+          const publications = db.prepare('SELECT data FROM publications WHERE run_id = ? AND status IN (\'Written\',\'Failed\',\'Cancelled\')').all(run.id)
+          for (const row of publications) {
+            const publication = json<PublicationRecord>(row.data)
+            const effect = publication.effect._tag === 'Check'
+              ? { ...publication.effect, summary: '' }
+              : publication.effect._tag === 'Review'
+                ? { ...publication.effect, body: '', comments: [] }
+                : { ...publication.effect, body: '' }
+            writePublication({ ...publication, effect })
+          }
+        }
+        return { logs, eventPayloads, runPayloads }
       })
     },
     close(): void {

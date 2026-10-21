@@ -1,10 +1,10 @@
 # Glossary
 
-Vocabulary for the Octorun design.
-The Map describes intended ownership, rather than existing tables or exports.
+Vocabulary for the Octorun package.
+The map describes ownership across the runtime and public API.
 
 Octorun adopts the requested workflow and task vocabulary.
-The [source glossary](../harlan-github-agent/GLOSSARY.md) continues to govern the existing service.
+The [source glossary](https://github.com/harlan-zw/harlan-agent-kit/blob/2d184d86bf2aebd9c22ca7d17e30898a7e7f759e/packages/harlan-github-agent/GLOSSARY.md) governs the existing service.
 Its restriction of workflow to GitHub Actions does not govern Octorun workflows.
 
 ## Map
@@ -100,7 +100,7 @@ Avoid model as a replacement noun. A provider can offer several models.
 | session for a workflow run | workflow run | Provider sessions can span several turns |
 | issue for a review finding | finding | An issue remains a GitHub issue |
 
-## Open questions
+## Public contracts
 
-Public package identifiers, CLI syntax, and configuration keys need contract tests before release.
-Design examples illustrate the proposed contract. They do not establish published exports.
+The package README and guides describe the public API and CLI.
+Historical design notes record the wider roadmap.
