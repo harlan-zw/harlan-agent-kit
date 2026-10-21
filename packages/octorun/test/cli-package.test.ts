@@ -172,7 +172,7 @@ it('runs the production tarball from a clean home through GitHub, restart, and f
   const apiUrl = `https://127.0.0.1:${address.port}`
   const configPath = join(configHome, 'octorun', 'config.yaml')
   const environment: NodeJS.ProcessEnv = { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome, XDG_STATE_HOME: stateHome, NODE_EXTRA_CA_CERTS: cert, APP_KEY: await readFile(key, 'utf8'), API_KEY: 'synthetic-provider-key', WEBHOOK_SECRET: webhookSecret, OCTORUN_GITHUB_PRIVATE_KEY: await readFile(key, 'utf8'), OCTORUN_API_KEY: 'synthetic-provider-key', OCTORUN_WEBHOOK_SECRET: webhookSecret }
-  const cliPath = join(installation, 'node_modules', 'octorun', 'dist', 'cli.mjs')
+  const cliPath = join(installation, 'node_modules', '@harlan-zw', 'octorun', 'dist', 'cli.mjs')
   const cli = async (...args: string[]) => {
     const result = await execute(process.execPath, [cliPath, '--json', ...args], { cwd: installation, env: environment, timeout: 60000, maxBuffer: 8 * 1024 * 1024 })
     return JSON.parse(result.stdout) as Record<string, unknown>
@@ -216,7 +216,7 @@ it('runs the production tarball from a clean home through GitHub, restart, and f
     await writeFile(configPath, stringify(config))
     expect((await cli('config', 'validate')).valid).toBe(true)
     expect((await cli('doctor', '--online')).ready).toBe(true)
-    await copyFile(join(installation, 'node_modules', 'octorun', 'examples', 'custom-task.ts'), join(installation, 'custom-task.ts'))
+    await copyFile(join(installation, 'node_modules', '@harlan-zw', 'octorun', 'examples', 'custom-task.ts'), join(installation, 'custom-task.ts'))
     const example = await execute(process.execPath, ['--experimental-strip-types', join(installation, 'custom-task.ts')], { cwd: installation, env: environment, timeout: 10000 })
     expect(JSON.parse(example.stdout)).toMatchObject({ state: { _tag: 'Succeeded' }, output: { repository: 'example/project' } })
     const first = await start()

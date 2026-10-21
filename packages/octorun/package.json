@@ -1,5 +1,5 @@
 {
-  "name": "octorun",
+  "name": "@harlan-zw/octorun",
   "type": "module",
   "version": "0.1.0",
   "description": "Run reactive GitHub workflows with your own agent provider.",

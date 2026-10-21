@@ -1,5 +1,5 @@
-import type { EventEnvelope, TaskType } from 'octorun'
-import { createRunner, digest, openStore, parseJsonValue, parseWorkflow } from 'octorun'
+import type { EventEnvelope, TaskType } from '@harlan-zw/octorun'
+import { createRunner, digest, openStore, parseJsonValue, parseWorkflow } from '@harlan-zw/octorun'
 
 const describeTarget: TaskType = {
   id: 'example.describe-target',

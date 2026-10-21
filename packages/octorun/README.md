@@ -31,8 +31,8 @@ From the repository root, build a tarball:
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm --filter octorun build
-pnpm --filter octorun pack --out /tmp/octorun.tgz
+pnpm --filter @harlan-zw/octorun build
+pnpm --filter @harlan-zw/octorun pack --out /tmp/octorun.tgz
 ```
 
 From an unrelated directory, install that tarball:

@@ -208,7 +208,7 @@ jobs:
         run: pnpm --filter harlan-github-agent test:run
 
       - name: Octorun package
-        run: pnpm --filter octorun test:run
+        run: pnpm --filter @harlan-zw/octorun test:run
 
       - name: Native terminal bindings
         run: pnpm --filter ghostty-terminal-bindings test:run

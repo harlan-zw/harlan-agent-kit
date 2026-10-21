@@ -102,8 +102,8 @@ It prints the `Succeeded` run state and the task's repository and target output.
 The smaller snippet below shows the registration contract.
 
 ```ts
-import type { TaskType } from 'octorun'
-import { createRunner, openStore, parseJsonValue } from 'octorun'
+import type { TaskType } from '@harlan-zw/octorun'
+import { createRunner, openStore, parseJsonValue } from '@harlan-zw/octorun'
 
 const describeTarget: TaskType = {
   id: 'example.describe-target',
