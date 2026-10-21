@@ -205,7 +205,8 @@ it('runs the production tarball from a clean home through GitHub, restart, and f
     await execute('pnpm', ['pack', '--out', tarball], { cwd: packageDirectory, timeout: 120000, maxBuffer: 4 * 1024 * 1024 })
     await writeFile(join(installation, 'package.json'), '{"private":true,"type":"module"}\n')
     await execute('pnpm', ['--ignore-workspace', 'add', '--prod', '--ignore-scripts', '--ignore-pnpmfile', '--reporter=append-only', tarball], { cwd: installation, env: { ...environment, CI: 'true' }, timeout: 120000, maxBuffer: 4 * 1024 * 1024 })
-    expect((await cli('version')).node).toBe(process.version)
+    const installedBin = await execute('pnpm', ['--ignore-workspace', 'exec', 'octorun', '--json', 'version'], { cwd: installation, env: environment, timeout: 10000 })
+    expect(JSON.parse(installedBin.stdout).node).toBe(process.version)
     await cli('init', '--repository', 'acme/project', '--repository-id', '10', '--installation-id', '20', '--app-id', '7', '--model', 'test-model')
     const config = parse(await readFile(configPath, 'utf8')) as Record<string, unknown>
     Object.assign(config.github as Record<string, unknown>, { apiUrl })
