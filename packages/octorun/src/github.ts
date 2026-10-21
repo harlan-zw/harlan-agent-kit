@@ -3,7 +3,7 @@ import type { RepositoryPermission } from './github-commands.ts'
 import type { Actor, EventTarget, RepositoryRef, Result } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
-import { githubHttpFailure, githubId, githubObject, parseRepositoryName, readGitHubJson } from './github-auth.ts'
+import { githubHttpFailure, githubId, githubObject, githubTransportFailure, parseRepositoryName, readGitHubJson } from './github-auth.ts'
 import { err, ok } from './types.ts'
 
 export { createGitHubAppAuth } from './github-auth.ts'
@@ -70,6 +70,8 @@ export function createGitHubClient(options: { auth: GitHubAppAuth, fetch?: typeo
   const base = (options.apiUrl ?? 'https://api.github.com').replace(/\/$/, '')
   let bot: Actor | undefined
   const request: GitHubClient['request'] = async (repository, access, path, requestOptions = {}) => {
+    if (requestOptions.signal?.aborted)
+      return err(githubTransportFailure(requestOptions.signal))
     const parsed = parseRepositoryName(repository)
     if (parsed._tag === 'Err')
       return parsed
@@ -82,17 +84,21 @@ export function createGitHubClient(options: { auth: GitHubAppAuth, fetch?: typeo
       const credential = await options.auth.token(repository, access, requestOptions.signal)
       if (credential._tag === 'Err')
         return credential
-      const response = await fetch(`${base}${path}`, { method: requestOptions.method ?? 'GET', headers: { 'authorization': `Bearer ${credential.value.token}`, 'accept': 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'octorun', 'x-github-api-version': '2022-11-28' }, ...(requestOptions.body === undefined ? {} : { body: JSON.stringify(requestOptions.body) }), signal: requestOptions.signal ? AbortSignal.any([requestOptions.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000), redirect: 'error' })
-      if (!response.ok) {
-        const failure = githubHttpFailure(response, now())
-        await response.body?.cancel()
-        if (response.status === 401 && attempt === 0) {
+      const response = await Promise.resolve().then(() => fetch(`${base}${path}`, { method: requestOptions.method ?? 'GET', headers: { 'authorization': `Bearer ${credential.value.token}`, 'accept': 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'octorun', 'x-github-api-version': '2022-11-28' }, ...(requestOptions.body === undefined ? {} : { body: JSON.stringify(requestOptions.body) }), signal: requestOptions.signal ? AbortSignal.any([requestOptions.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000), redirect: 'error' })).then(ok).catch(() => err(githubTransportFailure(requestOptions.signal)))
+      if (response._tag === 'Err')
+        return response
+      if (!response.value.ok) {
+        const failure = githubHttpFailure(response.value, now())
+        await response.value.body?.cancel().catch(() => {
+          // This rejected response already has an HTTP outcome. Discard failures cannot replace it.
+        })
+        if (response.value.status === 401 && attempt === 0) {
           options.auth.invalidate(repository, access)
           continue
         }
         return err(failure)
       }
-      return response.status === 204 ? ok(null) : readGitHubJson(response)
+      return response.value.status === 204 ? ok(null) : readGitHubJson(response.value, undefined, requestOptions.signal)
     }
     return err({ _tag: 'Authorization', message: 'GitHub rejected the refreshed App credential.' })
   }

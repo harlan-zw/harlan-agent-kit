@@ -1,8 +1,9 @@
-import type { PublicationContext, PublicationEffect } from '../src/types.ts'
+import type { GitHubAppAuth } from '../src/github-auth.ts'
+import type { PublicationContext, PublicationEffect, Result } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
 import { createHmac, generateKeyPairSync, verify } from 'node:crypto'
 import { createServer } from 'node:http'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createGitHubAppAuth, createGitHubClient, createGitHubPublisher, createGitHubSnapshotReader, findingMarker, normalizeGitHubWebhook, overviewMarker, pollGitHubEvents, publicationMarker, verifyWebhookSignature } from '../src/github.ts'
 
 const now = Date.parse('2026-10-21T00:00:00.000Z')
@@ -15,7 +16,16 @@ const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 20
 const closeFixtures: (() => Promise<void>)[] = []
 afterEach(async () => {
   await Promise.all(closeFixtures.splice(0).map(close => close()))
+  vi.restoreAllMocks()
 })
+
+function transportCaller(surface: 'repository' | 'app', fetch: typeof globalThis.fetch): (signal?: AbortSignal) => Promise<Result<unknown>> {
+  const auth: GitHubAppAuth = { appId: 7, token: async () => ({ _tag: 'Ok', value: { token: 'fixture', installationId: 20, expiresAt: new Date(now + 3600000).toISOString() } }), identity: async () => ({ _tag: 'Ok', value: { id: 7, slug: 'octorun' } }), invalidate: () => {} }
+  if (surface === 'app')
+    return createGitHubAppAuth({ appId: 7, privateKey, fetch, now: () => now }).identity
+  const client = createGitHubClient({ auth, fetch, now: () => now })
+  return signal => client.repository('acme/project', signal)
+}
 
 interface FixtureRequest { method: string, path: string, body: Record<string, unknown>, authorization: string }
 
@@ -140,6 +150,59 @@ function publication(effect: PublicationEffect, key = 'result', runId = 'run-1')
 }
 
 describe('gitHub App authentication', () => {
+  it.each(['repository', 'app'] as const)('returns a transient %s transport failure and recovers on retry', async (surface) => {
+    let calls = 0
+    const invoke = transportCaller(surface, async () => {
+      if (calls++ === 0)
+        throw new TypeError('Synthetic connection reset.')
+      return Response.json(surface === 'app' ? { id: 7, slug: 'octorun' } : { id: 10, full_name: 'acme/project', default_branch: 'main' })
+    })
+    expect(await invoke()).toMatchObject({ _tag: 'Err', error: { _tag: 'Transient' } })
+    expect(await invoke()).toMatchObject({ _tag: 'Ok' })
+    expect(calls).toBe(2)
+  })
+
+  it.each(['repository', 'app'] as const)('returns a transient %s response stream failure', async (surface) => {
+    const invoke = transportCaller(surface, async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.error(new TypeError('Synthetic response reset.'))
+      },
+    })))
+    expect(await invoke()).toMatchObject({ _tag: 'Err', error: { _tag: 'Transient' } })
+  })
+
+  it.each(['repository', 'app'] as const)('keeps an internal %s timeout retryable', async (surface) => {
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(AbortSignal.abort(new DOMException('Synthetic timeout.', 'TimeoutError')))
+    let calls = 0
+    const invoke = transportCaller(surface, async (_input, init) => {
+      calls++
+      init?.signal?.throwIfAborted()
+      return Response.json({})
+    })
+    expect(await invoke()).toMatchObject({ _tag: 'Err', error: { _tag: 'Transient' } })
+    expect(calls).toBe(1)
+  })
+
+  it.each(['repository', 'app'] as const)('keeps caller cancellation separate from %s transport failure', async (surface) => {
+    let calls = 0
+    const invoke = transportCaller(surface, async () => {
+      calls++
+      throw new TypeError('The cancelled request reached fetch.')
+    })
+    expect(await invoke(AbortSignal.abort())).toMatchObject({ _tag: 'Err', error: { _tag: 'Permanent', message: 'The GitHub request was cancelled.' } })
+    expect(calls).toBe(0)
+  })
+
+  it('keeps invalid App signing keys distinct from transport failures', async () => {
+    let calls = 0
+    const auth = createGitHubAppAuth({ appId: 7, privateKey: 'invalid signing key', fetch: async () => {
+      calls++
+      throw new TypeError('Signing must happen before transport.')
+    } })
+    await expect(auth.identity()).rejects.toThrow()
+    expect(calls).toBe(0)
+  })
+
   it('signs JWTs, mints only one repository, and scopes credentials per operation', async () => {
     const test = await fixture()
     expect(await test.auth.token('acme/project', 'read')).toMatchObject({ _tag: 'Ok', value: { installationId: 20 } })
@@ -279,7 +342,7 @@ describe('gitHub publication reconciliation', () => {
     })
     const publisher = createGitHubPublisher({ client: test.client })
     const context = publication({ _tag: 'Comment', repository: 'acme/project', number: 1, namespace: 'review', body: 'Result.' })
-    await expect(publisher.publish(context)).rejects.toThrow()
+    expect(await publisher.publish(context)).toMatchObject({ _tag: 'Err', error: { _tag: 'Transient' } })
     expect(await publisher.reconcile(context)).toEqual({ _tag: 'Ok', value: { id: '400', url: null, data: {} } })
     expect(await publisher.publish(context)).toEqual({ _tag: 'Ok', value: { id: '400', url: null, data: {} } })
     expect(test.requests.filter(request => request.method === 'POST' && request.path === '/repos/acme/project/issues/1/comments')).toHaveLength(1)

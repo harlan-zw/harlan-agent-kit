@@ -30,24 +30,36 @@ export function githubHttpFailure(response: Response, now: number): TaskFailure 
   return { _tag: response.status >= 500 ? 'Transient' : [401, 403].includes(response.status) ? 'Authorization' : 'Permanent', message: `GitHub returned HTTP ${response.status}.` }
 }
 
-export async function readGitHubJson(response: Response, maxBytes = 8 * 1024 * 1024): Promise<Result<unknown>> {
+export function githubTransportFailure(signal?: AbortSignal): TaskFailure {
+  return signal?.aborted
+    ? { _tag: 'Permanent', message: 'The GitHub request was cancelled.' }
+    : { _tag: 'Transient', message: 'GitHub could not complete this request. Retry after checking the connection.' }
+}
+
+export async function readGitHubJson(response: Response, maxBytes = 8 * 1024 * 1024, signal?: AbortSignal): Promise<Result<unknown>> {
   const reader = response.body?.getReader()
   if (!reader)
     return err({ _tag: 'Permanent', message: 'GitHub returned an empty response.' })
-  const chunks: Uint8Array[] = []
-  let size = 0
-  for (;;) {
-    const chunk = await reader.read()
-    if (chunk.done)
-      break
-    size += chunk.value.byteLength
-    if (size > maxBytes) {
-      await reader.cancel()
-      return err({ _tag: 'Permanent', message: 'GitHub response exceeds the configured byte limit.' })
+  const readBody = async (): Promise<Result<Buffer>> => {
+    const chunks: Uint8Array[] = []
+    let size = 0
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done)
+        break
+      size += chunk.value.byteLength
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => {
+          // The byte limit already rejected this response. Cleanup cannot change that result.
+        })
+        return err({ _tag: 'Permanent', message: 'GitHub response exceeds the configured byte limit.' })
+      }
+      chunks.push(chunk.value)
     }
-    chunks.push(chunk.value)
+    return ok(Buffer.concat(chunks))
   }
-  return Promise.resolve().then(() => JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown).then(ok).catch(() => err({ _tag: 'Permanent', message: 'GitHub returned invalid JSON.' }))
+  const body = await readBody().catch(() => err(githubTransportFailure(signal))).finally(() => reader.releaseLock())
+  return body._tag === 'Err' ? body : Promise.resolve().then(() => JSON.parse(body.value.toString('utf8')) as unknown).then(ok).catch(() => err({ _tag: 'Permanent', message: 'GitHub returned invalid JSON.' }))
 }
 
 export const githubObject = (value: unknown): Record<string, unknown> | null => typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
@@ -63,17 +75,23 @@ export function createGitHubAppAuth(options: { appId: number, privateKey: string
   const inflight = new Map<string, Promise<Result<GitHubCredential>>>()
   let app: GitHubAppIdentity | undefined
   const appRequest = async (path: string, body?: unknown, signal?: AbortSignal): Promise<Result<unknown>> => {
+    if (signal?.aborted)
+      return err(githubTransportFailure(signal))
     const epoch = Math.floor(now() / 1000)
     const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url')
     const claims = Buffer.from(JSON.stringify({ iat: epoch - 60, exp: epoch + 540, iss: options.appId })).toString('base64url')
     const content = `${header}.${claims}`
     const signature = createSign('RSA-SHA256').update(content).sign(options.privateKey, 'base64url')
-    const response = await fetch(`${base}${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'authorization': `Bearer ${content}.${signature}`, 'accept': 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'octorun', 'x-github-api-version': '2022-11-28' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000), redirect: 'error' })
-    if (!response.ok) {
-      await response.body?.cancel()
-      return err(githubHttpFailure(response, now()))
+    const response = await Promise.resolve().then(() => fetch(`${base}${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'authorization': `Bearer ${content}.${signature}`, 'accept': 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'octorun', 'x-github-api-version': '2022-11-28' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000), redirect: 'error' })).then(ok).catch(() => err(githubTransportFailure(signal)))
+    if (response._tag === 'Err')
+      return response
+    if (!response.value.ok) {
+      await response.value.body?.cancel().catch(() => {
+        // This rejected response already has an HTTP outcome. Discard failures cannot replace it.
+      })
+      return err(githubHttpFailure(response.value, now()))
     }
-    return readGitHubJson(response)
+    return readGitHubJson(response.value, undefined, signal)
   }
   const mint = async (repository: string, access: GitHubAccess, signal?: AbortSignal): Promise<Result<GitHubCredential>> => {
     const parsed = parseRepositoryName(repository)
@@ -116,6 +134,8 @@ export function createGitHubAppAuth(options: { appId: number, privateKey: string
       return ok(app)
     },
     async token(repository, access, signal) {
+      if (signal?.aborted)
+        return err(githubTransportFailure(signal))
       const key = `${repository.toLowerCase()}:${access}`
       const cached = credentials.get(key)
       if (cached && Date.parse(cached.expiresAt) > now() + 60_000)
