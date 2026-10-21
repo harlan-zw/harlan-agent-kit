@@ -16,12 +16,25 @@ export type ParsedGitHubCommand
 export function parseGitHubCommand(body: string, handle: string): ParsedGitHubCommand {
   const mention = `@${handle.replace(/^@/, '').toLowerCase()}`
   let fence: string | null = null
+  let htmlComment = false
   for (const line of body.replace(/\r\n/g, '\n').split('\n')) {
+    if (fence === null) {
+      if (htmlComment) {
+        if (line.includes('-->'))
+          htmlComment = false
+        continue
+      }
+      const opening = line.indexOf('<!--')
+      if (opening !== -1) {
+        htmlComment = !line.includes('-->', opening + 4)
+        continue
+      }
+    }
     const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1]
     if (marker !== undefined) {
       if (fence === null)
-        fence = marker[0]!
-      else if (marker[0] === fence)
+        fence = marker
+      else if (marker[0] === fence[0] && marker.length >= fence.length && /^ {0,3}(?:`{3,}|~{3,})\s*$/.test(line))
         fence = null
       continue
     }

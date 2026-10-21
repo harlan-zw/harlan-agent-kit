@@ -204,6 +204,18 @@ describe('gitHub publication reconciliation', () => {
     expect(test.comments.map(comment => ({ id: comment.id, body: comment.body }))).toEqual([{ id: 1, body: `${overviewMarker('review')}\n${publicationMarker('first')}` }, { id: expect.any(Number), body: `Review complete.\n\n${overviewMarker('review')}\n${publicationMarker('second')}` }])
   })
 
+  it('distinguishes publication identities when later runs reuse a task key', async () => {
+    const test = await fixture()
+    const publisher = createGitHubPublisher({ client: test.client })
+    const first = publication({ _tag: 'Comment', repository: 'acme/project', number: 1, namespace: 'review', body: 'First run.' }, 'publication-one', 'run-one')
+    first.publication.key = 'overview'
+    const second = publication({ _tag: 'Comment', repository: 'acme/project', number: 1, namespace: 'review', body: 'Second run.' }, 'publication-two', 'run-two')
+    second.publication.key = 'overview'
+    expect(await publisher.publish(first)).toMatchObject({ _tag: 'Ok' })
+    expect(await publisher.publish(second)).toMatchObject({ _tag: 'Ok' })
+    expect(test.comments.map(comment => comment.body)).toEqual([`Second run.\n\n${overviewMarker('review')}\n${publicationMarker('publication-two')}`])
+  })
+
   it('groups findings, supports removed lines, and recovers without duplicate findings', async () => {
     const test = await fixture()
     const publisher = createGitHubPublisher({ client: test.client })
@@ -233,6 +245,15 @@ describe('gitHub publication reconciliation', () => {
     const publisher = createGitHubPublisher({ client: test.client })
     expect(await publisher.publish(publication({ _tag: 'Comment', repository: 'acme/project', number: 1, namespace: 'review', body: 'Old result.' }))).toMatchObject({ _tag: 'Err', error: { _tag: 'Authorization' } })
     expect(test.comments).toEqual([])
+  })
+
+  it('can close a superseded head check without publishing its old result', async () => {
+    const test = await fixture()
+    test.moveHead('c'.repeat(40))
+    const publisher = createGitHubPublisher({ client: test.client })
+    const context = publication({ _tag: 'Check', repository: 'acme/project', headSha: head, name: 'Octorun / Review', phase: { status: 'completed', conclusion: 'cancelled' }, summary: 'A newer head superseded this run.' })
+    expect(await publisher.publish(context)).toMatchObject({ _tag: 'Ok' })
+    expect(test.checks.map(check => ({ head: check.head_sha, conclusion: check.conclusion }))).toEqual([{ head, conclusion: 'cancelled' }])
   })
 
   it('recovers an unknown write result without sending the comment twice', async () => {

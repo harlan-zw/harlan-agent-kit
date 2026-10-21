@@ -83,7 +83,8 @@ export function createGitHubPublisher(options: { client: GitHubClient, authorize
       const current = await client.snapshot(effect.repository, target.number, context.signal)
       if (current._tag === 'Err')
         return current
-      if (current.value.headSha !== target.headSha || current.value.baseSha !== target.baseSha || current.value.state !== 'open')
+      const closesOldCheck = effect._tag === 'Check' && effect.phase.status === 'completed' && ['cancelled', 'skipped'].includes(effect.phase.conclusion)
+      if (!closesOldCheck && (current.value.headSha !== target.headSha || current.value.baseSha !== target.baseSha || current.value.state !== 'open'))
         return err({ _tag: 'Authorization', message: 'The pull request changed or closed before publication.' })
       if ((effect._tag === 'Review' || effect._tag === 'Check') && effect.headSha !== target.headSha)
         return err({ _tag: 'Authorization', message: 'The publication head does not match its workflow run.' })

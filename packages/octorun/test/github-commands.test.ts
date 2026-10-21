@@ -13,6 +13,11 @@ describe('explicit GitHub commands', () => {
     expect(parseGitHubCommand('@octorun fix everything', 'octorun')).toEqual({ _tag: 'Unknown', text: 'fix everything' })
   })
 
+  it('keeps shorter fences and HTML comments inert', () => {
+    expect(parseGitHubCommand('````markdown\n```\n@octorun review\n````', 'octorun')).toEqual({ _tag: 'Ignored' })
+    expect(parseGitHubCommand('<!-- hidden example\n@octorun review\n-->', 'octorun')).toEqual({ _tag: 'Ignored' })
+  })
+
   it('authorizes an organization collaborator by repository permission and stable identity', async () => {
     const calls: string[] = []
     const result = await authorizeGitHubCommand({ command: { _tag: 'Pause' }, actor: { id: 14, login: 'alice', kind: 'User' }, repository: 'acme/project', resolvePermission: async (repository, actor) => {
