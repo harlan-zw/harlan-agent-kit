@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
-import { contextBudgetExhaustedReason, MEMORY_BUDGET_EXHAUSTED } from '../src/failure.ts'
+import { contextBudgetExhaustedReason, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS, MEMORY_BUDGET_EXHAUSTED } from '../src/failure.ts'
 import { replaceServiceIncidents } from '../src/service.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -562,7 +562,7 @@ describe('recovery budget after a GitHub outage', () => {
     return store
   }
 
-  function storeWithProviderFailureAtRecoveryLimit() {
+  function storeWithProviderFailureAtRecoveryLimit(recoveries = 5) {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
     store.recordObservation({
@@ -571,7 +571,7 @@ describe('recovery budget after a GitHub outage', () => {
       source: 'poll',
       subject: pullRequestItem({ mergeState: 'clean' }),
     })
-    for (let round = 0; round <= 5; round += 1) {
+    for (let round = 0; round <= recoveries; round += 1) {
       const at = new Date(Date.parse('2026-08-18T00:00:00.000Z') + round * 2 * 60 * 60_000).toISOString()
       if (round > 0)
         expect(store.retryRecoverableWorkerFailures(at)).toBe(1)
@@ -648,6 +648,21 @@ describe('recovery budget after a GitHub outage', () => {
 
     expect(store.listIncidents()[0]?.recovery).toEqual(expect.objectContaining({ _tag: 'Retrying' }))
     expect(store.retryRecoverableWorkerFailures('2026-08-18T12:00:00.000Z')).toBe(1)
+  })
+
+  it('stops retrying a provider failure that outlives its recovery budget', () => {
+    // nuxtseo.com#1796: one Review failed after the worktree step every thirty
+    // minutes for a day, and the pull request only ever showed QUEUED.
+    const store = storeWithProviderFailureAtRecoveryLimit(MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS)
+
+    expect(store.listIncidents()).toMatchObject([{
+      scope: { _tag: 'Service' },
+      kind: 'agent_provider',
+      severity: 'error',
+      recovery: { _tag: 'Exhausted' },
+    }])
+    expect(store.retryRecoverableWorkerFailures('2026-08-20T00:00:00.000Z')).toBe(0)
+    expect(store.getDashboardSnapshot('2026-08-20T00:00:00.000Z').queue.find(entry => entry.number === 24)?.state).toEqual({ _tag: 'ActionRequired', reason: 'The opencode session failed: Unexpected server error.' })
   })
 
   it('reports one shared Incident when one Agent provider fails across Tasks', () => {

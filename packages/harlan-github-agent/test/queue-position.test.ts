@@ -610,3 +610,112 @@ describe('listQueuedReviewStatuses across revisions', () => {
     expect(store.listQueuedReviewStatuses()).toEqual([])
   })
 })
+
+/**
+ * One pull request whose Review published a progress comment, then failed.
+ * The Task keeps the canonical comment, so the sweep is what tells the pull
+ * request the attempt stopped.
+ */
+function failingReview(store: ReturnType<typeof openJournalStore>, number: number, at: string) {
+  const observed = store.recordObservation({
+    externalId: `failing-review-${number}`,
+    observedAt: at,
+    source: 'poll',
+    subject: pullRequestItem({ number, headSha: `head${number}`, mergeState: 'clean' }),
+  })
+  if (observed._tag !== 'Inserted')
+    throw new Error('Expected a new pull request revision.')
+  const review = store.claimNextAdversarialReviewTask(`review-agent-${number}`, at, 600_000)
+  if (review === null)
+    throw new Error('Expected the review Task.')
+  const staged = store.stageReviewStatus({
+    taskKind: 'adversarial_review',
+    phase: 'review',
+    taskId: review.id,
+    workerId: review.state.workerId,
+    fence: review.state.fence,
+    at,
+    revisionId: observed.revisionId,
+    expectedHeadSha: review.pullRequest.headSha,
+    body: '### 🤖 REVIEWING · 35% · Git worktree ready',
+  })
+  if (staged._tag === 'Rejected')
+    throw new Error(staged.reason)
+  const command = store.claimReviewStatus(staged.commandId, `status-worker-${number}`, at, 60_000)
+  if (command === null)
+    throw new Error('Expected the review status command.')
+  store.completeReviewStatus({
+    commandId: command.id,
+    workerId: command.workerId,
+    fence: command.fence,
+    at,
+    commentId: 200 + number,
+    url: `https://github.com/harlan-zw/example/pull/${number}#issuecomment-${200 + number}`,
+  })
+  return review
+}
+
+const providerFailure = 'The opencode session failed: Unexpected server error.'
+
+function failUntilFailed(store: ReturnType<typeof openJournalStore>, firstClaim: { id: string, state: { workerId: string, fence: number } }, at: string) {
+  let task: { id: string, state: { workerId: string, fence: number } } | null = firstClaim
+  while (task !== null) {
+    const outcome = store.failWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, reason: providerFailure })
+    task = outcome === 'Retrying' ? store.claimNextAdversarialReviewTask('retry-agent', at, 600_000) : null
+  }
+}
+
+describe('a Review whose attempt failed', () => {
+  // nuxtseo.com#1796: the comment held REVIEWING 35% during every backoff and
+  // a plain QUEUED after every requeue, for a day, and never named the failure.
+  it('names the failure and the restart time while the Task waits on a backoff', () => {
+    const store = createStore()
+    failUntilFailed(store, failingReview(store, 40, '2026-08-13T01:00:00.000Z'), '2026-08-13T01:00:00.000Z')
+
+    expect(store.listQueuedReviewStatuses()).toEqual([expect.objectContaining({
+      pullRequestNumber: 40,
+      attempt: { _tag: 'Retrying', reason: providerFailure, retry: null, nextAttemptAt: '2026-08-13T01:00:00.000Z' },
+    })])
+  })
+
+  it('keeps naming the failure once the retry is back in the Queue', () => {
+    const store = createStore()
+    failUntilFailed(store, failingReview(store, 41, '2026-08-13T01:00:00.000Z'), '2026-08-13T01:00:00.000Z')
+    expect(store.retryRecoverableWorkerFailures('2026-08-13T01:01:00.000Z')).toBe(1)
+
+    expect(store.listQueuedReviewStatuses()).toEqual([expect.objectContaining({
+      pullRequestNumber: 41,
+      queue: { _tag: 'Waiting', position: 1, total: 1 },
+      attempt: { _tag: 'Retrying', reason: providerFailure, retry: { spent: 1, limit: 12 }, nextAttemptAt: null },
+    })])
+  })
+
+  it('says the Review is stuck once its retries run out', () => {
+    const store = createStore()
+    let at = '2026-08-13T00:00:00.000Z'
+    let claim = failingReview(store, 42, at)
+    for (;;) {
+      failUntilFailed(store, claim, at)
+      // Past the longest backoff, so only the budget decides.
+      at = new Date(Date.parse(at) + 60 * 60_000).toISOString()
+      if (store.retryRecoverableWorkerFailures(at) === 0)
+        break
+      const reclaimed = store.claimNextAdversarialReviewTask('retry-agent', at, 600_000)
+      if (reclaimed === null)
+        throw new Error('Expected the requeued Review.')
+      claim = reclaimed
+    }
+
+    expect(store.listQueuedReviewStatuses()).toEqual([expect.objectContaining({
+      pullRequestNumber: 42,
+      attempt: { _tag: 'Stuck', reason: providerFailure },
+    })])
+  })
+
+  it('leaves a first attempt alone', () => {
+    const store = createStore()
+    queuedRepair(store, 43, '2026-08-13T01:00:00.000Z')
+
+    expect(store.listQueuedReviewStatuses()).toEqual([expect.objectContaining({ attempt: { _tag: 'FirstAttempt' } })])
+  })
+})
