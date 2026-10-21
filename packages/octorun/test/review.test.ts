@@ -136,6 +136,61 @@ describe('adversarial review preset', () => {
     expect(h.turns).toEqual([])
   })
 
+  it('reserves the whole parallel batch before spending tokens', async () => {
+    const h = harness([])
+    h.context.run.definition.limits.maxTokens = 1000
+    const selected = await successful(h.execute('review.snapshot', {}))
+    expect(await h.execute('review.adversarial', { snapshot: selected })).toMatchObject({ _tag: 'Failed', error: { _tag: 'Configuration', message: expect.stringContaining('token budget') } })
+    expect(h.turns).toEqual([])
+  })
+
+  it('refuses a currency budget without price estimates before any provider call', async () => {
+    const h = harness([])
+    h.context.run.definition.limits.maxCostUsd = 1
+    const changes = await successful(h.execute('changes.classify', {}))
+    expect(await h.execute('changes.summarize', { changes })).toMatchObject({ _tag: 'Failed', error: { _tag: 'Configuration', message: expect.stringContaining('currency budget') } })
+    expect(h.turns).toEqual([])
+  })
+
+  it('runs reviewer roles within the configured parallel limit', async () => {
+    const h = harness([])
+    let active = 0
+    let maximum = 0
+    let turns = 0
+    const types = createReviewTaskTypes({
+      snapshots: { read: async () => ({ _tag: 'Ok', value: snapshot }) },
+      provider: {
+        id: 'concurrency-fixture',
+        async generate() {
+          active++
+          turns++
+          maximum = Math.max(maximum, active)
+          await new Promise(resolve => setTimeout(resolve, 1))
+          active--
+          return { _tag: 'Ok', value: { text: '{"findings":[]}', usage: { inputTokens: 10, outputTokens: 5, costUsd: null } } }
+        },
+      },
+    })
+    const selected = await successful(h.execute('review.snapshot', {}))
+    const task = types.find(type => type.id === 'review.adversarial')!
+    await successful(Promise.resolve(task.execute(h.context, { snapshot: selected, roles: ['correctness', 'security', 'regression'], maxParallelReviewers: 1 })))
+    expect(maximum).toBe(1)
+    expect(turns).toBe(3)
+  })
+
+  it('caps grouped findings and records incomplete scope when findings exceed the publication limit', async () => {
+    const count = 51
+    const patch = `@@ -0,0 +1,${count} @@\n${Array.from({ length: count }, (_, index) => `+return value${index}`).join('\n')}`
+    const fixture = { ...snapshot, files: [{ path: 'src/account.ts', status: 'modified', truncated: false, patch }] }
+    const candidates = Array.from({ length: count }, (_, index) => ({ ...candidate, id: `candidate-${index}`, line: index + 1, evidence: `return value${index}` }))
+    const h = harness([JSON.stringify({ accepted: candidates.slice(0, 50).map(finding => finding.id) })], [], fixture)
+    const selected = await successful(h.execute('review.snapshot', {}))
+    const report = await successful(h.execute('review.verify', { snapshot: selected, review: { candidates, reviewers: 2 } }))
+    await successful(h.execute('review.publish', { report }))
+    expect(report).toMatchObject({ coverage: 'incomplete', omittedFindings: 1, rejected: 0 })
+    expect(h.effects.filter(effect => effect._tag === 'Review').flatMap(effect => effect.comments)).toHaveLength(50)
+  })
+
   it('suppresses unchanged findings on an incremental review and retains their result', async () => {
     const fingerprint = findingFingerprint(candidate)
     const h = harness([JSON.stringify({ findings: [candidate] }), JSON.stringify({ findings: [] }), JSON.stringify({ accepted: ['correctness-0'] })], [fingerprint])

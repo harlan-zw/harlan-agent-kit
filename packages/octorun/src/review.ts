@@ -1,4 +1,4 @@
-import type { AgentProvider, Capability, EventTarget, JsonValue, Parser, Result, TaskContext, TaskFailure, TaskOutcome, TaskType, Usage, WorkflowDefinition } from './types.ts'
+import type { AgentMessage, AgentProvider, AgentRequest, AgentResponse, Capability, EventTarget, JsonValue, Parser, Result, TaskContext, TaskFailure, TaskOutcome, TaskType, Usage, WorkflowDefinition } from './types.ts'
 import { createHash } from 'node:crypto'
 import { emptyUsage, err, isJsonValue, ok } from './types.ts'
 
@@ -62,6 +62,7 @@ export interface ReviewReport {
   repeated: number
   rejected: number
   omittedFiles: number
+  omittedFindings: number
   previousFingerprints: string[]
 }
 
@@ -74,7 +75,7 @@ export interface ReviewDependencies {
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const text = (value: unknown, max: number): value is string => typeof value === 'string' && value.length <= max
 const integer = (value: unknown, min: number, max: number): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= min && value <= max
-const sha = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40,64}$/i.test(value)
+const sha = (value: unknown): value is string => typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(value)
 const boundedPath = (value: unknown): value is string => text(value, 1024) && value.length > 0 && !value.startsWith('/') && !value.split('/').includes('..') && ![...value].some(character => character.charCodeAt(0) < 32)
 const invalid = (message: string): Result<never> => err({ _tag: 'Configuration', message })
 const failed = (message: string, usage?: Usage): TaskOutcome => ({ _tag: 'Failed', error: { _tag: 'Permanent', message }, ...(usage ? { usage } : {}) })
@@ -93,6 +94,26 @@ function addUsage(left: Usage, right: Usage): Usage {
 
 function failureUsage(error: TaskFailure): Usage {
   return (error as TaskFailure & { usage?: Usage }).usage ?? emptyUsage()
+}
+
+interface PlannedTurn { messages: AgentMessage[], maxOutputTokens: number }
+
+/** UTF-8 bytes conservatively bound text tokens. Framing receives a separate reserve. */
+function reserveTurns(context: TaskContext, turns: PlannedTurn[], localUsage: Usage): Result<AgentRequest[]> {
+  if (context.run.definition.limits.maxCostUsd !== null)
+    return invalid('This agent provider cannot reserve a currency budget. Use a token budget with maxCostUsd set to null.')
+  const used = context.run.usage.inputTokens + context.run.usage.outputTokens + localUsage.inputTokens + localUsage.outputTokens
+  const inputReserve = turns.reduce((total, turn) => total + 256 + turn.messages.reduce((tokens, message) => tokens + Buffer.byteLength(message.content, 'utf8') + 32, 0), 0)
+  const remaining = context.run.definition.limits.maxTokens - used - inputReserve
+  const outputPerTurn = Math.floor(remaining / turns.length)
+  if (outputPerTurn < 128)
+    return invalid('The remaining token budget cannot cover this agent turn. Increase maxTokens or reduce the review scope.')
+  return ok(turns.map(turn => ({ ...turn, maxOutputTokens: Math.min(turn.maxOutputTokens, outputPerTurn), signal: context.signal })))
+}
+
+async function generateTurn(context: TaskContext, provider: AgentProvider, turn: PlannedTurn): Promise<Result<AgentResponse>> {
+  const reserved = reserveTurns(context, [turn], emptyUsage())
+  return reserved._tag === 'Err' ? reserved : provider.generate(reserved.value[0]!)
 }
 
 export function parseReviewSnapshot(value: unknown): Result<ReviewSnapshot> {
@@ -290,7 +311,7 @@ async function selectSnapshot(dependencies: ReviewDependencies, context: TaskCon
   return ok({ ...parsed.value, body: parsed.value.body.slice(0, 12_000), files, coverage, omittedFiles, previous: previous.value?.baseSha === parsed.value.baseSha ? previous.value : null })
 }
 
-interface ReviewInput { snapshot: ReviewSelection, roles: string[], maxFindings: number, maxOutputTokens: number }
+interface ReviewInput { snapshot: ReviewSelection, roles: string[], maxFindings: number, maxOutputTokens: number, maxParallelReviewers: number }
 function parseReviewInput(value: unknown): Result<ReviewInput> {
   if (!object(value))
     return invalid('Review input must contain a snapshot.')
@@ -300,10 +321,11 @@ function parseReviewInput(value: unknown): Result<ReviewInput> {
   const roles = value.roles ?? ['correctness', 'security']
   if (!Array.isArray(roles) || roles.length < 1 || roles.length > 4 || roles.some(role => !['correctness', 'security', 'regression', 'maintainability'].includes(role))
     || new Set(roles).size !== roles.length || (value.maxFindings !== undefined && !integer(value.maxFindings, 1, 50))
-    || (value.maxOutputTokens !== undefined && !integer(value.maxOutputTokens, 256, 8192))) {
+    || (value.maxOutputTokens !== undefined && !integer(value.maxOutputTokens, 256, 8192))
+    || (value.maxParallelReviewers !== undefined && !integer(value.maxParallelReviewers, 1, 4))) {
     return invalid('Reviewer roles, finding limits, or token limits are invalid.')
   }
-  return ok({ snapshot: snapshot.value, roles: roles as string[], maxFindings: (value.maxFindings as number | undefined) ?? 20, maxOutputTokens: (value.maxOutputTokens as number | undefined) ?? 4096 })
+  return ok({ snapshot: snapshot.value, roles: roles as string[], maxFindings: (value.maxFindings as number | undefined) ?? 20, maxOutputTokens: (value.maxOutputTokens as number | undefined) ?? 4096, maxParallelReviewers: (value.maxParallelReviewers as number | undefined) ?? 2 })
 }
 
 interface ReviewOutput { candidates: ReviewCandidate[], reviewers: number }
@@ -327,7 +349,7 @@ function parseVerifyInput(value: unknown): Result<{ snapshot: ReviewSelection, r
 function parseReport(value: unknown): Result<ReviewReport> {
   if (!object(value) || !sha(value.headSha) || !sha(value.baseSha) || !['complete', 'incomplete'].includes(value.coverage as string)
     || !['clean', 'actionable', 'incomplete'].includes(value.outcome as string) || !integer(value.repeated, 0, 200)
-    || !integer(value.rejected, 0, 200) || !integer(value.omittedFiles, 0, 3000) || !Array.isArray(value.fingerprints)
+    || !integer(value.rejected, 0, 200) || !integer(value.omittedFiles, 0, 3000) || !integer(value.omittedFindings, 0, 200) || !Array.isArray(value.fingerprints)
     || value.fingerprints.length > 200 || value.fingerprints.some(item => !text(item, 128))
     || !Array.isArray(value.previousFingerprints) || value.previousFingerprints.length > 1000 || value.previousFingerprints.some(item => !text(item, 128))) {
     return invalid('The verified review result is invalid.')
@@ -405,19 +427,19 @@ export function createReviewTaskTypes(dependencies: ReviewDependencies): TaskTyp
       return { _tag: 'Succeeded', output: { candidates: [], reviewers: 0 }, usage: emptyUsage() }
     let usage = emptyUsage()
     const candidates: ReviewCandidate[] = []
-    // At most two concurrent turns. Each batch completes before another batch starts.
-    for (let offset = 0; offset < input.roles.length; offset += 2) {
-      const results = await Promise.all(input.roles.slice(offset, offset + 2).map(async (role) => {
-        const result = await dependencies.provider.generate({
-          messages: [
-            { role: 'system', content: `${inertInstructions}\nReview as a ${role} specialist. Report only concrete defects introduced by the diff. Return JSON {"findings":[{"path":"file","side":"RIGHT","line":1,"title":"short title","body":"concrete trigger and impact","evidence":"exact changed source text","severity":"high","confidence":90}]}. Allowed sides: LEFT, RIGHT. Allowed severities: critical, high, medium, low. Use an empty array when there are no actionable findings. Do not report style preferences. Maximum ${input.maxFindings} findings.` },
-            { role: 'user', content: JSON.stringify(input.snapshot) },
-          ],
-          maxOutputTokens: input.maxOutputTokens,
-          signal: context.signal,
-        })
-        return { role, result }
-      }))
+    // Each bounded batch reserves input and output tokens before it invokes a provider.
+    for (let offset = 0; offset < input.roles.length; offset += input.maxParallelReviewers) {
+      const roles = input.roles.slice(offset, offset + input.maxParallelReviewers)
+      const planned = reserveTurns(context, roles.map(role => ({
+        messages: [
+          { role: 'system', content: `${inertInstructions}\nReview as a ${role} specialist. Report only concrete defects introduced by the diff. Return JSON {"findings":[{"path":"file","side":"RIGHT","line":1,"title":"short title","body":"concrete trigger and impact","evidence":"exact changed source text","severity":"high","confidence":90}]}. Allowed sides: LEFT, RIGHT. Allowed severities: critical, high, medium, low. Use an empty array when there are no actionable findings. Do not report style preferences. Maximum ${input.maxFindings} findings.` },
+          { role: 'user', content: JSON.stringify(input.snapshot) },
+        ],
+        maxOutputTokens: input.maxOutputTokens,
+      })), usage)
+      if (planned._tag === 'Err')
+        return { _tag: 'Failed', error: planned.error, usage }
+      const results = await Promise.all(planned.value.map(async (request, index) => ({ role: roles[index]!, result: await dependencies.provider.generate(request) })))
       let failure: TaskFailure | null = null
       for (const { role, result } of results) {
         if (result._tag === 'Err') {
@@ -443,21 +465,24 @@ export function createReviewTaskTypes(dependencies: ReviewDependencies): TaskTyp
   const verify = makeTask('review.verify', ['agent:invoke'], parseVerifyInput, outputParser(parseReport), async (context, input) => {
     const checked = verifyReviewFindings(input.snapshot, input.review.candidates)
     let usage = emptyUsage()
-    let findings = checked.findings
+    const priority = { critical: 0, high: 1, medium: 2, low: 3 }
+    const bounded = checked.findings.sort((left, right) => priority[left.severity] - priority[right.severity] || right.confidence - left.confidence).slice(0, 50)
+    const omittedFindings = checked.findings.length - bounded.length
+    let findings = bounded
     if (findings.length) {
-      const response = await dependencies.provider.generate({
+      const response = await generateTurn(context, dependencies.provider, {
         messages: [
-          { role: 'system', content: `${inertInstructions}\nIndependently challenge every candidate. Keep only evidence-backed defects with a concrete failing condition. Return JSON {"accepted":["candidate-id"]}. Reject speculative, pre-existing, or unsupported concerns. This is static inspection, not executed proof.` },
+          { role: 'system', content: `${inertInstructions}\nIndependently challenge every candidate. Keep only evidence-backed defects with a concrete failing condition. Keep one finding per root cause. Return JSON {"accepted":["candidate-id"]}. Reject duplicate, speculative, pre-existing, or unsupported concerns. This is static inspection, not executed proof.` },
           { role: 'user', content: JSON.stringify({ snapshot: input.snapshot, findings }) },
         ],
         maxOutputTokens: 2048,
-        signal: context.signal,
       })
       if (response._tag === 'Err')
         return { _tag: 'Failed', error: response.error, usage: failureUsage(response.error) }
       usage = response.value.usage
       const result = parseJsonResponse(response.value.text)
       if (!object(result) || !Array.isArray(result.accepted) || result.accepted.length > findings.length
+        || new Set(result.accepted).size !== result.accepted.length
         || result.accepted.some(id => typeof id !== 'string' || !findings.some(finding => finding.id === id))) {
         return failed('The agent provider returned invalid verification JSON.', usage)
       }
@@ -467,13 +492,14 @@ export function createReviewTaskTypes(dependencies: ReviewDependencies): TaskTyp
     const report: ReviewReport = {
       headSha: input.snapshot.headSha,
       baseSha: input.snapshot.baseSha,
-      coverage: input.snapshot.coverage,
-      outcome: findings.length ? 'actionable' : input.snapshot.coverage === 'complete' ? 'clean' : 'incomplete',
+      coverage: omittedFindings ? 'incomplete' : input.snapshot.coverage,
+      outcome: findings.length ? 'actionable' : input.snapshot.coverage === 'complete' && omittedFindings === 0 ? 'clean' : 'incomplete',
       findings,
       fingerprints: findings.map(finding => finding.fingerprint),
       repeated: findings.filter(finding => previousFingerprints.includes(finding.fingerprint)).length,
-      rejected: checked.rejected + checked.findings.length - findings.length,
+      rejected: checked.rejected + bounded.length - findings.length,
       omittedFiles: input.snapshot.omittedFiles,
+      omittedFindings,
       previousFingerprints,
     }
     return { _tag: 'Succeeded', output: json(report), usage }
@@ -484,7 +510,7 @@ export function createReviewTaskTypes(dependencies: ReviewDependencies): TaskTyp
     const count = report.findings.length
     const outcome = count ? `${count} actionable finding${count === 1 ? '' : 's'}.` : report.outcome === 'clean' ? 'No actionable findings.' : 'Review scope is incomplete.'
     const previous = report.repeated ? `\n${report.repeated} finding${report.repeated === 1 ? ' was' : 's were'} already reported.` : ''
-    const scope = report.coverage === 'incomplete' ? '\nSome files or patches exceeded the review limits.' : ''
+    const scope = report.coverage === 'incomplete' ? '\nSome files, patches, or findings exceeded the review limits.' : ''
     const summary = await context.publish('overview', {
       _tag: 'Comment',
       repository: context.event.repository.fullName,
@@ -513,13 +539,12 @@ export function createReviewTaskTypes(dependencies: ReviewDependencies): TaskTyp
     const selected = await selectSnapshot(dependencies, context, { maxFiles: 40, maxCharacters: 60_000, full: true })
     if (selected._tag === 'Err')
       return { _tag: 'Failed', error: selected.error }
-    const response = await dependencies.provider.generate({
+    const response = await generateTurn(context, dependencies.provider, {
       messages: [
         { role: 'system', content: `${inertInstructions}\nAnswer only the question about this review thread. Distinguish the reviewed commit from the current commit. If the finding is unsupported, say so. Keep the answer concise. Never start a full review or offer an automatic repair.` },
         { role: 'user', content: JSON.stringify({ ...conversation, current: selected.value }) },
       ],
       maxOutputTokens: 2048,
-      signal: context.signal,
     })
     if (response._tag === 'Err')
       return { _tag: 'Failed', error: response.error, usage: failureUsage(response.error) }
@@ -551,10 +576,10 @@ export function createReviewTaskTypes(dependencies: ReviewDependencies): TaskTyp
     const changes = parseChanges(value.changes)
     return changes._tag === 'Err' ? changes : ok({ changes: changes.value })
   }, outputParser(parseSummary), async (context, { changes }) => {
-    const response = await dependencies.provider.generate({ messages: [
+    const response = await generateTurn(context, dependencies.provider, { messages: [
       { role: 'system', content: `${inertInstructions}\nWrite a concise release summary from these changed files. Describe behavior supported by the patches. State when the scope is incomplete. Return plain Markdown, at most 200 words.` },
       { role: 'user', content: JSON.stringify(changes) },
-    ], maxOutputTokens: 1024, signal: context.signal })
+    ], maxOutputTokens: 1024 })
     if (response._tag === 'Err')
       return { _tag: 'Failed', error: response.error, usage: failureUsage(response.error) }
     const summary = parseSummary({ text: response.value.text, headSha: changes.headSha })
@@ -579,7 +604,7 @@ function preset(id: string, name: string, tasks: WorkflowDefinition['tasks']): W
     version: 1,
     id,
     name,
-    on: [{ event: 'pull_request', actions: ['opened', 'synchronize', 'reopened', 'ready_for_review'] }],
+    on: [{ event: 'pull_request', actions: ['opened', 'synchronize', 'reopened', 'ready_for_review', 'observed'] }],
     tasks,
     concurrency: { mode: 'replace', group: 'target' },
     limits: { maxAttempts: 2, timeoutMs: 300_000, maxTokens: 100_000, maxCostUsd: null, maxDurationMs: 900_000 },
