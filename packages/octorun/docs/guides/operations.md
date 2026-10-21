@@ -119,7 +119,8 @@ API key rotation does not change this pin.
 
 After a restart, incompatible pending tasks fail with a configuration error.
 If inspection reports an unavailable task implementation, check for changed provider settings or a changed package version.
-Choose the required settings, restart the controller, and submit a new manual run.
+Choose the required settings and restart the controller.
+If you drained admission, run `octorun resume` before submitting a new manual run.
 A failed run keeps its original result.
 Do not reuse its manual request ID for the new run.
 
