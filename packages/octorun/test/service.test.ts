@@ -7,6 +7,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { changeSummaryPreset } from '../src/review.ts'
 import { createOctorun, parseRepositoryWorkflows } from '../src/service.ts'
 import { ok } from '../src/types.ts'
 
@@ -30,6 +31,7 @@ async function setup(options: { failProvider?: boolean, sourceText?: string } = 
   let providerCalls = 0
   let nextId = 100
   let permission: 'read' | 'write' = 'write'
+  let permissionChecks = 0
   const comments: Record<string, unknown>[] = []
   const reviews: Record<string, unknown>[] = []
   const checkRuns: Record<string, unknown>[] = []
@@ -46,7 +48,10 @@ async function setup(options: { failProvider?: boolean, sourceText?: string } = 
       return ok(snapshot())
     },
     files: async () => ok([{ path: 'src/a.ts', patch: '@@ -1 +1 @@\n-old\n+new', status: 'modified', truncated: false, additions: 1, deletions: 1 }]),
-    permission: async () => ok(permission),
+    permission: async () => {
+      permissionChecks++
+      return ok(permission)
+    },
     readFile: async () => ok(null),
     readWorkflow: async () => ok({ sha: base, text: options.sourceText ?? null }),
     botIdentity: async () => ok(bot),
@@ -114,7 +119,7 @@ async function setup(options: { failProvider?: boolean, sourceText?: string } = 
     const body = JSON.stringify(payload)
     return service.handleWebhook({ deliveryId, event, body, signature: `sha256=${createHmac('sha256', secret).update(body).digest('hex')}` })
   }
-  return { config, client, comments, reviews, checkRuns, inputComments, snapshot, webhook, service: () => service, reads: () => reads, providerCalls: () => providerCalls, moveHead: (sha: string) => {
+  return { config, client, comments, reviews, checkRuns, inputComments, snapshot, webhook, service: () => service, reads: () => reads, providerCalls: () => providerCalls, permissionChecks: () => permissionChecks, moveHead: (sha: string) => {
     currentHead = sha
   }, setPermission: (value: 'read' | 'write') => {
     permission = value
@@ -125,6 +130,8 @@ async function setup(options: { failProvider?: boolean, sourceText?: string } = 
 }
 
 const issueComment = (body: string, id = 1) => ({ action: 'created', repository: { id: 10, full_name: 'acme/project' }, installation: { id: 20 }, sender: { ...actor, type: 'User' }, issue: { number: 1, pull_request: {} }, comment: { id, body, user: { ...actor, type: 'User' }, created_at: now.toISOString(), updated_at: now.toISOString() } })
+
+const checkAction = (check: Record<string, unknown>, identifier: string) => ({ action: 'requested_action', repository: { id: 10, full_name: 'acme/project' }, installation: { id: 20 }, sender: { ...actor, type: 'User' }, check_run: check, requested_action: { identifier } })
 
 describe('trusted repository workflows', () => {
   it('rejects aliases and duplicate workflow IDs before admission', () => {
@@ -286,5 +293,59 @@ describe('reactive service composition', () => {
     expect(test.providerCalls()).toBe(2)
     expect(await test.service().command('poll', { backfill: true })).toMatchObject({ _tag: 'Ok', value: { accepted: 0 } })
     expect(test.providerCalls()).toBe(2)
+  })
+
+  it('reruns the recorded custom workflow once for one native action delivery', async () => {
+    const test = await setup()
+    test.config.repositories[0]!.workflowSource = { _tag: 'Inline', definitions: [{ ...changeSummaryPreset(), id: 'custom-summary', name: 'Custom summary' }] }
+    expect(await test.service().command('run', { repository: repo.fullName, number: 1, workflow: 'custom-summary' })).toMatchObject({ _tag: 'Ok', value: { state: 'Succeeded' } })
+    const payload = checkAction(test.checkRuns[0]!, 'rerun')
+    await test.webhook('check_run', payload, 'rerun-one')
+    await test.webhook('check_run', payload, 'rerun-one')
+    await test.service().settle()
+    expect(test.service().runner.runs().map(run => ({ workflow: run.definition.id, state: run.state._tag }))).toEqual([{ workflow: 'custom-summary', state: 'Succeeded' }, { workflow: 'custom-summary', state: 'Succeeded' }])
+    expect(test.providerCalls()).toBe(2)
+  })
+
+  it('cancels only the workflow run recorded by the native check', async () => {
+    const test = await setup()
+    test.config.repositories[0]!.workflowSource = { _tag: 'Presets', presets: ['adversarial-review', 'change-summary'] }
+    const review = await test.service().run({ repository: repo.fullName, number: 1, workflow: 'adversarial-review' })
+    const summary = await test.service().run({ repository: repo.fullName, number: 1, workflow: 'change-summary' })
+    if (review._tag !== 'Ok' || summary._tag !== 'Ok')
+      throw new Error('Expected both workflows to be accepted.')
+    await test.service().tick()
+    const runId = (review.value as { runId: string }).runId
+    const check = test.checkRuns.find(value => value.external_id === `octorun:${runId}`)!
+    await test.webhook('check_run', checkAction(check, 'cancel'), 'cancel-one')
+    await test.service().settle()
+    expect(test.service().runner.inspect(runId)?.state._tag).toBe('Cancelled')
+    expect(test.service().runner.inspect((summary.value as { runId: string }).runId)?.state._tag).toBe('Succeeded')
+    expect(test.providerCalls()).toBe(1)
+  })
+
+  it('denies native actions after the actor loses repository write access', async () => {
+    const test = await setup()
+    test.config.repositories[0]!.workflowSource = { _tag: 'Presets', presets: ['change-summary'] }
+    await test.service().command('run', { repository: repo.fullName, number: 1, workflow: 'change-summary' })
+    test.setPermission('read')
+    await test.webhook('check_run', checkAction(test.checkRuns[0]!, 'rerun'), 'denied-rerun')
+    await test.service().settle()
+    expect(test.providerCalls()).toBe(1)
+    expect(test.service().runner.runs().map(run => run.definition.id)).toEqual(['change-summary'])
+    expect(test.permissionChecks()).toBe(1)
+  })
+
+  it('ignores foreign App checks and rejects an unrecorded check ID', async () => {
+    const test = await setup()
+    test.config.repositories[0]!.workflowSource = { _tag: 'Presets', presets: ['change-summary'] }
+    await test.service().command('run', { repository: repo.fullName, number: 1, workflow: 'change-summary' })
+    const check = test.checkRuns[0]!
+    await test.webhook('check_run', checkAction({ ...check, app: { id: 8 } }, 'rerun'), 'foreign-app')
+    await test.webhook('check_run', checkAction({ ...check, id: 999999 }, 'rerun'), 'unrecorded-id')
+    await test.service().settle()
+    expect(test.providerCalls()).toBe(1)
+    expect(test.service().runner.runs().map(run => run.definition.id)).toEqual(['change-summary'])
+    expect(test.permissionChecks()).toBe(0)
   })
 })

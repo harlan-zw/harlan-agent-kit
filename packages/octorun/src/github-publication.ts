@@ -168,7 +168,10 @@ export function createGitHubPublisher(options: { client: GitHubClient, authorize
       const id = githubObject(previous)?.id
       path = githubId(id) ? `${root}/check-runs/${id}` : `${root}/check-runs`
       method = githubId(id) ? 'PATCH' : 'POST'
-      body = { name: effect.name, head_sha: effect.headSha, external_id: `octorun:${context.run.id}`, ...effect.phase, output: { title: effect.name.slice(0, 255), summary: effect.summary, text: marker }, ...(effect.detailsUrl === undefined ? {} : { details_url: effect.detailsUrl }) }
+      const actions = effect.phase.status === 'completed'
+        ? [{ label: 'Run again', description: 'Run this workflow again.', identifier: 'rerun' }]
+        : [{ label: 'Cancel', description: 'Cancel this workflow run.', identifier: 'cancel' }]
+      body = { name: effect.name, head_sha: effect.headSha, external_id: `octorun:${context.run.id}`, ...effect.phase, actions, output: { title: effect.name.slice(0, 255), summary: effect.summary, text: marker }, ...(effect.detailsUrl === undefined ? {} : { details_url: effect.detailsUrl }) }
     }
     else if (effect._tag === 'Reply') {
       access = 'review'

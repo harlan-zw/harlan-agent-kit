@@ -242,6 +242,11 @@ describe('gitHub publication reconciliation', () => {
       expect(await publisher.publish(publication({ _tag: 'Check', repository: 'acme/project', headSha: head, name: 'Octorun / Review', summary: 'Review status.', phase }, `check-${phase.status}`))).toMatchObject({ _tag: 'Ok' })
     }
     expect(test.checks.map(check => ({ status: check.status, conclusion: check.conclusion, externalId: check.external_id }))).toEqual([{ status: 'completed', conclusion: 'timed_out', externalId: 'octorun:run-1' }])
+    expect(test.requests.filter(request => ['POST', 'PATCH'].includes(request.method) && request.path.includes('/check-runs')).map(request => request.body.actions)).toEqual([
+      [{ label: 'Cancel', description: 'Cancel this workflow run.', identifier: 'cancel' }],
+      [{ label: 'Cancel', description: 'Cancel this workflow run.', identifier: 'cancel' }],
+      [{ label: 'Run again', description: 'Run this workflow again.', identifier: 'rerun' }],
+    ])
   })
 
   it('blocks a stale head before creating a comment', async () => {
@@ -356,7 +361,7 @@ describe('gitHub event normalization', () => {
     const test = await fixture()
     const payload = { action: 'rerequested', repository: { id: 10, full_name: 'acme/project' }, installation: { id: 20 }, sender: user, check_run: { id: 99, app: { id: 7 }, head_sha: head, external_id: 'octorun:run-1', pull_requests: [] } }
     expect(await normalizeGitHubWebhook({ client: test.client, event: 'check_run', delivery: 'check-1', payload, now: () => now })).toMatchObject({ _tag: 'Err', error: { _tag: 'Authorization' } })
-    expect(await normalizeGitHubWebhook({ client: test.client, event: 'check_run', delivery: 'check-2', payload, resolveCheckTarget: async () => ({ _tag: 'PullRequest', number: 1, headSha: head, baseSha: base }), now: () => now })).toMatchObject({ _tag: 'Ok', value: [{ target: { number: 1, headSha: head }, data: { command: 'review' } }] })
+    expect(await normalizeGitHubWebhook({ client: test.client, event: 'check_run', delivery: 'check-2', payload, resolveCheckTarget: async () => ({ _tag: 'PullRequest', number: 1, headSha: head, baseSha: base }), now: () => now })).toMatchObject({ _tag: 'Ok', value: [{ target: { number: 1, headSha: head }, data: { command: 'rerun' } }] })
   })
 
   it('reads later comment pages and never treats an unknown editor as the author', async () => {

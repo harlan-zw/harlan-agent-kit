@@ -115,7 +115,10 @@ export async function normalizeGitHubWebhook(options: NormalizeWebhookOptions): 
     if (!['rerequested', 'requested_action'].includes(action))
       return ok([])
     const check = githubObject(payload.check_run)
-    if (githubObject(check?.app)?.id !== options.client.auth.appId || typeof check?.external_id !== 'string' || !check.external_id.startsWith('octorun:') || typeof check.head_sha !== 'string')
+    const requestedAction = githubObject(payload.requested_action)?.identifier
+    if (action === 'requested_action' && !['cancel', 'rerun'].includes(String(requestedAction)))
+      return ok([])
+    if (!githubId(check?.id) || githubObject(check?.app)?.id !== options.client.auth.appId || typeof check?.external_id !== 'string' || !check.external_id.startsWith('octorun:') || typeof check.head_sha !== 'string')
       return ok([])
     const recorded = await options.resolveCheckTarget?.(check.external_id, check.head_sha)
     if (!recorded || recorded.headSha !== check.head_sha)
@@ -123,11 +126,10 @@ export async function normalizeGitHubWebhook(options: NormalizeWebhookOptions): 
     const snapshot = await options.client.snapshot(repository.fullName, recorded.number, options.signal)
     if (snapshot._tag === 'Err')
       return snapshot
-    if (snapshot.value.headSha !== recorded.headSha || snapshot.value.repository.id !== repository.id)
+    if (snapshot.value.headSha !== recorded.headSha || snapshot.value.repository.id !== repository.id || snapshot.value.repository.installationId !== repository.installationId)
       return ok([])
     target = pullTarget(snapshot.value)
-    const requestedAction = githubObject(payload.requested_action)?.identifier
-    data = { checkId: githubId(check.id) ? check.id : null, externalId: check.external_id, command: action === 'rerequested' ? 'review' : typeof requestedAction === 'string' ? requestedAction : '' }
+    data = { checkId: check.id, externalId: check.external_id, command: action === 'rerequested' ? 'rerun' : requestedAction as string }
   }
   else if (options.event === 'push') {
     if (typeof payload.after !== 'string' || !/^[a-f0-9]{40,64}$/i.test(payload.after) || typeof payload.ref !== 'string' || /^0+$/.test(payload.after))

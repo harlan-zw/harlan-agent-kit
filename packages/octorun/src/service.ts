@@ -241,12 +241,29 @@ export async function createOctorun(options: OctorunServiceOptions) {
       return err({ _tag: 'Authorization', message: 'The GitHub event identifies a different repository installation.' })
     const data = githubObject(event.data)
     if (event.name === 'check_run') {
-      if (event.action === 'rerequested' && typeof data?.externalId === 'string') {
-        const original = store.run(data.externalId.slice('octorun:'.length))
-        return original ? executeCommand(event, repository.value, { _tag: 'Run', workflow: original.definition.id }) : err({ _tag: 'Authorization', message: 'The requested check run no longer identifies a workflow.' })
-      }
-      const command = parseGitHubCommand(`@${config.handle} ${String(data?.command ?? '')}`, config.handle)
-      return command._tag === 'Command' ? executeCommand(event, repository.value, command.command) : ok({ ignored: true })
+      if (!githubId(data?.checkId) || typeof data.externalId !== 'string' || !data.externalId.startsWith('octorun:') || !['cancel', 'rerun'].includes(String(data.command)))
+        return err({ _tag: 'Authorization', message: 'The requested check action does not identify an Octorun run.' })
+      const original = store.run(data.externalId.slice('octorun:'.length))
+      if (!original || original.event.repository.id !== event.repository.id || original.event.repository.fullName.toLowerCase() !== event.repository.fullName.toLowerCase() || original.event.repository.installationId !== event.repository.installationId || original.event.target._tag !== 'PullRequest' || event.target._tag !== 'PullRequest' || original.event.target.number !== event.target.number || original.event.target.headSha !== event.target.headSha)
+        return err({ _tag: 'Authorization', message: 'The requested check run does not match this repository and head.' })
+      const headSha = event.target.headSha
+      const recorded = store.publications({ runId: original.id }).some(publication => publication.effect._tag === 'Check' && publication.effect.headSha === headSha && publication.state._tag === 'Written' && publication.state.receipt.id === String(data.checkId))
+      if (!recorded)
+        return err({ _tag: 'Authorization', message: 'The requested check ID is not recorded for this workflow run.' })
+      if (data.command === 'rerun')
+        return executeCommand(event, repository.value, { _tag: 'Run', workflow: original.definition.id })
+      const previous = store.cursor(`command:${event.semanticKey}`)
+      if (previous !== null)
+        return ok(previous)
+      const permission = await authorizeGitHubCommand({ command: { _tag: 'Cancel' }, actor: event.actor, repository: repository.value.fullName, resolvePermission: (name, actor) => client.permission(name, actor) })
+      if (permission._tag === 'Err')
+        return permission
+      const cancelled = runner.cancel(original.id, `Cancelled by ${event.actor!.login}.`)
+      if (cancelled._tag === 'Err')
+        return cancelled
+      const result: JsonValue = { accepted: true, runId: cancelled.value.id, state: cancelled.value.state._tag, command: 'Cancel', targetKey: targetKey(event) }
+      store.setCursor(`command:${event.semanticKey}`, result)
+      return ok(result)
     }
     if (event.name.includes('comment') && typeof data?.body === 'string') {
       const command = parseGitHubCommand(data.body, config.handle)
