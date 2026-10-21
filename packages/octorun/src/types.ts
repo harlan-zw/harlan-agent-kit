@@ -7,6 +7,7 @@ export type TaskFailure = {
   _tag: 'Configuration' | 'Authorization' | 'Transient' | 'Capacity' | 'Permanent'
   message: string
   retryAt?: string
+  usage?: Usage
 }
 
 export type Parser<T> = (input: unknown) => Result<T>
