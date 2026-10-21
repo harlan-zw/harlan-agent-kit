@@ -34,8 +34,8 @@ it('installs executable commands that work in a noninteractive shell', async () 
     await writeFile(join(checkout, 'packages/harlan-github-agent/src/cli.ts'), 'console.log(JSON.stringify({args: process.argv.slice(2), cwd: process.cwd()}))')
     const env = { ...process.env, HOME: home, HARLAN_AGENT_CONTEXT_HOME: home, HARLAN_AGENT_CONTEXT_SKIP_MEMORY: '1', HARLAN_GITHUB_AGENT_CHECKOUT: checkout }
     await execute('bash', ['scripts/sync-agent-context.sh', 'local'], { env })
-    const run = await execute('bash', ['-c', `${home}/.local/bin/harlan-github-agent control status`], { env, cwd: tmpdir() })
-    expect(JSON.parse(run.stdout)).toEqual({ args: ['control', 'status', '--config', join(home, '.config/harlan-github-agent/config.yml'), '--url', 'https://hogwild.tailcad325.ts.net'], cwd: checkout })
+    const run = await execute('bash', ['-c', `${home}/.local/bin/harlan-github-agent control status --url https://control.example`], { env, cwd: tmpdir() })
+    expect(JSON.parse(run.stdout)).toEqual({ args: ['control', 'status', '--url', 'https://control.example', '--config', join(home, '.config/harlan-github-agent/config.yml')], cwd: checkout })
     const help = await execute('bash', ['-c', `${home}/.local/bin/hw --help`], { env, cwd: tmpdir() })
     expect(help.stdout).toContain('hw <command>')
   }
