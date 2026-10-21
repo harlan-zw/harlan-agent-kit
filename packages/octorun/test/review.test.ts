@@ -1,7 +1,7 @@
 import type { ReviewSnapshot } from '../src/review.ts'
-import type { AgentProvider, EventEnvelope, JsonValue, PublicationEffect, RunRecord, TaskContext, TaskType } from '../src/types.ts'
+import type { AgentProvider, AgentRequest, EventEnvelope, JsonValue, PublicationEffect, RunRecord, TaskContext, TaskType, Usage } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { adversarialReviewPreset, createReviewTaskTypes, findingFingerprint, verifyReviewFindings } from '../src/review.ts'
+import { adversarialReviewPreset, conversationPreset, createReviewTaskTypes, findingFingerprint, verifyReviewFindings } from '../src/review.ts'
 
 const headSha = 'a'.repeat(40)
 const baseSha = 'b'.repeat(40)
@@ -30,9 +30,12 @@ const event: EventEnvelope = {
 function harness(responses: (string | { error: true })[], previousFingerprints: string[] = [], snapshotValue: ReviewSnapshot = snapshot) {
   const effects: PublicationEffect[] = []
   const turns: string[] = []
+  const requests: AgentRequest[] = []
+  const reservations: Usage[] = []
   const provider: AgentProvider = {
     id: 'fixture',
     async generate(request) {
+      requests.push(request)
       turns.push(request.messages.map(message => message.content).join('\n'))
       const response = responses.shift()
       if (response === undefined)
@@ -69,7 +72,10 @@ function harness(responses: (string | { error: true })[], previousFingerprints: 
     outputs: {},
     signal: new AbortController().signal,
     task: { id: 'task', definition: definition.tasks[0]!, typeVersion: '1', state: { _tag: 'Running', leaseUntil: event.receivedAt }, attempts: 1, failures: 0, fence: 1, output: null, usage: run.usage, unreservedUsage: run.usage, usageReservations: [], startedAt: event.receivedAt, finishedAt: null },
-    reserveUsage: async () => ({ _tag: 'Ok', value: crypto.randomUUID() }),
+    reserveUsage: async (usage) => {
+      reservations.push(usage)
+      return { _tag: 'Ok', value: crypto.randomUUID() }
+    },
     settleUsage: async () => ({ _tag: 'Ok', value: undefined }),
     publish: async (_key, effect) => {
       effects.push(effect)
@@ -83,7 +89,7 @@ function harness(responses: (string | { error: true })[], previousFingerprints: 
       throw new Error(parsed.error.message)
     return task.execute(context, parsed.value)
   }
-  return { execute, context, effects, turns, types }
+  return { execute, context, effects, turns, types, requests, reservations }
 }
 
 async function successful(task: ReturnType<ReturnType<typeof harness>['execute']>): Promise<JsonValue> {
@@ -222,6 +228,38 @@ describe('adversarial review preset', () => {
     await successful(h.execute('review.conversation', { conversation: { commentId: 52, question: 'Why does this fail?', reviewedHeadSha: headSha, finding: candidate, history: [] } }))
     expect(h.effects).toMatchObject([{ _tag: 'Reply', commentId: 52, body: expect.stringContaining('missing account') }])
     expect(h.turns).toHaveLength(1)
+  })
+
+  it('fits a focused finding conversation within its default budget on a large pull request', async () => {
+    const focusedPath = 'src/focused.ts'
+    const files = Array.from({ length: 70 }, (_, index) => ({ path: `src/unrelated-${index}.ts`, status: 'modified', truncated: false, patch: `@@ -1 +1 @@\n-old\n+${'unrelated source '.repeat(400)}` }))
+    files.push({ path: focusedPath, status: 'modified', truncated: false, patch: '@@ -1 +1 @@\n-old\n+return account.name' })
+    const h = harness(['A missing account makes this property access throw.'], [], { ...snapshot, files })
+    h.context.run.definition = conversationPreset()
+    const finding = { ...candidate, path: focusedPath }
+    const question = 'Why does this account access throw?'
+    const history = Array.from({ length: 20 }, (_, index) => ({ role: 'user', content: `${index}: ${'🦊'.repeat(1900)}` }))
+    await successful(h.execute('review.conversation', { conversation: { commentId: 52, question, finding, history, reviewedHeadSha: headSha } }))
+    const request = h.requests[0]!
+    const payload = JSON.parse(request.messages[1]!.content)
+    expect(payload.question).toBe(question)
+    expect(payload.finding).toEqual(finding)
+    expect(payload.current.files).toContainEqual(expect.objectContaining({ path: focusedPath, patch: expect.stringContaining('return account.name') }))
+    expect(payload.current.coverage).toBe('incomplete')
+    expect(payload.current.omittedFiles).toBeGreaterThan(0)
+    expect(payload.omittedHistoryMessages).toBeGreaterThan(0)
+    expect(Buffer.byteLength(request.messages.map(message => message.content).join(''), 'utf8') + request.maxOutputTokens).toBeLessThan(50_000)
+    expect(h.reservations[0]!.inputTokens + h.reservations[0]!.outputTokens).toBeLessThanOrEqual(50_000)
+    expect(h.effects).toMatchObject([{ _tag: 'Reply', commentId: 52 }])
+    expect(h.turns).toHaveLength(1)
+  })
+
+  it('preserves an oversized question and finding by refusing before provider spending', async () => {
+    const h = harness([])
+    h.context.run.definition = conversationPreset()
+    const result = await h.execute('review.conversation', { conversation: { commentId: 52, question: '🦊'.repeat(4000), finding: { path: 'src/account.ts', body: '界'.repeat(11500) } } })
+    expect(result).toMatchObject({ _tag: 'Failed', error: { _tag: 'Configuration', message: expect.stringContaining('question and finding') } })
+    expect(h.turns).toEqual([])
   })
 })
 

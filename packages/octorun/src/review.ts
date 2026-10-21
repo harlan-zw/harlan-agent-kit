@@ -313,7 +313,7 @@ function parseScope(value: unknown): Result<ScopeInput> {
   return ok({ maxFiles: (value.maxFiles as number | undefined) ?? 60, maxCharacters: (value.maxCharacters as number | undefined) ?? 100_000, full: value.full === true })
 }
 
-async function selectSnapshot(dependencies: ReviewDependencies, context: TaskContext, scope: ScopeInput): Promise<Result<ReviewSelection>> {
+async function selectSnapshot(dependencies: ReviewDependencies, context: TaskContext, scope: ScopeInput, preferred?: { path: string, line: number | null }): Promise<Result<ReviewSelection>> {
   if (context.event.target._tag !== 'PullRequest')
     return invalid('This task requires a pull request target.')
   const snapshot = await dependencies.snapshots.read(context.event.repository.fullName, context.event.target, context.signal)
@@ -327,7 +327,18 @@ async function selectSnapshot(dependencies: ReviewDependencies, context: TaskCon
   const files: ReviewFile[] = []
   let remaining = scope.maxCharacters
   let coverage: ReviewSelection['coverage'] = 'complete'
-  for (const file of parsed.value.files.slice(0, scope.maxFiles)) {
+  const ordered = preferred ? [...parsed.value.files].sort((left, right) => Number(right.path === preferred.path) - Number(left.path === preferred.path)) : parsed.value.files
+  for (const original of ordered.slice(0, scope.maxFiles)) {
+    let file = original
+    if (preferred?.path === file.path && preferred.line !== null && file.patch) {
+      const hunk = file.patch.split(/(?=^@@ )/m).find((part) => {
+        const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(part)
+        return header !== null && ((preferred.line! >= Number(header[1]) && preferred.line! < Number(header[1]) + Number(header[2] ?? 1))
+          || (preferred.line! >= Number(header[3]) && preferred.line! < Number(header[3]) + Number(header[4] ?? 1)))
+      })
+      if (hunk && hunk.length < file.patch.length)
+        file = { ...file, patch: hunk, truncated: true }
+    }
     if (remaining <= 0)
       break
     const patch = file.patch === null ? null : file.patch.slice(0, remaining)
@@ -431,6 +442,61 @@ function parseConversation(value: unknown): Result<ConversationInput> {
     return invalid('The review thread exceeds its location or context limits.')
   }
   return ok({ conversation: { commentId: conversation.commentId, question: conversation.question, reviewedHeadSha: (conversation.reviewedHeadSha as string | null | undefined) ?? null, finding: (conversation.finding as JsonValue | undefined) ?? null, history: history as ConversationInput['conversation']['history'] } })
+}
+
+function conversationTurn(context: TaskContext, conversation: ConversationInput['conversation'], selected: ReviewSelection, preferredPath: string | null): Result<PlannedTurn> {
+  const current = structuredClone(selected)
+  const history = [...conversation.history]
+  let omittedHistoryMessages = 0
+  let omittedBodyCharacters = 0
+  let omittedTitleCharacters = 0
+  const system: AgentMessage = { role: 'system', content: `${inertInstructions}\nAnswer only the question about this review thread. Distinguish the reviewed commit from the current commit. Use the focused file and recent thread history. State when omitted context prevents a reliable answer. If the finding is unsupported, say so. Keep the answer concise. Never start a full review or offer an automatic repair.` }
+  const turn = (): PlannedTurn => ({ messages: [system, { role: 'user', content: JSON.stringify({ ...conversation, history, current, omittedHistoryMessages, omittedBodyCharacters, omittedTitleCharacters }) }], maxOutputTokens: 2048 })
+  const remaining = context.run.definition.limits.maxTokens - context.run.usage.inputTokens - context.run.usage.outputTokens
+  const mandatory: PlannedTurn = { messages: [system, { role: 'user', content: JSON.stringify({ ...conversation, history: [], current: { ...selected, title: '', body: '', files: [], coverage: 'incomplete', omittedFiles: selected.omittedFiles + selected.files.length }, omittedHistoryMessages: conversation.history.length, omittedBodyCharacters: selected.body.length, omittedTitleCharacters: selected.title.length }) }], maxOutputTokens: 128 }
+  const mandatoryTokens = inputTokenCeiling(mandatory)
+  if (mandatoryTokens + 128 > remaining)
+    return invalid('The question and finding exceed this conversation budget. Shorten the question or finding before retrying.')
+  const maxOutputTokens = Math.min(2048, remaining - mandatoryTokens)
+  while (inputTokenCeiling(turn()) + maxOutputTokens > remaining) {
+    const unrelated = current.files.findLastIndex(file => file.path !== preferredPath)
+    if (unrelated >= 0) {
+      current.files.splice(unrelated, 1)
+      current.omittedFiles++
+      current.coverage = 'incomplete'
+    }
+    else if (history.length) {
+      history.shift()
+      omittedHistoryMessages++
+    }
+    else if (current.body) {
+      omittedBodyCharacters = current.body.length
+      current.body = ''
+    }
+    else if (current.title) {
+      omittedTitleCharacters = current.title.length
+      current.title = ''
+    }
+    else if (current.files.some(file => file.patch)) {
+      const file = current.files.find(file => file.patch)!
+      const overflow = inputTokenCeiling(turn()) + maxOutputTokens - remaining
+      const bytes = Buffer.from(file.patch!, 'utf8')
+      const clipped = new TextDecoder().decode(bytes.subarray(0, Math.max(0, bytes.length - overflow - 64)), { stream: true })
+      const newline = clipped.lastIndexOf('\n')
+      file.patch = newline < 0 ? '' : clipped.slice(0, newline)
+      file.truncated = true
+      current.coverage = 'incomplete'
+    }
+    else if (current.files.length) {
+      current.files.pop()
+      current.omittedFiles++
+      current.coverage = 'incomplete'
+    }
+    else {
+      return invalid('The question and finding exceed this conversation budget. Shorten the question or finding before retrying.')
+    }
+  }
+  return ok({ ...turn(), maxOutputTokens })
 }
 
 interface ClassifiedChanges {
@@ -573,16 +639,15 @@ export function createReviewTaskTypes(dependencies: ReviewDependencies): TaskTyp
     return { _tag: 'Succeeded', output: { publications: fresh.length ? 2 : 1 } }
   })
   const conversation = makeTask('review.conversation', ['repository:read', 'agent:invoke', 'github:comment'], parseConversation, parsePublished, async (context, { conversation }) => {
-    const selected = await selectSnapshot(dependencies, context, { maxFiles: 40, maxCharacters: 60_000, full: true })
+    const finding = object(conversation.finding) ? conversation.finding : null
+    const preferred = finding && boundedPath(finding.path) ? { path: finding.path, line: integer(finding.line, 1, 10_000_000) ? finding.line : null } : undefined
+    const selected = await selectSnapshot(dependencies, context, { maxFiles: 40, maxCharacters: 60_000, full: true }, preferred)
     if (selected._tag === 'Err')
       return { _tag: 'Failed', error: selected.error }
-    const response = await generateTurn(context, dependencies.provider, {
-      messages: [
-        { role: 'system', content: `${inertInstructions}\nAnswer only the question about this review thread. Distinguish the reviewed commit from the current commit. If the finding is unsupported, say so. Keep the answer concise. Never start a full review or offer an automatic repair.` },
-        { role: 'user', content: JSON.stringify({ ...conversation, current: selected.value }) },
-      ],
-      maxOutputTokens: 2048,
-    })
+    const planned = conversationTurn(context, conversation, selected.value, preferred?.path ?? null)
+    if (planned._tag === 'Err')
+      return { _tag: 'Failed', error: planned.error }
+    const response = await generateTurn(context, dependencies.provider, planned.value)
     if (response._tag === 'Err')
       return { _tag: 'Failed', error: response.error, usage: failureUsage(response.error) }
     if (!response.value.text.trim() || response.value.text.length > 12_000)
