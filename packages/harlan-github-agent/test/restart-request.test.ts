@@ -39,6 +39,15 @@ describe('restart request', () => {
     expect(next.finishUpdatePreparation({ id: 'pending-update', _tag: 'Ready', at })).toMatchObject({ operation: { preparation: 'Ready' } })
   })
 
+  it('records a scheduled Update as its own source', () => {
+    const store = createStore()
+    const at = '2026-10-20T16:05:00.000Z'
+    expect(store.requestRestart({ id: 'scheduled-update', source: 'schedule', operation: { _tag: 'Update', targetCommit: 'a'.repeat(40), preparation: 'Ready' }, at }))
+      .toMatchObject({ _tag: 'Requested', source: 'schedule', operation: { _tag: 'Update', preparation: 'Ready' } })
+    expect(store.requestRestart({ id: 'dashboard-update', source: 'dashboard', operation: { _tag: 'Update', targetCommit: 'a'.repeat(40), preparation: 'Ready' }, at }))
+      .toMatchObject({ id: 'scheduled-update', source: 'schedule' })
+  })
+
   it('blocks claims during Update file sync and waits for its exact preparation receipt', async () => {
     vi.useFakeTimers()
     const store = createStore()

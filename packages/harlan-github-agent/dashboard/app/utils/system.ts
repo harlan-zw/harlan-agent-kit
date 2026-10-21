@@ -197,7 +197,7 @@ export function restartNotice(request: RestartRequest | null): RestartNotice | u
     return undefined
   const updating = request.operation._tag === 'Update'
   if (request._tag === 'Requested')
-    return { _tag: 'Requested', text: updating ? 'Update requested. Active work finishes first.' : 'Restart requested. Active work finishes first.' }
+    return { _tag: 'Requested', text: updating ? `${request.source === 'schedule' ? 'Scheduled update' : 'Update'} requested. Active work finishes first.` : 'Restart requested. Active work finishes first.' }
   if (request._tag === 'Restarting')
     return { _tag: 'Restarting', text: updating ? 'Starting the updated service.' : 'Restarting.' }
   return { _tag: 'ActionRequired', text: `${updating ? 'Update' : 'Restart'} did not complete: ${request.reason}` }

@@ -609,6 +609,24 @@ agent:
     })
   })
 
+  it('reads a daily service update time on its own clock', () => {
+    const result = parseConfigText(configText.replace('issue_cutoff: 2026-07-14', 'issue_cutoff: 2026-07-14\nservice_update:\n  at: "03:00"\n  time_zone: Australia/Melbourne'))
+
+    expect(result).toMatchObject({ _tag: 'Ok', value: { serviceUpdate: { minuteOfDay: 180, timeZone: 'Australia/Melbourne' } } })
+    const absent = parseConfigText(configText)
+    expect(absent._tag === 'Ok' && absent.value.serviceUpdate).toBeUndefined()
+  })
+
+  it.each([
+    ['3am', 'Australia/Melbourne', '$.service_update.at', 'Expected a 24 hour HH:MM time.'],
+    ['24:00', 'Australia/Melbourne', '$.service_update.at', 'Expected a 24 hour HH:MM time.'],
+    ['03:00', 'Melbourne', '$.service_update.time_zone', 'Expected an IANA time zone, such as Australia/Melbourne.'],
+  ])('rejects service update time %s in %s', (at, timeZone, path, message) => {
+    const result = parseConfigText(configText.replace('issue_cutoff: 2026-07-14', `issue_cutoff: 2026-07-14\nservice_update:\n  at: "${at}"\n  time_zone: ${timeZone}`))
+
+    expect(result).toEqual({ _tag: 'Err', error: expect.arrayContaining([{ path, message }]) })
+  })
+
   it('loads only a private GitHub App PEM file', async () => {
     const root = mkdtempSync(join(tmpdir(), 'harlan-github-key-'))
     temporaryDirectories.push(root)

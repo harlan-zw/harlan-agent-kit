@@ -7142,7 +7142,24 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${findingThreadSyncSchema} PRAGMA user_version = 92;`)
     version = 92
   }
-  if (version === 92)
+  if (version === 92) {
+    // A scheduled Update records its own source. SQLite cannot widen a CHECK in
+    // place, so the table is rebuilt from its stored definition.
+    const schema = database.prepare('SELECT sql FROM sqlite_master WHERE name = \'restart_requests\'').get() as { sql: string }
+    const expanded = schema.sql
+      .replace(/^CREATE TABLE[^(]+/, 'CREATE TABLE restart_requests_v93 ')
+      .replace('\'tray\', \'helper\')', '\'tray\', \'helper\', \'schedule\')')
+    if (!expanded.includes('\'schedule\''))
+      throw new Error('The restart_requests source constraint could not be widened.')
+    applyForeignKeyMigration(database, `${expanded};
+      INSERT INTO restart_requests_v93 SELECT * FROM restart_requests;
+      DROP TABLE restart_requests;
+      ALTER TABLE restart_requests_v93 RENAME TO restart_requests;
+      CREATE UNIQUE INDEX restart_requests_active ON restart_requests ((1)) WHERE state_tag IN ('Requested', 'Restarting');
+      PRAGMA user_version = 93;`)
+    version = 93
+  }
+  if (version === 93)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }

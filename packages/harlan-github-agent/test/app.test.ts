@@ -1,7 +1,7 @@
 import type { AgentSelection } from '../src/agent-profile.ts'
 import type { AgentAppOptions } from '../src/app.ts'
 import type { StatsRange, StatsSnapshot } from '../src/stats.ts'
-import type { RestartOperation, SelectionMode } from '../src/types.ts'
+import type { RestartOperation, RestartRequestSource, SelectionMode } from '../src/types.ts'
 import { Buffer } from 'node:buffer'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -54,7 +54,7 @@ const agentControls = {
   listRoutines: () => [],
   openRoutineRun: () => null,
   pauseAgents: (at: string) => ({ _tag: 'Paused' as const, pausedAt: at }),
-  requestRestart: (input: { id: string, source: 'dashboard' | 'tray' | 'helper', operation: RestartOperation, at: string }) => ({
+  requestRestart: (input: { id: string, source: RestartRequestSource, operation: RestartOperation, at: string }) => ({
     _tag: 'Requested' as const,
     id: input.id,
     source: input.source,

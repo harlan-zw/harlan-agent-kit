@@ -279,6 +279,7 @@ describe('restartNotice', () => {
       operation: { _tag: 'Update' as const, targetCommit: 'b'.repeat(40), preparation: 'Ready' as const },
     }
     expect(restartNotice(request)).toEqual({ _tag: 'Requested', text: 'Update requested. Active work finishes first.' })
+    expect(restartNotice({ ...request, source: 'schedule' })).toEqual({ _tag: 'Requested', text: 'Scheduled update requested. Active work finishes first.' })
   })
 })
 
