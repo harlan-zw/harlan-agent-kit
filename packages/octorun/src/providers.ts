@@ -30,7 +30,7 @@ const record = (value: unknown): value is Record<string, unknown> => value !== n
 const positiveInteger = (value: unknown, min: number, max: number): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= min && value <= max
 
 function configurationError(message: string): Result<never, ProviderFailure> {
-  return fail({ _tag: 'Configuration', code: 'configuration', message })
+  return fail({ _tag: 'Configuration', code: 'configuration', message, usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
 }
 
 function parseResponse(value: unknown, maxOutputTokens: number): Result<AgentResponse, ProviderFailure> {
@@ -86,18 +86,18 @@ async function readBody(response: Response, maxBytes: number): Promise<Result<st
 function statusFailure(response: Response, now: Date): ProviderFailure {
   const status = response.status
   if (status === 401 || status === 403)
-    return { _tag: 'Authorization', code: 'authentication', status, message: 'The agent provider rejected its credentials or model access.' }
+    return { _tag: 'Authorization', code: 'authentication', status, message: 'The agent provider rejected its credentials or model access.', usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } }
   if (status === 429) {
     const header = response.headers.get('retry-after')
     const seconds = header === null ? Number.NaN : Number(header)
     const timestamp = header === null ? Number.NaN : Date.parse(header)
     const delay = Number.isFinite(seconds) ? seconds * 1000 : timestamp - now.getTime()
     const retryAt = new Date(now.getTime() + Math.min(86_400_000, Math.max(1000, Number.isFinite(delay) ? delay : 60_000))).toISOString()
-    return { _tag: 'Capacity', code: 'quota', status, retryAt, message: 'The agent provider has no available quota or capacity.' }
+    return { _tag: 'Capacity', code: 'quota', status, retryAt, message: 'The agent provider has no available quota or capacity.', usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } }
   }
   if (status === 408 || status === 409 || status >= 500)
     return { _tag: 'Transient', code: 'transient', status, message: `The agent provider is temporarily unavailable, HTTP ${status}.` }
-  return { _tag: 'Configuration', code: 'configuration', status, message: `The agent provider rejected the configured request, HTTP ${status}.` }
+  return { _tag: 'Configuration', code: 'configuration', status, message: `The agent provider rejected the configured request, HTTP ${status}.`, usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } }
 }
 
 /** A text-only transport. Repository content never becomes tools or executable instructions. */
@@ -139,7 +139,7 @@ export function createOpenAICompatibleProvider(configuration: OpenAICompatibleCo
         return configurationError('The agent turn exceeds the message or token limits.')
       }
       if (request.signal.aborted)
-        return fail({ _tag: 'Permanent', code: 'cancelled', message: 'The agent turn was cancelled.' })
+        return fail({ _tag: 'Permanent', code: 'cancelled', message: 'The agent turn was cancelled.', usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } })
       const controller = new AbortController()
       const cancel = () => controller.abort(request.signal.reason)
       request.signal.addEventListener('abort', cancel, { once: true })

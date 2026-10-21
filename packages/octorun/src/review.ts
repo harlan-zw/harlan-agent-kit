@@ -1,6 +1,6 @@
 import type { AgentMessage, AgentProvider, AgentRequest, AgentResponse, Capability, EventTarget, JsonValue, Parser, Result, TaskContext, TaskFailure, TaskOutcome, TaskType, Usage, WorkflowDefinition } from './types.ts'
 import { createHash } from 'node:crypto'
-import { emptyUsage, err, isJsonValue, ok } from './types.ts'
+import { err, isJsonValue, ok } from './types.ts'
 
 export interface ReviewFile {
   path: string
@@ -92,28 +92,65 @@ function addUsage(left: Usage, right: Usage): Usage {
   }
 }
 
+const zeroUsage = (): Usage => ({ inputTokens: 0, outputTokens: 0, costUsd: 0 })
+
 function failureUsage(error: TaskFailure): Usage {
-  return (error as TaskFailure & { usage?: Usage }).usage ?? emptyUsage()
+  return (error as TaskFailure & { usage?: Usage }).usage ?? zeroUsage()
 }
 
 interface PlannedTurn { messages: AgentMessage[], maxOutputTokens: number }
+interface ReservedTurn { request: AgentRequest, reservationId: string }
+
+function inputTokenCeiling(turn: PlannedTurn): number {
+  return 256 + turn.messages.reduce((tokens, message) => tokens + Buffer.byteLength(message.content, 'utf8') + 32, 0)
+}
 
 /** UTF-8 bytes conservatively bound text tokens. Framing receives a separate reserve. */
-function reserveTurns(context: TaskContext, turns: PlannedTurn[], localUsage: Usage): Result<AgentRequest[]> {
+async function reserveTurns(context: TaskContext, turns: PlannedTurn[], localUsage: Usage): Promise<Result<ReservedTurn[]>> {
   if (context.run.definition.limits.maxCostUsd !== null)
     return invalid('This agent provider cannot reserve a currency budget. Use a token budget with maxCostUsd set to null.')
   const used = context.run.usage.inputTokens + context.run.usage.outputTokens + localUsage.inputTokens + localUsage.outputTokens
-  const inputReserve = turns.reduce((total, turn) => total + 256 + turn.messages.reduce((tokens, message) => tokens + Buffer.byteLength(message.content, 'utf8') + 32, 0), 0)
+  const inputReserve = turns.reduce((total, turn) => total + inputTokenCeiling(turn), 0)
   const remaining = context.run.definition.limits.maxTokens - used - inputReserve
   const outputPerTurn = Math.floor(remaining / turns.length)
   if (outputPerTurn < 128)
     return invalid('The remaining token budget cannot cover this agent turn. Increase maxTokens or reduce the review scope.')
-  return ok(turns.map(turn => ({ ...turn, maxOutputTokens: Math.min(turn.maxOutputTokens, outputPerTurn), signal: context.signal })))
+  const reserved: ReservedTurn[] = []
+  for (const turn of turns) {
+    const request = { ...turn, maxOutputTokens: Math.min(turn.maxOutputTokens, outputPerTurn), signal: context.signal }
+    const reservation = await context.reserveUsage({ inputTokens: inputTokenCeiling(turn), outputTokens: request.maxOutputTokens, costUsd: null })
+    if (reservation._tag === 'Err') {
+      // No provider was invoked. These reservations have positively known zero usage.
+      for (const unused of reserved) {
+        const released = await context.settleUsage(unused.reservationId, { inputTokens: 0, outputTokens: 0, costUsd: 0 })
+        if (released._tag === 'Err')
+          return released
+      }
+      return reservation
+    }
+    reserved.push({ request, reservationId: reservation.value })
+  }
+  return ok(reserved)
+}
+
+async function generateReservedTurn(context: TaskContext, provider: AgentProvider, reserved: ReservedTurn): Promise<Result<AgentResponse>> {
+  if (context.signal.aborted) {
+    const released = await context.settleUsage(reserved.reservationId, { inputTokens: 0, outputTokens: 0, costUsd: 0 })
+    return released._tag === 'Err' ? released : err({ _tag: 'Authorization', message: 'The agent turn lost execution authority before invocation.' })
+  }
+  const response = await provider.generate(reserved.request)
+  const knownUsage = response._tag === 'Ok' ? response.value.usage : response.error.usage
+  if (knownUsage) {
+    const settled = await context.settleUsage(reserved.reservationId, knownUsage)
+    if (settled._tag === 'Err')
+      return settled
+  }
+  return response
 }
 
 async function generateTurn(context: TaskContext, provider: AgentProvider, turn: PlannedTurn): Promise<Result<AgentResponse>> {
-  const reserved = reserveTurns(context, [turn], emptyUsage())
-  return reserved._tag === 'Err' ? reserved : provider.generate(reserved.value[0]!)
+  const reserved = await reserveTurns(context, [turn], zeroUsage())
+  return reserved._tag === 'Err' ? reserved : generateReservedTurn(context, provider, reserved.value[0]!)
 }
 
 export function parseReviewSnapshot(value: unknown): Result<ReviewSnapshot> {
@@ -424,13 +461,13 @@ export function createReviewTaskTypes(dependencies: ReviewDependencies): TaskTyp
   })
   const adversarial = makeTask('review.adversarial', ['agent:invoke'], parseReviewInput, outputParser(parseReviewOutput), async (context, input) => {
     if (!input.snapshot.files.some(file => file.patch))
-      return { _tag: 'Succeeded', output: { candidates: [], reviewers: 0 }, usage: emptyUsage() }
-    let usage = emptyUsage()
+      return { _tag: 'Succeeded', output: { candidates: [], reviewers: 0 }, usage: zeroUsage() }
+    let usage = zeroUsage()
     const candidates: ReviewCandidate[] = []
     // Each bounded batch reserves input and output tokens before it invokes a provider.
     for (let offset = 0; offset < input.roles.length; offset += input.maxParallelReviewers) {
       const roles = input.roles.slice(offset, offset + input.maxParallelReviewers)
-      const planned = reserveTurns(context, roles.map(role => ({
+      const planned = await reserveTurns(context, roles.map(role => ({
         messages: [
           { role: 'system', content: `${inertInstructions}\nReview as a ${role} specialist. Report only concrete defects introduced by the diff. Return JSON {"findings":[{"path":"file","side":"RIGHT","line":1,"title":"short title","body":"concrete trigger and impact","evidence":"exact changed source text","severity":"high","confidence":90}]}. Allowed sides: LEFT, RIGHT. Allowed severities: critical, high, medium, low. Use an empty array when there are no actionable findings. Do not report style preferences. Maximum ${input.maxFindings} findings.` },
           { role: 'user', content: JSON.stringify(input.snapshot) },
@@ -439,7 +476,7 @@ export function createReviewTaskTypes(dependencies: ReviewDependencies): TaskTyp
       })), usage)
       if (planned._tag === 'Err')
         return { _tag: 'Failed', error: planned.error, usage }
-      const results = await Promise.all(planned.value.map(async (request, index) => ({ role: roles[index]!, result: await dependencies.provider.generate(request) })))
+      const results = await Promise.all(planned.value.map(async (request, index) => ({ role: roles[index]!, result: await generateReservedTurn(context, dependencies.provider, request) })))
       let failure: TaskFailure | null = null
       for (const { role, result } of results) {
         if (result._tag === 'Err') {
@@ -464,7 +501,7 @@ export function createReviewTaskTypes(dependencies: ReviewDependencies): TaskTyp
   })
   const verify = makeTask('review.verify', ['agent:invoke'], parseVerifyInput, outputParser(parseReport), async (context, input) => {
     const checked = verifyReviewFindings(input.snapshot, input.review.candidates)
-    let usage = emptyUsage()
+    let usage = zeroUsage()
     const priority = { critical: 0, high: 1, medium: 2, low: 3 }
     const bounded = checked.findings.sort((left, right) => priority[left.severity] - priority[right.severity] || right.confidence - left.confidence).slice(0, 50)
     const omittedFindings = checked.findings.length - bounded.length

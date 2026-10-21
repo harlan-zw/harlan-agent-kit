@@ -68,7 +68,9 @@ function harness(responses: (string | { error: true })[], previousFingerprints: 
     event,
     outputs: {},
     signal: new AbortController().signal,
-    task: { id: 'task', definition: definition.tasks[0]!, typeVersion: '1', state: { _tag: 'Running', leaseUntil: event.receivedAt }, attempts: 1, failures: 0, fence: 1, output: null, usage: run.usage, startedAt: event.receivedAt, finishedAt: null },
+    task: { id: 'task', definition: definition.tasks[0]!, typeVersion: '1', state: { _tag: 'Running', leaseUntil: event.receivedAt }, attempts: 1, failures: 0, fence: 1, output: null, usage: run.usage, unreservedUsage: run.usage, usageReservations: [], startedAt: event.receivedAt, finishedAt: null },
+    reserveUsage: async () => ({ _tag: 'Ok', value: crypto.randomUUID() }),
+    settleUsage: async () => ({ _tag: 'Ok', value: undefined }),
     publish: async (_key, effect) => {
       effects.push(effect)
       return { _tag: 'Ok', value: `publication-${effects.length}` }

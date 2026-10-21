@@ -1,5 +1,5 @@
 import type { WorkflowStore } from './store.ts'
-import type { ConfigurationSource, EventEnvelope, PublicationEffect, PublicationPublisher, PublicationRecord, RepositoryPolicy, Result, RunRecord, TaskFailure, TaskOutcome, TaskType, Usage, WorkflowDefinition } from './types.ts'
+import type { ConfigurationSource, EventEnvelope, PublicationEffect, PublicationPublisher, PublicationRecord, RepositoryPolicy, Result, RunRecord, TaskFailure, TaskOutcome, TaskRecord, TaskType, Usage, WorkflowDefinition } from './types.ts'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { err, isJsonValue, ok } from './types.ts'
@@ -26,6 +26,10 @@ export interface StartRunOptions {
 const terminal = (state: { _tag: string }): boolean => ['Succeeded', 'Failed', 'Cancelled', 'Superseded', 'Skipped'].includes(state._tag)
 const zeroUsage = (): Usage => ({ inputTokens: 0, outputTokens: 0, costUsd: 0 })
 const sumUsage = (left: Usage, right: Usage): Usage => ({ inputTokens: left.inputTokens + right.inputTokens, outputTokens: left.outputTokens + right.outputTokens, costUsd: left.costUsd === null || right.costUsd === null ? null : left.costUsd + right.costUsd })
+const validUsage = (usage: Usage): boolean => Number.isSafeInteger(usage.inputTokens) && usage.inputTokens >= 0 && Number.isSafeInteger(usage.outputTokens) && usage.outputTokens >= 0 && (usage.costUsd === null || (Number.isFinite(usage.costUsd) && usage.costUsd >= 0))
+const taskUsage = (task: TaskRecord): Usage => task.usageReservations.reduce((usage, reservation) => sumUsage(usage, reservation._tag === 'Reserved' ? reservation.ceiling : reservation.actual), task.unreservedUsage)
+const totalUsage = (tasks: TaskRecord[]): Usage => tasks.reduce((usage, task) => sumUsage(usage, task.usage), zeroUsage())
+const withinBudget = (run: RunRecord, usage: Usage): boolean => validUsage(usage) && usage.inputTokens + usage.outputTokens <= run.definition.limits.maxTokens && (run.definition.limits.maxCostUsd === null || (usage.costUsd !== null && usage.costUsd <= run.definition.limits.maxCostUsd))
 const rejected = (message: string): Result<never> => err({ _tag: 'Authorization', message })
 const configurationError = (message: string): Result<never> => err({ _tag: 'Configuration', message })
 const retryable = (error: TaskFailure): boolean => error._tag === 'Transient' || error._tag === 'Capacity'
@@ -146,7 +150,7 @@ export function createRunner(options: RunnerOptions) {
         configuration: structuredClone(input.configuration),
         policy: structuredClone(input.policy),
         state: workflow.concurrency.mode === 'reject' && others.length ? { _tag: 'Skipped', reason: 'Another workflow run owns this concurrency group.' } : { _tag: 'Queued' },
-        tasks: workflow.tasks.map(task => ({ id: task.id, definition: task, typeVersion: compiled.value[task.id]!, state: { _tag: 'Queued' }, attempts: 0, failures: 0, fence: 0, output: null, usage: zeroUsage(), startedAt: null, finishedAt: null })),
+        tasks: workflow.tasks.map(task => ({ id: task.id, definition: task, typeVersion: compiled.value[task.id]!, state: { _tag: 'Queued' }, attempts: 0, failures: 0, fence: 0, output: null, usage: zeroUsage(), unreservedUsage: zeroUsage(), usageReservations: [], startedAt: null, finishedAt: null })),
         usage: zeroUsage(),
         createdAt: at(),
         updatedAt: at(),
@@ -200,6 +204,72 @@ export function createRunner(options: RunnerOptions) {
         event: snapshot.event,
         outputs,
         signal: controller.signal,
+        reserveUsage: async (ceiling: Usage): Promise<Result<string>> => {
+          if (stopping || controller.signal.aborted)
+            return rejected('The task no longer owns execution authority.')
+          if (!validUsage(ceiling))
+            return configurationError('Usage reservations require nonnegative token counts and known or explicitly unknown costs.')
+          const grant = await effectivePolicy(snapshot)
+          if (stopping || controller.signal.aborted)
+            return rejected('The task no longer owns execution authority.')
+          if (grant._tag === 'Err')
+            return grant
+          if (handler.capabilities.some(capability => !grant.value.capabilities.includes(capability)))
+            return rejected('The task lost a required capability before reserving usage.')
+          return store.transaction(() => {
+            const current = store.run(runId)
+            const owned = current?.tasks.find(item => item.id === taskId)
+            if (!current || terminal(current.state) || owned?.state._tag !== 'Running' || owned.fence !== task.fence)
+              return rejected('The task no longer owns execution authority.')
+            if (now().getTime() - Date.parse(current.createdAt) >= current.definition.limits.maxDurationMs)
+              return configurationError('The workflow duration budget is exhausted.')
+            if (owned.usageReservations.length >= 1024)
+              return configurationError('The task exceeded its usage reservation limit.')
+            const reservation = { _tag: 'Reserved' as const, id: randomUUID(), fence: task.fence, ceiling: structuredClone(ceiling) }
+            const amended = { ...owned, usageReservations: [...owned.usageReservations, reservation] }
+            amended.usage = taskUsage(amended)
+            const tasks = current.tasks.map(item => item.id === taskId ? amended : item)
+            const usage = totalUsage(tasks)
+            if (!withinBudget(current, usage))
+              return configurationError('The usage reservation exceeds the remaining workflow budget or requires unknown prices.')
+            update(runId, run => ({ ...run, tasks, usage }))
+            store.log('usage.reserved', { taskId, reservationId: reservation.id, ceiling: { ...ceiling } }, runId)
+            return ok(reservation.id)
+          })
+        },
+        settleUsage: async (reservationId: string, actual: Usage): Promise<Result<void>> => {
+          if (stopping)
+            return rejected('The controller is shutting down. Reserved usage remains charged.')
+          if (!validUsage(actual))
+            return configurationError('Actual usage requires nonnegative token counts and known or explicitly unknown costs.')
+          return store.transaction(() => {
+            const current = store.run(runId)
+            const owned = current?.tasks.find(item => item.id === taskId)
+            const reservation = owned?.usageReservations.find(item => item.id === reservationId && item.fence === task.fence)
+            if (!current || !owned || !reservation)
+              return rejected('This task attempt does not own that usage reservation.')
+            if (reservation._tag === 'Settled')
+              return digest(reservation.actual) === digest(actual) ? ok(undefined) : configurationError('The usage reservation already records a different actual result.')
+            const amended = { ...owned, usageReservations: owned.usageReservations.map(item => item.id === reservationId ? { ...reservation, _tag: 'Settled' as const, actual: structuredClone(actual) } : item) }
+            amended.usage = taskUsage(amended)
+            const tasks = current.tasks.map(item => item.id === taskId ? amended : item)
+            const usage = totalUsage(tasks)
+            update(runId, run => ({ ...run, tasks, usage }))
+            store.log('usage.settled', { taskId, reservationId, actual: { ...actual } }, runId)
+            if (!withinBudget(current, usage)) {
+              const error: TaskFailure = { _tag: 'Permanent', message: 'Reported usage exceeds the workflow budget or requires unknown prices.' }
+              failRun(runId, error)
+              return err(error)
+            }
+            if (actual.inputTokens > reservation.ceiling.inputTokens || actual.outputTokens > reservation.ceiling.outputTokens
+              || (reservation.ceiling.costUsd !== null && (actual.costUsd === null || actual.costUsd > reservation.ceiling.costUsd))) {
+              const error: TaskFailure = { _tag: 'Permanent', message: 'Reported usage exceeds its reserved ceiling.' }
+              failRun(runId, error)
+              return err(error)
+            }
+            return ok(undefined)
+          })
+        },
         publish: async (key: string, effect: PublicationEffect): Promise<Result<string>> => {
           if (stopping || controller.signal.aborted)
             return rejected('The task no longer owns publication authority.')
@@ -248,35 +318,40 @@ export function createRunner(options: RunnerOptions) {
     if (stopping)
       return
     let reportedUsage = outcome._tag === 'Succeeded' ? outcome.usage : outcome._tag === 'Failed' ? outcome.usage ?? outcome.error.usage : undefined
-    if (reportedUsage && (!Number.isSafeInteger(reportedUsage.inputTokens) || reportedUsage.inputTokens < 0
-      || !Number.isSafeInteger(reportedUsage.outputTokens) || reportedUsage.outputTokens < 0
-      || (reportedUsage.costUsd !== null && (!Number.isFinite(reportedUsage.costUsd) || reportedUsage.costUsd < 0)))) {
+    if (reportedUsage && !validUsage(reportedUsage)) {
       outcome = { _tag: 'Failed', error: { _tag: 'Permanent', message: 'The task reported invalid token or cost usage.' } }
       reportedUsage = undefined
     }
     let owned = false
-    update(runId, current => ({ ...current, usage: reportedUsage ? sumUsage(current.usage, reportedUsage) : current.usage, tasks: current.tasks.map((item) => {
-      if (item.id !== taskId)
-        return item
-      const usage = reportedUsage ? sumUsage(item.usage, reportedUsage) : item.usage
-      if (item.state._tag !== 'Running' || item.fence !== task.fence || terminal(current.state))
-        return { ...item, usage }
-      owned = true
-      if (outcome._tag === 'Succeeded') {
-        const output = handler.output(outcome.output)
-        if (output._tag === 'Err' || !isJsonValue(outcome.output) || JSON.stringify(outcome.output).length > 1048576)
-          outcome = { _tag: 'Failed', error: output._tag === 'Err' ? output.error : { _tag: 'Permanent', message: 'The task output exceeded the JSON data limit.' } }
-        else
-          return { ...item, state: { _tag: 'Succeeded' }, output: output.value, usage, finishedAt: at() }
-      }
-      if (outcome._tag === 'Deferred')
-        return { ...item, state: { _tag: 'Waiting', reason: outcome.reason, until: outcome.until }, usage }
-      const error = outcome._tag === 'Failed' ? outcome.error : { _tag: 'Permanent' as const, message: 'The task returned an invalid outcome.' }
-      if (error._tag === 'Capacity')
-        return { ...item, state: { _tag: 'Waiting', reason: error.message, until: error.retryAt ?? new Date(now().getTime() + 30000).toISOString() }, usage }
-      const failures = item.failures + 1
-      return { ...item, failures, usage, state: retryable(error) && failures < taskLimits(item.definition, current.definition).maxAttempts ? { _tag: 'Waiting', reason: error.message, until: error.retryAt ?? new Date(now().getTime() + Math.min(60000, 1000 * 2 ** failures)).toISOString() } : { _tag: 'Failed', error }, finishedAt: retryable(error) && failures < taskLimits(item.definition, current.definition).maxAttempts ? null : at() }
-    }) }))
+    update(runId, (current) => {
+      const tasks = current.tasks.map((item): TaskRecord => {
+        if (item.id !== taskId)
+          return item
+        // Reservations account for every paid call in this attempt. Its aggregate is informational.
+        const reserved = item.usageReservations.some(reservation => reservation.fence === task.fence)
+        const unreservedUsage = reportedUsage && !reserved ? sumUsage(item.unreservedUsage, reportedUsage) : item.unreservedUsage
+        item = { ...item, unreservedUsage }
+        const usage = taskUsage(item)
+        if (item.state._tag !== 'Running' || item.fence !== task.fence || terminal(current.state))
+          return { ...item, usage }
+        owned = true
+        if (outcome._tag === 'Succeeded') {
+          const output = handler.output(outcome.output)
+          if (output._tag === 'Err' || !isJsonValue(outcome.output) || JSON.stringify(outcome.output).length > 1048576)
+            outcome = { _tag: 'Failed', error: output._tag === 'Err' ? output.error : { _tag: 'Permanent', message: 'The task output exceeded the JSON data limit.' } }
+          else
+            return { ...item, state: { _tag: 'Succeeded' }, output: output.value, usage, finishedAt: at() }
+        }
+        if (outcome._tag === 'Deferred')
+          return { ...item, state: { _tag: 'Waiting', reason: outcome.reason, until: outcome.until }, usage }
+        const error = outcome._tag === 'Failed' ? outcome.error : { _tag: 'Permanent' as const, message: 'The task returned an invalid outcome.' }
+        if (error._tag === 'Capacity')
+          return { ...item, state: { _tag: 'Waiting', reason: error.message, until: error.retryAt ?? new Date(now().getTime() + 30000).toISOString() }, usage }
+        const failures = item.failures + 1
+        return { ...item, failures, usage, state: retryable(error) && failures < taskLimits(item.definition, current.definition).maxAttempts ? { _tag: 'Waiting', reason: error.message, until: error.retryAt ?? new Date(now().getTime() + Math.min(60000, 1000 * 2 ** failures)).toISOString() } : { _tag: 'Failed', error }, finishedAt: retryable(error) && failures < taskLimits(item.definition, current.definition).maxAttempts ? null : at() }
+      })
+      return { ...current, tasks, usage: totalUsage(tasks) }
+    })
     if (!owned)
       return
     const current = store.run(runId)!

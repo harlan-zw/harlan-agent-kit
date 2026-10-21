@@ -103,6 +103,10 @@ export interface Usage {
   costUsd: number | null
 }
 
+export type UsageReservation
+  = | { _tag: 'Reserved', id: string, fence: number, ceiling: Usage }
+    | { _tag: 'Settled', id: string, fence: number, ceiling: Usage, actual: Usage }
+
 export type RunState
   = | { _tag: 'Queued' }
     | { _tag: 'Running' }
@@ -132,6 +136,8 @@ export interface TaskRecord {
   fence: number
   output: JsonValue | null
   usage: Usage
+  unreservedUsage: Usage
+  usageReservations: UsageReservation[]
   startedAt: string | null
   finishedAt: string | null
 }
@@ -220,6 +226,10 @@ export interface TaskContext {
   event: EventEnvelope
   outputs: Record<string, JsonValue>
   signal: AbortSignal
+  /** Reserve before a paid call. Unknown results keep this durable charge. */
+  reserveUsage: (ceiling: Usage) => Promise<Result<string>>
+  /** Settle only positively known usage. Repeating the same result is safe. */
+  settleUsage: (reservationId: string, actual: Usage) => Promise<Result<void>>
   publish: (key: string, effect: PublicationEffect) => Promise<Result<string>>
 }
 
