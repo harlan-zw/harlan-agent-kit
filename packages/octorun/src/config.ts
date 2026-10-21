@@ -158,12 +158,12 @@ export function parseConfig(input: unknown, context: ConfigContext): Result<Oper
   const baseUrl = parseUrl(provider.baseUrl)
   if (!baseUrl || (baseUrl.protocol !== 'https:' && !(baseUrl.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(baseUrl.hostname))) || baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash)
     return invalid('provider.baseUrl must use HTTPS, or HTTP on localhost, without credentials or query parameters.')
-  if (!text(provider.model) || !envName(provider.apiKeyEnv))
+  if (!text(provider.model) || provider.model.length > 200 || !envName(provider.apiKeyEnv))
     return invalid('provider needs a model and an apiKeyEnv environment reference.')
   const timeoutMs = provider.timeoutMs ?? 120000
   const maxResponseBytes = provider.maxResponseBytes ?? 2097152
   const maxInputCharacters = provider.maxInputCharacters ?? 200000
-  if (!integer(timeoutMs, 100, 900000) || !integer(maxResponseBytes, 1024, 16777216) || !integer(maxInputCharacters, 1024, 2000000))
+  if (!integer(timeoutMs, 100, 900000) || !integer(maxResponseBytes, 1024, 4194304) || !integer(maxInputCharacters, 1024, 1048576))
     return invalid('Provider limits exceed the supported timeout or response bounds.')
   const host = input.host ?? '127.0.0.1'
   const port = input.port ?? 3333

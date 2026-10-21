@@ -1,0 +1,36 @@
+# Replace each example ID with the ID from your App installation.
+version: 1
+github:
+  appId: '123'
+  privateKeyEnv: OCTORUN_GITHUB_PRIVATE_KEY
+  webhookSecretEnv: OCTORUN_WEBHOOK_SECRET
+provider:
+  baseUrl: https://api.openai.com/v1
+  model: your-provider-model
+  apiKeyEnv: OCTORUN_API_KEY
+repositories:
+  - id: 456
+    fullName: your-org/your-repository
+    installationId: 789
+    defaultBranch: main
+    policy:
+      enabled: true
+      capabilities:
+        - repository:read
+        - agent:invoke
+        - github:comment
+        - github:review
+        - github:check
+      maxConcurrency: 1
+    workflowSource:
+      _tag: Presets
+      presets:
+        - adversarial-review
+# The controller listens on loopback. Put your HTTPS proxy in front of it.
+host: 127.0.0.1
+port: 3333
+pollIntervalMs: 60000
+limits:
+  bodyBytes: 2097152
+  requestsPerMinute: 300
+  concurrency: 2

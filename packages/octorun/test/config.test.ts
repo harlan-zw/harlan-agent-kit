@@ -34,6 +34,9 @@ it.each([
   [{ ...input(), repositories: [{ id: 7, fullName: 'team/example', installationId: 8 }, { id: 7, fullName: 'team/example', installationId: 8 }] }, 'duplicate'],
   [{ ...input(), provider: { ...input().provider, apiKey: 'must-never-be-stored' } }, 'apiKey'],
   [{ ...input(), provider: { ...input().provider, baseUrl: 'http://example.test/v1' } }, 'HTTPS'],
+  [{ ...input(), provider: { ...input().provider, maxResponseBytes: 8388608 } }, 'limits'],
+  [{ ...input(), provider: { ...input().provider, maxInputCharacters: 1500000 } }, 'limits'],
+  [{ ...input(), provider: { ...input().provider, model: 'm'.repeat(201) } }, 'model'],
   [{ ...input(), repositories: [{ ...input().repositories[0], workflowSource: { _tag: 'Repository', path: '../workflow.yml' } }] }, 'path'],
   [{ ...input(), repositories: [{ ...input().repositories[0], policy: { enabled: true, maxConcurrency: 1, capabilities: ['repository:write'] } }] }, 'capabilities'],
 ])('rejects unsafe operator configuration: %s', (value, message) => {

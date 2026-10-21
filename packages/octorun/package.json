@@ -1,19 +1,27 @@
 {
   "name": "octorun",
-  "version": "0.1.0",
   "type": "module",
+  "version": "0.1.0",
   "description": "Run reactive GitHub workflows with your own agent provider.",
   "license": "MIT",
-  "engines": { "node": ">=24.0.0" },
+  "exports": {
+    ".": { "types": "./dist/index.d.mts", "import": "./dist/index.mjs" },
+    "./config": { "types": "./dist/config.d.mts", "import": "./dist/config.mjs" },
+    "./server": { "types": "./dist/server.d.mts", "import": "./dist/server.mjs" },
+    "./github": { "types": "./dist/github.d.mts", "import": "./dist/github.mjs" },
+    "./review": { "types": "./dist/review.d.mts", "import": "./dist/review.mjs" },
+    "./providers": { "types": "./dist/providers.d.mts", "import": "./dist/providers.mjs" }
+  },
   "bin": { "octorun": "./dist/cli.mjs" },
-  "exports": { ".": { "types": "./dist/index.d.mts", "import": "./dist/index.mjs" } },
-  "files": ["dist", "README.md", "LICENSE.md", "examples"],
+  "files": ["GLOSSARY.md", "LICENSE.md", "README.md", "dist", "docs", "examples"],
+  "engines": { "node": ">=24.0.0" },
   "scripts": {
     "build": "obuild",
     "dev": "node --experimental-strip-types src/cli.ts",
     "test:run": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "prepack": "pnpm build"
   },
   "dependencies": { "yaml": "catalog:" },
   "devDependencies": { "@types/node": "catalog:", "obuild": "catalog:", "typescript": "catalog:", "vitest": "catalog:" }

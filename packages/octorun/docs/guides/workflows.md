@@ -1,0 +1,128 @@
+# Configure workflows
+
+A workflow selects events and runs an ordered chain of tasks.
+Each run pins its definition, event, repository snapshot, and repository policy.
+Task outputs become available to later tasks.
+
+## Select presets
+
+Set `workflowSource` on each operator repository mapping:
+
+```yaml
+workflowSource:
+  _tag: Presets
+  presets:
+    - adversarial-review
+    - change-summary
+```
+
+The review preset captures changes, proposes findings, verifies them, and publishes a grouped review.
+The summary preset classifies changes, writes a summary, and updates a comment.
+Both run through the same task scheduler.
+
+The operator policy limits capabilities for every task.
+The initial CLI supports repository reads, agent requests, comments, reviews, and checks.
+It does not enable shell execution, branch writes, or merges.
+A repository definition cannot expand that policy.
+
+## Load trusted repository definitions
+
+Set a repository workflow source:
+
+```yaml
+workflowSource:
+  _tag: Repository
+  path: .github/octorun.yaml
+```
+
+Octorun reads this file from the repository's trusted default branch.
+It records the source revision and definition digest on the run.
+A pull request cannot change its own effective workflow by modifying that file.
+The file contains data, with no JavaScript imports or executable configuration.
+
+Use this document shape:
+
+```yaml
+version: 1
+workflows:
+  - version: 1
+    id: change-summary
+    name: Change summary
+    on:
+      - event: pull_request
+        actions: [opened, synchronize, reopened]
+    concurrency:
+      mode: replace
+      group: target
+    limits:
+      maxAttempts: 3
+      timeoutMs: 120000
+      maxTokens: 50000
+      maxCostUsd: null
+      maxDurationMs: 600000
+    tasks:
+      - id: snapshot
+        uses: review.snapshot
+        with: {}
+      - id: classify
+        uses: changes.classify
+        with: {}
+      - id: summarize
+        uses: changes.summarize
+        with: {}
+      - id: comment
+        uses: changes.comment
+        with: {}
+```
+
+Operator-owned definitions use `_tag: Inline` with a `definitions` list in the same format.
+Run `octorun validate` after changing operator configuration.
+Run `octorun plan --repository owner/repository --pr 7` to inspect selected workflows before execution.
+
+## Register a custom task type
+
+The library supports operator-registered task types.
+The CLI registers its packaged review and summary task types.
+Use the library to register additional executable behavior.
+Keep that code in your trusted host application.
+
+```ts
+import type { TaskType } from 'octorun'
+import { createRunner, openStore, parseJsonValue } from 'octorun'
+
+const describeTarget: TaskType = {
+  id: 'example.describe-target',
+  version: '1',
+  capabilities: ['repository:read'],
+  input: parseJsonValue,
+  output: parseJsonValue,
+  execute: async context => ({
+    _tag: 'Succeeded',
+    output: {
+      repository: context.event.repository.fullName,
+      target: context.event.target,
+    },
+  }),
+}
+
+const store = openStore({ path: '/srv/my-octorun/state.sqlite' })
+const runner = createRunner({ store, taskTypes: [describeTarget] })
+// Supply parsed events, workflows, configuration sources, and repository policy through runner.ingest().
+// Call runner.tick() to process admitted tasks. Close the runner and store when your host stops.
+```
+
+The final lines show host integration points.
+A standalone host must also supply event ingestion, scheduling, and lifecycle handling.
+The packaged CLI already supplies these for its built-in task types.
+
+Each task declares a version and required capabilities.
+Its input and output parsers return `Result` values.
+Expected domain failures return a tagged task failure.
+Capacity waits return `Deferred`, so admission holds do not consume execution attempts.
+Use `context.signal` to stop external work after cancellation or timeout.
+
+Use `context.publish(key, effect)` for durable GitHub writes.
+Octorun records the desired comment, review, reply, or check before dispatch.
+An unknown result must be reconciled against GitHub before another write.
+External effects cannot share a database transaction with SQLite.
+The runtime preserves identities and reconciles uncertain results to resist duplicates.
