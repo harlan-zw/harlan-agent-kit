@@ -28,9 +28,9 @@ Usage: octorun [--config FILE] [--json] COMMAND
   inspect [RUN_ID]                  Show a workflow run or recent runs
   logs [RUN_ID] [--limit N]          Read correlated controller logs
   cancel RUN_ID                     Cancel one workflow run
-  pause --repository OWNER/REPO [--pr N | --target TARGET_KEY]
-  resume --repository OWNER/REPO [--pr N | --target TARGET_KEY]
-  drain                             Finish accepted work, then pause admission
+  pause [--repository OWNER/REPO] [--pr N | --target TARGET_KEY]
+  resume [--repository OWNER/REPO] [--pr N | --target TARGET_KEY]
+  drain                             Pause admission and finish active attempts
   backup FILE                       Back up durable state
   restore FILE                      Restore state while the controller is stopped
   prune --before ISO_DATE           Remove completed evidence before this date
@@ -56,7 +56,7 @@ function commandRequest(command: CliCommand): { command: string, args: JsonObjec
       return { command: 'cancel', args: { runId: command.runId } }
     case 'Pause':
     case 'Resume':
-      return { command: command._tag.toLowerCase(), args: { repository: command.repository, targetKey: command.targetKey, ...(command.number ? { number: command.number } : {}) } }
+      return { command: command._tag.toLowerCase(), args: command.scope._tag === 'Controller' ? {} : { repository: command.scope.repository, targetKey: command.scope.targetKey, ...(command.scope.number ? { number: command.scope.number } : {}) } }
     case 'Backup':
       return { command: 'backup', args: { destination: resolve(command.destination) } }
     case 'Restore':
@@ -75,14 +75,17 @@ function commandRequest(command: CliCommand): { command: string, args: JsonObjec
   }
 }
 
-function writeResult(result: Result<JsonValue>, json: boolean): number {
+function writeResult(result: Result<JsonValue>, json: boolean, outcome: 'Operation' | 'Run' | 'Doctor' = 'Operation'): number {
   if (result._tag === 'Err') {
     const text = json ? JSON.stringify(result) : result.error.message
     process.stderr.write(`${text}\n`)
     return 1
   }
   process.stdout.write(`${json ? JSON.stringify(result.value) : JSON.stringify(result.value, null, 2)}\n`)
-  return 0
+  const value = typeof result.value === 'object' && result.value !== null && !Array.isArray(result.value) ? result.value : null
+  if (outcome === 'Doctor' && value?.ready === false)
+    return 1
+  return outcome === 'Run' && typeof value?.state === 'string' && ['Failed', 'Cancelled', 'Superseded'].includes(value.state) ? 1 : 0
 }
 
 async function main(args: string[]): Promise<number> {
@@ -134,7 +137,7 @@ async function main(args: string[]): Promise<number> {
   if (request) {
     const existing = await requestControl({ path: join(config.stateDir, 'control.sock'), ...request })
     if (existing !== null)
-      return writeResult(existing, command.json)
+      return writeResult(existing, command.json, command._tag === 'Run' ? 'Run' : command._tag === 'Doctor' ? 'Doctor' : 'Operation')
   }
   const created = await createOctorun({ config })
   if (created._tag === 'Err')
@@ -146,7 +149,7 @@ async function main(args: string[]): Promise<number> {
       return writeResult(err({ _tag: 'Configuration', message: 'This command does not operate on the controller.' }), command.json)
     }
     const result = await service.command(request.command, request.args).finally(() => service.close())
-    return writeResult(result, command.json)
+    return writeResult(result, command.json, command._tag === 'Run' ? 'Run' : command._tag === 'Doctor' ? 'Doctor' : 'Operation')
   }
   const secrets = resolveSecrets(config)
   if (secrets._tag === 'Err') {

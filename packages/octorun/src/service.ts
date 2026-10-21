@@ -16,7 +16,7 @@ import { adversarialReviewPreset, changeSummaryPreset, conversationPreset, creat
 import { createRunner } from './runner.ts'
 import { openStore } from './store.ts'
 import { err, ok, parseJsonValue } from './types.ts'
-import { digest, parseWorkflow, targetKey } from './workflow.ts'
+import { compileWorkflow, digest, parseWorkflow, targetKey, taskLimits } from './workflow.ts'
 
 export function parseRepositoryWorkflows(text: string): Result<WorkflowDefinition[]> {
   if (Buffer.byteLength(text) > 512 * 1024)
@@ -149,7 +149,8 @@ export async function createOctorun(options: OctorunServiceOptions) {
     return ok(undefined)
   } })
   let observeRun = (_run: RunRecord): void => {}
-  const runner = createRunner({ store, taskTypes: [...pinnedReviewTypes, responder, ...(options.taskTypes ?? [])], publisher, now, concurrency: config.limits.concurrency, policy: currentPolicy, onRunChanged: (run) => {
+  const taskTypes = [...pinnedReviewTypes, responder, ...(options.taskTypes ?? [])]
+  const runner = createRunner({ store, taskTypes, publisher, now, concurrency: config.limits.concurrency, policy: currentPolicy, onRunChanged: (run) => {
     observeRun(run)
   } })
   let timer: ReturnType<typeof setInterval> | null = null
@@ -458,6 +459,14 @@ export async function createOctorun(options: OctorunServiceOptions) {
       return cancelled._tag === 'Err' ? cancelled : ok({ runId: cancelled.value.id, state: cancelled.value.state._tag })
     }
     if (name === 'pause' || name === 'resume') {
+      if (args.repository === undefined) {
+        if (args.number !== undefined || (args.targetKey !== undefined && args.targetKey !== null))
+          return err({ _tag: 'Configuration', message: 'Target controls require a configured repository.' })
+        store.setOperatorPause(name === 'pause')
+        if (name === 'resume')
+          await settle()
+        return ok({ scope: 'controller', paused: name === 'pause' })
+      }
       if (typeof args.repository !== 'string')
         return err({ _tag: 'Configuration', message: 'Pause and resume require a configured repository.' })
       const repository = configured(args.repository)
@@ -486,11 +495,45 @@ export async function createOctorun(options: OctorunServiceOptions) {
     if (name === 'plan') {
       if (typeof args.repository !== 'string' || !githubId(args.number))
         return err({ _tag: 'Configuration', message: 'Plan requires a configured repository and pull request number.' })
+      if (args.workflow !== undefined && (typeof args.workflow !== 'string' || args.workflow.length === 0))
+        return err({ _tag: 'Configuration', message: 'Plan requires a workflow ID when --workflow is supplied.' })
       const repository = configured(args.repository)
       if (repository._tag === 'Err')
         return repository
+      const snapshot = await client.snapshot(repository.value.fullName, args.number)
+      if (snapshot._tag === 'Err')
+        return snapshot
+      if (snapshot.value.repository.id !== repository.value.id || snapshot.value.repository.installationId !== repository.value.installationId)
+        return err({ _tag: 'Authorization', message: 'The pull request installation does not match the operator configuration.' })
       const source = await definitions(repository.value)
-      return source._tag === 'Err' ? source : ok({ repository: repository.value.fullName, configuration: source.value.configuration, workflows: source.value.workflows, policy: repository.value.policy } as unknown as JsonValue)
+      if (source._tag === 'Err')
+        return source
+      const workflow = source.value.workflows.find(value => value.id === (args.workflow ?? 'adversarial-review'))
+      if (!workflow)
+        return err({ _tag: 'Configuration', message: 'The requested workflow is not configured. Choose a configured --workflow ID.' })
+      const compiled = compileWorkflow(workflow, taskTypes)
+      if (compiled._tag === 'Err')
+        return compiled
+      const policy = repository.value.policy
+      if (!policy.enabled)
+        return err({ _tag: 'Authorization', message: 'The repository policy disables workflow execution.' })
+      for (const task of workflow.tasks) {
+        const type = taskTypes.find(type => type.id === task.uses)!
+        if (type.capabilities.some(capability => !policy.capabilities.includes(capability)))
+          return err({ _tag: 'Authorization', message: `The repository policy does not grant task ${task.id} its required capabilities.` })
+      }
+      const target = { _tag: 'PullRequest' as const, number: args.number, headSha: snapshot.value.headSha, baseSha: snapshot.value.baseSha }
+      const selector = workflow.on.find(selector => selector.event === 'pull_request' && (selector.actions === undefined || selector.actions.includes('manual')))
+      return ok({
+        repository: repository.value.fullName,
+        target,
+        configuration: source.value.configuration,
+        policy,
+        workflow: { id: workflow.id, name: workflow.name, digest: digest(workflow) },
+        selection: selector ? { _tag: 'Matched', selector } : { _tag: 'Manual', reason: 'Manual execution selects this workflow independently of automatic event selectors.' },
+        tasks: workflow.tasks.map(task => ({ ...task, typeVersion: compiled.value[task.id]!, capabilities: taskTypes.find(type => type.id === task.uses)!.capabilities, limits: taskLimits(task, workflow) })),
+        limits: workflow.limits,
+      } as unknown as JsonValue)
     }
     if (name === 'doctor') {
       const results: JsonValue[] = []

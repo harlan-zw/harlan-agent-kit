@@ -94,7 +94,7 @@ Task implementations register with `createRunner`.
 Their capabilities must fit the repository policy.
 Repository configuration cannot register executable JavaScript.
 
-Focused entry points include `octorun/config`, `octorun/server`, `octorun/github`, `octorun/review`, and `octorun/providers`.
+Focused entry points include `@harlan-zw/octorun/config`, `@harlan-zw/octorun/server`, `@harlan-zw/octorun/github`, `@harlan-zw/octorun/review`, and `@harlan-zw/octorun/providers`.
 See [workflows](docs/guides/workflows.md) for a custom task example.
 
 ## License

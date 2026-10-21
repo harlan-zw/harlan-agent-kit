@@ -74,11 +74,12 @@ octorun doctor --online
 `validate` parses the configuration without requiring credentials.
 `doctor` checks credential references without printing their values.
 `doctor --online` checks access to the configured GitHub repositories.
+It exits with code 1 if an access check fails.
 If a check fails, apply the error's remedy before running a review.
 
 ## Run one pull request
 
-Preview the selected workflow, then run it:
+Preview the pinned target, task capabilities, and limits, then run the selected workflow:
 
 ```bash
 octorun plan --repository your-org/your-repository --pr 7
@@ -91,6 +92,10 @@ This verification inspects supplied code and diff evidence.
 It does not execute repository tests.
 Check the pull request overview and its Octorun check run for the result.
 Use `octorun inspect` and `octorun logs` to inspect local state.
+`run` exits with code 1 for a failed, cancelled, or superseded run.
+It preserves the run result in its output.
+A waiting run remains accepted and exits with code 0.
+Inspect its hold reason before retrying.
 
 ## Keep processing events
 

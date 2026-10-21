@@ -135,6 +135,54 @@ describe('trusted repository workflows', () => {
 })
 
 describe('reactive service composition', () => {
+  it('previews a selected workflow against its live pinned target without executing tasks or publishing', async () => {
+    const test = await setup()
+    test.config.repositories[0]!.workflowSource = { _tag: 'Presets', presets: ['adversarial-review', 'change-summary'] }
+    const planned = await test.service().command('plan', { repository: repo.fullName, number: 1, workflow: 'change-summary' })
+    expect(planned).toMatchObject({ _tag: 'Ok', value: {
+      target: { _tag: 'PullRequest', number: 1, headSha: head, baseSha: base },
+      workflow: { id: 'change-summary' },
+      tasks: [{ id: 'classify', uses: 'changes.classify' }, { id: 'summarize', uses: 'changes.summarize' }, { id: 'comment', uses: 'changes.comment' }],
+      selection: { _tag: 'Manual' },
+      policy: { enabled: true },
+      limits: { maxCostUsd: null },
+    } })
+    expect(test.service().runner.runs()).toEqual([])
+    expect(test.providerCalls()).toBe(0)
+    expect(test.comments).toEqual([])
+    expect(test.reviews).toEqual([])
+    expect(test.checkRuns).toEqual([])
+  })
+
+  it('rejects an unavailable workflow, missing pull request, or denied task capability during preview', async () => {
+    const test = await setup()
+    expect(await test.service().command('plan', { repository: repo.fullName, number: 1, workflow: 'missing' })).toMatchObject({ _tag: 'Err', error: { _tag: 'Configuration' } })
+    test.config.repositories[0]!.policy.capabilities = ['repository:read']
+    expect(await test.service().command('plan', { repository: repo.fullName, number: 1 })).toMatchObject({ _tag: 'Err', error: { _tag: 'Authorization' } })
+    test.client.snapshot = async () => ({ _tag: 'Err', error: { _tag: 'Permanent', message: 'The pull request does not exist.' } })
+    expect(await test.service().command('plan', { repository: repo.fullName, number: 404 })).toMatchObject({ _tag: 'Err', error: { message: 'The pull request does not exist.' } })
+    expect(test.providerCalls()).toBe(0)
+    expect(test.service().runner.runs()).toEqual([])
+  })
+
+  it('resumes queued work after a drain persists through restart', async () => {
+    const test = await setup()
+    expect(await test.service().command('drain', {})).toMatchObject({ _tag: 'Ok' })
+    const queued = await test.service().run({ repository: repo.fullName, number: 1, requestId: 'paused-run' })
+    expect(queued).toMatchObject({ _tag: 'Ok', value: { state: 'Queued' } })
+    await test.restart()
+    await test.service().settle()
+    expect(test.providerCalls()).toBe(0)
+    expect(test.service().store.operatorPaused()).toBe(true)
+    await test.service().command('resume', { repository: repo.fullName })
+    expect(test.service().store.operatorPaused()).toBe(true)
+    expect(test.providerCalls()).toBe(0)
+    expect(await test.service().command('resume', {})).toMatchObject({ _tag: 'Ok', value: { scope: 'controller', paused: false } })
+    expect(test.service().store.operatorPaused()).toBe(false)
+    expect(test.service().runner.runs().find(run => run.definition.id === 'adversarial-review')?.state._tag).toBe('Succeeded')
+    expect(test.providerCalls()).toBe(2)
+  })
+
   it('persists a signed webhook before network reads and resumes it after restart', async () => {
     const test = await setup()
     expect(await test.webhook('issue_comment', issueComment('@octorun status'))).toMatchObject({ _tag: 'Ok', value: { accepted: true } })

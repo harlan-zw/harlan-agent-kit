@@ -11,7 +11,7 @@ export type CliCommand = CommonOptions & (
   | { _tag: 'Inspect', runId?: string }
   | { _tag: 'Logs', runId?: string, limit: number }
   | { _tag: 'Cancel', runId: string }
-  | { _tag: 'Pause' | 'Resume', repository: string, targetKey: string | null, number?: number }
+  | { _tag: 'Pause' | 'Resume', scope: { _tag: 'Controller' } | { _tag: 'Repository', repository: string, targetKey: string | null, number?: number } }
   | { _tag: 'Backup', destination: string }
   | { _tag: 'Restore', source: string }
   | { _tag: 'Prune', before: string }
@@ -126,12 +126,15 @@ export function parseCliArguments(args: string[]): Result<CliCommand> {
     return ok({ ...common, _tag: 'Cancel', runId })
   }
   if (command === 'pause' || command === 'resume') {
-    if (!values.repository)
-      return failure(`${command} needs --repository owner/repository.`)
+    if (!values.repository) {
+      if (values.pr || values.target)
+        return failure('Target controls need --repository owner/repository.')
+      return ok({ ...common, _tag: command === 'pause' ? 'Pause' : 'Resume', scope: { _tag: 'Controller' } })
+    }
     const pr = values.pr ? number(values.pr) : null
     if ((values.pr && !pr) || (values.pr && values.target))
       return failure('Use one valid --pr number or --target key for the pause scope.')
-    return ok({ ...common, _tag: command === 'pause' ? 'Pause' : 'Resume', repository: values.repository, targetKey: values.target ?? null, ...(pr ? { number: pr } : {}) })
+    return ok({ ...common, _tag: command === 'pause' ? 'Pause' : 'Resume', scope: { _tag: 'Repository', repository: values.repository, targetKey: values.target ?? null, ...(pr ? { number: pr } : {}) } })
   }
   if (command === 'backup' || command === 'restore') {
     if (!positional)

@@ -42,10 +42,23 @@ Use `cancel` when you need to stop a specific active run.
 octorun drain
 ```
 
-Use drain before stopping the controller or transferring ownership.
+Drain pauses new task admission across the controller.
+Active attempts finish, while queued tasks and later tasks remain held.
+Use it before stopping the controller or transferring ownership.
 Check `status` and `inspect` for unfinished work.
 Stop `serve` with SIGTERM or Ctrl+C.
 The controller closes its HTTP server, private socket, and durable state.
+The admission pause survives restart.
+
+To resume queued work after drain, run:
+
+```bash
+octorun resume
+```
+
+Without `--repository`, `pause` and `resume` control admission across the controller.
+Repository and target pauses remain separate.
+If a repository still has a pause, resume that scope too.
 
 ## Back up and restore
 
@@ -98,6 +111,34 @@ If credentials expired or were rotated, update the referenced environment values
 If a provider rejects a model or endpoint, check `provider.model` and `provider.baseUrl`.
 Use `--json` with any command to collect machine-readable output.
 Error output excludes credential values.
+
+Accepted tasks pin the provider, endpoint, model, timeout, input limit, and response limit.
+Before changing these settings, drain the controller and inspect unfinished runs.
+Finish or cancel waiting work before changing the configuration.
+API key rotation does not change this pin.
+
+After a restart, incompatible pending tasks fail with a configuration error.
+If inspection reports an unavailable task implementation, check for changed provider settings or a changed package version.
+Choose the required settings, restart the controller, and submit a new manual run.
+A failed run keeps its original result.
+Do not reuse its manual request ID for the new run.
+
+```bash
+octorun run --repository your-org/your-repository --pr 7
+```
+
+The command creates a new request ID when you omit `--request-id`.
+For scripts, `run` exits with code 1 for Failed, Cancelled, or Superseded results.
+Waiting work exits with code 0 because the controller accepted it.
+Read the output state before treating acceptance as completion.
+
+Before a paid request, Octorun records a conservative token reservation in SQLite.
+Confirmed provider usage replaces that reservation.
+A timeout or crash can leave the provider's actual usage unknown.
+That reservation remains charged against the run's budget after restart.
+Inspect the run's usage and the provider's request history before authorizing another attempt.
+If the remaining budget cannot cover another request, submit a new manual run only when you authorize a separate budget.
+The previous run remains part of your usage history.
 
 If the binary rejects the database schema, use a compatible binary or restore a compatible backup.
 Keep the current state copy before attempting recovery.

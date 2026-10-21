@@ -81,6 +81,16 @@ Use `maxCostUsd: null` with the HTTP provider, which cannot establish the next r
 Token and duration budgets still apply.
 Run `octorun validate` after changing operator configuration.
 Run `octorun plan --repository owner/repository --pr 7` to inspect selected workflows before execution.
+For the summary workflow above, select its ID explicitly:
+
+```bash
+octorun plan --repository owner/repository --pr 7 --workflow change-summary
+octorun run --repository owner/repository --pr 7 --workflow change-summary
+```
+
+The preview pins the current head and base revisions and checks registered tasks against repository policy.
+It starts no task and writes no GitHub result.
+Without `--workflow`, manual requests select `adversarial-review`.
 
 ## Register a custom task type
 
@@ -94,7 +104,7 @@ In a separate directory, install the package locally and run its example:
 
 ```bash
 pnpm add /tmp/octorun.tgz
-cp node_modules/octorun/examples/custom-task.ts ./custom-task.ts
+cp node_modules/@harlan-zw/octorun/examples/custom-task.ts ./custom-task.ts
 node --experimental-strip-types custom-task.ts
 ```
 
@@ -135,6 +145,14 @@ Its input and output parsers return `Result` values.
 Expected domain failures return a tagged task failure.
 Capacity waits return `Deferred`, so admission holds do not consume execution attempts.
 Use `context.signal` to stop external work after cancellation or timeout.
+
+Before a paid agent request, call `context.reserveUsage(ceiling)` with its maximum usage.
+If reservation fails, return the failure before sending the request.
+After the provider confirms usage, call `context.settleUsage(reservationId, actual)`.
+Settle only usage that the provider positively reports.
+Repeating an identical settlement is safe; a changed settlement is rejected.
+For an attempt with reservations, the runtime uses its ledger instead of the task's aggregate usage.
+A timeout or crash keeps unknown usage charged at the reserved ceiling.
 
 Use `context.publish(key, effect)` for durable GitHub writes.
 Octorun records the desired comment, review, reply, or check before dispatch.

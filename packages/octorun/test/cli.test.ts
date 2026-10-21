@@ -34,3 +34,11 @@ it('offers config validation and familiar help aliases', () => {
   expect(parseCliArguments(['config'])).toEqual({ _tag: 'Ok', value: { _tag: 'Configuration', json: false } })
   expect(parseCliArguments(['-h'])).toEqual({ _tag: 'Ok', value: { _tag: 'Help', json: false } })
 })
+
+it('distinguishes controller admission controls from repository controls', () => {
+  expect(parseCliArguments(['pause'])).toEqual({ _tag: 'Ok', value: { _tag: 'Pause', scope: { _tag: 'Controller' }, json: false } })
+  expect(parseCliArguments(['resume'])).toEqual({ _tag: 'Ok', value: { _tag: 'Resume', scope: { _tag: 'Controller' }, json: false } })
+  expect(parseCliArguments(['resume', '--repository', 'example/project', '--pr', '7'])).toEqual({ _tag: 'Ok', value: { _tag: 'Resume', scope: { _tag: 'Repository', repository: 'example/project', targetKey: null, number: 7 }, json: false } })
+  expect(parseCliArguments(['pause', '--pr', '7'])._tag).toBe('Err')
+  expect(parseCliArguments(['resume', '--target', '1:pull_request:7'])._tag).toBe('Err')
+})
