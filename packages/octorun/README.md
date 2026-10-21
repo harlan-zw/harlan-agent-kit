@@ -42,6 +42,8 @@ pnpm add --global /tmp/octorun.tgz
 octorun help
 ```
 
+If pnpm reports a missing global binary directory, run `pnpm setup` and open a new shell before repeating installation.
+
 The tarball contains the CLI, library declarations, preset implementation, examples, and license.
 Use a release tarball from your chosen source when installing outside this checkout.
 

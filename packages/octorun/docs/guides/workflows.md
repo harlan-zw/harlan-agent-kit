@@ -89,6 +89,18 @@ The CLI registers its packaged review and summary task types.
 Use the library to register additional executable behavior.
 Keep that code in your trusted host application.
 
+The [complete custom task example](../../examples/custom-task.ts) runs in memory without GitHub access or provider credentials.
+In a separate directory, install the package locally and run its example:
+
+```bash
+pnpm add /tmp/octorun.tgz
+cp node_modules/octorun/examples/custom-task.ts ./custom-task.ts
+node --experimental-strip-types custom-task.ts
+```
+
+It prints the `Succeeded` run state and the task's repository and target output.
+The smaller snippet below shows the registration contract.
+
 ```ts
 import type { TaskType } from 'octorun'
 import { createRunner, openStore, parseJsonValue } from 'octorun'

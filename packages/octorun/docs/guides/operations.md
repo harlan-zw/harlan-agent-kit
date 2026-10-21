@@ -52,7 +52,8 @@ The controller closes its HTTP server, private socket, and durable state.
 Create a backup while the controller owns the state:
 
 ```bash
-octorun backup /srv/octorun-backups/state.sqlite
+mkdir -p "$HOME/octorun-backups"
+octorun backup "$HOME/octorun-backups/state.sqlite"
 ```
 
 Keep backups outside the state directory's retention area.
@@ -62,7 +63,7 @@ Store credentials separately in your secret manager.
 If you need to restore, stop the controller first:
 
 ```bash
-octorun restore /srv/octorun-backups/state.sqlite
+octorun restore "$HOME/octorun-backups/state.sqlite"
 octorun serve
 ```
 
@@ -78,7 +79,10 @@ octorun prune --before 2026-01-01T00:00:00Z
 ```
 
 The command removes eligible completed evidence older than the supplied timestamp.
+It scrubs embedded event data, task outputs, and confirmed GitHub comment, review, and check text.
+It keeps run identities, usage, configuration, and GitHub result identities.
 Active runs remain available for recovery.
+Expired review context is unavailable for later finding conversations.
 Choose a retention interval that supports your audit and recovery needs.
 
 ## Diagnose a hold or failure
