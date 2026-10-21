@@ -165,6 +165,16 @@ describe('reactive service composition', () => {
     expect(test.providerCalls()).toBe(2)
   })
 
+  it('refuses a changed provider configuration when recovering accepted work', async () => {
+    const test = await setup()
+    expect(await test.service().run({ repository: repo.fullName, number: 1, requestId: 'pinned-provider' })).toMatchObject({ _tag: 'Ok', value: { state: 'Queued' } })
+    test.config.provider.model = 'different-model'
+    await test.restart()
+    await test.service().settle()
+    expect(test.providerCalls()).toBe(0)
+    expect(test.service().runner.runs()).toMatchObject([{ state: { _tag: 'Failed', error: { _tag: 'Configuration' } } }])
+  })
+
   it('keeps provider failure separate from a clean review', async () => {
     const test = await setup({ failProvider: true })
     expect(await test.service().command('run', { repository: repo.fullName, number: 1 })).toMatchObject({ _tag: 'Ok', value: { state: 'Failed' } })
