@@ -127,6 +127,8 @@ async function main(args: string[]): Promise<number> {
   if (loaded._tag === 'Err')
     return writeResult(loaded, command.json)
   const config = loaded.value
+  if (command._tag === 'Configuration')
+    return writeResult(ok(config as unknown as JsonValue), command.json)
   if (command._tag === 'Restore') {
     const existing = await requestControl({ path: join(config.stateDir, 'control.sock'), command: 'status', args: {} })
     if (existing !== null)
