@@ -281,6 +281,7 @@ export async function exportOctorun(options: { destination: string, sourceDirect
   await writeFile(join(canonical.value, 'pnpm-lock.yaml'), stringify(standaloneLock.value), { flag: 'wx' })
   await writeFile(join(canonical.value, 'eslint.config.ts'), 'import antfu from \'@antfu/eslint-config\'\n\nexport default antfu({ typescript: true, ignores: [\'dist/**\', \'coverage/**\'] }, { rules: { \'node/prefer-global/process\': \'off\', \'node/prefer-global/buffer\': \'off\', \'ts/no-use-before-define\': \'off\', \'jsonc/sort-keys\': \'off\' } })\n', { flag: 'wx' })
   await writeFile(join(canonical.value, '.gitignore'), 'node_modules\ndist\ncoverage\n*.tgz\n.env\n.data\n', { flag: 'wx' })
+  await writeFile(join(canonical.value, 'pnpm-workspace.yaml'), 'allowBuilds:\n  esbuild: false\n', { flag: 'wx' })
   await mkdir(join(canonical.value, '.github', 'workflows'), { recursive: true })
   await mkdir(join(canonical.value, 'scripts'), { recursive: true })
   await copyFile(fileURLToPath(import.meta.url), join(canonical.value, 'scripts', 'export.ts'))
