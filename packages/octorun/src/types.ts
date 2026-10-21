@@ -1,9 +1,9 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
-export type JsonObject = { [key: string]: JsonValue }
+export interface JsonObject { [key: string]: JsonValue }
 
 export type Result<T, E = TaskFailure> = { _tag: 'Ok', value: T } | { _tag: 'Err', error: E }
 
-export type TaskFailure = {
+export interface TaskFailure {
   _tag: 'Configuration' | 'Authorization' | 'Transient' | 'Capacity' | 'Permanent'
   message: string
   retryAt?: string

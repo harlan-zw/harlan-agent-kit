@@ -25,7 +25,7 @@ describe('workflow definitions', () => {
     { ...definition(), execute: 'arbitrary-code' },
     { ...definition(), limits: { maxAttempts: 0 } },
     { ...definition(), concurrency: { mode: 'unknown' } },
-  ])('rejects unsafe or ambiguous configuration', input => {
+  ])('rejects unsafe or ambiguous configuration', (input) => {
     expect(parseWorkflow(input)).toMatchObject({ _tag: 'Err', error: { _tag: 'Configuration' } })
   })
 
@@ -44,7 +44,7 @@ describe('event boundaries', () => {
     { ...event(), target: { _tag: 'PullRequest', number: 4, headSha: 'not-a-sha', baseSha: 'b'.repeat(40) } },
     { ...event(), occurredAt: 'invalid' },
     { ...event(), data: JSON.parse('{"__proto__":{"secret":true}}') },
-  ])('rejects malformed external input', input => {
+  ])('rejects malformed external input', (input) => {
     expect(parseEvent(input)).toMatchObject({ _tag: 'Err', error: { _tag: 'Configuration' } })
   })
 
