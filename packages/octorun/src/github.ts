@@ -74,7 +74,7 @@ export function createGitHubClient(options: { auth: GitHubAppAuth, fetch?: typeo
     if (parsed._tag === 'Err')
       return parsed
     const expected = `${githubRepositoryPath(repository)}/`
-    if (!path.startsWith(expected) && !/^\/users\/[^/?]+$/.test(path))
+    if (path !== expected.slice(0, -1) && !path.startsWith(expected) && !/^\/users\/[^/?]+$/.test(path))
       return err({ _tag: 'Authorization', message: 'The GitHub route leaves the configured repository.' })
     if (path.includes('..') || path.includes('\\') || path.includes('#'))
       return err({ _tag: 'Configuration', message: 'The GitHub route contains an invalid path.' })
@@ -112,7 +112,7 @@ export function createGitHubClient(options: { auth: GitHubAppAuth, fetch?: typeo
     return err({ _tag: 'Capacity', message: 'GitHub pagination exceeds the configured page limit.' })
   }
   const repository: GitHubClient['repository'] = async (name, signal) => {
-    const data = await request(name, 'read', `${githubRepositoryPath(name)}/`, { signal })
+    const data = await request(name, 'read', githubRepositoryPath(name), { signal })
     if (data._tag === 'Err')
       return data
     const value = githubObject(data.value)

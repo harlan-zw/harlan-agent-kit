@@ -47,7 +47,7 @@ async function fixture(custom?: (request: FixtureRequest) => { status?: number, 
       else if (path === '/app/installations/20/access_tokens') {
         response = { body: { token: `installation-token-${nextId++}`, expires_at: new Date(now + 3600_000).toISOString(), permissions: request.body.permissions, repositories: [{ id: 10, full_name: 'acme/project' }] } }
       }
-      else if (path === '/repos/acme/project/') {
+      else if (path === '/repos/acme/project' || path === '/repos/acme/project/') {
         response = { body: { id: 10, full_name: 'acme/project', default_branch: 'main', private: false, archived: false } }
       }
       else if (path === '/users/octorun%5Bbot%5D') {
@@ -160,14 +160,14 @@ describe('gitHub App authentication', () => {
   })
 
   it('returns a quota hold without refreshing credentials', async () => {
-    const test = await fixture(request => request.path === '/repos/acme/project/' ? { status: 403, body: {}, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000 + 60) } } : undefined)
+    const test = await fixture(request => request.path === '/repos/acme/project' ? { status: 403, body: {}, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000 + 60) } } : undefined)
     expect(await test.client.repository('acme/project')).toEqual({ _tag: 'Err', error: { _tag: 'Capacity', message: 'GitHub rate limited this request.', retryAt: new Date(now + 60_000).toISOString() } })
     expect(test.requests.filter(request => request.path.endsWith('/access_tokens'))).toHaveLength(1)
   })
 
   it('refreshes a rejected credential once and rechecks the repository', async () => {
     let reads = 0
-    const test = await fixture(request => request.path === '/repos/acme/project/' && reads++ === 0 ? { status: 401, body: {} } : undefined)
+    const test = await fixture(request => request.path === '/repos/acme/project' && reads++ === 0 ? { status: 401, body: {} } : undefined)
     expect(await test.client.repository('acme/project')).toMatchObject({ _tag: 'Ok', value: { ref: repository } })
     expect(test.requests.filter(request => request.path.endsWith('/access_tokens'))).toHaveLength(2)
   })
@@ -180,6 +180,11 @@ describe('gitHub App authentication', () => {
         : undefined)
     expect(await test.client.readWorkflow('acme/project', '.github/octorun.yml')).toEqual({ _tag: 'Ok', value: { sha: base, text: 'version: 1' } })
     expect(test.requests.some(request => request.path === `/repos/acme/project/contents/.github/octorun.yml?ref=${base}`)).toBe(true)
+  })
+
+  it('uses the canonical repository endpoint without requiring a redirect', async () => {
+    const test = await fixture(request => request.path === '/repos/acme/project/' ? { status: 301, headers: { location: '/repos/acme/project' }, body: {} } : undefined)
+    expect(await test.client.repository('acme/project')).toMatchObject({ _tag: 'Ok', value: { ref: repository } })
   })
 
   it('rejects a snapshot that moves while its files are read', async () => {
