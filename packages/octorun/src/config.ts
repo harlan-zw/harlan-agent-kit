@@ -141,8 +141,8 @@ export function parseConfig(input: unknown, context: ConfigContext): Result<Oper
   const githubUnknown = keys(github, ['appId', 'privateKeyEnv', 'webhookSecretEnv', 'apiUrl'])
   if (githubUnknown)
     return invalid(`Unknown github setting: ${githubUnknown}. Store secrets in environment variables.`)
-  if (!text(github.appId) || !/^\d+$/.test(github.appId))
-    return invalid('github.appId must be a numeric string.')
+  if (!text(github.appId) || !/^\d+$/.test(github.appId) || !integer(Number(github.appId), 1, Number.MAX_SAFE_INTEGER))
+    return invalid('github.appId must be a positive safe integer written as a string.')
   if (!envName(github.privateKeyEnv) || !envName(github.webhookSecretEnv))
     return invalid('github secret references must name environment variables.')
   const apiUrl = github.apiUrl ?? 'https://api.github.com'
@@ -158,7 +158,7 @@ export function parseConfig(input: unknown, context: ConfigContext): Result<Oper
   const baseUrl = parseUrl(provider.baseUrl)
   if (!baseUrl || (baseUrl.protocol !== 'https:' && !(baseUrl.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(baseUrl.hostname))) || baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash)
     return invalid('provider.baseUrl must use HTTPS, or HTTP on localhost, without credentials or query parameters.')
-  if (!text(provider.model) || provider.model.length > 200 || !envName(provider.apiKeyEnv))
+  if (!text(provider.model) || !provider.model.trim() || provider.model.length > 200 || !envName(provider.apiKeyEnv))
     return invalid('provider needs a model and an apiKeyEnv environment reference.')
   const timeoutMs = provider.timeoutMs ?? 120000
   const maxResponseBytes = provider.maxResponseBytes ?? 2097152

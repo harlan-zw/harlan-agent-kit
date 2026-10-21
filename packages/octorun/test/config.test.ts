@@ -29,6 +29,8 @@ it('rejects relative XDG paths', () => {
 
 it.each([
   [{ ...input(), version: 2 }, 'version'],
+  [{ ...input(), github: { ...input().github, appId: '0' } }, 'appId'],
+  [{ ...input(), github: { ...input().github, appId: '9007199254740992' } }, 'appId'],
   [{ ...input(), repositories: [] }, 'repositories'],
   [{ ...input(), repositories: [{ id: 7, fullName: '../example', installationId: 8 }] }, 'fullName'],
   [{ ...input(), repositories: [{ id: 7, fullName: 'team/example', installationId: 8 }, { id: 7, fullName: 'team/example', installationId: 8 }] }, 'duplicate'],
@@ -37,6 +39,7 @@ it.each([
   [{ ...input(), provider: { ...input().provider, maxResponseBytes: 8388608 } }, 'limits'],
   [{ ...input(), provider: { ...input().provider, maxInputCharacters: 1500000 } }, 'limits'],
   [{ ...input(), provider: { ...input().provider, model: 'm'.repeat(201) } }, 'model'],
+  [{ ...input(), provider: { ...input().provider, model: '   ' } }, 'model'],
   [{ ...input(), repositories: [{ ...input().repositories[0], workflowSource: { _tag: 'Repository', path: '../workflow.yml' } }] }, 'path'],
   [{ ...input(), repositories: [{ ...input().repositories[0], policy: { enabled: true, maxConcurrency: 1, capabilities: ['repository:write'] } }] }, 'capabilities'],
 ])('rejects unsafe operator configuration: %s', (value, message) => {
