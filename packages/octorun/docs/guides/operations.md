@@ -1,6 +1,8 @@
 # Operate Octorun
 
 One controller owns each state directory.
+Use dedicated state and backup directories owned by the controller.
+Octorun sets their permissions to `700` and database file permissions to `600`.
 The default directory is `$XDG_STATE_HOME/octorun`.
 If `XDG_STATE_HOME` is unset, it uses `~/.local/state/octorun`.
 A relative `stateDir` resolves beside the operator configuration file.
