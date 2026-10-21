@@ -1,6 +1,6 @@
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
-import type { JournalStore, QueuedReviewHistory, QueuedReviewStatus, ReviewQueueState } from './store.ts'
+import type { JournalStore, QueuedReviewHistory, QueuedReviewStatus, ReviewAttemptState, ReviewQueueState } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
@@ -30,25 +30,67 @@ export function queuedReviewHistoryLine(history: QueuedReviewHistory): string | 
     : `${prior} A new commit replaced it, so this Review answers the new commit.`
 }
 
+/** A failure reason on one line, short enough to read in a comment. */
+function oneLineReason(reason: string): string {
+  const line = reason.replace(/\s+/g, ' ').trim()
+  return line.length > 280 ? `${line.slice(0, 279).trimEnd()}…` : line
+}
+
+/** `2026-10-21T02:37:00.000Z` → `02:37 UTC`. The Dashboard carries the date. */
+function utcClock(iso: string): string {
+  return `${iso.slice(11, 16)} UTC`
+}
+
 /**
- * The canonical comment while its Task waits in the Queue.
+ * What the last attempt did, in one sentence, or nothing on a first attempt.
+ *
+ * A failed attempt used to leave the comment on its last progress line, then
+ * on a plain QUEUED, so a Review that failed every thirty minutes for a day
+ * read as one that had not started (nuxtseo.com#1796, 2026-10-20).
+ */
+export function reviewAttemptLine(attempt: ReviewAttemptState, work: string): string | null {
+  if (attempt._tag === 'FirstAttempt')
+    return null
+  const reason = oneLineReason(attempt.reason)
+  if (attempt._tag === 'Stuck')
+    return `The ${work} stopped and will not run again on its own: ${reason}`
+  const retry = attempt.retry === null ? '' : ` Retry ${attempt.retry.spent} of ${attempt.retry.limit}.`
+  return `The last attempt stopped: ${reason}${retry}`
+}
+
+/**
+ * The canonical comment while its Task waits: in the Queue, on a retry
+ * backoff, or on a person.
  *
  * Exact position belongs to the Dashboard. A Queue movement therefore does
  * not create serial GitHub writes across every waiting pull request.
  */
 export function queuePositionComment(status: QueuedReviewStatus): string {
   const work = workLabel[status.taskKind]
-  const heading = status.queue._tag === 'Paused' ? 'PAUSED' : 'QUEUED'
-  const next = status.queue._tag === 'Paused'
-    ? `${work} starts when this repository resumes.`
-    : `${work} starts when an Agent is free.`
+  const { attempt } = status
+  const heading = attempt._tag === 'Stuck'
+    ? 'STUCK'
+    : status.queue._tag === 'Paused'
+      ? 'PAUSED'
+      : attempt._tag === 'Retrying' ? 'RETRYING' : 'QUEUED'
+  const next = attempt._tag === 'Stuck'
+    ? 'Fix the cause, then push a commit to start a new Review. The Dashboard shows the Incident.'
+    : status.queue._tag === 'Paused'
+      ? `${work} starts when this repository resumes.`
+      : attempt._tag === 'Retrying' && attempt.nextAttemptAt !== null
+        ? `${work} restarts after ${utcClock(attempt.nextAttemptAt)}.`
+        : attempt._tag === 'Retrying'
+          ? `${work} restarts when an Agent is free.`
+          : `${work} starts when an Agent is free.`
   const history = queuedReviewHistoryLine(status.history)
+  const attemptLine = reviewAttemptLine(attempt, work)
+  const lines = [history, attemptLine].filter((line): line is string => line !== null)
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${status.headSha} -->
 ### 🤖 ${heading}
 
 ${automatedDisclosure({ kind: 'review', notes: ['The Dashboard shows the exact Queue position.'] })}
-${history === null ? '' : `\n${history}\n`}
+${lines.length === 0 ? '' : `\n${lines.join('\n\n')}\n`}
 Next: ${next}`
 }
 

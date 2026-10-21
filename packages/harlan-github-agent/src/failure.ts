@@ -364,8 +364,20 @@ export function mayRetryFailure(signal: FailureSignal): boolean {
   return failure._tag !== 'Permanent' || failure.kind === 'unknown'
 }
 
-/** Recovery limit for failures a person can affect. Provider outages keep capped backoff. */
+/** Recovery limit for failures a person can affect. */
 export const MAXIMUM_RECOVERY_ATTEMPTS = 5
+
+/**
+ * Recovery limit for Agent provider failures, about three and a half hours of
+ * capped backoff.
+ *
+ * A provider outage opens the provider circuit, and a circuit pause spends no
+ * Task budget, so this limit only meets a failure that keeps coming back for
+ * one Task. An unlimited budget let one Review restart every thirty minutes for
+ * a day while its pull request showed only QUEUED and REVIEWING 35%, and the
+ * real reason sat in the journal (nuxtseo.com#1796, 2026-10-20).
+ */
+export const MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS = 12
 
 /** Shared by recovery, observation, and status reporting. */
 export function canRecoverFailure(signal: FailureSignal, recoveryAttempts: number): boolean {
@@ -373,7 +385,7 @@ export function canRecoverFailure(signal: FailureSignal, recoveryAttempts: numbe
   if (failure._tag !== 'Transient')
     return false
   if (failure.kind === 'agent_provider')
-    return true
+    return recoveryAttempts < MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS
   return recoveryAttempts < (failure.kind === 'resource_limit' ? 1 : MAXIMUM_RECOVERY_ATTEMPTS)
 }
 

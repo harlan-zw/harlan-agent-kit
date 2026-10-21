@@ -15,6 +15,7 @@ function queuedRepair(overrides: Partial<QueuedReviewStatus> = {}): QueuedReview
     queue: { _tag: 'Waiting', position: 3, total: 7 },
     verdict: { _tag: 'Answered' },
     history: { _tag: 'FirstReview' },
+    attempt: { _tag: 'FirstAttempt' },
     commentId: 42,
     publishedBody: '### 🤖 REVIEWING · Repair queued',
     ...overrides,
@@ -81,6 +82,43 @@ describe('the queued review history line', () => {
 
     expect(body).toContain('A Repair pushed this commit, so this Review answers the Repair.')
     expect(body).toContain('Next: Review starts when an Agent is free.')
+  })
+})
+
+describe('a comment for a failed attempt', () => {
+  const reason = 'The opencode session failed: Unexpected server error.'
+
+  it('says the attempt stopped and when it restarts', () => {
+    const body = queuePositionComment(queuedRepair({
+      taskKind: 'adversarial_review',
+      attempt: { _tag: 'Retrying', reason, retry: { spent: 3, limit: 12 }, nextAttemptAt: '2026-10-21T02:37:00.000Z' },
+    }))
+
+    expect(body).toContain('### 🤖 RETRYING')
+    expect(body).toContain(`The last attempt stopped: ${reason} Retry 3 of 12.`)
+    expect(body).toContain('Next: Review restarts after 02:37 UTC.')
+  })
+
+  it('says a person has to act once nothing will retry', () => {
+    const body = queuePositionComment(queuedRepair({
+      taskKind: 'adversarial_review',
+      attempt: { _tag: 'Stuck', reason },
+    }))
+
+    expect(body).toContain('### 🤖 STUCK')
+    expect(body).toContain(`The Review stopped and will not run again on its own: ${reason}`)
+    expect(body).toContain('Next: Fix the cause, then push a commit to start a new Review.')
+  })
+
+  it('keeps a long reason to one readable line', () => {
+    const body = queuePositionComment(queuedRepair({
+      attempt: { _tag: 'Retrying', reason: `line one\n${'x'.repeat(400)}`, retry: null, nextAttemptAt: null },
+    }))
+    const line = body.split('\n').find(entry => entry.startsWith('The last attempt stopped:'))
+
+    expect(line).toBeDefined()
+    expect(line!.length).toBeLessThan(320)
+    expect(body).toContain('Next: Repair restarts when an Agent is free.')
   })
 })
 
