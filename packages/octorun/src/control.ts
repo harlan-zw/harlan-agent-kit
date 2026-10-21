@@ -70,7 +70,7 @@ export async function startControlServer(options: { path: string, handle: (comma
     socket.on('data', (chunk) => {
       if (accepted)
         return
-      frame = Buffer.concat([frame, chunk])
+      frame = Buffer.concat([frame, typeof chunk === 'string' ? Buffer.from(chunk) : chunk])
       if (frame.length > frameBytes) {
         accepted = true
         respond(failure('Control request exceeds the one MiB limit.'))
@@ -132,7 +132,7 @@ export async function requestControl(options: { path: string, command: string, a
     socket.setTimeout(options.timeoutMs ?? 900000, () => finish(err({ _tag: 'Transient', message: 'The controller operation timed out. Inspect its run before retrying.' })))
     socket.once('connect', () => socket.write(payload))
     socket.on('data', (chunk) => {
-      frame = Buffer.concat([frame, chunk])
+      frame = Buffer.concat([frame, typeof chunk === 'string' ? Buffer.from(chunk) : chunk])
       if (frame.length > responseBytes + 1024) {
         finish(failure('Control response exceeds the four MiB limit.'))
         return
