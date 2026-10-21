@@ -171,7 +171,7 @@ it('runs the production tarball from a clean home through GitHub, restart, and f
     throw new Error('Mock HTTPS server did not start.')
   const apiUrl = `https://127.0.0.1:${address.port}`
   const configPath = join(configHome, 'octorun', 'config.yaml')
-  const environment: NodeJS.ProcessEnv = { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome, XDG_STATE_HOME: stateHome, NODE_EXTRA_CA_CERTS: cert, APP_KEY: await readFile(key, 'utf8'), API_KEY: 'synthetic-provider-key', WEBHOOK_SECRET: webhookSecret, OCTORUN_GITHUB_PRIVATE_KEY: await readFile(key, 'utf8'), OCTORUN_API_KEY: 'synthetic-provider-key', OCTORUN_WEBHOOK_SECRET: webhookSecret }
+  const environment: NodeJS.ProcessEnv = { ...process.env, PATH: `${dirname(process.execPath)}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: home, XDG_CONFIG_HOME: configHome, XDG_STATE_HOME: stateHome, NODE_EXTRA_CA_CERTS: cert, APP_KEY: await readFile(key, 'utf8'), API_KEY: 'synthetic-provider-key', WEBHOOK_SECRET: webhookSecret, OCTORUN_GITHUB_PRIVATE_KEY: await readFile(key, 'utf8'), OCTORUN_API_KEY: 'synthetic-provider-key', OCTORUN_WEBHOOK_SECRET: webhookSecret }
   const cliPath = join(installation, 'node_modules', '@harlan-zw', 'octorun', 'dist', 'cli.mjs')
   const cli = async (...args: string[]) => {
     const result = await execute(process.execPath, [cliPath, '--json', ...args], { cwd: installation, env: environment, timeout: 60000, maxBuffer: 8 * 1024 * 1024 })
