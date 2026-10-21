@@ -41,8 +41,8 @@ function acquireLock(path: string): () => void {
   if (existsSync(lockPath) && (lstatSync(lockPath).isSymbolicLink() || (process.getuid && lstatSync(lockPath).uid !== process.getuid())))
     throw new Error('The controller lock must be an owned regular file, without symbolic links.')
   const lock = new DatabaseSync(lockPath)
-  chmodSync(lockPath, 0o600)
   try {
+    chmodSync(lockPath, 0o600)
     lock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE; CREATE TABLE IF NOT EXISTS controller (id INTEGER PRIMARY KEY);')
   }
   catch (cause) {
@@ -50,8 +50,12 @@ function acquireLock(path: string): () => void {
     throw new Error('Another controller holds the state lock, or its lock database is unavailable.', { cause })
   }
   return () => {
-    lock.exec('ROLLBACK')
-    lock.close()
+    try {
+      lock.exec('ROLLBACK')
+    }
+    finally {
+      lock.close()
+    }
   }
 }
 
@@ -67,15 +71,22 @@ export function openStore(options: StoreOptions) {
       throw new Error('The state database must be an owned regular file, without symbolic links.')
   }
   const release = memory ? () => {} : acquireLock(path)
-  const db = new DatabaseSync(path)
-  const openedVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version)
-  if (openedVersion > schemaVersion) {
-    db.close()
-    release()
-    throw new Error(`State schema ${openedVersion} requires a newer Octorun version. Restore a compatible backup before rollback.`)
-  }
-  db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
-  db.exec(`
+  const db = (() => {
+    try {
+      return new DatabaseSync(path)
+    }
+    catch (cause) {
+      release()
+      throw cause
+    }
+  })()
+  try {
+    const openedVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version)
+    if (openedVersion > schemaVersion) {
+      throw new Error(`State schema ${openedVersion} requires a newer Octorun version. Restore a compatible backup before rollback.`)
+    }
+    db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
+    db.exec(`
     CREATE TABLE IF NOT EXISTS events (
       id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, data TEXT NOT NULL, received_at TEXT NOT NULL
     );
@@ -104,8 +115,18 @@ export function openStore(options: StoreOptions) {
     );
     PRAGMA user_version=${schemaVersion};
   `)
-  if (!memory)
-    chmodSync(path, 0o600)
+    if (!memory)
+      chmodSync(path, 0o600)
+  }
+  catch (cause) {
+    try {
+      db.close()
+    }
+    finally {
+      release()
+    }
+    throw cause
+  }
   let transactionDepth = 0
   let closed = false
 
@@ -170,7 +191,7 @@ export function openStore(options: StoreOptions) {
       })
     },
     pendingDeliveries(): StoredDelivery[] {
-      return db.prepare("SELECT data FROM deliveries WHERE status='Queued' AND run_after <= ? ORDER BY rowid LIMIT 100").all(now().toISOString()).map(row => json<StoredDelivery>(row.data))
+      return db.prepare('SELECT data FROM deliveries WHERE status=\'Queued\' AND run_after <= ? ORDER BY rowid LIMIT 100').all(now().toISOString()).map(row => json<StoredDelivery>(row.data))
     },
     updateDelivery(id: string, update: (delivery: StoredDelivery) => StoredDelivery): StoredDelivery | null {
       return transaction(() => {
@@ -337,18 +358,18 @@ export function openStore(options: StoreOptions) {
       if (!Number.isFinite(Date.parse(options.before)))
         throw new Error('Retention requires a valid cutoff timestamp.')
       return transaction(() => {
-        const logs = Number(db.prepare("DELETE FROM logs WHERE at < ? AND (run_id IS NULL OR run_id IN (SELECT id FROM runs WHERE status IN ('Succeeded','Failed','Cancelled','Superseded','Skipped')))").run(options.before).changes)
+        const logs = Number(db.prepare('DELETE FROM logs WHERE at < ? AND (run_id IS NULL OR run_id IN (SELECT id FROM runs WHERE status IN (\'Succeeded\',\'Failed\',\'Cancelled\',\'Superseded\',\'Skipped\')))').run(options.before).changes)
         const rows = db.prepare('SELECT id, data FROM events WHERE received_at < ?').all(options.before)
         let eventPayloads = 0
         for (const row of rows) {
           const event = json<EventEnvelope>(row.data)
-          const active = db.prepare("SELECT 1 FROM runs WHERE json_extract(data, '$.event.id') = ? AND status NOT IN ('Succeeded','Failed','Cancelled','Superseded','Skipped') LIMIT 1").get(event.id)
+          const active = db.prepare('SELECT 1 FROM runs WHERE json_extract(data, \'$.event.id\') = ? AND status NOT IN (\'Succeeded\',\'Failed\',\'Cancelled\',\'Superseded\',\'Skipped\') LIMIT 1').get(event.id)
           if (active)
             continue
           db.prepare('UPDATE events SET data = ? WHERE id = ?').run(JSON.stringify({ ...event, data: null }), event.id)
           eventPayloads++
         }
-        const deliveries = db.prepare("SELECT id, data FROM deliveries WHERE status != 'Queued' AND run_after < ?").all(options.before)
+        const deliveries = db.prepare('SELECT id, data FROM deliveries WHERE status != \'Queued\' AND run_after < ?').all(options.before)
         for (const row of deliveries) {
           const delivery = json<StoredDelivery>(row.data)
           db.prepare('UPDATE deliveries SET data = ? WHERE id = ?').run(JSON.stringify({ ...delivery, body: '' }), delivery.id)
@@ -374,16 +395,18 @@ export async function restoreStoreBackup(options: { source: string, destination:
     throw new Error('Choose separate source and destination paths for restore.')
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 })
   const release = acquireLock(destination)
-  const source = new DatabaseSync(options.source, { readOnly: true })
-  const version = Number(source.prepare('PRAGMA user_version').get()?.user_version)
-  const check = source.prepare('PRAGMA quick_check').get()
-  source.close()
-  if (version !== schemaVersion || check?.quick_check !== 'ok') {
-    release()
-    throw new Error('The backup is corrupt or uses an incompatible state schema.')
-  }
   const staged = `${destination}.restore-${randomUUID()}`
   try {
+    const source = new DatabaseSync(options.source, { readOnly: true })
+    try {
+      const version = Number(source.prepare('PRAGMA user_version').get()?.user_version)
+      const check = source.prepare('PRAGMA quick_check').get()
+      if (version !== schemaVersion || check?.quick_check !== 'ok')
+        throw new Error('The backup is corrupt or uses an incompatible state schema.')
+    }
+    finally {
+      source.close()
+    }
     await copyFile(options.source, staged)
     await chmod(staged, 0o600)
     await rm(`${destination}-wal`, { force: true })
@@ -391,7 +414,11 @@ export async function restoreStoreBackup(options: { source: string, destination:
     await rename(staged, destination)
   }
   finally {
-    await rm(staged, { force: true })
-    release()
+    try {
+      await rm(staged, { force: true })
+    }
+    finally {
+      release()
+    }
   }
 }

@@ -1,7 +1,8 @@
 import type { EventEnvelope } from '../src/index.ts'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { openStore, restoreStoreBackup } from '../src/index.ts'
 
@@ -77,5 +78,65 @@ describe('durable workflow storage', () => {
     store.setOperatorPause(true)
     expect(store.operatorPaused()).toBe(true)
     store.close()
+  })
+
+  it.each(['missing', 'corrupt'])('releases the restore lock after a %s backup fails', async (kind) => {
+    const directory = await mkdtemp(join(tmpdir(), 'octorun-restore-error-'))
+    const path = join(directory, 'state.sqlite')
+    const backup = join(directory, 'backup.sqlite')
+    const invalid = join(directory, 'invalid.sqlite')
+    const initial = openStore({ path })
+    initial.recordEvent(event())
+    await initial.backup(backup)
+    initial.close()
+    if (kind === 'corrupt')
+      await writeFile(invalid, 'This file is not a SQLite database.')
+    await expect(restoreStoreBackup({ source: invalid, destination: path })).rejects.toThrow()
+    await restoreStoreBackup({ source: backup, destination: path })
+    const restored = openStore({ path })
+    expect(restored.event('one')?.id).toBe('one')
+    restored.close()
+    await rm(directory, { recursive: true })
+  })
+
+  it.each(['constructor', 'pragma', 'schema'])('releases state ownership after %s initialization fails', async (stage) => {
+    const directory = await mkdtemp(join(tmpdir(), 'octorun-initialize-error-'))
+    const path = join(directory, 'state.sqlite')
+    if (stage === 'constructor') {
+      await mkdir(path)
+    }
+    else if (stage === 'pragma') {
+      await writeFile(path, 'This file is not a SQLite database.')
+    }
+    else {
+      const incompatible = new DatabaseSync(path)
+      incompatible.exec('CREATE TABLE runs (id TEXT PRIMARY KEY)')
+      incompatible.close()
+    }
+    expect(() => openStore({ path })).toThrow()
+    await rm(path, { recursive: true, force: true })
+    await rm(`${path}-wal`, { force: true })
+    await rm(`${path}-shm`, { force: true })
+    const recovered = openStore({ path })
+    expect(recovered.recordEvent(event())).toEqual({ _tag: 'Ok', value: { eventId: 'one', duplicate: false } })
+    recovered.close()
+    await rm(directory, { recursive: true })
+  })
+
+  it('refuses restore while another controller owns the destination', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'octorun-live-restore-'))
+    const path = join(directory, 'state.sqlite')
+    const backup = join(directory, 'backup.sqlite')
+    const active = openStore({ path })
+    active.recordEvent(event())
+    await active.backup(backup)
+    await expect(restoreStoreBackup({ source: backup, destination: path })).rejects.toThrow(/controller|lock/i)
+    expect(active.recordEvent(event('still-live'))._tag).toBe('Ok')
+    active.close()
+    await restoreStoreBackup({ source: backup, destination: path })
+    const recovered = openStore({ path })
+    expect(recovered.event('still-live')).toBeNull()
+    recovered.close()
+    await rm(directory, { recursive: true })
   })
 })
