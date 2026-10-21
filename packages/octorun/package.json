@@ -1,0 +1,20 @@
+{
+  "name": "octorun",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Run reactive GitHub workflows with your own agent provider.",
+  "license": "MIT",
+  "engines": { "node": ">=24.0.0" },
+  "bin": { "octorun": "./dist/cli.mjs" },
+  "exports": { ".": { "types": "./dist/index.d.mts", "import": "./dist/index.mjs" } },
+  "files": ["dist", "README.md", "LICENSE.md", "examples"],
+  "scripts": {
+    "build": "obuild",
+    "dev": "node --experimental-strip-types src/cli.ts",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": { "yaml": "catalog:" },
+  "devDependencies": { "@types/node": "catalog:", "obuild": "catalog:", "typescript": "catalog:", "vitest": "catalog:" }
+}
