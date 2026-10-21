@@ -87,6 +87,8 @@ octorun run --repository your-org/your-repository --pr 7
 
 The review preset captures the pull request's head and base revisions.
 It asks the agent provider for findings and verifies their evidence before publishing.
+This verification inspects supplied code and diff evidence.
+It does not execute repository tests.
 Check the pull request overview and its Octorun check run for the result.
 Use `octorun inspect` and `octorun logs` to inspect local state.
 

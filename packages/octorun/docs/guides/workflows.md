@@ -50,7 +50,7 @@ workflows:
     name: Change summary
     on:
       - event: pull_request
-        actions: [opened, synchronize, reopened]
+        actions: [opened, synchronize, reopened, observed]
     concurrency:
       mode: replace
       group: target
@@ -61,21 +61,24 @@ workflows:
       maxCostUsd: null
       maxDurationMs: 600000
     tasks:
-      - id: snapshot
-        uses: review.snapshot
-        with: {}
       - id: classify
         uses: changes.classify
         with: {}
       - id: summarize
         uses: changes.summarize
-        with: {}
+        with:
+          changes:
+            $ref: tasks.classify.output
       - id: comment
         uses: changes.comment
-        with: {}
+        with:
+          summary:
+            $ref: tasks.summarize.output
 ```
 
 Operator-owned definitions use `_tag: Inline` with a `definitions` list in the same format.
+Use `maxCostUsd: null` with the HTTP provider, which cannot establish the next request's price before sending it.
+Token and duration budgets still apply.
 Run `octorun validate` after changing operator configuration.
 Run `octorun plan --repository owner/repository --pr 7` to inspect selected workflows before execution.
 
