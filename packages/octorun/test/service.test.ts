@@ -200,6 +200,17 @@ describe('reactive service composition', () => {
     expect(test.comments.map(comment => comment.body)).toEqual([expect.stringContaining('No workflow run exists')])
   })
 
+  it('acknowledges pause and still runs an explicit review request', async () => {
+    const test = await setup()
+    await test.webhook('issue_comment', issueComment('@octorun pause'), 'pause-one')
+    await test.service().settle()
+    expect(test.comments.map(comment => comment.body)).toEqual([expect.stringContaining('Automatic workflow runs are paused')])
+    await test.webhook('issue_comment', issueComment('@octorun review', 2), 'review-two')
+    await test.service().settle()
+    expect(test.providerCalls()).toBe(2)
+    expect(test.service().runner.runs().filter(run => run.definition.id === 'adversarial-review').map(run => run.state._tag)).toEqual(['Succeeded'])
+  })
+
   it('processes explicit poll backfill and never repeats the same observed head', async () => {
     const test = await setup()
     expect(await test.service().command('poll', { backfill: true })).toMatchObject({ _tag: 'Ok', value: { accepted: 1 } })

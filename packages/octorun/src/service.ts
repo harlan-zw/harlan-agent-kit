@@ -155,7 +155,7 @@ export async function createOctorun(options: OctorunServiceOptions) {
   let lastPollAt = 0
 
   const startWorkflow = (event: EventEnvelope, workflow: WorkflowDefinition, repository: ConfiguredRepository, configuration: ConfigurationSource, requestId: string): Result<RunRecord> => runner.start({ event, workflow, policy: repository.policy, configuration, requestId })
-  const commandResponse = (event: EventEnvelope, repository: ConfiguredRepository, body: string): Result<RunRecord> => startWorkflow(event, {
+  const commandResponse = (event: EventEnvelope, repository: ConfiguredRepository, body: string): Result<RunRecord> => startWorkflow({ ...event, name: 'octorun.command' }, {
     version: 1,
     id: 'command-response',
     name: 'Command response',
@@ -213,7 +213,7 @@ export async function createOctorun(options: OctorunServiceOptions) {
         return err({ _tag: 'Configuration', message: `Workflow is not configured: ${id}.` })
       if (command._tag === 'Review' && command.full)
         workflow = { ...workflow, tasks: workflow.tasks.map(task => task.uses === 'review.snapshot' ? { ...task, with: { ...task.with, full: true } } : task) }
-      const started = startWorkflow({ ...event, action: 'command' }, workflow, repository, selected.value.configuration, `command:${event.semanticKey}`)
+      const started = startWorkflow({ ...event, name: 'octorun.command', action: 'command' }, workflow, repository, selected.value.configuration, `command:${event.semanticKey}`)
       if (started._tag === 'Err')
         return started
       runId = started.value.id
