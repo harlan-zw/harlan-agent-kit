@@ -1,4 +1,7 @@
 import type { EventEnvelope, PublicationPublisher, RepositoryPolicy, TaskContext, TaskOutcome, TaskType, WorkflowDefinition } from '../src/index.ts'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createRunner, ok, openStore, parseJsonValue, parseWorkflow } from '../src/index.ts'
 
@@ -12,7 +15,7 @@ function definition(tasks: unknown[] = [{ id: 'first', uses: 'echo', with: { mes
   return result.value
 }
 const type = (execute: (context: TaskContext, input: unknown) => Promise<TaskOutcome>, id = 'echo'): TaskType => ({ id, version: '1', capabilities: [], input: parseJsonValue, output: parseJsonValue, execute })
-const start = (runner: ReturnType<typeof createRunner>, input = event(), workflow = definition()) => {
+function start(runner: ReturnType<typeof createRunner>, input = event(), workflow = definition()) {
   const result = runner.start({ event: input, workflow, policy, configuration })
   if (result._tag === 'Err')
     throw new Error(result.error.message)
@@ -20,6 +23,210 @@ const start = (runner: ReturnType<typeof createRunner>, input = event(), workflo
 }
 
 describe('durable workflow execution', () => {
+  it('does not resurrect a run cancelled while its admission policy is resolving', async () => {
+    let release: (() => void) | undefined
+    let entered: (() => void) | undefined
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const checking = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    let calls = 0
+    const runner = createRunner({ store: openStore({ path: ':memory:' }), policy: async () => {
+      entered!()
+      await waiting
+      return ok(policy)
+    }, taskTypes: [type(async () => {
+      calls++
+      return { _tag: 'Succeeded', output: null }
+    })] })
+    const run = start(runner)
+    const admission = runner.tick()
+    await checking
+    runner.cancel(run.id)
+    release!()
+    await admission
+    await runner.drain()
+    expect(calls).toBe(0)
+    expect(runner.inspect(run.id)?.state._tag).toBe('Cancelled')
+    await runner.close()
+  })
+
+  it('holds automatic work while allowing explicit commands and finding conversations', async () => {
+    let calls = 0
+    const runner = createRunner({ store: openStore({ path: ':memory:' }), taskTypes: [type(async () => {
+      calls++
+      return { _tag: 'Succeeded', output: null }
+    })] })
+    runner.pause('acme/project', '1:pull_request:4', true)
+    const automatic = start(runner)
+    const conversation = start(runner, { ...event('conversation'), name: 'octorun.conversation', semanticKey: 'reply:52' }, { ...definition(), id: 'conversation' })
+    const command = start(runner, { ...event('command'), name: 'octorun.command', semanticKey: 'command:53' }, { ...definition(), id: 'command' })
+    await runner.drain()
+    expect(runner.inspect(automatic.id)?.state._tag).toBe('Queued')
+    expect(runner.inspect(conversation.id)?.state._tag).toBe('Succeeded')
+    expect(runner.inspect(command.id)?.state._tag).toBe('Succeeded')
+    expect(calls).toBe(2)
+    await runner.close()
+  })
+
+  it('rejects negative usage rather than allowing it to expand a later task budget', async () => {
+    let calls = 0
+    const runner = createRunner({ store: openStore({ path: ':memory:' }), taskTypes: [type(async () => {
+      calls++
+      return { _tag: 'Succeeded', output: null, usage: { inputTokens: -100, outputTokens: 1, costUsd: 0 } }
+    })] })
+    const run = start(runner, event(), definition([{ id: 'first', uses: 'echo', with: {} }, { id: 'second', uses: 'echo', with: {} }]))
+    await runner.drain()
+    expect(calls).toBe(1)
+    expect(runner.inspect(run.id)?.state).toMatchObject({ _tag: 'Failed', error: { message: expect.stringContaining('invalid token or cost usage') } })
+    await runner.close()
+  })
+
+  it('checks cumulative currency usage after the final task', async () => {
+    let calls = 0
+    const runner = createRunner({ store: openStore({ path: ':memory:' }), taskTypes: [type(async () => {
+      calls++
+      return { _tag: 'Succeeded', output: null, usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.6 } }
+    })] })
+    const run = start(runner, event(), definition([{ id: 'first', uses: 'echo', with: {} }, { id: 'second', uses: 'echo', with: {} }], { maxCostUsd: 1 }))
+    await runner.drain()
+    expect(calls).toBe(2)
+    expect(runner.inspect(run.id)).toMatchObject({ state: { _tag: 'Failed' }, usage: { costUsd: 1.2 } })
+    await runner.close()
+  })
+
+  it('rejects late task publications after shutdown without touching the closed store', async () => {
+    let release: (() => void) | undefined
+    let report: ((result: unknown) => void) | undefined
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const late = new Promise<unknown>((resolve) => {
+      report = resolve
+    })
+    const runner = createRunner({ store: openStore({ path: ':memory:' }), taskTypes: [type(async (context) => {
+      await blocked
+      report!(await context.publish('late', { _tag: 'Comment', repository: 'acme/project', number: 4, namespace: 'example', body: 'late' }).catch((cause: unknown) => cause))
+      return { _tag: 'Succeeded', output: null }
+    })] })
+    start(runner, event(), definition(undefined, { timeoutMs: 10 }))
+    await runner.tick()
+    await runner.close()
+    release!()
+    expect(await late).toMatchObject({ _tag: 'Err', error: { _tag: 'Authorization' } })
+  })
+
+  it('rechecks cancellation after asynchronous publication authorization', async () => {
+    let authorize: (() => void) | undefined
+    let entered: (() => void) | undefined
+    const waiting = new Promise<void>((resolve) => {
+      authorize = resolve
+    })
+    const authorizing = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    let writes = 0
+    const publisher: PublicationPublisher = {
+      authorize: async () => {
+        entered!()
+        await waiting
+        return ok(undefined)
+      },
+      reconcile: async () => ok(null),
+      publish: async () => {
+        writes++
+        return ok({ id: 'remote', url: null, data: null })
+      },
+    }
+    const runner = createRunner({ store: openStore({ path: ':memory:' }), publisher, taskTypes: [type(async () => ({ _tag: 'Succeeded', output: null }))] })
+    const run = start(runner)
+    runner.publishSystem(run.id, 'queued', { _tag: 'Check', repository: 'acme/project', headSha: 'a'.repeat(40), name: 'Example', phase: { status: 'queued' }, summary: 'Queued.' })
+    const flushing = runner.tick()
+    await authorizing
+    runner.cancel(run.id)
+    authorize!()
+    await flushing
+    expect(writes).toBe(0)
+    await runner.close()
+  })
+
+  it('closes safely while a publisher ignores cancellation during authorization', async () => {
+    let authorize: (() => void) | undefined
+    let entered: (() => void) | undefined
+    const waiting = new Promise<void>((resolve) => {
+      authorize = resolve
+    })
+    const authorizing = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    let writes = 0
+    const publisher: PublicationPublisher = {
+      authorize: async () => {
+        entered!()
+        await waiting
+        return ok(undefined)
+      },
+      reconcile: async () => ok(null),
+      publish: async () => {
+        writes++
+        return ok({ id: 'remote', url: null, data: null })
+      },
+    }
+    const runner = createRunner({ store: openStore({ path: ':memory:' }), publisher, taskTypes: [type(async () => ({ _tag: 'Succeeded', output: null }))] })
+    const run = start(runner)
+    runner.publishSystem(run.id, 'queued', { _tag: 'Check', repository: 'acme/project', headSha: 'a'.repeat(40), name: 'Example', phase: { status: 'queued' }, summary: 'Queued.' })
+    const flushing = runner.tick()
+    await authorizing
+    await runner.close()
+    authorize!()
+    await flushing
+    expect(writes).toBe(0)
+  })
+
+  it('fails an over-budget final task before publishing its output', async () => {
+    let writes = 0
+    const publisher: PublicationPublisher = {
+      authorize: async () => ok(undefined),
+      reconcile: async () => ok(null),
+      publish: async () => {
+        writes++
+        return ok({ id: 'remote', url: null, data: null })
+      },
+    }
+    const runner = createRunner({ store: openStore({ path: ':memory:' }), publisher, taskTypes: [type(async (context) => {
+      await context.publish('result', { _tag: 'Comment', repository: 'acme/project', number: 4, namespace: 'example', body: 'result' })
+      return { _tag: 'Succeeded', output: 'done', usage: { inputTokens: 6, outputTokens: 6, costUsd: 0 } }
+    })] })
+    const run = start(runner, event(), definition(undefined, { maxTokens: 10 }))
+    await runner.drain()
+    expect(runner.inspect(run.id)?.state).toMatchObject({ _tag: 'Failed', error: { message: expect.stringContaining('budget') } })
+    expect(writes).toBe(0)
+    await runner.close()
+  })
+
+  it('recovers an interrupted task without consuming its failure allowance', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'octorun-recovery-'))
+    await (async () => {
+      const path = join(directory, 'state.sqlite')
+      const firstStore = openStore({ path })
+      const first = createRunner({ store: firstStore, taskTypes: [type(async () => ({ _tag: 'Succeeded', output: null }))] })
+      const run = start(first, event(), definition(undefined, { maxAttempts: 1 }))
+      firstStore.updateRun(run.id, value => ({ ...value, state: { _tag: 'Running' }, tasks: value.tasks.map(task => ({ ...task, state: { _tag: 'Running', leaseUntil: new Date().toISOString() }, attempts: 1, fence: 1 })) }))
+      await first.close()
+      let calls = 0
+      const recovered = createRunner({ store: openStore({ path }), taskTypes: [type(async () => {
+        calls++
+        return { _tag: 'Succeeded', output: 'recovered' }
+      })] })
+      await recovered.drain()
+      expect(recovered.inspect(run.id)?.state).toEqual({ _tag: 'Succeeded' })
+      expect(calls).toBe(1)
+      await recovered.close()
+    })().finally(() => rm(directory, { recursive: true, force: true }))
+  })
+
   it('runs an arbitrary chain through validated prior outputs', async () => {
     const store = openStore({ path: ':memory:' })
     const calls: unknown[] = []
@@ -83,7 +290,9 @@ describe('durable workflow execution', () => {
 
   it('persists a cancellation before an active task can prepare output', async () => {
     let finish: (() => void) | undefined
-    const waiting = new Promise<void>(resolve => { finish = resolve })
+    const waiting = new Promise<void>((resolve) => {
+      finish = resolve
+    })
     let latePublication: unknown
     const runner = createRunner({ store: openStore({ path: ':memory:' }), taskTypes: [type(async (context) => {
       await waiting
@@ -123,7 +332,7 @@ describe('durable workflow execution', () => {
         return { _tag: 'Err', error: { _tag: 'Transient', message: 'The connection closed after the write.' } }
       },
     }
-    const runner = createRunner({ store: openStore({ path: ':memory:' }), publisher, now: () => clock, taskTypes: [type(async context => {
+    const runner = createRunner({ store: openStore({ path: ':memory:' }), publisher, now: () => clock, taskTypes: [type(async (context) => {
       const result = await context.publish('overview', { _tag: 'Comment', repository: 'acme/project', number: 4, namespace: 'example', body: 'done' })
       return result._tag === 'Err' ? { _tag: 'Failed', error: result.error } : { _tag: 'Succeeded', output: null }
     })] })
@@ -152,7 +361,7 @@ describe('durable workflow execution', () => {
   })
 
   it('rejects cross-repository effects before creating publication intent', async () => {
-    const runner = createRunner({ store: openStore({ path: ':memory:' }), taskTypes: [type(async context => {
+    const runner = createRunner({ store: openStore({ path: ':memory:' }), taskTypes: [type(async (context) => {
       const publication = await context.publish('other', { _tag: 'Comment', repository: 'another/private', number: 4, namespace: 'example', body: 'wrong' })
       return publication._tag === 'Err' ? { _tag: 'Failed', error: publication.error } : { _tag: 'Succeeded', output: null }
     })] })

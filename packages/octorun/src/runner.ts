@@ -1,5 +1,5 @@
 import type { WorkflowStore } from './store.ts'
-import type { ConfigurationSource, EventEnvelope, JsonValue, PublicationEffect, PublicationPublisher, PublicationRecord, RepositoryPolicy, Result, RunRecord, TaskFailure, TaskOutcome, TaskRecord, TaskType, Usage, WorkflowDefinition } from './types.ts'
+import type { ConfigurationSource, EventEnvelope, PublicationEffect, PublicationPublisher, PublicationRecord, RepositoryPolicy, Result, RunRecord, TaskFailure, TaskOutcome, TaskType, Usage, WorkflowDefinition } from './types.ts'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { err, isJsonValue, ok } from './types.ts'
@@ -37,7 +37,13 @@ export function createRunner(options: RunnerOptions) {
   const maximum = Math.max(1, Math.min(100, options.concurrency ?? 4))
   const registry = new Map(options.taskTypes.map(type => [type.id, type]))
   const active = new Map<string, { taskId: string, controller: AbortController, promise: Promise<void>, settled: boolean, lastPolicyCheck: number }>()
+  const publishing = new Map<string, { runId: string, controller: AbortController }>()
   let stopping = false
+  let closing: Promise<void> | null = null
+  let stopExecution: (() => void) | undefined
+  const shutdown = new Promise<TaskOutcome>((resolve) => {
+    stopExecution = () => resolve({ _tag: 'Failed', error: { _tag: 'Permanent', message: 'The controller is shutting down.' } })
+  })
   let ticking: Promise<{ progressed: number }> | null = null
   let lastRepository = ''
   const at = () => now().toISOString()
@@ -51,6 +57,10 @@ export function createRunner(options: RunnerOptions) {
     return next
   }
   const cancelPending = (runId: string, reason: string): void => {
+    for (const entry of publishing.values()) {
+      if (entry.runId === runId)
+        entry.controller.abort(new Error(reason))
+    }
     for (const publication of store.publications({ runId, states: ['Queued', 'Waiting'] })) {
       if (publication.taskId === '__lifecycle')
         continue
@@ -88,7 +98,7 @@ export function createRunner(options: RunnerOptions) {
   for (const run of store.runs({ states: ['Queued', 'Running', 'Waiting'], limit: 10000 })) {
     if (!run.tasks.some(task => task.state._tag === 'Running'))
       continue
-    store.updateRun(run.id, current => ({ ...current, state: { _tag: 'Waiting', reason: 'Recovering interrupted execution.', until: at() }, updatedAt: at(), tasks: current.tasks.map(task => task.state._tag === 'Running' ? { ...task, state: { _tag: 'Waiting', reason: 'Recovering interrupted execution.', until: at() }, fence: task.fence + 1, failures: task.failures + 1 } : task) }))
+    store.updateRun(run.id, current => ({ ...current, state: { _tag: 'Waiting', reason: 'Recovering interrupted execution.', until: at() }, updatedAt: at(), tasks: current.tasks.map(task => task.state._tag === 'Running' ? { ...task, state: { _tag: 'Waiting', reason: 'Recovering interrupted execution.', until: at() }, fence: task.fence + 1 } : task) }))
     store.log('run.recovered', { reason: 'The previous controller stopped during execution.' }, run.id)
   }
   for (const publication of store.publications({ states: ['Sending'] }))
@@ -129,10 +139,19 @@ export function createRunner(options: RunnerOptions) {
       const group = `${event.repository.id}:${workflow.id}:${workflow.concurrency.group === 'repository' ? '*' : targetKey(event)}`
       const others = store.runs({ group, states: ['Queued', 'Running', 'Waiting'] })
       const run: RunRecord = {
-        id: randomUUID(), event, definition: workflow, definitionDigest, configuration: structuredClone(input.configuration), policy: structuredClone(input.policy),
+        id: randomUUID(),
+        event,
+        definition: workflow,
+        definitionDigest,
+        configuration: structuredClone(input.configuration),
+        policy: structuredClone(input.policy),
         state: workflow.concurrency.mode === 'reject' && others.length ? { _tag: 'Skipped', reason: 'Another workflow run owns this concurrency group.' } : { _tag: 'Queued' },
         tasks: workflow.tasks.map(task => ({ id: task.id, definition: task, typeVersion: compiled.value[task.id]!, state: { _tag: 'Queued' }, attempts: 0, failures: 0, fence: 0, output: null, usage: zeroUsage(), startedAt: null, finishedAt: null })),
-        usage: zeroUsage(), createdAt: at(), updatedAt: at(), startedAt: null, finishedAt: null,
+        usage: zeroUsage(),
+        createdAt: at(),
+        updatedAt: at(),
+        startedAt: null,
+        finishedAt: null,
       }
       const created = store.createRun(run, { trigger, group })
       if (!created.duplicate && workflow.concurrency.mode === 'replace') {
@@ -176,12 +195,20 @@ export function createRunner(options: RunnerOptions) {
     }
     else {
       const context = {
-        run: snapshot, task, event: snapshot.event, outputs, signal: controller.signal,
+        run: snapshot,
+        task,
+        event: snapshot.event,
+        outputs,
+        signal: controller.signal,
         publish: async (key: string, effect: PublicationEffect): Promise<Result<string>> => {
+          if (stopping || controller.signal.aborted)
+            return rejected('The task no longer owns publication authority.')
           const current = store.run(runId)
           if (!current || terminal(current.state) || controller.signal.aborted)
             return rejected('The task no longer owns publication authority.')
           const grant = await effectivePolicy(current)
+          if (stopping || controller.signal.aborted)
+            return rejected('The task no longer owns publication authority.')
           if (grant._tag === 'Err')
             return grant
           const allowed = effectAllowed({ ...current, policy: grant.value }, effect)
@@ -193,9 +220,12 @@ export function createRunner(options: RunnerOptions) {
         },
       }
       let timer: ReturnType<typeof setTimeout> | undefined
-      const execution = handler.execute(context, parsed.value).catch((cause: unknown): TaskOutcome => {
+      const execution = Promise.resolve().then((): Promise<TaskOutcome> | TaskOutcome => stopping || controller.signal.aborted
+        ? { _tag: 'Failed', error: { _tag: 'Authorization', message: 'The task no longer owns execution authority.' } }
+        : handler.execute(context, parsed.value)).catch((cause: unknown): TaskOutcome => {
         const message = cause instanceof Error ? cause.message : String(cause)
-        store.log('task.exception', { taskId, message }, runId)
+        if (!stopping)
+          store.log('task.exception', { taskId, message }, runId)
         return { _tag: 'Failed', error: { _tag: 'Permanent', message: `Task ${taskId} failed unexpectedly: ${message}` } }
       })
       execution.then(() => {
@@ -210,14 +240,20 @@ export function createRunner(options: RunnerOptions) {
         timer = setTimeout(() => {
           controller.abort(new Error('The task exceeded its execution timeout.'))
           resolve({ _tag: 'Failed', error: { _tag: 'Permanent', message: 'The task exceeded its execution timeout.' } })
-        }, taskLimits(task.definition, snapshot.definition).timeoutMs)
+        }, Math.min(taskLimits(task.definition, snapshot.definition).timeoutMs, Math.max(1, snapshot.definition.limits.maxDurationMs - (now().getTime() - Date.parse(snapshot.createdAt)))))
       })
-      outcome = await Promise.race([execution, deadline])
+      outcome = await Promise.race([execution, deadline, shutdown])
       clearTimeout(timer)
     }
     if (stopping)
       return
-    const reportedUsage = outcome._tag === 'Succeeded' ? outcome.usage : outcome._tag === 'Failed' ? outcome.usage ?? outcome.error.usage : undefined
+    let reportedUsage = outcome._tag === 'Succeeded' ? outcome.usage : outcome._tag === 'Failed' ? outcome.usage ?? outcome.error.usage : undefined
+    if (reportedUsage && (!Number.isSafeInteger(reportedUsage.inputTokens) || reportedUsage.inputTokens < 0
+      || !Number.isSafeInteger(reportedUsage.outputTokens) || reportedUsage.outputTokens < 0
+      || (reportedUsage.costUsd !== null && (!Number.isFinite(reportedUsage.costUsd) || reportedUsage.costUsd < 0)))) {
+      outcome = { _tag: 'Failed', error: { _tag: 'Permanent', message: 'The task reported invalid token or cost usage.' } }
+      reportedUsage = undefined
+    }
     let owned = false
     update(runId, current => ({ ...current, usage: reportedUsage ? sumUsage(current.usage, reportedUsage) : current.usage, tasks: current.tasks.map((item) => {
       if (item.id !== taskId)
@@ -244,9 +280,17 @@ export function createRunner(options: RunnerOptions) {
     if (!owned)
       return
     const current = store.run(runId)!
+    const limit = current.definition.limits
+    if (current.usage.inputTokens + current.usage.outputTokens > limit.maxTokens
+      || (limit.maxCostUsd !== null && (current.usage.costUsd === null || current.usage.costUsd > limit.maxCostUsd))
+      || now().getTime() - Date.parse(current.createdAt) >= limit.maxDurationMs) {
+      failRun(runId, { _tag: 'Permanent', message: 'The workflow execution budget is exhausted or its cost is unknown.' })
+      return
+    }
     const failed = current.tasks.find(item => item.state._tag === 'Failed')
-    if (failed?.state._tag === 'Failed')
+    if (failed?.state._tag === 'Failed') {
       failRun(runId, failed.state.error)
+    }
     else {
       const waiting = current.tasks.find(item => item.state._tag === 'Waiting')
       if (waiting?.state._tag === 'Waiting')
@@ -270,57 +314,73 @@ export function createRunner(options: RunnerOptions) {
         continue
       const controller = new AbortController()
       const context = { publication, run, signal: controller.signal }
-      const publisher = options.publisher
-      if (!publisher) {
-        store.updatePublication(publication.id, value => ({ ...value, state: { _tag: 'Failed', error: { _tag: 'Configuration', message: 'No publication adapter is configured.' } }, updatedAt: at() }))
-        if (!system)
-          failRun(run.id, { _tag: 'Configuration', message: 'No publication adapter is configured.' })
-        progressed++
-        continue
-      }
-      if (publication.attempts > 0) {
-        const reconciled = await publisher.reconcile(context)
-        if (reconciled._tag === 'Ok' && reconciled.value !== null) {
-          store.updatePublication(publication.id, value => ({ ...value, state: { _tag: 'Written', receipt: reconciled.value! }, updatedAt: at() }))
-          finish(run.id)
+      publishing.set(publication.id, { runId: run.id, controller })
+      try {
+        const publisher = options.publisher
+        if (!publisher) {
+          store.updatePublication(publication.id, value => ({ ...value, state: { _tag: 'Failed', error: { _tag: 'Configuration', message: 'No publication adapter is configured.' } }, updatedAt: at() }))
+          if (!system)
+            failRun(run.id, { _tag: 'Configuration', message: 'No publication adapter is configured.' })
           progressed++
           continue
         }
-        if (reconciled._tag === 'Err') {
-          const error = reconciled.error
-          store.updatePublication(publication.id, value => ({ ...value, state: retryable(error) ? { _tag: 'Waiting', until: error.retryAt ?? new Date(now().getTime() + 30000).toISOString(), reason: error.message } : { _tag: 'Failed', error }, updatedAt: at() }))
+        if (publication.attempts > 0) {
+          const reconciled = await publisher.reconcile(context)
+          if (stopping)
+            return progressed
+          if (reconciled._tag === 'Ok' && reconciled.value !== null) {
+            store.updatePublication(publication.id, value => ({ ...value, state: { _tag: 'Written', receipt: reconciled.value! }, updatedAt: at() }))
+            finish(run.id)
+            progressed++
+            continue
+          }
+          if (reconciled._tag === 'Err') {
+            const error = reconciled.error
+            store.updatePublication(publication.id, value => ({ ...value, state: retryable(error) ? { _tag: 'Waiting', until: error.retryAt ?? new Date(now().getTime() + 30000).toISOString(), reason: error.message } : { _tag: 'Failed', error }, updatedAt: at() }))
+            progressed++
+            continue
+          }
+        }
+        const current = store.run(run.id)!
+        const terminalSystem = system && publication.effect._tag === 'Check' && publication.effect.phase.status === 'completed'
+        if (terminal(current.state) && !terminalSystem && !(system && publication.effect._tag === 'Comment' && ['Failed', 'Succeeded'].includes(current.state._tag))) {
+          store.updatePublication(publication.id, value => ({ ...value, state: { _tag: 'Cancelled', reason: 'The workflow run no longer permits new output.' }, updatedAt: at() }))
           progressed++
           continue
         }
-      }
-      const current = store.run(run.id)!
-      const terminalSystem = system && publication.effect._tag === 'Check' && publication.effect.phase.status === 'completed'
-      if (terminal(current.state) && !terminalSystem && !(system && publication.effect._tag === 'Comment' && ['Failed', 'Succeeded'].includes(current.state._tag))) {
-        store.updatePublication(publication.id, value => ({ ...value, state: { _tag: 'Cancelled', reason: 'The workflow run no longer permits new output.' }, updatedAt: at() }))
+        const grant = await effectivePolicy(current)
+        if (stopping)
+          return progressed
+        const allowed = grant._tag === 'Err' ? grant : effectAllowed({ ...current, policy: grant.value }, publication.effect)
+        const authorized = allowed._tag === 'Err' ? allowed : await publisher.authorize({ ...context, run: current })
+        if (stopping)
+          return progressed
+        if (authorized._tag === 'Err') {
+          store.updatePublication(publication.id, value => ({ ...value, state: { _tag: 'Failed', error: authorized.error }, updatedAt: at() }))
+          if (!system)
+            failRun(current.id, authorized.error)
+          progressed++
+          continue
+        }
+        const latest = store.run(run.id)!
+        if (terminal(latest.state) && !terminalSystem && !(system && publication.effect._tag === 'Comment' && ['Failed', 'Succeeded'].includes(latest.state._tag))) {
+          store.updatePublication(publication.id, value => ({ ...value, state: { _tag: 'Cancelled', reason: 'The workflow run no longer permits new output.' }, updatedAt: at() }))
+          continue
+        }
+        store.updatePublication(publication.id, value => ({ ...value, state: { _tag: 'Sending' }, attempts: value.attempts + 1, updatedAt: at() }))
+        const result = await publisher.publish({ ...context, run: latest })
+        if (stopping)
+          return progressed
+        store.updatePublication(publication.id, value => ({ ...value, state: result._tag === 'Ok' ? { _tag: 'Written', receipt: result.value } : retryable(result.error) && value.attempts < 10 ? { _tag: 'Waiting', until: result.error.retryAt ?? new Date(now().getTime() + 2000 * value.attempts).toISOString(), reason: result.error.message } : { _tag: 'Failed', error: result.error }, updatedAt: at() }))
+        store.log('publication.settled', { publicationId: publication.id, outcome: result._tag }, run.id)
+        if (result._tag === 'Err' && !retryable(result.error) && !system)
+          failRun(run.id, result.error)
+        finish(run.id)
         progressed++
-        continue
       }
-      const grant = await effectivePolicy(current)
-      const allowed = grant._tag === 'Err' ? grant : effectAllowed({ ...current, policy: grant.value }, publication.effect)
-      const authorized = allowed._tag === 'Err' ? allowed : await publisher.authorize({ ...context, run: current })
-      if (authorized._tag === 'Err') {
-        store.updatePublication(publication.id, value => ({ ...value, state: { _tag: 'Failed', error: authorized.error }, updatedAt: at() }))
-        if (!system)
-          failRun(current.id, authorized.error)
-        progressed++
-        continue
+      finally {
+        publishing.delete(publication.id)
       }
-      const latest = store.run(run.id)!
-      if (terminal(latest.state) && !terminalSystem && !system)
-        continue
-      store.updatePublication(publication.id, value => ({ ...value, state: { _tag: 'Sending' }, attempts: value.attempts + 1, updatedAt: at() }))
-      const result = await publisher.publish({ ...context, run: latest })
-      store.updatePublication(publication.id, value => ({ ...value, state: result._tag === 'Ok' ? { _tag: 'Written', receipt: result.value } : retryable(result.error) && value.attempts < 10 ? { _tag: 'Waiting', until: result.error.retryAt ?? new Date(now().getTime() + 2000 * value.attempts).toISOString(), reason: result.error.message } : { _tag: 'Failed', error: result.error }, updatedAt: at() }))
-      store.log('publication.settled', { publicationId: publication.id, outcome: result._tag }, run.id)
-      if (result._tag === 'Err' && !retryable(result.error) && !system)
-        failRun(run.id, result.error)
-      finish(run.id)
-      progressed++
     }
     return progressed
   }
@@ -337,6 +397,8 @@ export function createRunner(options: RunnerOptions) {
       if (!run || terminal(run.state))
         continue
       const grant = await effectivePolicy(run)
+      if (stopping)
+        return { progressed }
       const type = registry.get(run.tasks.find(task => task.id === entry.taskId)!.definition.uses)
       if (grant._tag === 'Err' || type?.capabilities.some(capability => !grant.value.capabilities.includes(capability)))
         failRun(runId, grant._tag === 'Err' ? grant.error : { _tag: 'Authorization', message: 'The active task lost a required capability.' })
@@ -349,7 +411,7 @@ export function createRunner(options: RunnerOptions) {
       finish(run.id)
       if (active.size >= maximum || active.has(run.id) || terminal(store.run(run.id)!.state) || store.operatorPaused())
         continue
-      if (run.startedAt === null && run.event.name !== 'octorun.command' && run.event.source !== 'manual' && store.paused(run.event.repository.fullName, targetKey(run.event)))
+      if (run.startedAt === null && !['octorun.command', 'octorun.conversation'].includes(run.event.name) && run.event.source !== 'manual' && store.paused(run.event.repository.fullName, targetKey(run.event)))
         continue
       const group = `${run.event.repository.id}:${run.definition.id}:${run.definition.concurrency.group === 'repository' ? '*' : targetKey(run.event)}`
       const groupRuns = store.runs({ group, states: ['Queued', 'Running', 'Waiting'] })
@@ -376,6 +438,13 @@ export function createRunner(options: RunnerOptions) {
         continue
       }
       const grant = await effectivePolicy(run)
+      if (stopping)
+        return { progressed }
+      const latestRun = store.run(run.id)
+      if (!latestRun || terminal(latestRun.state) || store.operatorPaused())
+        continue
+      if (latestRun.startedAt === null && !['octorun.command', 'octorun.conversation'].includes(latestRun.event.name) && latestRun.event.source !== 'manual' && store.paused(latestRun.event.repository.fullName, targetKey(latestRun.event)))
+        continue
       if (grant._tag === 'Err' || handler.capabilities.some(capability => !grant.value.capabilities.includes(capability))) {
         failRun(run.id, grant._tag === 'Err' ? grant.error : { _tag: 'Authorization', message: 'The task lost a required capability.' })
         progressed++
@@ -404,7 +473,9 @@ export function createRunner(options: RunnerOptions) {
     return { progressed }
   }
   const tick = (): Promise<{ progressed: number }> => {
-    ticking ??= tickOnce().finally(() => { ticking = null })
+    ticking ??= tickOnce().finally(() => {
+      ticking = null
+    })
     return ticking
   }
 
@@ -431,7 +502,9 @@ export function createRunner(options: RunnerOptions) {
     tick,
     async drain(): Promise<void> {
       const deadline = Date.now() + 300000
-      while (!stopping) {
+      while (true) {
+        if (stopping)
+          return
         const result = await tick()
         if (active.size === 0 && result.progressed === 0)
           return
@@ -458,6 +531,8 @@ export function createRunner(options: RunnerOptions) {
     inspect: store.run,
     runs: store.runs,
     publishSystem(runId: string, key: string, effect: PublicationEffect): Result<string> {
+      if (stopping)
+        return rejected('The controller is shutting down.')
       const run = store.run(runId)
       if (!run)
         return configurationError('The workflow run does not exist.')
@@ -466,12 +541,16 @@ export function createRunner(options: RunnerOptions) {
       const permitted = effectAllowed(run, effect)
       return permitted._tag === 'Err' ? permitted : store.enqueueSystem(prepare(run, '__lifecycle', key, effect))
     },
-    async close(): Promise<void> {
-      stopping = true
-      for (const entry of active.values())
-        entry.controller.abort(new Error('The controller is shutting down.'))
-      await Promise.allSettled([...active.values()].map(entry => entry.promise))
-      store.close()
+    close(): Promise<void> {
+      closing ??= (async () => {
+        stopping = true
+        stopExecution!()
+        for (const entry of [...active.values(), ...publishing.values()])
+          entry.controller.abort(new Error('The controller is shutting down.'))
+        await Promise.allSettled([...active.values()].map(entry => entry.promise))
+        store.close()
+      })()
+      return closing
     },
   }
 }
