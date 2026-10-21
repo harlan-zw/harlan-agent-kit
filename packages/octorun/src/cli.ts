@@ -88,6 +88,15 @@ function writeResult(result: Result<JsonValue>, json: boolean, outcome: 'Operati
   return outcome === 'Run' && typeof value?.state === 'string' && ['Failed', 'Cancelled', 'Superseded'].includes(value.state) ? 1 : 0
 }
 
+function restoreFailure(error: unknown): Result<never> {
+  const message = error instanceof Error ? error.message : ''
+  if (message === 'Another controller holds the state lock, or its lock database is unavailable.')
+    return err({ _tag: 'Configuration', message: 'Restore could not acquire the state lock. Stop the controller and check state directory access before restoring.' })
+  if (message === 'The backup is corrupt or uses an incompatible state schema.')
+    return err({ _tag: 'Configuration', message: 'Restore failed. Check backup integrity and schema compatibility. Choose a backup created by this Octorun version.' })
+  return err({ _tag: 'Configuration', message: 'Restore failed. Check backup integrity, schema compatibility, and file access. Stop the controller before restoring.' })
+}
+
 async function main(args: string[]): Promise<number> {
   const parsed = parseCliArguments(args)
   if (parsed._tag === 'Err')
@@ -122,8 +131,10 @@ async function main(args: string[]): Promise<number> {
     const existing = await requestControl({ path: join(config.stateDir, 'control.sock'), command: 'status', args: {} })
     if (existing !== null)
       return writeResult(existing._tag === 'Err' ? existing : err({ _tag: 'Configuration', message: 'Stop the Octorun controller before restoring a backup.' }), command.json)
-    await restoreStoreBackup({ source: resolve(command.source), destination: join(config.stateDir, 'state.sqlite') })
-    return writeResult(ok({ restored: true, stateDir: config.stateDir }), command.json)
+    const restored = await restoreStoreBackup({ source: resolve(command.source), destination: join(config.stateDir, 'state.sqlite') })
+      .then(() => ok({ restored: true, stateDir: config.stateDir }))
+      .catch(restoreFailure)
+    return writeResult(restored, command.json)
   }
   if (command._tag === 'Validate')
     return writeResult(ok({ valid: true, repositories: config.repositories.map(repository => repository.fullName), stateDir: config.stateDir }), command.json)
