@@ -54,7 +54,7 @@ export function createGitHubPublisher(options: { client: GitHubClient, authorize
   }
   const matches = (effect: PublicationEffect, object: unknown, context: PublicationContext, botId: number): boolean => {
     const value = githubObject(object)
-    const marker = publicationMarker(context.publication.key)
+    const marker = publicationMarker(context.publication.id)
     if (effect._tag === 'Check') {
       const output = githubObject(value?.output)
       return githubObject(value?.app)?.id === client.auth.appId && value?.external_id === `octorun:${context.run.id}` && value?.name === effect.name && value?.head_sha === effect.headSha && value?.status === effect.phase.status && (effect.phase.status !== 'completed' || value?.conclusion === effect.phase.conclusion) && typeof output?.text === 'string' && output.text.includes(marker)
@@ -131,7 +131,7 @@ export function createGitHubPublisher(options: { client: GitHubClient, authorize
       return ok(recovered.value)
     const effect = context.publication.effect
     const root = githubRepositoryPath(effect.repository)
-    const marker = publicationMarker(context.publication.key)
+    const marker = publicationMarker(context.publication.id)
     let path: string
     let method: 'POST' | 'PATCH' = 'POST'
     let body: unknown
