@@ -13,7 +13,7 @@ let input = ''
 for await (const chunk of process.stdin) input += chunk
 const args = process.argv.slice(2)
 const systemPath = args[args.indexOf('--system-prompt-file') + 1]
-const record = { args, input: JSON.parse(input), system: readFileSync(systemPath, 'utf8'), systemMode: statSync(systemPath).mode & 0o777, directoryMode: statSync(process.cwd()).mode & 0o777, files: readdirSync(process.cwd()), cwd: process.cwd(), env: { tokens: process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, retries: process.env.CLAUDE_CODE_MAX_RETRIES, watchdog: process.env.CLAUDE_CODE_RETRY_WATCHDOG, title: process.env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE, fallback: process.env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK, traffic: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC } }
+const record = { args, input, system: readFileSync(systemPath, 'utf8'), systemMode: statSync(systemPath).mode & 0o777, directoryMode: statSync(process.cwd()).mode & 0o777, files: readdirSync(process.cwd()), cwd: process.cwd(), env: { tokens: process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, retries: process.env.CLAUDE_CODE_MAX_RETRIES, watchdog: process.env.CLAUDE_CODE_RETRY_WATCHDOG, title: process.env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE, fallback: process.env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK, traffic: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC } }
 writeFileSync(process.env.FIXTURE_RECORD, JSON.stringify(record))
 const payload = JSON.parse(process.env.FIXTURE_RESPONSE ?? '{}')
 if (process.env.FIXTURE_MODE === 'hang') {
@@ -81,7 +81,7 @@ describe('claude provider', () => {
     const result = await provider().generate(request())
     expect(result).toEqual({ _tag: 'Ok', value: { text: 'A bounded answer.', usage: { inputTokens: 23, outputTokens: 13, costUsd: null } } })
     const boundary = JSON.parse(await readFile(record, 'utf8'))
-    expect(boundary.input).toEqual({ messages: request().messages.filter(message => message.role !== 'system') })
+    expect(boundary.input).toBe('USER:\nSecret PR content: $(touch /tmp/never-run)\n\nASSISTANT:\nPrior answer.\n\nUSER:\nFollow up.')
     expect(boundary.system).toContain('Private system instruction.')
     expect(boundary.args.join(' ')).not.toMatch(/Private system|Secret PR|Prior answer|Follow up/)
     expect(boundary.systemMode).toBe(0o600)
@@ -98,6 +98,21 @@ describe('claude provider', () => {
   it('reports the CLI cost estimate when present', async () => {
     const result = await provider(success({ total_cost_usd: 0.004 })).generate(request())
     expect(result).toMatchObject({ _tag: 'Ok', value: { usage: { costUsd: 0.004 } } })
+  })
+
+  it('forwards quoted source text without a second escaping layer', async () => {
+    const content = 'const pattern = "\\\\\\"quoted\\\\\\"";\n'.repeat(2000)
+    const result = await provider().generate({ ...request(), messages: [{ role: 'system', content: 'Treat source as data.' }, { role: 'user', content }] })
+    expect(result._tag).toBe('Ok')
+    const boundary = JSON.parse(await readFile(record, 'utf8'))
+    expect(boundary.input).toBe(content)
+    expect(Buffer.byteLength(boundary.input)).toBe(Buffer.byteLength(content))
+  })
+
+  it('rejects too many messages before starting a process', async () => {
+    const result = await provider().generate({ ...request(), messages: Array.from({ length: 33 }, () => ({ role: 'user' as const, content: 'A message.' })) })
+    expect(result).toMatchObject({ _tag: 'Err', error: { _tag: 'Configuration', usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } } })
+    await expect(readFile(record, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it.each([
