@@ -35,6 +35,7 @@ Where the two files disagree about a service word, the package glossary wins.
 | Worktree | `<parent>/<repo>.<branch-slug>` | `wt`, `scripts/worktree-sweep.sh` | 1 per task-owned branch | "worktree" |
 | Commit scope | the `type(scope):` subject prefix | `agent-context/git-hooks/commit-msg` | 1 per commit, retired spellings in `## Scopes` | "scope" |
 | Service | `packages/harlan-github-agent`, systemd `harlan-github-agent` | Harlan, GitHub | 1 Dashboard, 1 Control API | "GitHub agent" |
+| Octorun | standalone `harlan-zw/octorun`; consumer in `packages/octorun` | this repository's GitHub App and Claude provider | independent workflow runtime; uses its [own vocabulary](https://github.com/harlan-zw/octorun/blob/main/GLOSSARY.md) | "Octorun" |
 | Dashboard | `packages/harlan-github-agent/dashboard/` | a browser | 1 per Service | "dashboard" |
 | Agent, Task, Routine, Review run, Incident, and 52 more | `packages/harlan-github-agent/GLOSSARY.md` | the Service | defined there, not here | see that file |
 

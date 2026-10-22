@@ -24,6 +24,9 @@ catalogs:
     '@harlan-zw/jev':
       specifier: ^0.3.0
       version: 0.3.0
+    '@harlan-zw/octorun':
+      specifier: github:harlan-zw/octorun#9de6e7fe08a3fd020ef05548d4a951b04ec298e9
+      version: 0.1.0
     '@iconify-json/octicon':
       specifier: ^1.2.39
       version: 1.2.39
@@ -398,6 +401,28 @@ importers:
       vitepress-plugin-mermaid:
         specifier: 'catalog:'
         version: 2.0.17(mermaid@12.1.0)(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@26.6.5)(change-case@5.4.4)(fuse.js@7.5.0)(jiti@2.7.0)(lightningcss@1.33.0)(postcss@8.5.30)(search-insights@2.17.3)(terser@5.50.0)(typescript@6.0.3)(yaml@2.9.1))
+
+  packages/octorun:
+    dependencies:
+      '@harlan-zw/octorun':
+        specifier: 'catalog:'
+        version: https://codeload.github.com/harlan-zw/octorun/tar.gz/9de6e7fe08a3fd020ef05548d4a951b04ec298e9
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.1
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.5
+      obuild:
+        specifier: 'catalog:'
+        version: 0.4.45(@volar/typescript@2.4.28(typescript@6.0.3))(@vue/language-core@3.3.13)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(magicast@0.5.4)(typescript@6.0.3)(vue-tsc@3.3.13(typescript@6.0.3))
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.3(@opentelemetry/api@1.9.0)(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(yaml@2.9.1))
 
 packages:
 
@@ -1338,6 +1363,12 @@ packages:
     resolution: {integrity: sha512-XEPrZeKr3D/901ZnVfv5aXn7UMjER7XXkR1/M+LnzoEYwNfJBr/CPYk0q7/C82GxZmP30FqQCQv5hcq//e4b8A==}
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
 
+  '@harlan-zw/octorun@https://codeload.github.com/harlan-zw/octorun/tar.gz/9de6e7fe08a3fd020ef05548d4a951b04ec298e9':
+    resolution: {gitHosted: true, integrity: sha512-lQzIXENWWP3E5OzqTqrzKCe7jtFgblkSdunKjt05TG6vCus71NuvBDhOY6jmoEDIiWCWIbUSuO/oSrCaVxBawQ==, tarball: https://codeload.github.com/harlan-zw/octorun/tar.gz/9de6e7fe08a3fd020ef05548d4a951b04ec298e9}
+    version: 0.1.0
+    engines: {node: '>=24.0.0'}
+    hasBin: true
+
   '@hexagon/base64@1.1.28':
     resolution: {integrity: sha512-lhqDEAvWixy3bZ+UOYbPwUbBkwBq5C1LAJ/xPC8Oi+lL54oyakv/npbA0aU2hgCsx/1NUd4IBvV03+aUBWxerw==}
 
@@ -1992,6 +2023,7 @@ packages:
   '@opentelemetry/sdk-trace-node@2.8.0':
     resolution: {integrity: sha512-nZt9OGufioAc3AfoLTqA9bsAeaMJAictYDdI2VcNQ+PmT+3rfKjAZDZvgPfd8VPX0O5Bw1hdQF6kDK8VSpZiWg==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
@@ -9004,6 +9036,10 @@ snapshots:
   '@harlan-zw/jev@0.3.0':
     dependencies:
       ohash: 2.0.12
+
+  '@harlan-zw/octorun@https://codeload.github.com/harlan-zw/octorun/tar.gz/9de6e7fe08a3fd020ef05548d4a951b04ec298e9':
+    dependencies:
+      yaml: 2.9.1
 
   '@hexagon/base64@1.1.28': {}
 
