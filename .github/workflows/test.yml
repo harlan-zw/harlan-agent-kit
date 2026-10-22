@@ -207,6 +207,9 @@ jobs:
       - name: Service package
         run: pnpm --filter harlan-github-agent test:run
 
+      - name: Octorun consumer
+        run: pnpm --filter harlan-octorun test:run
+
       - name: Native terminal bindings
         run: pnpm --filter ghostty-terminal-bindings test:run
 

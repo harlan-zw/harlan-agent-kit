@@ -220,6 +220,10 @@ pnpm service:status    # Show the service state
 pnpm service:update    # Rebuild and restart
 ```
 
+[`packages/octorun`](./packages/octorun/README.md) consumes the standalone [Octorun](https://github.com/harlan-zw/octorun) runtime for this repository.
+It runs automatic change summaries and explicit `@octorun review` commands with the existing App and Claude subscription.
+Run `pnpm octorun doctor`, then `pnpm octorun serve` for continuous processing.
+
 ## Reference
 
 The Skills defer to these when the rules get long:
