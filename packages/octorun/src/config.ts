@@ -4,7 +4,6 @@ import { parseDocument } from 'yaml'
 
 export const KIT_REPOSITORY = 'harlan-zw/harlan-agent-kit'
 export const KIT_PRIVATE_KEY_ENV = 'OCTORUN_KIT_GITHUB_PRIVATE_KEY'
-export const KIT_PROVIDER_ENV = 'OCTORUN_KIT_PROVIDER_CREDENTIAL'
 export const KIT_WEBHOOK_ENV = 'OCTORUN_KIT_WEBHOOK_SECRET'
 
 export interface KitServiceSettings {

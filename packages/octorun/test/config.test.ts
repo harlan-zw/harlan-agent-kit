@@ -32,7 +32,7 @@ function options() {
     settings: settings.value,
     repository: { id: 123, fullName: 'harlan-zw/harlan-agent-kit', installationId: 456 },
     stateDir: '/state/octorun-kit',
-    provider: { baseUrl: 'http://127.0.0.1', model: 'claude-opus-5-5', apiKeyEnv: 'OCTORUN_KIT_PROVIDER_CREDENTIAL', timeoutMs: 120_000, maxInputCharacters: 200_000, maxResponseBytes: 2_097_152 },
+    provider: { _tag: 'Claude' as const, command: 'claude', model: 'claude-opus-5-5', timeoutMs: 120_000, maxInputBytes: 200_000, maxResponseBytes: 2_097_152 },
     presets: { summary: workflow('change-summary'), review: workflow('adversarial-review') },
   }
 }

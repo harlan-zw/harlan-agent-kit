@@ -154,7 +154,8 @@ If the App identity or mapped paths change, restart Octorun after checking the n
 
 ## Provider boundary
 
-The Claude adapter starts one bounded text turn with repository text supplied as data.
+The standalone Octorun package supplies the Claude adapter and login checks.
+The adapter starts one bounded text turn with repository text supplied as data.
 It disables tools, MCP servers, user customizations, repository instructions, session persistence, and automatic retries.
 Managed Claude policy still applies.
 It uses a private temporary directory and removes each prompt after the turn.

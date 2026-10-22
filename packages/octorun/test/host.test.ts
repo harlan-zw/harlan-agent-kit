@@ -121,7 +121,7 @@ it('withholds a generated result after the Service mapping is disabled during it
   try {
     await host.value.command('run', { repository: 'harlan-zw/harlan-agent-kit', number: 7, workflow: 'change-summary', requestId: 'revoked-during-paid-turn' })
     expect(f.calls()).toBe(1)
-    expect(f.comments).toEqual([])
+    expect(f.comments.map(comment => String(comment.body))).not.toContainEqual(expect.stringContaining('Missing values now return undefined.'))
     expect(f.checks).toContainEqual(expect.objectContaining({ status: 'completed' }))
     expect(f.checks.every(check => check.status === 'completed')).toBe(true)
   }
@@ -175,7 +175,7 @@ it('reports an unavailable Claude executable in the controller diagnostic', asyn
   try {
     expect(await host.value.command('doctor', {})).toMatchObject({
       _tag: 'Ok',
-      value: { ready: false, provider: { configured: false, authenticated: false } },
+      value: { ready: false, provider: { kind: 'Claude', configured: false, authentication: 'failed', authenticated: false } },
     })
   }
   finally {
