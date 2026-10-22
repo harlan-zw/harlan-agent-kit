@@ -16,6 +16,10 @@ export interface ClaudeProviderOptions {
   spawn?: typeof spawn
 }
 
+export interface ClaudeAgentProvider extends AgentProvider {
+  inputTokenOverhead: number
+}
+
 interface Configuration {
   stateDir: string
   model: string
@@ -65,8 +69,8 @@ function parseUsage(payload: Record<string, unknown>): Usage | null {
     return null
   const input = payload.usage.input_tokens
   const output = payload.usage.output_tokens
-  const created = payload.usage.cache_creation_input_tokens ?? 0
-  const cached = payload.usage.cache_read_input_tokens ?? 0
+  const created = payload.usage.cache_creation_input_tokens === undefined ? 0 : payload.usage.cache_creation_input_tokens
+  const cached = payload.usage.cache_read_input_tokens === undefined ? 0 : payload.usage.cache_read_input_tokens
   const cost = payload.total_cost_usd ?? null
   if (!integer(input) || !integer(output) || !integer(created) || !integer(cached) || !integer(input + created + cached)
     || !(cost === null || (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0))) {
@@ -84,7 +88,7 @@ async function parseResponse(output: Extract<ProcessResult, { _tag: 'Completed' 
   if (output.exitCode !== 0 || payload?.is_error === true) {
     if (/invalid.?api.?key|authentication|unauthorized|not logged in|login required|please (?:run.*login|log in)|oauth.*expired|\b401\b|\b403\b/i.test(diagnostic))
       return failure('Authorization', 'Claude authentication failed. Run claude auth login, then retry.', usage ?? undefined)
-    if (/rate.?limit|usage.?limit|quota|too many requests|\b429\b/i.test(diagnostic))
+    if (/rate.?limit|usage.?limit|quota|too many requests|(?:hit|reached|exceeded).{0,60}(?:limit|budget)|credit balance|usage credits required|\b429\b/i.test(diagnostic))
       return failure('Capacity', 'Claude reached its usage limit. Retry after capacity returns.', usage ?? undefined)
     if (/connection|network|timed? ?out|overloaded|temporar|\b50[0234]\b|\b529\b|econn|enotfound|fetch failed/i.test(diagnostic))
       return failure('Transient', 'Claude could not complete the request. Retry the run.', usage ?? undefined)
@@ -109,6 +113,8 @@ function runProcess(config: Configuration, options: ClaudeProviderOptions, reque
     CLAUDE_CODE_MAX_RETRIES: '0',
     CLAUDE_CODE_RETRY_WATCHDOG: '0',
     CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1',
+    CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     CLAUDE_CODE_EFFORT_LEVEL: 'low',
     MAX_THINKING_TOKENS: '0',
   }
@@ -204,11 +210,14 @@ async function privateWorkspace(stateDir: string): Promise<string> {
   return mkdtemp(join(base, 'turn-'))
 }
 
-export function createClaudeProvider(options: ClaudeProviderOptions): AgentProvider {
+export function createClaudeProvider(options: ClaudeProviderOptions): ClaudeAgentProvider {
   const config = configuration(options)
-  const id = createHash('sha256').update(JSON.stringify(config)).digest('hex').slice(0, 24)
+  // Claude adds framing even when its default system prompt and tools are absent.
+  const inputTokenOverhead = 2048
+  const id = createHash('sha256').update(JSON.stringify({ config, inputTokenOverhead })).digest('hex').slice(0, 24)
   return {
-    id: `claude-cli:${id}`,
+    id: `claude-cli:v1:${id}`,
+    inputTokenOverhead,
     async generate(request) {
       if (request.signal.aborted)
         return failure('Permanent', 'The Claude request was cancelled before it started.', zero())

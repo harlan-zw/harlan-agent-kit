@@ -13,7 +13,7 @@ let input = ''
 for await (const chunk of process.stdin) input += chunk
 const args = process.argv.slice(2)
 const systemPath = args[args.indexOf('--system-prompt-file') + 1]
-const record = { args, input: JSON.parse(input), system: readFileSync(systemPath, 'utf8'), systemMode: statSync(systemPath).mode & 0o777, directoryMode: statSync(process.cwd()).mode & 0o777, files: readdirSync(process.cwd()), cwd: process.cwd(), env: { tokens: process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, retries: process.env.CLAUDE_CODE_MAX_RETRIES, watchdog: process.env.CLAUDE_CODE_RETRY_WATCHDOG, title: process.env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE } }
+const record = { args, input: JSON.parse(input), system: readFileSync(systemPath, 'utf8'), systemMode: statSync(systemPath).mode & 0o777, directoryMode: statSync(process.cwd()).mode & 0o777, files: readdirSync(process.cwd()), cwd: process.cwd(), env: { tokens: process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, retries: process.env.CLAUDE_CODE_MAX_RETRIES, watchdog: process.env.CLAUDE_CODE_RETRY_WATCHDOG, title: process.env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE, fallback: process.env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK, traffic: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC } }
 writeFileSync(process.env.FIXTURE_RECORD, JSON.stringify(record))
 const payload = JSON.parse(process.env.FIXTURE_RESPONSE ?? '{}')
 if (process.env.FIXTURE_MODE === 'hang') {
@@ -91,7 +91,7 @@ describe('claude provider', () => {
       expect(boundary.args).toContain(flag)
     for (const [flag, value] of [['--tools', ''], ['--disallowedTools', '*'], ['--mcp-config', '{"mcpServers":{}}'], ['--max-turns', '1'], ['--model', 'claude-opus-5-5'], ['--setting-sources', '']])
       expect(boundary.args[boundary.args.indexOf(flag) + 1]).toBe(value)
-    expect(boundary.env).toEqual({ tokens: '128', retries: '0', watchdog: '0', title: '1' })
+    expect(boundary.env).toEqual({ tokens: '128', retries: '0', watchdog: '0', title: '1', fallback: '1', traffic: '1' })
     expect(await readdir(join(directory, 'state', 'claude-turns'))).toEqual([])
   })
 
@@ -105,6 +105,7 @@ describe('claude provider', () => {
     ['missing usage', success({ usage: undefined }), {}],
     ['negative tokens', success({ usage: { input_tokens: -1, output_tokens: 2 } }), {}],
     ['invalid cached tokens', success({ usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: '3' } }), {}],
+    ['null cached tokens', success({ usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: null } }), {}],
     ['unsafe token sum', success({ usage: { input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 2, cache_creation_input_tokens: 1 } }), {}],
     ['negative cost', success({ total_cost_usd: -1 }), {}],
     ['extra turns', success({ num_turns: 2 }), {}],
@@ -118,6 +119,11 @@ describe('claude provider', () => {
   it.each([
     ['authentication', 'Invalid API key', 'Authorization'],
     ['capacity', 'Rate limit exceeded', 'Capacity'],
+    ['subscription capacity', 'You have hit your session limit', 'Capacity'],
+    ['weekly capacity', 'You\'ve hit your weekly limit', 'Capacity'],
+    ['model capacity', 'You\'ve hit your Opus limit', 'Capacity'],
+    ['spend capacity', 'Credit balance is too low', 'Capacity'],
+    ['monthly capacity', 'You\'ve hit your monthly spend limit', 'Capacity'],
     ['network', 'Connection reset', 'Transient'],
     ['configuration', 'Unknown option --safe-mode', 'Configuration'],
     ['unknown', 'Unexpected execution failure', 'Permanent'],
