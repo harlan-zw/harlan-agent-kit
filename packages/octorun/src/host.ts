@@ -4,6 +4,7 @@ import { basename, dirname, join } from 'node:path'
 import { adversarialReviewPreset, changeSummaryPreset, createGitHubAppAuth, createGitHubClient, createOctorun, err } from '@harlan-zw/octorun'
 import { createClaudeProvider } from './claude-provider.ts'
 import { buildKitOctorunConfig, KIT_PRIVATE_KEY_ENV, KIT_REPOSITORY, parseKitServiceConfig } from './config.ts'
+import { checkClaudeAuthentication, withClaudeReadiness } from './readiness.ts'
 import { createKitTaskTypes } from './tasks.ts'
 
 export interface KitHostOptions {
@@ -50,5 +51,14 @@ export async function createKitHost(options: KitHostOptions) {
   const config = buildKitOctorunConfig({ ...setup, stateDir: paths.value.stateDir, settings: { ...settings.value, repository: { ...settings.value.repository, checkout: paths.value.checkout }, storagePath: join(paths.value.legacyDirectory, basename(settings.value.storagePath)) } })
   if (config._tag === 'Err')
     return config
-  return createOctorun({ config: config.value, client, provider: options.provider ?? createClaudeProvider({ stateDir: options.stateDir, model: options.model, timeoutMs: config.value.provider.timeoutMs, env: options.env }), env: { [KIT_PRIVATE_KEY_ENV]: key.value }, taskTypes: createKitTaskTypes() })
+  const service = await createOctorun({ config: config.value, client, provider: options.provider ?? createClaudeProvider({ stateDir: options.stateDir, model: options.model, timeoutMs: config.value.provider.timeoutMs, env: options.env }), env: { [KIT_PRIVATE_KEY_ENV]: key.value }, taskTypes: createKitTaskTypes() })
+  if (service._tag === 'Err' || options.provider)
+    return service
+  const command: typeof service.value.command = async (name, args) => {
+    const result = await service.value.command(name, args)
+    return name === 'doctor' && result._tag === 'Ok'
+      ? withClaudeReadiness(result, await checkClaudeAuthentication({ env: options.env }))
+      : result
+  }
+  return { _tag: 'Ok' as const, value: { ...service.value, command } }
 }

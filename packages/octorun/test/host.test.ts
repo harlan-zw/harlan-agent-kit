@@ -91,3 +91,20 @@ it.each(['legacy', 'checkout'] as const)('rejects state symlinks into the existi
     await result.value.close()
   expect(result).toMatchObject({ _tag: 'Err', error: { _tag: 'Configuration' } })
 })
+
+it('reports an unavailable Claude executable in the controller diagnostic', async () => {
+  const f = await fixture()
+  const { provider: _provider, ...options } = f.options
+  const host = await createKitHost({ ...options, env: { PATH: '/missing-claude-executable' } })
+  if (host._tag === 'Err')
+    throw new Error(host.error.message)
+  try {
+    expect(await host.value.command('doctor', {})).toMatchObject({
+      _tag: 'Ok',
+      value: { ready: false, provider: { configured: false, authenticated: false } },
+    })
+  }
+  finally {
+    await host.value.close()
+  }
+})
