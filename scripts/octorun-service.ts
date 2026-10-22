@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { parseKitServiceConfig } from '../packages/octorun/src/config.ts'
+import { loadKitServiceSettings } from '../packages/octorun/src/authority.ts'
 import { openStore, requestControl } from '../packages/octorun/src/control.ts'
 
 const UNIT = 'harlan-octorun.service'
@@ -179,7 +179,7 @@ async function canonicalFuture(path: string): Promise<string> {
 }
 
 async function stateBoundary(options: ServiceOptions): Promise<Result<void>> {
-  const parsed = parseKitServiceConfig(await readFile(options.configurationPath, 'utf8'))
+  const parsed = await loadKitServiceSettings(options.configurationPath)
   if (parsed._tag === 'Err')
     return parsed
   const [state, root, checkout, legacy] = await Promise.all([canonicalFuture(options.stateDir), canonicalFuture(options.root), realpath(parsed.value.repository.checkout), realpath(dirname(parsed.value.storagePath))])

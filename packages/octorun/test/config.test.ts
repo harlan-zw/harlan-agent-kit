@@ -7,7 +7,7 @@ function service(overrides: Record<string, unknown> = {}) {
   return {
     github: { app_id: 123, private_key_path: '/private/app.pem', allowed_owners: ['harlan-zw'] },
     storage: { path: '/state/legacy/state.sqlite' },
-    repositories: [{ github: 'harlan-zw/harlan-agent-kit', checkout: '/repos/harlan-agent-kit', enabled: true, ownership: 'owned' }],
+    repositories: [{ github: 'harlan-zw/harlan-agent-kit', checkout: '/repos/harlan-agent-kit', enabled: true, ownership: 'owned', writable_pr_authors: ['maintainer'] }],
     ...overrides,
   }
 }
@@ -32,19 +32,30 @@ function options() {
     settings: settings.value,
     repository: { id: 123, fullName: 'harlan-zw/harlan-agent-kit', installationId: 456 },
     stateDir: '/state/octorun-kit',
-    provider: { baseUrl: 'http://127.0.0.1', model: 'claude-opus-5-5', apiKeyEnv: 'OCTORUN_KIT_PROVIDER_CREDENTIAL', timeoutMs: 120_000, maxInputCharacters: 200_000, maxResponseBytes: 2_097_152 },
+    provider: { _tag: 'Claude' as const, command: 'claude', model: 'claude-opus-5-5', timeoutMs: 120_000, maxInputBytes: 200_000, maxResponseBytes: 2_097_152 },
     presets: { summary: workflow('change-summary'), review: workflow('adversarial-review') },
   }
 }
 
 describe('parseKitServiceConfig', () => {
+  it('accepts an exact repository allow-list entry without authorizing sibling repositories', () => {
+    const configured = service({ github: { app_id: 123, private_key_path: '/private/app.pem', allowed_owners: [' Harlan-Zw/Harlan-Agent-Kit '] } })
+    expect(parseKitServiceConfig(stringify(configured))).toMatchObject({ _tag: 'Ok' })
+    configured.github.allowed_owners = ['harlan-zw/another-repository']
+    expect(parseKitServiceConfig(stringify(configured))).toMatchObject({ _tag: 'Err', error: { _tag: 'Configuration' } })
+  })
+
+  it.each([['harlan-zw', 'invalid/path/extra'], ['harlan-zw', 'HARLAN-ZW'], ['harlan-zw', '']])('rejects invalid Service allow-list entries %j', (...allowed_owners) => {
+    expect(parseKitServiceConfig(stringify(service({ github: { app_id: 123, private_key_path: '/private/app.pem', allowed_owners } })))).toMatchObject({ _tag: 'Err', error: { _tag: 'Configuration' } })
+  })
+
   it('reads one eligible mapping from the existing Service configuration', () => {
     const parsed = parseKitServiceConfig(stringify(service({ unrelated: { token: 'do-not-propagate' } })))
     expect(parsed).toEqual({
       _tag: 'Ok',
       value: {
         github: { appId: 123, privateKeyPath: '/private/app.pem' },
-        repository: { fullName: 'harlan-zw/harlan-agent-kit', checkout: '/repos/harlan-agent-kit' },
+        repository: { fullName: 'harlan-zw/harlan-agent-kit', checkout: '/repos/harlan-agent-kit', trustedAuthors: ['maintainer'] },
         storagePath: '/state/legacy/state.sqlite',
       },
     })
@@ -58,6 +69,8 @@ describe('parseKitServiceConfig', () => {
     ['dedicated account', { repositories: [{ ...service().repositories[0], github_account: { login: 'somebody' } }] }],
     ['user authentication', { repositories: [{ ...service().repositories[0], authentication: 'user' }] }],
     ['duplicate mapping', { repositories: [...service().repositories, ...service().repositories] }],
+    ['missing trusted authors', { repositories: [{ ...service().repositories[0], writable_pr_authors: undefined }] }],
+    ['invalid trusted authors', { repositories: [{ ...service().repositories[0], writable_pr_authors: ['maintainer', ''] }] }],
     ['relative private key', { github: { app_id: 123, private_key_path: 'app.pem', allowed_owners: ['harlan-zw'] } }],
     ['invalid App identity', { github: { app_id: 0, private_key_path: '/private/app.pem', allowed_owners: ['harlan-zw'] } }],
     ['relative storage', { storage: { path: 'state.sqlite' } }],

@@ -23,7 +23,7 @@ async function fixture() {
   const legacy = join(root, 'legacy')
   await Promise.all([mkdir(repository), mkdir(home), mkdir(legacy)])
   const configurationPath = join(root, 'config.yml')
-  await writeFile(configurationPath, stringify({ github: { app_id: 123, private_key_path: join(root, 'app.pem'), allowed_owners: ['harlan-zw'] }, storage: { path: join(legacy, 'state.sqlite') }, repositories: [{ github: 'harlan-zw/harlan-agent-kit', enabled: true, ownership: 'owned', checkout: repository }] }))
+  await writeFile(configurationPath, stringify({ github: { app_id: 123, private_key_path: join(root, 'app.pem'), allowed_owners: ['harlan-zw'] }, storage: { path: join(legacy, 'state.sqlite') }, repositories: [{ github: 'harlan-zw/harlan-agent-kit', enabled: true, ownership: 'owned', checkout: repository, writable_pr_authors: ['maintainer'] }] }), { mode: 0o600 })
   await writeFile(join(repository, 'source.txt'), 'An immutable merged revision.\n')
   const git = (args: string[]) => execute('git', ['-C', repository, ...args])
   await git(['init', '--quiet'])
@@ -133,6 +133,14 @@ async function fixture() {
 }
 
 describe('managed Octorun service', () => {
+  it('rejects unsafe configuration permissions before preparing or stopping the controller', async () => {
+    const f = await fixture()
+    await chmod(f.options.configurationPath, 0o640)
+    expect(await manageOctorun(f.options, f.deps)).toMatchObject({ _tag: 'Err', error: { _tag: 'Configuration' } })
+    expect(f.calls).toEqual([])
+    expect(f.controls).toEqual([])
+  })
+
   it('prepares one merged archive and starts only its compiled consumer', async () => {
     const f = await fixture()
     expect(await manageOctorun(f.options, f.deps)).toMatchObject({ _tag: 'Ok', value: { active: true } })
