@@ -210,6 +210,9 @@ jobs:
       - name: Octorun consumer
         run: pnpm --filter harlan-octorun test:run
 
+      - name: Octorun managed service
+        run: pnpm test:octorun-service
+
       - name: Native terminal bindings
         run: pnpm --filter ghostty-terminal-bindings test:run
 
