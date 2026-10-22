@@ -29,7 +29,7 @@ pnpm octorun plan --pr 7
 pnpm octorun run --pr 7 --request-id first-summary-7
 ```
 
-`doctor` checks App access and workflow configuration without generating text.
+`doctor` checks App access, workflow configuration, Claude installation, and Claude login without a model turn.
 `plan` shows the selected workflow, pinned commits, capabilities, and limits.
 `run` processes one pull request and reports its final state or retry hold.
 Repeat the same request ID to recover that request without starting another run.
@@ -44,7 +44,69 @@ The controller polls every minute and exposes a private local control socket.
 It requires no public HTTP listener or webhook routing change.
 Its first poll records existing pull requests without starting workflows for them.
 To process existing pull requests explicitly, run `pnpm octorun poll --backfill existing`.
-Keep `serve` running through your process manager for continuous processing.
+Use the managed user service for continuous processing.
+
+## Install the user service
+
+Use a Linux host with a systemd user manager and Node.js 24 or newer.
+Sign in to Claude on that host before installing.
+Keep the Service configuration and App key readable only by your user.
+Enable user lingering if the controller must run after logout or reboot.
+
+From a prepared checkout of the merged default branch:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm octorun:service install origin/main
+pnpm octorun:service status
+```
+
+The installer accepts only revisions already merged into `origin/main`.
+It archives the selected revision into its own private release directory.
+It installs frozen dependencies in a separate store and builds the compiled consumer.
+It checks App access and Claude login with temporary state before draining the serving controller.
+It then enables `harlan-octorun.service` and waits for its private control socket.
+The existing Service keeps its own process and database.
+
+If a worktree installed dependencies with scripts disabled, prepare a fresh checkout before running these commands.
+Use a separate store for that checkout:
+
+```bash
+pnpm install --frozen-lockfile --store-dir "$HOME/.local/share/harlan-octorun-bootstrap-store"
+```
+
+The unit pins absolute release and Node paths.
+Its explicit `HOME` and `PATH` include `~/.local/bin` for Claude.
+It uses private files and restarts after failure.
+Its recovery step restores saved admission state once after an interrupted transition.
+
+Use these commands for managed changes:
+
+```bash
+pnpm octorun:service update origin/main
+pnpm octorun:service restart
+pnpm octorun:service stop
+journalctl --user -u harlan-octorun.service
+```
+
+Updates and restarts drain running work before stopping the controller.
+They preserve an existing manual pause.
+If startup fails, the manager restores the previous release and admission state.
+Prepared releases remain available for inspection and rollback.
+Use `pnpm octorun:service update MERGED_COMMIT` to select a previous compatible release.
+Back up state before an upgrade that changes its database schema.
+
+| Managed path | Default |
+| --- | --- |
+| `HARLAN_OCTORUN_HOME` | `~/.local/share/harlan-octorun`, under `XDG_DATA_HOME` when set |
+| Release archives and dependencies | `$HARLAN_OCTORUN_HOME/releases` and `$HARLAN_OCTORUN_HOME/store` |
+| Selected release | `$HARLAN_OCTORUN_HOME/current` |
+| User unit | `~/.config/systemd/user/harlan-octorun.service`, under `XDG_CONFIG_HOME` when set |
+
+Keep the managed root outside checkouts, Octorun state, and the existing Service database directory.
+Use an owned state directory without a directory symlink.
+Keep the same managed root after installation.
+Set `HARLAN_OCTORUN_CONFIG` to select an absolute configuration path for the managed service.
 
 ## Operate
 
