@@ -80,6 +80,17 @@ function quote(value: string): string {
   return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%')}"`
 }
 
+function runtimeEnvironment(options: ServiceOptions, stateDir = options.stateDir): NodeJS.ProcessEnv {
+  return {
+    HOME: options.home,
+    PATH: options.env.PATH,
+    HARLAN_OCTORUN_HOME: options.root,
+    HARLAN_OCTORUN_CONFIG: options.configurationPath,
+    OCTORUN_KIT_STATE_DIR: stateDir,
+    OCTORUN_KIT_MODEL: options.model,
+  }
+}
+
 export function renderServiceUnit(options: ServiceOptions, selectedRelease = join(options.root, 'current')): Result<string> {
   if ([options.home, options.root, options.stateDir, options.configurationPath, options.node, options.repository, options.unitPath, selectedRelease].some(path => !isAbsolute(path) || path.trim() !== path || [...path].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) || [...options.model].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127))
     return invalid('Service paths must be absolute and contain no control characters.')
@@ -96,12 +107,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${selectedRelease.replaceAll('%', '%%')}
-Environment=${quote(`HOME=${options.home}`)}
-Environment=${quote(`PATH=${options.env.PATH}`)}
-Environment=${quote(`HARLAN_OCTORUN_HOME=${options.root}`)}
-Environment=${quote(`HARLAN_OCTORUN_CONFIG=${options.configurationPath}`)}
-Environment=${quote(`OCTORUN_KIT_STATE_DIR=${options.stateDir}`)}
-Environment=${quote(`OCTORUN_KIT_MODEL=${options.model}`)}
+${Object.entries(runtimeEnvironment(options)).map(([key, value]) => `Environment=${quote(`${key}=${value}`)}`).join('\n')}
 ExecStartPre=:${quote(options.node)} --experimental-strip-types ${quote(join(selectedRelease, 'scripts/octorun-service.ts'))} recover
 ExecStart=:${quote(options.node)} ${quote(cli(selectedRelease))} serve --config ${quote(options.configurationPath)}
 UMask=0077
@@ -314,7 +320,7 @@ export async function manageOctorun(options: ServiceOptions, overrides: Partial<
   const preflight = async (candidate: string): Promise<void> => {
     const preflight = await mkdtemp(join(options.root, 'preflight-'))
     try {
-      const checked = await deps.exec(options.node, [cli(candidate), 'doctor', '--config', options.configurationPath], { cwd: candidate, env: { ...options.env, OCTORUN_KIT_STATE_DIR: preflight, OCTORUN_KIT_MODEL: options.model }, timeoutMs: 60000 })
+      const checked = await deps.exec(options.node, [cli(candidate), 'doctor', '--config', options.configurationPath], { cwd: candidate, env: runtimeEnvironment(options, preflight), timeoutMs: 60000 })
       const diagnosis: unknown = JSON.parse(checked.stdout)
       if (checked.code !== 0 || !object(diagnosis) || diagnosis._tag !== 'Ok' || !object(diagnosis.value) || diagnosis.value.ready !== true)
         throw new Error('The prepared release did not pass diagnostics.')
@@ -327,6 +333,7 @@ export async function manageOctorun(options: ServiceOptions, overrides: Partial<
   let unlock: (() => Promise<void>) | undefined
   let transition: Transition | null = null
   let stopped = false
+  let preparedUnit: string | null = null
   try {
     if (options.action === 'status') {
       const status = await deps.control('status', {})
@@ -410,6 +417,15 @@ export async function manageOctorun(options: ServiceOptions, overrides: Partial<
     }
     if (!nextRelease)
       return invalid('Install an Octorun release before restarting or stopping it.')
+    if (options.action !== 'stop') {
+      stage = 'preparing the user unit'
+      const selected = renderServiceUnit(options, nextRelease)
+      if (selected._tag === 'Err')
+        return selected
+      await mkdir(dirname(options.unitPath), { recursive: true, mode: 0o700 })
+      preparedUnit = `${options.unitPath}.prepared.${crypto.randomUUID()}`
+      await atomicWrite(preparedUnit, selected.value)
+    }
     transition = { version: 1, next: nextRelease, prior: { release: oldRelease, unit: oldUnit, enabled: await unitEnabled(), active, paused: interrupted?.prior.paused ?? (status?._tag === 'Ok' && object(status.value) ? status.value.paused === true : await deps.readPause()) } }
     await atomicWrite(marker, JSON.stringify(transition))
     if (active) {
@@ -425,11 +441,8 @@ export async function manageOctorun(options: ServiceOptions, overrides: Partial<
     if (options.action !== 'stop') {
       stage = 'activating the prepared release'
       await switchCurrent(nextRelease)
-      await mkdir(dirname(options.unitPath), { recursive: true, mode: 0o700 })
-      const selected = renderServiceUnit(options, nextRelease)
-      if (selected._tag === 'Err')
-        throw new Error(selected.error.message)
-      await atomicWrite(options.unitPath, selected.value)
+      await rename(preparedUnit!, options.unitPath)
+      await syncDirectory(dirname(options.unitPath))
       await required('systemctl', ['--user', 'daemon-reload'])
       await required('systemctl', ['--user', 'enable', UNIT])
       stage = 'starting the prepared controller'
@@ -456,10 +469,13 @@ export async function manageOctorun(options: ServiceOptions, overrides: Partial<
         await stopUnit()
         await restorePaused(transition!)
         await switchCurrent(transition!.prior.release)
-        if (transition!.prior.unit !== null)
-          await atomicWrite(options.unitPath, transition!.prior.unit)
-        else if (await exists(options.unitPath))
-          await unlink(options.unitPath)
+        const installedUnit = await optionalText(options.unitPath)
+        if (installedUnit !== transition!.prior.unit) {
+          if (transition!.prior.unit !== null)
+            await atomicWrite(options.unitPath, transition!.prior.unit)
+          else if (await exists(options.unitPath))
+            await unlink(options.unitPath)
+        }
         await required('systemctl', ['--user', 'daemon-reload'])
         await required('systemctl', ['--user', transition!.prior.enabled ? 'enable' : 'disable', UNIT])
         if (transition!.prior.active) {
@@ -473,7 +489,7 @@ export async function manageOctorun(options: ServiceOptions, overrides: Partial<
     return { _tag: 'Err', error: { _tag: 'Transient', message: `Octorun failed while ${stage}. Inspect its paths, tools, and configuration.` } }
   }
   finally {
-    await unlock?.()
+    await (preparedUnit === null ? Promise.resolve() : rm(preparedUnit, { force: true })).finally(() => unlock?.())
   }
 }
 

@@ -1,6 +1,6 @@
 import type { ServiceDependencies } from './octorun-service.ts'
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -168,6 +168,24 @@ describe('managed Octorun service', () => {
     expect(f.snapshot().active).toBe(true)
   })
 
+  it('checks candidate readiness without caller-only Claude configuration', async () => {
+    const f = await fixture()
+    f.options.env.CLAUDE_CONFIG_DIR = join(f.root, 'caller-only-login')
+    const original = f.deps.exec!
+    let diagnosed = false
+    f.deps.exec = async (command, args, execution) => {
+      if (command === f.options.node && args.includes('doctor')) {
+        diagnosed = true
+        expect(execution.env.CLAUDE_CONFIG_DIR).toBeUndefined()
+        expect(execution.env.HOME).toBe(f.options.home)
+        expect(execution.env.PATH).toBe(f.options.env.PATH)
+      }
+      return original(command, args, execution)
+    }
+    expect((await manageOctorun(f.options, f.deps))._tag).toBe('Ok')
+    expect(diagnosed).toBe(true)
+  })
+
   it('rejects an unmerged revision before building or stopping anything', async () => {
     const f = await fixture()
     f.setUnmerged()
@@ -234,6 +252,21 @@ describe('managed Octorun service', () => {
     expect((await manageOctorun({ ...f.options, action: 'restart' }, f.deps))._tag).toBe('Err')
     expect(f.calls.slice(before).some(call => call.command === 'systemctl' && call.args[1] === 'stop')).toBe(false)
     expect(f.snapshot()).toEqual({ active: true, enabled: true, paused: false })
+  })
+
+  it('prepares the actual unit destination before draining a serving controller', async () => {
+    const f = await fixture()
+    expect((await manageOctorun(f.options, f.deps))._tag).toBe('Ok')
+    await chmod(dirname(f.options.unitPath), 0o500)
+    const before = f.calls.length
+    try {
+      expect((await manageOctorun({ ...f.options, action: 'restart' }, f.deps))._tag).toBe('Err')
+      expect(f.calls.slice(before).some(call => call.command === 'systemctl' && call.args[1] === 'stop')).toBe(false)
+      expect(f.snapshot()).toEqual({ active: true, enabled: true, paused: false })
+    }
+    finally {
+      await chmod(dirname(f.options.unitPath), 0o700)
+    }
   })
 
   it('preserves manual pause when a stopped unit starts again', async () => {
