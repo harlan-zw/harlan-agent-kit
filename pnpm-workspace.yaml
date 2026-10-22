@@ -104,7 +104,6 @@ overrides:
 
 allowBuilds:
   '@harlan-zw/octorun@https://codeload.github.com/harlan-zw/octorun/tar.gz/93d550e94a8af47b5d3261aa99b59485591ce7e5': true
-  '@harlan-zw/octorun@https://codeload.github.com/harlan-zw/octorun/tar.gz/e615d14af80101fb423af12b095cab53afa32c57': set this to true or false
   esbuild: false
   node-pty: true
   vue-demi: true
