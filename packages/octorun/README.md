@@ -129,6 +129,9 @@ Use `pnpm octorun inspect RUN_ID` for a specific run.
 Use `pnpm octorun cancel RUN_ID` to cancel it.
 `pnpm octorun drain` pauses admission and waits for running work.
 Use `resume` to admit work again.
+Pausing stops new task execution. Polling and workflow status publication continue.
+Run one controller for this App, repository, and workflow.
+Before an isolated GitHub test, stop the managed controller with `pnpm octorun:service stop`.
 The upstream [operations guide](https://github.com/harlan-zw/octorun/blob/main/docs/guides/operations.md) explains durable state and recovery.
 
 ## Configure
