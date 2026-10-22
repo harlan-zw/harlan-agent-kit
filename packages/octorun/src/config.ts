@@ -9,7 +9,7 @@ export const KIT_WEBHOOK_ENV = 'OCTORUN_KIT_WEBHOOK_SECRET'
 
 export interface KitServiceSettings {
   github: { appId: number, privateKeyPath: string }
-  repository: { fullName: string, checkout: string }
+  repository: { fullName: string, checkout: string, trustedAuthors: string[] }
   storagePath: string
 }
 
@@ -46,9 +46,13 @@ export function parseKitServiceConfig(text: string): Result<KitServiceSettings> 
   }
   if (!object(input) || !object(input.github) || !id(input.github.app_id) || !absolutePath(input.github.private_key_path))
     return invalid('The Service configuration requires an App ID and absolute private key path.')
-  if (!Array.isArray(input.github.allowed_owners) || !input.github.allowed_owners.every(owner => typeof owner === 'string')
-    || !input.github.allowed_owners.some(owner => owner.toLowerCase() === 'harlan-zw')) {
-    return invalid('The Service configuration must explicitly allow the harlan-zw owner.')
+  const allowed = Array.isArray(input.github.allowed_owners) && input.github.allowed_owners.every(owner => typeof owner === 'string')
+    ? input.github.allowed_owners.map(owner => (owner as string).trim().toLowerCase())
+    : []
+  if (allowed.length === 0 || allowed.some(owner => !/^[\w-]+(?:\/[\w.-]+)?$/.test(owner))
+    || new Set(allowed).size !== allowed.length
+    || !allowed.some(owner => owner === 'harlan-zw' || owner === KIT_REPOSITORY)) {
+    return invalid('The Service configuration must explicitly allow Harlan Agent Kit through valid, unique owner or repository entries.')
   }
   if (!object(input.storage) || !absolutePath(input.storage.path))
     return invalid('The Service configuration requires an absolute database path.')
@@ -63,11 +67,13 @@ export function parseKitServiceConfig(text: string): Result<KitServiceSettings> 
     return invalid('The Harlan Agent Kit repository must be enabled, owned, and mapped to an absolute checkout.')
   if (mapping.github_account !== undefined || (mapping.authentication !== undefined && mapping.authentication !== 'app'))
     return invalid('The Harlan Agent Kit repository must use the configured GitHub App.')
+  if (!Array.isArray(mapping.writable_pr_authors) || !mapping.writable_pr_authors.every(author => typeof author === 'string' && author.trim().length > 0))
+    return invalid('The Harlan Agent Kit repository requires its Service list of trusted pull request authors.')
   return {
     _tag: 'Ok',
     value: {
       github: { appId: input.github.app_id, privateKeyPath: resolve(input.github.private_key_path) },
-      repository: { fullName: KIT_REPOSITORY, checkout: resolve(mapping.checkout) },
+      repository: { fullName: KIT_REPOSITORY, checkout: resolve(mapping.checkout), trustedAuthors: mapping.writable_pr_authors.map(author => (author as string).trim()) },
       storagePath: resolve(input.storage.path),
     },
   }

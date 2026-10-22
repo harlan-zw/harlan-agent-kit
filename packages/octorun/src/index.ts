@@ -1,3 +1,4 @@
+export * from './authority.ts'
 export * from './claude-provider.ts'
 export * from './commands.ts'
 export * from './config.ts'

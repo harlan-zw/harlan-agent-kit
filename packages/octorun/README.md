@@ -5,9 +5,13 @@ This private package imports the standalone runtime at an exact Git commit.
 It adds the existing GitHub App mapping and a Claude subscription provider.
 
 Automatic pull request events select the change summary workflow.
+Automatic summaries require an author listed in the Service mapping's `writable_pr_authors`.
+Fork pull requests use the same author rule.
 The existing Service owns automatic Review, Repair, conflict resolution, and releases.
 Use `@octorun review` for an explicit Octorun adversarial review.
 Questions inside Octorun findings stay in their threads.
+For outside contributors, a repository writer must request an Octorun workflow explicitly.
+The existing Service keeps its own Approval path for Review and Repair.
 
 ## Run
 
@@ -19,6 +23,7 @@ Keep an eligible Harlan Agent Kit mapping in the existing Service configuration.
 The host reads its App ID, private key path, allowed owner, repository mapping, and database path.
 It discovers repository and installation IDs through the App.
 It stores no copied key or provider credential in its configuration.
+Configuration and App key files must be owned, private regular files without a final symlink.
 
 From the repository root:
 
@@ -138,6 +143,14 @@ Use a dedicated state directory outside the Service database directory and repos
 The host resolves symlinks before opening Octorun state.
 Each state directory has one controller owner.
 Changing the model requires finishing or cancelling runs pinned to the previous provider.
+
+This consumer serves only `harlan-zw/harlan-agent-kit`.
+Its Service mapping must remain enabled, owned, and authenticated through the configured App.
+The allow-list accepts the whole owner or this exact repository.
+It grants no access to other repositories or organizations.
+Octorun rechecks this authority before paid work and result publication.
+It also rechecks current contributor trust and the exact pull request revision for automatic work.
+If the App identity or mapped paths change, restart Octorun after checking the new configuration.
 
 ## Provider boundary
 

@@ -1,9 +1,10 @@
-import type { AgentProvider, GitHubClient, Result } from '@harlan-zw/octorun'
-import { mkdir, readFile, realpath } from 'node:fs/promises'
+import type { AgentProvider, GitHubClient } from '@harlan-zw/octorun'
+import { mkdir, realpath } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { adversarialReviewPreset, changeSummaryPreset, createGitHubAppAuth, createGitHubClient, createOctorun, err } from '@harlan-zw/octorun'
+import { createKitRunAuthorizer, loadKitAppPrivateKey, loadKitServiceSettings } from './authority.ts'
 import { createClaudeProvider } from './claude-provider.ts'
-import { buildKitOctorunConfig, KIT_PRIVATE_KEY_ENV, KIT_REPOSITORY, parseKitServiceConfig } from './config.ts'
+import { buildKitOctorunConfig, KIT_PRIVATE_KEY_ENV, KIT_REPOSITORY } from './config.ts'
 import { checkClaudeAuthentication, withClaudeReadiness } from './readiness.ts'
 import { createKitTaskTypes } from './tasks.ts'
 
@@ -17,13 +18,10 @@ export interface KitHostOptions {
 }
 
 export async function createKitHost(options: KitHostOptions) {
-  const input: Result<string> = await readFile(options.configurationPath, 'utf8').then(value => ({ _tag: 'Ok' as const, value })).catch(() => err({ _tag: 'Configuration', message: 'Cannot read the Service configuration. Check its path and file permissions.' }))
-  if (input._tag === 'Err')
-    return input
-  const settings = parseKitServiceConfig(input.value)
+  const settings = await loadKitServiceSettings(options.configurationPath)
   if (settings._tag === 'Err')
     return settings
-  const key: Result<string> = await readFile(settings.value.github.privateKeyPath, 'utf8').then(value => ({ _tag: 'Ok' as const, value })).catch(() => err({ _tag: 'Configuration', message: 'Cannot read the GitHub App private key. Check its path and file permissions.' }))
+  const key = await loadKitAppPrivateKey(settings.value.github.privateKeyPath)
   if (key._tag === 'Err')
     return key
   const client = options.client ?? createGitHubClient({ auth: createGitHubAppAuth({ appId: Number(settings.value.github.appId), privateKey: key.value }) })
@@ -51,7 +49,7 @@ export async function createKitHost(options: KitHostOptions) {
   const config = buildKitOctorunConfig({ ...setup, stateDir: paths.value.stateDir, settings: { ...settings.value, repository: { ...settings.value.repository, checkout: paths.value.checkout }, storagePath: join(paths.value.legacyDirectory, basename(settings.value.storagePath)) } })
   if (config._tag === 'Err')
     return config
-  const service = await createOctorun({ config: config.value, client, provider: options.provider ?? createClaudeProvider({ stateDir: options.stateDir, model: options.model, timeoutMs: config.value.provider.timeoutMs, env: options.env }), env: { [KIT_PRIVATE_KEY_ENV]: key.value }, taskTypes: createKitTaskTypes() })
+  const service = await createOctorun({ config: config.value, client, provider: options.provider ?? createClaudeProvider({ stateDir: options.stateDir, model: options.model, timeoutMs: config.value.provider.timeoutMs, env: options.env }), env: { [KIT_PRIVATE_KEY_ENV]: key.value }, taskTypes: createKitTaskTypes(), authorizeRun: createKitRunAuthorizer({ configurationPath: options.configurationPath, settings: settings.value, repository: repository.value.ref, client }) })
   if (service._tag === 'Err' || options.provider)
     return service
   const command: typeof service.value.command = async (name, args) => {
