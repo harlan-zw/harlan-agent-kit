@@ -59,7 +59,7 @@ export function parseKitServiceConfig(text: string): Result<KitServiceSettings> 
   if (mappings.length !== 1)
     return invalid('The Service configuration requires exactly one Harlan Agent Kit repository mapping.')
   const mapping = mappings[0]!
-  if (mapping.enabled !== true || mapping.ownership !== 'owned' || !absolutePath(mapping.checkout))
+  if (mapping.enabled === true || mapping.ownership !== 'owned' || !absolutePath(mapping.checkout))
     return invalid('The Harlan Agent Kit repository must be enabled, owned, and mapped to an absolute checkout.')
   if (mapping.github_account !== undefined || (mapping.authentication !== undefined && mapping.authentication !== 'app'))
     return invalid('The Harlan Agent Kit repository must use the configured GitHub App.')
