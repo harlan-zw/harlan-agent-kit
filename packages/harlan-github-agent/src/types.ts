@@ -1560,6 +1560,7 @@ export type IncidentKind
     | 'agent_result'
     | 'context_budget'
     | 'policy'
+    | 'provider_config'
     | 'installation_access'
     /**
      * A runner stopped while its jobs were running.

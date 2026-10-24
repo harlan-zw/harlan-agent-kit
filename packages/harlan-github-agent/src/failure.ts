@@ -43,6 +43,8 @@ export type PermanentKind
     | 'context_budget'
     /** The agent repeated a rejected result after the controller named the broken rule. */
     | 'agent_result'
+    /** The provider rejected the model configuration the role pinned. */
+    | 'provider_config'
     | 'unknown'
 
 export interface FailureSignal {
@@ -228,6 +230,19 @@ const ownedAgentProviderPatterns: RegExp[] = [
 ]
 
 /**
+ * The provider rejected the model configuration the Task pinned, not the world
+ * the Task works on.
+ *
+ * A variant the provider does not offer fails identically on every attempt, and
+ * the owned-agent kind below recovers without an attempt cap, so this must be
+ * matched before it. One role pinned a missing variant and requeued its Failed
+ * Task for hours: twelve agent turns of sixteen seconds each.
+ */
+const providerConfigPatterns: RegExp[] = [
+  /\bvariant unavailable\b/i,
+]
+
+/**
  * The controller lost a race with itself. The next pass starts from a clean state.
  *
  * A race is the only thing that belongs here. "Could not be claimed" used to
@@ -291,6 +306,11 @@ export function classifyFailure(signal: FailureSignal): FailureClass {
 
   if (permanentMessages.has(message.trim()) || matches(permanentPatterns, message))
     return { _tag: 'Permanent', kind: 'policy' }
+
+  // Matched before the owned-agent wrapper, whose kind recovers without an
+  // attempt cap. A rejected model variant survives every one of those retries.
+  if (matches(providerConfigPatterns, message))
+    return { _tag: 'Permanent', kind: 'provider_config' }
 
   // Provider errors carry their owner in the persisted reason. Match that
   // before generic service and rate-limit text that any provider may return.
