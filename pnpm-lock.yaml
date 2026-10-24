@@ -25,7 +25,7 @@ catalogs:
       specifier: ^0.3.0
       version: 0.3.0
     '@harlan-zw/octorun':
-      specifier: github:harlan-zw/octorun#93d550e94a8af47b5d3261aa99b59485591ce7e5
+      specifier: github:harlan-zw/octorun#92997911343e04b1f08701dd88fa586cb02bc3ec
       version: 0.1.0
     '@iconify-json/octicon':
       specifier: ^1.2.39
@@ -406,7 +406,7 @@ importers:
     dependencies:
       '@harlan-zw/octorun':
         specifier: 'catalog:'
-        version: https://codeload.github.com/harlan-zw/octorun/tar.gz/93d550e94a8af47b5d3261aa99b59485591ce7e5
+        version: https://codeload.github.com/harlan-zw/octorun/tar.gz/92997911343e04b1f08701dd88fa586cb02bc3ec
       yaml:
         specifier: 'catalog:'
         version: 2.9.1
@@ -1363,8 +1363,8 @@ packages:
     resolution: {integrity: sha512-XEPrZeKr3D/901ZnVfv5aXn7UMjER7XXkR1/M+LnzoEYwNfJBr/CPYk0q7/C82GxZmP30FqQCQv5hcq//e4b8A==}
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
 
-  '@harlan-zw/octorun@https://codeload.github.com/harlan-zw/octorun/tar.gz/93d550e94a8af47b5d3261aa99b59485591ce7e5':
-    resolution: {gitHosted: true, integrity: sha512-VrbUPw13TvWMkk2iKd5PT/cZsAMIvv1OSGrWWa9pQhloME+YjrBmzKrn00ou+NBE0VYfRsOXLqnSNiXhbWJ1Cg==, tarball: https://codeload.github.com/harlan-zw/octorun/tar.gz/93d550e94a8af47b5d3261aa99b59485591ce7e5}
+  '@harlan-zw/octorun@https://codeload.github.com/harlan-zw/octorun/tar.gz/92997911343e04b1f08701dd88fa586cb02bc3ec':
+    resolution: {gitHosted: true, integrity: sha512-zJulZnirCUrfTXptHPnmWp3uwPE3O/wW2s7KNDeIc5WWFyVKr/W4Ox/tzAyUnxLVqGmLzMVSiHbzOVGujPzwHw==, tarball: https://codeload.github.com/harlan-zw/octorun/tar.gz/92997911343e04b1f08701dd88fa586cb02bc3ec}
     version: 0.1.0
     engines: {node: '>=24.0.0'}
     hasBin: true
@@ -9037,7 +9037,7 @@ snapshots:
     dependencies:
       ohash: 2.0.12
 
-  '@harlan-zw/octorun@https://codeload.github.com/harlan-zw/octorun/tar.gz/93d550e94a8af47b5d3261aa99b59485591ce7e5':
+  '@harlan-zw/octorun@https://codeload.github.com/harlan-zw/octorun/tar.gz/92997911343e04b1f08701dd88fa586cb02bc3ec':
     dependencies:
       yaml: 2.9.1
 
