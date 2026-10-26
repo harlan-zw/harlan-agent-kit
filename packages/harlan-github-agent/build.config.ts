@@ -4,6 +4,7 @@ export default defineBuildConfig({
   entries: [
     {
       type: 'bundle',
+      dts: { eager: true },
       input: [
         './src/index.ts',
         './src/terminal.ts',
