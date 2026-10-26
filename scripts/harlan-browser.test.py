@@ -26,8 +26,9 @@ class BrowserCliTests(unittest.TestCase):
         chrome.write_text("#!/usr/bin/env python3\nimport json, os, sys\nfrom pathlib import Path\nPath(os.environ['BROWSER_TEST_RECORD']).write_text(json.dumps(sys.argv[1:]))\n")
         chrome.chmod(0o755)
         self.ports = {}
-        for identity in ["CLIENTS", "AGENT"]:
-            with socket.socket() as probe:
+        # Reserve both ports before release so the kernel cannot reuse the first.
+        with socket.socket() as clients, socket.socket() as agent:
+            for identity, probe in [("CLIENTS", clients), ("AGENT", agent)]:
                 probe.bind(("127.0.0.1", 0))
                 self.ports[identity] = probe.getsockname()[1]
         self.env = dict(os.environ, HARLAN_BROWSER_CLIENTS_PORT=str(self.ports["CLIENTS"]),

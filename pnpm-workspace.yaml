@@ -103,7 +103,7 @@ overrides:
   vitepress>vite: ^6.4.3
 
 allowBuilds:
-  '@harlan-zw/octorun@https://codeload.github.com/harlan-zw/octorun/tar.gz/a34298d173851d6632c2e01af2ee69a7a9903c06': true
+  '@harlan-zw/octorun@https://codeload.github.com/harlan-zw/octorun/tar.gz/f1eaeb53b31acab80540bee45e84918c7dc17f1e': true
   esbuild: false
   node-pty: true
   vue-demi: true
@@ -115,7 +115,7 @@ catalog:
   '@expo-google-fonts/noto-emoji': 0.4.8
   '@fontpkg/unifont': 15.0.1
   '@harlan-zw/jev': ^0.3.0
-  '@harlan-zw/octorun': github:harlan-zw/octorun#a34298d173851d6632c2e01af2ee69a7a9903c06
+  '@harlan-zw/octorun': github:harlan-zw/octorun#f1eaeb53b31acab80540bee45e84918c7dc17f1e
   '@iconify-json/octicon': ^1.2.39
   '@iconify-json/simple-icons': ^1.2.100
   '@nuxt/fonts': ^0.14.0
