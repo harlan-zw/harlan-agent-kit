@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
@@ -35,7 +35,8 @@ it('installs executable commands that work in a noninteractive shell', async () 
     const env = { ...process.env, HOME: home, HARLAN_AGENT_CONTEXT_HOME: home, HARLAN_AGENT_CONTEXT_SKIP_MEMORY: '1', HARLAN_GITHUB_AGENT_CHECKOUT: checkout }
     await execute('bash', ['scripts/sync-agent-context.sh', 'local'], { env })
     const run = await execute('bash', ['-c', `${home}/.local/bin/harlan-github-agent control status`], { env, cwd: tmpdir() })
-    expect(JSON.parse(run.stdout)).toEqual({ args: ['control', 'status', '--config', join(home, '.config/harlan-github-agent/config.yml'), '--url', 'https://hogwild.tailcad325.ts.net'], cwd: checkout })
+    const expectedUrl = hostname().split('.')[0] === 'hogwild' ? 'http://127.0.0.1:3210' : 'https://hogwild.tailcad325.ts.net'
+    expect(JSON.parse(run.stdout)).toEqual({ args: ['control', 'status', '--config', join(home, '.config/harlan-github-agent/config.yml'), '--url', expectedUrl], cwd: checkout })
     const help = await execute('bash', ['-c', `${home}/.local/bin/hw --help`], { env, cwd: tmpdir() })
     expect(help.stdout).toContain('hw <command>')
   }
