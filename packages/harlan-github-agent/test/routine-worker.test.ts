@@ -6,12 +6,14 @@ import type { RoutineScanInput } from '../src/routines/contract.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { createAgentActivityLog } from '../src/agent-activity.ts'
+import { createAgentPermitPool } from '../src/agent-permit-pool.ts'
 import { CODEX_AGENT_PROFILE, createAgentRuntimeSource } from '../src/agent-profile.ts'
 import { ok } from '../src/result.ts'
 import { createRoutineReportController } from '../src/routine-report-controller.ts'
 import { createRoutineScanWorker } from '../src/routine-worker.ts'
 import { getRoutine } from '../src/routines/index.ts'
 import { openJournalStore } from '../src/store.ts'
+import { createWorkerTaskScheduler } from '../src/worker-task-scheduler.ts'
 import { repositoryMapping } from './fixtures.ts'
 
 const routineScanPrompt = (input: RoutineScanInput) => getRoutine(input.name).scanPrompt(input)
@@ -323,6 +325,54 @@ describe('building the scan prompt', () => {
 })
 
 describe('running one scan', () => {
+  it.each([
+    { outcome: 'existing_work', report: 'PR https://github.com/harlan-zw/example/pull/25 needs a rebase. Harlan owns it.', state: 'Completed', attempts: 1 },
+    { outcome: 'blocked', report: 'Registry authentication failed.', state: 'Failed', attempts: 3 },
+  ])('settles dependency $outcome after $attempts attempts and publishes its reason', async ({ outcome, report, state, attempts }) => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'dependency-updates')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const capture = { prompts: [] as string[], requests: [] as AgentTurnRequest[] }
+      const scheduler = createWorkerTaskScheduler({
+        claim: store.claimNextRoutineRun,
+        complete: store.completeRoutineRun,
+        fail: store.failRoutineRun,
+        heartbeat: store.heartbeatRoutineRun,
+        intervalMilliseconds: 60_000,
+        leaseMilliseconds: 60_000,
+        now,
+        onError: (error) => { throw error },
+        permits: createAgentPermitPool(1),
+        worker: workerFor(store, scanning({ outcome, report, updates: [] }, capture)),
+        workerId: 'worker-1',
+      })
+
+      for (let attempt = 0; attempt < 4; attempt++)
+        await scheduler.runNow()
+
+      expect(store.listRoutineRuns('harlan-zw/example:dependency-updates')[0])
+        .toMatchObject({ state: { _tag: state }, attempts })
+      expect(capture.requests).toHaveLength(attempts)
+      expect(store.listCandidates('harlan-zw/example:dependency-updates')).toEqual([])
+      expect(store.claimNextCandidateIssue('controller-1', now().toISOString(), 60_000)).toBeNull()
+      const published = store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)
+      expect(published?.body).toContain(report)
+      if (outcome === 'existing_work') {
+        expect(published?.body).toContain('Dependency scan skipped because dependency work is open.')
+        expect(published?.body).toContain('Registry coverage is not established by this result.')
+      }
+      else {
+        expect(published?.body).toContain('Failed. Dependency scan blocked: Registry authentication failed.')
+      }
+      expect(store.claimNextRoutineReport('controller-2', now().toISOString(), 60_000)).toBeNull()
+      await scheduler.stop()
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it.each(['pr-triage', 'sentry-checkin', 'ci-review', 'perf-review', 'seo-review'] as const)(
     'completes %s without a check-in verdict',
     async (name) => {
