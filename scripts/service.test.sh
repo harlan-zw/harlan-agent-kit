@@ -13,6 +13,7 @@ export SERVICE_TEST_CALLS="$test_root/curl.calls"
 export SERVICE_TEST_PNPM_CALLS="$test_root/pnpm.calls"
 export SERVICE_TEST_SYNC_CALLS="$test_root/sync.calls"
 export SERVICE_TEST_GIT_CALLS="$test_root/git.calls"
+export SERVICE_TEST_SYSTEMCTL_CALLS="$test_root/systemctl.calls"
 
 export HARLAN_GITHUB_AGENT_NODE="$test_root/bin/node"
 
@@ -58,6 +59,7 @@ git() {
 }
 
 systemctl() {
+  printf '%s\n' "$*" >> "$SERVICE_TEST_SYSTEMCTL_CALLS"
   if [[ "$*" == *'show '* ]]; then
     printf '%s\n' '0'
   fi
@@ -175,5 +177,68 @@ if ! SERVICE_TEST_CLI_EXIT=0 PATH="$test_root/bin:/usr/bin:/bin" \
   printf '%s\n' 'service refused a restart although the deployed revision accepts the configuration' >&2
   exit 1
 fi
+
+# A checkout change must run the target's preparation in a fresh shell. The
+# loaded shell still holds the old functions after Git replaces its script.
+(
+  unset -f git
+  fixture_origin="$test_root/origin"
+  export HARLAN_GITHUB_AGENT_CHECKOUT="$test_root/updating-service"
+  export SERVICE_TEST_TARGET_CALLS="$test_root/target.calls"
+  mkdir -p "$fixture_origin/scripts"
+  git init --quiet "$fixture_origin"
+  git -C "$fixture_origin" config user.name Test
+  git -C "$fixture_origin" config user.email test@example.invalid
+  git -C "$fixture_origin" config core.hooksPath /dev/null
+  cp "$script_dir/service.sh" "$fixture_origin/scripts/service.sh"
+  git -C "$fixture_origin" add .
+  git -C "$fixture_origin" commit --quiet -m 'test: record loaded preparation'
+  old_commit=$(git -C "$fixture_origin" rev-parse HEAD)
+  cat > "$fixture_origin/scripts/service.sh" <<'TARGET'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" != prepare-update || "${2:-}" != "$(git -C "$HARLAN_GITHUB_AGENT_CHECKOUT" rev-parse HEAD)" ]]; then
+  printf '%s\n' 'Target preparation received another command or commit.' >&2
+  exit 1
+fi
+printf '%s\n' target >> "$SERVICE_TEST_TARGET_CALLS"
+exit "${SERVICE_TEST_TARGET_EXIT:-0}"
+TARGET
+  git -C "$fixture_origin" add .
+  git -C "$fixture_origin" commit --quiet -m 'test: change target preparation'
+  target_commit=$(git -C "$fixture_origin" rev-parse HEAD)
+  cp "$script_dir/service.sh" "$fixture_origin/scripts/service.sh"
+  git -C "$fixture_origin" add .
+  git -C "$fixture_origin" commit --quiet -m 'test: record newer preparation'
+  newer_commit=$(git -C "$fixture_origin" rev-parse HEAD)
+  git clone --quiet "$fixture_origin" "$HARLAN_GITHUB_AGENT_CHECKOUT"
+
+  for source_commit in "$old_commit" "$newer_commit"; do
+    for command in prepare-update update; do
+      for target_exit in 0 17; do
+        git -C "$HARLAN_GITHUB_AGENT_CHECKOUT" reset --hard --quiet "$source_commit"
+        : > "$SERVICE_TEST_TARGET_CALLS"
+        : > "$SERVICE_TEST_PNPM_CALLS"
+        : > "$SERVICE_TEST_SYSTEMCTL_CALLS"
+        status=0
+        SERVICE_TEST_TARGET_EXIT="$target_exit" PATH="$test_root/bin:/usr/bin:/bin" \
+          bash "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts/service.sh" "$command" "$target_commit" >/dev/null 2>&1 || status=$?
+        if [[ "$status" != "$target_exit" || "$(cat "$SERVICE_TEST_TARGET_CALLS")" != target || -s "$SERVICE_TEST_PNPM_CALLS" ]]; then
+          printf '%s\n' 'Service update did not run target preparation once or preserve its failure.' >&2
+          exit 1
+        fi
+        restarts=$(grep -Fc -- '--user restart harlan-github-agent' "$SERVICE_TEST_SYSTEMCTL_CALLS" || true)
+        expected_restarts=0
+        if [[ "$command" == update && "$target_exit" == 0 ]]; then
+          expected_restarts=1
+        fi
+        if [[ "$restarts" != "$expected_restarts" ]]; then
+          printf '%s\n' 'Service update restarted before target preparation succeeded.' >&2
+          exit 1
+        fi
+      done
+    done
+  done
+)
 
 printf '%s\n' 'service tests passed'
