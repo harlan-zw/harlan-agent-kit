@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { createApprovalController } from '../src/approval-controller.ts'
 import { routedResult } from '../src/issue-classification.ts'
 import { reconcileRepository } from '../src/reconcile.ts'
 import { err, ok } from '../src/result.ts'
 import { AGENT_ACTOR_LOGIN } from '../src/review-comment.ts'
 import { routineReportCommand } from '../src/routine-report-controller.ts'
-import { openJournalStore } from '../src/store.ts'
+import { openJournalStore, revisionIdFor } from '../src/store.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const noFinalRead = {
@@ -573,6 +574,208 @@ describe('gitHub reconciliation', () => {
     store.close()
   })
 
+  it.each([
+    { kind: 'issue', status: 404 },
+    { kind: 'issue', status: 503 },
+    { kind: 'pull_request', status: 403 },
+    { kind: 'pull_request', status: 503 },
+  ] as const)('observes fresh Items when a missing $kind returns $status', async ({ kind, status }) => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    const before = '2026-08-13T00:01:00.000Z'
+    const at = '2026-08-13T01:00:00.000Z'
+    const unavailable = kind === 'issue' ? issueItem() : pullRequestItem({ author: 'contributor', mergeState: 'clean' })
+    const closedIssue = issueItem({ number: 15 })
+    const closedPullRequest = pullRequestItem({ number: 25, mergeState: 'clean' })
+    const routineIssue = issueItem({ number: 41, author: AGENT_ACTOR_LOGIN, routineFiled: true })
+    const pendingIssue = issueItem({ number: 42 })
+    const approvedIssue = issueItem({ number: 43, approvalLabels: ['review'] })
+    const pendingPullRequest = pullRequestItem({ number: 44, mergeState: 'clean' })
+    const approvedPullRequest = pullRequestItem({ number: 45, mergeState: 'clean', approvalLabels: ['review'] })
+    const fresh = [routineIssue, pendingIssue, approvedIssue, pendingPullRequest, approvedPullRequest]
+    const message = `GitHub could not read ${kind} ${unavailable.number}.`
+    const failure = err({ repository: repository.github, message, status })
+    const consumed: number[] = []
+    store.syncRepositories([repository], before)
+    store.setRepositoryWritesEnabled(repository.github, true)
+    store.setSelectionMode('manual')
+    store.recordPollSuccess(repository.github, before)
+    for (const subject of [unavailable, closedIssue, closedPullRequest]) {
+      store.recordPollObservation({ observedAt: before, subject })
+    }
+    const originalTasks = store.listTasks().filter(task => task.revisionId === revisionIdFor(unavailable))
+    const approvals = createApprovalController({
+      store,
+      now: () => new Date(at),
+      github: {
+        clearAgentLabels: () => Promise.reject(new Error('No labels should need clearing.')),
+        consumeApprovalLabel: (_repository, _kind, number) => {
+          consumed.push(number)
+          return Promise.resolve(ok(undefined))
+        },
+        ensureApprovalLabel: () => Promise.resolve(ok(undefined)),
+        upsertReviewStatus: () => Promise.reject(new Error('No Approval prompt should be posted in Manual Selection.')),
+      },
+    })
+
+    try {
+      const result = await reconcileRepository(repository, {
+        approvals,
+        github: {
+          listOpenItems: () => Promise.resolve(ok(fresh)),
+          getIssue: (_repository, number) => Promise.resolve(kind === 'issue' && number === unavailable.number
+            ? failure
+            : ok({ ...closedIssue, state: 'closed' as const })),
+          getPullRequest: (_repository, number) => Promise.resolve(kind === 'pull_request' && number === unavailable.number
+            ? failure
+            : ok({ ...closedPullRequest, state: 'closed' as const })),
+        },
+        store,
+        now: () => new Date(at),
+      })
+
+      expect(result).toEqual(err({ repository: repository.github, message }))
+      const snapshot = store.getDashboardSnapshot(at)
+      expect(snapshot.items).toEqual(expect.arrayContaining(fresh.map(subject => expect.objectContaining({
+        kind: subject.kind,
+        number: subject.number,
+        state: 'open',
+      }))))
+      expect(snapshot.items.find(item => item.kind === kind && item.number === unavailable.number))
+        .toEqual(expect.objectContaining({ state: 'open', revisionId: revisionIdFor(unavailable) }))
+      expect(store.listTasks().filter(task => task.revisionId === revisionIdFor(unavailable))).toEqual(originalTasks)
+      if (unavailable.kind === 'issue')
+        expect(store.isIssueApprovalPending(repository.github, unavailable.number, revisionIdFor(unavailable))).toBe(true)
+      else
+        expect(store.hasPullRequestApproval(repository.github, unavailable.number, revisionIdFor(unavailable), 'review')).toBe(false)
+      expect(store.getOpenIssueStatus(repository.github, closedIssue.number)).toBeNull()
+      expect(store.getPullRequestWatchState(repository.github, closedPullRequest.number)?._tag).toBe('Closed')
+      expect(store.isIssueApprovalPending(repository.github, pendingIssue.number, revisionIdFor(pendingIssue))).toBe(true)
+      expect(store.isIssueApprovalPending(repository.github, approvedIssue.number, revisionIdFor(approvedIssue))).toBe(false)
+      expect(store.hasPullRequestApproval(repository.github, pendingPullRequest.number, revisionIdFor(pendingPullRequest), 'review')).toBe(false)
+      expect(store.hasPullRequestApproval(repository.github, approvedPullRequest.number, revisionIdFor(approvedPullRequest), 'review')).toBe(true)
+      expect(consumed).toEqual([approvedIssue.number])
+      expect(snapshot.repositories[0]).toEqual(expect.objectContaining({ lastError: message, lastSuccessAt: before, lastAttemptAt: at }))
+      expect(store.listIncidents()).toEqual([expect.objectContaining({ operation: 'poll', message })])
+      const review = store.claimNextAdversarialReviewTask('review', at, 10_000)
+      expect(review?.pullRequestNumber).toBe(approvedPullRequest.number)
+      const triage = [1, 2].map(index => store.claimNextIssueTriageTask(`triage-${index}`, at, 10_000)?.issueNumber)
+      expect(triage.sort()).toEqual([routineIssue.number, approvedIssue.number])
+      expect(store.claimNextIssueTriageTask('triage-3', at, 10_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it.each([
+    { repositoryWrites: false, mutationsEnabled: true },
+    { repositoryWrites: true, mutationsEnabled: false },
+  ])('observes a partial poll with write authority $repositoryWrites/$mutationsEnabled', async ({ repositoryWrites, mutationsEnabled }) => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    const at = '2026-08-13T01:00:00.000Z'
+    const unavailable = issueItem()
+    const fresh = issueItem({ number: 41, approvalLabels: ['review'] })
+    store.syncRepositories([repository], at)
+    store.setRepositoryWritesEnabled(repository.github, repositoryWrites)
+    store.recordPollObservation({ observedAt: at, subject: unavailable })
+    const approvals = createApprovalController({
+      store,
+      now: () => new Date(at),
+      github: {
+        clearAgentLabels: () => Promise.reject(new Error('Writes are disabled.')),
+        consumeApprovalLabel: () => Promise.reject(new Error('Writes are disabled.')),
+        ensureApprovalLabel: () => Promise.reject(new Error('Writes are disabled.')),
+        upsertReviewStatus: () => Promise.reject(new Error('Writes are disabled.')),
+      },
+    })
+    try {
+      const result = await reconcileRepository(repository, {
+        approvals,
+        mutationsEnabled,
+        github: {
+          ...noFinalRead,
+          getIssue: () => Promise.resolve(err({ repository: repository.github, message: 'Issue unavailable.', status: 404 })),
+          listOpenItems: () => Promise.resolve(ok([fresh])),
+        },
+        store,
+        now: () => new Date(at),
+      })
+      expect(result).toEqual(err({ repository: repository.github, message: 'Issue unavailable.' }))
+      expect(store.getOpenIssueStatus(repository.github, fresh.number)?.revisionId).toBe(revisionIdFor(fresh))
+      expect(store.isIssueApprovalPending(repository.github, fresh.number, revisionIdFor(fresh))).toBe(true)
+      expect(store.getOpenIssueStatus(repository.github, unavailable.number)?.revisionId).toBe(revisionIdFor(unavailable))
+      expect(store.getDashboardSnapshot(at).repositories[0]?.lastSuccessAt).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('keeps observations and Tasks unchanged when the open Item list fails', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    const at = '2026-08-13T01:00:00.000Z'
+    store.syncRepositories([repository], at)
+    store.recordPollObservation({ observedAt: at, subject: issueItem() })
+    store.recordPollObservation({ observedAt: at, subject: pullRequestItem() })
+    const before = store.getDashboardSnapshot(at)
+    try {
+      const result = await reconcileRepository(repository, {
+        github: {
+          ...noFinalRead,
+          listOpenItems: () => Promise.resolve(err({ repository: repository.github, message: 'Open Item list unavailable.', status: 503 })),
+        },
+        store,
+        now: () => new Date('2026-08-13T01:01:00.000Z'),
+      })
+      expect(result).toEqual(err({ repository: repository.github, message: 'Open Item list unavailable.' }))
+      const after = store.getDashboardSnapshot(at)
+      expect(after.items).toEqual(before.items)
+      expect(after.tasks).toEqual(before.tasks)
+      expect(after.repositories[0]?.lastSuccessAt).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('stops before partial observations when shutdown aborts an exact read', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping()
+    const controller = new AbortController()
+    const at = '2026-08-13T01:00:00.000Z'
+    const unavailable = pullRequestItem()
+    store.syncRepositories([repository], at)
+    store.recordPollObservation({ observedAt: at, subject: unavailable })
+    const before = store.getDashboardSnapshot(at)
+    try {
+      const result = await reconcileRepository(repository, {
+        github: {
+          ...noFinalRead,
+          getPullRequest: () => {
+            controller.abort()
+            return Promise.resolve(err({ repository: repository.github, message: 'This operation was aborted.' }))
+          },
+          listOpenItems: () => Promise.resolve(ok([issueItem({ author: 'harlan-zw' })])),
+        },
+        store,
+        now: () => new Date(at),
+        signal: controller.signal,
+      })
+      expect(result).toEqual(err({ repository: repository.github, message: 'This operation was aborted.' }))
+      const after = store.getDashboardSnapshot(at)
+      expect(after.items).toEqual(before.items)
+      expect(after.tasks).toEqual(before.tasks)
+      expect(after.repositories[0]?.lastError).toBeNull()
+      expect(store.listIncidents()).toEqual([])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('keeps a Routine candidate issue eligible for Issue triage', async () => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
@@ -796,7 +999,7 @@ describe('gitHub reconciliation', () => {
     store.close()
   })
 
-  it('rechecks a legacy CLOSED status before trusting its final state', async () => {
+  it.each([false, true])('rechecks a legacy CLOSED status before trusting its final state, read fails: %s', async (readFails) => {
     const store = openJournalStore(':memory:')
     const repository = repositoryMapping()
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
@@ -857,12 +1060,14 @@ describe('gitHub reconciliation', () => {
     expect(store.listStoppedReviews()).toEqual([])
     let exactReads = 0
 
-    await reconcileRepository(repository, {
+    const result = await reconcileRepository(repository, {
       github: {
         ...noFinalRead,
-        listOpenItems: () => Promise.resolve(ok([])),
+        listOpenItems: () => Promise.resolve(ok([issueItem({ number: 41, author: 'harlan-zw' })])),
         getPullRequest: () => {
           exactReads += 1
+          if (readFails)
+            return Promise.resolve(err({ repository: repository.github, message: 'Pull request unavailable.', status: 404 }))
           return Promise.resolve(ok({
             ...pullRequest,
             state: 'closed',
@@ -876,7 +1081,17 @@ describe('gitHub reconciliation', () => {
     })
 
     expect(exactReads).toBe(1)
-    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({ disposition: { _tag: 'Merged' } })])
+    expect(result._tag).toBe(readFails ? 'Err' : 'Ok')
+    expect(store.getOpenIssueStatus(repository.github, 41)).not.toBeNull()
+    if (readFails) {
+      expect(store.getPullRequestWatchState(repository.github, pullRequest.number)?._tag).toBe('PendingClosure')
+      expect(store.listUnverifiedClosedPullRequestNumbers(repository.github)).toEqual([pullRequest.number])
+      expect(store.listStoppedReviews()).toEqual([])
+    }
+    else {
+      expect(store.getPullRequestWatchState(repository.github, pullRequest.number)?._tag).toBe('Merged')
+      expect(store.listStoppedReviews()).toEqual([expect.objectContaining({ disposition: { _tag: 'Merged' } })])
+    }
     store.close()
   })
 
