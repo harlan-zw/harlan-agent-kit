@@ -882,6 +882,12 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
           await applyLabels(existing.number)
           return ok({ number: existing.number, url: existing.html_url, diagram: { _tag: 'None' } })
         }
+        if (response.data.length > 0) {
+          return err({
+            repository: input.repository.github,
+            message: 'The pull request head changed before publication.',
+          })
+        }
         const attached = await attachDiagram()
         return octokit.rest.pulls.create({
           owner,
@@ -892,7 +898,13 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
           body: attached.body,
           draft: false,
           ...request,
-        }).then(async (created) => {
+        }).then(async (created): Promise<Result<PublishedPullRequest, GitHubReadError>> => {
+          if (created.data.head.sha !== input.expectedHeadSha) {
+            return err({
+              repository: input.repository.github,
+              message: 'The pull request head changed before publication.',
+            })
+          }
           await applyLabels(created.data.number)
           return ok({ number: created.data.number, url: created.data.html_url, diagram: attached.diagram })
         })

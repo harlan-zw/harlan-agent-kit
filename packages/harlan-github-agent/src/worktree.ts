@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { APPROVAL_LABELS } from './approval-labels.ts'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
 import { canPushBranch, canRepairBaseline, canResolveConflictPullRequestHead, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -1783,7 +1784,16 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
         expectedHeadSha: command.commitSha,
         title: command.pullRequestTitle,
         body: command.pullRequestBody,
-        ...(command.taskKind === 'baseline_repair' ? { labels: [BASELINE_REPAIR_LABEL_SPEC] } : {}),
+        labels: [
+          ...(command.repositoryMapping.pullRequestReview
+            ? [{
+                name: APPROVAL_LABELS.review,
+                color: '8250df',
+                description: 'Approve automated work for the current issue state or pull request head commit.',
+              }]
+            : []),
+          ...(command.taskKind === 'baseline_repair' ? [BASELINE_REPAIR_LABEL_SPEC] : []),
+        ],
         ...(command.taskKind === 'issue_work' && command.diagram !== null ? { diagram: command.diagram } : {}),
       }, signal)
       if (pullRequest._tag === 'Err')

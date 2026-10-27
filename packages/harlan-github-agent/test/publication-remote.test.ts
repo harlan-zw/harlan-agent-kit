@@ -1,3 +1,4 @@
+import type { GitHubPullRequestPublisher } from '../src/github.ts'
 import type { ClaimedPublicationCommand } from '../src/types.ts'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -99,6 +100,82 @@ function fixture(changedPath = 'base.txt'): { bare: string, checkout: string, co
     },
   }
 }
+
+describe('controller pull request Review handoff', () => {
+  function command(taskKind: 'issue_work' | 'baseline_repair' | 'review_fix'): Extract<ClaimedPublicationCommand, { _tag: 'OpenPullRequest' }> {
+    const common = {
+      id: 'publication-1',
+      taskId: 'task-1',
+      repository: 'harlan-zw/example',
+      repositoryMapping: repositoryMapping(),
+      commitSha: 'b'.repeat(40),
+      baseSha: 'a'.repeat(40),
+      baseRef: 'main',
+      expectedHeadSha: 'a'.repeat(40),
+      headRef: 'fix/issue-12',
+      artifactRef: 'refs/harlan-github-agent/publications/task-1',
+      patchDigest: 'c'.repeat(64),
+      changedFiles: 1,
+      outcomeUnknown: false,
+      workerId: 'publisher-1',
+      fence: 1,
+      leaseExpiresAt: '2126-01-01T00:00:00Z',
+      pullRequestTitle: 'fix: correct a defect',
+      pullRequestBody: 'Corrects a defect.',
+    }
+    return taskKind === 'issue_work'
+      ? { ...common, _tag: 'OpenPullRequest', taskKind, issueNumber: 12, diagram: null }
+      : { ...common, _tag: 'OpenPullRequest', taskKind, pullRequestNumber: 24 }
+  }
+
+  function publisher(requests: Parameters<GitHubPullRequestPublisher['ensurePullRequest']>[0][]) {
+    return createGitPublicationRemote({
+      root: '/unused',
+      tokens: { getToken: async () => { throw new Error('Finalization cannot push a branch.') }, invalidate: () => undefined },
+      github: {
+        getPullRequest: async () => { throw new Error('Finalization uses the publication adapter.') },
+        hasOpenPullRequestForBranch: async () => { throw new Error('The branch is already published.') },
+        isBranchProtected: async () => { throw new Error('Authority is checked before finalization.') },
+      },
+      pullRequests: { ensurePullRequest: async (input) => {
+        requests.push(input)
+        return ok({ number: 31, url: 'https://github.com/harlan-zw/example/pull/31', diagram: { _tag: 'None' } })
+      } },
+    })
+  }
+
+  it.each([
+    ['issue_work', ['harlan-agent-review']],
+    ['baseline_repair', ['harlan-agent-review', 'harlan-agent-baseline-repair']],
+    ['review_fix', ['harlan-agent-review']],
+  ] as const)('requests Review for a controller-published %s pull request', async (taskKind, labels) => {
+    const requests: Parameters<GitHubPullRequestPublisher['ensurePullRequest']>[0][] = []
+    const publication = command(taskKind)
+
+    const result = await publisher(requests).finalize(publication, new AbortController().signal)
+
+    expect(result).toEqual(ok({ evidence: 'Opened pull request #31: https://github.com/harlan-zw/example/pull/31.', pullRequestNumber: 31 }))
+    expect(requests.map(input => ({ head: input.expectedHeadSha, labels: input.labels?.map(label => label.name) })))
+      .toEqual([{ head: publication.commitSha, labels }])
+  })
+
+  it('respects disabled repository Review while retaining the Baseline repair label', async () => {
+    const requests: Parameters<GitHubPullRequestPublisher['ensurePullRequest']>[0][] = []
+    const publication = command('baseline_repair')
+
+    await publisher(requests).finalize({ ...publication, repositoryMapping: { ...publication.repositoryMapping, pullRequestReview: false } }, new AbortController().signal)
+
+    expect(requests.flatMap(input => input.labels?.map(label => label.name) ?? [])).toEqual(['harlan-agent-baseline-repair'])
+  })
+
+  it.each(['review_fix', 'resolve_conflict'] as const)('does not grant a new Review when %s updates an existing pull request', async (taskKind) => {
+    const requests: Parameters<GitHubPullRequestPublisher['ensurePullRequest']>[0][] = []
+    const publication = { ...command('review_fix'), _tag: 'UpdatePullRequest' as const, taskKind, pullRequestNumber: 24 }
+
+    expect(await publisher(requests).finalize(publication, new AbortController().signal)).toEqual(ok({ evidence: `Published ${publication.commitSha}.` }))
+    expect(requests).toEqual([])
+  })
+})
 
 describe('git publication remote', () => {
   it.each([
