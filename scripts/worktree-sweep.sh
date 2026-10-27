@@ -209,11 +209,13 @@ has_live_claim() {
 }
 
 has_live_process() {
-  local path=$1 cwd
-  while IFS= read -r cwd; do
+  local path=$1 link cwd
+  for link in /proc/[0-9]*/cwd; do
+    # Some readlink implementations stop a bulk scan at one inaccessible link.
+    # Processes can exit during this scan. Ignore vanished or inaccessible entries.
+    cwd=$("$readlink_bin" "$link" 2>/dev/null) || continue
     [[ $cwd == "$path" || $cwd == "$path/"* ]] && return 0
-  # Processes can exit during this scan. Ignore vanished or inaccessible entries.
-  done < <("$readlink_bin" /proc/[0-9]*/cwd 2>/dev/null || true)
+  done
   return 1
 }
 

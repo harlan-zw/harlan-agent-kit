@@ -9,6 +9,7 @@ test_root=$(mktemp -d)
 running_pid=''
 trap 'if [[ -n $running_pid ]]; then kill "$running_pid" 2>/dev/null || true; fi; rm -rf "$test_root"' EXIT
 real_worktrunk=$(command -v wt)
+real_readlink=$(command -v readlink)
 
 export HOME="$test_root/home"
 mkdir -p "$HOME/.config/worktrunk" "$test_root/bin"
@@ -27,7 +28,18 @@ printf '%s\n' \
   'exec "$WORKTREE_SWEEP_REAL_WT" "$@"' \
   > "$test_root/bin/sweep-wt"
 chmod +x "$test_root/bin/sweep-wt"
+cat > "$test_root/bin/readlink" <<'EOF'
+#!/usr/bin/env bash
+# uutils can stop a bulk scan at its first inaccessible process.
+# Make that condition independent of the runner's process permissions.
+if (($# > 1)); then
+  exit 1
+fi
+exec "$WORKTREE_SWEEP_REAL_READLINK" "$@"
+EOF
+chmod +x "$test_root/bin/readlink"
 export WORKTREE_SWEEP_REAL_WT="$real_worktrunk"
+export WORKTREE_SWEEP_REAL_READLINK="$real_readlink"
 export PATH="$test_root/bin:/usr/bin:/bin"
 
 origin="$test_root/origin.git"
