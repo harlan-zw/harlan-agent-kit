@@ -159,6 +159,8 @@ prepare_update() {
   (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" install --frozen-lockfile >/dev/null)
   echo "Restoring Brundlefly Skills"
   (cd "$SERVICE_CHECKOUT" && "$pnpm_bin" sync:skills)
+  echo "Refreshing Agent Skills"
+  "$node_bin" --experimental-strip-types "$SERVICE_CHECKOUT/scripts/worker-skills.ts"
   echo "Refreshing OpenCode worker configuration"
   "$node_bin" --experimental-strip-types "$SERVICE_CHECKOUT/scripts/opencode-v2-migrate.ts" --worker
   echo "Syncing Agent instructions"

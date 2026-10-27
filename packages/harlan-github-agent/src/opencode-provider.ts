@@ -15,6 +15,7 @@ import { createInterface } from 'node:readline'
 import { opencodeTurnEnvironment } from './agent-context.ts'
 import { advanceContextBudget, agentProviderFailureReason, agentTextEvent, contextBudgetWrapUpPrompt, DEFAULT_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
 import { opencodeSandboxPaths, prepareAgentSandbox } from './agent-sandbox.ts'
+import { agentSkillCatalogPrompt } from './agent-skill-catalog.ts'
 import { createAgentTransport } from './agent-transport.ts'
 import { materializeAgentMedia } from './github-media.ts'
 import { createOpencodeSession, opencodeDeliveryKey, readOpencodeMessages, recoverOpencodeResult, waitOpencodeReviewTools } from './opencode-result.ts'
@@ -49,6 +50,8 @@ export interface OpencodeServer {
   password: string
   /** Internal socket directory for this turn's isolated attachment client. */
   transportDirectory?: string
+  /** The catalog belongs to the server namespace where model tools run. */
+  skillCatalogPath?: string
   memoryExceeded?: () => Promise<boolean>
   createSession: (signal: AbortSignal) => Promise<Result<string, string>>
   /** Adds one user message to a busy session. The session reads it before its next model step. */
@@ -134,7 +137,7 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime, 
           const session = review === undefined
             ? (stateDirectory === undefined ? {} : { stateDirectory })
             : { reviewTools: REVIEW_TOOL_NAMES }
-          settle(ok({ ...opencodeServer(transport.url, password, workspace, child, session), transportDirectory, memoryExceeded: sandbox.memoryExceeded, close: async (signal) => {
+          settle(ok({ ...opencodeServer(transport.url, password, workspace, child, session), transportDirectory, ...(sandbox.skillCatalogPath === undefined ? {} : { skillCatalogPath: sandbox.skillCatalogPath }), memoryExceeded: sandbox.memoryExceeded, close: async (signal) => {
             child.kill(signal)
             const stop = setTimeout(() => child.kill('SIGKILL'), 5_000)
             stop.unref()
@@ -441,7 +444,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       inputError = error
       stop('SIGKILL')
     })
-    child.stdin?.end(prompt)
+    child.stdin?.end(agentSkillCatalogPrompt(prompt, review === undefined ? server.skillCatalogPath : undefined))
 
     // A silent run means a wedged agent, and its Task holds its lease until the
     // process ends. Stop it so the Task can fail and retry.

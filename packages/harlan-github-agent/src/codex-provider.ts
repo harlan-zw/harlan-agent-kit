@@ -8,6 +8,7 @@ import process from 'node:process'
 import { Codex } from '@openai/codex-sdk'
 import { agentProviderFailureReason, agentTextEvent } from './agent-provider.ts'
 import { prepareAgentSandbox } from './agent-sandbox.ts'
+import { agentSkillCatalogPrompt } from './agent-skill-catalog.ts'
 import { materializeAgentMedia } from './github-media.ts'
 import { createReviewRuntime, REVIEW_CODEX_FEATURES } from './review-runtime.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
@@ -174,7 +175,8 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
         const threadOptions: ThreadOptions = request.reasoningEffort === undefined
           ? baseOptions
           : { ...baseOptions, modelReasoningEffort: request.reasoningEffort as NonNullable<ThreadOptions['modelReasoningEffort']> }
-        const input: Input = media.paths.length === 0 ? request.prompt : [{ type: 'text', text: request.prompt }, ...media.paths.map(path => ({ type: 'local_image' as const, path }))]
+        const prompt = agentSkillCatalogPrompt(request.prompt, review === undefined ? sandbox?.skillCatalogPath : undefined)
+        const input: Input = media.paths.length === 0 ? prompt : [{ type: 'text', text: prompt }, ...media.paths.map(path => ({ type: 'local_image' as const, path }))]
         const run = (thread: CodexThread) => thread.runStreamed(input, {
           outputSchema: request.outputSchema,
           signal: request.signal,
