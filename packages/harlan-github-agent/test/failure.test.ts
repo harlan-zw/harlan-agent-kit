@@ -56,6 +56,7 @@ describe('classifyFailure', () => {
   })
 
   it.each([
+    'Variant unavailable for zai-coding-plan/glm-5.3-flash: medium',
     'The opencode session failed: Variant unavailable for zai-coding-plan/glm-5.3-flash: medium',
     'The codex session failed: Variant unavailable for openai/gpt-5.2: high',
   ])('never retries %s, because the variant the role pinned does not exist', (message) => {
@@ -65,6 +66,12 @@ describe('classifyFailure', () => {
     expect(classifyFailure({ message })).toEqual({ _tag: 'Permanent', kind: 'provider_config' })
     expect(mayRetryFailure({ message })).toBe(false)
     expect(canRecoverFailure({ message }, 0)).toBe(false)
+  })
+
+  it('keeps retries and recovery for a transient provider failure', () => {
+    const signal = { message: 'The opencode session failed: Unexpected server error. Check server logs for details.' }
+    expect(mayRetryFailure(signal)).toBe(true)
+    expect(canRecoverFailure(signal, 0)).toBe(true)
   })
 
   it('keeps the attempts of a failure nobody has classified', () => {
