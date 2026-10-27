@@ -85,10 +85,16 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   ])
   const failedFinalRead = [...finalIssueReads, ...finalPullRequestReads].find(read => read._tag === 'Err')
   if (failedFinalRead?._tag === 'Err') {
-    if (dependencies.signal?.aborted !== true)
-      dependencies.store.recordPollFailure(repository.github, observedAt, failedFinalRead.error.message, failedFinalRead.error.status)
-    return err({ repository: repository.github, message: failedFinalRead.error.message })
+    if (dependencies.signal?.aborted === true)
+      return err({ repository: repository.github, message: failedFinalRead.error.message })
+    dependencies.store.recordPollFailure(repository.github, observedAt, failedFinalRead.error.message, failedFinalRead.error.status)
   }
+  // An unavailable exact read says nothing about closure. Protect its Item
+  // while independent observations and confirmed closures continue.
+  const unavailableItems = [
+    ...missingIssueNumbers.flatMap((number, index) => finalIssueReads[index]?._tag === 'Err' ? [{ kind: 'issue' as const, number }] : []),
+    ...finalPullRequestNumbers.flatMap((number, index) => finalPullRequestReads[index]?._tag === 'Err' ? [{ kind: 'pull_request' as const, number }] : []),
+  ]
   const finalIssues = finalIssueReads.flatMap(read => read._tag === 'Ok' ? [read.value] : [])
   const finalPullRequests = finalPullRequestReads.flatMap(read => read._tag === 'Ok' ? [read.value] : [])
   const observedItems = [...eligibleItems, ...finalIssues, ...finalPullRequests]
@@ -313,9 +319,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
       && (write?._tag === 'Inserted' || write?._tag === 'Duplicate')
   }).length + dependencies.store.closeMissingItems(
     repository.github,
-    observedItems.map(subject => ({ kind: subject.kind, number: subject.number })),
+    [...observedItems.map(subject => ({ kind: subject.kind, number: subject.number })), ...unavailableItems],
     observedAt,
   )
+  if (failedFinalRead?._tag === 'Err')
+    return err({ repository: repository.github, message: failedFinalRead.error.message })
   dependencies.store.recordPollSuccess(repository.github, observedAt)
   if (writesEnabled && dependencies.recoverRunnerIncidents !== undefined) {
     const recovery = await dependencies.recoverRunnerIncidents(repository, dependencies.signal ?? AbortSignal.timeout(30_000))
