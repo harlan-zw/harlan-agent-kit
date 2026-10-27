@@ -15,7 +15,7 @@ describe('gitHub pull request publication', () => {
           pulls: {
             create: (input: { base: string, head: string }) => {
               created = input
-              return Promise.resolve({ data: { html_url: 'https://github.com/harlan-zw/example/pull/31', number: 31 } })
+              return Promise.resolve({ data: { html_url: 'https://github.com/harlan-zw/example/pull/31', number: 31, head: { sha: 'abc123' } } })
             },
             list: (input: { base: string }) => {
               listed = input
@@ -51,7 +51,7 @@ describe('gitHub pull request publication', () => {
           pulls: {
             create: (input: { draft: boolean }) => {
               draft = input.draft
-              return Promise.resolve({ data: { html_url: 'https://github.com/harlan-zw/example/pull/31', number: 31 } })
+              return Promise.resolve({ data: { html_url: 'https://github.com/harlan-zw/example/pull/31', number: 31, head: { sha: 'abc123' } } })
             },
             list: () => Promise.resolve({ data: [] }),
           },
@@ -93,7 +93,7 @@ describe('gitHub pull request publication', () => {
             },
           },
           pulls: {
-            create: () => Promise.resolve({ data: { html_url: 'https://github.com/harlan-zw/example/pull/31', number: 31 } }),
+            create: () => Promise.resolve({ data: { html_url: 'https://github.com/harlan-zw/example/pull/31', number: 31, head: { sha: 'abc123' } } }),
             list: () => Promise.resolve({ data: [] }),
           },
         },
@@ -117,6 +117,86 @@ describe('gitHub pull request publication', () => {
     expect(createdLabels).toEqual(['harlan-agent-baseline-repair'])
     expect(appliedLabels).toEqual(['harlan-agent-baseline-repair'])
   })
+
+  it('recovers a Review request after the pull request was created and its label write failed', async () => {
+    const labels: string[][] = []
+    let created = 0
+    let exists = false
+    const pullRequest = { html_url: 'https://github.com/harlan-zw/example/pull/31', number: 31, head: { sha: 'abc123' }, draft: false }
+    const publisher = createGitHubPullRequestPublisher({
+      createClient: () => ({ rest: {
+        pulls: {
+          list: async () => ({ data: exists ? [pullRequest] : [] }),
+          create: async () => {
+            created++
+            exists = true
+            return { data: pullRequest }
+          },
+        },
+        issues: {
+          createLabel: async () => ({ data: {} }),
+          addLabels: async (input: { labels: string[] }) => {
+            labels.push(input.labels)
+            if (labels.length === 1)
+              throw new Error('The label write failed.')
+            return { data: [] }
+          },
+        },
+      } }) as unknown as Octokit,
+      tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined },
+    })
+    const request = {
+      repository: repositoryMapping(),
+      baseRef: 'main',
+      headRef: 'fix/issue-30',
+      expectedHeadSha: 'abc123',
+      title: 'fix: correct a defect',
+      body: 'Corrects a defect.',
+      labels: [{ name: 'harlan-agent-review', color: '8250df', description: 'Approve automated review for this head.' }],
+    }
+
+    expect(await publisher.ensurePullRequest(request)).toEqual(err({ repository: request.repository.github, message: 'The label write failed.' }))
+    expect(await publisher.ensurePullRequest(request)).toEqual(ok({ number: 31, url: pullRequest.html_url, diagram: { _tag: 'None' } }))
+    expect(created).toBe(1)
+    expect(labels).toEqual([['harlan-agent-review'], ['harlan-agent-review']])
+  })
+
+  it.each([
+    ['an existing draft', [{ number: 31, html_url: 'https://github.com/harlan-zw/example/pull/31', head: { sha: 'abc123' }, draft: true }], 'abc123'],
+    ['a changed existing branch', [{ number: 31, html_url: 'https://github.com/harlan-zw/example/pull/31', head: { sha: 'changed' }, draft: false }], 'changed'],
+    ['a changed newly created branch', [], 'changed'],
+  ])('does not approve %s', async (_scenario, existing, createdHead) => {
+    const labels: string[][] = []
+    const publisher = createGitHubPullRequestPublisher({
+      createClient: () => ({ rest: {
+        pulls: {
+          list: async () => ({ data: existing }),
+          create: async () => ({ data: { number: 31, html_url: 'https://github.com/harlan-zw/example/pull/31', head: { sha: createdHead }, draft: false } }),
+        },
+        issues: {
+          createLabel: async () => ({ data: {} }),
+          addLabels: async (input: { labels: string[] }) => {
+            labels.push(input.labels)
+            return { data: [] }
+          },
+        },
+      } }) as unknown as Octokit,
+      tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined },
+    })
+
+    const result = await publisher.ensurePullRequest({
+      repository: repositoryMapping(),
+      baseRef: 'main',
+      headRef: 'fix/issue-30',
+      expectedHeadSha: 'abc123',
+      title: 'fix: correct a defect',
+      body: 'Corrects a defect.',
+      labels: [{ name: 'harlan-agent-review', color: '8250df', description: 'Approve automated review for this head.' }],
+    })
+
+    expect(result._tag).toBe('Err')
+    expect(labels).toEqual([])
+  })
 })
 
 describe('pull request diagram attachment', () => {
@@ -136,7 +216,7 @@ describe('pull request diagram attachment', () => {
           pulls: {
             create: (input: { body: string }) => {
               onCreate(input)
-              return Promise.resolve({ data: { html_url: 'https://github.com/harlan-zw/example/pull/31', number: 31 } })
+              return Promise.resolve({ data: { html_url: 'https://github.com/harlan-zw/example/pull/31', number: 31, head: { sha: 'abc123' } } })
             },
             list: () => Promise.resolve({ data: [] }),
           },
