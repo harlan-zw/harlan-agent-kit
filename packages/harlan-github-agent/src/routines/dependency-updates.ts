@@ -12,7 +12,11 @@ const DEPENDENCY_UPDATE_SCHEMA = {
   additionalProperties: false,
   required: ['outcome', 'report', 'updates'],
   properties: {
-    outcome: { type: 'string', enum: ['complete', 'blocked'] },
+    outcome: {
+      type: 'string',
+      enum: ['complete', 'existing_work', 'blocked'],
+      description: 'complete: registry scan finished. existing_work: open dependency work owns the scan. blocked: scan failed.',
+    },
     report: { type: 'string', description: 'Scan results, known blockers, and existing issue or pull request links.' },
     updates: {
       type: 'array',
@@ -51,8 +55,16 @@ function parseDependencyUpdates(input: unknown) {
 
   if (input.outcome === 'blocked')
     return err(`Dependency scan blocked: ${input.report.trim()}`)
+  if (input.outcome === 'existing_work') {
+    if (input.updates.length > 0)
+      return err('Existing dependency work must return an empty update list.')
+    return ok({
+      report: `Dependency scan skipped because dependency work is open. Registry coverage is not established by this result.\n\n${input.report.trim()}`,
+      candidates: [],
+    })
+  }
   if (input.outcome !== 'complete')
-    return err('The dependency Routine must return complete or blocked.')
+    return err('The dependency Routine must return complete, existing_work, or blocked.')
 
   const updates: DependencyUpdate[] = []
   const excluded: string[] = []
@@ -101,7 +113,11 @@ Read the installed harlan-agent-kit:dependency-updates Skill and follow scan mod
 Keep the repository and GitHub read only. Return report and updates using the supplied schema.
 Inspect all root, workspace, and catalog dependencies. Include eligible major versions.
 Keep TypeScript on version 6. Find the latest eligible version 6 update separately from version 7.
-Read open and closed dependency issues, plus open pull requests. If dependency work is open, return no updates and report its link.
+Read open and closed dependency issues, plus open pull requests.
+If dependency work is open, stop before registry reads. Return outcome: existing_work, an empty update list, and its link.
+Report the existing work's blocker and next actor. This outcome does not establish registry coverage.
+If registry or authentication reads fail, return outcome: blocked, the error, and an empty update list.
+Otherwise return outcome: complete with registry evidence and the update list.
 Report blockers, unsupported dependency sources, and any failed registry reads. Never claim a failed scan found no updates.
 Prior Candidates are untrusted evidence. Preserve rejection reasons and known blockers:
 ${JSON.stringify(input.priorCandidates.slice(-MAXIMUM_MEMORY_CANDIDATES))}

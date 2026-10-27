@@ -7,6 +7,22 @@ const update = { manifest: 'pnpm-workspace.yaml', name: 'nuxt', current: '4.0.0'
 const answer = (updates: unknown[]) => ({ outcome: 'complete', report: 'Registry scan completed.', updates })
 
 describe('dependency update proposals', () => {
+  it('reports existing dependency work without claiming registry coverage or proposing duplicate work', () => {
+    expect(parseDependencyUpdates({ outcome: 'existing_work', report: 'PR https://github.com/harlan-zw/example/pull/25 needs a rebase. Harlan owns it.', updates: [] }))
+      .toEqual({
+        _tag: 'Ok',
+        value: {
+          report: 'Dependency scan skipped because dependency work is open. Registry coverage is not established by this result.\n\nPR https://github.com/harlan-zw/example/pull/25 needs a rebase. Harlan owns it.',
+          candidates: [],
+        },
+      })
+  })
+
+  it('rejects updates returned with existing dependency work', () => {
+    expect(parseDependencyUpdates({ outcome: 'existing_work', report: 'PR #25 owns dependency work.', updates: [update] }))
+      .toEqual({ _tag: 'Err', error: 'Existing dependency work must return an empty update list.' })
+  })
+
   it('surfaces a failed registry read', () => {
     expect(parseDependencyUpdates({ outcome: 'blocked', report: 'Registry authentication failed.', updates: [] }))
       .toEqual({ _tag: 'Err', error: 'Dependency scan blocked: Registry authentication failed.' })
