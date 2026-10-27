@@ -12,6 +12,84 @@ import { createOpencodeProvider } from '../src/opencode-provider.ts'
 
 const execute = promisify(execFile)
 
+it('advertises readable mounted Skills and References without granting write access or leaking Review context', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-skills-'))
+  const home = join(root, 'controller')
+  const worker = join(root, 'worker')
+  const primary = join(root, 'primary')
+  const plugin = join(root, 'plugin')
+  const builtIn = join(plugin, 'skills/dependency-updates')
+  const portable = join(worker, '.local/share/harlan-agent-kit/skilld/skills/im-part-human')
+  const profile = join(root, 'worker.json')
+  await Promise.all([mkdir(home), mkdir(primary), mkdir(join(builtIn, 'references'), { recursive: true }), mkdir(join(portable, 'references'), { recursive: true })])
+  await Promise.all([
+    writeFile(join(builtIn, 'SKILL.md'), 'Built-in scan instructions.'),
+    writeFile(join(builtIn, 'references/scan.md'), 'Built-in reference.'),
+    writeFile(join(portable, 'SKILL.md'), 'Portable writing instructions.'),
+    writeFile(join(portable, 'references/writing.md'), 'Portable reference.'),
+    writeFile(join(home, 'secret'), 'Controller secret.'),
+  ])
+  await mkdir(join(worker, '.agents/skills/missing'), { recursive: true })
+  await mkdir(join(worker, '.agents/skills/im-part-human'), { recursive: true })
+  await writeFile(join(worker, '.agents/skills/im-part-human/SKILL.md'), 'Stale portable instructions.')
+  await mkdir(join(worker, '.agents/skills/dependency-updates'))
+  await writeFile(join(worker, '.agents/skills/dependency-updates/SKILL.md'), 'Stale copied instructions.')
+  await symlink(builtIn, join(worker, '.agents/skills/absolute-alias'))
+  await symlink(portable, join(worker, '.agents/skills/internal-alias'))
+  await symlink(home, join(worker, '.agents/skills/escape'))
+  await symlink(join(root, 'absent'), join(worker, '.agents/skills/dangling'))
+  await mkdir(join(worker, '.agents/skills/file-alias'))
+  await symlink(join(home, 'secret'), join(worker, '.agents/skills/file-alias/SKILL.md'))
+  await mkdir(join(worker, '.agents/skills/bad\nname'))
+  await writeFile(join(worker, '.agents/skills/bad\nname/SKILL.md'), 'Untrusted catalog row.')
+  await execute('git', ['init', primary])
+  await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
+  const wtConfig = join(root, 'wt.toml')
+  await writeFile(wtConfig, '[list]\njson-schema = 2\n')
+  await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'skills', '--base', 'HEAD', '--yes'])
+  const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
+  const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'skills').worktree.path as string
+  await writeFile(profile, JSON.stringify({ home: worker, codex: '/usr/bin/true', opencode: '/usr/bin/true', tools: [], readOnlyPaths: [plugin] }))
+  const sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, readOnly: true })
+  try {
+    const proof = await execute(sandbox.binary, [...sandbox.args, '/run/agent/node', '--input-type=module-typescript', '-e', `
+      import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+      const catalog: string = readFileSync('/run/agent/SKILLS.md', 'utf8')
+      const skills = Object.fromEntries(catalog.split('\\n').filter(line => line.startsWith('- ')).map(line => {
+        const [, name, quoted] = /^- ([a-z0-9-]+): (.+)$/.exec(line)
+        return [name, JSON.parse(quoted)]
+      }))
+      const contents = Object.fromEntries(Object.entries(skills).map(([name, path]) => [name, readFileSync(path, 'utf8')]))
+      const reference = readFileSync(skills['im-part-human'].replace('SKILL.md', 'references/writing.md'), 'utf8')
+      const builtInReference = readFileSync(skills['dependency-updates'].replace('SKILL.md', 'references/scan.md'), 'utf8')
+      let writeError: string | null = null
+      try { writeFileSync('/run/agent/SKILLS.md', 'tampered') } catch (cause) { writeError = (cause as NodeJS.ErrnoException).code ?? 'unknown' }
+      console.log(JSON.stringify({ contents, reference, builtInReference, writeError, controllerVisible: existsSync(${JSON.stringify(join(home, 'secret'))}) }))
+    `], { env: sandbox.environment })
+    expect(JSON.parse(proof.stdout)).toEqual({
+      contents: { 'dependency-updates': 'Built-in scan instructions.', 'im-part-human': 'Portable writing instructions.' },
+      reference: 'Portable reference.',
+      builtInReference: 'Built-in reference.',
+      writeError: 'EROFS',
+      controllerVisible: false,
+    })
+  }
+  finally {
+    await sandbox.release()
+  }
+  const reviewHome = join(root, 'review')
+  await mkdir(reviewHome)
+  const review = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, reviewHome })
+  try {
+    const proof = await execute(review.binary, [...review.args, '/run/agent/node', '--input-type=module-typescript', '-e', 'import { existsSync } from \'node:fs\'; console.log(JSON.stringify({ catalog: existsSync(\'/run/agent/SKILLS.md\'), portable: existsSync(\'/home/agent/.agents/skills\') }))'], { env: review.environment })
+    expect(JSON.parse(proof.stdout)).toEqual({ catalog: false, portable: false })
+  }
+  finally {
+    await review.release()
+    await rm(root, { recursive: true })
+  }
+})
+
 it('blocks controller credentials, Git helpers, and parent process reads while preserving worker tools', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-boundary-'))
   const home = join(root, 'controller')
@@ -47,6 +125,7 @@ import process from 'node:process'
 if (existsSync(${JSON.stringify(secret)}) || process.env.GH_TOKEN || process.env.CONTROLLER_TOKEN) process.exit(30)
 if (['serve', 'run'].includes(process.argv[2]) && process.env.OPENCODE_FILEWATCHER_DISABLE !== 'true') process.exit(34)
 if (process.argv[2] === 'serve') {
+  if (!readFileSync('/run/agent/SKILLS.md', 'utf8').includes('# Installed Harlan Agent Kit Skills')) process.exit(37)
   const server = createServer((request, response) => {
     const expected = 'Basic ' + Buffer.from('opencode:' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64')
     if (request.headers.authorization !== expected) { response.writeHead(401); response.end(); return }
@@ -71,7 +150,7 @@ if (process.argv[2] === 'serve') {
   async function run() {
     let prompt = ''
     for await (const chunk of process.stdin) prompt += chunk.toString()
-    if (!prompt.startsWith('Return protected.'.repeat(16_000))) process.exit(35)
+    if (!prompt.includes('Return protected.'.repeat(16_000)) || !prompt.startsWith('Read /run/agent/SKILLS.md for exact installed Skill paths.')) process.exit(35)
     const target = process.argv[process.argv.indexOf('--server') + 1]
     const response = await fetch(target + '/fixture', { headers: { authorization: 'Basic ' + Buffer.from('opencode:' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64') } })
     if (!response.ok || !(await response.json()).protected) process.exit(31)
@@ -84,8 +163,13 @@ if (process.argv[2] === 'serve') {
   writeFileSync(${JSON.stringify(join(workspace, 'codex-mutation.txt'))}, 'isolated mutation')
   const schemaIndex = process.argv.indexOf('--output-schema')
   if (schemaIndex === -1 || !JSON.parse(readFileSync(process.argv[schemaIndex + 1], 'utf8'))) process.exit(33)
-  process.stdin.resume()
+  if (!process.argv.includes('--image')) process.exit(38)
+  let prompt = ''
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', chunk => { prompt += chunk })
   process.stdin.once('end', () => {
+    if (!prompt.startsWith('Read /run/agent/SKILLS.md for exact installed Skill paths.') || !prompt.includes('Return protected.'.repeat(16_000))) process.exit(39)
+    if (!readFileSync('/run/agent/SKILLS.md', 'utf8').includes('# Installed Harlan Agent Kit Skills')) process.exit(40)
     console.log(JSON.stringify({ type: 'thread.started', thread_id: 'fixture-thread' }))
     console.log(JSON.stringify({ type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: '{"protected":true}' } }))
     console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }))
@@ -249,7 +333,7 @@ if (process.argv[2] === 'serve') {
       await daily.release()
     }
     await expect(prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'codex', taskId: 'other/site:daily-checkin:2026-10-08T00:00:00.000Z' })).rejects.toThrow('repository')
-    const request = { taskId: 'owner/site:daily-checkin:2026-10-08T00:00:00.000Z', model: 'fixture', outputSchema: {}, prompt: 'Return protected.'.repeat(16_000), sessionId: null, signal: new AbortController().signal, workspace }
+    const request = { taskId: 'owner/site:daily-checkin:2026-10-08T00:00:00.000Z', model: 'fixture', outputSchema: {}, prompt: 'Return protected.'.repeat(16_000), sessionId: null, signal: new AbortController().signal, workspace, media: [{ mime: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAABQAAAAKCAYAAAC0VX7mAAAAF0lEQVR4nGNkoDIYNZByMGog5YDqBgIAFJEAC2Vie2MAAAAASUVORK5CYII=', label: 'Fixture image', source: 'https://github.com/user-attachments/assets/a' }] }
     const originalHome = process.env.HOME
     process.env.HOME = home
     const memory = process.env.XDG_RUNTIME_DIR === undefined ? {} : { memoryPerAgentGiB: 1 }

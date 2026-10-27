@@ -8,6 +8,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { createAgentEgress } from './agent-egress.ts'
+import { AGENT_SKILL_CATALOG_PATH, loadAgentSkillCatalog } from './agent-skill-catalog.ts'
 import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
 import { resolveWorkerHostTools } from './worker-host-tools.ts'
@@ -139,6 +140,8 @@ export interface AgentSandbox {
   workerStateHome: string
   providerBinary: string
   adapterPath: string
+  /** Present only where this namespace serves ordinary model tools. */
+  skillCatalogPath?: string
   memoryExceeded: () => Promise<boolean>
   release: () => Promise<void>
 }
@@ -282,9 +285,22 @@ export async function prepareAgentSandbox(input: {
         : await prepareOpencodeTaskDirectory(controllerHome, opencodeTaskKey(input.taskId ?? randomUUID()))
       args.push('--bind', databaseDirectory, '/run/agent/opencode-database')
     }
+    const skillRoots = []
     for (const path of [...profile.tools, ...profile.readOnlyPaths]) {
       const canonical = await permittedPath(path, controllerHome)
       args.push('--ro-bind', canonical, path)
+      if (profile.readOnlyPaths.includes(path))
+        skillRoots.push({ path: join(canonical, 'skills'), agentPath: join(path, 'skills') })
+    }
+    const skillCatalogPath = input.reviewHome === undefined && input.networkMode !== 'opencode-client'
+      ? AGENT_SKILL_CATALOG_PATH
+      : undefined
+    if (skillCatalogPath !== undefined) {
+      const relativeRoots = ['.local/share/harlan-agent-kit/skilld/skills', '.agents/skills']
+      skillRoots.push(...relativeRoots.map(path => ({ path: join(isolatedHome, path), agentPath: join(workerHome, path) })))
+      const catalog = join(scratch, 'SKILLS.md')
+      await writeFile(catalog, await loadAgentSkillCatalog(skillRoots), { mode: 0o600 })
+      args.push('--ro-bind', catalog, skillCatalogPath)
     }
     for (const [name, path] of Object.entries(hostTools)) {
       const canonical = await permittedPath(path, controllerHome)
@@ -435,7 +451,7 @@ export async function prepareAgentSandbox(input: {
     }
     const memory = input.memoryPerAgentGiB === undefined ? undefined : await workerMemoryCommand({ binary: '/usr/bin/bwrap', args, memoryGiB: input.memoryPerAgentGiB, ...(input.taskId === undefined ? {} : { taskId: input.taskId }) })
     const launchEnvironment = { PATH: '/usr/bin:/bin', ...(memory === undefined ? {} : { XDG_RUNTIME_DIR: input.environment.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: input.environment.DBUS_SESSION_BUS_ADDRESS }) }
-    return { binary: memory?.binary ?? '/usr/bin/bwrap', args: memory?.args ?? args, environment: launchEnvironment, workerStateHome, adapterPath, providerBinary: hostTools[input.provider] === undefined ? profile[input.provider] : `/run/agent/host-tools/${input.provider}`, memoryExceeded: memory?.memoryExceeded ?? (async () => false), release: () => {
+    return { binary: memory?.binary ?? '/usr/bin/bwrap', args: memory?.args ?? args, environment: launchEnvironment, workerStateHome, adapterPath, ...(skillCatalogPath === undefined ? {} : { skillCatalogPath }), providerBinary: hostTools[input.provider] === undefined ? profile[input.provider] : `/run/agent/host-tools/${input.provider}`, memoryExceeded: memory?.memoryExceeded ?? (async () => false), release: () => {
       released ??= (async () => {
         try {
           if (!readOnly)
