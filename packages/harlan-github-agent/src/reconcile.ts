@@ -61,7 +61,14 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
     return err({ repository: repository.github, message: result.error.message })
   }
 
-  const eligibleItems = result.value.filter(subject => isEligibleGitHubSubjectAuthor(
+  const unavailableObservations = result.value.filter(subject => subject.kind === 'unavailable')
+  const unavailableRead = unavailableObservations[0]
+  if (unavailableRead !== undefined) {
+    if (dependencies.signal?.aborted === true)
+      return err({ repository: repository.github, message: unavailableRead.error.message })
+    dependencies.store.recordPollFailure(repository.github, observedAt, unavailableRead.error.message, unavailableRead.error.status)
+  }
+  const eligibleItems = result.value.filter(subject => subject.kind !== 'unavailable').filter(subject => isEligibleGitHubSubjectAuthor(
     { login: subject.author },
     subject.kind === 'issue'
       ? { kind: 'issue', routineFiled: subject.routineFiled }
@@ -70,7 +77,10 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   const seenIssues = new Set(eligibleItems.flatMap(subject => subject.kind === 'issue' ? [subject.number] : []))
   const missingIssueNumbers = dependencies.store.listOpenIssueNumbers(repository.github)
     .filter(number => !seenIssues.has(number))
-  const seenPullRequests = new Set(eligibleItems.flatMap(subject => subject.kind === 'pull_request' ? [subject.number] : []))
+  const seenPullRequests = new Set([
+    ...eligibleItems.flatMap(subject => subject.kind === 'pull_request' ? [subject.number] : []),
+    ...unavailableObservations.map(subject => subject.number),
+  ])
   const missingPullRequestNumbers = dependencies.store.listOpenPullRequestNumbers(repository.github)
     .filter(number => !seenPullRequests.has(number))
   const unverifiedClosedPullRequestNumbers = dependencies.store.listUnverifiedClosedPullRequestNumbers(repository.github)
@@ -92,6 +102,7 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   // An unavailable exact read says nothing about closure. Protect its Item
   // while independent observations and confirmed closures continue.
   const unavailableItems = [
+    ...unavailableObservations.map(subject => ({ kind: subject.itemKind, number: subject.number })),
     ...missingIssueNumbers.flatMap((number, index) => finalIssueReads[index]?._tag === 'Err' ? [{ kind: 'issue' as const, number }] : []),
     ...finalPullRequestNumbers.flatMap((number, index) => finalPullRequestReads[index]?._tag === 'Err' ? [{ kind: 'pull_request' as const, number }] : []),
   ]
@@ -324,6 +335,8 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   )
   if (failedFinalRead?._tag === 'Err')
     return err({ repository: repository.github, message: failedFinalRead.error.message })
+  if (unavailableRead !== undefined)
+    return err({ repository: repository.github, message: unavailableRead.error.message })
   dependencies.store.recordPollSuccess(repository.github, observedAt)
   if (writesEnabled && dependencies.recoverRunnerIncidents !== undefined) {
     const recovery = await dependencies.recoverRunnerIncidents(repository, dependencies.signal ?? AbortSignal.timeout(30_000))
