@@ -37,6 +37,11 @@ printf '%s\n' '#!/usr/bin/env bash' 'printf '\''worktrunk %s\n'\'' "$*" >> "$SER
   > "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts/worktrunk-config.sh"
 printf '%s\n' 'process.stdout.write("worker configuration refreshed\n")' \
   > "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts/opencode-v2-migrate.ts"
+printf '%s\n' \
+  'import { appendFileSync } from "node:fs"' \
+  'appendFileSync(process.env.SERVICE_TEST_SYNC_CALLS, "worker-skills refreshed\n")' \
+  'process.exit(Number(process.env.SERVICE_TEST_SKILL_EXIT || 0))' \
+  > "$HARLAN_GITHUB_AGENT_CHECKOUT/scripts/worker-skills.ts"
 # Stands in for the deployed CLI. Its exit code is the configuration verdict.
 printf '%s\n' \
   'process.exit(Number(process.env.SERVICE_TEST_CLI_EXIT || 0))' \
@@ -107,6 +112,17 @@ fi
 
 if ! grep -Fx -- 'sync:skills' "$SERVICE_TEST_PNPM_CALLS" >/dev/null; then
   printf '%s\n' 'service did not restore Brundlefly Skills before startup' >&2
+  exit 1
+fi
+
+if ! grep -Fx -- 'worker-skills refreshed' "$SERVICE_TEST_SYNC_CALLS" >/dev/null; then
+  printf '%s\n' 'service did not refresh the isolated Agent Skill copies' >&2
+  exit 1
+fi
+
+if SERVICE_TEST_SKILL_EXIT=1 PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/service.sh" prepare-update >/dev/null 2>&1; then
+  printf '%s\n' 'service prepared an update after Agent Skill refresh failed' >&2
   exit 1
 fi
 
