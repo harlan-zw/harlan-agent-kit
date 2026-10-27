@@ -1039,7 +1039,41 @@ describe('claiming a Routine run', () => {
     }
   })
 
-  it('retries a failed run until its attempts run out', () => {
+  it.each([
+    'Variant unavailable for zai-coding-plan/glm-5.3-flash: medium',
+    'The opencode session failed: Variant unavailable for zai-coding-plan/glm-5.3-flash: medium',
+  ])('fails a rejected provider configuration after one Routine attempt: %s', (reason) => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const claimed = claimStoredRun(store)
+      const outcome = store.failRoutineRun({
+        taskId: claimed.id,
+        workerId: claimed.state.workerId,
+        fence: claimed.state.fence,
+        at: '2026-08-27T07:06:00.000Z',
+        reason,
+      })
+
+      expect(outcome).toBe('Failed')
+      expect(store.getDashboardSnapshot('2026-08-27T07:06:00.000Z').routineRuns.find(run => run.id === claimed.id))
+        .toMatchObject({ state: { _tag: 'Failed', reason }, attempts: 1 })
+      expect(store.claimNextRoutineRun('worker-2', '2026-08-27T07:06:00.000Z', 60_000)).toBeNull()
+      expect(store.claimNextRoutineRun('worker-2', '2026-08-28T07:06:00.000Z', 60_000)).toBeNull()
+      expect(store.claimNextRoutineReport('reporter', '2026-08-28T07:06:00.000Z', 60_000)?.body).toContain(reason)
+      expect(store.claimNextRoutineReport('reporter-2', '2026-08-28T07:06:01.000Z', 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it.each([
+    'The scan agent failed.',
+    'Registry authentication failed.',
+    'The opencode session failed: Unexpected server error. Check server logs for details.',
+  ])('retries other Routine failures until their attempts run out: %s', (reason) => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
@@ -1053,7 +1087,7 @@ describe('claiming a Routine run', () => {
           workerId: 'worker-1',
           fence: claimed.state.fence,
           at: `2026-08-27T0${7 + attempt}:06:00.000Z`,
-          reason: 'The scan agent failed.',
+          reason,
         }))
       }
 

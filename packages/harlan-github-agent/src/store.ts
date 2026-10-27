@@ -16230,7 +16230,7 @@ export function openJournalStore(
   }
 
   /**
-   * Records one failed Routine run, retrying it until its attempts run out.
+   * Records one failed Routine run. Invalid provider configuration never retries.
    *
    * A retry returns the run to the queue at the same instant. The unique
    * constraint on that instant still holds, so retrying can never fan one
@@ -16245,7 +16245,9 @@ export function openJournalStore(
         database.exec('COMMIT')
         return 'Rejected'
       }
-      const retrying = row.attempts < row.max_attempts
+      const failure = classifyFailure({ message: input.reason })
+      const rejectedConfiguration = failure._tag === 'Permanent' && failure.kind === 'provider_config'
+      const retrying = !rejectedConfiguration && row.attempts < row.max_attempts
       const to = retrying ? 'Queued' : 'Failed'
       const changed = database.prepare(`
         UPDATE routine_runs
