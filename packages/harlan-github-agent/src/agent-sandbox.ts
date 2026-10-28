@@ -13,6 +13,7 @@ import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
 import { resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
+import { resolveWorkerNuxtseo } from './worker-nuxtseo.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 const execute = promisify(execFile)
@@ -286,6 +287,18 @@ export async function prepareAgentSandbox(input: {
       args.push('--bind', databaseDirectory, '/run/agent/opencode-database')
     }
     const skillRoots = []
+    if (input.reviewHome === undefined && input.networkMode !== 'opencode-client'
+      && /^[^:]+:(?:seo-review|vitals-review):/.test(input.taskId ?? '')) {
+      const cli = await resolveWorkerNuxtseo(controllerHome)
+      for (const path of cli.packages)
+        args.push('--ro-bind', await permittedPath(path, controllerHome), path)
+      for (const link of cli.links)
+        args.push('--dir', dirname(link.path), '--symlink', link.target, link.path)
+      const launcher = join(scratch, 'nuxtseo')
+      await writeFile(launcher, `#!/bin/sh\nexec /run/agent/node '${cli.entry.replaceAll('\'', '\'\\\'\'')}' "$@"\n`, { mode: 0o700 })
+      args.push('--ro-bind', launcher, '/run/agent/host-tools/nuxtseo')
+      skillRoots.push({ path: cli.skills, agentPath: cli.skills })
+    }
     for (const path of [...profile.tools, ...profile.readOnlyPaths]) {
       const canonical = await permittedPath(path, controllerHome)
       args.push('--ro-bind', canonical, path)
