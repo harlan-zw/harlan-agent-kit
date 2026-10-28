@@ -14280,7 +14280,6 @@ export function openJournalStore(
       JOIN revisions ON revisions.id = subjects.current_revision_id
       WHERE repositories.enabled = 1 AND json_extract(revisions.payload, '$.state') = 'open'
       ORDER BY revisions.observed_at DESC
-      LIMIT 100
     `).all() as unknown as DashboardSubjectRow[]
     const repositories: RepositoryStatus[] = repositoryRows.map(row => ({
       github: row.github,

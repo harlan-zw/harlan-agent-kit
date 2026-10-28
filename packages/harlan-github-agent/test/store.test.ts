@@ -1585,6 +1585,41 @@ describe('journal store', () => {
     })).toEqual({ _tag: 'Duplicate', work: 'issue_work', taskId: work?.id })
   })
 
+  it.each(['owned', 'maintained'] as const)('keeps every open %s issue visible for Approval', (ownership) => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({ ownership })], '2026-08-13T00:00:00.000Z')
+    for (let number = 1; number <= 101; number += 1) {
+      const observedAt = new Date(Date.parse('2026-08-13T01:00:00.000Z') + number * 1_000).toISOString()
+      store.recordObservation({
+        externalId: `outside-issue-${number}`,
+        observedAt,
+        source: 'poll',
+        subject: issueItem({ number, url: `https://github.com/harlan-zw/example/issues/${number}`, updatedAt: observedAt }),
+      })
+    }
+
+    const snapshot = store.getDashboardSnapshot('2026-08-13T02:00:00.000Z')
+    expect(snapshot.items).toContainEqual(expect.objectContaining({ kind: 'issue', number: 1 }))
+    expect(snapshot.queue).toContainEqual(expect.objectContaining({
+      number: 1,
+      state: { _tag: 'AwaitingApproval', kind: 'issue_triage' },
+    }))
+    expect(store.claimNextIssueTriageTask('issue-worker', '2026-08-13T02:01:00.000Z', 60_000)).toBeNull()
+
+    const oldest = snapshot.items.find(item => item.kind === 'issue' && item.number === 1)
+    if (oldest === undefined)
+      throw new Error('Expected the oldest open issue.')
+    expect(store.approveIssue({
+      repository: oldest.repository,
+      issueNumber: oldest.number,
+      revisionId: oldest.revisionId,
+      at: '2026-08-13T02:01:01.000Z',
+    })).toEqual({ _tag: 'Approved', work: 'issue_triage', taskId: expect.any(String) })
+    expect(store.claimNextIssueTriageTask('issue-worker', '2026-08-13T02:01:02.000Z', 60_000))
+      .toEqual(expect.objectContaining({ kind: 'issue_triage', issueNumber: 1, revisionId: oldest.revisionId }))
+    expect(store.claimNextIssueTriageTask('another-worker', '2026-08-13T02:01:03.000Z', 60_000)).toBeNull()
+  })
+
   it('records a triage comment GitHub accepted after the lease ran out', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

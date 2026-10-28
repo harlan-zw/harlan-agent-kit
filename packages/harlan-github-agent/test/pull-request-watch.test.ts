@@ -9,7 +9,7 @@ import { H3 } from 'h3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentApp, createControlClient, createReconcileHint, createWebhookApp, openJournalStore, pullRequestWatchFinished, reconcileRepository, startAgentServer } from '../src/index.ts'
 import { ok } from '../src/result.ts'
-import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const target = { repository: 'harlan-zw/example', number: 24 }
 const open = { _tag: 'Open' as const, pullRequest: pullRequestItem({ mergeState: 'clean' }), tasks: [] }
@@ -168,21 +168,6 @@ describe('pull request watch', () => {
       expect(store.getPullRequestWatchState(target.repository, target.number)?._tag).toBe('Ready')
       store.recordPollObservation({ observedAt: '2026-10-05T00:01:00.000Z', subject: { ...open.pullRequest, baseRef: 'release', baseSha: 'newbase', updatedAt: '2026-10-05T00:01:00.000Z' } })
       expect(store.getPullRequestWatchState(target.repository, target.number)?._tag).toBe('Open')
-    }
-    finally {
-      store.close()
-    }
-  })
-
-  it('finds a watched pull request beyond the dashboard item limit', () => {
-    const store = openJournalStore(':memory:')
-    try {
-      store.syncRepositories([repositoryMapping()], '2026-10-05T00:00:00.000Z')
-      store.recordPollObservation({ observedAt: '2026-10-05T00:00:00.000Z', subject: open.pullRequest })
-      for (let number = 100; number < 201; number++)
-        store.recordPollObservation({ observedAt: '2026-10-05T00:01:00.000Z', subject: issueItem({ number, author: 'harlan-zw' }) })
-      expect(store.getDashboardSnapshot('2026-10-05T00:02:00.000Z').items.some(item => item.kind === 'pull_request' && item.number === 24)).toBe(false)
-      expect(store.getPullRequestWatchState(target.repository, target.number)).toMatchObject({ _tag: 'Open', pullRequest: { number: 24 } })
     }
     finally {
       store.close()

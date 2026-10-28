@@ -22,13 +22,12 @@ function setup(path = ':memory:') {
 }
 
 describe('owner pull request changes', () => {
-  it('routes a comment when newer items fill the dashboard', async () => {
+  it('routes an owner comment across many open Items', async () => {
     const { store, request, at } = setup()
     const later = '2026-10-09T01:01:00.000Z'
     for (let number = 1000; number < 1101; number++) {
       store.recordObservation({ externalId: `issue:${number}`, observedAt: later, source: 'poll', subject: issueItem({ number }) })
     }
-    expect(store.getDashboardSnapshot(later).items.some(item => item.kind === 'pull_request' && item.number === 24)).toBe(false)
     const results = await syncOpenReviewRerunRequests([repositoryMapping()], {
       github: { listReviewRerunRequests: async () => ok([{
         author: request.requestedBy,
