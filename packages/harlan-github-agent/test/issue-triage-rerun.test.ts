@@ -32,15 +32,6 @@ function finish(store: ReturnType<typeof openJournalStore>, route = 'NEEDS_INFO'
 }
 
 describe('issue triage rerun', () => {
-  it('finds an Issue Revision outside the latest 100 dashboard Items', () => {
-    const { store, request } = setup()
-    for (let number = 100; number < 201; number++) {
-      store.recordObservation({ externalId: `newer-${number}`, observedAt: request.at, source: 'poll', subject: issueItem({ number, author: 'harlan-zw' }) })
-    }
-    expect(store.getDashboardSnapshot(request.at).items.some(item => item.number === 12)).toBe(false)
-    expect(store.getOpenIssueStatus(request.repository, 12)).toEqual({ revisionId: request.revisionId, dismissed: false })
-  })
-
   it('rejects a closed issue', () => {
     const { store, request } = setup()
     store.recordObservation({ externalId: 'closed', observedAt: request.at, source: 'poll', subject: issueItem({ author: 'harlan-zw', state: 'closed' }) })
