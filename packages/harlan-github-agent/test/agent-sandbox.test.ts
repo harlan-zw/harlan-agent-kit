@@ -12,6 +12,85 @@ import { createOpencodeProvider } from '../src/opencode-provider.ts'
 
 const execute = promisify(execFile)
 
+it('runs the installed NuxtSEO package with its dependency and bundled Skill inside a Routine', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-node-tool-'))
+  const home = join(root, 'controller')
+  const worker = join(root, 'worker')
+  const primary = join(root, 'primary')
+  const tools = join(home, '.local/bin')
+  const packageRoot = join(home, '.local/share/pnpm/global/node_modules/.pnpm/@nuxtseo+cli@1/node_modules/@nuxtseo/cli')
+  const dependency = join(home, '.local/share/pnpm/global/node_modules/.pnpm/fixture-dependency@1/node_modules/fixture-dependency')
+  const profile = join(root, 'worker.json')
+  await Promise.all([
+    mkdir(primary),
+    mkdir(worker),
+    mkdir(tools, { recursive: true }),
+    mkdir(join(packageRoot, 'dist'), { recursive: true }),
+    mkdir(join(packageRoot, 'skills/nuxtseo-cli/references'), { recursive: true }),
+    mkdir(dependency, { recursive: true }),
+  ])
+  await Promise.all([
+    writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@nuxtseo/cli', type: 'module', bin: { nuxtseo: './dist/cli-entry.js' }, dependencies: { 'fixture-dependency': '1' } })),
+    writeFile(join(packageRoot, 'dist/cli-entry.js'), 'import { version } from "fixture-dependency"; console.log(JSON.stringify({ version }))'),
+    writeFile(join(packageRoot, 'skills/nuxtseo-cli/SKILL.md'), 'Required CLI Skill.'),
+    writeFile(join(packageRoot, 'skills/nuxtseo-cli/references/protocol.md'), 'CLI protocol.'),
+    writeFile(join(dependency, 'package.json'), JSON.stringify({ name: 'fixture-dependency', type: 'module', exports: './index.js' })),
+    writeFile(join(dependency, 'index.js'), 'export const version = "fixture-1"'),
+    writeFile(join(home, 'secret'), 'Controller secret.'),
+    writeFile(join(tools, 'nuxtseo'), `#!/bin/sh\n# cmd-shim-target=${packageRoot}/dist/cli-entry.js\nexec node ${JSON.stringify(join(packageRoot, 'dist/cli-entry.js'))} "$@"\n`, { mode: 0o755 }),
+  ])
+  await symlink(dependency, join(packageRoot, '../../fixture-dependency'))
+  await execute('git', ['init', primary])
+  await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
+  await execute('git', ['-C', primary, 'remote', 'add', 'origin', 'https://github.com/harlan-zw/example.git'])
+  const wtConfig = join(root, 'wt.toml')
+  await writeFile(wtConfig, '[list]\njson-schema = 2\n')
+  await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'node-tool', '--base', 'HEAD', '--yes'])
+  const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
+  const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'node-tool').worktree.path as string
+  await writeFile(profile, JSON.stringify({ home: worker, codex: '/usr/bin/true', opencode: '/usr/bin/true', tools: [tools], readOnlyPaths: [] }))
+  const sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, readOnly: true, taskId: 'harlan-zw/example:vitals-review:2026-10-28T00:00:00.000Z' })
+  try {
+    const result = await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'nuxtseo --version --json'], { env: sandbox.environment })
+    expect(JSON.parse(result.stdout)).toEqual({ version: 'fixture-1' })
+    const proof = await execute(sandbox.binary, [...sandbox.args, '/run/agent/node', '--input-type=module-typescript', '-e', `
+      import { existsSync, readFileSync } from 'node:fs'
+      const catalog = readFileSync('/run/agent/SKILLS.md', 'utf8')
+      const path = JSON.parse(catalog.split('\\n').find(line => line.startsWith('- nuxtseo-cli: ')).slice('- nuxtseo-cli: '.length))
+      console.log(JSON.stringify({ skill: readFileSync(path, 'utf8'), reference: readFileSync(path.replace('SKILL.md', 'references/protocol.md'), 'utf8'), secret: existsSync(${JSON.stringify(join(home, 'secret'))}) }))
+    `], { env: sandbox.environment })
+    expect(JSON.parse(proof.stdout)).toEqual({ skill: 'Required CLI Skill.', reference: 'CLI protocol.', secret: false })
+    const unrelated = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, readOnly: true, taskId: 'harlan-zw/example:dependency-updates:2026-10-28T00:00:00.000Z' })
+    try {
+      const excluded = await execute(unrelated.binary, [...unrelated.args, '/run/agent/node', '--input-type=module-typescript', '-e', `import { existsSync } from 'node:fs'; console.log(JSON.stringify({ cli: existsSync(${JSON.stringify(packageRoot)}), launcher: existsSync('/run/agent/host-tools/nuxtseo') }))`], { env: unrelated.environment })
+      expect(JSON.parse(excluded.stdout)).toEqual({ cli: false, launcher: false })
+    }
+    finally {
+      await unrelated.release()
+    }
+    const reviewHome = join(root, 'review')
+    await mkdir(reviewHome)
+    const review = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, reviewHome, taskId: 'harlan-zw/example:vitals-review:2026-10-28T00:00:00.000Z' })
+    try {
+      const excluded = await execute(review.binary, [...review.args, '/run/agent/node', '--input-type=module-typescript', '-e', `import { existsSync } from 'node:fs'; console.log(JSON.stringify({ cli: existsSync(${JSON.stringify(packageRoot)}), launcher: existsSync('/run/agent/host-tools/nuxtseo') }))`], { env: review.environment })
+      expect(JSON.parse(excluded.stdout)).toEqual({ cli: false, launcher: false })
+    }
+    finally {
+      await review.release()
+    }
+    const forbidden = join(home, '.config/credential-package')
+    await mkdir(forbidden, { recursive: true })
+    await writeFile(join(forbidden, 'package.json'), '{}')
+    await rm(join(packageRoot, '../../fixture-dependency'))
+    await symlink(forbidden, join(packageRoot, '../../fixture-dependency'))
+    await expect(prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, readOnly: true, taskId: 'harlan-zw/example:vitals-review:2026-10-28T00:00:00.000Z' })).rejects.toThrow('exposes controller credentials')
+  }
+  finally {
+    await sandbox.release()
+    await rm(root, { recursive: true })
+  }
+})
+
 it('advertises readable mounted Skills and References without granting write access or leaking Review context', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-skills-'))
   const home = join(root, 'controller')
