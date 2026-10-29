@@ -5,7 +5,7 @@ import { open, realpath } from 'node:fs/promises'
 import { createReviewStaticReader } from './review-static.ts'
 
 export const REVIEW_TOOLS = [
-  { name: 'review_read', description: 'Page workspace files or immutable exact revision evidence. Use revision diff with empty path for the complete diff and changed-file metadata. Base means the triple-dot merge base. Follow nextOffset until truncated is false. Binary files and symlinks are unavailable.', inputSchema: { type: 'object', properties: { path: { type: 'string', maxLength: 500 }, revision: { type: 'string', enum: ['workspace', 'diff', 'base', 'head'] }, offset: { type: 'integer', minimum: 0, maximum: 32_000_000 } }, required: ['path'], additionalProperties: false } },
+  { name: 'review_read', description: 'Page workspace files or immutable exact revision evidence. Use revision diff with empty path for text patches and all changed-file metadata. Base means the triple-dot merge base. Follow nextOffset until truncated is false. Binary and symlink revisions return metadata instead of text.', inputSchema: { type: 'object', properties: { path: { type: 'string', maxLength: 500 }, revision: { type: 'string', enum: ['workspace', 'diff', 'base', 'head'] }, offset: { type: 'integer', minimum: 0, maximum: 32_000_000 } }, required: ['path'], additionalProperties: false } },
   { name: 'review_search', description: 'Search bounded worktree files for literal text.', inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 200 } }, required: ['text'], additionalProperties: false } },
   { name: 'review_proof', description: 'Spend this Review Task one controller Node invocation. Failure cannot be edited or retried. Use a standalone TypeScript probe of a workspace exported API. Setup and other runtimes are unsupported.', inputSchema: { type: 'object', properties: { planId: { const: 'node-typescript', type: 'string' }, source: { type: 'string', minLength: 1, maxLength: 20_000 } }, required: ['planId', 'source'], additionalProperties: false } },
 ] as const
@@ -40,8 +40,11 @@ export function createReviewTools(options: { workspace: string, evidencePath?: s
         const artifact = await evidence()
         if (artifact._tag === 'Unavailable')
           return artifact
-        const text = record.revision === 'diff' && record.path === '' ? artifact.diff : artifact.files[record.path]?.[record.revision as 'base' | 'head']
-        if (typeof text !== 'string')
+        const content = artifact.files[record.path]?.[record.revision as 'base' | 'head']
+        if (content?._tag === 'Binary' || content?._tag === 'Symlink')
+          return { _tag: 'Unavailable', reason: `Review cannot read this ${content._tag.toLowerCase()} revision as source text.`, content }
+        const text = record.revision === 'diff' && record.path === '' ? artifact.diff : content?._tag === 'Text' ? content.text : undefined
+        if (text === undefined)
           return { _tag: 'Refused', reason: 'This revision has no supported changed file at that path.' }
         const bytes = Buffer.from(text)
         let end = Math.min(Number(offset) + 16_000, bytes.length)

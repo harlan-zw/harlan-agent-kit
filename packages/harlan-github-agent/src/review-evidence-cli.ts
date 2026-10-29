@@ -5,7 +5,11 @@ import { promisify } from 'node:util'
 
 const execute = promisify(execFile)
 const maximumBytes = 8_000_000
-export type ReviewRevisionEvidence = { _tag: 'Available', baseSha: string, headSha: string, mergeBaseSha: string, diff: string, files: Record<string, { base: string | null, head: string | null }> } | { _tag: 'Unavailable', reason: string }
+export type ReviewRevisionBlob
+  = | { _tag: 'Missing' }
+    | { _tag: 'Text', oid: string, bytes: number, text: string }
+    | { _tag: 'Binary' | 'Symlink', oid: string, bytes: number }
+export type ReviewRevisionEvidence = { _tag: 'Available', baseSha: string, headSha: string, mergeBaseSha: string, diff: string, files: Record<string, { base: ReviewRevisionBlob, head: ReviewRevisionBlob }> } | { _tag: 'Unavailable', reason: string }
 
 /** Fixed object reads only. Production calls this collector inside the isolated namespace. */
 export async function collectReviewEvidence(workspace: string, baseSha: string, headSha: string): Promise<ReviewRevisionEvidence> {
@@ -32,27 +36,39 @@ export async function collectReviewEvidence(workspace: string, baseSha: string, 
   }
   const base = await tree(mergeBaseSha)
   const head = await tree(headSha)
-  const files: ReviewRevisionEvidence & { _tag: 'Available' } = { _tag: 'Available', baseSha, headSha, mergeBaseSha, diff: '', files: Object.create(null) as Record<string, { base: string | null, head: string | null }> }
+  const files: ReviewRevisionEvidence & { _tag: 'Available' } = { _tag: 'Available', baseSha, headSha, mergeBaseSha, diff: '', files: Object.create(null) as Record<string, { base: ReviewRevisionBlob, head: ReviewRevisionBlob }> }
   let bytes = 0
   for (const path of paths) {
-    const read = async (entries: Map<string, { oid: string, regular: boolean }>): Promise<string | null> => {
+    const read = async (entries: Map<string, { oid: string, regular: boolean }>): Promise<ReviewRevisionBlob> => {
       const entry = entries.get(path)
       if (entry === undefined)
-        return null
+        return { _tag: 'Missing' }
       const size = Number((await git(['cat-file', '-s', entry.oid], 100)).toString('utf8').trim())
-      if (!Number.isSafeInteger(size) || size < 0 || size > 1_000_000 || bytes + size > maximumBytes)
-        throw new Error('Changed revision blobs exceed the Review evidence byte limit.')
-      bytes += size
+      if (!Number.isSafeInteger(size) || size < 0)
+        throw new Error('The changed revision blob size is invalid.')
       if (!entry.regular)
-        return null
-      const value = await git(['cat-file', 'blob', entry.oid], 1_000_000)
+        return { _tag: 'Symlink', oid: entry.oid, bytes: size }
+      const prefix = await git(['cat-file', 'blob', entry.oid], 8192).catch((error: unknown) => {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' && 'stdout' in error && Buffer.isBuffer(error.stdout))
+          return error.stdout.subarray(0, 8192)
+        throw error
+      })
+      if (prefix.includes(0))
+        return { _tag: 'Binary', oid: entry.oid, bytes: size }
+      if (size > 1_000_000 || bytes + size > maximumBytes)
+        throw new Error('Changed text revision blobs exceed the Review evidence byte limit.')
+      const value = size <= 8192 ? prefix : await git(['cat-file', 'blob', entry.oid], 1_000_000)
       if (value.includes(0))
-        throw new Error('Binary changed files require unavailable binary inspection.')
-      return value.toString('utf8')
+        return { _tag: 'Binary', oid: entry.oid, bytes: size }
+      bytes += size
+      return { _tag: 'Text', oid: entry.oid, bytes: size, text: value.toString('utf8') }
     }
     files.files[path] = { base: await read(base), head: await read(head) }
   }
-  files.diff = (await git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--binary', mergeBaseSha, headSha, '--'])).toString('utf8')
+  const textPaths = paths.filter(path => [files.files[path]!.base, files.files[path]!.head].every(blob => blob._tag === 'Text' || blob._tag === 'Missing'))
+  const metadata = await git(['diff', '--raw', '--no-abbrev', '--no-ext-diff', '--no-textconv', '--no-renames', mergeBaseSha, headSha, '--'])
+  const patch = textPaths.length === 0 ? Buffer.alloc(0) : await git(['diff', '--text', '--no-ext-diff', '--no-textconv', '--no-renames', mergeBaseSha, headSha, '--', ...textPaths])
+  files.diff = Buffer.concat([metadata, Buffer.from('\n'), patch]).toString('utf8')
   if (Buffer.byteLength(JSON.stringify(files)) > maximumBytes)
     return { _tag: 'Unavailable', reason: 'The serialized Review evidence exceeds 8000000 bytes.' }
   return files

@@ -9,7 +9,7 @@ it('pages late workspace code and immutable deleted base evidence without spendi
   try {
     await writeFile(join(root, 'large.ts'), `${'x'.repeat(64_000)}late code`)
     const artifact = join(root, 'evidence.json')
-    await writeFile(artifact, JSON.stringify({ _tag: 'Available', baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40), mergeBaseSha: 'a'.repeat(40), diff: 'deleted old.ts', files: { 'old.ts': { base: 'deleted exported API', head: null } } }))
+    await writeFile(artifact, JSON.stringify({ _tag: 'Available', baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40), mergeBaseSha: 'a'.repeat(40), diff: 'deleted old.ts', files: { 'old.ts': { base: { _tag: 'Text', oid: 'c'.repeat(40), bytes: 20, text: 'deleted exported API' }, head: { _tag: 'Missing' } } } }))
     let attempts = 0
     const tools = createReviewTools({ workspace: root, evidencePath: artifact, proof: async () => {
       attempts++
