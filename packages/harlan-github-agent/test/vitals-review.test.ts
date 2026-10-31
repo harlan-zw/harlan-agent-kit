@@ -273,6 +273,15 @@ describe('lab findings', () => {
     expect(parsed._tag === 'Ok' && parsed.value.candidates.map(candidate => candidate.fingerprint)).toEqual(['vitals-lab#/#mobile#lcp'])
   })
 
+  it('describes Poor persistence after a gap without claiming the entire retained history', () => {
+    const measured = [scan(1, 1100), { ...scan(2, 1200), lcp: null }, scan(3, 5000), scan(4, 5100)]
+    const parsed = createVitalsReview({ minimumViews: 200 }).parseResponse(answer({ labFindings: [labFinding({ url: 'https://example.com/blog', strategy: 'desktop', scans: measured })] }))
+    const claims = parsed._tag === 'Ok' ? parsed.value.candidates.map(candidate => candidate.claim) : []
+    expect(claims).toEqual([expect.stringContaining('last 2 measured Scans')])
+    expect(claims[0]).not.toContain('Poor in every retained Scan')
+    expect(claims[0]).toContain('no earlier measured reference')
+  })
+
   it('files nothing for a proposal the series does not support', () => {
     const parsed = createVitalsReview({ minimumViews: 200 }).parseResponse(answer({ labFindings: [labFinding({ strategy: 'desktop' })] }))
     expect(parsed._tag).toBe('Ok')

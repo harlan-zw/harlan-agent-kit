@@ -29,7 +29,7 @@ If a required detail fails, record the missing FCP coverage.
 Never substitute an older Scan for a missing latest detail to claim persistence.
 If either of the latest two completed Scans lacks the metric, the verdict is `MissingMetric`. It files nothing.
 Do not report a complete FCP history or absence of drops from partial details.
-Return every retained list row unchanged, adding FCP only from its matching successful detail.
+Preserve every retained list row. Add FCP only from its matching successful detail.
 
 Save failed stdout, stderr, and exit codes separately from successful JSON.
 Honor the CLI retry delay and reuse successful reads across retries.

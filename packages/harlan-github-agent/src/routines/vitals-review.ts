@@ -338,7 +338,7 @@ function parseLabProposal(input: unknown): Result<LabProposal, string> {
   if (scans._tag === 'Err')
     return scans
   if (typeof input.suspectCommits !== 'string')
-    return err(`Lab finding on ${input.url} needs suspectCommits, empty when the page was Poor from its first Scan.`)
+    return err(`Lab finding on ${input.url} needs suspectCommits, empty when no earlier measured reference exists.`)
   return ok({ ...proposal.value, path: pagePath(input.url), strategy, metric, scans: scans.value, suspectCommits: input.suspectCommits.trim() })
 }
 
@@ -359,7 +359,7 @@ function describeVerdict(metric: LabMetric, verdict: LabVerdict): string {
     case 'Unstable':
       return `Unstable: the reference Scans disagree around ${formatValue(metric, verdict.reference)}`
     case 'Poor':
-      return `Poor for the last ${verdict.scans} Scans, since ${verdict.since}, now ${formatValue(metric, verdict.latest)}${verdict.lastReferenceAt === null ? ', Poor in every retained Scan' : `, last better Scan ${verdict.lastReferenceAt}`}`
+      return `Poor for the last ${verdict.scans} measured Scans, since ${verdict.since}, now ${formatValue(metric, verdict.latest)}${verdict.lastReferenceAt === null ? ', no earlier measured reference' : `, last better Scan ${verdict.lastReferenceAt}`}`
     case 'Drop':
       return `Drop from ${formatValue(metric, verdict.reference)} to ${formatValue(metric, verdict.latest)} for ${verdict.scans} Scans, since ${verdict.since}, last reference Scan ${verdict.lastReferenceAt}`
   }
@@ -519,7 +519,7 @@ const VITALS_SCHEMA = {
           strategy: { type: 'string', enum: STRATEGIES },
           metric: { type: 'string', enum: LAB_METRICS },
           scans: { type: 'array', items: SCAN_ROW_SCHEMA, description: 'Every retained Scan of this page, both strategies allowed, copied from `nuxtseo scans list --json`.' },
-          suspectCommits: { type: 'string', description: 'The commit range deployed between the last reference Scan and the first worse Scan. Empty only when the page was Poor in every retained Scan.' },
+          suspectCommits: { type: 'string', description: 'The commit range deployed between the last measured reference Scan and the first worse Scan. Empty when no earlier measured reference exists.' },
           ...PROPOSAL_PROPERTIES,
         },
       },
