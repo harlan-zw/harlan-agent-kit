@@ -27,7 +27,8 @@ Never write baseline, budget, or regression here. Those words belong to Baseline
 
 Follow "Load the CLI skill first" and "Find the Site" in the `seo-review` Skill, word for word.
 Use `$HOME/scratch/vitals-review/<UTC timestamp>` as the scratch directory.
-The token comes from `NUXTSEO_TOKEN` in the worktree `.env`. Never print it, and never write it to a file.
+Use the controller-provided `NUXTSEO_TOKEN`, from repository credentials or private host configuration.
+Never print the token or copy its value into a file.
 If `nuxtseo` is missing or exits `3`, report the blocker and never report a healthy Site.
 
 ## Boundary with seo-review
@@ -42,7 +43,7 @@ The scan is read only for the repository and for GitHub.
 The one NuxtSEO write allowed is the post-deploy `page scan` in step 5.
 
 1. **Field.** Run `nuxtseo vitals summary --site <id> --json` and `nuxtseo vitals trend --site <id> --json` for p75 direction. Then `nuxtseo vitals findings --site <id> --json --limit 50`. When `data.message` says there is no field element data, record that and move on. It is a coverage gap, not a clean Site.
-2. **Lab.** Run `nuxtseo performance --site <id> --json` and `nuxtseo scans list --site <id> --json --limit 100`. Split every Scan by page and strategy. Judge each Lab series with `references/lab-series.md`. For FCP, read `nuxtseo scans show <scan-id>` for the Scans you judge, because `scans list` carries no FCP.
+2. **Lab.** Run `nuxtseo performance --site <id> --json` and `nuxtseo scans list --site <id> --json --limit 100`. Split every Scan by page and strategy. Judge each Lab series with `references/lab-series.md`. Follow its bounded detail reads for FCP, which `scans list` omits.
 3. **Map.** For each Poor Vitals finding and each Poor series or Lab drop, find the route, component, asset, or config in this repository that produces it. Read the cited NuxtSEO performance actions for the cause.
 4. **Date.** For a Lab drop, name the production deploys between the last reference Scan and the first worse Scan. `references/deploy-window.md` gives the commands. Put the commit range in `suspectCommits`.
 5. **Follow up fixes.** `references/follow-up.md` says when to start a post-deploy `page scan`, and how to report a fix as confirmed or not holding.

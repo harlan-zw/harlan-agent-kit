@@ -25,7 +25,8 @@ Follow its protocol, its exit codes, and its dataset rules.
 This skill narrows its guardrails. Where the two differ, this skill wins.
 
 If `nuxtseo` is missing, or exits `3`, that is a blocker. Report it, and never report a clean Site.
-The token comes from `NUXTSEO_TOKEN` in the worktree `.env`. Never print it, and never write it to a file.
+Use the controller-provided `NUXTSEO_TOKEN`, from repository credentials or private host configuration.
+Never print the token or copy its value into a file.
 
 ## Find the Site
 

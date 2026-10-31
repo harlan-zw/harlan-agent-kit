@@ -13,6 +13,27 @@ If the two disagree, the code wins. Apply the rule yourself only to decide what 
 
 Never merge the mobile and desktop groups. On nuxtseo.com the scheduler scans desktop on Sundays and mobile on Tuesdays. Mobile LCP sits near 8 s and desktop near 1.3 s, so a merged list flips every few days with no deploy behind it.
 
+## Bound Scan detail reads
+
+Use list rows for LCP, TBT, and CLS.
+Read `nuxtseo scans show <scan-id>` only for missing FCP values or cause evidence.
+Reuse successful details by Scan ID before making another request.
+
+For FCP persistence, start with the latest two completed Scans for each page and strategy.
+Two Poor values establish persistence; they do not date an earlier onset.
+Read older details only when the comparison or cause needs them.
+For a Lab drop, read the reference and trailing Scans needed by the rule below.
+
+If a required detail fails, record the missing FCP coverage.
+Never substitute an older Scan for a missing latest detail to claim persistence.
+Do not report a complete FCP history or absence of drops from partial details.
+Return every retained list row unchanged, adding FCP only from its matching successful detail.
+
+Save failed stdout, stderr, and exit codes separately from successful JSON.
+Honor the CLI retry delay and reuse successful reads across retries.
+If repeated throttling or retry deadlines occur, stop parallel detail reads and report the coverage gap.
+Other Sites on the same team share the read quota.
+
 ## Thresholds
 
 | Metric | Poor line | A Scan is worse when it exceeds the reference by more than |
