@@ -1462,7 +1462,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       if (checksLostRunner(snapshot.value.checks) || checksLostRunner(snapshot.value.baseChecks))
         recordRunnerLostIncident(options, task.repository)
 
-      const stored = task.rerun._tag === 'NotRequested' && !manualReview
+      const stored = task.rerun._tag === 'NotRequested' && (!manualReview || task.state.fence > 1)
         ? options.store.storedReviewForHead(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
         : { _tag: 'None' as const }
       // A later fence resumes the stored run, unless repository policy moved
@@ -1470,6 +1470,18 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // would only requeue the same run on every poll.
       const storedRun = task.state.fence > 1 && stored._tag === 'Current' ? stored.run : undefined
       if (storedRun !== undefined) {
+        // A failed label write must not start another Agent on a publication retry.
+        if (manualReview) {
+          const consumed = await options.github.consumeApprovalLabel(
+            task.repositoryMapping,
+            'pull_request',
+            task.pullRequestNumber,
+            APPROVAL_LABELS.review,
+            signal,
+          )
+          if (consumed._tag === 'Err')
+            options.onProgressPublishFailure?.(task, consumed.error)
+        }
         const repairAccess = await options.preflightRepair(task.repository, signal)
         return projectReviewRun(
           options,
