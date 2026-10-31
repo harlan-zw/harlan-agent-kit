@@ -108,7 +108,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         ? null
         : options.githubEvidence === undefined
           ? { _tag: 'Unavailable' as const, reason: 'The controller has no GitHub metadata source.' }
-          : await options.githubEvidence.collect(task.repositoryMapping, signal, task.name === 'ci-review', task.name === 'daily-checkin' ? task.repositoryMapping.defaultBranch : undefined)
+          : await options.githubEvidence.collect(task.repositoryMapping, signal, task.name === 'ci-review', task.name === 'daily-checkin' ? task.repositoryMapping.defaultBranch : undefined, task.name === 'seo-review' || task.name === 'vitals-review' ? 'ownership' : 'metadata')
       if (task.name === 'daily-checkin') {
         await (options.writeCheckinEvidence ?? writeCheckinGitHubEvidence)({
           workspace: workspace.value.path,
