@@ -17,6 +17,11 @@ PORT=4173 node .output/server/index.mjs &
 
 Use the repository's own preview command instead when it has one, for example `pnpm preview`.
 Stop the server after each run.
+Use a preview that supports the repository's production preset and local bindings.
+
+Keep before and after caches separate. Seed local databases from identical fixtures.
+Record each sample's document bytes and asset URLs. Confirm they match that side's build.
+If cached HTML or different content enters the comparison, correct the fixture before attributing an improvement.
 
 ## Scan the route
 
@@ -34,6 +39,9 @@ Read `ci-result.json` in the output path. Record the metric for the route from b
 
 ## Report it
 
-Put both values, the command, and the commit each side was built from in the pull request body.
-If the metric did not move past the Threshold in `lab-series.md`, say so and recommend closing.
+Return both values, the commands, and each side's commit in the result's `checks`.
+Include measured benchmarks in the pull request body.
+Compare the target metric with run-to-run variation and the Threshold in `lab-series.md`.
+If the comparison does not establish the claimed benefit, return blocked with measurements. Do not retain the unproved experiment.
+Report other metric changes and HTML size beside the target result.
 Never raise a Threshold, skip a route, or change the strategy to make the number move.

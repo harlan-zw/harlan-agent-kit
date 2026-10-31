@@ -194,6 +194,7 @@ describe('agent prompt fragments', () => {
       expect(prompt).not.toContain('Do not run the full test suite, the full typecheck, or a build.')
       expect(prompt).toContain('Do not run the full test suite or full typecheck. CI runs those.')
       expect(prompt).toContain('If the required comparison cannot run, return blocked with the exact blocker.')
+      expect(prompt).toContain('If the comparison does not establish the claimed benefit, return blocked with measurements.')
     }
     else {
       expect(prompt).not.toContain(permission)

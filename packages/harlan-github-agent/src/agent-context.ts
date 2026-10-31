@@ -382,7 +382,10 @@ export function checkBudgetLines(scope: CheckScope): string {
 When the issue requires a local performance comparison, build the before and after applications serially.
 Use the repository's build scripts and the same local runner, strategy, and measurement settings for both.
 These builds provide inputs for the focused comparison. They do not authorize production deployment or unrelated validation builds.
-If the required comparison cannot run, return blocked with the exact blocker.`
+If the required comparison cannot run, return blocked with the exact blocker.
+Compare the target metric with run-to-run variation.
+If the comparison does not establish the claimed benefit, return blocked with measurements.
+Report other metric changes and HTML size beside the target result.`
     : 'Do not run the full test suite, the full typecheck, or a build. CI runs those.'
   const lastResort = scope === CHECK_SCOPES.failingCheck
     ? ' Exception: when no narrower command reproduces the failure, run the failing check\'s exact command, even if it is the full suite.'
