@@ -1075,7 +1075,6 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   app.get('/favicon.ico', () => new Response(null, { status: 204 }))
   app.get('/_payload.json', () => staticAsset(assets, dashboardRoot, '_payload.json'))
   app.get('/_nuxt/**', event => staticAsset(assets, dashboardRoot, new URL(event.req.url).pathname.slice(1)))
-  app.get('/_fonts/**', event => staticAsset(assets, dashboardRoot, new URL(event.req.url).pathname.slice(1)))
   app.get('/_nuxt-skew-sw.js', () => staticAsset(assets, dashboardRoot, '_nuxt-skew-sw.js'))
   app.get('/', event => dashboardHtml(assets, dashboardRoot, 'index.html', String(event.context.dashboardNonce)))
   DASHBOARD_PAGES.forEach((page) => {
