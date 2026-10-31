@@ -140,6 +140,57 @@ describe('lab series', () => {
     expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')?._tag).toBe('Drop')
   })
 
+  it.each(['lcp', 'fcp', 'tbt', 'cls'] as const)('requires the latest completed %s measurement before judging older Poor points', (metric) => {
+    const poor = metric === 'cls' ? 0.4 : 5000
+    const rows = [1, 2, 3].map(day => ({ ...scan(day, 5000), [metric]: poor }))
+    rows.push({ ...scan(4, 5000), [metric]: null })
+
+    expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', metric)).toEqual({
+      _tag: 'MissingMetric',
+      missingAt: ['2026-09-04T06:00:00.000Z'],
+    })
+  })
+
+  it('requires the previous completed metric even when the latest one is Poor', () => {
+    const rows = [scan(1, 5000), scan(2, 5000), { ...scan(3, 5000), lcp: null }, scan(4, 5000)]
+
+    expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')).toEqual({
+      _tag: 'MissingMetric',
+      missingAt: ['2026-09-03T06:00:00.000Z'],
+    })
+  })
+
+  it('reports the missing latest pair when no FCP details were read', () => {
+    expect(verdictFor(judgeLabScans(scans([scan(1, 5000), scan(2, 5000)])), '/blog', 'desktop', 'fcp')).toEqual({
+      _tag: 'MissingMetric',
+      missingAt: ['2026-09-01T06:00:00.000Z', '2026-09-02T06:00:00.000Z'],
+    })
+  })
+
+  it('reports missing latest metrics instead of keeping an older drop current', () => {
+    const rows = [scan(1, 1100), scan(2, 1150), scan(3, 2600), scan(4, 2700), { ...scan(5, 2700), lcp: null }]
+
+    expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')?._tag).toBe('MissingMetric')
+  })
+
+  it('keeps a measured Poor pair without dating its onset across an older missing metric', () => {
+    const rows = [scan(1, 5000), scan(2, 5000), { ...scan(3, 5000), lcp: null }, scan(4, 5000), scan(5, 5100)]
+
+    expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')).toEqual({
+      _tag: 'Poor',
+      latest: 5100,
+      since: '2026-09-04T06:00:00.000Z',
+      lastReferenceAt: null,
+      scans: 2,
+    })
+  })
+
+  it('excludes a failed latest Scan from a measured Poor pair', () => {
+    const rows = [scan(1, 5000), scan(2, 5100), { ...scan(3, 0), status: 'failed', lcp: null }]
+
+    expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')).toMatchObject({ _tag: 'Poor', latest: 5100, scans: 2 })
+  })
+
   it('refuses a scan list that is not the CLI shape', () => {
     expect(parseScanRows([{ url: 'https://example.com', strategy: 'tablet', status: 'complete', completedAt: '2026-09-01T00:00:00.000Z' }])._tag).toBe('Err')
   })
@@ -220,6 +271,15 @@ describe('lab findings', () => {
   it('files a persistently Poor mobile page, keyed on page, strategy, and metric', () => {
     const parsed = createVitalsReview({ minimumViews: 200 }).parseResponse(answer({ labFindings: [labFinding()] }))
     expect(parsed._tag === 'Ok' && parsed.value.candidates.map(candidate => candidate.fingerprint)).toEqual(['vitals-lab#/#mobile#lcp'])
+  })
+
+  it('describes Poor persistence after a gap without claiming the entire retained history', () => {
+    const measured = [scan(1, 1100), { ...scan(2, 1200), lcp: null }, scan(3, 5000), scan(4, 5100)]
+    const parsed = createVitalsReview({ minimumViews: 200 }).parseResponse(answer({ labFindings: [labFinding({ url: 'https://example.com/blog', strategy: 'desktop', scans: measured })] }))
+    const claims = parsed._tag === 'Ok' ? parsed.value.candidates.map(candidate => candidate.claim) : []
+    expect(claims).toEqual([expect.stringContaining('last 2 measured Scans')])
+    expect(claims[0]).not.toContain('Poor in every retained Scan')
+    expect(claims[0]).toContain('no earlier measured reference')
   })
 
   it('files nothing for a proposal the series does not support', () => {
