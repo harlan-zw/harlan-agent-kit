@@ -9,6 +9,7 @@ import { expect, it } from 'vitest'
 import { checkAgentWorker, prepareAgentSandbox, runAgentSandboxCommand } from '../src/agent-sandbox.ts'
 import { createCodexProvider } from '../src/codex-provider.ts'
 import { createOpencodeProvider } from '../src/opencode-provider.ts'
+import { createWorkerMemoryLimiter } from '../src/worker-memory.ts'
 
 const execute = promisify(execFile)
 
@@ -54,6 +55,37 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
   await writeFile(profile, JSON.stringify({ home: worker, codex: '/usr/bin/true', opencode: '/usr/bin/true', tools: [tools], readOnlyPaths: [] }))
   const sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, readOnly: true, taskId: 'harlan-zw/example:vitals-review:2026-10-28T00:00:00.000Z' })
   try {
+    expect(sandbox.args.some(value => value.includes('fixture-viewer'))).toBe(false)
+    const limiter = createWorkerMemoryLimiter({
+      execute: async () => ({ stdout: '/user.slice/fixture.slice\n' }),
+      readEvents: async () => 'oom_kill 0\n',
+      newId: () => 'fixture',
+    })
+    const bounded = await limiter({ binary: sandbox.binary, args: sandbox.args, memoryGiB: 1 })
+    try {
+      expect(bounded.args.some(value => value.includes('fixture-viewer'))).toBe(false)
+    }
+    finally {
+      await bounded.release()
+    }
+    const probe = execute(sandbox.binary, [...sandbox.args, '/run/agent/node', '-e', `
+      process.stdin.resume();
+      process.stdin.on('end', () => process.exit(0));
+      console.log(Boolean(process.env.NUXTSEO_TOKEN));
+    `], { env: sandbox.environment, timeout: 10_000 })
+    try {
+      const ready = await new Promise<string>((resolve, reject) => {
+        probe.child.stdout!.once('data', data => resolve(String(data).trim()))
+        probe.catch(reject)
+      })
+      expect(ready).toBe('true')
+      const processes = await execute('/bin/ps', ['-e', '-o', 'args='])
+      expect(processes.stdout.includes('fixture-viewer')).toBe(false)
+    }
+    finally {
+      probe.child.stdin!.end()
+      await probe
+    }
     const result = await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'nuxtseo --version --json'], { env: sandbox.environment })
     expect(JSON.parse(result.stdout)).toEqual({ version: 'fixture-1' })
     const identity = await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'nuxtseo whoami --json'], { env: sandbox.environment })
@@ -312,7 +344,8 @@ if (process.argv[2] === 'serve') {
     profilePath: profile,
     provider: 'opencode',
   })
-  expect(sandbox.environment).toEqual({ PATH: '/usr/bin:/bin' })
+  const hostEnvironment = await execute(process.execPath, ['-e', 'console.log(JSON.stringify({ token: process.env.TOOLING_TOKEN ?? null, controller: process.env.CONTROLLER_TOKEN ?? null, nodeOptions: process.env.NODE_OPTIONS ?? null }))'], { env: sandbox.environment })
+  expect(JSON.parse(hostEnvironment.stdout)).toEqual({ token: null, controller: null, nodeOptions: null })
   const host = createServer((_request, response) => response.end('fake-host-session-secret'))
   await new Promise<void>((resolve) => {
     host.listen(0, '127.0.0.1', resolve)

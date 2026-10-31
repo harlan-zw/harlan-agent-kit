@@ -439,9 +439,9 @@ export async function prepareAgentSandbox(input: {
       // Native watcher startup can block OpenCode's event loop. Controller turns use tools to read current files.
       ...(input.provider === 'opencode' ? { OPENCODE_FILEWATCHER_DISABLE: 'true', OPENCODE_DB: '/run/agent/opencode-database/opencode.db' } : {}),
     }
-    // Repository variables belong inside the boundary. Loader variables must
-    // never affect host Bubblewrap before namespace creation.
-    args.splice(args.indexOf('--'), 0, '--clearenv', ...Object.entries(environment).flatMap(([key, value]) => value === undefined ? [] : ['--setenv', key, value]))
+    // Keep secrets out of launcher arguments and files. Decode the opaque
+    // environment only inside the guest, after host loaders have started.
+    const guestEnvironment = { PATH: '/usr/bin:/bin', HARLAN_AGENT_SANDBOX_ENVIRONMENT: JSON.stringify(environment) }
     let released: Promise<void> | undefined
     const saveGit = async () => {
       const finalHead = await gitData(privateGit.directory, 'HEAD')
@@ -451,11 +451,11 @@ export async function prepareAgentSandbox(input: {
       const exportArgs = [...args]
       exportArgs[exportArgs.lastIndexOf('/run/agent/runtime.ts') + 1] = 'command'
       const guest = [...exportArgs, ...safeGit]
-      const newSha = (await execute('/usr/bin/bwrap', [...guest, 'rev-parse', '--verify', 'HEAD'], { env: { PATH: '/usr/bin:/bin' }, timeout: 30_000 })).stdout.trim()
+      const newSha = (await execute('/usr/bin/bwrap', [...guest, 'rev-parse', '--verify', 'HEAD'], { env: guestEnvironment, timeout: 30_000 })).stdout.trim()
       if (!/^[a-f0-9]{40}$/.test(newSha) || !/^[a-f0-9]{40}$/.test(originalSha))
         throw new Error('The Agent Git head must use a complete commit SHA.')
       if (newSha !== originalSha) {
-        const exporting = execute('/usr/bin/bwrap', [...guest, 'pack-objects', '--stdout', '--revs', '--thin'], { env: { PATH: '/usr/bin:/bin' }, encoding: 'buffer', maxBuffer: 128 * 1024 * 1024, timeout: 30_000 })
+        const exporting = execute('/usr/bin/bwrap', [...guest, 'pack-objects', '--stdout', '--revs', '--thin'], { env: guestEnvironment, encoding: 'buffer', maxBuffer: 128 * 1024 * 1024, timeout: 30_000 })
         exporting.child.stdin!.end(`${newSha}\n^${originalSha}\n`)
         const pack = (await exporting).stdout
         // Host Git reads only a pack stream. It never reads worker configuration or aliases.
@@ -467,7 +467,7 @@ export async function prepareAgentSandbox(input: {
       await privateGit.save()
     }
     const memory = input.memoryPerAgentGiB === undefined ? undefined : await workerMemoryCommand({ binary: '/usr/bin/bwrap', args, memoryGiB: input.memoryPerAgentGiB, ...(input.taskId === undefined ? {} : { taskId: input.taskId }) })
-    const launchEnvironment = { PATH: '/usr/bin:/bin', ...(memory === undefined ? {} : { XDG_RUNTIME_DIR: input.environment.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: input.environment.DBUS_SESSION_BUS_ADDRESS }) }
+    const launchEnvironment = { ...guestEnvironment, ...(memory === undefined ? {} : { XDG_RUNTIME_DIR: input.environment.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: input.environment.DBUS_SESSION_BUS_ADDRESS }) }
     return { binary: memory?.binary ?? '/usr/bin/bwrap', args: memory?.args ?? args, environment: launchEnvironment, workerStateHome, adapterPath, ...(skillCatalogPath === undefined ? {} : { skillCatalogPath }), providerBinary: hostTools[input.provider] === undefined ? profile[input.provider] : `/run/agent/host-tools/${input.provider}`, memoryExceeded: memory?.memoryExceeded ?? (async () => false), release: () => {
       released ??= (async () => {
         try {

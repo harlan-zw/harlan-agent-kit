@@ -40,7 +40,7 @@ export async function workerNuxtseoEnvironment(input: { configurationPath: strin
   const task = /^([^:]+):(seo-review|vitals-review):/.exec(input.taskId ?? '')
   if (task === null)
     return {}
-  if (task[1] !== input.repository)
+  if (task[1]!.toLowerCase() !== input.repository?.toLowerCase())
     throw new Error('The NuxtSEO Routine repository does not match its Worktree origin.')
   const text = await privateText(input.configurationPath)
   if (text === undefined)
@@ -54,7 +54,7 @@ export async function workerNuxtseoEnvironment(input: { configurationPath: strin
     || !source.repositories.every(repository => typeof repository === 'string' && /^[\w.-]+\/[\w.-]+$/.test(repository))) {
     throw new Error('Configure an absolute NuxtSEO environment file and explicit repositories.')
   }
-  if (!source.repositories.includes(input.repository))
+  if (!source.repositories.some(repository => repository.toLowerCase() === input.repository?.toLowerCase()))
     return {}
   const environment = await privateText(source.environmentFile)
   if (environment === undefined)

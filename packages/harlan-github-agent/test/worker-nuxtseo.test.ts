@@ -65,6 +65,15 @@ it('leaves an unselected repository without the shared token', async () => {
   expect(await workerNuxtseoEnvironment({ ...input, repository: 'owner/client', taskId: 'owner/client:seo-review:2026-10-31T00:00:00.000Z' })).toEqual({})
 })
 
+it.each([true, false])('matches GitHub repository casing with shared configuration %s', async (configured) => {
+  const { input, environmentFile } = await credentials()
+  if (configured)
+    await writeFile(input.configurationPath, JSON.stringify({ environmentFile, repositories: ['OWNER/SITE'] }), { mode: 0o600 })
+  else
+    await rm(input.configurationPath)
+  expect(await workerNuxtseoEnvironment({ ...input, repository: 'Owner/Site' })).toEqual(configured ? { NUXTSEO_TOKEN: 'fixture-viewer' } : {})
+})
+
 it('never opens shared credentials for another role', async () => {
   const { input, environmentFile } = await credentials()
   await rm(environmentFile)
