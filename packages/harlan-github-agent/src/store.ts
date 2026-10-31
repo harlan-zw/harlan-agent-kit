@@ -4824,7 +4824,12 @@ function planAdversarialReview(
     && !(manualReviewRequested && localAttempt.revision_attempt === 0)
   // Recording the Agent's answer does not finish its controller Publication.
   // A retry resumes this stored run instead of paying for another Agent turn.
-  const needsReviewPublication = alreadyReviewed && database.prepare(`
+  const hasPublicationRetry = database.prepare(`
+    SELECT 1 FROM worker_tasks
+    WHERE subject_id = ? AND revision_id = ? AND kind = 'adversarial_review' AND fence > 0
+    LIMIT 1
+  `).get(subjectId, revisionId) !== undefined
+  const needsReviewPublication = alreadyReviewed && hasPublicationRetry && database.prepare(`
     SELECT 1 FROM review_publications
     WHERE review_run_id = ? AND result_tag = 'Published'
     UNION ALL

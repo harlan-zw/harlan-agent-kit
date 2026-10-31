@@ -190,4 +190,16 @@ describe('stored Review publication recovery', () => {
     store.recordObservation({ externalId: 'explicit-stop', observedAt: '2026-08-13T01:10:00.000Z', source: 'poll', subject: pullRequest })
     expect(store.claimNextAdversarialReviewTask('publisher-retry', '2026-08-13T01:10:01.000Z', 600_000)).toBeNull()
   })
+
+  it('does not create a fresh Agent Task when only the base moves', () => {
+    const { store, task, pullRequest } = savedReview('Queued')
+    const retry = store.claimNextAdversarialReviewTask('reviewer', '2026-08-13T01:06:00.000Z', 600_000)
+    if (retry === null)
+      throw new Error('Expected the existing publication retry.')
+    store.completeWorkerTask({ taskId: retry.id, workerId: retry.state.workerId, fence: retry.state.fence, at: '2026-08-13T01:06:01.000Z', evidence: 'saved-run' })
+    store.recordObservation({ externalId: 'base-moved', observedAt: '2026-08-13T01:10:00.000Z', source: 'poll', subject: { ...pullRequest, baseSha: 'new-base' } })
+    expect(store.claimNextAdversarialReviewTask('new-agent', '2026-08-13T01:10:01.000Z', 600_000)).toBeNull()
+    expect(store.storedReviewForHead(task.repository, task.pullRequestNumber, pullRequest.headSha))
+      .toMatchObject({ _tag: 'Current', run: { id: 'saved-run' } })
+  })
 })
