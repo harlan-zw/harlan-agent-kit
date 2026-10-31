@@ -15,6 +15,7 @@ import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storag
 import { resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
 import { resolveWorkerNuxtseo, workerNuxtseoEnvironment, workerNuxtseoRoutine } from './worker-nuxtseo.ts'
+import { resolveWorkerPackage } from './worker-package.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 const execute = promisify(execFile)
@@ -289,17 +290,39 @@ export async function prepareAgentSandbox(input: {
       args.push('--bind', databaseDirectory, '/run/agent/opencode-database')
     }
     const skillRoots = []
+    const packageTools = []
     if (input.reviewHome === undefined && input.networkMode !== 'opencode-client'
       && workerNuxtseoRoutine(input) !== undefined) {
       const cli = await resolveWorkerNuxtseo(controllerHome)
-      for (const path of cli.packages)
-        args.push('--ro-bind', await permittedPath(path, controllerHome), path)
-      for (const link of cli.links)
-        args.push('--dir', dirname(link.path), '--symlink', link.target, link.path)
-      const launcher = join(scratch, 'nuxtseo')
-      await writeFile(launcher, `#!/bin/sh\nexec /run/agent/node '${cli.entry.replaceAll('\'', '\'\\\'\'')}' "$@"\n`, { mode: 0o700 })
-      args.push('--ro-bind', launcher, '/run/agent/host-tools/nuxtseo')
+      packageTools.push({ ...cli, command: 'nuxtseo' })
       skillRoots.push({ path: cli.skills, agentPath: cli.skills })
+    }
+    if (input.reviewHome === undefined && input.networkMode !== 'opencode-client') {
+      const browser = await resolveWorkerPackage(controllerHome, { name: 'dev-browser', package: 'dev-browser', label: 'browser' })
+      if (browser !== undefined)
+        packageTools.push({ ...browser, command: 'dev-browser' })
+    }
+    const mountedPackages = new Set<string>()
+    const packageLinks = new Map<string, string>()
+    for (const cli of packageTools) {
+      for (const path of cli.packages) {
+        if (!mountedPackages.has(path)) {
+          args.push('--ro-bind', await permittedPath(path, controllerHome), path)
+          mountedPackages.add(path)
+        }
+      }
+      for (const link of cli.links) {
+        const previous = packageLinks.get(link.path)
+        if (previous !== undefined && previous !== link.target)
+          throw new Error('The Agent package alias changed while preparing its tools.')
+        if (previous === undefined) {
+          args.push('--dir', dirname(link.path), '--symlink', link.target, link.path)
+          packageLinks.set(link.path, link.target)
+        }
+      }
+      const launcher = join(scratch, cli.command)
+      await writeFile(launcher, `#!/bin/sh\nexec /run/agent/node '${cli.entry.replaceAll('\'', '\'\\\'\'')}' "$@"\n`, { mode: 0o700 })
+      args.push('--ro-bind', launcher, `/run/agent/host-tools/${cli.command}`)
     }
     for (const path of [...profile.tools, ...profile.readOnlyPaths]) {
       const canonical = await permittedPath(path, controllerHome)
