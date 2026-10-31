@@ -68,7 +68,8 @@ export interface VitalsFinding {
 }
 
 export type LabVerdict
-  = | { _tag: 'ShortSeries', count: number }
+  = | { _tag: 'MissingMetric', missingAt: string[] }
+    | { _tag: 'ShortSeries', count: number }
     | { _tag: 'Steady', latest: number }
     | { _tag: 'Suspect', latest: number, reference: number }
     | { _tag: 'Unstable', latest: number, reference: number }
@@ -223,9 +224,16 @@ export function judgeLabScans(scans: readonly LabScan[]): LabJudgement[] {
     const ordered = [...group].sort((a, b) => Date.parse(a.completedAt) - Date.parse(b.completedAt))
     const first = ordered[0]!
     for (const metric of LAB_METRICS) {
-      const points = ordered.flatMap(scan => scan.values[metric] === null ? [] : [{ completedAt: scan.completedAt, value: scan.values[metric] }])
-      if (points.length === 0)
+      const lastMissing = ordered.findLastIndex(scan => scan.values[metric] === null)
+      const measuredTail = ordered.slice(lastMissing + 1)
+      if (lastMissing >= 0 && measuredTail.length < PERSISTENT_SCANS) {
+        const missingAt = ordered.slice(-PERSISTENT_SCANS)
+          .filter(scan => scan.values[metric] === null)
+          .map(scan => scan.completedAt)
+        judged.push({ path: first.path, strategy: first.strategy, metric, verdict: { _tag: 'MissingMetric', missingAt } })
         continue
+      }
+      const points = measuredTail.map(scan => ({ completedAt: scan.completedAt, value: scan.values[metric]! }))
       judged.push({ path: first.path, strategy: first.strategy, metric, verdict: judgeLabSeries(metric, points) })
     }
   }
@@ -340,6 +348,8 @@ function formatValue(metric: FieldMetric | LabMetric, value: number): string {
 
 function describeVerdict(metric: LabMetric, verdict: LabVerdict): string {
   switch (verdict._tag) {
+    case 'MissingMetric':
+      return `MissingMetric: ${verdict.missingAt.length} latest completed Scans lack ${metric.toUpperCase()}`
     case 'ShortSeries':
       return `ShortSeries: ${verdict.count} usable Scans`
     case 'Steady':

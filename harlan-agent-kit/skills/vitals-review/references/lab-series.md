@@ -9,7 +9,8 @@ If the two disagree, the code wins. Apply the rule yourself only to decide what 
 2. Drop every row whose `status` is not `complete`. A failed Scan is not a gap.
 3. Group by page and strategy. The page is the URL path with the trailing slash removed, so `https://site.com` and `https://site.com/` are both `/`.
 4. Sort each group by `completedAt`, oldest first.
-5. Judge LCP, TBT, CLS, and FCP separately. Skip a Scan with no value for that metric.
+5. Judge LCP, TBT, CLS, and FCP separately. A missing metric in a completed Scan is a coverage gap.
+6. Judge only the measured Scans after the last gap for that metric. Never bridge a gap to date persistence.
 
 Never merge the mobile and desktop groups. On nuxtseo.com the scheduler scans desktop on Sundays and mobile on Tuesdays. Mobile LCP sits near 8 s and desktop near 1.3 s, so a merged list flips every few days with no deploy behind it.
 
@@ -26,6 +27,7 @@ For a Lab drop, read the reference and trailing Scans needed by the rule below.
 
 If a required detail fails, record the missing FCP coverage.
 Never substitute an older Scan for a missing latest detail to claim persistence.
+If either of the latest two completed Scans lacks the metric, the verdict is `MissingMetric`. It files nothing.
 Do not report a complete FCP history or absence of drops from partial details.
 Return every retained list row unchanged, adding FCP only from its matching successful detail.
 

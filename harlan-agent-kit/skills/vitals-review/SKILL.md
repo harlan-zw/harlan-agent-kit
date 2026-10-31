@@ -59,7 +59,8 @@ The one NuxtSEO write allowed is the post-deploy `page scan` in step 5.
 A Poor series and a Lab drop on one page, strategy, and metric share one fingerprint, so they are one issue.
 When several pages share one cause, such as one render-blocking stylesheet on every route, propose only the page with the most traffic and name the others in its claim.
 Propose another of those pages only after that fix deploys and the page stays Poor.
-A Suspect, an Unstable series, a Steady series, and a short series file nothing. Name each in the report.
+A Suspect, an Unstable series, a Steady series, a short series, and `MissingMetric` file nothing.
+Name each in the report. `MissingMetric` means required measurements are absent. Report the coverage gap for that metric.
 
 ### Answer the controller
 
