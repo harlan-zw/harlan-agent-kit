@@ -30,6 +30,11 @@ export interface RoutineGitHubEvidenceSource {
 }
 
 type Read = (path: string) => Promise<Result<unknown, string>>
+const workflowRunFields = ['id', 'name', 'head_sha', 'head_branch', 'status', 'conclusion', 'html_url', 'created_at', 'updated_at']
+
+function metadataList(value: unknown, key: string): unknown {
+  return typeof value === 'object' && value !== null && key in value ? (value as Record<string, unknown>)[key] : null
+}
 
 function section(input: unknown, fields: readonly string[], excludePullRequests = false): Section {
   if (!Array.isArray(input))
@@ -49,11 +54,44 @@ function section(input: unknown, fields: readonly string[], excludePullRequests 
   return { _tag: 'Available', entries: selected, truncated: input.length > maximumEntries || selected.length < entries.length || entries.some(value => fields.some(field => typeof value[field] === 'string' && value[field].length > maximumText)) }
 }
 
+async function collectWorkflowRuns(input: { repository: string, read: Read, workflowBranch?: string }, listed: Result<unknown, string>): Promise<Section> {
+  if (listed._tag === 'Err')
+    return { _tag: 'Unavailable', reason: safeText(listed.error) }
+  if (input.workflowBranch === undefined)
+    return section(metadataList(listed.value, 'workflow_runs'), workflowRunFields)
+  const workflows = metadataList(listed.value, 'workflows')
+  if (!Array.isArray(workflows) || workflows.some(value => typeof value !== 'object' || value === null
+    || !Number.isSafeInteger(value.id) || value.id <= 0 || typeof value.state !== 'string')) {
+    return { _tag: 'Unavailable', reason: 'GitHub returned an invalid workflow list.' }
+  }
+  const active = (workflows as Array<{ id: number, state: string }>).filter(workflow => workflow.state === 'active')
+  const runs = await Promise.all(active.slice(0, maximumEntries).map(async (workflow) => {
+    const result = await input.read(`/repos/${input.repository}/actions/workflows/${workflow.id}/runs?per_page=1&branch=${encodeURIComponent(input.workflowBranch!)}`)
+    return result._tag === 'Err'
+      ? { _tag: 'Unavailable' as const, reason: safeText(result.error) }
+      : section(metadataList(result.value, 'workflow_runs'), workflowRunFields)
+  }))
+  const unavailable = runs.find(run => run._tag === 'Unavailable')
+  if (unavailable?._tag === 'Unavailable')
+    return unavailable
+  const selected = runs.flatMap(run => run._tag === 'Available' ? run.entries.slice(0, 1) : [])
+    .sort((left, right) => String(right.created_at ?? '').localeCompare(String(left.created_at ?? '')))
+  const result = section(selected, workflowRunFields)
+  const total = metadataList(listed.value, 'total_count')
+  return result._tag === 'Unavailable'
+    ? result
+    : {
+        ...result,
+        truncated: result.truncated || active.length > maximumEntries || (typeof total === 'number' && total > workflows.length)
+          || runs.some(run => run._tag === 'Available' && run.truncated),
+      }
+}
+
 /** Only allowlisted metadata reaches a Routine. An unreadable section never becomes an empty success. */
 export async function collectRoutineGitHubEvidence(input: { repository: string, read: Read, now: () => Date, readJob?: (id: number) => Promise<Result<FailedJobContext, string>>, includeSuccessfulJobs?: boolean, workflowBranch?: string }): Promise<RoutineGitHubEvidence> {
   const base = `/repos/${input.repository}`
-  const branch = input.workflowBranch === undefined ? '' : `&branch=${encodeURIComponent(input.workflowBranch)}`
-  const paths = [`${base}/issues?state=open&per_page=21`, `${base}/pulls?state=open&per_page=21`, `${base}/actions/runs?per_page=${input.workflowBranch === undefined ? 21 : 10}${branch}`, `${base}/deployments?per_page=21`]
+  const workflowPath = input.workflowBranch === undefined ? `${base}/actions/runs?per_page=21` : `${base}/actions/workflows?per_page=100`
+  const paths = [`${base}/issues?state=open&per_page=21`, `${base}/pulls?state=open&per_page=21`, workflowPath, `${base}/deployments?per_page=21`]
   const results = await Promise.all(paths.map(path => input.read(path)))
   const select = (index: number, fields: readonly string[], key?: string): Section => {
     const result = results[index]!
@@ -69,7 +107,7 @@ export async function collectRoutineGitHubEvidence(input: { repository: string, 
         const result = await input.read(`${base}/deployments/${entry.id}/statuses?per_page=1`)
         return { deploymentId: entry.id as number, evidence: result._tag === 'Err' ? { _tag: 'Unavailable' as const, reason: safeText(result.error) } : section(result.value, ['state', 'created_at', 'description']) }
       }))
-  const workflowRuns = select(2, ['id', 'name', 'head_sha', 'head_branch', 'status', 'conclusion', 'html_url', 'created_at', 'updated_at'], 'workflow_runs')
+  const workflowRuns = await collectWorkflowRuns(input, results[2]!)
   const jobLogs: JobLogSnapshot = input.readJob === undefined ? { _tag: 'NotRequested' } : await collectRoutineJobLogs(input, workflowRuns)
   return {
     observedAt: input.now().toISOString(),

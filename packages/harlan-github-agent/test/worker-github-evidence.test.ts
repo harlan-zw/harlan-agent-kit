@@ -4,14 +4,43 @@ import { err, ok } from '../src/result.ts'
 import { collectRepairGitHubEvidence, collectRoutineGitHubEvidence, createRoutineGitHubEvidenceSource, jobExecutionContext } from '../src/worker-github-evidence.ts'
 import { repositoryMapping } from './fixtures.ts'
 
-it('collects daily check-in workflow evidence for the mapped branch', async () => {
-  const paths: string[] = []
-  const result = await collectRoutineGitHubEvidence({ repository: 'harlan-zw/example', workflowBranch: 'main', now: () => new Date('2026-10-10T07:00:00Z'), read: async (path) => {
-    paths.push(path)
-    return ok(path.includes('/actions/runs?') ? { workflow_runs: [{ id: 12, name: 'CI', head_branch: 'main', updated_at: '2026-10-10T07:00:00Z' }] } : [])
-  } })
-  expect(paths).toContain('/repos/harlan-zw/example/actions/runs?per_page=10&branch=main')
-  expect(result.workflowRuns).toMatchObject({ entries: [{ id: 12, head_branch: 'main', updated_at: '2026-10-10T07:00:00Z' }] })
+it('keeps CI and deployment evidence when a frequent workflow fills the recent runs', async () => {
+  const workflowRuns = [
+    { id: 13, name: 'Summary', head_branch: 'release/checkin', created_at: '2026-10-10T07:00:00Z', conclusion: 'success' },
+    { id: 12, name: 'CI', head_branch: 'release/checkin', created_at: '2026-10-09T07:00:00Z', conclusion: 'failure' },
+    { id: 11, name: 'Deploy', head_branch: 'release/checkin', created_at: '2026-10-08T07:00:00Z', conclusion: 'success' },
+  ]
+  const result = await collectRoutineGitHubEvidence({
+    repository: 'harlan-zw/example',
+    workflowBranch: 'release/checkin',
+    now: () => new Date('2026-10-10T07:00:00Z'),
+    read: async (path) => {
+      const url = new URL(path, 'https://api.github.com')
+      if (url.pathname.endsWith('/actions/workflows'))
+        return ok({ total_count: 4, workflows: [{ id: 1, state: 'active' }, { id: 2, state: 'active' }, { id: 3, state: 'active' }, { id: 4, state: 'disabled_manually' }] })
+      if (url.pathname.includes('/actions/workflows/')) {
+        if (url.searchParams.get('branch') !== 'release/checkin')
+          return err('The workflow read used the wrong branch.')
+        const workflowId = Number(url.pathname.split('/').at(-2))
+        const run = workflowRuns[workflowId - 1]
+        return run === undefined ? err('Disabled workflow must not be read.') : ok({ workflow_runs: [run] })
+      }
+      return ok(url.pathname.endsWith('/actions/runs') ? { workflow_runs: Array.from({ length: 10 }, (_, index) => ({ ...workflowRuns[0], id: 100 + index })) } : [])
+    },
+  })
+  expect(result.workflowRuns).toEqual({ _tag: 'Available', entries: workflowRuns, truncated: false })
+})
+
+it('reports incomplete workflow evidence when a workflow read fails', async () => {
+  const result = await collectRoutineGitHubEvidence({
+    repository: 'harlan-zw/example',
+    workflowBranch: 'main',
+    now: () => new Date('2026-10-10T07:00:00Z'),
+    read: async path => path.includes('/actions/workflows?')
+      ? ok({ total_count: 1, workflows: [{ id: 2, state: 'active' }] })
+      : path.includes('/actions/workflows/2/runs?') ? err('Workflow access unavailable') : ok([]),
+  })
+  expect(result.workflowRuns).toEqual({ _tag: 'Unavailable', reason: 'Workflow access unavailable' })
 })
 
 it('preserves failed job evidence without treating commit statuses as Actions jobs', async () => {
