@@ -12,6 +12,15 @@ If the two disagree, the code wins. Apply the rule yourself only to decide what 
 5. Judge LCP, TBT, CLS, and FCP separately. A missing metric in a completed Scan is a coverage gap.
 6. Judge only the measured Scans after the last gap for that metric. Never bridge a gap to date persistence.
 
+Keep each row's `lighthouseVersion` when returning Scan evidence to the controller.
+Use `null` only when the source reports no version.
+Before judging metrics, keep only the contiguous latest Lighthouse release in each page and strategy series.
+Any version change, including a patch release or a known-to-unknown transition, starts a new comparison window.
+Never join older matching releases across another version.
+Two absent versions may compare, matching NuxtSEO's comparison contract.
+One Scan after a version change is ShortSeries. It proves no persistence or recovery.
+Report the version boundary and the remaining comparison coverage.
+
 Never merge the mobile and desktop groups. On nuxtseo.com the scheduler scans desktop on Sundays and mobile on Tuesdays. Mobile LCP sits near 8 s and desktop near 1.3 s, so a merged list flips every few days with no deploy behind it.
 
 ## Bound Scan detail reads
