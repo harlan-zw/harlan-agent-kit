@@ -10,15 +10,15 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
-async function fixture() {
+async function fixture(tool = command) {
   const home = await mkdtemp(join(tmpdir(), 'worker-package-'))
   roots.push(home)
   const tools = join(home, '.local/bin')
   const root = join(home, 'installed')
   await Promise.all([mkdir(tools, { recursive: true }), mkdir(root)])
-  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'dev-browser', bin: { 'dev-browser': './cli.js' } }))
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name: tool.package, bin: { [tool.name]: './cli.js' } }))
   await writeFile(join(root, 'cli.js'), 'console.log("fixture")')
-  await writeFile(join(tools, 'dev-browser'), `#!/bin/sh\n# cmd-shim-target=${root}/cli.js\n`, { mode: 0o755 })
+  await writeFile(join(tools, tool.name), `#!/bin/sh\n# cmd-shim-target=${root}/cli.js\n`, { mode: 0o755 })
   return { home, root, tools }
 }
 
@@ -67,4 +67,18 @@ it('bounds the installed dependency closure', async () => {
     await writeFile(join(dependency, 'package.json'), JSON.stringify({ name: `fixture-${index}`, dependencies: index < 127 ? { [`fixture-${index + 1}`]: '1' } : {} }))
   }))
   await expect(resolveWorkerPackage(home, command)).rejects.toThrow('exceeds 128 packages')
+})
+
+it('accepts the trusted npm closure bound and rejects another package beyond it', async () => {
+  const npm = { name: 'npm', package: 'npm', label: 'npm', maximumPackages: 256 as const }
+  const { home, root } = await fixture(npm)
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'npm', bin: { npm: './cli.js' }, dependencies: { 'fixture-0': '1' } }))
+  await Promise.all(Array.from({ length: 256 }, async (_, index) => {
+    const dependency = join(home, 'node_modules', `fixture-${index}`)
+    await mkdir(dependency, { recursive: true })
+    await writeFile(join(dependency, 'package.json'), JSON.stringify({ name: `fixture-${index}`, dependencies: index < 254 ? { [`fixture-${index + 1}`]: '1' } : {} }))
+  }))
+  expect((await resolveWorkerPackage(home, npm))?.entry).toBe(join(root, 'cli.js'))
+  await writeFile(join(home, 'node_modules/fixture-254/package.json'), JSON.stringify({ name: 'fixture-254', dependencies: { 'fixture-255': '1' } }))
+  await expect(resolveWorkerPackage(home, npm)).rejects.toThrow('exceeds 256 packages')
 })
