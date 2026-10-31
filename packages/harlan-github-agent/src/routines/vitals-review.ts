@@ -359,7 +359,7 @@ function describeVerdict(metric: LabMetric, verdict: LabVerdict): string {
     case 'Unstable':
       return `Unstable: the reference Scans disagree around ${formatValue(metric, verdict.reference)}`
     case 'Poor':
-      return `Poor for the last ${verdict.scans} measured Scans, since ${verdict.since}, now ${formatValue(metric, verdict.latest)}${verdict.lastReferenceAt === null ? ', no earlier measured reference' : `, last better Scan ${verdict.lastReferenceAt}`}`
+      return `Poor for the last ${verdict.scans} measured Scans since ${verdict.since}. Latest ${formatValue(metric, verdict.latest)}. ${verdict.lastReferenceAt === null ? 'There is no earlier measured reference' : `Last better Scan: ${verdict.lastReferenceAt}`}`
     case 'Drop':
       return `Drop from ${formatValue(metric, verdict.reference)} to ${formatValue(metric, verdict.latest)} for ${verdict.scans} Scans, since ${verdict.since}, last reference Scan ${verdict.lastReferenceAt}`
   }
