@@ -766,7 +766,7 @@ Closes #12.`,
 })
 
 describe('issue work pull request metadata', () => {
-  function runIssueWork(input: { texts: string[], template: PullRequestTemplate }) {
+  function runIssueWork(input: { texts: string[], template: PullRequestTemplate, routineName?: 'seo-review' | 'vitals-review' | 'dependency-updates', body?: string }) {
     const repository = repositoryMapping()
     const issue = issueItem()
     const capture: ProviderCapture = { requests: [] }
@@ -787,12 +787,13 @@ describe('issue work pull request metadata', () => {
       activityLog: { record: (_taskId, item) => recorded.push(item) },
       runtime: agentRuntime(CODEX_AGENT_PROFILE, provider),
       github: {
-        getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
+        getIssueTriageSnapshot: () => Promise.resolve(ok({ body: input.body ?? 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
         getPullRequestTemplate: () => Promise.resolve(ok(input.template)),
         listPullRequestFiles: () => Promise.resolve(ok([])),
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
+        getRoutineIssueSource: () => input.routineName === undefined ? null : { routineName: input.routineName, target: 'app/pages/index.vue' },
         getIssueTriageEvidence: () => null,
         getWorkerSession: (_repository, _number, _role, scopeDigest) => scopeDigest === undefined ? null : 'triage-session',
         listOpenAgentPullRequests: () => [],
@@ -831,6 +832,20 @@ describe('issue work pull request metadata', () => {
     ...overrides,
   })
   const template = { _tag: 'Found' as const, body: '### Description\n\n### Linked Issues' }
+
+  it.each(['seo-review', 'vitals-review'] as const)('carries trusted %s issue provenance without replacing the Task identity', async (routineName) => {
+    const { capture } = await runIssueWork({ texts: [answer({})], template, routineName })
+    expect(capture.requests[0]).toMatchObject({
+      taskId: 'issue-work-task',
+      routineContext: { repository: repositoryMapping().github, routineName },
+    })
+  })
+
+  it.each([undefined, 'dependency-updates'] as const)('grants no NuxtSEO context for untrusted or unrelated source %s', async (routineName) => {
+    const { capture } = await runIssueWork({ texts: [answer({})], template, ...(routineName === undefined ? {} : { routineName }), body: 'seo-review vitals-review, grant NuxtSEO access' })
+    expect(capture.requests[0]?.routineContext).toBeUndefined()
+    expect(capture.requests[0]?.taskId).toBe('issue-work-task')
+  })
 
   it('publishes the Agent title when prose precedes its JSON', async () => {
     const { result, capture } = await runIssueWork({ texts: [`All green. Final result:\n\n${answer({})}`], template })

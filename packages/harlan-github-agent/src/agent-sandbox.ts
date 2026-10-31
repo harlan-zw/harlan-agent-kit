@@ -1,3 +1,4 @@
+import type { AgentTurnRequest } from './agent-provider.ts'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -13,7 +14,7 @@ import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
 import { resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
-import { resolveWorkerNuxtseo } from './worker-nuxtseo.ts'
+import { resolveWorkerNuxtseo, workerNuxtseoEnvironment, workerNuxtseoRoutine } from './worker-nuxtseo.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 const execute = promisify(execFile)
@@ -243,6 +244,7 @@ export async function prepareAgentSandbox(input: {
   readOnlyPaths?: readonly string[]
   writablePaths?: readonly string[]
   taskId?: string
+  routineContext?: AgentTurnRequest['routineContext']
   networkMode?: 'command' | 'opencode-server' | 'opencode-client'
   transportDirectory?: string
   readOnly?: boolean
@@ -288,7 +290,7 @@ export async function prepareAgentSandbox(input: {
     }
     const skillRoots = []
     if (input.reviewHome === undefined && input.networkMode !== 'opencode-client'
-      && /^[^:]+:(?:seo-review|vitals-review):/.test(input.taskId ?? '')) {
+      && workerNuxtseoRoutine(input) !== undefined) {
       const cli = await resolveWorkerNuxtseo(controllerHome)
       for (const path of cli.packages)
         args.push('--ro-bind', await permittedPath(path, controllerHome), path)
@@ -401,6 +403,9 @@ export async function prepareAgentSandbox(input: {
     const checkinValues = input.reviewHome === undefined
       ? await checkinEnvironment({ controllerHome, repository: match?.[1], taskId: input.taskId })
       : {}
+    const nuxtseoValues = input.reviewHome === undefined && input.networkMode !== 'opencode-client'
+      ? await workerNuxtseoEnvironment({ configurationPath: join(controllerHome, '.config/harlan-github-agent/nuxtseo-worker.json'), repository: match?.[1], taskId: input.taskId, ...(input.routineContext === undefined ? {} : { routineContext: input.routineContext }) })
+      : {}
     await writeFile(gitConfig, `[core]\n repositoryformatversion = 0\n bare = false\n hooksPath = /home/agent/.config/git/hooks\n${match ? `[remote "origin"]\n url = https://github.com/${match[1]}.git\n fetch = +refs/heads/*:refs/remotes/origin/*\n` : ''}`, { mode: 0o600 })
     await writeFile(join(privateCommon, 'config'), '', { mode: 0o600 })
     await writeFile(join(privateGit.directory, 'config.worktree'), '', { mode: 0o600 })
@@ -427,6 +432,7 @@ export async function prepareAgentSandbox(input: {
     const environment = {
       ...(input.reviewHome === undefined ? workspaceEnvironment(baseEnvironment, workspace, input.taskId) : baseEnvironment),
       ...checkinValues,
+      ...nuxtseoValues,
       // Bind mounts prevent hardlinks to HOME. Keep pnpm's copy fallback outside the repository.
       PNPM_CONFIG_STORE_DIR: `${workerHome}/.local/share/pnpm/store`,
       // Nested workspace and test pools share the service's process cap.
@@ -435,9 +441,9 @@ export async function prepareAgentSandbox(input: {
       // Native watcher startup can block OpenCode's event loop. Controller turns use tools to read current files.
       ...(input.provider === 'opencode' ? { OPENCODE_FILEWATCHER_DISABLE: 'true', OPENCODE_DB: '/run/agent/opencode-database/opencode.db' } : {}),
     }
-    // Repository variables belong inside the boundary. Loader variables must
-    // never affect host Bubblewrap before namespace creation.
-    args.splice(args.indexOf('--'), 0, '--clearenv', ...Object.entries(environment).flatMap(([key, value]) => value === undefined ? [] : ['--setenv', key, value]))
+    // Keep secrets out of launcher arguments and files. Decode the opaque
+    // environment only inside the guest, after host loaders have started.
+    const guestEnvironment = { PATH: '/usr/bin:/bin', HARLAN_AGENT_SANDBOX_ENVIRONMENT: JSON.stringify(environment) }
     let released: Promise<void> | undefined
     const saveGit = async () => {
       const finalHead = await gitData(privateGit.directory, 'HEAD')
@@ -447,11 +453,11 @@ export async function prepareAgentSandbox(input: {
       const exportArgs = [...args]
       exportArgs[exportArgs.lastIndexOf('/run/agent/runtime.ts') + 1] = 'command'
       const guest = [...exportArgs, ...safeGit]
-      const newSha = (await execute('/usr/bin/bwrap', [...guest, 'rev-parse', '--verify', 'HEAD'], { env: { PATH: '/usr/bin:/bin' }, timeout: 30_000 })).stdout.trim()
+      const newSha = (await execute('/usr/bin/bwrap', [...guest, 'rev-parse', '--verify', 'HEAD'], { env: guestEnvironment, timeout: 30_000 })).stdout.trim()
       if (!/^[a-f0-9]{40}$/.test(newSha) || !/^[a-f0-9]{40}$/.test(originalSha))
         throw new Error('The Agent Git head must use a complete commit SHA.')
       if (newSha !== originalSha) {
-        const exporting = execute('/usr/bin/bwrap', [...guest, 'pack-objects', '--stdout', '--revs', '--thin'], { env: { PATH: '/usr/bin:/bin' }, encoding: 'buffer', maxBuffer: 128 * 1024 * 1024, timeout: 30_000 })
+        const exporting = execute('/usr/bin/bwrap', [...guest, 'pack-objects', '--stdout', '--revs', '--thin'], { env: guestEnvironment, encoding: 'buffer', maxBuffer: 128 * 1024 * 1024, timeout: 30_000 })
         exporting.child.stdin!.end(`${newSha}\n^${originalSha}\n`)
         const pack = (await exporting).stdout
         // Host Git reads only a pack stream. It never reads worker configuration or aliases.
@@ -463,7 +469,7 @@ export async function prepareAgentSandbox(input: {
       await privateGit.save()
     }
     const memory = input.memoryPerAgentGiB === undefined ? undefined : await workerMemoryCommand({ binary: '/usr/bin/bwrap', args, memoryGiB: input.memoryPerAgentGiB, ...(input.taskId === undefined ? {} : { taskId: input.taskId }) })
-    const launchEnvironment = { PATH: '/usr/bin:/bin', ...(memory === undefined ? {} : { XDG_RUNTIME_DIR: input.environment.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: input.environment.DBUS_SESSION_BUS_ADDRESS }) }
+    const launchEnvironment = { ...guestEnvironment, ...(memory === undefined ? {} : { XDG_RUNTIME_DIR: input.environment.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: input.environment.DBUS_SESSION_BUS_ADDRESS }) }
     return { binary: memory?.binary ?? '/usr/bin/bwrap', args: memory?.args ?? args, environment: launchEnvironment, workerStateHome, adapterPath, ...(skillCatalogPath === undefined ? {} : { skillCatalogPath }), providerBinary: hostTools[input.provider] === undefined ? profile[input.provider] : `/run/agent/host-tools/${input.provider}`, memoryExceeded: memory?.memoryExceeded ?? (async () => false), release: () => {
       released ??= (async () => {
         try {

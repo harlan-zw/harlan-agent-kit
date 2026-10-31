@@ -14,13 +14,18 @@ function relay(socket: Socket, target: { host: string, port: number } | { path: 
 }
 
 async function main(): Promise<void> {
+  const encodedEnvironment = process.env.HARLAN_AGENT_SANDBOX_ENVIRONMENT
+  delete process.env.HARLAN_AGENT_SANDBOX_ENVIRONMENT
+  if (encodedEnvironment === undefined)
+    throw new Error('The Agent runtime needs its private environment.')
+  const workerEnvironment = JSON.parse(encodedEnvironment) as NodeJS.ProcessEnv
   const proxy = createServer(socket => relay(socket, { path: '/run/agent/egress/proxy.sock' }))
   await new Promise<void>((resolve, reject) => {
     proxy.once('error', reject)
     proxy.listen(0, '127.0.0.1', resolve)
   })
   const proxyPort = (proxy.address() as AddressInfo).port
-  const environment = { ...process.env, HTTP_PROXY: `http://127.0.0.1:${proxyPort}`, HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`, http_proxy: `http://127.0.0.1:${proxyPort}`, https_proxy: `http://127.0.0.1:${proxyPort}`, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost', NODE_USE_ENV_PROXY: '1' }
+  const environment = { ...workerEnvironment, HTTP_PROXY: `http://127.0.0.1:${proxyPort}`, HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`, http_proxy: `http://127.0.0.1:${proxyPort}`, https_proxy: `http://127.0.0.1:${proxyPort}`, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost', NODE_USE_ENV_PROXY: '1' }
   const mode = process.argv[2]
   const binary = process.argv[3]
   if (!binary)

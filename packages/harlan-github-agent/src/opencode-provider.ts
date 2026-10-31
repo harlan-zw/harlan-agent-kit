@@ -61,7 +61,7 @@ export interface OpencodeServer {
   close: (signal: NodeJS.Signals) => void | Promise<void>
 }
 
-export type StartOpencodeServer = (workspace: string, environment: NodeJS.ProcessEnv, readOnlyPaths?: readonly string[], taskId?: string) => Promise<Result<OpencodeServer, string | { _tag: 'SandboxSetupFailed' | 'ResourceLimit', reason: string }>>
+export type StartOpencodeServer = (workspace: string, environment: NodeJS.ProcessEnv, readOnlyPaths?: readonly string[], taskId?: string, routineContext?: AgentTurnRequest['routineContext']) => Promise<Result<OpencodeServer, string | { _tag: 'SandboxSetupFailed' | 'ResourceLimit', reason: string }>>
 
 /** The fixed user name OpenCode expects with a server password. */
 const serverUsername = 'opencode'
@@ -81,7 +81,7 @@ function serverCredentials(password: string): NodeJS.ProcessEnv {
 
 /** Starts `opencode serve` on a free local port in the turn's worktree. */
 export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime, memoryPerAgentGiB?: number): StartOpencodeServer {
-  return async (workspace, environment, readOnlyPaths = [], taskId) => {
+  return async (workspace, environment, readOnlyPaths = [], taskId, routineContext) => {
     const password = randomBytes(24).toString('hex')
     const transportDirectory = await mkdtemp(join(tmpdir(), 'agent-transport-'))
     const transport = await createAgentTransport(join(transportDirectory, 'opencode.sock'))
@@ -89,7 +89,7 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime, 
       await transport.close()
       await rm(transportDirectory, { recursive: true, force: true })
     }
-    const prepared = await prepareAgentSandbox({ workspace, environment: { ...environment, ...serverCredentials(password) }, provider: 'opencode', ...(memoryPerAgentGiB === undefined ? {} : { memoryPerAgentGiB }), readOnlyPaths: [...opencodeSandboxPaths(environment), ...readOnlyPaths, ...(review?.readOnlyPaths ?? [])], networkMode: 'opencode-server', transportDirectory, ...(review === undefined ? {} : { reviewHome: review.home }), ...(taskId === undefined ? {} : { taskId }), ...(readOnly === undefined ? {} : { readOnly }) })
+    const prepared = await prepareAgentSandbox({ workspace, environment: { ...environment, ...serverCredentials(password) }, provider: 'opencode', ...(memoryPerAgentGiB === undefined ? {} : { memoryPerAgentGiB }), readOnlyPaths: [...opencodeSandboxPaths(environment), ...readOnlyPaths, ...(review?.readOnlyPaths ?? [])], networkMode: 'opencode-server', transportDirectory, ...(review === undefined ? {} : { reviewHome: review.home }), ...(taskId === undefined ? {} : { taskId }), ...(routineContext === undefined ? {} : { routineContext }), ...(readOnly === undefined ? {} : { readOnly }) })
       .then(ok)
       .catch((error: unknown) => err({ _tag: 'SandboxSetupFailed' as const, reason: `The Agent worker isolation failed: ${error instanceof Error ? error.message : String(error)}` }))
     if (prepared._tag === 'Err') {
@@ -391,7 +391,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       return
     }
     const start = review === undefined || options.startOpencodeServer !== undefined ? startOpencodeServer : spawnOpencodeServer(true, review, options.memoryPerAgentGiB)
-    const started = await start(request.workspace, turnEnvironment.value, mediaPaths, taskId)
+    const started = await start(request.workspace, turnEnvironment.value, mediaPaths, taskId, review === undefined ? request.routineContext : undefined)
     if (started._tag === 'Err') {
       yield typeof started.error === 'string'
         ? { _tag: 'Failed', reason: agentProviderFailureReason('opencode', started.error) }

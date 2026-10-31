@@ -9,6 +9,7 @@ import { expect, it } from 'vitest'
 import { checkAgentWorker, prepareAgentSandbox, runAgentSandboxCommand } from '../src/agent-sandbox.ts'
 import { createCodexProvider } from '../src/codex-provider.ts'
 import { createOpencodeProvider } from '../src/opencode-provider.ts'
+import { createWorkerMemoryLimiter } from '../src/worker-memory.ts'
 
 const execute = promisify(execFile)
 
@@ -31,7 +32,7 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
   ])
   await Promise.all([
     writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@nuxtseo/cli', type: 'module', bin: { nuxtseo: './dist/cli-entry.js' }, dependencies: { 'fixture-dependency': '1' } })),
-    writeFile(join(packageRoot, 'dist/cli-entry.js'), 'import { version } from "fixture-dependency"; console.log(JSON.stringify({ version }))'),
+    writeFile(join(packageRoot, 'dist/cli-entry.js'), 'import { version } from "fixture-dependency"; console.log(JSON.stringify(process.argv.includes("whoami") ? { authenticated: Boolean(process.env.NUXTSEO_TOKEN), unrelatedCredential: Boolean(process.env.CLOUDFLARE_API_TOKEN) } : { version }))'),
     writeFile(join(packageRoot, 'skills/nuxtseo-cli/SKILL.md'), 'Required CLI Skill.'),
     writeFile(join(packageRoot, 'skills/nuxtseo-cli/references/protocol.md'), 'CLI protocol.'),
     writeFile(join(dependency, 'package.json'), JSON.stringify({ name: 'fixture-dependency', type: 'module', exports: './index.js' })),
@@ -48,11 +49,47 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
   await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'node-tool', '--base', 'HEAD', '--yes'])
   const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
   const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'node-tool').worktree.path as string
+  await mkdir(join(home, '.config/harlan-github-agent'), { recursive: true })
+  await writeFile(join(home, 'seo.env'), 'NUXTSEO_TOKEN=fixture-viewer\nCLOUDFLARE_API_TOKEN=unrelated-secret\n', { mode: 0o600 })
+  await writeFile(join(home, '.config/harlan-github-agent/nuxtseo-worker.json'), JSON.stringify({ environmentFile: join(home, 'seo.env'), repositories: ['harlan-zw/example'] }), { mode: 0o600 })
   await writeFile(profile, JSON.stringify({ home: worker, codex: '/usr/bin/true', opencode: '/usr/bin/true', tools: [tools], readOnlyPaths: [] }))
   const sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, readOnly: true, taskId: 'harlan-zw/example:vitals-review:2026-10-28T00:00:00.000Z' })
   try {
+    expect(sandbox.args.some(value => value.includes('fixture-viewer'))).toBe(false)
+    const limiter = createWorkerMemoryLimiter({
+      execute: async () => ({ stdout: '/user.slice/fixture.slice\n' }),
+      readEvents: async () => 'oom_kill 0\n',
+      newId: () => 'fixture',
+    })
+    const bounded = await limiter({ binary: sandbox.binary, args: sandbox.args, memoryGiB: 1 })
+    try {
+      expect(bounded.args.some(value => value.includes('fixture-viewer'))).toBe(false)
+    }
+    finally {
+      await bounded.release()
+    }
+    const probe = execute(sandbox.binary, [...sandbox.args, '/run/agent/node', '-e', `
+      process.stdin.resume();
+      process.stdin.on('end', () => process.exit(0));
+      console.log(Boolean(process.env.NUXTSEO_TOKEN));
+    `], { env: sandbox.environment, timeout: 10_000 })
+    try {
+      const ready = await new Promise<string>((resolve, reject) => {
+        probe.child.stdout!.once('data', data => resolve(String(data).trim()))
+        probe.catch(reject)
+      })
+      expect(ready).toBe('true')
+      const processes = await execute('/bin/ps', ['-e', '-o', 'args='])
+      expect(processes.stdout.includes('fixture-viewer')).toBe(false)
+    }
+    finally {
+      probe.child.stdin!.end()
+      await probe
+    }
     const result = await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'nuxtseo --version --json'], { env: sandbox.environment })
     expect(JSON.parse(result.stdout)).toEqual({ version: 'fixture-1' })
+    const identity = await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'nuxtseo whoami --json'], { env: sandbox.environment })
+    expect(JSON.parse(identity.stdout)).toEqual({ authenticated: true, unrelatedCredential: false })
     const proof = await execute(sandbox.binary, [...sandbox.args, '/run/agent/node', '--input-type=module-typescript', '-e', `
       import { existsSync, readFileSync } from 'node:fs'
       const catalog = readFileSync('/run/agent/SKILLS.md', 'utf8')
@@ -60,23 +97,49 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
       console.log(JSON.stringify({ skill: readFileSync(path, 'utf8'), reference: readFileSync(path.replace('SKILL.md', 'references/protocol.md'), 'utf8'), secret: existsSync(${JSON.stringify(join(home, 'secret'))}) }))
     `], { env: sandbox.environment })
     expect(JSON.parse(proof.stdout)).toEqual({ skill: 'Required CLI Skill.', reference: 'CLI protocol.', secret: false })
+    for (const provider of ['codex', 'opencode'] as const) {
+      for (const routineName of ['seo-review', 'vitals-review'] as const) {
+        const implementation = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider, profilePath: profile, taskId: 'opaque-issue-work-task', routineContext: { repository: 'harlan-zw/example', routineName } })
+        try {
+          const identity = await execute(implementation.binary, [...implementation.args, '/bin/sh', '-c', 'nuxtseo whoami --json'], { env: implementation.environment })
+          expect(JSON.parse(identity.stdout)).toEqual({ authenticated: true, unrelatedCredential: false })
+          expect(implementation.args.some(value => value.includes('fixture-viewer'))).toBe(false)
+        }
+        finally {
+          await implementation.release()
+        }
+      }
+    }
+    await expect(prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, taskId: 'opaque-issue-work-task', routineContext: { repository: 'harlan-zw/other', routineName: 'seo-review' } })).rejects.toThrow('repository')
     const unrelated = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, readOnly: true, taskId: 'harlan-zw/example:dependency-updates:2026-10-28T00:00:00.000Z' })
     try {
       const excluded = await execute(unrelated.binary, [...unrelated.args, '/run/agent/node', '--input-type=module-typescript', '-e', `import { existsSync } from 'node:fs'; console.log(JSON.stringify({ cli: existsSync(${JSON.stringify(packageRoot)}), launcher: existsSync('/run/agent/host-tools/nuxtseo') }))`], { env: unrelated.environment })
       expect(JSON.parse(excluded.stdout)).toEqual({ cli: false, launcher: false })
+      const credentials = await execute(unrelated.binary, [...unrelated.args, '/run/agent/node', '--input-type=module-typescript', '-e', 'console.log(Boolean(process.env.NUXTSEO_TOKEN))'], { env: unrelated.environment })
+      expect(credentials.stdout.trim()).toBe('false')
     }
     finally {
       await unrelated.release()
     }
     const reviewHome = join(root, 'review')
     await mkdir(reviewHome)
-    const review = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, reviewHome, taskId: 'harlan-zw/example:vitals-review:2026-10-28T00:00:00.000Z' })
+    const review = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, reviewHome, taskId: 'opaque-issue-work-task', routineContext: { repository: 'harlan-zw/example', routineName: 'vitals-review' } })
     try {
       const excluded = await execute(review.binary, [...review.args, '/run/agent/node', '--input-type=module-typescript', '-e', `import { existsSync } from 'node:fs'; console.log(JSON.stringify({ cli: existsSync(${JSON.stringify(packageRoot)}), launcher: existsSync('/run/agent/host-tools/nuxtseo') }))`], { env: review.environment })
       expect(JSON.parse(excluded.stdout)).toEqual({ cli: false, launcher: false })
+      const credentials = await execute(review.binary, [...review.args, '/run/agent/node', '--input-type=module-typescript', '-e', 'console.log(Boolean(process.env.NUXTSEO_TOKEN))'], { env: review.environment })
+      expect(credentials.stdout.trim()).toBe('false')
     }
     finally {
       await review.release()
+    }
+    const client = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'opencode', profilePath: profile, networkMode: 'opencode-client', taskId: 'opaque-issue-work-task', routineContext: { repository: 'harlan-zw/example', routineName: 'seo-review' } })
+    try {
+      const excluded = await execute(client.binary, [...client.args, '/run/agent/node', '--input-type=module-typescript', '-e', 'import { existsSync } from "node:fs"; console.log(JSON.stringify({ cli: existsSync("/run/agent/host-tools/nuxtseo"), authenticated: Boolean(process.env.NUXTSEO_TOKEN) }))', '--', '--server', 'http://127.0.0.1:4097'], { env: client.environment })
+      expect(JSON.parse(excluded.stdout)).toEqual({ cli: false, authenticated: false })
+    }
+    finally {
+      await client.release()
     }
     const forbidden = join(home, '.config/credential-package')
     await mkdir(forbidden, { recursive: true })
@@ -303,7 +366,8 @@ if (process.argv[2] === 'serve') {
     profilePath: profile,
     provider: 'opencode',
   })
-  expect(sandbox.environment).toEqual({ PATH: '/usr/bin:/bin' })
+  const hostEnvironment = await execute(process.execPath, ['-e', 'console.log(JSON.stringify({ token: process.env.TOOLING_TOKEN ?? null, controller: process.env.CONTROLLER_TOKEN ?? null, nodeOptions: process.env.NODE_OPTIONS ?? null }))'], { env: sandbox.environment })
+  expect(JSON.parse(hostEnvironment.stdout)).toEqual({ token: null, controller: null, nodeOptions: null })
   const host = createServer((_request, response) => response.end('fake-host-session-secret'))
   await new Promise<void>((resolve) => {
     host.listen(0, '127.0.0.1', resolve)

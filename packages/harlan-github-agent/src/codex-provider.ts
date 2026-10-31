@@ -143,6 +143,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
             readOnlyPaths: [...media.paths, ...(request.instructionPaths ?? []), ...(review?.readOnlyPaths ?? [])],
             ...(review === undefined ? {} : { reviewHome: review.home, readOnly: true }),
             ...(request.taskId === undefined ? {} : { taskId: request.taskId }),
+            ...(request.routineContext === undefined || review !== undefined ? {} : { routineContext: request.routineContext }),
             ...(options.readOnly === undefined ? {} : { readOnly: options.readOnly }),
           }).then(value => ({ _tag: 'Ok' as const, value })).catch((error: unknown) => ({ _tag: 'Err' as const, error }))
           if (prepared._tag === 'Err') {
