@@ -4772,6 +4772,8 @@ function parseRevisionFiles(filesJson: string): PullRequestFile[] | null {
   return files
 }
 
+const REVIEW_ALREADY_RECORDED_REASON = 'The current head commit already has an automated review.'
+
 function planAdversarialReview(
   database: DatabaseSync,
   subject: GitHubItem,
@@ -4820,12 +4822,23 @@ function planAdversarialReview(
     && localAttempt.head_review_run_id !== null
     && !rerunRequested
     && !(manualReviewRequested && localAttempt.revision_attempt === 0)
+  // Recording the Agent's answer does not finish its controller Publication.
+  // A retry resumes this stored run instead of paying for another Agent turn.
+  const needsReviewPublication = alreadyReviewed && database.prepare(`
+    SELECT 1 FROM review_publications
+    WHERE review_run_id = ? AND result_tag = 'Published'
+    UNION ALL
+    SELECT 1 FROM review_status_commands
+    WHERE review_run_id = ? AND phase = 'terminal'
+      AND state_tag IN ('Pending', 'Running', 'Published')
+    LIMIT 1
+  `).get(localAttempt.head_review_run_id, localAttempt.head_review_run_id) === undefined
   const reviewable = subject.kind === 'pull_request'
     && subject.state === 'open'
     && !subject.draft
     && mapping.enabled
     && mapping.pullRequestReview
-    && !alreadyReviewed
+    && (!alreadyReviewed || needsReviewPublication)
     && (!approvalRequired || reviewApproved)
 
   // GitHub computes mergeability lazily, so a poll seconds after a push reads
@@ -4896,7 +4909,7 @@ function planAdversarialReview(
       'adversarial_review',
       observedAt,
       alreadyReviewed
-        ? 'The current head commit already has an automated review.'
+        ? REVIEW_ALREADY_RECORDED_REASON
         : 'The pull request is not ready for review.',
       undefined,
       ownRunLanded ? revisionId : undefined,
@@ -4917,7 +4930,7 @@ function planAdversarialReview(
   // the decision instead of paying for the classification again. The manual
   // Review label still wins over any skip, an explicit rerun wins too, and
   // the supersede above already retired any Task this revision queued.
-  if (triage !== undefined && subject.kind === 'pull_request') {
+  if (triage !== undefined && subject.kind === 'pull_request' && !needsReviewPublication) {
     if (triage._tag === 'Skipped' && !manualReviewRequested && !rerunRequested) {
       // A Task queued before this decision landed (a failure row recovered,
       // or a poll that computed no verdict) is retired here: a live-leased
@@ -4956,6 +4969,20 @@ function planAdversarialReview(
     && canRecoverFailure({ message: existing.reason }, existing.recovery_attempts)
     && (classifyFailure({ message: existing.reason }).kind !== 'resource_limit'
       || Date.parse(observedAt) >= Date.parse(nextRecoveryAt(existing.updated_at, existing.recovery_attempts, { message: existing.reason })))
+  // Older deployments retired a publication retry as a duplicate Review.
+  // Only that automatic decision can resume; explicit stops still win above.
+  const prematureDeduplication = needsReviewPublication && existing?.state_tag === 'Superseded'
+    && existing.reason === REVIEW_ALREADY_RECORDED_REASON
+  if (prematureDeduplication) {
+    database.prepare(`
+      UPDATE worker_tasks
+      SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
+        lease_expires_at = NULL, updated_at = ?
+      WHERE id = ? AND state_tag = 'Superseded'
+    `).run(observedAt, existing.id)
+    recordWorkerTransition(database, { taskId: existing.id, from: 'Superseded', to: 'Queued', reason: 'The stored Review still needs its terminal Publication.', fence: existing.fence, at: observedAt })
+    return
+  }
   if (recoverableFailure) {
     database.prepare(`
       UPDATE worker_tasks

@@ -4198,7 +4198,7 @@ describe('journal store', () => {
     })
     if (firstObservation._tag !== 'Inserted')
       throw new Error('Expected the first pull request revision.')
-    const first = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 10_000)
+    const first = store.claimNextAdversarialReviewTask('reviewer-1', '2026-08-13T01:01:00.000Z', 600_000)
     if (first === null)
       throw new Error('Expected the first review.')
     store.recordReviewRun({
@@ -4225,6 +4225,13 @@ describe('journal store', () => {
       fence: first.state.fence,
       at: '2026-08-13T01:02:00.000Z',
       evidence: 'Reviewed old base.',
+    })
+    store.recordReviewPublication({
+      id: 'old-base-publication',
+      reviewRunId: 'old-base-attempt',
+      body: '### 🤖 READY',
+      at: '2026-08-13T01:02:01.000Z',
+      result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
     })
     const secondObservation = store.recordObservation({
       externalId: 'review-new-base',
