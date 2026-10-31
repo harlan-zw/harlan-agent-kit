@@ -4386,6 +4386,8 @@ function currentSameHeadRevision(database: DatabaseSync, revisionId: string): st
   return row?.current_id ?? revisionId
 }
 
+const REVIEW_ALREADY_RECORDED_REASON = 'The current head commit already has an automated review.'
+
 /**
  * Moves Review work to the Revision that now carries the same head commit.
  *
@@ -4416,10 +4418,30 @@ function followHeadCommit(database: DatabaseSync, subjectId: number, revisionId:
   `
   database.prepare(`
     UPDATE worker_tasks SET revision_id = ?
-    WHERE subject_id = ? AND kind = 'adversarial_review' AND state_tag != 'Superseded'
+    WHERE subject_id = ? AND kind = 'adversarial_review'
+      AND (
+        state_tag != 'Superseded'
+        OR (
+          reason = ? AND fence > 0
+          AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = worker_tasks.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM review_status_commands AS terminal
+            WHERE terminal.task_id = worker_tasks.id AND terminal.phase = 'terminal'
+              AND terminal.state_tag IN ('Pending', 'Running', 'Published')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM review_publications
+            WHERE review_run_id = (
+              SELECT id FROM review_runs
+              WHERE subject_id = worker_tasks.subject_id AND revision_id = ?
+              ORDER BY completed_at DESC, id DESC LIMIT 1
+            ) AND result_tag = 'Published'
+          )
+        )
+      )
       AND revision_id IN (${sameHead})
       AND revision_id NOT IN (${waitsOnBaseline})
-  `).run(revisionId, subjectId, ...sameHeadArgs, subjectId)
+  `).run(revisionId, subjectId, REVIEW_ALREADY_RECORDED_REASON, revisionId, ...sameHeadArgs, subjectId)
   database.prepare(`
     UPDATE tasks SET revision_id = ?
     WHERE subject_id = ? AND kind = 'review_fix' AND state_tag != 'Superseded'
@@ -4771,8 +4793,6 @@ function parseRevisionFiles(filesJson: string): PullRequestFile[] | null {
   }
   return files
 }
-
-const REVIEW_ALREADY_RECORDED_REASON = 'The current head commit already has an automated review.'
 
 function planAdversarialReview(
   database: DatabaseSync,

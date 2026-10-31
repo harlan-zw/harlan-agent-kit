@@ -84,11 +84,24 @@ function savedReview(state: 'Queued' | 'Failed' | 'Superseded') {
 }
 
 describe('stored Review publication recovery', () => {
-  it.each(['Queued', 'Failed', 'Superseded'] as const)('resumes the saved run after a %s publication retry', async (state) => {
-    const { store, task, pullRequest } = savedReview(state)
-    store.recordObservation({ externalId: 'quota-reset', observedAt: '2026-08-13T01:10:00.000Z', source: 'poll', subject: pullRequest })
+  it.each([
+    { state: 'Queued', baseMoved: false, retainedLabel: false },
+    { state: 'Failed', baseMoved: false, retainedLabel: false },
+    { state: 'Superseded', baseMoved: false, retainedLabel: false },
+    { state: 'Failed', baseMoved: true, retainedLabel: false },
+    { state: 'Superseded', baseMoved: true, retainedLabel: false },
+    { state: 'Failed', baseMoved: false, retainedLabel: true },
+    { state: 'Superseded', baseMoved: true, retainedLabel: true },
+  ] as const)('resumes $state after base moved: $baseMoved, retained label: $retainedLabel', async ({ state, baseMoved, retainedLabel }) => {
+    const { store, task, pullRequest: original } = savedReview(state)
+    const pullRequest = pullRequestItem({ ...original, baseSha: baseMoved ? 'merged-publication-fix' : original.baseSha, approvalLabels: retainedLabel ? ['review'] : [] })
+    if (baseMoved)
+      store.recordObservation({ externalId: 'merge-publication-fix', observedAt: '2026-08-13T01:03:00.000Z', source: 'poll', subject: pullRequest })
+    const observed = store.recordObservation({ externalId: 'quota-reset', observedAt: '2026-08-13T01:10:00.000Z', source: 'poll', subject: pullRequest })
+    if (observed._tag === 'Conflict' || observed._tag === 'Stale')
+      throw new Error('Expected the current Review Revision.')
     const retry = store.claimNextAdversarialReviewTask('publisher-retry', '2026-08-13T01:10:01.000Z', 600_000)
-    expect(retry).toMatchObject({ id: task.id, revisionId: task.revisionId })
+    expect(retry).toMatchObject({ id: task.id, revisionId: observed.revisionId })
     expect(store.storedReviewForHead(task.repository, task.pullRequestNumber, pullRequest.headSha))
       .toMatchObject({ _tag: 'Current', run: { id: 'saved-run' } })
     expect(store.listStoppedReviews()).toEqual([])
@@ -98,10 +111,14 @@ describe('stored Review publication recovery', () => {
       throw new Error('Publication recovery must not start an Agent or unrelated operation.')
     }
     let terminalId: string | undefined
+    let labelsConsumed = 0
     const worker = createReviewWorker({
       runtime: unexpected,
       github: {
-        consumeApprovalLabel: unexpected,
+        consumeApprovalLabel: async () => {
+          labelsConsumed++
+          return ok(undefined)
+        },
         editReviewStatus: unexpected,
         upsertReviewCheckRun: unexpected,
         ensureApprovalLabel: unexpected,
@@ -161,6 +178,7 @@ describe('stored Review publication recovery', () => {
     })
     const result = await worker.run(retry, new AbortController().signal)
     expect(result).toMatchObject({ _tag: 'Ok', value: { evidence: 'saved-run', resolution: { _tag: 'Reviewed', reviewRunId: 'saved-run' } } })
+    expect(labelsConsumed).toBe(retainedLabel ? 1 : 0)
     if (result._tag === 'Err' || terminalId === undefined)
       throw new Error('Expected stored Review projection.')
     expect(store.completeReviewTask({ taskId: retry.id, workerId: retry.state.workerId, fence: retry.state.fence, at: '2026-08-13T01:10:03.000Z', ...result.value })).toBe(true)
@@ -187,7 +205,8 @@ describe('stored Review publication recovery', () => {
     else {
       store.cancelTask({ taskId: task.id, at: '2026-08-13T01:09:00.000Z' })
     }
-    store.recordObservation({ externalId: 'explicit-stop', observedAt: '2026-08-13T01:10:00.000Z', source: 'poll', subject: pullRequest })
+    store.recordObservation({ externalId: 'merge-publication-fix', observedAt: '2026-08-13T01:09:30.000Z', source: 'poll', subject: { ...pullRequest, baseSha: 'merged-publication-fix' } })
+    store.recordObservation({ externalId: 'explicit-stop', observedAt: '2026-08-13T01:10:00.000Z', source: 'poll', subject: { ...pullRequest, baseSha: 'merged-publication-fix' } })
     expect(store.claimNextAdversarialReviewTask('publisher-retry', '2026-08-13T01:10:01.000Z', 600_000)).toBeNull()
   })
 
