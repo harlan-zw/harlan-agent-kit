@@ -364,7 +364,7 @@ This worktree was prepared fresh for this turn. No work from an earlier turn of 
 ${instructionFilesLine(input.instructionFiles)}
 ${memoryBlock}Select every installed code-domain skill whose trigger matches the affected implementation. Do not load workflow skills such as pr, unit-tests, or im-part-human. Their rules are inlined below.
 ${UNIT_TEST_LINES}
-${checkBudgetLines(CHECK_SCOPES.changedFiles)}
+${checkBudgetLines(routineSource?.routineName === 'vitals-review' ? CHECK_SCOPES.focusedPerformance : CHECK_SCOPES.changedFiles)}
 ${TOOLCHAIN_LINES}
 If browser checks are required, use dev-browser --browser <task-name> --headless.
 Its scripts use QuickJS. Use browser.getPage and page.evaluate; Node imports and require are unavailable.

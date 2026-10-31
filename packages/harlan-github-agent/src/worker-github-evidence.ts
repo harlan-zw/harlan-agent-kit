@@ -16,6 +16,9 @@ type JobLogSnapshot = { _tag: 'NotRequested' } | { _tag: 'Unavailable', reason: 
 type RepairGitHubEvidence = { _tag: 'Unavailable', reason: string } | { _tag: 'Available', jobs: Array<{ check: string, evidence: JobContextEvidence }>, truncated: boolean }
 
 type Section = { _tag: 'Available', entries: Record<string, string | number | null>[], truncated: boolean } | { _tag: 'Unavailable', reason: string }
+type OwnershipBody = { _tag: 'Complete' | 'Truncated', text: string } | { _tag: 'Unavailable', reason: string }
+type OwnershipSection = { _tag: 'Available', entries: Array<{ number: number, body: OwnershipBody }>, truncated: boolean } | { _tag: 'Unavailable', reason: string }
+type RoutineEvidenceScope = 'metadata' | 'ownership'
 export interface RoutineGitHubEvidence {
   observedAt: string
   issues: Section
@@ -24,9 +27,10 @@ export interface RoutineGitHubEvidence {
   deployments: Section
   deploymentStatuses: Array<{ deploymentId: number, evidence: Section }>
   jobLogs: JobLogSnapshot
+  ownership: { _tag: 'NotRequested' } | { _tag: 'Available', issues: OwnershipSection, pullRequests: OwnershipSection }
 }
 export interface RoutineGitHubEvidenceSource {
-  collect: (mapping: RepositoryMapping, signal: AbortSignal, includeSuccessfulJobs?: boolean, workflowBranch?: string) => Promise<RoutineGitHubEvidence>
+  collect: (mapping: RepositoryMapping, signal: AbortSignal, includeSuccessfulJobs?: boolean, workflowBranch?: string, evidenceScope?: RoutineEvidenceScope) => Promise<RoutineGitHubEvidence>
 }
 
 type Read = (path: string) => Promise<Result<unknown, string>>
@@ -52,6 +56,30 @@ function section(input: unknown, fields: readonly string[], excludePullRequests 
   while (JSON.stringify(selected).length > 6_000)
     selected.pop()
   return { _tag: 'Available', entries: selected, truncated: input.length > maximumEntries || selected.length < entries.length || entries.some(value => fields.some(field => typeof value[field] === 'string' && value[field].length > maximumText)) }
+}
+
+function ownershipBody(body: unknown): OwnershipBody {
+  if (body === null)
+    return { _tag: 'Complete', text: '' }
+  if (typeof body !== 'string')
+    return { _tag: 'Unavailable', reason: 'GitHub did not supply this body.' }
+  const text = redactSecrets(body)
+  return { _tag: text.length > 3_000 ? 'Truncated' : 'Complete', text: text.slice(0, 3_000) }
+}
+
+/** Reuses open-list responses. Body limits never hide list coverage or request more private reads. */
+function ownershipSection(result: Result<unknown, string>, excludePullRequests = false): OwnershipSection {
+  if (result._tag === 'Err')
+    return { _tag: 'Unavailable', reason: safeText(result.error) }
+  const selected = section(result.value, ['number'], excludePullRequests)
+  if (selected._tag === 'Unavailable')
+    return selected
+  const rows = result.value as Array<Record<string, unknown>>
+  return {
+    _tag: 'Available',
+    entries: selected.entries.map(entry => ({ number: entry.number as number, body: ownershipBody(rows.find(row => row.number === entry.number)?.body) })),
+    truncated: selected.truncated,
+  }
 }
 
 async function collectWorkflowRuns(input: { repository: string, read: Read, workflowBranch?: string }, listed: Result<unknown, string>): Promise<Section> {
@@ -88,7 +116,7 @@ async function collectWorkflowRuns(input: { repository: string, read: Read, work
 }
 
 /** Only allowlisted metadata reaches a Routine. An unreadable section never becomes an empty success. */
-export async function collectRoutineGitHubEvidence(input: { repository: string, read: Read, now: () => Date, readJob?: (id: number) => Promise<Result<FailedJobContext, string>>, includeSuccessfulJobs?: boolean, workflowBranch?: string }): Promise<RoutineGitHubEvidence> {
+export async function collectRoutineGitHubEvidence(input: { repository: string, read: Read, now: () => Date, readJob?: (id: number) => Promise<Result<FailedJobContext, string>>, includeSuccessfulJobs?: boolean, workflowBranch?: string, evidenceScope?: RoutineEvidenceScope }): Promise<RoutineGitHubEvidence> {
   const base = `/repos/${input.repository}`
   const workflowPath = input.workflowBranch === undefined ? `${base}/actions/runs?per_page=21` : `${base}/actions/workflows?per_page=100`
   const paths = [`${base}/issues?state=open&per_page=21`, `${base}/pulls?state=open&per_page=21`, workflowPath, `${base}/deployments?per_page=21`]
@@ -117,6 +145,9 @@ export async function collectRoutineGitHubEvidence(input: { repository: string, 
     deployments,
     deploymentStatuses,
     jobLogs,
+    ownership: input.evidenceScope === 'ownership'
+      ? { _tag: 'Available', issues: ownershipSection(results[0]!, true), pullRequests: ownershipSection(results[1]!) }
+      : { _tag: 'NotRequested' },
   }
 }
 
@@ -163,7 +194,7 @@ function safeJob(job: FailedJobContext): FailedJobContext {
 
 export function createRoutineGitHubEvidenceSource(options: { tokens: GitHubTokenProvider, now: () => Date, jobs: Pick<GitHubAgentSource, 'getFailedJobContext'>, createClient?: Parameters<typeof createAuthenticatedClient>[0]['createClient'] }): RoutineGitHubEvidenceSource {
   return {
-    async collect(mapping, signal, includeSuccessfulJobs, workflowBranch) {
+    async collect(mapping, signal, includeSuccessfulJobs, workflowBranch, evidenceScope) {
       const repository = mapping.github
       const clients = new Map<GitHubRepositoryAccess, Promise<Result<Octokit, string>>>()
       const read: Read = async (path) => {
@@ -182,7 +213,7 @@ export function createRoutineGitHubEvidenceSource(options: { tokens: GitHubToken
           .then(response => ok(response.data as unknown))
           .catch((error: unknown) => err(error instanceof Error ? error.message : String(error)))
       }
-      return collectRoutineGitHubEvidence({ repository, read, now: options.now, includeSuccessfulJobs: includeSuccessfulJobs ?? false, ...(workflowBranch === undefined ? {} : { workflowBranch }), readJob: id => options.jobs.getFailedJobContext(mapping, id, signal) })
+      return collectRoutineGitHubEvidence({ repository, read, now: options.now, includeSuccessfulJobs: includeSuccessfulJobs ?? false, ...(workflowBranch === undefined ? {} : { workflowBranch }), ...(evidenceScope === undefined ? {} : { evidenceScope }), readJob: id => options.jobs.getFailedJobContext(mapping, id, signal) })
     },
   }
 }

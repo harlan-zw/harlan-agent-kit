@@ -13,6 +13,7 @@ import { createRoutineReportController } from '../src/routine-report-controller.
 import { createRoutineScanWorker } from '../src/routine-worker.ts'
 import { getRoutine } from '../src/routines/index.ts'
 import { openJournalStore } from '../src/store.ts'
+import { collectRoutineGitHubEvidence } from '../src/worker-github-evidence.ts'
 import { createWorkerTaskScheduler } from '../src/worker-task-scheduler.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -70,7 +71,7 @@ function workerFor(
   return createRoutineScanWorker({
     serviceEvidence: store,
     writeCheckinEvidence: async (input) => { writtenEvidence?.push(input) },
-    githubEvidence: { collect: async () => ({ observedAt: now().toISOString(), issues: { _tag: 'Available', entries: [{ number: 7, title: 'Private controller issue' }], truncated: false }, pullRequests: { _tag: 'Available', entries: [], truncated: false }, workflowRuns: { _tag: 'Unavailable', reason: 'Controller cannot read Actions' }, deployments: { _tag: 'Available', entries: [], truncated: false }, deploymentStatuses: [], jobLogs: { _tag: 'NotRequested' } }) },
+    githubEvidence: { collect: async () => ({ observedAt: now().toISOString(), issues: { _tag: 'Available', entries: [{ number: 7, title: 'Private controller issue' }], truncated: false }, pullRequests: { _tag: 'Available', entries: [], truncated: false }, workflowRuns: { _tag: 'Unavailable', reason: 'Controller cannot read Actions' }, deployments: { _tag: 'Available', entries: [], truncated: false }, deploymentStatuses: [], jobLogs: { _tag: 'NotRequested' }, ownership: { _tag: 'NotRequested' } }) },
     ...(activityLog === undefined ? {} : { activityLog }),
     logger: { error: () => undefined, info: () => undefined },
     ...(maximumChangedFiles === undefined ? {} : { maximumChangedFiles }),
@@ -108,6 +109,36 @@ const candidate = {
 }
 
 describe('building the scan prompt', () => {
+  it.each(['seo-review', 'vitals-review', 'ci-review'] as const)('requests the appropriate private evidence for %s', async (name) => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, name)
+      const capture = { prompts: [] as string[] }
+      const scopes: Array<string | undefined> = []
+      const provider = scanning(name === 'vitals-review' ? { report: 'No findings.', fieldFindings: [], labFindings: [] } : { report: 'No findings.', candidates: [] }, capture)
+      const worker = createRoutineScanWorker({
+        now,
+        store,
+        logger: { error: () => undefined, info: () => undefined },
+        runtime: () => ({ profile: CODEX_AGENT_PROFILE, provider }),
+        workspaces: { prepareRoutine: async () => ok({ path: '/tmp/routine', baseSha: 'abc123', headSha: 'abc123', defaultBranchSha: 'abc123' }) },
+        githubEvidence: { collect: async (_mapping, _signal, _jobs, _branch, evidenceScope) => {
+          scopes.push(evidenceScope)
+          return collectRoutineGitHubEvidence({ repository: 'harlan-zw/example', now, ...(evidenceScope === undefined ? {} : { evidenceScope }), read: async path => path.includes('/issues?')
+            ? ok([{ number: 13, body: 'The shared stylesheet already has an owner.' }])
+            : ok([]) })
+        } },
+      })
+      const result = await worker.run(claimStoredRun(store), new AbortController().signal)
+      expect(result._tag).toBe('Ok')
+      expect(scopes).toEqual([name === 'ci-review' ? 'metadata' : 'ownership'])
+      expect(capture.prompts[0]?.includes('The shared stylesheet already has an owner.')).toBe(name !== 'ci-review')
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('executes only the selected scan on Codex while the Service stays on OpenCode', async () => {
     const store = openJournalStore(':memory:')
     try {

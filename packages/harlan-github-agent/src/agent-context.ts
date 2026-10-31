@@ -369,13 +369,24 @@ export const CHECK_SCOPES = {
   failingCheck: 'prefer a narrower command that reproduces the same failure; run the exact command of the failing check only when no narrower command reproduces it, then lint and typecheck on the changed files only.',
   /** Conflict resolution, where the merge already names the files in scope. */
   conflictedFiles: 'run eslint on the conflicted files, vitest on the test files that import them, and git diff --check.',
+  /** Trusted vitals Issue work needs compiled applications for its local comparison. */
+  focusedPerformance: 'run the required local performance comparison, then regression tests, lint, and typecheck on changed files only.',
 } as const
 
 export type CheckScope = typeof CHECK_SCOPES[keyof typeof CHECK_SCOPES]
 
 /** The check budget every Agent turn that verifies its own change gets. */
 export function checkBudgetLines(scope: CheckScope): string {
-  const fullSuiteRule = 'Do not run the full test suite, the full typecheck, or a build. CI runs those.'
+  const fullSuiteRule = scope === CHECK_SCOPES.focusedPerformance
+    ? `Do not run the full test suite or full typecheck. CI runs those.
+When the issue requires a local performance comparison, build the before and after applications serially.
+Use the repository's build scripts and the same local runner, strategy, and measurement settings for both.
+These builds provide inputs for the focused comparison. They do not authorize production deployment or unrelated validation builds.
+If the required comparison cannot run, return blocked with the exact blocker.
+Compare the target metric with run-to-run variation.
+If the comparison does not establish the claimed benefit, return blocked with measurements.
+Report other metric changes and HTML size beside the target result.`
+    : 'Do not run the full test suite, the full typecheck, or a build. CI runs those.'
   const lastResort = scope === CHECK_SCOPES.failingCheck
     ? ' Exception: when no narrower command reproduces the failure, run the failing check\'s exact command, even if it is the full suite.'
     : ''

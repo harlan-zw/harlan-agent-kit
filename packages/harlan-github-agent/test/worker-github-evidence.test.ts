@@ -4,6 +4,59 @@ import { err, ok } from '../src/result.ts'
 import { collectRepairGitHubEvidence, collectRoutineGitHubEvidence, createRoutineGitHubEvidenceSource, jobExecutionContext } from '../src/worker-github-evidence.ts'
 import { repositoryMapping } from './fixtures.ts'
 
+it('supplies redacted ownership bodies without another GitHub request', async () => {
+  const paths: string[] = []
+  const result = await collectRoutineGitHubEvidence({
+    repository: 'harlan-zw/example',
+    evidenceScope: 'ownership',
+    now: () => new Date('2026-10-31T06:00:00Z'),
+    read: async (path) => {
+      paths.push(path)
+      if (path.includes('/issues?')) {
+        return ok([
+          { number: 3, title: 'Shared first paint', body: 'Shared bundle already tracked. ghp_12345678901234567890' },
+          { number: 4, title: 'A pull request', body: 'Not an issue', pull_request: {} },
+        ])
+      }
+      if (path.includes('/pulls?'))
+        return ok([{ number: 7, title: 'Bound the bundle', body: 'Repairs the shared bundle on the tools routes.' }])
+      return ok(path.includes('/actions/runs?') ? { workflow_runs: [] } : [])
+    },
+  })
+  expect(paths.sort()).toEqual([
+    '/repos/harlan-zw/example/actions/runs?per_page=21',
+    '/repos/harlan-zw/example/deployments?per_page=21',
+    '/repos/harlan-zw/example/issues?state=open&per_page=21',
+    '/repos/harlan-zw/example/pulls?state=open&per_page=21',
+  ])
+  expect(result.ownership).toMatchObject({
+    _tag: 'Available',
+    issues: { _tag: 'Available', entries: [{ number: 3, body: { _tag: 'Complete', text: expect.stringContaining('Shared bundle already tracked.') } }], truncated: false },
+    pullRequests: { _tag: 'Available', entries: [{ number: 7, body: { _tag: 'Complete', text: 'Repairs the shared bundle on the tools routes.' } }], truncated: false },
+  })
+  expect(JSON.stringify(result)).not.toContain('ghp_12345678901234567890')
+})
+
+it('distinguishes missing bodies, truncated bodies, and incomplete ownership lists', async () => {
+  const result = await collectRoutineGitHubEvidence({
+    repository: 'harlan-zw/example',
+    evidenceScope: 'ownership',
+    now: () => new Date('2026-10-31T06:00:00Z'),
+    read: async path => path.includes('/issues?')
+      ? ok(Array.from({ length: 21 }, (_, index) => ({ number: index + 1, body: index === 0 ? 'a'.repeat(3_001) : index === 1 ? undefined : null })))
+      : path.includes('/pulls?') ? err('Private pull request evidence unavailable') : ok([]),
+  })
+  expect(result.ownership).toMatchObject({
+    _tag: 'Available',
+    issues: { _tag: 'Available', truncated: true, entries: [
+      { number: 1, body: { _tag: 'Truncated', text: 'a'.repeat(3_000) } },
+      { number: 2, body: { _tag: 'Unavailable', reason: 'GitHub did not supply this body.' } },
+      ...Array.from({ length: 18 }, (_, index) => ({ number: index + 3, body: { _tag: 'Complete', text: '' } })),
+    ] },
+    pullRequests: { _tag: 'Unavailable', reason: 'Private pull request evidence unavailable' },
+  })
+})
+
 it('keeps CI and deployment evidence when a frequent workflow fills the recent runs', async () => {
   const workflowRuns = [
     { id: 13, name: 'Summary', head_branch: 'release/checkin', created_at: '2026-10-10T07:00:00Z', conclusion: 'success' },

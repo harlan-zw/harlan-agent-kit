@@ -48,6 +48,12 @@ The one NuxtSEO write allowed is the post-deploy `page scan` in step 5.
 4. **Date.** For a Lab drop, name the production deploys between the last reference Scan and the first worse Scan. `references/deploy-window.md` gives the commands. Put the commit range in `suspectCommits`.
 5. **Follow up fixes.** `references/follow-up.md` says when to start a post-deploy `page scan`, and how to report a fix as confirmed or not holding.
 
+Use controller ownership bodies for private issue and pull request checks. Never obtain worker credentials or bypass the public wrapper.
+Read each body's coverage tag. A truncated list or body does not establish complete duplicate checks.
+Missing closed history blocks checks for matching prior fixes or regressions.
+It does not block a verified new cause after duplicate checks against open work pass.
+Report coverage for open work and closed fixes separately. Poor measurements alone still do not establish a repository cause.
+
 ### What files an issue
 
 | Evidence | Files when | Fingerprint, written by the controller |

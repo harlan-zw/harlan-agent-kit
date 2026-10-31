@@ -191,6 +191,82 @@ describe('lab series', () => {
     expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')).toMatchObject({ _tag: 'Poor', latest: 5100, scans: 2 })
   })
 
+  it.each(['13.6.0', '13.5.1', null])('requires another comparable Scan after Lighthouse changes to %s', (version) => {
+    const rows = [
+      { ...scan(1, 5000), lighthouseVersion: '13.5.0' },
+      { ...scan(2, 5100), lighthouseVersion: version },
+    ]
+
+    expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')).toEqual({ _tag: 'ShortSeries', count: 1 })
+  })
+
+  it('dates Poor persistence only within the current Lighthouse release', () => {
+    const rows = [
+      { ...scan(1, 5000), lighthouseVersion: '13.4.1' },
+      { ...scan(2, 5100), lighthouseVersion: '13.5.0' },
+      { ...scan(3, 5200), lighthouseVersion: '13.5.0' },
+    ]
+
+    expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')).toEqual({
+      _tag: 'Poor',
+      latest: 5200,
+      since: '2026-09-02T06:00:00.000Z',
+      lastReferenceAt: null,
+      scans: 2,
+    })
+  })
+
+  it('does not date a drop against a different Lighthouse release', () => {
+    const rows = [
+      ...[scan(1, 1100), scan(2, 1150)].map(row => ({ ...row, lighthouseVersion: '13.5.0' })),
+      ...[scan(3, 2600), scan(4, 2700)].map(row => ({ ...row, lighthouseVersion: '13.6.0' })),
+    ]
+
+    expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')).toEqual({ _tag: 'Steady', latest: 2700 })
+  })
+
+  it('still dates a drop entirely within the current Lighthouse release', () => {
+    const rows = [
+      { ...scan(1, 5000), lighthouseVersion: '13.5.0' },
+      ...[scan(2, 1100), scan(3, 1150), scan(4, 2600), scan(5, 2700)]
+        .map(row => ({ ...row, lighthouseVersion: '13.6.0' })),
+    ]
+
+    expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')).toMatchObject({
+      _tag: 'Drop',
+      since: '2026-09-04T06:00:00.000Z',
+      lastReferenceAt: '2026-09-03T06:00:00.000Z',
+      scans: 2,
+    })
+  })
+
+  it('does not join an older matching version across a different release', () => {
+    const rows = [
+      { ...scan(1, 5000), lighthouseVersion: '13.5.0' },
+      { ...scan(2, 5000), lighthouseVersion: '13.6.0' },
+      { ...scan(3, 5000), lighthouseVersion: '13.5.0' },
+    ]
+
+    expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')).toEqual({ _tag: 'ShortSeries', count: 1 })
+  })
+
+  it('keeps a missing current metric after a Lighthouse release boundary', () => {
+    const rows = [
+      { ...scan(1, 5000), lighthouseVersion: '13.5.0' },
+      { ...scan(2, 5000), lighthouseVersion: '13.6.0', lcp: null },
+      { ...scan(3, 5000), lighthouseVersion: '13.6.0' },
+    ]
+
+    expect(verdictFor(judgeLabScans(scans(rows)), '/blog', 'desktop', 'lcp')).toEqual({
+      _tag: 'MissingMetric',
+      missingAt: ['2026-09-02T06:00:00.000Z'],
+    })
+  })
+
+  it('rejects malformed Lighthouse provenance instead of treating it as an absent version', () => {
+    expect(parseScanRows([{ ...scan(1, 5000), lighthouseVersion: 13.5 }])._tag).toBe('Err')
+  })
+
   it('refuses a scan list that is not the CLI shape', () => {
     expect(parseScanRows([{ url: 'https://example.com', strategy: 'tablet', status: 'complete', completedAt: '2026-09-01T00:00:00.000Z' }])._tag).toBe('Err')
   })
@@ -289,6 +365,18 @@ describe('lab findings', () => {
       expect(parsed.value.candidates).toEqual([])
       expect(parsed.value.report).toContain('Steady')
     }
+  })
+
+  it('refuses a Poor proposal whose latest pair crosses a Lighthouse release', () => {
+    const measured = [
+      { ...scan(1, 5000), lighthouseVersion: '13.5.0' },
+      { ...scan(2, 5100), lighthouseVersion: '13.6.0' },
+    ]
+    const parsed = createVitalsReview({ minimumViews: 200 }).parseResponse(answer({
+      labFindings: [labFinding({ url: 'https://example.com/blog', strategy: 'desktop', scans: measured })],
+    }))
+
+    expect(parsed._tag === 'Ok' && parsed.value.candidates).toEqual([])
   })
 
   it('merges two proposals for one page, strategy, and metric', () => {
