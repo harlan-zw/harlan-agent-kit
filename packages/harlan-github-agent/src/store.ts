@@ -3979,6 +3979,16 @@ function supersededAfterStarting(database: DatabaseSync, taskId: string): boolea
   return row?.from_tag === 'Running' || row?.from_tag === 'Publishing'
 }
 
+/** Branch authority blocks creation or claiming. Agent blockers stop a running Task. */
+function conflictTaskWaitsForAuthority(database: DatabaseSync, taskId: string): boolean {
+  const row = database.prepare(`
+    SELECT from_tag FROM task_transitions
+    WHERE task_id = ? AND to_tag = 'ActionRequired'
+    ORDER BY id DESC LIMIT 1
+  `).get(taskId) as { from_tag: TaskRow['state_tag'] | null } | undefined
+  return row?.from_tag === null || row?.from_tag === 'Queued'
+}
+
 /** Wait for quiet base inputs, but never delay a burst beyond five minutes. */
 const CONFLICT_BASE_QUIET_MS = 120_000
 const CONFLICT_BASE_MAX_WAIT_MS = 300_000
@@ -4094,9 +4104,11 @@ function planConflictResolution(
     return
   }
 
+  // Approval can unblock branch authority, but cannot clear an Agent verification blocker.
   // An exhausted budget waits for a person. A new head commit makes a new task.
   if (existing?.state_tag === 'ActionRequired' && existing.cancelled === 0 && ready
-    && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS) {
+    && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS
+    && conflictTaskWaitsForAuthority(database, existing.id)) {
     database.prepare(`
       UPDATE tasks
       SET state_tag = 'Queued', reason = NULL, attempts = 0, worker_id = NULL,
