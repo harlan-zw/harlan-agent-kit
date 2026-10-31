@@ -118,6 +118,36 @@ Its Basic-auth username is `agent`.
 Read API response contracts before extracting fields.
 For the Review endpoint, the array lives at `.runs`.
 
+## Share NuxtSEO credentials with Routines
+
+SEO and vitals workers need a NuxtSEO token inside their sandbox.
+Host CLI login alone does not authenticate workers.
+Repository environment files remain supported.
+
+To share an existing read-only token, configure each worker host separately.
+Write `~/.config/harlan-github-agent/nuxtseo-worker.json` with an explicit repository list:
+
+```json
+{
+  "environmentFile": "/absolute/path/to/existing/private.env",
+  "repositories": ["owner/site"]
+}
+```
+
+The existing environment file must contain `NUXTSEO_TOKEN`.
+Use a viewer token with read scopes and optional `feedback:write`.
+Keep the token in its existing private file.
+Never copy its value into commands, reports, or repository files.
+Both files must belong to the worker account and use mode `600`.
+Use canonical paths without symbolic links.
+
+Only listed repositories receive the token during `seo-review` and `vitals-review` Tasks.
+The Task repository must match the Worktree origin.
+Review Tasks and other Routines receive no shared token.
+Workers receive only `NUXTSEO_TOKEN`, rather than either source file or other environment values.
+Missing configuration preserves repository credentials.
+Invalid configuration stops the matching Routine with an error.
+
 ## Authority and deeper contracts
 
 Read [Hogwild](../hogwild/SKILL.md) before host work.

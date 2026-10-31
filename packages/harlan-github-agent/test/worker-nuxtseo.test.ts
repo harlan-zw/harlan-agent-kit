@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { resolveWorkerNuxtseo } from '../src/worker-nuxtseo.ts'
+import { resolveWorkerNuxtseo, workerNuxtseoEnvironment } from '../src/worker-nuxtseo.ts'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -43,4 +43,72 @@ it('rejects a command pointing to a different package', async () => {
 it('rejects an incomplete package dependency closure before starting a Routine', async () => {
   const input = await fixture({ dependencies: { missing: '1' } })
   await expect(resolveWorkerNuxtseo(input.home)).rejects.toThrow('dependency is missing: missing')
+})
+
+async function credentials() {
+  const root = await mkdtemp(join(tmpdir(), 'worker-nuxtseo-auth-'))
+  roots.push(root)
+  const environmentFile = join(root, 'viewer.env')
+  const configurationPath = join(root, 'nuxtseo-worker.json')
+  await writeFile(environmentFile, 'NUXTSEO_TOKEN=fixture-viewer\nCLOUDFLARE_API_TOKEN=unrelated\nHOME=/other\n', { mode: 0o600 })
+  await writeFile(configurationPath, JSON.stringify({ environmentFile, repositories: ['owner/site'] }), { mode: 0o600 })
+  return { root, environmentFile, input: { configurationPath, repository: 'owner/site', taskId: 'owner/site:seo-review:2026-10-31T00:00:00.000Z' } }
+}
+
+it.each(['seo-review', 'vitals-review'])('provides only the NuxtSEO token to a selected %s repository', async (routine) => {
+  const { input } = await credentials()
+  expect(await workerNuxtseoEnvironment({ ...input, taskId: `owner/site:${routine}:2026-10-31T00:00:00.000Z` })).toEqual({ NUXTSEO_TOKEN: 'fixture-viewer' })
+})
+
+it('leaves an unselected repository without the shared token', async () => {
+  const { input } = await credentials()
+  expect(await workerNuxtseoEnvironment({ ...input, repository: 'owner/client', taskId: 'owner/client:seo-review:2026-10-31T00:00:00.000Z' })).toEqual({})
+})
+
+it('never opens shared credentials for another role', async () => {
+  const { input, environmentFile } = await credentials()
+  await rm(environmentFile)
+  expect(await workerNuxtseoEnvironment({ ...input, taskId: 'owner/site:dependency-updates:2026-10-31T00:00:00.000Z' })).toEqual({})
+})
+
+it('rejects a Routine that names another Worktree repository', async () => {
+  const { input } = await credentials()
+  await expect(workerNuxtseoEnvironment({ ...input, repository: 'owner/other' })).rejects.toThrow('repository')
+})
+
+it('preserves repository authentication when shared configuration is absent', async () => {
+  const { input } = await credentials()
+  await rm(input.configurationPath)
+  expect(await workerNuxtseoEnvironment(input)).toEqual({})
+})
+
+it.each(['configuration', 'environment'])('refuses a shared %s file readable by another account', async (kind) => {
+  const { input, environmentFile } = await credentials()
+  await chmod(kind === 'configuration' ? input.configurationPath : environmentFile, 0o644)
+  await expect(workerNuxtseoEnvironment(input)).rejects.toThrow('private')
+})
+
+it('refuses an aliased credential source', async () => {
+  const { input, root, environmentFile } = await credentials()
+  const original = join(root, 'original.env')
+  await writeFile(original, 'NUXTSEO_TOKEN=other\n', { mode: 0o600 })
+  await rm(environmentFile)
+  await symlink(original, environmentFile)
+  await expect(workerNuxtseoEnvironment(input)).rejects.toThrow()
+})
+
+it.each([
+  { environmentFile: 'relative.env', repositories: ['owner/site'] },
+  { environmentFile: '/unused', repositories: [] },
+  { environmentFile: '/unused', repositories: ['owner/site:seo-review'] },
+])('refuses invalid shared credential configuration %#', async (value) => {
+  const { input } = await credentials()
+  await writeFile(input.configurationPath, JSON.stringify(value), { mode: 0o600 })
+  await expect(workerNuxtseoEnvironment(input)).rejects.toThrow('absolute NuxtSEO environment file and explicit repositories')
+})
+
+it('reports a missing token instead of silently falling back to another identity', async () => {
+  const { input, environmentFile } = await credentials()
+  await writeFile(environmentFile, 'CLOUDFLARE_API_TOKEN=unrelated\n', { mode: 0o600 })
+  await expect(workerNuxtseoEnvironment(input)).rejects.toThrow('no token')
 })

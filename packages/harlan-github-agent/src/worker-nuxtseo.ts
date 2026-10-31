@@ -1,6 +1,7 @@
 import { constants } from 'node:fs'
-import { access, readFile, realpath, stat } from 'node:fs/promises'
+import { access, open, readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { parseEnvironmentFile } from './workspace-environment.ts'
 
 export interface WorkerNuxtseo {
   entry: string
@@ -11,6 +12,58 @@ export interface WorkerNuxtseo {
 
 const packageName = /^(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*$/i
 const within = (path: string, root: string) => path === root || path.startsWith(`${root}/`)
+
+async function privateText(path: string): Promise<string | undefined> {
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch((cause: NodeJS.ErrnoException) => {
+    // A host without shared NuxtSEO configuration keeps repository credentials.
+    if (cause.code === 'ENOENT')
+      return undefined
+    throw cause
+  })
+  if (file === undefined)
+    return undefined
+  try {
+    const metadata = await file.stat()
+    if (!metadata.isFile() || metadata.size > 64 * 1024 || (metadata.mode & 0o077) !== 0
+      || metadata.uid !== process.getuid?.() || await realpath(`/proc/self/fd/${file.fd}`) !== path) {
+      throw new Error('The NuxtSEO credential source must be private, bounded, and owned by this account.')
+    }
+    return await file.readFile('utf8')
+  }
+  finally {
+    await file.close()
+  }
+}
+
+/** Share only the configured NuxtSEO token with explicitly selected repository scans. */
+export async function workerNuxtseoEnvironment(input: { configurationPath: string, repository: string | undefined, taskId: string | undefined }): Promise<Record<string, string>> {
+  const task = /^([^:]+):(seo-review|vitals-review):/.exec(input.taskId ?? '')
+  if (task === null)
+    return {}
+  if (task[1] !== input.repository)
+    throw new Error('The NuxtSEO Routine repository does not match its Worktree origin.')
+  const text = await privateText(input.configurationPath)
+  if (text === undefined)
+    return {}
+  const value: unknown = JSON.parse(text)
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new Error('Write a NuxtSEO worker configuration object.')
+  const source = value as Record<string, unknown>
+  if (typeof source.environmentFile !== 'string' || !isAbsolute(source.environmentFile)
+    || !Array.isArray(source.repositories) || source.repositories.length === 0
+    || !source.repositories.every(repository => typeof repository === 'string' && /^[\w.-]+\/[\w.-]+$/.test(repository))) {
+    throw new Error('Configure an absolute NuxtSEO environment file and explicit repositories.')
+  }
+  if (!source.repositories.includes(input.repository))
+    return {}
+  const environment = await privateText(source.environmentFile)
+  if (environment === undefined)
+    throw new Error('The configured NuxtSEO environment file is missing.')
+  const token = parseEnvironmentFile(environment).NUXTSEO_TOKEN
+  if (!token)
+    throw new Error('The configured NuxtSEO environment file has no token.')
+  return { NUXTSEO_TOKEN: token }
+}
 
 async function exists(path: string): Promise<boolean> {
   return stat(path).then(() => true).catch((cause: NodeJS.ErrnoException) => {

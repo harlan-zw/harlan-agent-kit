@@ -13,7 +13,7 @@ import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
 import { resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
-import { resolveWorkerNuxtseo } from './worker-nuxtseo.ts'
+import { resolveWorkerNuxtseo, workerNuxtseoEnvironment } from './worker-nuxtseo.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 const execute = promisify(execFile)
@@ -401,6 +401,9 @@ export async function prepareAgentSandbox(input: {
     const checkinValues = input.reviewHome === undefined
       ? await checkinEnvironment({ controllerHome, repository: match?.[1], taskId: input.taskId })
       : {}
+    const nuxtseoValues = input.reviewHome === undefined && input.networkMode !== 'opencode-client'
+      ? await workerNuxtseoEnvironment({ configurationPath: join(controllerHome, '.config/harlan-github-agent/nuxtseo-worker.json'), repository: match?.[1], taskId: input.taskId })
+      : {}
     await writeFile(gitConfig, `[core]\n repositoryformatversion = 0\n bare = false\n hooksPath = /home/agent/.config/git/hooks\n${match ? `[remote "origin"]\n url = https://github.com/${match[1]}.git\n fetch = +refs/heads/*:refs/remotes/origin/*\n` : ''}`, { mode: 0o600 })
     await writeFile(join(privateCommon, 'config'), '', { mode: 0o600 })
     await writeFile(join(privateGit.directory, 'config.worktree'), '', { mode: 0o600 })
@@ -427,6 +430,7 @@ export async function prepareAgentSandbox(input: {
     const environment = {
       ...(input.reviewHome === undefined ? workspaceEnvironment(baseEnvironment, workspace, input.taskId) : baseEnvironment),
       ...checkinValues,
+      ...nuxtseoValues,
       // Bind mounts prevent hardlinks to HOME. Keep pnpm's copy fallback outside the repository.
       PNPM_CONFIG_STORE_DIR: `${workerHome}/.local/share/pnpm/store`,
       // Nested workspace and test pools share the service's process cap.
