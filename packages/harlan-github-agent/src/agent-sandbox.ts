@@ -1,3 +1,4 @@
+import type { AgentTurnRequest } from './agent-provider.ts'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -13,7 +14,7 @@ import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
 import { resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
-import { resolveWorkerNuxtseo, workerNuxtseoEnvironment } from './worker-nuxtseo.ts'
+import { resolveWorkerNuxtseo, workerNuxtseoEnvironment, workerNuxtseoRoutine } from './worker-nuxtseo.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 const execute = promisify(execFile)
@@ -243,6 +244,7 @@ export async function prepareAgentSandbox(input: {
   readOnlyPaths?: readonly string[]
   writablePaths?: readonly string[]
   taskId?: string
+  routineContext?: AgentTurnRequest['routineContext']
   networkMode?: 'command' | 'opencode-server' | 'opencode-client'
   transportDirectory?: string
   readOnly?: boolean
@@ -288,7 +290,7 @@ export async function prepareAgentSandbox(input: {
     }
     const skillRoots = []
     if (input.reviewHome === undefined && input.networkMode !== 'opencode-client'
-      && /^[^:]+:(?:seo-review|vitals-review):/.test(input.taskId ?? '')) {
+      && workerNuxtseoRoutine(input) !== undefined) {
       const cli = await resolveWorkerNuxtseo(controllerHome)
       for (const path of cli.packages)
         args.push('--ro-bind', await permittedPath(path, controllerHome), path)
@@ -402,7 +404,7 @@ export async function prepareAgentSandbox(input: {
       ? await checkinEnvironment({ controllerHome, repository: match?.[1], taskId: input.taskId })
       : {}
     const nuxtseoValues = input.reviewHome === undefined && input.networkMode !== 'opencode-client'
-      ? await workerNuxtseoEnvironment({ configurationPath: join(controllerHome, '.config/harlan-github-agent/nuxtseo-worker.json'), repository: match?.[1], taskId: input.taskId })
+      ? await workerNuxtseoEnvironment({ configurationPath: join(controllerHome, '.config/harlan-github-agent/nuxtseo-worker.json'), repository: match?.[1], taskId: input.taskId, ...(input.routineContext === undefined ? {} : { routineContext: input.routineContext }) })
       : {}
     await writeFile(gitConfig, `[core]\n repositoryformatversion = 0\n bare = false\n hooksPath = /home/agent/.config/git/hooks\n${match ? `[remote "origin"]\n url = https://github.com/${match[1]}.git\n fetch = +refs/heads/*:refs/remotes/origin/*\n` : ''}`, { mode: 0o600 })
     await writeFile(join(privateCommon, 'config'), '', { mode: 0o600 })

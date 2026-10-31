@@ -26,8 +26,9 @@ function record(value: unknown): value is Record<string, unknown> {
  * 8: exact base revision supplied for immutable Review static evidence.
  * 9: fenced event delivery and host failure attribution across the desktop boundary.
  * 11: proposed next actions carried by selected Logged findings.
+ * 13: trusted SEO and vitals Routine provenance carried into implementation turns.
  */
-export const DESKTOP_PROTOCOL = 12
+export const DESKTOP_PROTOCOL = 13
 
 export const DESKTOP_TURN_LEASE_MILLISECONDS = 15_000
 

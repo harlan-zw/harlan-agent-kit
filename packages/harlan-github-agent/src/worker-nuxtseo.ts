@@ -1,3 +1,4 @@
+import type { AgentTurnRequest } from './agent-provider.ts'
 import { constants } from 'node:fs'
 import { access, open, readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -35,12 +36,25 @@ async function privateText(path: string): Promise<string | undefined> {
   }
 }
 
-/** Share only the configured NuxtSEO token with explicitly selected repository scans. */
-export async function workerNuxtseoEnvironment(input: { configurationPath: string, repository: string | undefined, taskId: string | undefined }): Promise<Record<string, string>> {
+/** Resolve controller Routine identity without replacing durable implementation Task IDs. */
+export function workerNuxtseoRoutine(input: { routineContext?: AgentTurnRequest['routineContext'], taskId?: string | undefined }): AgentTurnRequest['routineContext'] {
+  if (input.routineContext !== undefined) {
+    return input.routineContext.routineName === 'seo-review' || input.routineContext.routineName === 'vitals-review'
+      ? input.routineContext
+      : undefined
+  }
   const task = /^([^:]+):(seo-review|vitals-review):/.exec(input.taskId ?? '')
   if (task === null)
+    return undefined
+  return { repository: task[1]!, routineName: task[2] as 'seo-review' | 'vitals-review' }
+}
+
+/** Share only the configured NuxtSEO token with explicitly selected repositories. */
+export async function workerNuxtseoEnvironment(input: { configurationPath: string, repository: string | undefined, taskId: string | undefined, routineContext?: AgentTurnRequest['routineContext'] }): Promise<Record<string, string>> {
+  const routine = workerNuxtseoRoutine(input)
+  if (routine === undefined)
     return {}
-  if (task[1]!.toLowerCase() !== input.repository?.toLowerCase())
+  if (routine.repository.toLowerCase() !== input.repository?.toLowerCase())
     throw new Error('The NuxtSEO Routine repository does not match its Worktree origin.')
   const text = await privateText(input.configurationPath)
   if (text === undefined)

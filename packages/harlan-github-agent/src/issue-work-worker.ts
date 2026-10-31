@@ -487,6 +487,9 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
         sessionRole: 'issue_triage',
         taskId: task.id,
         workspace: prepared.value.path,
+        ...(routineSource?.routineName === 'seo-review' || routineSource?.routineName === 'vitals-review'
+          ? { routineContext: { repository: task.repository, routineName: routineSource.routineName } }
+          : {}),
       }, signal)
       if (turn._tag === 'Err')
         return turn

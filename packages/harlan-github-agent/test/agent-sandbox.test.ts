@@ -97,6 +97,20 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
       console.log(JSON.stringify({ skill: readFileSync(path, 'utf8'), reference: readFileSync(path.replace('SKILL.md', 'references/protocol.md'), 'utf8'), secret: existsSync(${JSON.stringify(join(home, 'secret'))}) }))
     `], { env: sandbox.environment })
     expect(JSON.parse(proof.stdout)).toEqual({ skill: 'Required CLI Skill.', reference: 'CLI protocol.', secret: false })
+    for (const provider of ['codex', 'opencode'] as const) {
+      for (const routineName of ['seo-review', 'vitals-review'] as const) {
+        const implementation = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider, profilePath: profile, taskId: 'opaque-issue-work-task', routineContext: { repository: 'harlan-zw/example', routineName } })
+        try {
+          const identity = await execute(implementation.binary, [...implementation.args, '/bin/sh', '-c', 'nuxtseo whoami --json'], { env: implementation.environment })
+          expect(JSON.parse(identity.stdout)).toEqual({ authenticated: true, unrelatedCredential: false })
+          expect(implementation.args.some(value => value.includes('fixture-viewer'))).toBe(false)
+        }
+        finally {
+          await implementation.release()
+        }
+      }
+    }
+    await expect(prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, taskId: 'opaque-issue-work-task', routineContext: { repository: 'harlan-zw/other', routineName: 'seo-review' } })).rejects.toThrow('repository')
     const unrelated = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, readOnly: true, taskId: 'harlan-zw/example:dependency-updates:2026-10-28T00:00:00.000Z' })
     try {
       const excluded = await execute(unrelated.binary, [...unrelated.args, '/run/agent/node', '--input-type=module-typescript', '-e', `import { existsSync } from 'node:fs'; console.log(JSON.stringify({ cli: existsSync(${JSON.stringify(packageRoot)}), launcher: existsSync('/run/agent/host-tools/nuxtseo') }))`], { env: unrelated.environment })
@@ -109,7 +123,7 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
     }
     const reviewHome = join(root, 'review')
     await mkdir(reviewHome)
-    const review = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, reviewHome, taskId: 'harlan-zw/example:vitals-review:2026-10-28T00:00:00.000Z' })
+    const review = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, reviewHome, taskId: 'opaque-issue-work-task', routineContext: { repository: 'harlan-zw/example', routineName: 'vitals-review' } })
     try {
       const excluded = await execute(review.binary, [...review.args, '/run/agent/node', '--input-type=module-typescript', '-e', `import { existsSync } from 'node:fs'; console.log(JSON.stringify({ cli: existsSync(${JSON.stringify(packageRoot)}), launcher: existsSync('/run/agent/host-tools/nuxtseo') }))`], { env: review.environment })
       expect(JSON.parse(excluded.stdout)).toEqual({ cli: false, launcher: false })
@@ -118,6 +132,14 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
     }
     finally {
       await review.release()
+    }
+    const client = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'opencode', profilePath: profile, networkMode: 'opencode-client', taskId: 'opaque-issue-work-task', routineContext: { repository: 'harlan-zw/example', routineName: 'seo-review' } })
+    try {
+      const excluded = await execute(client.binary, [...client.args, '/run/agent/node', '--input-type=module-typescript', '-e', 'import { existsSync } from "node:fs"; console.log(JSON.stringify({ cli: existsSync("/run/agent/host-tools/nuxtseo"), authenticated: Boolean(process.env.NUXTSEO_TOKEN) }))', '--', '--server', 'http://127.0.0.1:4097'], { env: client.environment })
+      expect(JSON.parse(excluded.stdout)).toEqual({ cli: false, authenticated: false })
+    }
+    finally {
+      await client.release()
     }
     const forbidden = join(home, '.config/credential-package')
     await mkdir(forbidden, { recursive: true })

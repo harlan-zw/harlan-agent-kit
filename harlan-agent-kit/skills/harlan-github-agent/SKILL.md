@@ -121,6 +121,7 @@ For the Review endpoint, the array lives at `.runs`.
 ## Share NuxtSEO credentials with Routines
 
 SEO and vitals workers need a NuxtSEO token inside their sandbox.
+This includes Issue work whose Published Routine provenance identifies `seo-review` or `vitals-review`.
 Host CLI login alone does not authenticate workers.
 Repository environment files remain supported.
 
@@ -141,9 +142,10 @@ Never copy its value into commands, reports, or repository files.
 Both files must belong to the worker account and use mode `600`.
 Use canonical paths without symbolic links.
 
-Only listed repositories receive the token during `seo-review` and `vitals-review` Tasks.
-The Task repository must match the Worktree origin.
-Review Tasks and other Routines receive no shared token.
+Only listed repositories receive the token for `seo-review`, `vitals-review`, or Issue work with their verified Published provenance.
+The controller derives `routineContext` from its Published issue records, never issue text or labels.
+The context repository must match the Worktree origin.
+Review Tasks, other Routines, unrelated Issue work, and attached OpenCode clients receive no shared token.
 Workers receive only `NUXTSEO_TOKEN`, rather than either source file or other environment values.
 Missing configuration preserves repository credentials.
 Invalid configuration stops the matching Routine with an error.

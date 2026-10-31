@@ -50,6 +50,7 @@ export interface AgentTurnOptions {
 }
 
 export interface AgentTurnInput {
+  routineContext?: AgentTurnRequest['routineContext']
   toolPolicy?: AgentTurnRequest['toolPolicy']
   media?: AgentMedia[]
   /** Start without prior session context, while still saving the new session for later turns. */
@@ -146,6 +147,7 @@ export async function runAgentTurn(
   const runtime = options.runtime(input.repository)
   const profile = roleProfile(runtime.profile, input.role)
   const events = runtime.provider.runTurn({
+    ...(input.routineContext === undefined ? {} : { routineContext: input.routineContext }),
     ...(input.toolPolicy === undefined ? {} : { toolPolicy: input.toolPolicy }),
     ...(input.media === undefined ? {} : { media: input.media }),
     ...(input.instructionPaths === undefined ? {} : { instructionPaths: input.instructionPaths }),

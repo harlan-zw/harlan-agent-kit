@@ -71,6 +71,8 @@ export function agentTextEvent(text: string): Extract<AgentEvent, { _tag: 'Messa
 }
 
 export interface AgentTurnRequest {
+  /** Trusted publication provenance, never copied from issue content or labels. */
+  routineContext?: { repository: string, routineName: 'seo-review' | 'vitals-review' }
   /** Bounded image pixels fetched by the controller, portable across hosts. */
   media?: readonly AgentMedia[]
   /**

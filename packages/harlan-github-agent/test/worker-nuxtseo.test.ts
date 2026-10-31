@@ -60,6 +60,21 @@ it.each(['seo-review', 'vitals-review'])('provides only the NuxtSEO token to a s
   expect(await workerNuxtseoEnvironment({ ...input, taskId: `owner/site:${routine}:2026-10-31T00:00:00.000Z` })).toEqual({ NUXTSEO_TOKEN: 'fixture-viewer' })
 })
 
+it.each(['seo-review', 'vitals-review'] as const)('authenticates trusted %s implementation with an opaque Task ID', async (routineName) => {
+  const { input } = await credentials()
+  expect(await workerNuxtseoEnvironment({ ...input, taskId: 'opaque-issue-work-task', routineContext: { repository: 'owner/site', routineName } })).toEqual({ NUXTSEO_TOKEN: 'fixture-viewer' })
+})
+
+it('refuses trusted implementation context for another Worktree origin', async () => {
+  const { input } = await credentials()
+  await expect(workerNuxtseoEnvironment({ ...input, taskId: 'opaque-issue-work-task', routineContext: { repository: 'owner/other', routineName: 'seo-review' } })).rejects.toThrow('repository')
+})
+
+it('does not grant trusted implementation access outside the configured repositories', async () => {
+  const { input } = await credentials()
+  expect(await workerNuxtseoEnvironment({ ...input, repository: 'owner/client', taskId: 'opaque-issue-work-task', routineContext: { repository: 'owner/client', routineName: 'seo-review' } })).toEqual({})
+})
+
 it('leaves an unselected repository without the shared token', async () => {
   const { input } = await credentials()
   expect(await workerNuxtseoEnvironment({ ...input, repository: 'owner/client', taskId: 'owner/client:seo-review:2026-10-31T00:00:00.000Z' })).toEqual({})
