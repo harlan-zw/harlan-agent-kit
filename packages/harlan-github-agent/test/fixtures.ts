@@ -1,6 +1,7 @@
 import type { AgentRuntimeSource } from '../src/agent-profile.ts'
 import type { AgentEvent, AgentProvider, AgentProviderName, AgentTurnRequest } from '../src/agent-provider.ts'
 import type { AgentProfile, DashboardSnapshot, GitHubIssueItem, GitHubPullRequestItem, RepositoryMapping } from '../src/types.ts'
+import type { GitHubOwnershipEvidence } from '../src/worker-github-evidence.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 
 /** One fixed Agent runtime, for a worker that never switches mid test. */
@@ -45,6 +46,24 @@ export function issueItem(overrides: Partial<GitHubIssueItem> = {}): GitHubIssue
     updatedAt: '2026-08-13T00:00:00.000Z',
     ...overrides,
   }
+}
+
+export function githubOwnershipEvidence(overrides: Partial<GitHubOwnershipEvidence> = {}): GitHubOwnershipEvidence {
+  return {
+    observedAt: '2026-11-01T07:00:00.000Z',
+    issues: { _tag: 'Available', entries: [], truncated: false },
+    pullRequests: { _tag: 'Available', entries: [], truncated: false },
+    ownership: {
+      _tag: 'Available',
+      issues: { _tag: 'Available', entries: [], truncated: false },
+      pullRequests: { _tag: 'Available', entries: [], truncated: false },
+    },
+    ...overrides,
+  }
+}
+
+export function githubOwnershipSource(evidence = githubOwnershipEvidence()) {
+  return { collectOwnership: async () => evidence }
 }
 
 export function pullRequestItem(overrides: Partial<GitHubPullRequestItem> = {}): GitHubPullRequestItem {

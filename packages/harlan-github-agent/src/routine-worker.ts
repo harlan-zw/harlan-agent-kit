@@ -21,7 +21,7 @@ export interface RoutineScanWorkerOptions {
   serviceEvidence?: Pick<JournalStore, 'listIncidents' | 'listWorkflowEvents'>
   serviceUpdate?: () => ServiceUpdateStatus
   activityLog?: Pick<AgentActivityLog, 'record'>
-  githubEvidence?: RoutineGitHubEvidenceSource
+  githubEvidence?: Pick<RoutineGitHubEvidenceSource, 'collect'>
   writeCheckinEvidence?: typeof writeCheckinGitHubEvidence
   logger: { error: (message: string) => void, info: (message: string) => void }
   maximumChangedFiles?: number
