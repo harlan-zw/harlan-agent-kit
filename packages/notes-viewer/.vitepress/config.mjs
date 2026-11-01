@@ -28,14 +28,22 @@ export default {
       chunkSizeWarningLimit: 1600,
       rollupOptions: {
         output: {
-          manualChunks(id) {
+          manualChunks(id, { getModuleInfo } = {}) {
             if (!id.includes('node_modules') || id.endsWith('.css'))
               return
             const tail = id.split(/[/\\]node_modules[/\\]/).pop()
             if (/mermaid|elkjs/.test(tail.split('/')[0]) && /-[A-Z0-9]{8}\.mjs$/.test(tail))
               return
+            // Modules Rollup has already shaken to nothing (mermaid's unused
+            // d3 tree, vue's re-export barrel) would otherwise force empty
+            // one-byte vendor chunks. Leave them to Rollup's placement.
+            if (getModuleInfo && !getModuleInfo(id)?.isIncluded)
+              return
             const name = tail.startsWith('@') ? tail.split('/').slice(0, 2).join('/') : tail.split('/')[0]
-            return `vendor/${name.replace(/[^\w-]/g, '-')}`
+            // vitepress-plugin-mermaid imports vitepress and vitepress imports
+            // the plugin's global component, so separate chunks form an import
+            // cycle that Rollup warns about on every build.
+            return `vendor/${(name === 'vitepress-plugin-mermaid' ? 'vitepress' : name).replace(/[^\w-]/g, '-')}`
           },
         },
       },
