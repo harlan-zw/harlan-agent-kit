@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 const execute = promisify(execFile)
+export const BROWSER_NODE_VERSION = '24.22.2'
+const BROWSER_NODE_MANIFEST_URL = `https://nodejs.org/dist/v${BROWSER_NODE_VERSION}/SHASUMS256.txt`
 export const managedTools = [
   { name: 'gh', repository: 'cli/cli', asset: (arch: string) => new RegExp(`^gh_[0-9.]+_linux_${arch === 'arm64' ? 'arm64' : 'amd64'}\\.tar\\.gz$`) },
   { name: 'codex', repository: 'openai/codex', asset: (arch: string) => new RegExp(`^codex-package-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-unknown-linux-musl\\.tar\\.gz$`) },
@@ -18,9 +20,26 @@ export const managedTools = [
   { name: 'wt', repository: 'max-sixty/worktrunk', asset: (arch: string) => new RegExp(`^worktrunk-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-unknown-linux-musl\\.tar\\.xz$`) },
   { name: 'rg', repository: 'BurntSushi/ripgrep', asset: (arch: string) => new RegExp(`^ripgrep-[0-9.]+-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-unknown-linux-musl\\.tar\\.gz$`) },
   { name: 'fd', repository: 'sharkdp/fd', asset: (arch: string) => new RegExp(`^fd-v[0-9.]+-${arch === 'arm64' ? 'aarch64' : 'x86_64'}-unknown-linux-musl\\.tar\\.gz$`) },
+  { name: 'browser-node' },
 ] as const
 
 interface ReleaseAsset { name: string, digest: string, browser_download_url: string }
+
+/** Pin the compatible setup runtime to its official checksum manifest. */
+export function browserNodeToolRelease(value: unknown, arch: string): { tag: string, asset: ReleaseAsset } {
+  if (arch !== 'x64' && arch !== 'arm64')
+    throw new Error(`The browser Node architecture is unsupported: ${arch}`)
+  if (typeof value !== 'string' || value.length > 64 * 1024)
+    throw new Error('The browser Node checksum manifest must be bounded text.')
+  const name = `node-v${BROWSER_NODE_VERSION}-linux-${arch}.tar.xz`
+  const matches = value.split(/\r?\n/).flatMap((line) => {
+    const entry = /^([a-f0-9]{64})\s+(\S+)$/.exec(line)
+    return entry?.[2] === name ? [entry[1]!] : []
+  })
+  if (matches.length !== 1)
+    throw new Error('The browser Node manifest needs one matching archive.')
+  return { tag: `v${BROWSER_NODE_VERSION}`, asset: { name, digest: `sha256:${matches[0]}`, browser_download_url: `https://nodejs.org/dist/v${BROWSER_NODE_VERSION}/${name}` } }
+}
 
 /** V2 publishes native archives through npm, independently of the V1 GitHub releases. */
 export function opencodeToolRelease(value: unknown, arch: string): { tag: string, asset: ReleaseAsset } {
@@ -42,6 +61,8 @@ export function opencodeToolRelease(value: unknown, arch: string): { tag: string
 
 /** Parse stable release metadata before using its archive or download URL. */
 export function agentToolRelease(value: unknown, tool: typeof managedTools[number], arch: string): { tag: string, asset: ReleaseAsset } {
+  if (tool.name === 'browser-node')
+    return browserNodeToolRelease(value, arch)
   if (tool.name === 'opencode')
     return opencodeToolRelease(value, arch)
   if (arch !== 'x64' && arch !== 'arm64')
@@ -120,7 +141,8 @@ export async function syncAgentTool(input: {
     const members = (await execute(zip ? '/usr/bin/unzip' : '/usr/bin/tar', zip ? ['-Z1', archive] : ['-tf', archive], { maxBuffer: 4 * 1024 * 1024 })).stdout.trim().split('\n')
     await mkdir(bundle, { mode: 0o700 })
     for (const name of executableNames) {
-      const candidates = members.filter(member => member === name || member.endsWith(`/${name}`))
+      const executable = input.tool.name === 'browser-node' ? 'node' : name
+      const candidates = members.filter(member => member === executable || member.endsWith(`/${executable}`))
       const member = candidates[0]
       if (candidates.length !== 1 || member === undefined || member.startsWith('/') || member.split('/').includes('..'))
         throw new Error(`The Agent tool archive has no unique executable: ${name}`)
@@ -129,7 +151,9 @@ export async function syncAgentTool(input: {
         throw new Error(`The Agent tool archive must contain a native executable: ${name}`)
       await writeFile(join(bundle, name), contents, { mode: 0o755 })
     }
-    await execute(join(bundle, input.tool.name), ['--version'], { timeout: 30_000 })
+    const version = await execute(join(bundle, input.tool.name), ['--version'], { timeout: 30_000 })
+    if (input.tool.name === 'browser-node' && version.stdout.trim() !== `v${BROWSER_NODE_VERSION}`)
+      throw new Error('The browser Node executable does not match its pinned version.')
     if (input.tool.name === 'codex') {
       // Resolve Codex and its sibling from one immutable directory, even during sync.
       const installed = await mkdtemp(join(root, 'codex-release-'))
@@ -174,13 +198,19 @@ async function main() {
     throw new Error('Agent tool sync requires Linux.')
   const home = resolve(process.env.HOME!)
   for (const tool of managedTools) {
-    const metadata: unknown = tool.name === 'opencode'
-      ? await fetch(`https://registry.npmjs.org/@opencode%2fcli-linux-${process.arch === 'arm64' ? 'arm64' : 'x64-baseline'}/latest`, { signal: AbortSignal.timeout(30_000) }).then((response) => {
+    const metadata: unknown = tool.name === 'browser-node'
+      ? await fetch(BROWSER_NODE_MANIFEST_URL, { signal: AbortSignal.timeout(30_000) }).then((response) => {
           if (!response.ok)
-            throw new Error(`The OpenCode release read failed: ${response.status}`)
-          return response.json()
+            throw new Error(`The browser Node manifest read failed: ${response.status}`)
+          return response.text()
         })
-      : JSON.parse((await execute(join(home, '.local/bin/agent-gh'), ['api', `repos/${tool.repository}/releases/latest`], { timeout: 30_000 })).stdout)
+      : tool.name === 'opencode'
+        ? await fetch(`https://registry.npmjs.org/@opencode%2fcli-linux-${process.arch === 'arm64' ? 'arm64' : 'x64-baseline'}/latest`, { signal: AbortSignal.timeout(30_000) }).then((response) => {
+            if (!response.ok)
+              throw new Error(`The OpenCode release read failed: ${response.status}`)
+            return response.json()
+          })
+        : JSON.parse((await execute(join(home, '.local/bin/agent-gh'), ['api', `repos/${tool.repository}/releases/latest`], { timeout: 30_000 })).stdout)
     const result = await syncAgentTool({ home, tool, release: metadata, arch: process.arch, download: async (url) => {
       const response = await fetch(url, { signal: AbortSignal.timeout(120_000) })
       if (!response.ok)

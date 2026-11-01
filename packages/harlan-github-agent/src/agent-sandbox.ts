@@ -1,7 +1,7 @@
 import type { AgentTurnRequest } from './agent-provider.ts'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { mkdir, mkdtemp, open, readdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -12,6 +12,7 @@ import { createAgentEgress } from './agent-egress.ts'
 import { AGENT_SKILL_CATALOG_PATH, loadAgentSkillCatalog } from './agent-skill-catalog.ts'
 import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
+import { resolveBrowserSetupRuntime } from './worker-browser-runtime.ts'
 import { resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
 import { resolveWorkerNuxtseo, workerNuxtseoEnvironment, workerNuxtseoRoutine } from './worker-nuxtseo.ts'
@@ -324,7 +325,27 @@ export async function prepareAgentSandbox(input: {
         }
       }
       const launcher = join(scratch, cli.command)
-      await writeFile(launcher, `#!/bin/sh\nexec /run/agent/node '${cli.entry.replaceAll('\'', '\'\\\'\'')}' "$@"\n`, { mode: 0o700 })
+      if (cli.command === 'dev-browser') {
+        const setup = await resolveBrowserSetupRuntime(controllerHome)
+        const npm = packageTools.find(tool => tool.command === 'npm')
+        const runtime = npm === undefined ? { _tag: 'Unavailable' as const, reason: 'Browser setup needs the installed npm command.' } : setup
+        const bootstrap = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './worker-browser-bootstrap.ts' : '../worker-browser-bootstrap.mjs', import.meta.url))
+        const configuration = join(scratch, 'browser-bootstrap.json')
+        const manifests = [await readFile(join(cli.root, 'package.json'), 'utf8'), npm === undefined ? null : await readFile(join(npm.root, 'package.json'), 'utf8')]
+        const fingerprint = createHash('sha256').update(JSON.stringify({ manifests, runtime: setup._tag === 'Available' ? { version: setup.version, digest: setup.digest } : setup })).digest('hex')
+        await writeFile(configuration, JSON.stringify({ entry: cli.entry, fingerprint, runtime: runtime._tag === 'Available' ? { _tag: 'Available' } : runtime }), { mode: 0o600 })
+        args.push('--ro-bind', bootstrap, '/run/agent/browser-bootstrap.ts', '--ro-bind', configuration, '/run/agent/browser-bootstrap.json')
+        if (setup._tag === 'Available' && npm !== undefined) {
+          const node = await permittedPath(setup.path, controllerHome)
+          const npmLauncher = join(scratch, 'browser-setup-npm')
+          await writeFile(npmLauncher, `#!/bin/sh\nexec /run/agent/browser-node '${npm.entry.replaceAll('\'', '\'\\\'\'')}' "$@"\n`, { mode: 0o700 })
+          args.push('--ro-bind', node, '/run/agent/browser-node', '--ro-bind', node, '/run/agent/browser-setup/node', '--ro-bind', npmLauncher, '/run/agent/browser-setup/npm')
+        }
+        await writeFile(launcher, '#!/bin/sh\nexec /run/agent/node --experimental-strip-types /run/agent/browser-bootstrap.ts /run/agent/browser-bootstrap.json run "$@"\n', { mode: 0o700 })
+      }
+      else {
+        await writeFile(launcher, `#!/bin/sh\nexec /run/agent/node '${cli.entry.replaceAll('\'', '\'\\\'\'')}' "$@"\n`, { mode: 0o700 })
+      }
       args.push('--ro-bind', launcher, `/run/agent/host-tools/${cli.command}`)
     }
     for (const path of [...profile.tools, ...profile.readOnlyPaths]) {

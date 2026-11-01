@@ -18,6 +18,7 @@ export default defineBuildConfig({
         './src/terminal-lock.ts',
         './src/agent-sandbox-cli.ts',
         './src/agent-sandbox-runtime.ts',
+        './src/worker-browser-bootstrap.ts',
         './src/github-media-render.ts',
         './src/repair-regression-reporter.ts',
         './src/review-mcp.ts',

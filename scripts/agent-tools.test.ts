@@ -4,7 +4,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { agentToolRelease, managedTools, syncAgentTool } from './agent-tools.ts'
+import { agentToolRelease, BROWSER_NODE_VERSION, browserNodeToolRelease, managedTools, syncAgentTool } from './agent-tools.ts'
 
 const roots: string[] = []
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })))
@@ -59,6 +59,26 @@ it.each([
 it('refuses downloads outside the official repository', () => {
   const f = fixture()
   expect(() => agentToolRelease({ ...f.release, assets: [{ ...f.asset, browser_download_url: 'https://example.com/archive' }] }, f.tool, 'x64')).toThrow()
+})
+
+it('selects the pinned official browser Node archive from its checksum manifest', () => {
+  const hash = 'a'.repeat(64)
+  const name = `node-v${BROWSER_NODE_VERSION}-linux-x64.tar.xz`
+  expect(browserNodeToolRelease(`${'b'.repeat(64)}  another.tar.xz\n${hash}  ${name}\n`, 'x64')).toEqual({ tag: `v${BROWSER_NODE_VERSION}`, asset: { name, digest: `sha256:${hash}`, browser_download_url: `https://nodejs.org/dist/v${BROWSER_NODE_VERSION}/${name}` } })
+  expect(() => browserNodeToolRelease(`${hash}  ${name}\n${hash}  ${name}\n`, 'x64')).toThrow('one matching archive')
+  expect(() => browserNodeToolRelease(`${hash}  ../${name}\n`, 'x64')).toThrow('one matching archive')
+})
+
+it('rejects an executable that disagrees with the browser Node manifest', async () => {
+  const f = fixture()
+  copyFileSync('/usr/bin/true', join(f.home, 'archive/bin/node'))
+  const name = `node-v${BROWSER_NODE_VERSION}-linux-x64.tar.xz`
+  execFileSync('/usr/bin/tar', ['-cJf', join(f.home, name), '-C', join(f.home, 'archive'), 'bin/node'])
+  const bytes = readFileSync(join(f.home, name))
+  const release = `${createHash('sha256').update(bytes).digest('hex')}  ${name}\n`
+  const tool = managedTools.find(tool => tool.name === 'browser-node')!
+  await expect(syncAgentTool({ ...f, tool, release, download: async () => bytes })).rejects.toThrow('pinned version')
+  expect(() => statSync(join(f.home, '.local/share/harlan-agent-kit/tools/bin/browser-node'))).toThrow()
 })
 
 it('refuses script installers inside an otherwise verified archive', async () => {
