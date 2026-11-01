@@ -22,7 +22,7 @@ async function exists(path: string): Promise<boolean> {
 }
 
 /** Resolve an installed pnpm command without mounting its store or global directory. */
-export async function resolveWorkerPackage(home: string, command: { name: string, package: string, label: string }): Promise<WorkerPackage | undefined> {
+export async function resolveWorkerPackage(home: string, command: { name: string, package: string, label: string, maximumPackages?: 128 | 256 }): Promise<WorkerPackage | undefined> {
   let target: string | undefined
   for (const directory of ['.local/bin', '.local/share/pnpm/bin', '.local/share/pnpm']) {
     const binary = join(home, directory, command.name)
@@ -55,14 +55,15 @@ export async function resolveWorkerPackage(home: string, command: { name: string
   }
   const packages = new Set<string>()
   const links = new Map<string, string>()
+  const maximumPackages = command.maximumPackages ?? 128
   async function visit(path: string): Promise<void> {
     const canonical = await realpath(path)
     if (path !== canonical)
       links.set(path, canonical)
     if (packages.has(canonical))
       return
-    if (packages.size >= 128)
-      throw new Error(`The ${command.label} dependency closure exceeds 128 packages.`)
+    if (packages.size >= maximumPackages)
+      throw new Error(`The ${command.label} dependency closure exceeds ${maximumPackages} packages.`)
     packages.add(canonical)
     const manifest = JSON.parse(await readFile(join(canonical, 'package.json'), 'utf8')) as { dependencies?: Record<string, string>, optionalDependencies?: Record<string, string> }
     for (const name of new Set([...Object.keys(manifest.dependencies ?? {}), ...Object.keys(manifest.optionalDependencies ?? {})])) {

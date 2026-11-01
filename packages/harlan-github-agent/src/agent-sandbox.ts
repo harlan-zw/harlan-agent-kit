@@ -301,6 +301,9 @@ export async function prepareAgentSandbox(input: {
       const browser = await resolveWorkerPackage(controllerHome, { name: 'dev-browser', package: 'dev-browser', label: 'browser' })
       if (browser !== undefined)
         packageTools.push({ ...browser, command: 'dev-browser' })
+      const npm = await resolveWorkerPackage(controllerHome, { name: 'npm', package: 'npm', label: 'npm', maximumPackages: 256 })
+      if (npm !== undefined)
+        packageTools.push({ ...npm, command: 'npm' })
     }
     const mountedPackages = new Set<string>()
     const packageLinks = new Map<string, string>()
