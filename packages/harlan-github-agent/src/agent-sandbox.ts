@@ -1,4 +1,5 @@
 import type { AgentTurnRequest } from './agent-provider.ts'
+import type { WorkerPackage } from './worker-package.ts'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
@@ -327,7 +328,7 @@ export async function prepareAgentSandbox(input: {
       const launcher = join(scratch, cli.command)
       if (cli.command === 'dev-browser') {
         const setup = await resolveBrowserSetupRuntime(controllerHome)
-        const npm = packageTools.find(tool => tool.command === 'npm')
+        const npm = packageTools.find((tool): tool is WorkerPackage & { command: 'npm' } => 'root' in tool && tool.command === 'npm')
         const runtime = npm === undefined ? { _tag: 'Unavailable' as const, reason: 'Browser setup needs the installed npm command.' } : setup
         const bootstrap = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './worker-browser-bootstrap.ts' : '../worker-browser-bootstrap.mjs', import.meta.url))
         const configuration = join(scratch, 'browser-bootstrap.json')
