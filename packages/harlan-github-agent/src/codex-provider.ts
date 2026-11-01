@@ -3,6 +3,7 @@ import type { AgentEvent, AgentProvider, AgentTokenUsage, AgentTurnRequest } fro
 import type { AgentSandbox } from './agent-sandbox.ts'
 import type { ReviewProofAuthorityFactory } from './review-proof-authority.ts'
 import type { ReviewRuntime } from './review-runtime.ts'
+import { writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import process from 'node:process'
 import { Codex } from '@openai/codex-sdk'
@@ -151,6 +152,12 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
             return
           }
           sandbox = prepared.value
+          // Only nonsecret command data belongs in this private launch file.
+          // The opaque guest environment stays on its existing environment channel.
+          const plan = JSON.stringify({ binary: sandbox.binary, args: [...sandbox.args, sandbox.providerBinary] })
+          if (Buffer.byteLength(plan) > 1024 * 1024)
+            throw new Error('The Codex Agent sandbox launch plan exceeds its size limit.')
+          await writeFile(`${sandbox.adapterPath}.json`, plan, { mode: 0o600, flag: 'wx' })
         }
         // Production uses the trusted adapter and its sanitized environment.
         // Injected clients exercise only the provider's event translation.
@@ -160,8 +167,6 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
               codexPathOverride: sandbox.adapterPath,
               env: {
                 PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
-                HARLAN_AGENT_SANDBOX_ARGS: JSON.stringify([...sandbox.args, sandbox.providerBinary]),
-                HARLAN_AGENT_SANDBOX_BINARY: sandbox.binary,
                 HARLAN_AGENT_SANDBOX_ENV: JSON.stringify(sandbox.environment),
               },
             }), ...(review === undefined ? {} : { config: { features: REVIEW_CODEX_FEATURES, agents: { enabled: false, max_depth: 0 } } }) })

@@ -264,6 +264,10 @@ it('advertises readable mounted Skills and References without granting write acc
 
 it('blocks controller credentials, Git helpers, and parent process reads while preserving worker tools', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-boundary-'))
+  // Large trusted tool closures exceed Linux's per-environment-entry limit.
+  // Each individual mount path remains small enough for a normal argv entry.
+  const instructionPaths = Array.from({ length: 900 }, (_, index) => join(root, `instruction-${String(index).padStart(4, '0')}-${'a'.repeat(48)}.md`))
+  await Promise.all(instructionPaths.map(path => writeFile(path, 'Fixture instruction.')))
   const home = join(root, 'controller')
   const worker = join(root, 'worker')
   const primary = join(root, 'primary')
@@ -331,6 +335,7 @@ if (process.argv[2] === 'serve') {
   }
   run().catch(error => { console.error(error.message); process.exit(32) })
 } else {
+  if (readFileSync(${JSON.stringify(instructionPaths[0])}, 'utf8') !== 'Fixture instruction.' || readFileSync(${JSON.stringify(instructionPaths.at(-1))}, 'utf8') !== 'Fixture instruction.') process.exit(41)
   if (process.argv[process.argv.indexOf('--sandbox') + 1] !== 'danger-full-access') process.exit(36)
   writeFileSync(${JSON.stringify(join(workspace, 'codex-mutation.txt'))}, 'isolated mutation')
   const schemaIndex = process.argv.indexOf('--output-schema')
@@ -360,7 +365,11 @@ if (process.argv[2] === 'serve') {
   await copyFile('/usr/bin/true', join(managedTools, 'codex-code-mode-host'))
   await writeFile(join(managedTools, 'gh'), '#!/bin/sh\nprintf "current-host-cli\\n"\n', { mode: 0o755 })
   const toolSandbox = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath: profile, readOnly: true })
+  const launchPlan = `${toolSandbox.adapterPath}.json`
+  await writeFile(launchPlan, '{', { mode: 0o600 })
   try {
+    // A rejected adapter launch still leaves cleanup with the sandbox owner.
+    await expect(execute(process.execPath, [toolSandbox.adapterPath], { env: { HARLAN_AGENT_SANDBOX_ENV: '{}' } })).rejects.toMatchObject({ code: 1 })
     const commandHost = await execute(toolSandbox.binary, [...toolSandbox.args, '/run/agent/host-tools/codex-code-mode-host', '--version'], { env: toolSandbox.environment })
     expect(commandHost.stdout).toContain('GNU coreutils')
     const runningTool = execute(toolSandbox.binary, [...toolSandbox.args, '/bin/sh', '-c', '/run/agent/host-tools/gh; read -r line; /run/agent/host-tools/gh'], { env: toolSandbox.environment })
@@ -386,6 +395,7 @@ if (process.argv[2] === 'serve') {
     await toolSandbox.release()
     await rm(managedTools, { recursive: true })
   }
+  await expect(readFile(launchPlan)).rejects.toMatchObject({ code: 'ENOENT' })
   const unsafeProfile = join(root, 'unsafe-worker.json')
   await writeFile(unsafeProfile, JSON.stringify({ home: worker, codex: fakeProvider, opencode: fakeProvider, tools: [home], readOnlyPaths: [] }))
   await expect(checkAgentWorker({ HOME: home }, unsafeProfile)).rejects.toThrow('exposes controller credentials')
@@ -506,7 +516,7 @@ if (process.argv[2] === 'serve') {
       await daily.release()
     }
     await expect(prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'codex', taskId: 'other/site:daily-checkin:2026-10-08T00:00:00.000Z' })).rejects.toThrow('repository')
-    const request = { taskId: 'owner/site:daily-checkin:2026-10-08T00:00:00.000Z', model: 'fixture', outputSchema: {}, prompt: 'Return protected.'.repeat(16_000), sessionId: null, signal: new AbortController().signal, workspace, media: [{ mime: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAABQAAAAKCAYAAAC0VX7mAAAAF0lEQVR4nGNkoDIYNZByMGog5YDqBgIAFJEAC2Vie2MAAAAASUVORK5CYII=', label: 'Fixture image', source: 'https://github.com/user-attachments/assets/a' }] }
+    const request = { instructionPaths, taskId: 'owner/site:daily-checkin:2026-10-08T00:00:00.000Z', model: 'fixture', outputSchema: {}, prompt: 'Return protected.'.repeat(16_000), sessionId: null, signal: new AbortController().signal, workspace, media: [{ mime: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAABQAAAAKCAYAAAC0VX7mAAAAF0lEQVR4nGNkoDIYNZByMGog5YDqBgIAFJEAC2Vie2MAAAAASUVORK5CYII=', label: 'Fixture image', source: 'https://github.com/user-attachments/assets/a' }] }
     const originalHome = process.env.HOME
     process.env.HOME = home
     const memory = process.env.XDG_RUNTIME_DIR === undefined ? {} : { memoryPerAgentGiB: 1 }
