@@ -120,6 +120,34 @@ it('does not record completion after a failed installer and retries on later bro
   }
 })
 
+it('releases the setup lock after a namespace dies during installation', async () => {
+  const f = await fixture()
+  const entry = join(f.home, 'npm/bin/cli.js')
+  const original = await readFile(entry, 'utf8')
+  await writeFile(entry, `const waitFs=require('node:fs');const waitPath=require('node:path');if(waitFs.existsSync(waitPath.join(process.env.HOME,'pause-browser-setup'))){waitFs.writeFileSync(waitPath.join(process.env.HOME,'setup-started'),'started');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);}${original}`)
+  await writeFile(join(f.worker, 'pause-browser-setup'), 'pause')
+  const sandbox = await prepareAgentSandbox({ workspace: f.workspace, environment: { HOME: f.home }, provider: 'codex', profilePath: f.profilePath })
+  const pending = execute(sandbox.binary, [...sandbox.args, '/run/agent/host-tools/dev-browser', '--headless'], { env: sandbox.environment, timeout: 10_000 })
+  try {
+    const interrupted = expect(pending).rejects.toMatchObject({ signal: 'SIGKILL' })
+    await expect.poll(() => readFile(join(f.worker, 'setup-started'), 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT')
+        return ''
+      throw error
+    })).toBe('started')
+    pending.child.kill('SIGKILL')
+    await interrupted
+    await expect(readFile(join(f.worker, '.local/state/harlan-agent-kit/browser-bootstrap.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await rm(join(f.worker, 'pause-browser-setup'))
+    const recovered = await execute(sandbox.binary, [...sandbox.args, '/run/agent/host-tools/dev-browser', '--headless'], { env: sandbox.environment, timeout: 10_000 })
+    expect(JSON.parse(recovered.stdout).ready).toBe(true)
+  }
+  finally {
+    pending.child.kill('SIGKILL')
+    await sandbox.release()
+  }
+})
+
 it('omits bootstrap and runtime mounts from Review homes and attached clients', async () => {
   const f = await fixture()
   const reviewHome = join(f.worker, 'review')
