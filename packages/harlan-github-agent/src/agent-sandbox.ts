@@ -295,16 +295,16 @@ export async function prepareAgentSandbox(input: {
     if (input.reviewHome === undefined && input.networkMode !== 'opencode-client'
       && workerNuxtseoRoutine(input) !== undefined) {
       const cli = await resolveWorkerNuxtseo(controllerHome)
-      packageTools.push({ ...cli, command: 'nuxtseo' })
+      packageTools.push({ ...cli, command: 'nuxtseo' as const })
       skillRoots.push({ path: cli.skills, agentPath: cli.skills })
     }
     if (input.reviewHome === undefined && input.networkMode !== 'opencode-client') {
       const browser = await resolveWorkerPackage(controllerHome, { name: 'dev-browser', package: 'dev-browser', label: 'browser' })
       if (browser !== undefined)
-        packageTools.push({ ...browser, command: 'dev-browser' })
+        packageTools.push({ ...browser, command: 'dev-browser' as const })
       const npm = await resolveWorkerPackage(controllerHome, { name: 'npm', package: 'npm', label: 'npm', maximumPackages: 256 })
       if (npm !== undefined)
-        packageTools.push({ ...npm, command: 'npm' })
+        packageTools.push({ ...npm, command: 'npm' as const })
     }
     const mountedPackages = new Set<string>()
     const packageLinks = new Map<string, string>()
