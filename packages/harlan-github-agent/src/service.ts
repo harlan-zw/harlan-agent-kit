@@ -702,6 +702,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     ownAppId: config.github.appId,
     tokens,
   })
+  const workerGitHubEvidence = createRoutineGitHubEvidenceSource({ tokens: routedTokens, now, jobs: workerGithub })
   // Pull request triage classifies at observation time, before the planner
   // queues anything. Without the classification service it still runs: the
   // path rule decides, and a prose-only pull request falls back to a full
@@ -835,6 +836,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       source: tokens,
       worker: createIssueWorkWorker({
         github: workerGithub,
+        githubEvidence: workerGitHubEvidence,
         activityLog,
         claudeHome: agentContext.value.claudeHome,
         ...(diagramReference === null ? {} : { diagramReference }),
@@ -1030,7 +1032,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           serviceEvidence: store,
           serviceUpdate: options.serviceUpdate.read,
           activityLog,
-          githubEvidence: createRoutineGitHubEvidenceSource({ tokens: routedTokens, now, jobs: workerGithub }),
+          githubEvidence: workerGitHubEvidence,
           logger: {
             error: message => options.logger.error(message),
             info: message => options.logger.info(message),
@@ -1058,7 +1060,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         worker: withGitHubWritePreflight({
           accesses: ['item_write'],
           source: tokens,
-          worker: createIssueTriageWorker(subjectWorkerOptions),
+          worker: createIssueTriageWorker({ ...subjectWorkerOptions, githubEvidence: workerGitHubEvidence }),
         }),
         workerId: randomUUID(),
       })),

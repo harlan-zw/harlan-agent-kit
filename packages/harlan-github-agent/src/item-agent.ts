@@ -30,6 +30,7 @@ import type {
   ReviewResolution,
   ReviewRun,
 } from './types.ts'
+import type { RoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { findRepositoryMemory, GITHUB_MEDIA_LINES, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
@@ -49,6 +50,7 @@ import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, reviewFindingCodeLink, reviewFindingFollowUp } from './review-comment.ts'
 import { applyReviewReasoningEffortBand, DEFAULT_REVIEW_REASONING_EFFORT_POLICY, reviewReasoningEffortBand } from './review-effort.ts'
 import { cleanLine, cleanText, updatedAtLabel } from './text.ts'
+import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
 
 interface ReviewResponse {
   confidence: number
@@ -198,17 +200,20 @@ Investigation defaults, unless repository policy sets a narrower scope:
 - If upstream inspection establishes a bounded fix, choose READY_TO_SPEC. Name the implementation repository and handoff in nextAction.
 - Do not queue implementation in this repository for a fix that belongs in another repository.
 - Choose the route once intent, scope, and the next action are clear. Leave implementation checks to Issue work.
+- Issue triage classifies intent and scope. Site-specific CLI tools, their bundled Skills, and Site credentials are intentionally absent here.
+- Missing Site tools in this phase do not establish missing implementation prerequisites. Issue work verifies its own prerequisites.
 - Before requesting a specification, read the matching installed workflow Skill for choices it already settles.
 - The dependency-updates Skill already covers major migrations, coupled dependencies, bounded repair attempts, and exclusions.
 - For dependency updates, refreshable version evidence and those migration steps alone do not require a separate specification.
 - Choose READY_TO_SPEC only when a concrete unresolved product or technical decision remains outside that policy. Name that decision.
 - Do not start a browser or dev server. Do not install packages.
-- Search this repository's open issues and pull request history with the GitHub CLI. Read promising matches before deciding.
+- Read the controller-collected open issue and pull request evidence first. Read promising matches before deciding.
+- Use public GitHub reads for additional public history. Open lists never establish complete pull request history.
 - Compare the cause and required fix, not only titles or shared files. Check up to 20 issue and 20 pull request candidates.
 - Keep at most three relatedPullRequests. Give each number and a concrete reason. Return [] when no match is verified.
 - Set duplicateIssue only for an open issue with the same cause and required fix. Give its number and reason, then choose WAIT_TO_IMPLEMENT.
 - A related pull request alone does not make an issue a duplicate. If search fails, say so in the summary and continue triage.
-- The GitHub CLI supports public reads only. Use supplied evidence for private repository history.
+- The GitHub CLI supports public reads only. Supplied private evidence covers bounded open items, not closed history.
 - After a private read fails, do not retry another repository name or credential. Report the evidence limit.
 
 Choose exactly one route:
@@ -1719,7 +1724,7 @@ export function issueMovedUnderTriage(
   return snapshot.state !== 'open' || snapshot.title !== issue.title
 }
 
-export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageWorker {
+export function createIssueTriageWorker(options: ItemAgentOptions & { githubEvidence: Pick<RoutineGitHubEvidenceSource, 'collectOwnership'> }): IssueTriageWorker {
   return {
     async run(task, signal) {
       const snapshot = await options.github.getIssueTriageSnapshot(task.repositoryMapping, task.issueNumber, signal)
@@ -1742,11 +1747,12 @@ export function createIssueTriageWorker(options: ItemAgentOptions): IssueTriageW
       const memory = options.claudeHome === undefined
         ? null
         : await findRepositoryMemory({ claudeHome: options.claudeHome, checkoutPath: task.repositoryMapping.checkout })
+      const githubEvidence = await options.githubEvidence.collectOwnership(task.repositoryMapping, signal)
       const turn = await runParsedAgentTurn({ ...options, parse: parseIssueTriageResponse }, {
         freshSession: task.state.fence > 1,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.issueNumber,
-        prompt: issuePrompt(task, snapshot.value, workspace.value.path, memory),
+        prompt: `${issuePrompt(task, snapshot.value, workspace.value.path, memory)}\n\n${issueGitHubOwnershipLines(githubEvidence)}`,
         progress: {
           current: agentPhase('WorktreeReady', 'Git worktree ready'),
           report: phase => Promise.resolve(saveAgentProgress(options, task, phase)),

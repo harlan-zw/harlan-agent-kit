@@ -4,6 +4,63 @@ import { err, ok } from '../src/result.ts'
 import { collectRepairGitHubEvidence, collectRoutineGitHubEvidence, createRoutineGitHubEvidenceSource, jobExecutionContext } from '../src/worker-github-evidence.ts'
 import { repositoryMapping } from './fixtures.ts'
 
+it('collects bounded open ownership using only the controller read grant', async () => {
+  const paths: string[] = []
+  const accesses: string[] = []
+  const source = createRoutineGitHubEvidenceSource({
+    tokens: { getToken: async (_repository, access) => {
+      accesses.push(access)
+      return ok({ token: 'controller-secret', expiresAt: '2126-01-01T00:00:00Z' })
+    }, invalidate: () => undefined },
+    now: () => new Date('2026-11-01T07:00:00Z'),
+    jobs: { getFailedJobContext: async () => { throw new Error('Ownership must not read job logs.') } },
+    createClient: options => new Octokit({ ...options, request: { fetch: async (url: string, init: RequestInit) => {
+      const parsed = new URL(url)
+      paths.push(parsed.pathname + parsed.search)
+      expect((init.headers as Record<string, string>).authorization).toBe('token controller-secret')
+      if (parsed.pathname.endsWith('/pulls'))
+        return Response.json({ message: 'Private pull request evidence unavailable.' }, { status: 404 })
+      return Response.json(Array.from({ length: 21 }, (_, index) => ({
+        number: index + 1,
+        title: index === 0 ? 'a'.repeat(501) : 'Related work',
+        body: index === 0 ? `Untrusted owner note. ghp_12345678901234567890 ${'b'.repeat(3000)}` : null,
+      })))
+    } } } as never),
+  })
+  const result = await source.collectOwnership(repositoryMapping(), new AbortController().signal)
+  expect(paths.sort()).toEqual([
+    '/repos/harlan-zw/example/issues?state=open&per_page=21',
+    '/repos/harlan-zw/example/pulls?state=open&per_page=21',
+  ])
+  expect(accesses).toEqual(['read'])
+  expect(result.issues).toMatchObject({ _tag: 'Available', truncated: true, entries: [{ number: 1, title: 'a'.repeat(500) }, ...Array.from({ length: 19 }, (_, index) => ({ number: index + 2 }))] })
+  expect(result.pullRequests).toMatchObject({ _tag: 'Unavailable' })
+  expect(result.ownership.issues).toMatchObject({ _tag: 'Available', truncated: true, entries: [{ number: 1, body: { _tag: 'Truncated' } }, ...Array.from({ length: 19 }, (_, index) => ({ number: index + 2 }))] })
+  expect(result.ownership.pullRequests).toMatchObject({ _tag: 'Unavailable' })
+  expect(JSON.stringify(result)).not.toContain('controller-secret')
+  expect(JSON.stringify(result)).not.toContain('ghp_12345678901234567890')
+})
+
+it('keeps empty successful ownership separate from unavailable private reads', async () => {
+  const source = createRoutineGitHubEvidenceSource({
+    tokens: { getToken: async () => ok({ token: 'controller-secret', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined },
+    now: () => new Date('2026-11-01T07:00:00Z'),
+    jobs: { getFailedJobContext: async () => { throw new Error('Ownership must not read job logs.') } },
+    createClient: options => new Octokit({ ...options, request: { fetch: async () => Response.json([]) } } as never),
+  })
+  const result = await source.collectOwnership(repositoryMapping(), new AbortController().signal)
+  expect(result).toEqual({
+    observedAt: '2026-11-01T07:00:00.000Z',
+    issues: { _tag: 'Available', entries: [], truncated: false },
+    pullRequests: { _tag: 'Available', entries: [], truncated: false },
+    ownership: {
+      _tag: 'Available',
+      issues: { _tag: 'Available', entries: [], truncated: false },
+      pullRequests: { _tag: 'Available', entries: [], truncated: false },
+    },
+  })
+})
+
 it('supplies redacted ownership bodies without another GitHub request', async () => {
   const paths: string[] = []
   const result = await collectRoutineGitHubEvidence({

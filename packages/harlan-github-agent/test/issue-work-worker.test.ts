@@ -13,14 +13,25 @@ import { withGitHubWritePreflight } from '../src/github-write-gate.ts'
 import { createIssueWorkWorker } from '../src/issue-work-worker.ts'
 import { issueSnapshotDigest } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
-import { agentRuntime, issueItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, githubOwnershipEvidence, githubOwnershipSource, issueItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('issue work worker', () => {
   it('preserves deployment evidence without committing an empty change', async () => {
     const repository = repositoryMapping()
     const issue = issueItem()
     const bases: PullRequestBase[] = []
+    const capture: ProviderCapture = { requests: [] }
+    const ownership = githubOwnershipEvidence({
+      issues: { _tag: 'Available', entries: [{ number: 1948, title: 'Related first paint' }], truncated: false },
+      pullRequests: { _tag: 'Unavailable', reason: 'Private pull request list unavailable.' },
+      ownership: {
+        _tag: 'Available',
+        issues: { _tag: 'Available', entries: [{ number: 1948, body: { _tag: 'Complete', text: 'Same routes, a related metric. Verify cause before claiming a duplicate.' } }], truncated: false },
+        pullRequests: { _tag: 'Unavailable', reason: 'Private pull request list unavailable.' },
+      },
+    })
     const worker = createIssueWorkWorker({
+      githubEvidence: githubOwnershipSource(ownership),
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         outcome: 'implemented',
         summary: 'Dispatch the deployment workflow and verify production.',
@@ -29,7 +40,7 @@ describe('issue work worker', () => {
         pullRequestTitle: 'fix: shared helper',
         // The Agent forgot the combined issue, so the controller substitutes metadata that closes both.
         pullRequestBody: '### Description\n\nFixed.\n\n### Linked Issues\n\nCloses #12.\nCloses #13.',
-      }))),
+      }), capture)),
       github: {
         getIssueTriageSnapshot: () => Promise.resolve(ok({ body: 'Body', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
         getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Found', body: '### Description\n\n### Linked Issues' })),
@@ -90,6 +101,7 @@ describe('issue work worker', () => {
       summary: 'Dispatch the deployment workflow and verify production.',
       checks: ['The deployment workflow has not run.'],
     })
+    expect(capture.requests[0]?.prompt).toContain(JSON.stringify(ownership))
   })
 
   it('keeps combined issues and the planned base through the GitHub write preflight', async () => {
@@ -97,6 +109,7 @@ describe('issue work worker', () => {
     const issue = issueItem()
     const bases: PullRequestBase[] = []
     const worker = createIssueWorkWorker({
+      githubEvidence: githubOwnershipSource(),
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         outcome: 'implemented',
         summary: 'Fixed both.',
@@ -168,6 +181,7 @@ describe('issue work worker', () => {
     const issue = issueItem()
     let committed = false
     const worker = createIssueWorkWorker({
+      githubEvidence: githubOwnershipSource(),
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         outcome: 'implemented',
         summary: 'Changed the controller.',
@@ -224,6 +238,7 @@ describe('issue work worker', () => {
     const capture: ProviderCapture = { requests: [] }
     let snapshotReads = 0
     const worker = createIssueWorkWorker({
+      githubEvidence: githubOwnershipSource(),
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         outcome: 'implemented',
         summary: 'Fixed the parser.',
@@ -325,6 +340,7 @@ Closes #12.`,
     let snapshotReads = 0
     let committed = false
     const worker = createIssueWorkWorker({
+      githubEvidence: githubOwnershipSource(),
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         outcome: 'implemented',
         summary: 'Fixed the parser.',
@@ -380,6 +396,7 @@ Closes #12.`,
     let commitMessage = ''
     const recorded: Array<{ taskId: string, item: unknown }> = []
     const worker = createIssueWorkWorker({
+      githubEvidence: githubOwnershipSource(),
       activityLog: {
         record: (taskId, item) => recorded.push({ taskId, item }),
       },
@@ -447,6 +464,7 @@ Closes #12.`,
     const issue = issueItem()
     let committed = false
     const worker = createIssueWorkWorker({
+      githubEvidence: githubOwnershipSource(),
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([
         { _tag: 'SessionStarted', sessionId: 'session-1' },
         { _tag: 'Message', text: '{"outcome":"blocked"}' },
@@ -508,6 +526,7 @@ Closes #12.`,
     const issue = issueItem()
     const bases: PullRequestBase[] = []
     const worker = createIssueWorkWorker({
+      githubEvidence: githubOwnershipSource(),
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         outcome: 'implemented',
         summary: 'Fixed the parser.',
@@ -657,6 +676,7 @@ Closes #12.`,
     const issue = issueItem()
     let workspaceCreated = false
     const worker = createIssueWorkWorker({
+      githubEvidence: githubOwnershipSource(),
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([])),
       github: {
         getIssueTriageSnapshot: () => Promise.resolve(ok({
@@ -713,6 +733,7 @@ Closes #12.`,
     const triageDigest = issueSnapshotDigest(snapshot)
     const asked: Array<string | undefined> = []
     const worker = createIssueWorkWorker({
+      githubEvidence: githubOwnershipSource(),
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         outcome: 'implemented',
         summary: 'Fixed.',
@@ -785,6 +806,7 @@ describe('issue work pull request metadata', () => {
     }
     const worker = createIssueWorkWorker({
       activityLog: { record: (_taskId, item) => recorded.push(item) },
+      githubEvidence: githubOwnershipSource(),
       runtime: agentRuntime(CODEX_AGENT_PROFILE, provider),
       github: {
         getIssueTriageSnapshot: () => Promise.resolve(ok({ body: input.body ?? 'Reproduction', comments: [], state: 'open', title: issue.title, updatedAt: '2026-08-13T01:00:00.000Z' })),
@@ -978,6 +1000,7 @@ describe('issue work pull request diagram', () => {
     const issue = issueItem()
     const recorded: unknown[] = []
     const worker = createIssueWorkWorker({
+      githubEvidence: githubOwnershipSource(),
       activityLog: { record: (_taskId, item) => recorded.push(item) },
       diagramReference: { guide: '/kit/graph-document.md', example: '/kit/example.graph.json' },
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({

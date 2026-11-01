@@ -8,6 +8,7 @@ import type { PullRequestDiagramReference } from './pull-request-diagram.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedIssueWorkTask, MutationWorkerOutcome, PullRequestBase, RepositoryMapping, RoutineIssueSource } from './types.ts'
+import type { RoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
 import type { IssueWorktreeManager } from './worktree.ts'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, instructionFilesLine, listInstructionFiles, PULL_REQUEST_BODY_LINES, repositoryMemoryLine, TOOLCHAIN_LINES, UNIT_TEST_LINES } from './agent-context.ts'
@@ -21,6 +22,7 @@ import { err, ok } from './result.ts'
 import { getRoutine } from './routines/index.ts'
 import { chooseStackBase } from './stack.ts'
 import { cleanLine } from './text.ts'
+import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
 
 interface ImplementedAgentResponse {
   outcome: 'implemented'
@@ -82,6 +84,7 @@ export interface IssueWorkWorkerOptions {
   /** The pr-lens authoring reference. Absent means the Agent is not asked to draw. */
   diagramReference?: PullRequestDiagramReference
   github: Pick<GitHubAgentSource, 'getIssueTriageSnapshot' | 'getPullRequestTemplate' | 'listPullRequestFiles'>
+  githubEvidence: Pick<RoutineGitHubEvidenceSource, 'collectOwnership'>
   now: () => Date
   runtime: AgentRuntimeSource
   activityLog?: Pick<AgentActivityLog, 'record'>
@@ -449,6 +452,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
       const sessionId = options.store.getWorkerSession(task.repository, task.issueNumber, 'issue_triage', scopeDigest)
       if (sessionId === null)
         return err('The issue changed before work started.')
+      const githubEvidence = await options.githubEvidence.collectOwnership(validated.value, signal)
       const templateBody = pullRequestTemplateBody(template.value)
       // A repair can lose a valid title while correcting the body. Keep the
       // first descriptive title before either response is rejected.
@@ -467,7 +471,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.issueNumber,
         progress: { current: agentPhase('WorktreeReady', 'Git worktree ready'), report: reportProgress, work: 'fix' },
-        prompt: issueWorkPrompt({
+        prompt: `${issueWorkPrompt({
           task,
           body: snapshot.value.body,
           comments: snapshot.value.comments,
@@ -478,7 +482,7 @@ export function createIssueWorkWorker(options: IssueWorkWorkerOptions): IssueWor
           combinedIssues,
           memory,
           diagramReference: options.diagramReference ?? null,
-        }),
+        })}\n\n${issueGitHubOwnershipLines(githubEvidence)}`,
         repository: task.repository,
         role: 'issue_work',
         schema: outputSchema,
