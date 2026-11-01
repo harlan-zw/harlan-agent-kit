@@ -20,6 +20,8 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
   const primary = join(root, 'primary')
   const tools = join(home, '.local/bin')
   const packageRoot = join(home, '.local/share/pnpm/global/node_modules/.pnpm/@nuxtseo+cli@1/node_modules/@nuxtseo/cli')
+  const lighthouseRoot = join(home, 'installed-lighthouse')
+  const lighthouseDependencies = Array.from({ length: 128 }, (_, index) => `lighthouse-fixture-${index}`)
   const dependency = join(home, '.local/share/pnpm/global/node_modules/.pnpm/fixture-dependency@1/node_modules/fixture-dependency')
   const profile = join(root, 'worker.json')
   await Promise.all([
@@ -29,6 +31,7 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
     mkdir(join(packageRoot, 'dist'), { recursive: true }),
     mkdir(join(packageRoot, 'skills/nuxtseo-cli/references'), { recursive: true }),
     mkdir(dependency, { recursive: true }),
+    mkdir(join(lighthouseRoot, 'node_modules'), { recursive: true }),
   ])
   await Promise.all([
     writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: '@nuxtseo/cli', type: 'module', bin: { nuxtseo: './dist/cli-entry.js' }, dependencies: { 'fixture-dependency': '1' } })),
@@ -39,8 +42,17 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
     writeFile(join(dependency, 'index.js'), 'export const version = "fixture-1"'),
     writeFile(join(home, 'secret'), 'Controller secret.'),
     writeFile(join(tools, 'nuxtseo'), `#!/bin/sh\n# cmd-shim-target=${packageRoot}/dist/cli-entry.js\nexec node ${JSON.stringify(join(packageRoot, 'dist/cli-entry.js'))} "$@"\n`, { mode: 0o755 }),
+    writeFile(join(lighthouseRoot, 'package.json'), JSON.stringify({ name: 'lighthouse', type: 'module', bin: { lighthouse: './cli.js' }, dependencies: { 'fixture-dependency': '1', ...Object.fromEntries(lighthouseDependencies.map(name => [name, '1'])) } })),
+    writeFile(join(lighthouseRoot, 'cli.js'), 'import { version } from "fixture-dependency"; console.log(JSON.stringify({ runner: "Lighthouse", version }))'),
+    writeFile(join(tools, 'lighthouse'), `#!/bin/sh\n# cmd-shim-target=${lighthouseRoot}/cli.js\nexec node ${JSON.stringify(join(lighthouseRoot, 'cli.js'))} "$@"\n`, { mode: 0o755 }),
   ])
+  await Promise.all(lighthouseDependencies.map(async (name) => {
+    const dependency = join(lighthouseRoot, 'node_modules', name)
+    await mkdir(dependency)
+    await writeFile(join(dependency, 'package.json'), JSON.stringify({ name, version: '1.0.0' }))
+  }))
   await symlink(dependency, join(packageRoot, '../../fixture-dependency'))
+  await symlink(dependency, join(lighthouseRoot, 'node_modules/fixture-dependency'))
   await execute('git', ['init', primary])
   await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
   await execute('git', ['-C', primary, 'remote', 'add', 'origin', 'https://github.com/harlan-zw/example.git'])
@@ -88,6 +100,10 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
     }
     const result = await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'nuxtseo --version --json'], { env: sandbox.environment })
     expect(JSON.parse(result.stdout)).toEqual({ version: 'fixture-1' })
+    const lighthouse = await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'lighthouse --version'], { env: sandbox.environment })
+    expect(JSON.parse(lighthouse.stdout)).toEqual({ runner: 'Lighthouse', version: 'fixture-1' })
+    const chromeFinder = await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'printf "worker\\n" | awk \'{print toupper($0)}\''], { env: sandbox.environment })
+    expect(chromeFinder.stdout.trim()).toBe('WORKER')
     const identity = await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'nuxtseo whoami --json'], { env: sandbox.environment })
     expect(JSON.parse(identity.stdout)).toEqual({ authenticated: true, unrelatedCredential: false })
     const proof = await execute(sandbox.binary, [...sandbox.args, '/run/agent/node', '--input-type=module-typescript', '-e', `
@@ -103,6 +119,14 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
         try {
           const identity = await execute(implementation.binary, [...implementation.args, '/bin/sh', '-c', 'nuxtseo whoami --json'], { env: implementation.environment })
           expect(JSON.parse(identity.stdout)).toEqual({ authenticated: true, unrelatedCredential: false })
+          if (routineName === 'vitals-review') {
+            const lighthouse = await execute(implementation.binary, [...implementation.args, '/bin/sh', '-c', 'lighthouse --version'], { env: implementation.environment })
+            expect(JSON.parse(lighthouse.stdout)).toEqual({ runner: 'Lighthouse', version: 'fixture-1' })
+          }
+          else {
+            const visibility = await execute(implementation.binary, [...implementation.args, '/run/agent/node', '--input-type=module', '-e', `import { existsSync } from 'node:fs'; console.log(existsSync(${JSON.stringify(lighthouseRoot)}))`], { env: implementation.environment })
+            expect(visibility.stdout.trim()).toBe('false')
+          }
           expect(implementation.args.some(value => value.includes('fixture-viewer'))).toBe(false)
         }
         finally {
@@ -115,6 +139,8 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
     try {
       const excluded = await execute(unrelated.binary, [...unrelated.args, '/run/agent/node', '--input-type=module-typescript', '-e', `import { existsSync } from 'node:fs'; console.log(JSON.stringify({ cli: existsSync(${JSON.stringify(packageRoot)}), launcher: existsSync('/run/agent/host-tools/nuxtseo') }))`], { env: unrelated.environment })
       expect(JSON.parse(excluded.stdout)).toEqual({ cli: false, launcher: false })
+      const lighthouse = await execute(unrelated.binary, [...unrelated.args, '/run/agent/node', '--input-type=module', '-e', `import { existsSync } from 'node:fs'; console.log(existsSync(${JSON.stringify(lighthouseRoot)}))`], { env: unrelated.environment })
+      expect(lighthouse.stdout.trim()).toBe('false')
       const credentials = await execute(unrelated.binary, [...unrelated.args, '/run/agent/node', '--input-type=module-typescript', '-e', 'console.log(Boolean(process.env.NUXTSEO_TOKEN))'], { env: unrelated.environment })
       expect(credentials.stdout.trim()).toBe('false')
     }
@@ -127,16 +153,20 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
     try {
       const excluded = await execute(review.binary, [...review.args, '/run/agent/node', '--input-type=module-typescript', '-e', `import { existsSync } from 'node:fs'; console.log(JSON.stringify({ cli: existsSync(${JSON.stringify(packageRoot)}), launcher: existsSync('/run/agent/host-tools/nuxtseo') }))`], { env: review.environment })
       expect(JSON.parse(excluded.stdout)).toEqual({ cli: false, launcher: false })
+      const lighthouse = await execute(review.binary, [...review.args, '/run/agent/node', '--input-type=module', '-e', `import { existsSync } from 'node:fs'; console.log(existsSync(${JSON.stringify(lighthouseRoot)}))`], { env: review.environment })
+      expect(lighthouse.stdout.trim()).toBe('false')
       const credentials = await execute(review.binary, [...review.args, '/run/agent/node', '--input-type=module-typescript', '-e', 'console.log(Boolean(process.env.NUXTSEO_TOKEN))'], { env: review.environment })
       expect(credentials.stdout.trim()).toBe('false')
     }
     finally {
       await review.release()
     }
-    const client = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'opencode', profilePath: profile, networkMode: 'opencode-client', taskId: 'opaque-issue-work-task', routineContext: { repository: 'harlan-zw/example', routineName: 'seo-review' } })
+    const client = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'opencode', profilePath: profile, networkMode: 'opencode-client', taskId: 'opaque-issue-work-task', routineContext: { repository: 'harlan-zw/example', routineName: 'vitals-review' } })
     try {
       const excluded = await execute(client.binary, [...client.args, '/run/agent/node', '--input-type=module-typescript', '-e', 'import { existsSync } from "node:fs"; console.log(JSON.stringify({ cli: existsSync("/run/agent/host-tools/nuxtseo"), authenticated: Boolean(process.env.NUXTSEO_TOKEN) }))', '--', '--server', 'http://127.0.0.1:4097'], { env: client.environment })
       expect(JSON.parse(excluded.stdout)).toEqual({ cli: false, authenticated: false })
+      const lighthouse = await execute(client.binary, [...client.args, '/run/agent/node', '--input-type=module', '-e', `import { existsSync } from 'node:fs'; console.log(existsSync(${JSON.stringify(lighthouseRoot)}))`, '--', '--server', 'http://127.0.0.1:4097'], { env: client.environment })
+      expect(lighthouse.stdout.trim()).toBe('false')
     }
     finally {
       await client.release()

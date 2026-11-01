@@ -296,6 +296,16 @@ export async function prepareAgentSandbox(input: {
       const cli = await resolveWorkerNuxtseo(controllerHome)
       packageTools.push({ ...cli, command: 'nuxtseo' })
       skillRoots.push({ path: cli.skills, agentPath: cli.skills })
+      if (workerNuxtseoRoutine(input)?.routineName === 'vitals-review') {
+        const lighthouse = await resolveWorkerPackage(controllerHome, { name: 'lighthouse', package: 'lighthouse', label: 'Lighthouse', maximumPackages: 256 })
+        if (lighthouse !== undefined) {
+          packageTools.push({ ...lighthouse, command: 'lighthouse' })
+          const awk = await realpath('/usr/bin/awk')
+          if (!awk.startsWith('/usr/'))
+            throw new Error('The Lighthouse awk command must stay inside system tools.')
+          args.push('--ro-bind', awk, '/run/agent/host-tools/awk')
+        }
+      }
     }
     if (input.reviewHome === undefined && input.networkMode !== 'opencode-client') {
       const browser = await resolveWorkerPackage(controllerHome, { name: 'dev-browser', package: 'dev-browser', label: 'browser' })
