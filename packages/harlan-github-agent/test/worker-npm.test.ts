@@ -49,7 +49,7 @@ it('lets an isolated browser installer run npm with its bundled dependencies', a
   try {
     const sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: home }, provider: 'codex', profilePath })
     try {
-      const result = await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'exec dev-browser --headless install'], { env: sandbox.environment, timeout: 10_000 })
+      const result = await execute(sandbox.binary, [...sandbox.args, '/run/agent/node', join(browser, 'bin/browser.js'), '--headless', 'install'], { env: sandbox.environment, timeout: 10_000 })
       expect(JSON.parse(result.stdout)).toEqual({ version: 'fixture-npm', dependency: 'fixture-186', runtime: '/run/agent/node', args: ['install'], secret: false })
       expect(await readFile(join(worker, '.dev-browser-fixture/installed'), 'utf8')).toBe('fixture-186')
       expect(await readFile(secret, 'utf8')).toBe('Controller secret.')
