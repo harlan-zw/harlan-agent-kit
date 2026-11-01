@@ -15,6 +15,7 @@ interface BrowserConfiguration {
 interface BrowserReceipt {
   fingerprint: string
   daemonDigest: string
+  runtimeDigest: string
   executables: string[]
 }
 
@@ -63,6 +64,46 @@ async function readBounded(path: string): Promise<string> {
   return readFile(path, 'utf8')
 }
 
+async function runtimeDigest(home: string): Promise<string | undefined> {
+  const modules = join(home, '.dev-browser/node_modules')
+  const manifestPath = join(home, '.dev-browser/package.json')
+  try {
+    const text = await readBounded(manifestPath)
+    const manifest = JSON.parse(text) as { name?: unknown, dependencies?: Record<string, unknown> }
+    if (manifest.name !== 'dev-browser-runtime' || typeof manifest.dependencies !== 'object'
+      || manifest.dependencies === null || Array.isArray(manifest.dependencies)) {
+      return undefined
+    }
+    const names = Object.keys(manifest.dependencies).sort()
+    if (names.length === 0 || names.length > 16 || !names.every(name => /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/.test(name)))
+      return undefined
+    const require = createRequire(manifestPath)
+    const files = [text]
+    for (const name of names) {
+      const root = join(modules, name)
+      if (!within(await realpath(root), modules))
+        throw new Error('Browser runtime packages must stay inside the private package directory.')
+      const packageText = await readBounded(join(root, 'package.json'))
+      const dependency = JSON.parse(packageText) as { name?: unknown, version?: unknown }
+      if (dependency.name !== name || typeof dependency.version !== 'string')
+        return undefined
+      const entry = await realpath(require.resolve(name))
+      if (!within(entry, await realpath(root)))
+        throw new Error('Browser runtime entries must stay inside their private packages.')
+      files.push(packageText, await readBounded(entry))
+    }
+    return digest(JSON.stringify(files))
+  }
+  catch (error) {
+    // Partial or damaged private installs must run the official installer again.
+    if (error instanceof SyntaxError || (typeof error === 'object' && error !== null && 'code' in error
+      && (error.code === 'ENOENT' || error.code === 'MODULE_NOT_FOUND'))) {
+      return undefined
+    }
+    throw error
+  }
+}
+
 async function currentReceipt(path: string, config: BrowserConfiguration, home: string): Promise<boolean> {
   const metadata = await lstat(path).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT')
@@ -85,6 +126,7 @@ async function currentReceipt(path: string, config: BrowserConfiguration, home: 
     return false
   const receipt = value as Partial<BrowserReceipt>
   if (receipt.fingerprint !== config.fingerprint || typeof receipt.daemonDigest !== 'string'
+    || typeof receipt.runtimeDigest !== 'string' || await runtimeDigest(home) !== receipt.runtimeDigest
     || !Array.isArray(receipt.executables) || receipt.executables.length !== 3
     || !receipt.executables.every(path => typeof path === 'string' && within(path, join(home, '.cache/ms-playwright')))) {
     return false
@@ -165,7 +207,10 @@ async function prepare(config: BrowserConfiguration, home: string, receiptPath: 
       throw new Error('Browser executables must stay inside the private browser cache.')
     await access(path, constants.X_OK)
   }
-  const receipt: BrowserReceipt = { fingerprint: config.fingerprint, daemonDigest: digest(await readBounded(join(home, '.dev-browser/daemon.mjs'))), executables }
+  const installedDigest = await runtimeDigest(home)
+  if (installedDigest === undefined)
+    throw new Error('Browser setup needs complete private runtime packages.')
+  const receipt: BrowserReceipt = { fingerprint: config.fingerprint, daemonDigest: digest(await readBounded(join(home, '.dev-browser/daemon.mjs'))), runtimeDigest: installedDigest, executables }
   const staged = `${receiptPath}.${randomUUID()}`
   try {
     await writeFile(staged, JSON.stringify(receipt), { mode: 0o600, flag: 'wx' })
