@@ -3,6 +3,12 @@ import { DESKTOP_PROTOCOL, parseDesktopEvents, parseDesktopReport, parseDesktopW
 import { DESKTOP_WORKTREE_LIMITS } from '../src/desktop-worktree.ts'
 
 describe('desktop boundaries', () => {
+  it('preserves a provider evidence refusal across hosts without accepting model prose', () => {
+    const event = { _tag: 'VitalsComparison', result: { _tag: 'Unavailable', requestId: '5b7a9978-6b09-4d3e-a978-bebef7e65091', reason: 'The raw reports are missing.' }, retainedDirectory: null }
+    expect(parseDesktopEvents([event])).toEqual([event])
+    expect(() => parseDesktopEvents([{ ...event, result: { _tag: 'Accepted', requestId: event.result.requestId, reason: 'Model says it is faster.', comparisons: [] } }])).toThrow()
+    expect(() => parseDesktopEvents([{ ...event, retainedDirectory: '../../controller' }])).toThrow('location is invalid')
+  })
   it.each(['host-cancelled', 'sandbox-setup', 'resource-limit'])('preserves %s attribution across hosts', (cause) => {
     const event = { _tag: 'Failed', reason: 'The host stopped the turn.', cause }
     expect(parseDesktopEvents([event])).toEqual([event])

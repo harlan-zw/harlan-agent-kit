@@ -16032,15 +16032,15 @@ export function openJournalStore(
 
   const getRoutineIssueSource: JournalStore['getRoutineIssueSource'] = (repository, issueNumber) => {
     const row = database.prepare(`
-      SELECT candidate_issue_commands.routine_name, candidates.target
+      SELECT candidate_issue_commands.routine_name, candidates.target, candidates.fingerprint, candidates.claim
       FROM candidate_issue_commands
       JOIN candidates ON candidates.id = candidate_issue_commands.candidate_id
       WHERE candidate_issue_commands.repository = ?
         AND candidate_issue_commands.github_issue_number = ?
         AND candidate_issue_commands.state_tag = 'Published'
       LIMIT 1
-    `).get(repository, issueNumber) as { routine_name: RoutineIssueSource['routineName'], target: string } | undefined
-    return row === undefined ? null : { routineName: row.routine_name, target: row.target }
+    `).get(repository, issueNumber) as { routine_name: RoutineIssueSource['routineName'], target: string, fingerprint: string, claim: string } | undefined
+    return row === undefined ? null : { routineName: row.routine_name, target: row.target, fingerprint: row.fingerprint, claim: row.claim }
   }
 
   /** Rebuild outcomes from controller publication provenance and current GitHub Observations. */

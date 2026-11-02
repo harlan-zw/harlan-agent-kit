@@ -53,6 +53,7 @@ interface ManifestSide { url: string, dataResources: { url: string }[] }
 interface ManifestTarget extends VitalsComparisonTarget { before: ManifestSide, after: ManifestSide }
 interface Manifest { targets: ManifestTarget[] }
 interface MeasuredReport extends ReportEvidence {
+  documentBytes: number
   settings: string
   lighthouseVersion: string
   hostUserAgent: string
@@ -262,22 +263,22 @@ function parseReport(buffer: Buffer, request: VitalsComparisonRequest, target: V
   if (!record(network) || !record(network.details) || !Array.isArray(network.details.items) || network.details.items.length > 2000)
     fail('A Lighthouse report lacks bounded request evidence.')
   const dataRequests: { url: string, resourceBytes: number, statusCode: number }[] = []
-  let successfulDocument = false
+  let documentBytes: number | undefined
   for (const item of network.details.items) {
     if (!record(item) || !text(item.url, 8192))
       fail('A Lighthouse request row is invalid.')
     const data = item.resourceType === 'Fetch' || item.resourceType === 'XHR' || (item.resourceType !== 'Script' && typeof item.mimeType === 'string' && /(?:\/|\+)json(?:;|$)/i.test(item.mimeType))
-    if (item.resourceType === 'Document' && item.url === url && number(item.statusCode) && item.statusCode >= 200 && item.statusCode < 300)
-      successfulDocument = true
+    if (item.resourceType === 'Document' && item.url === url && number(item.statusCode) && item.statusCode >= 200 && item.statusCode < 300 && number(item.resourceSize) && item.resourceSize > 0)
+      documentBytes = item.resourceSize
     if (data) {
       if (!number(item.resourceSize) || !number(item.statusCode) || !Number.isInteger(item.statusCode) || item.statusCode < 100 || item.statusCode > 599)
         fail('A Lighthouse data request lacks its response size or status.')
       dataRequests.push({ url: parseUrl(item.url), resourceBytes: item.resourceSize, statusCode: item.statusCode })
     }
   }
-  if (!successfulDocument)
+  if (documentBytes === undefined)
     fail('The measured page document did not return a successful response.')
-  return { sha256: hash(buffer), bytes: buffer.byteLength, fetchTime: value.fetchTime, durationMs: value.timing.total, metrics, transferBytes: transfer.numericValue, settings: canonical(value.configSettings), lighthouseVersion: value.lighthouseVersion, hostUserAgent: value.environment.hostUserAgent, networkUserAgent: value.environment.networkUserAgent, dataRequests }
+  return { sha256: hash(buffer), bytes: buffer.byteLength, fetchTime: value.fetchTime, durationMs: value.timing.total, metrics, transferBytes: transfer.numericValue, documentBytes, settings: canonical(value.configSettings), lighthouseVersion: value.lighthouseVersion, hostUserAgent: value.environment.hostUserAgent, networkUserAgent: value.environment.networkUserAgent, dataRequests }
 }
 
 function metrics(values: unknown): Metrics {
@@ -372,6 +373,8 @@ async function readSide(root: FileHandle, side: 'before' | 'after', manifest: Ma
     const document = await readBounded(directory, 'document.html', limits.document, budget)
     if (document.byteLength === 0)
       fail('The measured page document is missing.')
+    if (reports.some(report => report.documentBytes !== document.byteLength))
+      fail('Captured HTML bytes do not match the measured page document sizes.')
     return { summary: summarize(reports, document, dataResources), reports }
   }
   finally {

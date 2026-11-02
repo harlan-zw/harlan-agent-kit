@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentProvider } from '../src/agent-provider.ts'
+import type { AgentEvent, AgentProvider, AgentTurnRequest } from '../src/agent-provider.ts'
 import type { PullRequestTemplate } from '../src/github-agent-source.ts'
 import type { OpenAgentPullRequest, PullRequestBase } from '../src/types.ts'
 import type { IssueWorktreeManager } from '../src/worktree.ts'
@@ -198,7 +198,7 @@ describe('issue work worker', () => {
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
         getIssueTriageEvidence: () => null,
-        getRoutineIssueSource: () => ({ routineName: 'agent-feedback', target: 'harlan-agent-kit/skills/adversarial-review/SKILL.md' }),
+        getRoutineIssueSource: () => ({ routineName: 'agent-feedback', target: 'harlan-agent-kit/skills/adversarial-review/SKILL.md', fingerprint: 'review-policy', claim: 'Repair the Review instructions.' }),
         getWorkerSession: () => 'triage-session',
         listOpenAgentPullRequests: () => [],
         saveWorkerSession: () => undefined,
@@ -787,7 +787,7 @@ Closes #12.`,
 })
 
 describe('issue work pull request metadata', () => {
-  function runIssueWork(input: { texts: string[], template: PullRequestTemplate, routineName?: 'seo-review' | 'vitals-review' | 'dependency-updates', body?: string }) {
+  function runIssueWork(input: { texts: string[], template: PullRequestTemplate, routineName?: 'seo-review' | 'vitals-review' | 'dependency-updates', body?: string, events?: (request: AgentTurnRequest) => AgentEvent[] }) {
     const repository = repositoryMapping()
     const issue = issueItem()
     const capture: ProviderCapture = { requests: [] }
@@ -801,6 +801,7 @@ describe('issue work pull request metadata', () => {
           yield { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent
           yield { _tag: 'Message', text } as AgentEvent
           yield { _tag: 'TurnCompleted' } as AgentEvent
+          yield* input.events?.(request) ?? []
         })()
       },
     }
@@ -815,7 +816,7 @@ describe('issue work pull request metadata', () => {
       },
       now: () => new Date('2026-08-13T01:00:00.000Z'),
       store: {
-        getRoutineIssueSource: () => input.routineName === undefined ? null : { routineName: input.routineName, target: 'app/pages/index.vue' },
+        getRoutineIssueSource: () => input.routineName === undefined ? null : { routineName: input.routineName, target: 'app/pages/index.vue', fingerprint: 'vitals-lab#/#mobile#lcp', claim: 'Lab verification: run Unlighthouse on / with --mobile before and after the fix.' },
         getIssueTriageEvidence: () => null,
         getWorkerSession: (_repository, _number, _role, scopeDigest) => scopeDigest === undefined ? null : 'triage-session',
         listOpenAgentPullRequests: () => [],
@@ -854,6 +855,96 @@ describe('issue work pull request metadata', () => {
     ...overrides,
   })
   const template = { _tag: 'Found' as const, body: '### Description\n\n### Linked Issues' }
+  const acceptedEvidence = (request: AgentTurnRequest): Extract<AgentEvent, { _tag: 'VitalsComparison' }> => ({
+    _tag: 'VitalsComparison',
+    retainedDirectory: '/controller/scratch/vitals-review/task/fresh-id',
+    result: {
+      _tag: 'Accepted',
+      requestId: request.vitalsComparison?.id ?? '',
+      reason: 'The target improved beyond the Threshold and sample variation.',
+      comparisons: (request.vitalsComparison?.targets ?? []).map(target => ({
+        target,
+        before: { median: { lcp: 5000, fcp: 2500, tbt: 100, cls: 0 }, range: { lcp: 100, fcp: 100, tbt: 10, cls: 0 }, transferBytes: { median: 900000, range: 20 }, reports: [], document: { sha256: 'a'.repeat(64), bytes: 500000 }, dataResources: [] },
+        after: { median: { lcp: 3000, fcp: 1800, tbt: 90, cls: 0 }, range: { lcp: 100, fcp: 100, tbt: 10, cls: 0 }, transferBytes: { median: 800000, range: 20 }, reports: [], document: { sha256: 'b'.repeat(64), bytes: 400000 }, dataResources: [] },
+        runner: { lighthouseVersion: '13.4.0', hostUserAgent: 'Chrome/154.0', networkUserAgent: 'Chrome/154.0', settingsSha256: 'c'.repeat(64), url: 'http://localhost:4173/' },
+        improvement: { absolute: 2000, percent: 40, requiredAbsolute: 500, requiredPercent: 20 },
+      })),
+    },
+  })
+
+  it.each([false, true])('refuses a vitals repair without raw comparison evidence, including metadata fallback %s', async (fallback) => {
+    const text = answer(fallback
+      ? { pullRequestBody: 'Closes #12.' }
+      : { checks: ['LCP improved by 30 percent. Three samples passed.'] })
+    const { result } = await runIssueWork({ texts: [text, text], template, routineName: 'vitals-review' })
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      _tag: 'ActionRequired',
+      reason: expect.stringContaining('performance evidence'),
+    })))
+  })
+
+  it('publishes a vitals repair only after its provider verifies the fresh comparison', async () => {
+    const { result } = await runIssueWork({ texts: [answer({})], template, routineName: 'vitals-review', events: request => [acceptedEvidence(request)] })
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'Publish', publication: expect.objectContaining({ pullRequestBody: expect.stringContaining('5000.00 ms before; 3000.00 ms after') }) })))
+    if (result._tag !== 'Ok' || result.value._tag !== 'Publish' || result.value.publication._tag !== 'OpenPullRequest')
+      throw new Error('Expected the accepted repair publication.')
+    const evidence = JSON.parse(/<!-- harlan-agent-kit:vitals-evidence (.*?) -->/.exec(result.value.publication.pullRequestBody)?.[1] ?? 'null')
+    expect(evidence).toMatchObject({ baseSha: 'base-sha', headSha: 'commit-sha', comparisons: [{ target: { path: '/', metric: 'lcp' } }] })
+    expect(result.value.publication.pullRequestBody).not.toContain('/controller/scratch/')
+  })
+
+  it('does not accept a previous turn comparison', async () => {
+    const { result } = await runIssueWork({ texts: [answer({})], template, routineName: 'vitals-review', events: (request) => {
+      const event = acceptedEvidence(request)
+      return [{ ...event, result: { ...event.result, requestId: 'older-request-id' } }]
+    } })
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired', reason: expect.stringContaining('another turn') })))
+  })
+
+  it('does not accept a different target metric', async () => {
+    const { result } = await runIssueWork({ texts: [answer({})], template, routineName: 'vitals-review', events: (request) => {
+      const event = acceptedEvidence(request)
+      if (event.result._tag !== 'Accepted')
+        throw new Error('Expected the accepted fixture.')
+      return [{ ...event, result: { ...event.result, comparisons: event.result.comparisons.map(value => ({ ...value, target: { ...value.target, metric: 'fcp' } })) } }]
+    } })
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired', reason: expect.stringContaining('targets do not match') })))
+  })
+
+  it.each(['RejectedCandidate', 'FixtureReviewRequired', 'Unavailable'] as const)('preserves the %s refusal instead of publishing', async (_tag) => {
+    const { result } = await runIssueWork({ texts: [answer({})], template, routineName: 'vitals-review', events: request => [{
+      _tag: 'VitalsComparison',
+      retainedDirectory: '/controller/scratch/vitals-review/task/fresh-id',
+      result: _tag === 'Unavailable'
+        ? { _tag, requestId: request.vitalsComparison?.id ?? '', reason: 'Evidence could not be read.' }
+        : { _tag, requestId: request.vitalsComparison?.id ?? '', reason: _tag === 'RejectedCandidate' ? 'The target did not improve.' : 'Data resource bytes require review.', comparisons: [] },
+    }] })
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired', reason: expect.stringContaining(_tag === 'Unavailable' ? 'could not be read' : _tag === 'RejectedCandidate' ? 'did not improve' : 'require review') })))
+  })
+
+  it('does not treat a model-authored evidence object as a provider result', async () => {
+    const { result } = await runIssueWork({ texts: [answer({ performanceEvidence: { _tag: 'Accepted', requestId: 'invented' } })], template, routineName: 'vitals-review' })
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired', reason: expect.stringContaining('performance evidence is missing') })))
+  })
+
+  it('does not reuse accepted evidence when a metadata correction turn fails', async () => {
+    let turns = 0
+    const text = answer({ pullRequestBody: 'Closes #12.' })
+    const { result } = await runIssueWork({ texts: [text, text], template, routineName: 'vitals-review', events: request => ++turns === 1 ? [acceptedEvidence(request)] : [{ _tag: 'Failed', reason: 'The correction turn stopped.' }] })
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired', reason: expect.stringContaining('performance evidence is missing') })))
+  })
+
+  it('refuses the earlier evidence nonce after a successful metadata correction', async () => {
+    let earlier: Extract<AgentEvent, { _tag: 'VitalsComparison' }> | undefined
+    const { result, capture } = await runIssueWork({ texts: [answer({ pullRequestBody: 'Closes #12.' }), answer({})], template, routineName: 'vitals-review', events: (request) => {
+      earlier ??= acceptedEvidence(request)
+      return [earlier]
+    } })
+    expect(capture.requests).toHaveLength(2)
+    expect(capture.requests[1]?.vitalsComparison?.id).not.toBe(capture.requests[0]?.vitalsComparison?.id)
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired', reason: expect.stringContaining('another turn') })))
+  })
 
   it.each(['seo-review', 'vitals-review'] as const)('carries trusted %s issue provenance without replacing the Task identity', async (routineName) => {
     const { capture } = await runIssueWork({ texts: [answer({})], template, routineName })

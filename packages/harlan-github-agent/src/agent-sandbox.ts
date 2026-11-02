@@ -246,6 +246,8 @@ export async function prepareAgentSandbox(input: {
   memoryPerAgentGiB?: number
   readOnlyPaths?: readonly string[]
   writablePaths?: readonly string[]
+  /** Controller-owned retained reports for this trusted vitals comparison only. */
+  vitalsEvidenceDirectory?: string
   taskId?: string
   routineContext?: AgentTurnRequest['routineContext']
   networkMode?: 'command' | 'opencode-server' | 'opencode-client'
@@ -400,6 +402,11 @@ export async function prepareAgentSandbox(input: {
     }
     for (const path of input.writablePaths ?? [])
       args.push('--bind', await permittedPath(path, controllerHome), path)
+    if (input.vitalsEvidenceDirectory !== undefined) {
+      if (input.routineContext?.routineName !== 'vitals-review' || input.reviewHome !== undefined || input.networkMode === 'opencode-client')
+        throw new Error('Only trusted vitals Issue work may write performance evidence.')
+      args.push('--bind', await permittedPath(input.vitalsEvidenceDirectory, controllerHome), '/run/agent/vitals-evidence')
+    }
     const workspace = await realpath(input.workspace)
     const repositoryBind = readOnly ? '--ro-bind' : '--bind'
     if (input.reviewHome === undefined) {

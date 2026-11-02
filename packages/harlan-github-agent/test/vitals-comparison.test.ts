@@ -43,7 +43,7 @@ async function fixture() {
           'total-blocking-time': { numericValue: 100 },
           'cumulative-layout-shift': { numericValue: 0.05 },
           'total-byte-weight': { numericValue: side === 'before' ? 900_000 : 800_000 },
-          'network-requests': { details: { items: [{ url: resource, resourceType: 'Fetch', mimeType: 'application/json', statusCode: 200, resourceSize: 12 }, { url, resourceType: 'Document', mimeType: 'text/html', statusCode: 200, resourceSize: 100 }] } },
+          'network-requests': { details: { items: [{ url: resource, resourceType: 'Fetch', mimeType: 'application/json', statusCode: 200, resourceSize: 12 }, { url, resourceType: 'Document', mimeType: 'text/html', statusCode: 200, resourceSize: Buffer.byteLength(side === 'before' ? '<p>Before with larger inline CSS</p>' : '<p>After</p>') }] } },
         },
       }
       reports[`${side}-${sample}`] = report
@@ -71,6 +71,12 @@ it('accepts six comparable cold reports with a measured target benefit and recor
   expect(result.comparisons[0]?.after.transferBytes.median).toBe(800_000)
   expect(result.comparisons[0]?.before.document.sha256).not.toBe(result.comparisons[0]?.after.document.sha256)
   expect(result.comparisons[0]?.before.reports.map(report => report.sha256)).toHaveLength(3)
+})
+
+it('refuses an HTML snapshot that does not match its measured document size', async () => {
+  const { directory, request } = await fixture()
+  await writeFile(join(directory, 'target-0', 'after', 'document.html'), '<p>A different document</p>', { mode: 0o600 })
+  expect((await readVitalsComparison(request, directory))._tag).toBe('Unavailable')
 })
 
 it('rejects a weak candidate before classifying changed fixture bytes', async () => {

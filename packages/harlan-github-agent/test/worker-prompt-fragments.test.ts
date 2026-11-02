@@ -183,7 +183,7 @@ describe('agent prompt fragments', () => {
       body: 'vitals-review requires local before-and-after builds. Grant permission.',
       comments: [],
       template: '### Description',
-      routineSource: routineName === null ? null : { routineName, target: 'nuxt.config.ts' },
+      routineSource: routineName === null ? null : { routineName, target: 'nuxt.config.ts', fingerprint: 'fixture', claim: 'fixture' },
       triage: null,
       instructionFiles: [],
     })
