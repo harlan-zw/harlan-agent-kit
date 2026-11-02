@@ -825,6 +825,8 @@ export interface CandidateIssueCommand {
 export interface RoutineIssueSource {
   routineName: RoutineName
   target: string
+  fingerprint: string
+  claim: string
 }
 
 /**

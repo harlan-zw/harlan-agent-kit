@@ -12,6 +12,7 @@ import { prepareAgentSandbox } from './agent-sandbox.ts'
 import { agentSkillCatalogPrompt } from './agent-skill-catalog.ts'
 import { materializeAgentMedia } from './github-media.ts'
 import { createReviewRuntime, REVIEW_CODEX_FEATURES } from './review-runtime.ts'
+import { createVitalsEvidenceDirectory, inspectVitalsComparison, vitalsComparisonScript, vitalsEvidenceInstructions } from './vitals-comparison-runtime.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 interface CodexThread {
@@ -122,7 +123,13 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
       const media = await materializeAgentMedia(request.media)
       let sandbox: AgentSandbox | undefined
       let review: ReviewRuntime | undefined
+      let vitalsEvidenceDirectory: string | undefined
       try {
+        if (request.vitalsComparison !== undefined) {
+          if (request.routineContext?.routineName !== 'vitals-review' || request.taskId !== request.vitalsComparison.taskId || request.toolPolicy !== undefined)
+            throw new Error('The performance evidence request has no trusted vitals Task.')
+          vitalsEvidenceDirectory = await createVitalsEvidenceDirectory(process.env.HOME ?? '/home/harlan', request.vitalsComparison)
+        }
         if (request.toolPolicy?._tag === 'Review') {
           if (options.reviewProofAuthority === undefined) {
             yield { _tag: 'Failed', reason: 'The Review requires its controller proof authority.' }
@@ -141,7 +148,8 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
             environment: process.env,
             provider: 'codex',
             ...(options.memoryPerAgentGiB === undefined ? {} : { memoryPerAgentGiB: options.memoryPerAgentGiB }),
-            readOnlyPaths: [...media.paths, ...(request.instructionPaths ?? []), ...(review?.readOnlyPaths ?? [])],
+            readOnlyPaths: [...media.paths, ...(request.instructionPaths ?? []), ...(review?.readOnlyPaths ?? []), ...(request.vitalsComparison === undefined ? [] : [vitalsComparisonScript()])],
+            ...(vitalsEvidenceDirectory === undefined ? {} : { vitalsEvidenceDirectory }),
             ...(review === undefined ? {} : { reviewHome: review.home, readOnly: true }),
             ...(request.taskId === undefined ? {} : { taskId: request.taskId }),
             ...(request.routineContext === undefined || review !== undefined ? {} : { routineContext: request.routineContext }),
@@ -181,7 +189,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
         const threadOptions: ThreadOptions = request.reasoningEffort === undefined
           ? baseOptions
           : { ...baseOptions, modelReasoningEffort: request.reasoningEffort as NonNullable<ThreadOptions['modelReasoningEffort']> }
-        const prompt = agentSkillCatalogPrompt(request.prompt, review === undefined ? sandbox?.skillCatalogPath : undefined)
+        const prompt = agentSkillCatalogPrompt(`${request.prompt}${request.vitalsComparison === undefined ? '' : `\n\n${vitalsEvidenceInstructions(request.vitalsComparison)}`}`, review === undefined ? sandbox?.skillCatalogPath : undefined)
         const input: Input = media.paths.length === 0 ? prompt : [{ type: 'text', text: prompt }, ...media.paths.map(path => ({ type: 'local_image' as const, path }))]
         const run = (thread: CodexThread) => thread.runStreamed(input, {
           outputSchema: request.outputSchema,
@@ -211,17 +219,30 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
       }
       finally {
         let released: Awaited<ReturnType<ReviewRuntime['release']>> | undefined
+        let comparisonEvent: Extract<AgentEvent, { _tag: 'VitalsComparison' }> | undefined
         try {
-          await sandbox?.release()
+          if (request.vitalsComparison !== undefined) {
+            const result = sandbox === undefined
+              ? { _tag: 'Unavailable' as const, requestId: request.vitalsComparison.id, reason: 'The performance evidence reader requires an isolated Agent.' }
+              : await inspectVitalsComparison(sandbox, request.vitalsComparison, request.signal)
+            comparisonEvent = { _tag: 'VitalsComparison', result, retainedDirectory: vitalsEvidenceDirectory ?? null }
+          }
         }
         finally {
           try {
-            released = await review?.release()
+            await sandbox?.release()
           }
           finally {
-            await media.release()
+            try {
+              released = await review?.release()
+            }
+            finally {
+              await media.release()
+            }
           }
         }
+        if (comparisonEvent !== undefined)
+          yield comparisonEvent
         for (const text of released?.warnings ?? [])
           yield { _tag: 'Reasoning', text: `Controller warning: ${text}` }
       }

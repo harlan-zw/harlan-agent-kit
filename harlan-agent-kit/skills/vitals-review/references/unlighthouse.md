@@ -28,8 +28,14 @@ If cached HTML or different content enters the comparison, correct the fixture b
 If the Controller provides `lighthouse`, prefer that installed runner.
 Use Chromium from the isolated worker home. Export `CHROME_PATH` with its verified executable path.
 Record `lighthouse --version` and `"$CHROME_PATH" --version` before measuring.
-Save reports under `"$HOME/scratch/vitals-review/<run>"`. Create that directory before scanning.
-Use the worker's `$HOME`. A literal Controller home path can lose files when the sandbox exits.
+Controller Issue work supplies a fresh comparison request and a fixed directory at `/run/agent/vitals-evidence`.
+If supplied, follow its manifest and sample layout. The Controller retains that directory after the namespace closes.
+The request binds the issue state, source commit, targets, and start time.
+Preserve original reports. A previous run cannot verify this request.
+
+For standalone work, save reports under `"$HOME/scratch/vitals-review/<run>"`. Create that directory before scanning.
+Use the worker's `$HOME`. A literal Controller home path can lose files when the namespace exits.
+The example below uses the standalone layout. Controller comparisons use their supplied output paths.
 
 ```bash
 lighthouse http://localhost:4173/<route> \
@@ -43,7 +49,7 @@ This example uses the mobile strategy. Match the issue's strategy on both sides.
 Run three serial cold samples per side. Give each sample a separate output file and Chrome profile.
 Use each side's median. Keep Lighthouse, Chrome, throttling, and fixtures identical across both sides.
 Reject reports with `runtimeError` or a different final URL. Read metrics from each report's `audits`.
-Confirm all six reports persist in the worker home before handing off the result.
+Confirm all six reports persist in the supplied directory or worker home before handing off the result.
 If tool installation fails a trust check, stop. Never change versions or disable the check to evade it.
 
 If the installed runner is unavailable, use the repository's trusted Unlighthouse setup:
@@ -59,6 +65,17 @@ pnpm dlx unlighthouse-ci --site http://localhost:4173 \
 - `--samples 3` takes the median of three runs.
 
 Read `ci-result.json` in the output path. Record the metric for the route from both runs.
+Controller comparisons require separate raw Lighthouse reports. A median-only Unlighthouse result cannot supply those reports.
+
+## Preserve comparison inputs
+
+For Controller comparisons, save both HTML documents and each requested JSON, Fetch, or XHR response.
+Use the supplied manifest layout. Capture decoded response bytes, rather than hashes written from memory.
+The reader records document and transfer costs. Different HTML is expected when CSS or JavaScript delivery changes.
+
+Data responses with different bytes require review before automatic acceptance.
+Different hashes alone do not prove changed content. Build metadata and array order can explain differences.
+Pin appropriate fixture bytes across builds. Never sort arrays or discard timestamps to manufacture equality.
 
 ## Report it
 
@@ -68,3 +85,10 @@ Compare the target metric with run-to-run variation and the Threshold in `lab-se
 If the comparison does not establish the claimed benefit, return blocked with measurements. Do not retain the unproved experiment.
 Report other metric changes and HTML size beside the target result.
 Never raise a Threshold, skip a route, or change the strategy to make the number move.
+
+The Controller checks raw reports before publishing a lab repair. Check strings alone cannot verify the comparison.
+`RejectedCandidate` means the measured experiment failed acceptance. Revert it and return blocked with the measurements.
+`FixtureReviewRequired` means data differences need review. It does not prove material content changed.
+`Unavailable` means required evidence could not be read or parsed. Name that evidence failure separately.
+An accepted comparison verifies measured artifacts. It does not attest styling, themes, hydration, navigation, or tool interactions.
+Verify those behaviors separately before reporting a complete repair.

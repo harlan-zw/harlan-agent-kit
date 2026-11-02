@@ -3,6 +3,7 @@ import type { DesktopReport } from './desktop-broker.ts'
 import type { DesktopHistory, DesktopWorktree } from './desktop-worktree.ts'
 import { DESKTOP_WORKTREE_LIMITS, desktopWorktreeRefusal } from './desktop-worktree.ts'
 import { parseRunnerJobs } from './runner-jobs.ts'
+import { parseVitalsComparisonResult } from './vitals-comparison.ts'
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -27,8 +28,9 @@ function record(value: unknown): value is Record<string, unknown> {
  * 9: fenced event delivery and host failure attribution across the desktop boundary.
  * 11: proposed next actions carried by selected Logged findings.
  * 13: trusted SEO and vitals Routine provenance carried into implementation turns.
+ * 14: fresh vitals comparison requests and provider-verified evidence carried across hosts.
  */
-export const DESKTOP_PROTOCOL = 13
+export const DESKTOP_PROTOCOL = 14
 
 export const DESKTOP_TURN_LEASE_MILLISECONDS = 15_000
 
@@ -151,6 +153,15 @@ export function parseDesktopEvents(value: unknown): AgentEvent[] {
       return { _tag: 'SessionStarted', sessionId: event.sessionId }
     if (event._tag === 'Message' && typeof event.text === 'string')
       return { _tag: 'Message', text: event.text }
+    if (event._tag === 'VitalsComparison') {
+      const directory = event.retainedDirectory
+      if (directory !== null && (typeof directory !== 'string' || !directory.startsWith('/') || directory.includes('\0') || directory.length > 4096))
+        throw new Error('The performance evidence location is invalid.')
+      const result = parseVitalsComparisonResult(event.result)
+      if (result._tag === 'Accepted' && directory === null)
+        throw new Error('Accepted performance evidence must retain its raw reports.')
+      return { _tag: 'VitalsComparison', result, retainedDirectory: directory }
+    }
     if (event._tag === 'Failed' && typeof event.reason === 'string') {
       if (event.cause !== undefined && event.cause !== 'host-cancelled' && event.cause !== 'sandbox-setup' && event.cause !== 'resource-limit')
         throw new Error('The desktop failure cause is invalid.')

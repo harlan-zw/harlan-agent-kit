@@ -6,6 +6,7 @@
  */
 
 import type { AgentMedia } from './github-media.ts'
+import type { VitalsComparisonRequest, VitalsComparisonResult } from './vitals-comparison.ts'
 
 export type AgentProviderName = 'codex' | 'opencode'
 
@@ -40,6 +41,7 @@ export function addAgentTokenUsage(left: AgentTokenUsage, right: AgentTokenUsage
 
 export type AgentEvent
   = | { _tag: 'SessionStarted', sessionId: string }
+    | { _tag: 'VitalsComparison', result: VitalsComparisonResult, retainedDirectory: string | null }
     | { _tag: 'CommandStarted', command: string }
     | { _tag: 'CommandCompleted', command: string, output: string, exitCode: number | null }
     | { _tag: 'FileChanged', changes: Array<{ path: string, kind: 'add' | 'delete' | 'update' }> }
@@ -71,6 +73,8 @@ export function agentTextEvent(text: string): Extract<AgentEvent, { _tag: 'Messa
 }
 
 export interface AgentTurnRequest {
+  /** Trusted lab targets and a fresh evidence identity for one Issue work turn. */
+  vitalsComparison?: VitalsComparisonRequest
   /** Trusted publication provenance, never copied from issue content or labels. */
   routineContext?: { repository: string, routineName: 'seo-review' | 'vitals-review' }
   /** Bounded image pixels fetched by the controller, portable across hosts. */

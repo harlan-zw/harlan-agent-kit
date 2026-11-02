@@ -25,5 +25,9 @@ export default defineBuildConfig({
         './src/review-evidence-cli.ts',
       ],
     },
+    {
+      type: 'bundle',
+      input: ['./src/vitals-comparison.ts'],
+    },
   ],
 })
