@@ -2,6 +2,7 @@ import type { FileHandle } from 'node:fs/promises'
 import type { AgentSandbox } from './agent-sandbox.ts'
 import type { VitalsComparisonRequest, VitalsComparisonResult } from './vitals-comparison.ts'
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { mkdir, open, realpath } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -64,8 +65,15 @@ export function vitalsEvidenceInstructions(request: VitalsComparisonRequest): st
 
 /** Reads untrusted reports only inside the existing Agent boundary. No controller file path comes from a model. */
 export async function inspectVitalsComparison(sandbox: AgentSandbox, request: VitalsComparisonRequest, signal: AbortSignal): Promise<VitalsComparisonResult> {
+  // OpenCode's server still owns its scope and transport. Keep its Task slice and namespace for the helper.
+  const args = sandbox.binary === '/usr/bin/systemd-run'
+    ? sandbox.args.map(argument => argument.startsWith('--unit=harlan-worker-') ? `--unit=harlan-worker-${randomUUID()}` : argument)
+    : [...sandbox.args]
+  const runtime = args.lastIndexOf('/run/agent/runtime.ts')
+  if (runtime !== -1)
+    args[runtime + 1] = 'command'
   const executed = await promisify(execFile)(sandbox.binary, [
-    ...sandbox.args,
+    ...args,
     '/run/agent/node',
     '--experimental-strip-types',
     vitalsComparisonScript(),

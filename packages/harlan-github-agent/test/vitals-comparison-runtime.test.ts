@@ -1,8 +1,11 @@
+import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createVitalsEvidenceDirectory } from '../src/vitals-comparison-runtime.ts'
+import { createVitalsEvidenceDirectory, inspectVitalsComparison } from '../src/vitals-comparison-runtime.ts'
+import { workerMemoryCommand } from '../src/worker-memory.ts'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -67,3 +70,27 @@ describe('retained vitals evidence allocation', () => {
     await expect(stat(join(controller, 'scratch'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })
+
+it.skipIf(process.platform !== 'linux' || process.env.XDG_RUNTIME_DIR === undefined)('inspects evidence in command mode while the OpenCode memory scope remains active', async () => {
+  const response = { _tag: 'Unavailable', requestId: request.id, reason: 'The bounded reader ran inside the helper scope.' }
+  const wrongMode = { ...response, reason: 'The helper tried to start another OpenCode server.' }
+  const script = `if [ "$2" = /run/agent/node ]; then if [ "$1" = command ]; then printf '%s' '${JSON.stringify(response)}'; else printf '%s' '${JSON.stringify(wrongMode)}'; fi; else printf 'ready\\n'; exec /usr/bin/sleep 30; fi`
+  const memory = await workerMemoryCommand({ binary: '/usr/bin/bash', args: ['-c', script, '/run/agent/runtime.ts', 'opencode-server'], taskId: `vitals-scope-test-${randomUUID()}`, memoryGiB: 1 })
+  const child = spawn(memory.binary, memory.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  const stopped = new Promise<void>(resolve => child.once('close', () => resolve()))
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.once('error', reject)
+      child.once('exit', code => reject(new Error(`The main memory scope stopped: ${code}`)))
+      child.stdout.once('data', () => resolve())
+    })
+    const result = await inspectVitalsComparison({ ...memory, environment: { PATH: '/usr/bin:/bin', XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS }, workerStateHome: '/tmp', adapterPath: '/tmp/unused', providerBinary: '/usr/bin/true' }, request, new AbortController().signal)
+    expect(result).toEqual(response)
+    expect(child.exitCode).toBeNull()
+  }
+  finally {
+    child.kill('SIGTERM')
+    await stopped
+    await memory.release()
+  }
+}, 20_000)
