@@ -65,7 +65,7 @@ describe('gitHub rate limit gate', () => {
       retryAt: '2026-09-23T10:40:00.000Z',
     }])
 
-    github.advanceTo('2026-09-23T10:40:00.001Z')
+    github.advanceTo('2026-09-23T10:40:00.000Z')
     expect((await github.tokens.getToken('harlan-zw/other', 'read'))._tag).toBe('Ok')
     expect(github.gate.active()).toEqual([])
     expect(github.gate.read()).toEqual([])
@@ -85,7 +85,7 @@ describe('gitHub rate limit gate', () => {
     await expect(github.octokit.rest.pulls.list({ owner: 'harlan-zw', repo: 'example' })).rejects.toMatchObject({ status: 403 })
 
     expect(github.gate.active()).toEqual(['The App installation on harlan-zw hit a secondary GitHub rate limit. Requests pause until 2026-09-23T10:00:30.000Z.'])
-    github.advanceTo('2026-09-23T10:00:30.001Z')
+    github.advanceTo('2026-09-23T10:00:30.000Z')
     expect(github.gate.active()).toEqual([])
   })
 

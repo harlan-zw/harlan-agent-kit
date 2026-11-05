@@ -97,6 +97,15 @@ function holdMessage(hold: Hold): string {
   return `${quotaName(hold.quota)} hit ${limit}. Requests pause until ${hold.until.toISOString()}.`
 }
 
+/** Reads the gate's deadline after an error crosses a string-only boundary. */
+export function gitHubRateLimitRetryAt(message: string): string | null {
+  const deadline = /\bGitHub rate limit\. Requests pause until (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)\./.exec(message)?.[1]
+  if (deadline === undefined)
+    return null
+  const timestamp = Date.parse(deadline)
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === deadline ? deadline : null
+}
+
 export interface GitHubRateLimitGate {
   /**
    * Refuses a credential while its quota is held.
@@ -115,7 +124,7 @@ export function createGitHubRateLimitGate(options: { now: () => Date }): GitHubR
   const current = (): Hold[] => {
     const now = options.now().getTime()
     for (const [key, hold] of holds) {
-      if (hold.until.getTime() < now)
+      if (hold.until.getTime() <= now)
         holds.delete(key)
     }
     return [...holds.values()]
