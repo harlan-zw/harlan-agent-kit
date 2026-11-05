@@ -61,7 +61,7 @@ function failedForkPublication(failure = reason) {
 
 function rewind(path: string) {
   const database = new DatabaseSync(path)
-  database.exec('PRAGMA user_version = 65')
+  database.exec('ALTER TABLE review_status_commands DROP COLUMN retry_at; PRAGMA user_version = 65;')
   database.close()
 }
 

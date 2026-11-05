@@ -221,6 +221,7 @@ describe('issue work handoffs', () => {
     store.close()
     // Reconstruct the old on-disk state as the migration's input.
     const legacy = new DatabaseSync(path)
+    legacy.exec('ALTER TABLE review_status_commands DROP COLUMN retry_at')
     legacy.exec('UPDATE tasks SET state_tag = \'Completed\', evidence = \'Closed by the pull request for issue #12 in the same Batch.\' WHERE kind = \'issue_work\' AND state_tag = \'Queued\'; DROP TABLE combined_issue_publications; PRAGMA user_version = 66;')
     legacy.close()
 
