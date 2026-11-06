@@ -53,4 +53,14 @@ export default defineNuxtConfig({
       ignore: ['/kit'],
     },
   },
+  vite: {
+    build: {
+      // The terminal diff feature lazily loads Shiki, and each language
+      // grammar plus the inlined oniguruma wasm ships as a single module the
+      // bundler cannot split; the largest is about 780 kB. The limit sits
+      // above them, as notes-viewer does for mermaid's unsplittable elk
+      // bundle.
+      chunkSizeWarningLimit: 1600,
+    },
+  },
 })
