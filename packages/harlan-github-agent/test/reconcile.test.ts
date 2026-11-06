@@ -280,6 +280,42 @@ describe('gitHub reconciliation', () => {
     }
   })
 
+  it('reads a missing dismissed issue only after it is restored', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping({ issueWork: true })
+    const at = '2026-09-18T01:00:00.000Z'
+    const issue = issueItem()
+    const exactReads: number[] = []
+    store.syncRepositories([repository], at)
+    store.setRepositoryWritesEnabled(repository.github, true)
+    store.recordObservation({ externalId: 'missing-dismissed-issue', observedAt: at, source: 'poll', subject: issue })
+    store.dismissItem({ repository: repository.github, itemNumber: issue.number, at })
+    const poll = () => reconcileRepository(repository, {
+      github: {
+        ...noFinalRead,
+        listOpenItems: () => Promise.resolve(ok([])),
+        getIssue: async (_mapping, number) => {
+          exactReads.push(number)
+          return ok({ ...issue, state: 'closed' as const })
+        },
+      },
+      store,
+      now: () => new Date(at),
+    })
+    try {
+      expect((await poll())._tag).toBe('Ok')
+      expect(exactReads).toEqual([])
+
+      store.restoreItem({ repository: repository.github, itemNumber: issue.number, at })
+      expect((await poll())._tag).toBe('Ok')
+      expect(exactReads).toEqual([issue.number])
+      expect(store.listOpenIssueNumbers(repository.github)).toEqual([])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('a failed routed settle records the failure without stopping the pass', async () => {
     const store = openJournalStore(':memory:', true)
     const repository = repositoryMapping({ issueWork: true })

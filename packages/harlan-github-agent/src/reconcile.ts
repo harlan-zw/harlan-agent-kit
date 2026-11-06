@@ -75,8 +75,11 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
       : { kind: 'pull_request', allowedAuthors: repository.writablePullRequestAuthors },
   ))
   const seenIssues = new Set(eligibleItems.flatMap(subject => subject.kind === 'issue' ? [subject.number] : []))
-  const missingIssueNumbers = dependencies.store.listOpenIssueNumbers(repository.github)
+  const unlistedIssueNumbers = dependencies.store.listOpenIssueNumbers(repository.github)
     .filter(number => !seenIssues.has(number))
+  const dismissedIssueNumbers = new Set(unlistedIssueNumbers
+    .filter(number => dependencies.store.isItemDismissed(repository.github, 'issue', number)))
+  const missingIssueNumbers = unlistedIssueNumbers.filter(number => !dismissedIssueNumbers.has(number))
   const seenPullRequests = new Set([
     ...eligibleItems.flatMap(subject => subject.kind === 'pull_request' ? [subject.number] : []),
     ...unavailableObservations.map(subject => subject.number),
@@ -103,6 +106,7 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   // while independent observations and confirmed closures continue.
   const unavailableItems = [
     ...unavailableObservations.map(subject => ({ kind: subject.itemKind, number: subject.number })),
+    ...[...dismissedIssueNumbers].map(number => ({ kind: 'issue' as const, number })),
     ...missingIssueNumbers.flatMap((number, index) => finalIssueReads[index]?._tag === 'Err' ? [{ kind: 'issue' as const, number }] : []),
     ...finalPullRequestNumbers.flatMap((number, index) => finalPullRequestReads[index]?._tag === 'Err' ? [{ kind: 'pull_request' as const, number }] : []),
   ]
