@@ -12,6 +12,7 @@ import { redactSecrets } from './agent-activity.ts'
 import { parseVitalsComparisonRequest, parseVitalsComparisonResult, vitalsComparisonInstructions } from './vitals-comparison.ts'
 
 export const VITALS_EVIDENCE_GUEST_DIRECTORY = '/run/agent/vitals-evidence'
+export const VITALS_COMPARISON_GUEST_SCRIPT = '/run/agent/vitals-comparison.ts'
 
 /** The standalone source and emitted entry use no repository imports at runtime. */
 export function vitalsComparisonScript(): string {
@@ -76,7 +77,7 @@ export async function inspectVitalsComparison(sandbox: AgentSandbox, request: Vi
     ...args,
     '/run/agent/node',
     '--experimental-strip-types',
-    vitalsComparisonScript(),
+    VITALS_COMPARISON_GUEST_SCRIPT,
     'verify',
     JSON.stringify(request),
     VITALS_EVIDENCE_GUEST_DIRECTORY,
