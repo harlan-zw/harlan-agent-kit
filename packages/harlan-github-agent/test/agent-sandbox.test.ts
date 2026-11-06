@@ -9,9 +9,48 @@ import { expect, it } from 'vitest'
 import { checkAgentWorker, prepareAgentSandbox, runAgentSandboxCommand } from '../src/agent-sandbox.ts'
 import { createCodexProvider } from '../src/codex-provider.ts'
 import { createOpencodeProvider } from '../src/opencode-provider.ts'
+import { inspectVitalsComparison } from '../src/vitals-comparison-runtime.ts'
+import { parseVitalsComparisonRequest } from '../src/vitals-comparison.ts'
 import { createWorkerMemoryLimiter } from '../src/worker-memory.ts'
 
 const execute = promisify(execFile)
+
+it('runs the trusted vitals reader inside the evidence sandbox', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-vitals-reader-'))
+  const controller = join(root, 'controller')
+  const worker = join(root, 'worker')
+  const primary = join(root, 'primary')
+  const evidence = join(root, 'evidence')
+  const profile = join(root, 'worker.json')
+  const cli = join(controller, 'installed-nuxtseo')
+  let sandbox: Awaited<ReturnType<typeof prepareAgentSandbox>> | undefined
+  try {
+    await Promise.all([mkdir(controller), mkdir(worker), mkdir(primary), mkdir(evidence, { mode: 0o700 })])
+    await mkdir(join(controller, '.local/bin'), { recursive: true })
+    await mkdir(join(cli, 'skills/nuxtseo-cli'), { recursive: true })
+    await writeFile(join(cli, 'package.json'), JSON.stringify({ name: '@nuxtseo/cli', type: 'module', bin: { nuxtseo: './cli.js' } }))
+    await writeFile(join(cli, 'cli.js'), 'console.log("{}")')
+    await writeFile(join(cli, 'skills/nuxtseo-cli/SKILL.md'), 'Fixture NuxtSEO instructions.')
+    await writeFile(join(controller, '.local/bin/nuxtseo'), `#!/bin/sh\n# cmd-shim-target=${cli}/cli.js\nexec node '${cli}/cli.js' "$@"\n`, { mode: 0o755 })
+    await execute('git', ['init', primary])
+    await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
+    await execute('git', ['-C', primary, 'remote', 'add', 'origin', 'https://github.com/harlan-zw/example.git'])
+    const wtConfig = join(root, 'wt.toml')
+    await writeFile(wtConfig, '[list]\njson-schema = 2\n')
+    await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'vitals', '--base', 'HEAD', '--yes'])
+    const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
+    const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'vitals').worktree.path as string
+    await writeFile(profile, JSON.stringify({ home: worker, tools: [], readOnlyPaths: [], codex: '/usr/bin/true', opencode: '/usr/bin/true' }))
+    const request = parseVitalsComparisonRequest({ id: '12345678-1234-4123-8123-123456789012', taskId: 'task-123', revisionId: 'b'.repeat(64), baseSha: 'a'.repeat(40), issuedAt: new Date().toISOString(), targets: [{ path: '/', strategy: 'mobile', metric: 'lcp' }] })
+    sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex', taskId: request.taskId, routineContext: { repository: 'harlan-zw/example', routineName: 'vitals-review' }, vitalsEvidenceDirectory: evidence })
+    const result = await inspectVitalsComparison(sandbox, request, AbortSignal.timeout(10_000))
+    expect(result).toEqual({ _tag: 'Unavailable', requestId: request.id, reason: 'Required vitals artifacts are missing, unsafe, or unreadable.' })
+  }
+  finally {
+    await sandbox?.release()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)
 
 it('runs the installed NuxtSEO package with its dependency and bundled Skill inside a Routine', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-node-tool-'))

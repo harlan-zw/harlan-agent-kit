@@ -12,7 +12,7 @@ import { prepareAgentSandbox } from './agent-sandbox.ts'
 import { agentSkillCatalogPrompt } from './agent-skill-catalog.ts'
 import { materializeAgentMedia } from './github-media.ts'
 import { createReviewRuntime, REVIEW_CODEX_FEATURES } from './review-runtime.ts'
-import { createVitalsEvidenceDirectory, inspectVitalsComparison, vitalsComparisonScript, vitalsEvidenceInstructions } from './vitals-comparison-runtime.ts'
+import { createVitalsEvidenceDirectory, inspectVitalsComparison, vitalsEvidenceInstructions } from './vitals-comparison-runtime.ts'
 import { workspaceEnvironment } from './workspace-environment.ts'
 
 interface CodexThread {
@@ -148,7 +148,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
             environment: process.env,
             provider: 'codex',
             ...(options.memoryPerAgentGiB === undefined ? {} : { memoryPerAgentGiB: options.memoryPerAgentGiB }),
-            readOnlyPaths: [...media.paths, ...(request.instructionPaths ?? []), ...(review?.readOnlyPaths ?? []), ...(request.vitalsComparison === undefined ? [] : [vitalsComparisonScript()])],
+            readOnlyPaths: [...media.paths, ...(request.instructionPaths ?? []), ...(review?.readOnlyPaths ?? [])],
             ...(vitalsEvidenceDirectory === undefined ? {} : { vitalsEvidenceDirectory }),
             ...(review === undefined ? {} : { reviewHome: review.home, readOnly: true }),
             ...(request.taskId === undefined ? {} : { taskId: request.taskId }),

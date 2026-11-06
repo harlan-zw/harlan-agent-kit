@@ -13,6 +13,7 @@ import { createAgentEgress } from './agent-egress.ts'
 import { AGENT_SKILL_CATALOG_PATH, loadAgentSkillCatalog } from './agent-skill-catalog.ts'
 import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
+import { VITALS_COMPARISON_GUEST_SCRIPT, VITALS_EVIDENCE_GUEST_DIRECTORY, vitalsComparisonScript } from './vitals-comparison-runtime.ts'
 import { resolveBrowserSetupRuntime } from './worker-browser-runtime.ts'
 import { resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
@@ -405,7 +406,8 @@ export async function prepareAgentSandbox(input: {
     if (input.vitalsEvidenceDirectory !== undefined) {
       if (input.routineContext?.routineName !== 'vitals-review' || input.reviewHome !== undefined || input.networkMode === 'opencode-client')
         throw new Error('Only trusted vitals Issue work may write performance evidence.')
-      args.push('--bind', await permittedPath(input.vitalsEvidenceDirectory, controllerHome), '/run/agent/vitals-evidence')
+      args.push('--ro-bind', vitalsComparisonScript(), VITALS_COMPARISON_GUEST_SCRIPT)
+      args.push('--bind', await permittedPath(input.vitalsEvidenceDirectory, controllerHome), VITALS_EVIDENCE_GUEST_DIRECTORY)
     }
     const workspace = await realpath(input.workspace)
     const repositoryBind = readOnly ? '--ro-bind' : '--bind'

@@ -22,7 +22,7 @@ import { materializeAgentMedia } from './github-media.ts'
 import { createOpencodeSession, opencodeDeliveryKey, readOpencodeMessages, recoverOpencodeResult, waitOpencodeReviewTools } from './opencode-result.ts'
 import { err, ok } from './result.ts'
 import { createReviewRuntime, REVIEW_TOOL_NAMES } from './review-runtime.ts'
-import { createVitalsEvidenceDirectory, inspectVitalsComparison, vitalsComparisonScript, vitalsEvidenceInstructions } from './vitals-comparison-runtime.ts'
+import { createVitalsEvidenceDirectory, inspectVitalsComparison, vitalsEvidenceInstructions } from './vitals-comparison-runtime.ts'
 import { dailyCheckinDirectory } from './workspace-environment.ts'
 
 /** Tools that write files, so activity shows a file change instead of a command. */
@@ -96,7 +96,7 @@ export function spawnOpencodeServer(readOnly?: boolean, review?: ReviewRuntime, 
       await transport.close()
       await rm(transportDirectory, { recursive: true, force: true })
     }
-    const prepared = await prepareAgentSandbox({ workspace, environment: { ...environment, ...serverCredentials(password) }, provider: 'opencode', ...(memoryPerAgentGiB === undefined ? {} : { memoryPerAgentGiB }), readOnlyPaths: [...opencodeSandboxPaths(environment), ...readOnlyPaths, ...(review?.readOnlyPaths ?? []), ...(vitalsComparison === undefined ? [] : [vitalsComparisonScript()])], ...(vitalsEvidenceDirectory === undefined ? {} : { vitalsEvidenceDirectory }), networkMode: 'opencode-server', transportDirectory, ...(review === undefined ? {} : { reviewHome: review.home }), ...(taskId === undefined ? {} : { taskId }), ...(routineContext === undefined ? {} : { routineContext }), ...(readOnly === undefined ? {} : { readOnly }) })
+    const prepared = await prepareAgentSandbox({ workspace, environment: { ...environment, ...serverCredentials(password) }, provider: 'opencode', ...(memoryPerAgentGiB === undefined ? {} : { memoryPerAgentGiB }), readOnlyPaths: [...opencodeSandboxPaths(environment), ...readOnlyPaths, ...(review?.readOnlyPaths ?? [])], ...(vitalsEvidenceDirectory === undefined ? {} : { vitalsEvidenceDirectory }), networkMode: 'opencode-server', transportDirectory, ...(review === undefined ? {} : { reviewHome: review.home }), ...(taskId === undefined ? {} : { taskId }), ...(routineContext === undefined ? {} : { routineContext }), ...(readOnly === undefined ? {} : { readOnly }) })
       .then(ok)
       .catch((error: unknown) => err({ _tag: 'SandboxSetupFailed' as const, reason: `The Agent worker isolation failed: ${error instanceof Error ? error.message : String(error)}` }))
     if (prepared._tag === 'Err') {
