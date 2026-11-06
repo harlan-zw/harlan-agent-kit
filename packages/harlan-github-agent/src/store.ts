@@ -133,6 +133,7 @@ import { RESULT_PHASE_RANK } from './agent-progress.ts'
 import { createBatchStore } from './batch-store.ts'
 import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
+import { gitHubRateLimitRetryAt } from './github-rate-limit.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
@@ -7226,7 +7227,13 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 93;`)
     version = 93
   }
-  if (version === 93)
+  if (version === 93) {
+    const columns = database.prepare('PRAGMA table_info(review_status_commands)').all() as Array<{ name: string }>
+    applyMigration(database, `${columns.some(column => column.name === 'retry_at') ? '' : 'ALTER TABLE review_status_commands ADD COLUMN retry_at TEXT;'}
+      PRAGMA user_version = 94;`)
+    version = 94
+  }
+  if (version === 94)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -12114,6 +12121,7 @@ export function openJournalStore(
           CASE WHEN review_status_commands.task_kind = 'existing_review' THEN status_revision.subject_id END)
         JOIN repositories ON repositories.id = subjects.repository_id
         WHERE review_status_commands.id = ? AND review_status_commands.state_tag = 'Pending'
+          AND (review_status_commands.retry_at IS NULL OR review_status_commands.retry_at <= ?)
           AND (${reviewStatusAuthoritySql}) = 'Authorized'
           AND (
             (
@@ -12149,7 +12157,7 @@ export function openJournalStore(
           AND repositories.enabled = 1
           ${repositoryWriteAuthoritySql}
           AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
-      `).get(commandId, now, now) as {
+      `).get(commandId, now, now, now) as {
             id: string
             task_kind: 'adversarial_review' | 'review_fix' | 'existing_review'
             task_id: string
@@ -12175,7 +12183,7 @@ export function openJournalStore(
       const leaseExpiresAt = new Date(new Date(now).getTime() + leaseMilliseconds).toISOString()
       const update = database.prepare(`
         UPDATE review_status_commands
-        SET state_tag = 'Running', worker_id = ?, fence = ?, lease_expires_at = ?, updated_at = ?
+        SET state_tag = 'Running', worker_id = ?, fence = ?, lease_expires_at = ?, updated_at = ?, retry_at = NULL
         WHERE id = ? AND state_tag = 'Pending' AND fence = ?
       `).run(workerId, fence, leaseExpiresAt, now, row.id, row.fence)
       if (update.changes !== 1)
@@ -12264,6 +12272,7 @@ export function openJournalStore(
       JOIN repositories ON repositories.id = subjects.repository_id
       WHERE review_status_commands.state_tag = 'Pending'
         AND review_status_commands.phase = 'terminal'
+        AND (review_status_commands.retry_at IS NULL OR review_status_commands.retry_at <= ?)
         AND (${reviewStatusAuthoritySql}) = 'Authorized'
         AND review_status_commands.revision_id = subjects.current_revision_id
         AND (
@@ -12278,7 +12287,7 @@ export function openJournalStore(
         AND json_extract(repositories.policy_json, '$.pullRequestReview') = 1
       ORDER BY review_status_commands.updated_at, review_status_commands.id
       LIMIT 1
-    `).get() as { id: string } | undefined
+    `).get(now) as { id: string } | undefined
     return row === undefined
       ? null
       : claimReviewStatus(row.id, workerId, now, leaseMilliseconds)
@@ -12495,14 +12504,16 @@ export function openJournalStore(
   }
 
   const deferReviewStatus: JournalStore['deferReviewStatus'] = (input) => {
+    const deadline = gitHubRateLimitRetryAt(input.reason)
+    const retryAt = deadline !== null && deadline > input.at ? deadline : null
     database.exec('BEGIN IMMEDIATE')
     try {
       const changed = database.prepare(`
         UPDATE review_status_commands
         SET state_tag = 'Pending', outcome_unknown = 1, reason = ?, worker_id = NULL,
-          lease_expires_at = NULL, updated_at = ?
+          lease_expires_at = NULL, updated_at = ?, retry_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence).changes === 1
+      `).run(input.reason, input.at, retryAt, input.commandId, input.workerId, input.fence).changes === 1
       if (changed) {
         recordReviewStatusEvent(database, {
           commandId: input.commandId,

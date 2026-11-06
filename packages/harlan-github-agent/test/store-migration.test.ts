@@ -234,6 +234,8 @@ function dropReviewResolutionAdditions(database: DatabaseSync): void {
   database.exec('DROP TABLE IF EXISTS review_evidence_scopes')
   database.exec('DROP TABLE IF EXISTS review_resolutions')
   const reviewStatusColumns = database.prepare('PRAGMA table_info(review_status_commands)').all() as unknown as Array<{ name: string }>
+  if (reviewStatusColumns.some(column => column.name === 'retry_at'))
+    database.exec('ALTER TABLE review_status_commands DROP COLUMN retry_at')
   if (reviewStatusColumns.some(column => column.name === 'desired_outcome'))
     database.exec('ALTER TABLE review_status_commands DROP COLUMN desired_outcome')
   if (reviewStatusColumns.some(column => column.name === 'review_run_id'))
@@ -743,7 +745,7 @@ describe('review status Incident recovery migration', () => {
 
     const oldJournal = new DatabaseSync(path)
     dropRestartOperationAdditions(oldJournal)
-    oldJournal.exec('PRAGMA user_version = 56')
+    oldJournal.exec('ALTER TABLE review_status_commands DROP COLUMN retry_at; PRAGMA user_version = 56;')
     oldJournal.close()
 
     const migrated = openJournalStore(path, true, CODEX_AGENT_PROFILE)
@@ -805,7 +807,7 @@ describe('write quarantine Incident recovery migration', () => {
 
     const oldJournal = new DatabaseSync(path)
     dropRepairReports(oldJournal)
-    oldJournal.exec('PRAGMA user_version = 58')
+    oldJournal.exec('ALTER TABLE review_status_commands DROP COLUMN retry_at; PRAGMA user_version = 58;')
     oldJournal.close()
 
     const migrated = openJournalStore(path, true, CODEX_AGENT_PROFILE)
@@ -951,6 +953,7 @@ describe('candidate title migration', () => {
 
     // Rewind the journal to the shape a service running version 62 wrote.
     const database = new DatabaseSync(path)
+    database.exec('ALTER TABLE review_status_commands DROP COLUMN retry_at')
     database.exec('ALTER TABLE candidates DROP COLUMN title')
     database.exec('PRAGMA user_version = 62')
     database.close()
