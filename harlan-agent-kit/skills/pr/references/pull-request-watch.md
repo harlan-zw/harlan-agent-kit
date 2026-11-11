@@ -2,6 +2,7 @@
 
 Use the existing Service as the observer. Keep one submitting Agent responsible for the target.
 The CLI streams stored state over an authenticated connection. It does not poll GitHub.
+Use that stream for Review, Repair, and merge waiting. Reuse one subscription for the pull request.
 Webhooks trigger the Service's existing repository reconciliation. Recovery polling covers missed deliveries.
 
 ## Connect

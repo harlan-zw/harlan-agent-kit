@@ -29,8 +29,8 @@ Running the git and `gh` commands by hand is the failure mode this skill exists 
 
 - **Never amend published commits** -- CI and reviewers lose context. Always fix-forward with new commits.
 - **Never `--force` push** during a PR -- rewrites shared history. Use `git push` (regular) after new commits.
-- **Never sync a clean pull request with its base branch:** A newer base alone needs no pull request commit.
-  Merge the base into the head only when GitHub reports merge conflicts.
+- **A newer base alone needs no pull request commit.** If strict branch protection requires an updated head, use the repository's normal update path.
+  Restart CI and Review for the resulting head. Otherwise merge the base only when GitHub reports merge conflicts.
 - **Never `--no-verify`** -- if hooks fail, fix the underlying issue.
 - **`gh pr merge` refuses a pull request that has a child** -- GitHub asks for the stack merge. Use `gh stack merge`, and expect a child to turn CONFLICTING when its parent squash merges alone. Repair steps in [references/stacked-prs.md](references/stacked-prs.md).
 - **Never move unknown changes** -- primary checkout changes may belong to another task. Copy only changes this task owns.
@@ -274,9 +274,13 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
 
 1. Read the current head SHA with `gh pr view NUMBER --json headRefOid --jq .headRefOid`.
 2. Wait for GitHub Actions check runs. Use `gh run list --commit HEAD_SHA --limit 100` to find this head's runs.
-   For public repositories, use `agent-gh run watch RUN_ID --repo OWNER/REPO --exit-status` for each pending run.
+   Keep one observer for each repository and run ID. Reuse its foreground shell session after tool yields.
+   For public repositories, use `agent-gh run watch RUN_ID --repo OWNER/REPO --exit-status --interval 60 --compact` for each pending run.
    Then confirm every applicable run passed.
    For verified private repositories, scope each `gh run watch` with `HARLAN_AGENT_GITHUB_PRIVATE=OWNER/REPO`.
+   Pass `--interval 60 --compact` there too. Never use GitHub's default three-second interval.
+   Write the repository, head SHA, run IDs, and observer sessions to the task receipt.
+   If interrupted, read each saved run once, then resume only unfinished runs. Do not restart completed stages.
    Do not use `gh pr checks --watch` while Review is queued; the service's own check run can keep it waiting.
    A Markdown-only pull request may have no check runs, or only skipped ones beside `changes`. Confirm that its workflows exclude the changed paths. Count a skipped check as passed.
 3. Read the trusted `harlan-github-agent` marked comment and matching Review outcome label.
