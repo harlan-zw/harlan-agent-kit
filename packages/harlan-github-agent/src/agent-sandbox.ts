@@ -1,4 +1,5 @@
 import type { AgentTurnRequest } from './agent-provider.ts'
+import type { BrowserSetupRuntime } from './worker-browser-runtime.ts'
 import type { WorkerPackage } from './worker-package.ts'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
@@ -256,6 +257,8 @@ export async function prepareAgentSandbox(input: {
   readOnly?: boolean
   /** Task-owned home with only named provider login and trusted Review configuration. */
   reviewHome?: string
+  /** Finds the managed Node 24 runtime for browser setup. Defaults to the controller tool receipt. */
+  resolveBrowserRuntime?: (home: string) => Promise<BrowserSetupRuntime>
 }): Promise<AgentSandbox> {
   const controllerHome = resolve(input.environment.HOME ?? '/home/harlan')
   const profilePath = input.profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json')
@@ -340,7 +343,7 @@ export async function prepareAgentSandbox(input: {
       }
       const launcher = join(scratch, cli.command)
       if (cli.command === 'dev-browser') {
-        const setup = await resolveBrowserSetupRuntime(controllerHome)
+        const setup = await (input.resolveBrowserRuntime ?? resolveBrowserSetupRuntime)(controllerHome)
         const npm = packageTools.find((tool): tool is WorkerPackage & { command: 'npm' } => 'root' in tool && tool.command === 'npm')
         const runtime = npm === undefined ? { _tag: 'Unavailable' as const, reason: 'Browser setup needs the installed npm command.' } : setup
         const bootstrap = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './worker-browser-bootstrap.ts' : '../worker-browser-bootstrap.mjs', import.meta.url))

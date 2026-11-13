@@ -44,12 +44,14 @@ async function fixture() {
   const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
   const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'browser-setup').worktree.path as string
   await writeFile(profilePath, JSON.stringify({ home: worker, codex: '/usr/bin/true', opencode: '/usr/bin/true', tools: [tools], readOnlyPaths: [] }))
-  return { home, worker, workspace, profilePath, runtimeRoot }
+  // The host Node version varies. Tests that need browser setup inject the managed runtime receipt.
+  const resolveBrowserRuntime = async () => ({ _tag: 'Available' as const, path: join(runtimeRoot, 'bin/browser-node'), version: 'v24.22.2', digest: `sha256:${'a'.repeat(64)}` })
+  return { home, worker, workspace, profilePath, runtimeRoot, resolveBrowserRuntime }
 }
 
 it('lazily seeds fresh browser state with Node24 and reuses it with the ordinary runtime', async () => {
   const f = await fixture()
-  const sandbox = await prepareAgentSandbox({ workspace: f.workspace, environment: { HOME: f.home }, provider: 'codex', profilePath: f.profilePath })
+  const sandbox = await prepareAgentSandbox({ workspace: f.workspace, environment: { HOME: f.home }, provider: 'codex', profilePath: f.profilePath, resolveBrowserRuntime: f.resolveBrowserRuntime })
   try {
     const original = JSON.parse(sandbox.environment.HARLAN_AGENT_SANDBOX_ENVIRONMENT!)
     const environment = { ...sandbox.environment, HARLAN_AGENT_SANDBOX_ENVIRONMENT: JSON.stringify({ ...original, NUXTSEO_TOKEN: 'fixture-secret', NPM_CONFIG_USERCONFIG: '/home/agent/private-npmrc' }) }
@@ -107,7 +109,7 @@ it.each(['version', 'alias', 'permissions'] as const)('keeps unrelated commands 
 it('does not record completion after a failed installer and retries on later browser use', async () => {
   const f = await fixture()
   await writeFile(join(f.worker, 'fail-browser-setup'), 'fail once')
-  const sandbox = await prepareAgentSandbox({ workspace: f.workspace, environment: { HOME: f.home }, provider: 'codex', profilePath: f.profilePath })
+  const sandbox = await prepareAgentSandbox({ workspace: f.workspace, environment: { HOME: f.home }, provider: 'codex', profilePath: f.profilePath, resolveBrowserRuntime: f.resolveBrowserRuntime })
   try {
     const run = () => execute(sandbox.binary, [...sandbox.args, '/run/agent/host-tools/dev-browser', '--headless'], { env: sandbox.environment, timeout: 10_000 })
     await expect(run()).rejects.toMatchObject({ code: 23 })
@@ -126,7 +128,7 @@ it('releases the setup lock after a namespace dies during installation', async (
   const original = await readFile(entry, 'utf8')
   await writeFile(entry, `const waitFs=require('node:fs');const waitPath=require('node:path');if(waitFs.existsSync(waitPath.join(process.env.HOME,'pause-browser-setup'))){waitFs.writeFileSync(waitPath.join(process.env.HOME,'setup-started'),'started');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);}${original}`)
   await writeFile(join(f.worker, 'pause-browser-setup'), 'pause')
-  const sandbox = await prepareAgentSandbox({ workspace: f.workspace, environment: { HOME: f.home }, provider: 'codex', profilePath: f.profilePath })
+  const sandbox = await prepareAgentSandbox({ workspace: f.workspace, environment: { HOME: f.home }, provider: 'codex', profilePath: f.profilePath, resolveBrowserRuntime: f.resolveBrowserRuntime })
   const pending = execute(sandbox.binary, [...sandbox.args, '/run/agent/host-tools/dev-browser', '--headless'], { env: sandbox.environment, timeout: 10_000 })
   try {
     const interrupted = expect(pending).rejects.toMatchObject({ signal: 'SIGKILL' })
@@ -168,7 +170,7 @@ it('rejects a private cache alias before running the installer', async () => {
   const f = await fixture()
   await mkdir(join(f.worker, 'private'))
   await symlink(join(f.worker, 'private'), join(f.worker, '.cache'))
-  const sandbox = await prepareAgentSandbox({ workspace: f.workspace, environment: { HOME: f.home }, provider: 'codex', profilePath: f.profilePath })
+  const sandbox = await prepareAgentSandbox({ workspace: f.workspace, environment: { HOME: f.home }, provider: 'codex', profilePath: f.profilePath, resolveBrowserRuntime: f.resolveBrowserRuntime })
   try {
     await expect(execute(sandbox.binary, [...sandbox.args, '/run/agent/host-tools/dev-browser', '--headless'], { env: sandbox.environment, timeout: 10_000 })).rejects.toMatchObject({ stderr: expect.stringContaining('must not use file aliases') })
     await expect(readFile(join(f.worker, 'npm-runtimes'))).rejects.toMatchObject({ code: 'ENOENT' })
