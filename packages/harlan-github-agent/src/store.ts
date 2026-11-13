@@ -5005,8 +5005,7 @@ function planAdversarialReview(
     && existing.reason !== null
     && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS
     && canRecoverFailure({ message: existing.reason }, existing.recovery_attempts)
-    && (classifyFailure({ message: existing.reason }).kind !== 'resource_limit'
-      || Date.parse(observedAt) >= Date.parse(nextRecoveryAt(existing.updated_at, existing.recovery_attempts, { message: existing.reason })))
+    && Date.parse(observedAt) >= Date.parse(nextRecoveryAt(existing.updated_at, existing.recovery_attempts, { message: existing.reason }))
   // Older deployments retired a publication retry as a duplicate Review.
   // Only that automatic decision can resume; explicit stops still win above.
   const prematureDeduplication = needsReviewPublication && existing?.state_tag === 'Superseded'
