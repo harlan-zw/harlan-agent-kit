@@ -1,7 +1,7 @@
 import type { Result } from './result.ts'
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { backup, DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from 'node:sqlite'
 import { err, ok } from './result.ts'
 
 export interface CombinedServiceState {
@@ -183,8 +183,9 @@ function mergeRoutineState(database: DatabaseSync): CombinedServiceState {
   }
 }
 
-async function snapshot(source: DatabaseSync, path: string): Promise<void> {
-  await backup(source, path)
+// VACUUM INTO writes a consistent copy synchronously. The async backup() never settles on Node 26.8.1.
+function snapshot(source: DatabaseSync, path: string): void {
+  source.prepare('VACUUM INTO ?').run(path)
 }
 
 /**
@@ -221,13 +222,13 @@ export async function combineServiceState(
   try {
     operation = { _tag: 'ReadSource', source: 'GitHub' }
     githubSource = new DatabaseSync(githubPath, { readOnly: true })
-    await snapshot(githubSource, githubSnapshot)
+    snapshot(githubSource, githubSnapshot)
     githubSource.close()
     githubSource = null
 
     operation = { _tag: 'ReadSource', source: 'Routine' }
     routineSource = new DatabaseSync(routinePath, { readOnly: true })
-    await snapshot(routineSource, routineSnapshot)
+    snapshot(routineSource, routineSnapshot)
     routineSource.close()
     routineSource = null
 
@@ -263,7 +264,7 @@ export async function combineServiceState(
     operation = { _tag: 'PublishOutput' }
     const githubForBackup = new DatabaseSync(githubSnapshot, { readOnly: true })
     try {
-      await snapshot(githubForBackup, combinedPath)
+      snapshot(githubForBackup, combinedPath)
     }
     finally {
       githubForBackup.close()
