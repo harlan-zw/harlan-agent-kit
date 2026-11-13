@@ -1536,9 +1536,10 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
           : { _tag: 'NotAuthorized' as const }
         if (baseline._tag === 'Rejected')
           return err(baseline.reason)
-        // A repository Harlan only watches cannot get a Baseline repair. The
-        // review still runs, and its CI gate reports the red default branch.
-        if (baseline._tag !== 'NotAuthorized') {
+        // A repository Harlan only watches cannot get a Baseline repair, and a
+        // repair that ended ActionRequired carries its own Incident. In both
+        // cases the review still runs, and its CI gate reports the red base.
+        if (baseline._tag === 'Queued' || baseline._tag === 'Existing') {
           const waitingBody = baselineWaitingComment(task.pullRequest.headSha, snapshot.value.pullRequest.baseSha, options.now().toISOString())
           const waiting = options.status.stageTerminal === undefined
             ? await options.status.publish(task, 'terminal', waitingBody, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))

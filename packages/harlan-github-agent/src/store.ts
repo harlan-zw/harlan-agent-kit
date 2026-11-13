@@ -542,6 +542,12 @@ export type BaselineRepairQueueResult
   = | { _tag: 'Queued' | 'Existing', taskId: string }
     | { _tag: 'Rejected', reason: string }
     | { _tag: 'NotAuthorized', reason: string }
+    /**
+     * The Baseline repair for this base commit ended without a repair and
+     * names an Incident. A Review runs against the red base instead of waiting
+     * for work no one will do.
+     */
+    | { _tag: 'ActionRequired', taskId: string, reason: string }
 
 export interface BaselineRepairRetirementCandidate {
   _tag: 'ActionRequired' | 'Completed'
@@ -915,6 +921,12 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     evidence: BaselineRepairRetirementEvidence
     at: string
   }) => boolean
+  /**
+   * Names every Baseline repair of one repository that ended without a repair
+   * and releases the Reviews still waiting on it. Repairs journals written
+   * before needsAttentionTask and failTask did this themselves.
+   */
+  settleEndedBaselineRepairs: (repository: string, at: string) => number
   /** Claims one terminal Publication whose Agent Task no longer runs. */
   claimNextTerminalReviewStatus: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedReviewStatusCommand | null
   close: () => void
@@ -9026,7 +9038,7 @@ export function openJournalStore(
         SELECT ${table}.id FROM ${table}
         JOIN subjects ON subjects.id = ${table}.subject_id
         WHERE (${table}.state_tag IN ('Completed', 'Superseded')
-          OR ${table}.revision_id != subjects.current_revision_id
+          OR (${table}.revision_id != subjects.current_revision_id${table === 'tasks' ? ` AND tasks.kind != 'baseline_repair'` : ''})
           OR (${table}.state_tag = 'Failed' AND incidents.message != ${table}.reason)
           OR (${table}.state_tag = 'ActionRequired'
             AND incidents.message != ${table}.reason
@@ -10531,8 +10543,8 @@ export function openJournalStore(
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: 'This Baseline repair was cancelled.' }
       }
-      const existing = database.prepare('SELECT state_tag, fence FROM tasks WHERE id = ?').get(taskId) as
-        { state_tag: TaskRow['state_tag'], fence: number } | undefined
+      const existing = database.prepare('SELECT state_tag, fence, reason, recovery_attempts FROM tasks WHERE id = ?').get(taskId) as
+        { state_tag: TaskRow['state_tag'], fence: number, reason: string | null, recovery_attempts: number } | undefined
       const openRepair = database.prepare(`
         SELECT subjects.github_number, json_extract(revisions.payload, '$.url') AS url
         FROM subjects
@@ -10566,6 +10578,16 @@ export function openJournalStore(
         database.exec('COMMIT')
         return { _tag: 'Existing', taskId }
       }
+      // A Baseline repair that ended without a repair has an Incident and a
+      // person to act. A Review that waited on it would wait for good, and one
+      // that requeued it would spend an Agent turn on the same answer. Only a
+      // failure the taxonomy calls recoverable earns a bounded retry here.
+      const recoverable = existing?.state_tag === 'Failed' && existing.reason !== null
+        && canRecoverFailure({ message: existing.reason }, existing.recovery_attempts)
+      if ((existing?.state_tag === 'ActionRequired' || existing?.state_tag === 'Failed') && !recoverable) {
+        database.exec('COMMIT')
+        return { _tag: 'ActionRequired', taskId, reason: existing.reason ?? 'The Baseline repair ended without a repair.' }
+      }
       if (existing !== undefined && existing.state_tag !== 'Failed' && existing.state_tag !== 'Superseded') {
         database.exec('COMMIT')
         return { _tag: 'Existing', taskId }
@@ -10588,7 +10610,8 @@ export function openJournalStore(
         const requeued = database.prepare(`
           UPDATE tasks
           SET state_tag = 'Queued', reason = NULL, worker_id = NULL, command_id = NULL,
-            lease_expires_at = NULL, attempts = 0, fence = ?, updated_at = ?
+            lease_expires_at = NULL, attempts = 0, fence = ?, updated_at = ?,
+            recovery_attempts = recovery_attempts + CASE WHEN state_tag = 'Failed' THEN 1 ELSE 0 END
           WHERE id = ? AND state_tag = ?
         `).run(fence, input.at, taskId, existing.state_tag)
         if (requeued.changes !== 1) {
@@ -12730,6 +12753,7 @@ export function openJournalStore(
           ...(input.usage === undefined ? {} : { usage: input.usage }),
           at: input.at,
         })
+        settleEndedBaselineRepair(input.taskId, input.at)
       }
       database.exec('COMMIT')
       return result.changes === 1
@@ -12740,7 +12764,74 @@ export function openJournalStore(
     }
   }
 
+  /**
+   * Names a Baseline repair that ended without a repair, and frees its Reviews.
+   *
+   * Every Review of a red base commit waits on one Baseline repair. When that
+   * repair ended ActionRequired, nothing else moved those Reviews, so
+   * gscdump.com#1172 read "Waiting for Baseline repair" for good with no
+   * Incident. The Incident is named by the Task's kind and state, never by
+   * its wording. A released Review runs against the red base, and its CI gate
+   * reports that base.
+   */
+  const settleEndedBaselineRepair = (taskId: string, at: string): void => {
+    const row = database.prepare(`
+      SELECT tasks.state_tag, tasks.reason, repositories.github AS repository, subjects.github_number
+      FROM tasks
+      JOIN subjects ON subjects.id = tasks.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE tasks.id = ? AND tasks.kind = 'baseline_repair' AND tasks.state_tag IN ('ActionRequired', 'Failed')
+    `).get(taskId) as { state_tag: 'ActionRequired' | 'Failed', reason: string | null, repository: string, github_number: number } | undefined
+    if (row === undefined)
+      return
+    // failTask already raised the classified Incident of a Failed repair.
+    const open = database.prepare(`SELECT 1 FROM incidents WHERE resolved_at IS NULL AND scope_tag = 'Task' AND task_id = ?`).get(taskId)
+    if (row.state_tag === 'ActionRequired' && open === undefined) {
+      upsertIncident(database, {
+        scope: { _tag: 'Task', taskId, repository: row.repository, itemNumber: row.github_number },
+        kind: 'baseline_repair_action_required',
+        severity: 'error',
+        operation: 'baseline_repair',
+        message: row.reason ?? 'The Baseline repair ended without a repair.',
+        recovery: { _tag: 'ActionRequired' },
+        at,
+      })
+    }
+    resumeReviewsWaitingForBaseline(taskId, at)
+  }
+
+  const settleEndedBaselineRepairs: JournalStore['settleEndedBaselineRepairs'] = (repository, at) => {
+    if (!mutationsEnabled)
+      return 0
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const ended = database.prepare(`
+        SELECT tasks.id FROM tasks
+        JOIN subjects ON subjects.id = tasks.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE repositories.github = ? AND tasks.kind = 'baseline_repair'
+          AND tasks.state_tag IN ('ActionRequired', 'Failed')
+          AND (EXISTS (
+            SELECT 1 FROM review_resolutions
+            WHERE review_resolutions.baseline_task_id = tasks.id
+              AND review_resolutions.resolution_tag = 'WaitingForBaselineRepair'
+          ) OR (tasks.state_tag = 'ActionRequired' AND NOT EXISTS (
+            SELECT 1 FROM incidents
+            WHERE incidents.resolved_at IS NULL AND incidents.scope_tag = 'Task' AND incidents.task_id = tasks.id
+          )))
+      `).all(repository) as Array<{ id: string }>
+      ended.forEach(task => settleEndedBaselineRepair(task.id, at))
+      database.exec('COMMIT')
+      return ended.length
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const baselineRetirementAuthoritySql = `
+
     tasks.kind = 'baseline_repair'
     AND (
       tasks.state_tag = 'ActionRequired'
@@ -12864,6 +12955,8 @@ export function openJournalStore(
         resolveTaskIncidents(database, input.taskId, input.at)
       else if (!retry)
         recordTaskIncident(database, input.taskId, input.reason, input.at)
+      if (!retry)
+        settleEndedBaselineRepair(input.taskId, input.at)
       database.exec('COMMIT')
       return retry ? 'Retrying' : 'Failed'
     }
@@ -17005,6 +17098,7 @@ export function openJournalStore(
     recordRepairReport,
     listBaselineRepairRetirementCandidates,
     retireBaselineRepairCandidate,
+    settleEndedBaselineRepairs,
     queueBaselineRepairForReview,
     queueBaselineRepairForGate,
     retireBaselineRepairForReview,

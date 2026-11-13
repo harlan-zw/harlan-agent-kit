@@ -9,11 +9,13 @@ export interface BaselineRepairSweepOptions {
   github: DefaultBranchSource
   now: () => Date
   repository: RepositoryMapping
-  store: Pick<JournalStore, 'listBaselineRepairRetirementCandidates' | 'retireBaselineRepairCandidate'>
+  store: Pick<JournalStore, 'listBaselineRepairRetirementCandidates' | 'retireBaselineRepairCandidate' | 'settleEndedBaselineRepairs'>
 }
 
 /** Retires obsolete Baseline repair and releases its current waiting Reviews. */
 export async function retireObsoleteBaselineRepairs(options: BaselineRepairSweepOptions, signal: AbortSignal): Promise<Result<number, string>> {
+  // A Review must never wait on a repair that ended without one, red base or not.
+  options.store.settleEndedBaselineRepairs(options.repository.github, options.now().toISOString())
   const candidates = options.store.listBaselineRepairRetirementCandidates(options.repository.github)
   if (candidates.length === 0)
     return ok(0)

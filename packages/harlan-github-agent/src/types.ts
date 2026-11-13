@@ -1580,6 +1580,12 @@ export type IncidentKind
      * wording live in `ci-gate-pending.ts`.
      */
     | 'ci_gate_pending'
+    /**
+     * A Baseline repair ended ActionRequired: the Agent could not repair the
+     * red default branch. Reviews waiting on it run against the red base, so
+     * this Incident is the one place the red base reads as work for a person.
+     */
+    | 'baseline_repair_action_required'
     | 'unknown'
 
 /** What the controller will do about an Incident without being asked. */

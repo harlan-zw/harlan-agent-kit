@@ -3,7 +3,7 @@ import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentPhase } from './agent-progress.ts'
 import type { ClassificationSource } from './classification.ts'
-import type { DefaultBranchSource, FailedJobContext, GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, PullRequestTemplate } from './github-agent-source.ts'
+import type { DefaultBranchSource, FailedJobContext, FailedRunArtifact, GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, PullRequestTemplate } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedBaselineRepairTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
@@ -229,7 +229,30 @@ function checkBlock(context: FailedCheckContext): string {
   const log = context.job.logTail.length === 0
     ? '  Log: unavailable (the job log is empty).'
     : `  Last ${context.job.logTail.length} log lines:\n  \`\`\`\n${context.job.logTail.map(line => `  ${line}`).join('\n')}\n  \`\`\``
-  return `${head}\n  Run id ${context.job.runId}, job "${context.job.jobName}", ${step}.\n${log}`
+  return `${head}\n  Run id ${context.job.runId}, job "${context.job.jobName}", ${step}.\n${log}${artifactBlock(context.job.artifacts ?? [])}`
+}
+
+/**
+ * The run's artifacts, as the controller read them.
+ *
+ * The worker GitHub CLI cannot read a private repository, so an Agent that
+ * tries `gh run download` there gets 404 and reports missing evidence.
+ */
+function artifactBlock(artifacts: FailedRunArtifact[]): string {
+  if (artifacts.length === 0)
+    return ''
+  const entries = artifacts.flatMap((artifact) => {
+    if (artifact._tag === 'Unavailable')
+      return [`  Artifact "${artifact.name}": unavailable (${artifact.reason}).`]
+    return artifact.files.map((file) => {
+      const label = `  Artifact "${artifact.name}", file ${file.path}`
+      if (file.text === null)
+        return `${label}: binary, not shown.`
+      const text = redactSecrets(file.text).split('\n').map(line => `  ${line}`).join('\n')
+      return `${label}${file.truncated ? ', last part only' : ''}:\n  \`\`\`\n${text}\n  \`\`\``
+    })
+  })
+  return `\n  The controller downloaded this run's artifacts. Do not download these artifacts again.\n${entries.join('\n')}`
 }
 
 export interface BaselineRepairPromptInput {

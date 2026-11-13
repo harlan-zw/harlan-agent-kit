@@ -515,6 +515,7 @@ export function reviewOutcomeDetail(agent: ReviewAgent): string {
 const incidentKindLabels: Record<IncidentKind, string> = {
   agent_provider: 'Agent provider',
   agent_result: 'Agent result',
+  baseline_repair_action_required: 'Baseline repair',
   ci_gate_pending: 'CI gate PENDING',
   context_budget: 'Context budget',
   controller: 'Controller',
