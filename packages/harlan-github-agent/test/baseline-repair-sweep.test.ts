@@ -68,6 +68,13 @@ function completedRepair(published = false) {
   return fixture
 }
 
+/** A repair that ended ActionRequired releases its Reviews at once, so only a completed one keeps a Review waiting. */
+function waitingOnCompletedRepair() {
+  const fixture = setup(true, false, false)
+  expect(fixture.store.completeTask({ taskId: fixture.repair.id, workerId: 'baseline', fence: fixture.repair.state.fence, at: at(6), evidence: 'Existing repair pull request #26.' })).toBe(true)
+  return fixture
+}
+
 describe('obsolete Baseline repair attention', () => {
   it.each([false, true])('resumes a same-base waiting Review while its repair pull request stays open, published: %s', async (published) => {
     const fixture = completedRepair(published)
@@ -105,7 +112,7 @@ describe('obsolete Baseline repair attention', () => {
   })
 
   it('preserves an operator cancellation recorded while Review waits', async () => {
-    const fixture = setup(true, false)
+    const fixture = waitingOnCompletedRepair()
     expect(fixture.store.cancelReviewForHead({ repository: fixture.mapping.github, pullRequestNumber: 24, headSha: fixture.review.pullRequest.headSha, requestId: 'operator-cancel', requestedBy: 'harlan-zw', at: at(8) })).toBe(true)
     expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] })).toEqual(ok(1))
     expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(10), 600_000)).toBe(null)
@@ -113,7 +120,7 @@ describe('obsolete Baseline repair attention', () => {
   })
 
   it('requires Approval before the resumed Review can start in manual mode', async () => {
-    const fixture = setup(true, false)
+    const fixture = waitingOnCompletedRepair()
     fixture.store.setSelectionMode('manual')
     expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] })).toEqual(ok(1))
     expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(10), 600_000)).toBe(null)
@@ -122,7 +129,7 @@ describe('obsolete Baseline repair attention', () => {
   })
 
   it('resumes all current Reviews sharing the recovered base commit', async () => {
-    const fixture = setup(true, false)
+    const fixture = waitingOnCompletedRepair()
     fixture.store.recordObservation({ externalId: 'second-item', observedAt: at(7), source: 'poll', subject: pullRequestItem({ number: 25, baseSha: 'old-base', mergeState: 'clean' }) })
     const second = fixture.store.claimNextAdversarialReviewTask('second-reviewer', at(7), 600_000)!
     expect(fixture.store.queueBaselineRepairForReview({ taskId: second.id, workerId: 'second-reviewer', fence: second.state.fence, baseSha: 'old-base', at: at(7) })._tag).toBe('Existing')
@@ -139,7 +146,7 @@ describe('obsolete Baseline repair attention', () => {
   })
 
   it('preserves the Review cancellation after recovery and duplicate observations', async () => {
-    const fixture = setup(true, false)
+    const fixture = waitingOnCompletedRepair()
     expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] })).toEqual(ok(1))
     expect(fixture.store.cancelTask({ taskId: fixture.review.id, at: at(10) })._tag).toBe('Cancelled')
     fixture.store.recordObservation({ externalId: 'duplicate', observedAt: at(11), source: 'poll', subject: pullRequestItem({ baseSha: 'old-base', mergeState: 'clean' }) })
@@ -148,22 +155,21 @@ describe('obsolete Baseline repair attention', () => {
   })
 
   it('preserves a newer running Review after the head changes during the branch read', async () => {
-    const fixture = setup(true, false)
+    const fixture = waitingOnCompletedRepair()
     let newerId = ''
     expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] }, () => {
       fixture.store.recordObservation({ externalId: 'new-head', observedAt: at(8), source: 'poll', subject: pullRequestItem({ baseSha: 'old-base', headSha: 'new-head', mergeState: 'clean' }) })
       newerId = fixture.store.claimNextAdversarialReviewTask('new-reviewer', at(8), 600_000)!.id
-    })).toEqual(ok(1))
+    })).toEqual(ok(0))
     const tasks = fixture.store.getDashboardSnapshot(at(10)).tasks
     expect(tasks.find(task => task.id === newerId)?.state._tag).toBe('Running')
     expect(tasks.find(task => task.id === fixture.review.id)?.state._tag).toBe('Completed')
     expect(fixture.store.claimNextAdversarialReviewTask('reviewer', at(10), 600_000)).toBe(null)
   })
 
-  it.each(['ActionRequired', 'Completed'] as const)('keeps a saved same-head verdict when %s Baseline repair recovers', async (state) => {
-    const fixture = state === 'Completed' ? completedRepair() : setup(true, false)
-    if (state === 'Completed')
-      fixture.store.claimNextAdversarialReviewTask('repair-reviewer', at(8), 600_000)
+  it('keeps a saved same-head verdict when a completed Baseline repair recovers', async () => {
+    const fixture = completedRepair()
+    fixture.store.claimNextAdversarialReviewTask('repair-reviewer', at(8), 600_000)
     const passed = { _tag: 'Passed' as const, evidence: [{ label: 'verified', sha256: 'a'.repeat(64) }] }
     expect(fixture.store.recordReviewRun({ id: 'saved-review', repository: fixture.mapping.github, pullRequestNumber: 24, revisionId: fixture.review.revisionId, headSha: fixture.review.pullRequest.headSha, provider: 'codex', sessionId: 'saved-session', model: 'gpt-5.6-sol', agentVersion: '0.0.0', skillDigest: 'c'.repeat(64), startedAt: at(2), completedAt: at(7), gates: { merge: passed, review: passed, ci: passed }, confidence: 95, findings: [] })._tag).toBe('Inserted')
     expect(fixture.store.recordReviewPublication({ id: 'saved-publication', reviewRunId: 'saved-review', body: '### READY', at: at(8), result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' } })._tag).toBe('Inserted')
@@ -174,7 +180,7 @@ describe('obsolete Baseline repair attention', () => {
   })
 
   it('resumes the dependent Review when the same base becomes green', async () => {
-    const fixture = setup(true, false)
+    const fixture = waitingOnCompletedRepair()
     expect(await sweep(fixture, 'old-base', { _tag: 'Available', checks: [check('success')] })).toEqual(ok(1))
     const resumed = fixture.store.claimNextAdversarialReviewTask('reviewer', at(10), 600_000)
     expect(resumed?.id).toBe(fixture.review.id)

@@ -1,4 +1,5 @@
 import type { Octokit } from 'octokit'
+import type { ArtifactFile } from './actions-artifact.ts'
 import type { AgentLabelState } from './agent-label.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { MediaReference } from './github-media.ts'
@@ -10,6 +11,7 @@ import type { ReviewCheckRunPublisher, ReviewCheckRunUpdate } from './review-che
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { FindingDiscussion, ReviewFindingThread, ReviewFindingThreadSource } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
+import { readArtifactText } from './actions-artifact.ts'
 import { AGENT_LABELS, planAgentLabels, staleAgentLabels } from './agent-label.ts'
 import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
@@ -266,9 +268,26 @@ export interface FailedJobContext {
   executionTruncated?: boolean
   execution?: Array<{ run: string, shell: string | null, workingDirectory: string | null }>
   workflow?: JobWorkflowContext
+  /**
+   * The artifacts the failed run uploaded, read with the controller's token.
+   *
+   * The worker GitHub CLI reads public repositories only, so GitHub answers it
+   * 404 for a private repository's artifacts. Absent when nobody asked.
+   */
+  artifacts?: FailedRunArtifact[]
 }
 
+export type FailedRunArtifact
+  = | { _tag: 'Read', name: string, files: ArtifactFile[] }
+    | { _tag: 'Unavailable', name: string, reason: string }
+
 export const FAILED_JOB_LOG_TAIL_LINES = 80
+/** A failed run's artifacts the prompt carries, newest first. */
+export const FAILED_RUN_ARTIFACT_LIMIT = 3
+/** A larger archive is a build output, not failure evidence. */
+export const FAILED_RUN_ARTIFACT_MAXIMUM_BYTES = 512 * 1024
+/** Characters kept from the end of each artifact file. */
+export const FAILED_RUN_ARTIFACT_FILE_CHARACTERS = 6_000
 
 export interface ExistingReviewLabel extends PublishedReviewStatus {
   label: 'READY' | 'PENDING' | 'BLOCKED' | 'ADVERSARIAL_REVIEW_SKIPPED'
@@ -700,6 +719,24 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
               .catch((error: unknown): Result<string, string> => err(message(error))) })
           })
           .catch((error: unknown): JobWorkflowContext => ({ _tag: 'Unavailable', reason: message(error) }))
+        const artifacts = await Promise.resolve()
+          .then(() => octokit.value.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id: job.data.run_id, per_page: FAILED_RUN_ARTIFACT_LIMIT, request: { signal } }))
+          .then(({ data }) => Promise.all(data.artifacts.slice(0, FAILED_RUN_ARTIFACT_LIMIT).map(async (artifact): Promise<FailedRunArtifact> => {
+            if (artifact.expired)
+              return { _tag: 'Unavailable', name: artifact.name, reason: 'GitHub expired this artifact.' }
+            if (artifact.size_in_bytes > FAILED_RUN_ARTIFACT_MAXIMUM_BYTES)
+              return { _tag: 'Unavailable', name: artifact.name, reason: `The artifact holds ${artifact.size_in_bytes} bytes, above the ${FAILED_RUN_ARTIFACT_MAXIMUM_BYTES} byte limit.` }
+            return octokit.value.rest.actions.downloadArtifact({ owner, repo, artifact_id: artifact.id, archive_format: 'zip', request: { signal } })
+              .then(({ data }): FailedRunArtifact => {
+                const read = readArtifactText(Buffer.from(data as ArrayBuffer), FAILED_RUN_ARTIFACT_FILE_CHARACTERS)
+                return read._tag === 'Read'
+                  ? { _tag: 'Read', name: artifact.name, files: read.files }
+                  : { _tag: 'Unavailable', name: artifact.name, reason: read.reason }
+              })
+              .catch((error: unknown): FailedRunArtifact => ({ _tag: 'Unavailable', name: artifact.name, reason: message(error) }))
+          })))
+          // The job log is the primary evidence. A failed listing is named, not fatal.
+          .catch((error: unknown): FailedRunArtifact[] => [{ _tag: 'Unavailable', name: 'artifact list', reason: message(error) }])
         return ok({
           runId: job.data.run_id,
           jobName: job.data.name,
@@ -709,6 +746,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           logTruncated: lines.length > FAILED_JOB_LOG_TAIL_LINES,
           executionTruncated: lines.filter(line => line.includes('##[group]Run ')).length > 30,
           workflow,
+          artifacts,
         })
       }).catch((error: unknown): Result<FailedJobContext, string> => err(message(error)))
     },

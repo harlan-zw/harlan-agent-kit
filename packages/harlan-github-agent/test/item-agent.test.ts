@@ -858,7 +858,10 @@ describe('subject Workers', () => {
     expect(published).toContain(pullRequest.baseSha)
   })
 
-  it('reviews the pull request anyway when policy does not authorize Baseline repair', async () => {
+  it.each([
+    { _tag: 'NotAuthorized' as const, reason: 'Repository policy does not authorize Baseline repair for this base commit.' },
+    { _tag: 'ActionRequired' as const, taskId: 'baseline-task', reason: 'Cause unknown. Repair confidence: 0/100.' },
+  ])('reviews the pull request against the red base when Baseline repair answers $_tag', async (baseline) => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const capture: ProviderCapture = { requests: [] }
     let published = ''
@@ -908,10 +911,7 @@ describe('subject Workers', () => {
         getRevisionFiles: () => null,
         supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordIncident: () => { throw new Error('Unexpected Incident.') },
-        queueBaselineRepairForReview: () => ({
-          _tag: 'NotAuthorized',
-          reason: 'Repository policy does not authorize Baseline repair for this base commit.',
-        }),
+        queueBaselineRepairForReview: () => baseline,
         retireBaselineRepairForReview: () => 0,
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),
         recordReviewPublication: () => ({ _tag: 'Inserted', publicationId: 'publication-1' }),

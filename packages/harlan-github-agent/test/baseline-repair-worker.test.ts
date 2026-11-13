@@ -256,6 +256,28 @@ describe('baseline repair worker', () => {
     expect(prompt).not.toMatch(/PR skill|pull request template/i)
   })
 
+  it('gives the Agent the artifacts of a private failed run, which its own GitHub CLI cannot read', async () => {
+    const capture: ProviderCapture = { requests: [] }
+    await runWorker({
+      capture,
+      checks: [actionsCheck({ name: 'reconcile' })],
+      job: ok(jobContext({ artifacts: [
+        { _tag: 'Read', name: 'user-d1-publication-43324870980-1', files: [
+          { path: 'user-d1-publication.jsonl', text: '{"step":"canary-response-json-invalid","status":400}', truncated: false },
+          { path: 'trace.bin', text: null, truncated: false },
+        ] },
+        { _tag: 'Unavailable', name: 'old-journal', reason: 'GitHub expired this artifact.' },
+      ] })),
+    })
+    const prompt = capture.requests[0]?.prompt ?? ''
+
+    expect(prompt).toContain('Artifact "user-d1-publication-43324870980-1", file user-d1-publication.jsonl:')
+    expect(prompt).toContain('{"step":"canary-response-json-invalid","status":400}')
+    expect(prompt).toContain('file trace.bin: binary, not shown.')
+    expect(prompt).toContain('Artifact "old-journal": unavailable (GitHub expired this artifact.).')
+    expect(prompt).toContain('Do not download these artifacts again.')
+  })
+
   it.each([
     { job: err('Private job log unavailable') },
     { job: ok(jobContext({ logTail: [] })) },
