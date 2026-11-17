@@ -153,6 +153,7 @@ The Service saves each request once and waits for existing Review or Repair work
 A changed head commit cancels the request. Closed pull requests cannot accept it.
 Only owned repositories and writable head branches accept change requests.
 Pause, Dismissal, Stop Review, and write controls still apply.
+The canonical comment of a finished Review ends with the commands that pull request accepts.
 
 Pull request triage uses `harlan-agent-review-required` or `harlan-agent-review-skipped`.
 The final Review replaces that route with one outcome label: `ready`, `pending`, or `blocked`.

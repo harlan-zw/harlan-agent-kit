@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { loggedFindingPickup, normalizeLoggedFindingControls, withLoggedFindingControls } from '../src/logged-finding-pickup.ts'
-import { AUTOMATED_REVIEW_MARKER } from '../src/review-comment.ts'
+import { loggedFindingPickup, normalizeLoggedFindingControls, withLoggedFindingControls, withoutLoggedFindingControls } from '../src/logged-finding-pickup.ts'
+import { AUTOMATED_REVIEW_MARKER, pullRequestCommandFooter } from '../src/review-comment.ts'
 import { createWebhookApp } from '../src/webhook.ts'
 
 const fingerprint = 'f'.repeat(64)
@@ -59,6 +59,22 @@ describe('logged finding pickup', () => {
     expect(body).not.toContain('[ ]')
     expect(normalizeLoggedFindingControls(before.replace('[ ]', '[x]'))).toBe(before)
     expect(withLoggedFindingControls(before, [finding], [])).toBe(before)
+  })
+
+  it('keeps the command line last after it adds the selection hint', () => {
+    const footer = pullRequestCommandFooter(['Change', 'Rerun'])!
+    const source = `${original}\n\n${footer}`
+    const decorated = withLoggedFindingControls(source, [finding], [])
+
+    expect(decorated.split('\n').at(-1)).toBe(footer)
+    expect(decorated).toContain('Selected findings run after merge and open separate pull requests.')
+    expect(withoutLoggedFindingControls(decorated)).toBe(source)
+    expect(withLoggedFindingControls(decorated, [finding], [])).toBe(decorated)
+  })
+
+  it('still strips a published comment that ends with the selection hint', () => {
+    expect(before.endsWith('Selected findings run after merge and open separate pull requests.')).toBe(true)
+    expect(withoutLoggedFindingControls(before)).toBe(original)
   })
   it.each(['valid', 'sender', 'actor', 'signature', 'disabled'])('accepts only an authorized signed click: %s', async (kind) => {
     const requests: unknown[] = []

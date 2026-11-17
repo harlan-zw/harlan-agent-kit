@@ -1,6 +1,8 @@
 import type { ReviewGates, ReviewGateState } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { reviewOutcome, terminalComment } from '../src/item-agent.ts'
+import { reviewCheckRunUpdate } from '../src/review-check-run.ts'
+import { automatedReviewHead, priorAutomatedReviewForHead } from '../src/review-comment.ts'
 
 const passed: ReviewGateState = { _tag: 'Passed', evidence: [] }
 const pending = (reason: string): ReviewGateState => ({ _tag: 'Pending', reason, evidence: [] })
@@ -106,5 +108,51 @@ describe('reviewOutcome', () => {
 
     expect(body).toContain('The queue can drop events. Next: Preserve pending events.')
     expect(body).not.toContain('[View code]')
+  })
+})
+
+describe('terminalComment command line', () => {
+  const headSha = 'a'.repeat(40)
+  const both = 'Comment `@harlan-agent <change to make>` to request a change, or `@harlan-agent rerun` to review this commit again.'
+
+  it('ends an owned pull request comment with both commands', () => {
+    const body = terminalComment(headSha, 'base123', gates(), [], 95, [], undefined, 'harlan-zw/example', ['Change', 'Rerun'])
+
+    expect(body.split('\n').at(-1)).toBe(both)
+  })
+
+  it('ends a pull request that accepts only rerun with rerun alone', () => {
+    const body = terminalComment(headSha, 'base123', gates({ review: failed('A defect remains.') }), [], undefined, [], undefined, 'acme/example', ['Rerun'])
+
+    expect(body.split('\n').at(-1)).toBe('Comment `@harlan-agent rerun` to review this commit again.')
+    expect(body).not.toContain('<change to make>')
+  })
+
+  it('writes no command line when the pull request accepts none', () => {
+    const body = terminalComment(headSha, 'base123', gates(), [], 95, [], undefined, 'acme/example', [])
+
+    expect(body).not.toContain('@harlan-agent')
+    expect(body).toBe(terminalComment(headSha, 'base123', gates(), [], 95, [], undefined, 'acme/example'))
+  })
+
+  it('writes no command line while merge conflicts refuse every command', () => {
+    const body = terminalComment(headSha, 'base123', gates({ merge: failed('The pull request has merge conflicts.') }), [], undefined, [], undefined, 'harlan-zw/example', ['Change', 'Rerun'])
+
+    expect(body).not.toContain('@harlan-agent')
+  })
+
+  it('keeps every marker and parsed field the command line would follow', () => {
+    const plain = terminalComment(headSha, 'base123', gates({ ci: pending('Base branch CI: deploy is still running.') }), [], undefined, [], undefined, 'harlan-zw/example')
+    const body = terminalComment(headSha, 'base123', gates({ ci: pending('Base branch CI: deploy is still running.') }), [], undefined, [], undefined, 'harlan-zw/example', ['Change', 'Rerun'])
+
+    expect(body).toBe(`${plain}\n\n${both}`)
+    expect(automatedReviewHead(body)).toBe(headSha)
+    expect(reviewCheckRunUpdate({ taskKind: 'adversarial_review', phase: 'terminal', desiredOutcome: 'PENDING', body }, 'now'))
+      .toEqual(reviewCheckRunUpdate({ taskKind: 'adversarial_review', phase: 'terminal', desiredOutcome: 'PENDING', body: plain }, 'now'))
+    const comment = { authorAssociation: 'NONE', authorLogin: 'harlan-github-agent[bot]', body, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-1' }
+    expect(priorAutomatedReviewForHead([comment], headSha, 'harlan-github-agent[bot]')).toEqual({ _tag: 'None' })
+    const ready = terminalComment(headSha, 'base123', gates(), [], 95, [], undefined, 'harlan-zw/example', ['Change', 'Rerun'])
+    expect(priorAutomatedReviewForHead([{ ...comment, body: ready }], headSha, 'harlan-github-agent[bot]'))
+      .toEqual({ _tag: 'Found', authorLogin: 'harlan-github-agent[bot]', state: 'complete', url: comment.url })
   })
 })

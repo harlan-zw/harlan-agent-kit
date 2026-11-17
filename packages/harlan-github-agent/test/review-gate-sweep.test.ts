@@ -210,9 +210,11 @@ function harness(options: {
   edit?: () => Promise<any>
   repairAccess?: string
   rounds?: RepairRoundPlan
+  allowedAuthors?: string[]
 }) {
   const recorded: Recorded = { baselineQueued: [], ciFindings: [], failed: [], fixQueued: [], incidents: [], resolved: [], staged: [], stamped: [] }
   const run = async () => refreshReviewGates({
+    ...(options.allowedAuthors === undefined ? {} : { allowedAuthors: options.allowedAuthors }),
     preflightRepair: () => Promise.resolve(options.repairAccess === undefined ? ok(undefined) : err(options.repairAccess)),
     github: {
       getPullRequestReviewSnapshot: () => Promise.resolve(options.live ?? snapshot([check()])),
@@ -612,6 +614,18 @@ describe('refreshReviewGates', () => {
     expect(recorded.staged[0]?.body).toContain('### 🤖 READY · 88/100')
     expect(recorded.staged[0]?.body).not.toContain('Waiting:')
     expect(recorded.stamped).toEqual([])
+  })
+
+  it('ends the refreshed comment with the commands the owner may comment', async () => {
+    const owned = harness({ allowedAuthors: ['harlan-zw'] })
+    const unconfigured = harness({})
+
+    await owned.run()
+    await unconfigured.run()
+
+    expect(owned.recorded.staged[0]?.body.split('\n').at(-1))
+      .toBe('Comment `@harlan-agent <change to make>` to request a change, or `@harlan-agent rerun` to review this commit again.')
+    expect(unconfigured.recorded.staged[0]?.body).not.toContain('@harlan-agent')
   })
 
   it('stages one projection for the existing Agent run', async () => {

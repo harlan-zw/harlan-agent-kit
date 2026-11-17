@@ -11,6 +11,7 @@ import type { IssueTriageCommentController } from './issue-triage-comment-contro
 import type { IssueTriageResult } from './issue-triage.ts'
 import type { MergeRisk, PullRequestFile } from './merge-risk.ts'
 import type { RepairRoundPlan } from './repair-rounds.ts'
+import type { PullRequestCommand } from './repository-policy.ts'
 import type { Result } from './result.ts'
 import type { ReviewReasoningEffort, ReviewReasoningEffortPolicy } from './review-effort.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
@@ -45,9 +46,9 @@ import { mediaEvidenceLines, snapshotMedia } from './github-media.ts'
 import { parseStoredIssueTriage } from './issue-triage.ts'
 import { combineMergeRisk, describeMergeRisk, mergeRiskFloor } from './merge-risk.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
-import { canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
+import { acceptedPullRequestCommands, canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, reviewFindingCodeLink, reviewFindingFollowUp } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, pullRequestCommandFooter, reviewFindingCodeLink, reviewFindingFollowUp } from './review-comment.ts'
 import { applyReviewReasoningEffortBand, DEFAULT_REVIEW_REASONING_EFFORT_POLICY, reviewReasoningEffortBand } from './review-effort.ts'
 import { cleanLine, cleanText, updatedAtLabel } from './text.ts'
 import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
@@ -106,6 +107,8 @@ export interface ItemAgentOptions {
 }
 
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
+  /** Logins whose pull request comments count as commands: `github.allowed_owners`. Absent offers no command. */
+  allowedAuthors?: readonly string[]
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
@@ -1091,7 +1094,15 @@ function gateSummary(name: 'Merge' | 'Review' | 'CI', gate: ReviewGateState, fin
   return `- **${name} gate:** ${outcome}. ${cleanLine(gate.reason)}`
 }
 
-export function terminalComment(headSha: string, baseSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[], mergeRisk?: MergeRisk, repository?: string): string {
+/**
+ * The canonical comment for a finished Review.
+ *
+ * `commands` comes from `acceptedPullRequestCommands`. The store refuses every
+ * command while the pull request has merge conflicts, so the command line reads
+ * the settled merge gate. A raw mergeable state of `unknown` would rewrite the
+ * comment on every base branch push.
+ */
+export function terminalComment(headSha: string, baseSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[], mergeRisk?: MergeRisk, repository?: string, commands: readonly PullRequestCommand[] = []): string {
   const result = reviewOutcome(gates)
   const heading = result === 'READY' && confidence !== undefined ? `${result} · ${confidence}/100` : result
   const workflow = JSON.stringify({
@@ -1133,6 +1144,7 @@ export function terminalComment(headSha: string, baseSha: string, gates: ReviewG
   })
   const checkLines = reportedChecks.map(line => `- **Reported:** ${cleanLine(line)}`)
   const next = result === 'PENDING' ? ['', 'Next: The controller updates this comment when a Review gate changes.'] : []
+  const commandLine = gates.merge._tag === 'Passed' ? pullRequestCommandFooter(commands) : undefined
   return [
     AUTOMATED_REVIEW_MARKER,
     `<!-- reviewed-sha: ${headSha} -->`,
@@ -1144,6 +1156,7 @@ export function terminalComment(headSha: string, baseSha: string, gates: ReviewG
     ...gateLines,
     ...[...findingLines, ...checkLines].flatMap(line => ['', line]),
     ...next,
+    ...(commandLine === undefined ? [] : ['', commandLine]),
   ].join('\n')
 }
 
@@ -1440,7 +1453,8 @@ async function projectReviewRun(
 
   const outcome = reviewOutcome(gates)
   const confidence = outcome === 'READY' ? run.outcome.confidence : undefined
-  const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks, run.mergeRisk?.combined, task.repository)
+  const commands = acceptedPullRequestCommands(task.repositoryMapping, snapshot.pullRequest, options.allowedAuthors ?? [])
+  const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks, run.mergeRisk?.combined, task.repository, commands)
   const durablePublication = options.status.stageTerminal !== undefined
   const staged = !durablePublication
     ? await options.status.publish(task, 'terminal', body, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))

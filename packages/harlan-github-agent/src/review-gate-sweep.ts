@@ -8,6 +8,7 @@ import { ciGatePendingMessage, readCiGate } from './ci-gate-pending.ts'
 import { hasHeadCiFinding, headCiFinding } from './head-ci-finding.ts'
 import { refreshControllerGates, repairPreflight, reviewOutcome, terminalComment } from './item-agent.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
+import { acceptedPullRequestCommands } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 
 /**
@@ -21,6 +22,8 @@ export type ReviewGateRefreshOutcome
     | { _tag: 'Retired', repository: string, pullRequestNumber: number, reason: string }
 
 export interface ReviewGateSweepOptions {
+  /** Logins whose pull request comments count as commands: `github.allowed_owners`. Absent offers no command. */
+  allowedAuthors?: readonly string[]
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'> & Pick<ReviewPublicationSource, 'stampAgentLabel'>
   now: () => Date
   /** Proves the controller may publish Repair commits in this repository. */
@@ -108,7 +111,8 @@ export async function refreshReviewGates(
         ? { ...finding, nextAction: repair._tag === 'Queued' ? `Repair ${repairRoundLabel(repair.rounds)} starts. ${finding.nextAction}` : repair.reason }
         : finding)
     }
-    const body = terminalComment(review.headSha, live.value.pullRequest.baseSha, gates, findings, confidence, reportedChecks, review.mergeRisk?.combined, review.repository)
+    const commands = acceptedPullRequestCommands(mapping, live.value.pullRequest, options.allowedAuthors ?? [])
+    const body = terminalComment(review.headSha, live.value.pullRequest.baseSha, gates, findings, confidence, reportedChecks, review.mergeRisk?.combined, review.repository, commands)
     // A red default branch holds this review PENDING until someone repairs
     // it. No review lease exists here, so this is the only place that can
     // queue that repair. The store answers Existing on every later pass.
