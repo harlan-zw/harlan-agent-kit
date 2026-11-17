@@ -86,6 +86,14 @@ auto_merge:
   enabled: false
   minimum_confidence: 100
   method: squash
+# Payback prices Agent turns from dated rates, in US dollars per million tokens.
+# Absent, every cost stays unpriced. hourly_value turns a cost into break-even
+# minutes of your time. cache_write defaults to the input rate.
+# payback:
+#   rates_checked_on: "2026-11-17"
+#   hourly_value: 150
+#   rates:
+#     gpt-6.1-sol: { input: 2, cached_input: 0.1, cache_write: 2.5, output: 10 }
 # No new issue work starts when open pull requests reach this limit.
 max_open_pull_requests: 8
 # Plan Ready Routine-filed issues as Batches: one planning turn groups related

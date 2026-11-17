@@ -70,6 +70,8 @@ const agentControls = {
   restoreItem: () => ({ _tag: 'Restored' as const }),
   recordAgentFeedback: () => ({ _tag: 'Rejected' as const, reason: { _tag: 'ReviewRunNotFound' as const } }),
   listWorkflowEvents: () => [],
+  listAgentTurns: () => [],
+  listPaybackTasks: () => [],
 }
 
 afterEach(() => vi.useRealTimers())
@@ -1088,6 +1090,64 @@ describe('dashboard HTTP app', () => {
         timeZone: 'Australia/Melbourne',
       },
     }])
+  })
+
+  it('prices each kind of work for one date range with the configured rates', async () => {
+    const ranges: Array<{ from: string, to: string }> = []
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      paybackPricing: { rates: { 'gpt-6.1-sol': { input: 2, cachedInput: 0.1, cacheWrite: 2.5, output: 10 } }, ratesCheckedOn: '2026-11-17', hourlyValue: null },
+      store: {
+        ...agentControls,
+        approveIssue: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        approvePullRequest: () => ({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }),
+        cancelTask: () => ({ _tag: 'Rejected', reason: { _tag: 'TaskNotFound' } }),
+        getDashboardSnapshot: () => dashboardSnapshot(),
+        listReviewRuns: () => [],
+        requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'ItemNotFound' } }),
+        listAgentTurns: (range) => {
+          ranges.push(range)
+          return [{
+            id: 'turn-1',
+            taskId: 'task-1',
+            role: 'issue_work',
+            repository: 'harlan-zw/example',
+            itemNumber: 7,
+            provider: 'codex',
+            model: 'gpt-6.1-sol',
+            reasoningEffort: null,
+            sessionId: 'thread-1',
+            startedAt: '2026-08-01T00:00:00.000Z',
+            completedAt: '2026-08-01T00:05:00.000Z',
+            outcome: 'Answered',
+            usage: { _tag: 'Available', input: 1_000_000, cachedInput: 1_000_000, cacheWrite: 0, output: 0, reasoning: 0 },
+            sessionTotal: null,
+          }]
+        },
+        listPaybackTasks: () => [{ taskId: 'task-1', state: 'Completed', published: true, pullRequest: 'Merged' }],
+      },
+    })
+
+    const response = await app.request(
+      `http://${allowedHost}/api/stats/payback?from=2026-07-14T00%3A00%3A00.000Z&to=2026-08-13T00%3A00%3A00.000Z&time_zone=UTC`,
+      { headers: { authorization, host: allowedHost } },
+    )
+
+    expect(response.status).toBe(200)
+    expect(ranges).toEqual([expect.objectContaining({ from: '2026-07-14T00:00:00.000Z', to: '2026-08-13T00:00:00.000Z' })])
+    expect(await response.json()).toEqual({
+      ratesCheckedOn: '2026-11-17',
+      hourlyValue: null,
+      kinds: [expect.objectContaining({
+        work: 'issue_work',
+        cost: { _tag: 'Priced', usd: 0.1, unpricedTurns: 0 },
+        outcomes: { useful: 1, wasted: 0, open: 0, unrecorded: 0 },
+        verdict: { _tag: 'Keep' },
+      })],
+    })
   })
 
   it('rejects an invalid Stats date range', async () => {

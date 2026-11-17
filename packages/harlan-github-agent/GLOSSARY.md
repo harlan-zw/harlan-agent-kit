@@ -60,6 +60,7 @@ did not cover it.
 | Review usage | `review_runs.usage` | Runner | One per Review run | Review usage |
 | Agent turn | `agent_turns` | Runner | N to 1 Task, Review run, or Routine run | Agent turn |
 | Turn usage | `agent_turns.usage` | Runner | One per Agent turn | usage |
+| Payback | derived from `agent_turns` and Task outcomes | Control API | One per kind of work per date range | Payback |
 | Review gate | `review_runs.gates` | Controller | Three per Review run | gate |
 | Review outcome | `review_runs.outcome_tag` | Controller | One per Review run | READY, PENDING, or BLOCKED |
 | Running label | `harlan-agent-running` label | GitHub | One per Item with a Running Task | none |
@@ -565,6 +566,16 @@ The tokens one Agent turn spent, and none from earlier turns in the same session
 
 Codex reports a running total for a resumed session. Turn usage subtracts the total the previous turn left.
 If no earlier total is on record, Turn usage is `Unavailable`.
+
+### Payback
+
+What one kind of work cost in one date range, set against the useful outcomes it produced.
+
+A useful outcome is a merged pull request. Work whose outcome the Journal does not record reads Measure first.
+Dollars come from the dated rates in `payback.rates`. Break-even minutes also need `payback.hourly_value`.
+Each kind gets one verdict: Keep, Tune, Cut, or Measure first. A verdict recommends a change; Harlan decides it.
+
+Do not use ROI, value score, impact score, cost-benefit, efficiency, or worth.
 
 ### Agent feedback
 

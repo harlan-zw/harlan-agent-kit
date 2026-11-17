@@ -11,6 +11,7 @@ import type { IssueTriageResult, IssueTriageState } from './issue-triage.ts'
 import type { LoggedFindingStore } from './logged-finding-store.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
+import type { PaybackStore } from './payback-store.ts'
 import type { PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { PullRequestWatchState } from './pull-request-watch.ts'
 import type { RepairRecoveryTarget } from './repair-recovery.ts'
@@ -141,6 +142,7 @@ import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { createLoggedFindingStore, loggedFindingSchema } from './logged-finding-store.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
+import { createPaybackStore } from './payback-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON, triageDecider } from './pull-request-triage.ts'
 import { repairRecoveryProof } from './repair-recovery.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
@@ -811,7 +813,7 @@ export type StoredIssueTriageRun
       decidedAt: string
     }
 
-export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore {
   getTask: (taskId: string) => DashboardTask | null
   listTasks: () => DashboardTask[]
   getOpenPullRequest: (repository: string, number: number) => GitHubPullRequestItem | null
@@ -7542,6 +7544,7 @@ export function openJournalStore(
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
   const findingThreadSyncStore = createFindingThreadSyncStore(database, repositoryWriteAuthoritySql)
   const agentTurnStore = createAgentTurnStore(database)
+  const paybackStore = createPaybackStore(database)
   const loggedFindingStore = createLoggedFindingStore(database, {
     writeAuthoritySql: repositoryWriteAuthoritySql,
     digest,
@@ -17011,6 +17014,7 @@ export function openJournalStore(
     ...takeOwnershipStore,
     ...findingThreadSyncStore,
     ...agentTurnStore,
+    ...paybackStore,
     ...reviewProofStore,
     ...loggedFindingStore,
     approveIssue,
