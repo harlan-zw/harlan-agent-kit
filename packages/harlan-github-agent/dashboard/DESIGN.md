@@ -74,7 +74,7 @@ Repository health, provider limits, Routines, and host metrics are reference mat
 | `/history` | What happened, on what evidence | GitHub style list rows. Evidence opens in a slideover |
 | `/watching` | What is being polled | Repository table that flags exceptions only, open items, Dismissed group |
 | `/routines` | What is coming on the clock | Schedule table, soonest first, then the last runs |
-| `/stats` | What the work produced over a range | A stats strip, one bar chart, one table. No score, no money |
+| `/stats` | What the work produced over a range, and what it cost | A stats strip, one bar chart, the repository and work tables, then Payback. Payback is the only place money or a verdict shows |
 | `/flow` | How work moves through the service | Static explainer. Reached from the overflow menu, never a tab |
 | `/kit` | The design system, rendered | Dev only |
 

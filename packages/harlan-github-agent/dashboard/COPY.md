@@ -185,6 +185,13 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Routine waiting | Queued scans | Shared start blockers |
 | Routine exhausted | Usage limit reached. | Capacity blocker |
 | Routine Reserve | Reserve reached. | Capacity blocker |
+| Payback heading | Payback | Stats section |
+| Payback failure | Could not load Payback. Retry. | Stats page when the Payback request fails |
+| Payback no rates | No rates configured. Costs stay unpriced. | Payback heading tooltip |
+| Payback rates date | Rates checked {date}. | Payback heading tooltip |
+| Payback hourly value | Set an hourly value to see break-even minutes. | Payback heading tooltip without an hourly value |
+| Payback unpriced | Unpriced | Cost cell without a rate for the model |
+| Payback unrecorded | Not recorded | Merged cell for work with no recorded outcome |
 | Desktop memory label | Desktop memory | Hosts memory budget |
 | Desktop memory sharing | Shared by Agents and GitHub Actions. | Hosts memory budget |
 | Desktop memory configuration | Change Desktop memory in the host configuration. | Refused memory budget writes |
