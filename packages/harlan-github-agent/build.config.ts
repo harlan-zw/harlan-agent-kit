@@ -27,6 +27,7 @@ export default defineBuildConfig({
     },
     {
       type: 'bundle',
+      dts: { eager: true },
       input: ['./src/vitals-comparison.ts'],
     },
   ],

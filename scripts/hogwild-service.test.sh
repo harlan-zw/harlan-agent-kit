@@ -43,6 +43,7 @@ export HARLAN_AGENT_CONTEXT_SITES_FILE="$test_root/SITES.md"
 # the deploy. Point all three at fixtures, or the tests update the real client.
 export HARLAN_GITHUB_AGENT_DESKTOP_UNIT=harlan-desktop-agent-fixture
 export HARLAN_GITHUB_AGENT_SERVICE_SCRIPT="$test_root/bin/service-fixture.sh"
+export HARLAN_GITHUB_AGENT_CHECKOUT="$test_home/sites/example"
 export XDG_CONFIG_HOME="$test_home/.config"
 export XDG_STATE_HOME="$test_home/.local/state"
 export HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED="$test_root/desktop-restarted"
@@ -195,7 +196,8 @@ FAKE_SERVICE
 chmod +x "$test_root/bin/systemctl" "$test_root/bin/service-fixture.sh"
 chmod +x "$test_root/bin/ssh" "$test_root/bin/scp" "$test_root/bin/rsync" "$test_root/bin/curl" "$test_root/bin/sleep"
 
-PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update >/dev/null
+PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update > "$test_root/update.log"
+grep -Fx "Desktop client: $(git -C "$test_home/sites/example" log --oneline -1)" "$test_root/update.log" >/dev/null
 
 claude_copy_line=$(grep -n '^scp .*CLAUDE.md hogwild:/home/harlan/.claude/CLAUDE.md.next\.[0-9.]*$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 codex_copy_line=$(grep -n '^scp .*AGENTS.md hogwild:/home/harlan/.codex/AGENTS.md.next\.[0-9.]*$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
