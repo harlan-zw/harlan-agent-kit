@@ -25,12 +25,12 @@ function skipAnswer(): ClassificationSource {
 }
 
 /** Polls one clean pull request twice through the real triage controller and store. */
-async function pollTwice(input: { files: string[], pathRuleShadow: boolean, classification?: ClassificationSource }) {
+async function pollTwice(input: { files: string[], pathRuleShadow: boolean, classification?: ClassificationSource, approvalLabels?: Array<'review'> }) {
   const store = openJournalStore(':memory:', true)
   const repository = repositoryMapping()
   store.syncRepositories([repository], '2026-11-17T00:00:00.000Z')
   store.setRepositoryWritesEnabled(repository.github, true)
-  const subject = pullRequestItem({ mergeState: 'clean', headSha })
+  const subject = pullRequestItem({ mergeState: 'clean', headSha, approvalLabels: input.approvalLabels ?? [] })
   let minute = 0
   const now = () => new Date(`2026-11-17T01:0${minute++}:00.000Z`)
   const pullRequestTriage = createPullRequestTriageController({
@@ -84,6 +84,37 @@ describe('path rule shadow', () => {
 
     expect(events).toEqual([])
     expect(review?.pullRequest.headSha).toBe(headSha)
+  })
+
+  it('records a prose-only head whose Review the manual label requested', async () => {
+    const { events, review } = await pollTwice({ files: ['README.md'], pathRuleShadow: true, approvalLabels: ['review'] })
+
+    expect(events.map(event => event.to)).toEqual(['ProseOnly'])
+    expect(review?.pullRequest.headSha).toBe(headSha)
+  })
+
+  it('records one event when a second Revision of the same head carries the reading', () => {
+    const store = openJournalStore(':memory:')
+    store.syncRepositories([repositoryMapping()], '2026-11-17T00:00:00.000Z')
+    const reading = { verdict: 'ProseOnly' as const, fileCount: 1 }
+    const triage = { _tag: 'Required' as const, reason: 'rule: the classification service is not configured, so Review runs.', source: 'rule' as const }
+    try {
+      for (const [index, title] of ['Docs tweak', 'Docs tweak, renamed'].entries()) {
+        store.recordObservation({
+          externalId: `revision-${index}`,
+          observedAt: `2026-11-17T01:0${index}:00.000Z`,
+          source: 'poll',
+          subject: pullRequestItem({ mergeState: 'clean', headSha, title, updatedAt: `2026-11-17T00:0${index}:00.000Z` }),
+          pullRequestTriage: triage,
+          pathRuleShadow: reading,
+        })
+      }
+
+      expect(store.listWorkflowEvents({ stream: 'review_run' }).filter(event => event.event === 'path_rule_shadow')).toHaveLength(1)
+    }
+    finally {
+      store.close()
+    }
   })
 
   it('records nothing while the flag is off', async () => {

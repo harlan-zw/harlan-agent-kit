@@ -244,12 +244,26 @@ export function classificationDecision(input: {
  * failure of any kind keeps the safe direction, Review.
  */
 export function createPullRequestTriageController(options: PullRequestTriageControllerOptions): PullRequestTriageController {
+  // A label-forced Review is still a Review the path rule could have skipped,
+  // so shadow mode reads its files too. The decision stays the override; a
+  // failed read only loses the reading.
+  const overrideShadow = async (repository: RepositoryMapping, subject: GitHubPullRequestItem, signal: AbortSignal): Promise<Omit<PullRequestTriageVerdict, 'decision'>> => {
+    if (!options.pathRuleShadow)
+      return { files: null }
+    const files = await options.github.listPullRequestFiles(repository, subject.number, signal)
+    if (files._tag === 'Err')
+      return { files: null }
+    const changedFiles = files.value.map(file => file.path)
+    return classifyPullRequestPaths(changedFiles)._tag === 'ProseOnly'
+      ? { files: files.value, pathRuleShadow: { verdict: 'ProseOnly', fileCount: changedFiles.length } }
+      : { files: files.value }
+  }
   return {
     async verdict(repository, subject, signal) {
       // The manual Review label is late authority. It wins before any other
       // check and its decision consumes it.
       if (subject.approvalLabels.includes('review'))
-        return { decision: { _tag: 'RequiredOverride' }, files: null }
+        return { decision: { _tag: 'RequiredOverride' }, ...await overrideShadow(repository, subject, signal) }
 
       const reused = reuseStoredDecision(options.store, repository, subject)
       if (reused !== null)
