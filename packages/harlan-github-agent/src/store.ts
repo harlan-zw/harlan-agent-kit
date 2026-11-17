@@ -4046,21 +4046,36 @@ function unchangedTurnBlocker(database: DatabaseSync, taskId: string, revisionId
     : null
 }
 
-/** Whether the newest Review reports the same open findings as the newest one before `at`. */
+/**
+ * Whether a later Review repeats the open findings of the newest Review before `at`.
+ *
+ * The head CI finding is appended to a stored run, so the run a turn read can
+ * change in place. Only a different, later run counts as the same input. A
+ * Repair dispute asks its fresh Review to judge the finding again, so that
+ * answer is new input.
+ */
 function reviewFindingsUnchangedSince(database: DatabaseSync, subjectId: number, revisionId: string, at: string): boolean {
+  const disputed = database.prepare(`
+    SELECT 1 FROM review_rerun_requests
+    JOIN worker_tasks ON worker_tasks.id = review_rerun_requests.task_id
+    WHERE worker_tasks.subject_id = ? AND review_rerun_requests.source = 'repair_dispute'
+      AND review_rerun_requests.requested_at >= ?
+  `).get(subjectId, at) !== undefined
+  if (disputed)
+    return false
   const latest = (before: string | null) => database.prepare(`
-    SELECT findings FROM review_runs
+    SELECT id, findings FROM review_runs
     WHERE subject_id = ? AND revision_id = ? AND (? IS NULL OR completed_at <= ?)
     ORDER BY completed_at DESC, id DESC
     LIMIT 1
-  `).get(subjectId, revisionId, before, before) as { findings: string } | undefined
+  `).get(subjectId, revisionId, before, before) as { id: string, findings: string } | undefined
   const identities = (row: { findings: string }) => JSON.stringify((JSON.parse(row.findings) as ReviewFinding[])
     .filter(finding => finding._tag === 'Open')
     .map(finding => finding.details?.fingerprint ?? finding.summary)
     .sort())
   const then = latest(at)
   const now = latest(null)
-  return then !== undefined && now !== undefined && identities(then) === identities(now)
+  return then !== undefined && now !== undefined && then.id !== now.id && identities(then) === identities(now)
 }
 
 /**

@@ -51,6 +51,18 @@ describe('action_required_once for conflict resolution', () => {
     expect(heldEvents(store).map(event => [event.taskId, event.from, event.to, event.reason])).toEqual([[task.id, 'Superseded', 'ActionRequired', reason]])
   })
 
+  it('starts a held Task again on the next base move', () => {
+    const store = setup(true)
+    blockConflict(store, 'Verification failed.')
+
+    observe(store, 10, { draft: true })
+    observe(store, 20)
+    expect(claimConflict(store, 21)).toBeNull()
+
+    observe(store, 30, { baseSha: 'base2' })
+    expect(claimConflict(store, 400)?.pullRequest.baseSha).toBe('base2')
+  })
+
   it('starts again once the head commit changes', () => {
     const store = setup(true)
     blockConflict(store, 'Verification failed.')
@@ -128,7 +140,7 @@ function recordFinding(store: Store, runId: string, revisionId: string, headSha:
 }
 
 /** Blocks one Repair, then runs a fresh Review of the same head commit up to its Repair handoff. */
-function blockedRepairThenFreshReview(actionRequiredOnce: boolean, freshFingerprint: string) {
+function blockedRepairThenFreshReview(actionRequiredOnce: boolean, freshFingerprint: string, rerunSource: 'dashboard' | 'repair_dispute' = 'dashboard') {
   const store = setup(actionRequiredOnce, repositoryMapping())
   const observed = store.recordObservation({
     externalId: 'once-repair',
@@ -156,7 +168,7 @@ function blockedRepairThenFreshReview(actionRequiredOnce: boolean, freshFingerpr
     pullRequestNumber: review.pullRequestNumber,
     revisionId: observed.revisionId,
     requestId: 'fresh-review',
-    source: 'dashboard',
+    source: rerunSource,
     requestedBy: 'harlan-zw',
     at: '2026-08-13T01:00:09.500Z',
   })._tag).toBe('Queued')
@@ -177,6 +189,53 @@ describe('action_required_once for Repair', () => {
     expect(handoffAgain()).toEqual({ _tag: 'ActionRequired', reason })
     expect(store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:10:00.000Z', 60_000)).toBeNull()
     expect(heldEvents(store).map(event => [event.taskId, event.to, event.reason])).toEqual([[repair.id, 'ActionRequired', reason]])
+    expect(store.listStoppedReviews()).toEqual([])
+  })
+
+  // A Repair dispute asks the fresh Review to judge the finding again, so its answer is new input.
+  it('starts Repair again after a dispute Review upholds the same finding', () => {
+    const { store, repair, handoff } = blockedRepairThenFreshReview(true, 'a'.repeat(64), 'repair_dispute')
+
+    expect(handoff._tag).toBe('Queued')
+    expect(store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:10:00.000Z', 60_000)?.id).toBe(repair.id)
+    expect(heldEvents(store)).toEqual([])
+  })
+
+  // The head CI finding is appended to a stored Review run, so the same run can carry new input.
+  it('starts Repair again when a CI finding joins the Review it stopped on', () => {
+    const store = setup(true, repositoryMapping())
+    const observed = store.recordObservation({
+      externalId: 'once-ci-finding',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequestItem({ headRef: 'fix/ci-finding', mergeState: 'clean' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:00:01.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the Review Task.')
+    recordFinding(store, 'ci-review', observed.revisionId, review.pullRequest.headSha, 'a'.repeat(64), '2026-08-13T01:00:03.000Z')
+    const handoff = (at: string) => store.queueReviewFixTaskForReview({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at })
+    expect(handoff('2026-08-13T01:00:04.000Z')._tag).toBe('Queued')
+    const repair = store.claimNextReviewFixTask('repair-agent', '2026-08-13T01:00:05.000Z', 60_000)
+    if (repair === null)
+      throw new Error('Expected the Repair Task.')
+    expect(store.needsAttentionTask({ taskId: repair.id, workerId: repair.state.workerId, fence: repair.state.fence, at: '2026-08-13T01:00:06.000Z', reason: 'Blocked.', evidence: 'blocked' })).toBe(true)
+
+    expect(store.recordCiRepairFinding({
+      reviewRunId: 'ci-review',
+      finding: {
+        _tag: 'Open',
+        summary: 'Head CI fails.',
+        nextAction: 'Fix the failing check.',
+        resolution: 'Repair',
+        details: { fingerprint: 'c'.repeat(64), identity: 'head-ci', location: { path: '.github/workflows/test.yml', line: null }, proof: 'The test job failed.', regressionTest: null },
+      },
+    })).toBe(true)
+
+    expect(handoff('2026-08-13T01:00:10.000Z')._tag).toBe('Queued')
+    expect(heldEvents(store)).toEqual([])
   })
 
   it('starts Repair again when a fresh Review reports a different finding', () => {
