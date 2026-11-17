@@ -82,8 +82,9 @@ async function fastForward(checkout: string): Promise<void> {
   const git = async (args: string[]) => (await exec('git', ['-C', checkout, ...args])).stdout.trim()
   const branch = await git(['branch', '--show-current'])
   const changes = await git(['status', '--porcelain'])
+  // A skipped update must not fail a service deploy, so it warns and check:context reports the drift.
   if (branch !== 'main' || changes !== '') {
-    process.stderr.write(`Left ${checkout} as it is: it is on ${branch || 'a detached HEAD'} or has changes.\n`)
+    process.stderr.write(`WARN  ${checkout} did not move to origin/main: it is on ${branch || 'a detached HEAD'} or has uncommitted changes. The plugins keep reading its current files.\n`)
     return
   }
   await git(['fetch', '--quiet', 'origin', 'main'])
@@ -105,14 +106,21 @@ async function check(checkout: string, states: Record<Provider, ProviderState>):
   if (states.codex._tag === 'Present' && states.codex.plugin === 'Enabled') {
     const manifest = JSON.parse(await readFile(join(checkout, 'harlan-agent-kit/.codex-plugin/plugin.json'), 'utf8')) as { version: string }
     const cache = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'plugins/cache', marketplace, 'harlan-agent-kit', manifest.version)
-    // diff exits 1 when the trees differ. Any other exit is a real failure.
-    const same = await exec('diff', ['-rq', cache, join(checkout, 'harlan-agent-kit')]).then(() => true, (error: { code?: number }) => {
-      if (error.code === 1)
-        return false
-      throw error
-    })
-    if (!same)
-      problems.push('The Codex kit plugin copy differs from the checkout.')
+    // Compare tracked files only. Test caches in the checkout are not drift.
+    const tracked = (await exec('git', ['-C', checkout, 'ls-files', '-z', '--', 'harlan-agent-kit'], { maxBuffer: 16 * 1024 * 1024 })).stdout.split('\0').filter(path => path !== '')
+    const stale: string[] = []
+    for (const path of tracked) {
+      const source = await readFile(join(checkout, path))
+      const copy = await readFile(join(cache, path.slice('harlan-agent-kit/'.length))).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT')
+          return undefined
+        throw error
+      })
+      if (copy === undefined || !copy.equals(source))
+        stale.push(path)
+    }
+    if (stale.length > 0)
+      problems.push(`The Codex kit plugin copy differs from the checkout in ${stale.length} files, such as ${stale[0]}.`)
   }
   return problems
 }

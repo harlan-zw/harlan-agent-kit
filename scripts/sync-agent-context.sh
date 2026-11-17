@@ -29,12 +29,9 @@ tools_sync="$script_dir/agent-tools.ts"
 tools_sync_suffix='.local/share/harlan-agent-kit/agent-tools.ts'
 plugins_sync="$script_dir/agent-plugins.ts"
 plugins_sync_suffix='.local/share/harlan-agent-kit/agent-plugins.ts'
-# Plugins read the primary checkout, never the worktree this run started in, because wt removes worktrees.
-if common_git_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
-  primary_checkout=$(dirname "$common_git_dir")
-else
-  primary_checkout="$repo_root"
-fi
+# Plugins read one fixed checkout on every host. A run from a worktree or the service clone
+# must not move them, because wt removes worktrees and the service clone moves on deploy.
+plugin_checkout="${HARLAN_AGENT_PLUGIN_CHECKOUT:-$HOME/pkg/harlan-agent-kit}"
 check_runner="$script_dir/agent-check.ts"
 check_install_suffix='.local/share/harlan-agent-kit/github-bin/agent-check.ts'
 check_cli_suffix='.local/bin/agent-check.ts'
@@ -91,6 +88,7 @@ require_sources() {
   [ -f "$commit_hook" ] || fail "The commit-msg hook is missing: $commit_hook"
   [ -f "$github_wrapper" ] || fail "The public GitHub CLI is missing: $github_wrapper"
   [ -f "$tools_sync" ] || fail "The Agent tool sync is missing: $tools_sync"
+  [ -f "$plugins_sync" ] || fail "The plugin sync is missing: $plugins_sync"
   [ -f "$check_runner" ] || fail "The check command is missing: $check_runner"
   [ -f "$shared_check" ] || fail "Check is missing: $shared_check"
   for source in "$agent_cli" "$agent_cli_plan" "$hogwild_scripts/hw.ts" "$hogwild_scripts/plan.ts"; do
@@ -170,6 +168,7 @@ sync_local() {
   install -m 755 "$github_wrapper" "$target_home/$github_install_suffix"
   install -m 755 "$github_wrapper" "$target_home/$github_cli_suffix"
   install -m 644 "$tools_sync" "$target_home/$tools_sync_suffix"
+  install -m 644 "$plugins_sync" "$target_home/$plugins_sync_suffix"
   install -m 755 "$check_runner" "$target_home/$check_install_suffix"
   install -m 755 "$check_runner" "$target_home/$check_cli_suffix"
   install -m 755 "$shared_check" "$target_home/$shared_check_install_suffix"
@@ -197,8 +196,8 @@ sync_local() {
     (umask 077; flock -w 180 "$target_home/.local/share/harlan-agent-kit/tools.lock" node --experimental-strip-types "$target_home/$tools_sync_suffix")
   fi
   # A temporary HOME must never change the real host's Claude Code or Codex plugins.
-  if [ "$target_home" = "$HOME" ] && [ "${HARLAN_AGENT_PLUGINS_UPDATE:-1}" = 1 ]; then
-    node --experimental-strip-types "$plugins_sync" --checkout "$primary_checkout"
+  if [ "$target_home" = "$HOME" ] && [ "${HARLAN_AGENT_PLUGINS_UPDATE:-1}" = 1 ] && [ -d "$plugin_checkout/.git" ]; then
+    node --experimental-strip-types "$target_home/$plugins_sync_suffix" --checkout "$plugin_checkout" --update-checkout
   fi
   printf '%s\n' 'Synced local Agent instructions.'
 }

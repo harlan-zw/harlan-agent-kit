@@ -70,6 +70,8 @@ for installed in "$TARGET_HOME/.local/share/harlan-agent-kit/github-bin/gh" "$TA
 done
 cmp -s "$REPO_ROOT/scripts/agent-tools.ts" "$TARGET_HOME/.local/share/harlan-agent-kit/agent-tools.ts" \
   || bad "The Agent tool sync differs. Run pnpm sync:context."
+cmp -s "$REPO_ROOT/scripts/agent-plugins.ts" "$TARGET_HOME/.local/share/harlan-agent-kit/agent-plugins.ts" \
+  || bad "The plugin sync differs. Run pnpm sync:context."
 # The check command shares the worker PATH with the public GitHub CLI.
 for installed in "$TARGET_HOME/.local/share/harlan-agent-kit/github-bin/agent-check.ts" "$TARGET_HOME/.local/bin/agent-check.ts"; do
   cmp -s "$REPO_ROOT/scripts/agent-check.ts" "$installed" \
@@ -110,8 +112,10 @@ fi
 
 # The Claude Code and Codex plugins live in the real home, so a sandbox run skips them.
 if [ "$TARGET_HOME" = "$HOME" ]; then
-  primary_checkout=$(dirname "$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir)")
-  node --experimental-strip-types "$REPO_ROOT/scripts/agent-plugins.ts" --checkout "$primary_checkout" --check || fail=1
+  plugin_checkout="${HARLAN_AGENT_PLUGIN_CHECKOUT:-$HOME/pkg/harlan-agent-kit}"
+  if [ -d "$plugin_checkout/.git" ]; then
+    node --experimental-strip-types "$REPO_ROOT/scripts/agent-plugins.ts" --checkout "$plugin_checkout" --check || fail=1
+  fi
 fi
 
 # Each principle is a bullet opening with a bold clause; compare the whole set.
