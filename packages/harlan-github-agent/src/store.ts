@@ -123,6 +123,8 @@ import type {
   TriageSkip,
   WorkflowEvent,
   WorkflowEventStream,
+  WorkflowEventSummary,
+  WorkflowFailureGroup,
 } from './types.ts'
 import type { AgentWorktreeLease } from './worktree.ts'
 import { createHash } from 'node:crypto'
@@ -1035,8 +1037,15 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
   getStats: (range: StatsRange, generatedAt: string) => StatsSnapshot
-  /** Newest append-only workflow events. Reasons are redacted before storage. */
-  listWorkflowEvents: (input?: { stream?: WorkflowEventStream, limit?: number }) => WorkflowEvent[]
+  /**
+   * Newest append-only workflow events. Reasons are redacted before storage.
+   * `since` bounds the window. `failures` keeps events with a reason or a retry.
+   */
+  listWorkflowEvents: (input?: { stream?: WorkflowEventStream, limit?: number, since?: string, failures?: boolean }) => WorkflowEvent[]
+  /** Counts every workflow event since a time, by stream, event, and state. */
+  summarizeWorkflowEvents: (input: { since: string }) => WorkflowEventSummary[]
+  /** Groups every failed or retried workflow event since a time by cause, largest group first. */
+  groupWorkflowFailures: (input: { since: string }) => WorkflowFailureGroup[]
   /** Whether one provider may accept a normal turn or one half-open canary. */
   providerCanStart: (input: { provider: AgentProviderName, credential: string, model?: string, at: string }) => boolean
   /** Atomically reserves the only half-open canary when one is due. */
@@ -13912,17 +13921,27 @@ export function openJournalStore(
     return isSafeToRestart(at)
   }
 
+  const workflowFailureCondition = '(reason IS NOT NULL OR attempt > 1)'
+
   const listWorkflowEvents: JournalStore['listWorkflowEvents'] = (input = {}) => {
     const limit = Math.max(1, Math.min(1_000, input.limit ?? 200))
-    const rows = input.stream === undefined
-      ? database.prepare(`
-          SELECT * FROM workflow_events
-          ORDER BY occurred_at DESC, id DESC LIMIT ?
-        `).all(limit)
-      : database.prepare(`
-          SELECT * FROM workflow_events WHERE stream = ?
-          ORDER BY occurred_at DESC, id DESC LIMIT ?
-        `).all(input.stream, limit)
+    const conditions: string[] = []
+    const parameters: Array<string | number> = []
+    if (input.stream !== undefined) {
+      conditions.push('stream = ?')
+      parameters.push(input.stream)
+    }
+    if (input.since !== undefined) {
+      conditions.push('occurred_at >= ?')
+      parameters.push(input.since)
+    }
+    if (input.failures === true)
+      conditions.push(workflowFailureCondition)
+    const where = conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`
+    const rows = database.prepare(`
+      SELECT * FROM workflow_events ${where}
+      ORDER BY occurred_at DESC, id DESC LIMIT ?
+    `).all(...parameters, limit)
     return (rows as unknown as Array<{
       id: number
       stream: WorkflowEventStream
@@ -13958,6 +13977,58 @@ export function openJournalStore(
       usage: row.usage === null ? null : JSON.parse(row.usage) as AgentTokenUsage,
       occurredAt: row.occurred_at,
     }))
+  }
+
+  const groupWorkflowFailures: JournalStore['groupWorkflowFailures'] = ({ since }) => {
+    const rows = database.prepare(`
+      WITH failures AS (
+        SELECT id, stream, event, to_state, substr(reason, 1, 80) AS reason_key, attempt,
+          entity_id, repository, item_number, occurred_at
+        FROM workflow_events WHERE occurred_at >= ? AND ${workflowFailureCondition}
+      ), ranked AS (
+        SELECT *,
+          ROW_NUMBER() OVER (PARTITION BY stream, event, to_state, reason_key ORDER BY occurred_at DESC, id DESC) AS position,
+          COUNT(*) OVER (PARTITION BY stream, event, to_state, reason_key) AS count,
+          SUM(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) OVER (PARTITION BY stream, event, to_state, reason_key) AS retried,
+          MAX(occurred_at) OVER (PARTITION BY stream, event, to_state, reason_key) AS newest
+        FROM failures
+      )
+      SELECT * FROM ranked WHERE position <= 3
+      ORDER BY count DESC, newest DESC, stream, event, to_state, reason_key, position
+    `).all(since) as unknown as Array<{
+      id: number
+      stream: WorkflowEventStream
+      event: string
+      to_state: string
+      reason_key: string | null
+      entity_id: string
+      repository: string | null
+      item_number: number | null
+      occurred_at: string
+      position: number
+      count: number
+      retried: number
+      newest: string
+    }>
+    const groups: WorkflowFailureGroup[] = []
+    for (const row of rows) {
+      const example = { id: row.id, entityId: row.entity_id, repository: row.repository, itemNumber: row.item_number, occurredAt: row.occurred_at }
+      if (row.position > 1) {
+        groups.at(-1)?.examples.push(example)
+        continue
+      }
+      groups.push({
+        stream: row.stream,
+        event: row.event,
+        to: row.to_state,
+        reason: row.reason_key,
+        count: row.count,
+        retried: row.retried,
+        newestOccurredAt: row.newest,
+        examples: [example],
+      })
+    }
+    return groups
   }
 
   const providerFailureThreshold = 3
@@ -17167,6 +17238,14 @@ export function openJournalStore(
     getDashboardSnapshot,
     getStats,
     listWorkflowEvents,
+    groupWorkflowFailures,
+    summarizeWorkflowEvents: ({ since }) => (database.prepare(`
+      SELECT stream, event, to_state AS "to", COUNT(*) AS count,
+        SUM(CASE WHEN reason IS NOT NULL THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) AS retried
+      FROM workflow_events WHERE occurred_at >= ?
+      GROUP BY stream, event, to_state ORDER BY count DESC
+    `).all(since) as unknown as WorkflowEventSummary[]).map(row => ({ ...row })),
     providerCanStart,
     reserveProviderStart,
     releaseProviderStart,
