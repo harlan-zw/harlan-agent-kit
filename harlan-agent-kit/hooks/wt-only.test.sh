@@ -2,6 +2,10 @@
 # Verifies the wt-only hook blocks ad hoc worktree creation and allows reads.
 set -uo pipefail
 
+# Hook decisions append to the hit log. Keep test runs out of the real one.
+export XDG_STATE_HOME="$(mktemp -d)"
+trap 'rm -rf "$XDG_STATE_HOME"' EXIT
+
 hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wt-only.sh"
 fail=0
 banned='.claude/worktrees'

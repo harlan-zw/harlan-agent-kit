@@ -217,9 +217,12 @@ async function runHook(
     const child = spawn('bash', [scriptPath], {
       cwd: options.workingDirectory,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: options.sessionId === undefined
-        ? process.env
-        : { ...process.env, CLAUDE_SESSION_ID: options.sessionId },
+      env: {
+        ...process.env,
+        // The hit log reads this. opencode inherits its parent's variables, so it names itself.
+        HARLAN_AGENT_HOOK_SURFACE: 'opencode',
+        ...(options.sessionId === undefined ? {} : { CLAUDE_SESSION_ID: options.sessionId }),
+      },
     })
     let stdout = ''
     let stderr = ''

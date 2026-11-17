@@ -10,7 +10,7 @@
     "test:octorun-service": "vitest run scripts/octorun-service.test.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "pnpm test:release && pnpm test:agent-cli && pnpm test:agent-retro && pnpm test:context && pnpm test:commit-hook && pnpm test:himalaya && pnpm test:browser && pnpm test:opencode-hooks && pnpm test:hogwild && pnpm test:nuxt-4-minors-migration && pnpm test:skills && pnpm test:skill-doc-paths && pnpm test:codex-hooks && pnpm test:service && pnpm test:lockfile && pnpm test:github-public && pnpm --filter advocaat test:run && pnpm --filter harlan-github-agent test:run && pnpm --filter harlan-octorun test:run && pnpm test:octorun-service && pnpm test:notes-viewer",
+    "test": "pnpm test:release && pnpm test:agent-cli && pnpm test:agent-retro && pnpm test:context && pnpm test:commit-hook && pnpm test:himalaya && pnpm test:browser && pnpm test:opencode-hooks && pnpm test:hogwild && pnpm test:nuxt-4-minors-migration && pnpm test:skills && pnpm test:skill-doc-paths && pnpm test:codex-hooks && pnpm test:service && pnpm test:lockfile && pnpm test:github-public && pnpm --filter advocaat test:run && pnpm --filter harlan-github-agent test:run && pnpm --filter harlan-octorun test:run && pnpm test:octorun-service && pnpm test:notes-viewer && pnpm test:guard-hits",
     "test:github-public": "vitest run scripts/github-public.test.ts scripts/agent-check.test.ts scripts/agent-tools.test.ts",
     "sync:tools": "flock -w 180 $HOME/.local/share/harlan-agent-kit/tools.lock node --experimental-strip-types scripts/agent-tools.ts",
     "test:lockfile": "vitest run scripts/lockfile.test.ts",
@@ -52,6 +52,9 @@
     "browser:install": "python3 scripts/harlan-browser.py install",
     "test:agent-cli": "vitest run scripts/agent-cli.test.ts",
     "test:hook-output": "bash harlan-agent-kit/hooks/output-contract.test.sh",
+    "test:hit-log": "bash harlan-agent-kit/hooks/hit-log.test.sh",
+    "guard-hits": "node --experimental-strip-types scripts/guard-hits.ts",
+    "test:guard-hits": "vitest run scripts/guard-hits.test.ts",
     "test:codex-hooks": "vitest run scripts/codex-hooks.test.ts",
     "test:wt-worktree": "bash harlan-agent-kit/hooks/wt-worktree.test.sh"
   },

@@ -1,9 +1,12 @@
 #!/bin/bash
+source "$(dirname "$0")/hit-log.sh"
+
 input=$(cat)
 command=$(echo "$input" | jq -r '.tool_input.command // empty')
 
 rewrite() {
   jq -nc --arg cmd "$1" --arg reason "$2" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",permissionDecisionReason:$reason,updatedInput:{command:$cmd}}}'
+  log_hook_hit rewrite "$2" "$input"
   exit 0
 }
 

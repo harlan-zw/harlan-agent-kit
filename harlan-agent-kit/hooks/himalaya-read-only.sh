@@ -14,6 +14,7 @@
 # environment assignment before the binary is not matched, which is the known
 # gap in this shape.
 source "$(dirname "$0")/check-config.sh"
+source "$(dirname "$0")/hit-log.sh"
 is_hook_disabled "himalaya-read-only" && exit 0
 
 input=$(cat)
@@ -23,6 +24,7 @@ command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 
 deny() {
   jq -nc --arg reason "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
+  log_hook_hit deny "$1" "$input"
   exit 0
 }
 

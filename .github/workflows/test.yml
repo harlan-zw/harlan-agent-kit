@@ -181,6 +181,9 @@ jobs:
       - name: CI change selection
         run: pnpm test:ci-changes
 
+      - name: Hook hit summary
+        run: pnpm test:guard-hits
+
       # These enforce the worktree, pull request, and hook output rules. `pnpm test`
       # does not run them.
       - name: Plugin hooks
@@ -188,6 +191,7 @@ jobs:
           pnpm test:wt-only
           pnpm test:pr-skill-only
           pnpm test:hook-output
+          pnpm test:hit-log
           pnpm test:wt-worktree
           pnpm test:worktree-claim
 

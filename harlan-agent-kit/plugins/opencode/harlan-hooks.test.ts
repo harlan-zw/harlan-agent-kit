@@ -37,7 +37,15 @@ function manifestWithoutScripts(): string {
 /** A directory with no git repository, so merged-branch-guard.sh exits early. */
 const workingDirectory = mkdtempSync(join(tmpdir(), 'harlan-hooks-'))
 
-afterAll(() => rmSync(workingDirectory, { recursive: true, force: true }))
+/** Hook decisions append to the hit log. Test runs write here, never to the real one. */
+const stateDirectory = mkdtempSync(join(tmpdir(), 'harlan-hooks-state-'))
+process.env.XDG_STATE_HOME = stateDirectory
+const hitLog = join(stateDirectory, 'harlan-agent-kit', 'guard-hits.jsonl')
+
+afterAll(() => {
+  rmSync(workingDirectory, { recursive: true, force: true })
+  rmSync(stateDirectory, { recursive: true, force: true })
+})
 
 interface Hooks {
   'tool.execute.before': (input: { tool: string, sessionID?: string }, output: { args: any }) => Promise<void>
@@ -163,6 +171,26 @@ describe('tool.execute.before', () => {
 
   it('denies a himalaya call that changes mail', async () => {
     await expect(runShellHook('himalaya message delete 12')).rejects.toThrow(/read only/)
+  })
+
+  // opencode inherits the variables of the shell that started it, so it names itself.
+  it('logs a deny under the opencode surface, even inside a Claude Code hook environment', async () => {
+    rmSync(hitLog, { force: true })
+    vi.stubEnv('CLAUDECODE', '1')
+    vi.stubEnv('CLAUDE_PROJECT_DIR', workingDirectory)
+    await expect(runShellHook('git worktree add ../copy feature')).rejects.toThrow(/Use wt/)
+    vi.unstubAllEnvs()
+    const lines = readFileSync(hitLog, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+    expect(lines).toEqual([expect.objectContaining({ guard: 'wt-only.sh', decision: 'deny', surface: 'opencode' })])
+  })
+
+  it('logs a rewrite once and logs nothing for an allowed command', async () => {
+    rmSync(hitLog, { force: true })
+    await expect(runShellHook('ls')).resolves.toBe('ls')
+    expect(() => readFileSync(hitLog, 'utf8')).toThrow()
+    await expect(runShellHook('npm install')).resolves.toBe('pnpm install')
+    const lines = readFileSync(hitLog, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+    expect(lines).toEqual([expect.objectContaining({ guard: 'pnpm-only.sh', decision: 'rewrite', surface: 'opencode' })])
   })
 
   it('runs every PreToolUse Bash hook the manifest registers', async () => {
