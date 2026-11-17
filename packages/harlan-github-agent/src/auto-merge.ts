@@ -9,6 +9,12 @@ import type { GitHubPullRequestItem, RepositoryMapping, ReviewRun } from './type
  */
 export const AUTO_MERGE_LABEL = 'harlan-agent-auto-merge'
 
+export const AUTO_MERGE_LABEL_SPEC = {
+  name: AUTO_MERGE_LABEL,
+  color: '0e8a16',
+  description: 'Lets harlan-github-agent merge this after a READY review',
+}
+
 export function hasAutoMergeLabel(labels: string[]): boolean {
   return labels.some(label => label.toLowerCase() === AUTO_MERGE_LABEL)
 }

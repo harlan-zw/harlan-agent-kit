@@ -163,6 +163,15 @@ describe('issue work handoffs', () => {
       .toEqual([{ _tag: 'Completed', evidence }, { _tag: 'Completed', evidence }])
   })
 
+  it('names every issue a claimed publication closes', () => {
+    const single = publish(readyIssues([12]).store).command
+    const combined = publish(readyIssues([12, 13, 14]).store, 5, [14, 13]).command
+
+    expect(single).toMatchObject({ _tag: 'OpenPullRequest', issueNumber: 12 })
+    expect(single).not.toHaveProperty('combinedIssueNumbers')
+    expect(combined).toMatchObject({ _tag: 'OpenPullRequest', issueNumber: 12, combinedIssueNumbers: [13, 14] })
+  })
+
   it('retains the combined publication across a restart and prevents a second Batch claiming it', () => {
     const path = databasePath()
     const { store } = readyIssues([12, 13, 14], path)

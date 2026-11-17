@@ -1,10 +1,11 @@
+import type { DependencyUpdateLabel, PublishedPath } from './dependency-update-label.ts'
 import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubPullRequestPublisher, GitHubSource } from './github.ts'
 import type { PublicationRemote } from './publication-scheduler.ts'
 import type { RepairRecoveryArtifact, RepairRecoveryWorktrees } from './repair-recovery.ts'
 import type { Result } from './result.ts'
-import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedBatch, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase } from './types.ts'
+import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedBatch, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase, RoutineIssueSource } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -15,7 +16,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { APPROVAL_LABELS } from './approval-labels.ts'
+import { AUTO_MERGE_LABEL_SPEC } from './auto-merge.ts'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
+import { dependencyUpdateLabel, isDependencyFile } from './dependency-update-label.ts'
 import { canPushBranch, canRepairBaseline, canResolveConflictPullRequestHead, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
@@ -1576,7 +1579,11 @@ export interface GitPublicationRemoteOptions {
   tokens: GitHubTokenProvider
   /** Maintainer access for approved fork conflict merges containing workflow files. */
   forkWorkflowTokens?: GitHubTokenProvider
+  /** Which Routine filed an issue. Absent means no pull request gets the Auto merge label. */
+  routineIssueSource?: (repository: string, issueNumber: number) => RoutineIssueSource | null
 }
+
+type IssueWorkPublication = Extract<ClaimedPublicationCommand, { _tag: 'OpenPullRequest', taskKind: 'issue_work' }>
 
 function publicationRemoteUrl(repository: string): string {
   return `https://github.com/${repository}.git`
@@ -1590,6 +1597,36 @@ function publicationTargetRepository(command: ClaimedPublicationCommand): string
 
 export function createGitPublicationRemote(options: GitPublicationRemoteOptions): PublicationRemote {
   const remoteUrl = options.remoteUrl ?? publicationRemoteUrl
+
+  /** Decides the Auto merge label from the pinned commit. Null means the issue is not dependency work. */
+  async function dependencyUpdateLabelFor(command: IssueWorkPublication, signal: AbortSignal): Promise<DependencyUpdateLabel | null> {
+    const source = options.routineIssueSource
+    if (source === undefined || source(command.repository, command.issueNumber)?.routineName !== 'dependency-updates')
+      return null
+    const repository = repositoryGitDirectory(options.root, command.repository)
+    const listed = await runGit(repository, ['diff', '--name-status', '--no-renames', '-z', command.expectedHeadSha, command.commitSha], signal)
+    if (listed.exitCode !== 0)
+      return { _tag: 'NoLabel', reason: `The published diff could not be read: ${listed.stderr}` }
+    const fields = listed.stdout.split('\0').filter(field => field !== '')
+    const paths: PublishedPath[] = []
+    for (let index = 0; index + 1 < fields.length; index += 2)
+      paths.push({ status: fields[index]!, path: fields[index + 1]! })
+    const contents = new Map<string, { before: string, after: string }>()
+    for (const { path } of paths.filter(file => file.status === 'M' && isDependencyFile(file.path))) {
+      // A lockfile passes execFile's 1 MiB output limit, so stream every blob.
+      const before = await runGitPathOutput(repository, ['cat-file', 'blob', `${command.expectedHeadSha}:${path}`], signal)
+      const after = await runGitPathOutput(repository, ['cat-file', 'blob', `${command.commitSha}:${path}`], signal)
+      if (before.exitCode !== 0 || after.exitCode !== 0)
+        return { _tag: 'NoLabel', reason: `${path} could not be read: ${before.stderr || after.stderr}` }
+      contents.set(path, { before: before.stdout, after: after.stdout })
+    }
+    return dependencyUpdateLabel({
+      routines: [command.issueNumber, ...command.combinedIssueNumbers ?? []].map(issue => source(command.repository, issue)?.routineName ?? null),
+      ownership: command.repositoryMapping.ownership,
+      paths,
+      contents,
+    })
+  }
 
   async function token(command: ClaimedPublicationCommand, signal: AbortSignal): Promise<Result<string, string>> {
     const changed = await runGit(repositoryGitDirectory(options.root, command.repository), [
@@ -1777,6 +1814,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
         return ok({ evidence: `Published ${command.commitSha}.` })
       if (options.pullRequests === undefined)
         return err('Pull request publication is unavailable.')
+      const dependencyLabel = command.taskKind === 'issue_work' ? await dependencyUpdateLabelFor(command, signal) : null
       const pullRequest = await options.pullRequests.ensurePullRequest({
         repository: command.repositoryMapping,
         baseRef: command.baseRef,
@@ -1793,6 +1831,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
               }]
             : []),
           ...(command.taskKind === 'baseline_repair' ? [BASELINE_REPAIR_LABEL_SPEC] : []),
+          ...(dependencyLabel?._tag === 'Label' ? [AUTO_MERGE_LABEL_SPEC] : []),
         ],
         ...(command.taskKind === 'issue_work' && command.diagram !== null ? { diagram: command.diagram } : {}),
       }, signal)
@@ -1801,7 +1840,10 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
       const diagram = pullRequest.value.diagram._tag === 'Skipped'
         ? ` The diagram was not attached: ${pullRequest.value.diagram.reason}`
         : ''
-      return ok({ evidence: `Opened pull request #${pullRequest.value.number}: ${pullRequest.value.url}.${diagram}`, pullRequestNumber: pullRequest.value.number })
+      const autoMerge = dependencyLabel === null
+        ? ''
+        : ` Auto merge label ${dependencyLabel._tag === 'Label' ? 'added' : 'not added'}. ${dependencyLabel.reason}`
+      return ok({ evidence: `Opened pull request #${pullRequest.value.number}: ${pullRequest.value.url}.${diagram}${autoMerge}`, pullRequestNumber: pullRequest.value.number })
     },
   }
 }

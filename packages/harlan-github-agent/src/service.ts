@@ -1078,6 +1078,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           forkWorkflowTokens: gatedTokens(userTokens),
           pullRequests: createGitHubPullRequestPublisher({ tokens, uploadAsset: createUserAssetUploader({ token: signal => userAccess.token(signal) }) }),
           root: controllerRoot,
+          routineIssueSource: store.getRoutineIssueSource,
           tokens,
         }),
         workerId: randomUUID(),

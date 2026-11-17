@@ -177,6 +177,100 @@ describe('controller pull request Review handoff', () => {
   })
 })
 
+describe('dependency update Auto merge label on publication', () => {
+  const manifest = (h3: string) => `${JSON.stringify({ name: 'example', dependencies: { h3 } }, null, 2)}\n`
+  // The padding takes a real lockfile past execFile's 1 MiB output limit.
+  const lockfile = (h3: string) => `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      h3:\n        specifier: ^${h3}\n        version: ${h3}\n# ${'x'.repeat(1_200_000)}\n`
+
+  /** A controller repository holding one base commit and the published Issue work commit. */
+  function published(files: Record<string, string>, combinedIssueNumbers: readonly number[]): { root: string, command: Extract<ClaimedPublicationCommand, { _tag: 'OpenPullRequest' }> } {
+    const root = mkdtempSync(join(tmpdir(), 'harlan-dependency-label-'))
+    temporaryDirectories.push(root)
+    const checkout = join(root, 'checkout')
+    git(root, 'init', '-b', 'main', checkout)
+    git(checkout, 'config', 'user.name', 'Test Agent')
+    git(checkout, 'config', 'user.email', 'agent@example.com')
+    writeFileSync(join(checkout, 'package.json'), manifest('^2.1.0'))
+    writeFileSync(join(checkout, 'pnpm-lock.yaml'), lockfile('2.1.0'))
+    git(checkout, 'add', '-A')
+    git(checkout, 'commit', '-m', 'base')
+    const baseSha = git(checkout, 'rev-parse', 'HEAD')
+    for (const [path, content] of Object.entries(files)) {
+      mkdirSync(join(checkout, path, '..'), { recursive: true })
+      writeFileSync(join(checkout, path), content)
+    }
+    git(checkout, 'add', '-A')
+    git(checkout, 'commit', '-m', 'chore(deps): update dependencies')
+    const commitSha = git(checkout, 'rev-parse', 'HEAD')
+    mkdirSync(join(root, 'repositories'))
+    execFileSync('git', ['clone', '--quiet', '--bare', checkout, join(root, 'repositories', 'harlan-zw__example.git')])
+    return {
+      root,
+      command: {
+        _tag: 'OpenPullRequest',
+        taskKind: 'issue_work',
+        issueNumber: 12,
+        ...(combinedIssueNumbers.length === 0 ? {} : { combinedIssueNumbers }),
+        diagram: null,
+        id: 'publication-1',
+        taskId: 'task-1',
+        repository: 'harlan-zw/example',
+        repositoryMapping: repositoryMapping(),
+        commitSha,
+        baseSha,
+        baseRef: 'main',
+        expectedHeadSha: baseSha,
+        headRef: 'fix/issue-12',
+        artifactRef: 'refs/harlan-github-agent/publications/task-1',
+        patchDigest: 'c'.repeat(64),
+        changedFiles: Object.keys(files).length,
+        outcomeUnknown: false,
+        workerId: 'publisher-1',
+        fence: 1,
+        leaseExpiresAt: '2126-01-01T00:00:00Z',
+        pullRequestTitle: 'chore(deps): update dependencies',
+        pullRequestBody: 'Updates dependencies.',
+      },
+    }
+  }
+
+  it.each([
+    ['a clean update', ['dependency-updates'], { 'package.json': manifest('^2.3.0'), 'pnpm-lock.yaml': lockfile('2.3.0') }, true, ' Auto merge label added. Every changed file is a package manifest or lockfile, and every version stays inside its major.'],
+    ['a migration', ['dependency-updates'], { 'package.json': manifest('^2.3.0'), 'src/module.ts': 'export {}\n' }, false, ' Auto merge label not added. src/module.ts is not a package manifest or lockfile.'],
+    ['a major update', ['dependency-updates'], { 'package.json': manifest('^3.0.0') }, false, ' Auto merge label not added. package.json: h3 moves from ^2.1.0 to ^3.0.0, a new major version.'],
+    ['a lockfile major', ['dependency-updates'], { 'pnpm-lock.yaml': lockfile('3.0.0') }, false, ' Auto merge label not added. pnpm-lock.yaml importer .: h3 moves from 2.1.0 to 3.0.0, a new major version.'],
+    ['another Routine', ['seo-review'], { 'package.json': manifest('^2.3.0') }, false, ''],
+    ['a Batch with another Routine\'s issue', ['dependency-updates', 'seo-review'], { 'package.json': manifest('^2.3.0') }, false, ' Auto merge label not added. The pull request closes an issue the dependency-updates Routine did not file.'],
+  ] as const)('decides the label for %s from the published commit', async (_case, routines, files, labelled, evidence) => {
+    // Issue 12 is the primary issue. A Batch adds issues 13 onward.
+    const { root, command } = published(files, routines.slice(1).map((_, index) => 13 + index))
+    const requests: Parameters<GitHubPullRequestPublisher['ensurePullRequest']>[0][] = []
+    const remote = createGitPublicationRemote({
+      root,
+      tokens: { getToken: async () => { throw new Error('Finalization cannot push a branch.') }, invalidate: () => undefined },
+      github: {
+        getPullRequest: async () => { throw new Error('Finalization uses the publication adapter.') },
+        hasOpenPullRequestForBranch: async () => { throw new Error('The branch is already published.') },
+        isBranchProtected: async () => { throw new Error('Authority is checked before finalization.') },
+      },
+      pullRequests: { ensurePullRequest: async (input) => {
+        requests.push(input)
+        return ok({ number: 31, url: 'https://github.com/harlan-zw/example/pull/31', diagram: { _tag: 'None' } })
+      } },
+      routineIssueSource: (_repository, issueNumber) => {
+        const routineName = routines[issueNumber - 12]
+        return routineName === undefined ? null : { routineName, target: 'package.json', fingerprint: `${routineName}:${issueNumber}`, claim: 'Update dependencies.' }
+      },
+    })
+
+    const result = await remote.finalize(command, new AbortController().signal)
+
+    expect(result).toEqual(ok({ evidence: `Opened pull request #31: https://github.com/harlan-zw/example/pull/31.${evidence}`, pullRequestNumber: 31 }))
+    expect(requests.flatMap(input => input.labels?.map(label => label.name) ?? []))
+      .toEqual(labelled ? ['harlan-agent-review', 'harlan-agent-auto-merge'] : ['harlan-agent-review'])
+  })
+})
+
 describe('git publication remote', () => {
   it.each([
     ['fork workflow merge', 'contributor/example', '.github/workflows/ci.yml', 'maintainer'],
