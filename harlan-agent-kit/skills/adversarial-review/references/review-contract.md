@@ -111,10 +111,10 @@ Use this nonterminal shape:
 > [!NOTE]
 > The Review of `SHORT_HEAD_SHA` is running. This comment changes when it finishes.
 
-The last Review of `SHORT_PRIOR_SHA` answered OUTCOME. A new commit replaced it, so this Review answers the new commit.
+The last Review of `SHORT_PRIOR_SHA` answered OUTCOME on N defects. A new commit replaced it, so this Review answers the new commit.
 ```
 
-Keep this body steady while Review runs, so one Review writes one in-progress edit. Include the last line only when an earlier head has a Review. Keep findings out until verified.
+Keep this body steady while Review runs, so one Review writes one in-progress edit. Include the last line only when the newest Review answered an earlier head. OUTCOME is the verdict the last gate refresh settled. Omit ` on N defects` when no Open finding remains. After a Repair push, end with `A Repair pushed this commit, so this Review answers the Repair.` Keep findings out until verified.
 
 The controller reads the Agent's own `▓▓▓░░ NN% next-step` line and records that text as the phase in the Dashboard. Without one, the controller guesses the phase from the shape of each shell command.
 

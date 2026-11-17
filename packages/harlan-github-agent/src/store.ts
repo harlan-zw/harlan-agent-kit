@@ -1149,9 +1149,10 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
    * What the newest Review of this pull request answered, when it answered an
    * earlier head.
    *
-   * A queued Task's history reads the same run, so a running Review and a
-   * queued one name the last verdict in the same words. A newest Review of
-   * this same head reads as FirstReview: it is no earlier verdict.
+   * A queued Task's history reads the same outcome and defect count, so a
+   * running Review and a queued one name the last verdict in the same words.
+   * A newest Review of this same head reads as FirstReview: it is no earlier
+   * verdict.
    */
   priorReviewHistory: (revisionId: string) => QueuedReviewHistory
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
@@ -7736,6 +7737,12 @@ export function openJournalStore(
   const reviewProofStore = createReviewProofStore(database)
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
+  // The verdict a person reads for one Review run, with `review_runs` and its
+  // `projection`. A gate refresh moves the projection; the run keeps the
+  // outcome it first recorded, which a PENDING-then-READY Review contradicts.
+  const priorReviewOutcomeSql = 'COALESCE(projection.outcome_tag, review_runs.outcome_tag)'
+  // Logged and Fixed findings are no defects, so only Open findings count.
+  const priorReviewDefectCountSql = `(SELECT COUNT(*) FROM json_each(review_runs.findings) WHERE json_extract(json_each.value, '$._tag') = 'Open')`
   const findingThreadSyncStore = createFindingThreadSyncStore(database, repositoryWriteAuthoritySql)
   const agentTurnStore = createAgentTurnStore(database)
   const paybackStore = createPaybackStore(database)
@@ -12093,14 +12100,19 @@ export function openJournalStore(
       }
 
       const existing = database.prepare(`
-        SELECT id, body, state_tag, github_comment_id, github_url FROM review_status_commands WHERE id = ?
-      `).get(commandId) as { id: string, body: string, state_tag: string, github_comment_id: number | null, github_url: string | null } | undefined
+        SELECT id, body, state_tag, reason, github_comment_id, github_url FROM review_status_commands WHERE id = ?
+      `).get(commandId) as { id: string, body: string, state_tag: string, reason: string | null, github_comment_id: number | null, github_url: string | null } | undefined
       if (existing !== undefined) {
         database.exec('COMMIT')
         if (existing.body !== input.body)
           return { _tag: 'Rejected', reason: 'The review status command identifier has different content.' }
         if (existing.state_tag === 'Published' && existing.github_comment_id !== null && existing.github_url !== null)
           return { _tag: 'Published', commandId, commentId: existing.github_comment_id, url: existing.github_url }
+        // A steady progress body repeats one command for every later phase.
+        // Once the pull request moved, that command stays Superseded, and a
+        // repeat must say why instead of reading as a stuck queue.
+        if (existing.state_tag === 'Superseded' && input.phase !== 'terminal')
+          return { _tag: 'Rejected', reason: existing.reason ?? 'The pull request changed before the review comment was posted.' }
         return { _tag: 'Duplicate', commandId }
       }
       database.prepare(`
@@ -15338,14 +15350,19 @@ export function openJournalStore(
     LEFT JOIN approval_prompt_comments AS prompt
       ON prompt.subject_id = candidates.subject_id AND prompt.revision_id = candidates.revision_id
     LEFT JOIN (
-      SELECT subject_id, revision_id, head_sha, outcome_tag,
-        json_array_length(findings) AS finding_count, completed_at,
-        ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY completed_at DESC, id DESC) AS run_rank
+      SELECT review_runs.subject_id, review_runs.revision_id, review_runs.head_sha,
+        ${priorReviewOutcomeSql} AS outcome_tag,
+        ${priorReviewDefectCountSql} AS finding_count,
+        review_runs.completed_at,
+        ROW_NUMBER() OVER (PARTITION BY review_runs.subject_id ORDER BY review_runs.completed_at DESC, review_runs.id DESC) AS run_rank
       FROM review_runs
+      LEFT JOIN review_gate_projections AS projection ON projection.review_run_id = review_runs.id
     ) AS prior_run
       ON prior_run.subject_id = candidates.subject_id
       AND prior_run.run_rank = 1
       AND prior_run.revision_id != candidates.revision_id
+      -- A retarget or rerun keeps the head. Its last Review is no earlier verdict.
+      AND prior_run.head_sha != json_extract(revisions.payload, '$.headSha')
     LEFT JOIN review_status_commands AS published ON published.id = COALESCE(
       (
         SELECT candidate.id FROM review_status_commands AS candidate
@@ -15419,9 +15436,9 @@ export function openJournalStore(
     const row = database.prepare(`
       SELECT
         json_extract(revisions.payload, '$.headSha') AS head_sha,
-        prior_run.head_sha AS prior_head_sha,
-        prior_run.outcome_tag AS prior_outcome,
-        json_array_length(prior_run.findings) AS prior_findings,
+        review_runs.head_sha AS prior_head_sha,
+        ${priorReviewOutcomeSql} AS prior_outcome,
+        ${priorReviewDefectCountSql} AS prior_findings,
         EXISTS (
           SELECT 1 FROM publication_commands
           JOIN tasks AS repair ON repair.id = publication_commands.task_id
@@ -15431,9 +15448,10 @@ export function openJournalStore(
             AND publication_commands.commit_sha = json_extract(revisions.payload, '$.headSha')
         ) AS head_from_repair
       FROM revisions
-      JOIN review_runs AS prior_run ON prior_run.subject_id = revisions.subject_id
+      JOIN review_runs ON review_runs.subject_id = revisions.subject_id
+      LEFT JOIN review_gate_projections AS projection ON projection.review_run_id = review_runs.id
       WHERE revisions.id = ?
-      ORDER BY prior_run.completed_at DESC, prior_run.id DESC
+      ORDER BY review_runs.completed_at DESC, review_runs.id DESC
       LIMIT 1
     `).get(revisionId) as { head_sha: string, prior_head_sha: string, prior_outcome: string, prior_findings: number | null, head_from_repair: number } | undefined
     // A rerun or a base branch move keeps the head. When the newest Review

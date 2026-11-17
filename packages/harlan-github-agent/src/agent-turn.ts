@@ -217,8 +217,8 @@ export async function runAgentTurn(
         const at = options.now().toISOString()
         const next = agentEventPhase(event, input.progress.work)
         // A new phase restates the line. Otherwise the same phase restates it on
-        // a slow beat, so a reader can see the agent is alive without a comment
-        // for every file it touches.
+        // a slow beat, so the Dashboard can see the agent is alive without a
+        // report for every file it touches.
         const advanced = next === undefined ? undefined : advancedPhase(current, next)
         const stale = new Date(at).getTime() - new Date(reportedAt).getTime() >= PROGRESS_HEARTBEAT_MILLISECONDS
         if (advanced !== undefined || stale) {
