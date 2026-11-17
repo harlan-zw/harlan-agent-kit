@@ -120,8 +120,8 @@ import type {
   TaskState,
   TriageSkip,
   WorkflowEvent,
-  WorkflowEventSummary,
   WorkflowEventStream,
+  WorkflowEventSummary,
 } from './types.ts'
 import type { AgentWorktreeLease } from './worktree.ts'
 import { createHash } from 'node:crypto'
