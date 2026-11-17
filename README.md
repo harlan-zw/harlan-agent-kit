@@ -151,7 +151,7 @@ Codex reads [`hooks/codex.json`](./harlan-agent-kit/hooks/codex.json) through
 | SessionStart | [`session-start.sh`](./harlan-agent-kit/hooks/session-start.sh) | Detect the project type, print the Git state |
 | PreToolUse (Bash) | [`pnpm-only.sh`](./harlan-agent-kit/hooks/pnpm-only.sh) | Block [npm](https://npmjs.com), yarn, and npx |
 | PreToolUse (Bash) | [`wt-only.sh`](./harlan-agent-kit/hooks/wt-only.sh) | Keep every worktree owned by `wt` |
-| WorktreeCreate | [`wt-worktree-create.sh`](./harlan-agent-kit/hooks/wt-worktree-create.sh) | Create harness worktrees with `wt`, from the caller's HEAD |
+| WorktreeCreate | [`wt-worktree-create.sh`](./harlan-agent-kit/hooks/wt-worktree-create.sh) | Create Claude Code worktrees with `wt`, from the caller's HEAD |
 | WorktreeRemove | [`wt-worktree-remove.sh`](./harlan-agent-kit/hooks/wt-worktree-remove.sh) | Remove them with `wt`, never with force |
 | PreToolUse (Bash) | [`himalaya-read-only.sh`](./harlan-agent-kit/hooks/himalaya-read-only.sh) | Keep every agent's email access read only |
 | PreToolUse (Bash) | [`pr-skill-only.sh`](./harlan-agent-kit/hooks/pr-skill-only.sh) | Require the `pr` Skill to open a PR or edit its description |
