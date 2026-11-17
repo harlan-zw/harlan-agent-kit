@@ -629,7 +629,8 @@ The service records each one once. There are four kinds:
 - Merged untouched: the pull request merged, and the service published every head after the first.
 - Logged finding pickup: a person asked an agent to fix one Logged Review finding.
 
-Only pull requests the service opened or reviewed get one. A contributor's pull request gets none.
+Only pull requests the service opened or reviewed get one.
+A contributor's pull request gets no human commit, close, or merge signal. A Logged finding pickup still counts there.
 Only a close or merge that GitHub confirmed counts.
 The service never reads the commit author. Sessions on the service host commit as the GitHub App.
 So a head with no Publication command counts as a human commit. A person's rebase or base branch merge counts too.
