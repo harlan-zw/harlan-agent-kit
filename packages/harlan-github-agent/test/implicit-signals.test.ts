@@ -251,6 +251,16 @@ describe('merged untouched', () => {
     expect(store.listPaybackSignals({ from: at(10), to: at(60) })).toEqual([])
   })
 
+  it('records no merge as untouched when a later head shares the first head\'s GitHub time', () => {
+    const store = setup()
+    review(store, 'review-a', 2, observe(store, 1, { headSha: 'head-a' }), blocked)
+    observe(store, 3, { headSha: 'head-b', updatedAt: at(1) })
+
+    expect(close(store, 4, { headSha: 'head-b', mergedAt: at(4) })).toBe(true)
+
+    expect(store.listImplicitSignals(ALL)).toEqual([])
+  })
+
   it('records no merge as untouched after a head the service did not publish', () => {
     const store = setup()
     review(store, 'review-a', 2, observe(store, 1, { headSha: 'head-a' }), blocked)

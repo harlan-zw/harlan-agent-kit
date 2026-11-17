@@ -173,13 +173,16 @@ const SIGNAL_FIELD: Record<ImplicitSignalKind, keyof PaybackSignals> = {
   LoggedFindingPickedUp: 'loggedFindingPickedUp',
 }
 
-/** A signal counts for the work that opened its pull request, and for Review when it names a Review run. */
+/**
+ * Only pull requests the service opened count. On Harlan's own pull requests a later commit is mostly planned work.
+ * A signal counts for the work that opened its pull request, and for Review when it names a Review run.
+ */
 function signalsFor(work: PaybackWork, facts: readonly PaybackSignalFact[]): PaybackSignals {
   const counts: PaybackSignals = { humanCommit: 0, closedUnmerged: 0, mergedUntouched: 0, loggedFindingPickedUp: 0 }
   if (work._tag !== 'Role')
     return counts
   for (const fact of facts) {
-    if (fact.openedBy === work.role || (fact.reviewed && work.role === 'adversarial_review'))
+    if (fact.openedBy !== null && (fact.openedBy === work.role || (fact.reviewed && work.role === 'adversarial_review')))
       counts[SIGNAL_FIELD[fact.kind]] += 1
   }
   return counts
@@ -220,7 +223,7 @@ export interface PaybackKind {
   /** Minutes of Harlan's time each useful outcome must save to pay for itself. */
   breakEvenMinutes: number | null
   verdict: PaybackVerdict
-  /** Implicit signals recorded in the range. Routine rows are always zero. */
+  /** Implicit signals in the range, on pull requests the service opened. Routine rows are always zero. */
   signals: PaybackSignals
 }
 

@@ -308,7 +308,7 @@ describe('buildPayback', () => {
 })
 
 describe('payback implicit signals', () => {
-  it('counts each signal on the work that opened or reviewed the pull request, and keeps the verdict', () => {
+  it('counts signals only on pull requests the service opened, for the opening work and for Review, and keeps the verdict', () => {
     const turns = [turn({ taskId: 'a', role: 'issue_work' }), turn({ taskId: 'r', role: 'adversarial_review' }), turn({ taskId: 'c', role: 'conflict_resolution' })]
     const tasks = [task('a'), task('c')]
     const without = buildPayback({ turns, tasks, routineRuns: [], signals: [], pricing })
@@ -319,16 +319,20 @@ describe('payback implicit signals', () => {
       signals: [
         { kind: 'MergedUntouched', openedBy: 'issue_work', reviewed: true },
         { kind: 'HumanCommit', openedBy: 'issue_work', reviewed: true },
+        { kind: 'ClosedUnmerged', openedBy: 'issue_work', reviewed: false },
+        { kind: 'LoggedFindingPickedUp', openedBy: 'review_fix', reviewed: true },
+        { kind: 'MergedUntouched', openedBy: 'baseline_repair', reviewed: false },
+        // Harlan's own pull requests: the service only reviewed them.
+        { kind: 'HumanCommit', openedBy: null, reviewed: true },
         { kind: 'ClosedUnmerged', openedBy: null, reviewed: true },
         { kind: 'LoggedFindingPickedUp', openedBy: null, reviewed: true },
-        { kind: 'MergedUntouched', openedBy: 'baseline_repair', reviewed: false },
       ],
       pricing,
     })
 
     const signals = (role: string) => report.kinds.find(kind => kind.work._tag === 'Role' && kind.work.role === role)?.signals
-    expect(signals('issue_work')).toEqual({ humanCommit: 1, closedUnmerged: 0, mergedUntouched: 1, loggedFindingPickedUp: 0 })
-    expect(signals('adversarial_review')).toEqual({ humanCommit: 1, closedUnmerged: 1, mergedUntouched: 1, loggedFindingPickedUp: 1 })
+    expect(signals('issue_work')).toEqual({ humanCommit: 1, closedUnmerged: 1, mergedUntouched: 1, loggedFindingPickedUp: 0 })
+    expect(signals('adversarial_review')).toEqual({ humanCommit: 1, closedUnmerged: 0, mergedUntouched: 1, loggedFindingPickedUp: 1 })
     expect(signals('conflict_resolution')).toEqual({ humanCommit: 0, closedUnmerged: 0, mergedUntouched: 0, loggedFindingPickedUp: 0 })
     expect(report.kinds.map(kind => kind.verdict)).toEqual(without.kinds.map(kind => kind.verdict))
   })

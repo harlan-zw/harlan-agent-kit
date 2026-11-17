@@ -597,7 +597,7 @@ Work whose outcome the Journal does not record reads Measure first. So does work
 Dollars come from the dated rates in `payback.rates`. Break-even minutes also need `payback.hourly_value`.
 Each kind gets one verdict: Keep, Tune, Cut, or Measure first. A verdict recommends a change; Harlan decides it.
 Cut needs spend of at least 15 minutes of Harlan's time in the range. Cheaper work with nothing to show reads Keep.
-Each kind also counts the Implicit signals in the range: for the work that opened the pull request, and for Review when one names a Review run.
+Each kind also counts the Implicit signals in the range, on pull requests the service opened. A signal counts for the work that opened the pull request, and for Review when it names a Review run.
 
 Do not use ROI, value score, impact score, cost-benefit, efficiency, or worth.
 

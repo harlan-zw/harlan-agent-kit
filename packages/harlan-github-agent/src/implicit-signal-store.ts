@@ -156,19 +156,22 @@ export function recordHeadChangeSignal(database: DatabaseSync, input: { subjectI
   })
 }
 
-/** True when every head after the first observed one is a service publication. */
+/**
+ * True when every head except the first stored one is a service publication.
+ * Insert order names the first head, so two heads with one GitHub time cannot both pass as first.
+ */
 function untouched(database: DatabaseSync, subjectId: number): boolean {
   return database.prepare(`
-    WITH heads AS (
-      SELECT json_extract(payload, '$.headSha') AS head_sha, MIN(json_extract(payload, '$.updatedAt')) AS first_seen
-      FROM revisions WHERE subject_id = ?
-      GROUP BY head_sha
+    WITH first AS (
+      SELECT json_extract(payload, '$.headSha') AS head_sha FROM revisions
+      WHERE subject_id = ? ORDER BY rowid LIMIT 1
     )
-    SELECT 1 FROM heads
-    WHERE first_seen > (SELECT MIN(first_seen) FROM heads)
-      AND NOT EXISTS (SELECT 1 FROM publication_commands WHERE commit_sha = heads.head_sha)
+    SELECT 1 FROM revisions
+    WHERE subject_id = ?
+      AND json_extract(payload, '$.headSha') != (SELECT head_sha FROM first)
+      AND NOT EXISTS (SELECT 1 FROM publication_commands WHERE commit_sha = json_extract(revisions.payload, '$.headSha'))
     LIMIT 1
-  `).get(subjectId) === undefined
+  `).get(subjectId, subjectId) === undefined
 }
 
 /**
