@@ -44,20 +44,20 @@ describe('agent retro evidence', () => {
     }, new Date(at))
     expect(result.failureSample[0]).toMatchObject({ id: 1, taskId: 'task-1', reason: expect.stringMatching(/^Bearer \*\*\* x+$/), durationMilliseconds: 60000 })
     expect(result.failureSample[0]?.reason).toHaveLength(400)
-    expect(result.failureGroups).toMatchObject([{ reason: 'Bearer ***', count: 2, retried: 1 }])
+    expect(result.failureGroups.rows).toEqual([['task', 'failed', 'Failed', 'Bearer ***', 2, 1, [[1, 'task-1', 'harlan-zw/example', 7, at]]]])
     expect(result.coverage).toMatchObject({ events: 'complete', failureEvents: 2, failureGroups: 1, omittedFailureGroups: 0 })
   })
 
   it('states incomplete coverage when failure groups exceed the limit', () => {
-    const groups = Array.from({ length: 61 }, (_, index) => ({ ...group, reason: `cause ${index}` }))
+    const groups = Array.from({ length: 151 }, (_, index) => ({ ...group, reason: `cause ${index}` }))
     const result = collectAgentRetroEvidence({
       listIncidents: () => [],
       listWorkflowEvents: () => [],
       summarizeWorkflowEvents: () => [],
       groupWorkflowFailures: () => groups,
     }, new Date(at))
-    expect(result.failureGroups).toHaveLength(60)
-    expect(result.coverage).toMatchObject({ events: 'incomplete', failureEvents: 122, failureGroups: 61, omittedFailureGroups: 1 })
+    expect(result.failureGroups.rows).toHaveLength(150)
+    expect(result.coverage).toMatchObject({ events: 'incomplete', failureEvents: 302, failureGroups: 151, omittedFailureGroups: 1 })
   })
 
   it('refuses scans on another repository', () => {

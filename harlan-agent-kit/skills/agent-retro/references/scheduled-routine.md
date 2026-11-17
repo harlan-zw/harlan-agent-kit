@@ -13,11 +13,13 @@ Each finding belongs to this repository's Service or Skills, even when another r
 - Missing transcripts, resolved Incidents, and system logs remain explicit coverage gaps.
 - `summary` counts every event in the window by stream, event, and state. Use it for rates.
 - `failureGroups` groups every failure by stream, event, state, and the first 80 characters of the reason.
-- Each group holds its count, retried count, newest time, and up to three example events. The largest groups come first.
+- Each row in `failureGroups.rows` follows `failureGroups.columns`: stream, event, state, reason, count, retried count, and examples.
+- Each example follows `failureGroups.exampleColumns`: event ID, entity ID, repository, item number, and time. The first example is the newest event.
+- The largest groups come first. The 20 largest groups hold up to three examples. The rest hold one.
 - `failureSample` holds the newest 40 failures in full. Their reasons stop at 400 characters. Durations and token use appear only here.
 - The sample cannot prove a rate or a pattern. Use the groups for patterns and `summary` for rates.
 - State `windowEvents`, `failureEvents`, `failureGroups`, and `omittedFailureGroups` from `coverage`.
-- `coverage.events` is `incomplete` only when more than 60 groups exist. The omitted groups are the smallest.
+- `coverage.events` is `incomplete` only when more than 150 groups exist. The omitted groups are the smallest.
 - Never read credentials, the live journal, provider databases, raw transcripts, or host logs.
 - Never start analyst Agents, change host settings, restart, deploy, or write GitHub state.
 

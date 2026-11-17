@@ -1,11 +1,15 @@
 import type { JournalStore } from './store.ts'
 import { redactSecrets } from './agent-activity.ts'
 
-const failureGroupLimit = 60
+const failureGroupLimit = 150
+const detailedGroupLimit = 20
 const failureSampleLimit = 40
 const sampleReasonLength = 400
 const incidentLimit = 50
 const weekMilliseconds = 7 * 24 * 60 * 60 * 1000
+// Rows with a legend: 150 keyed groups alone would fill the prompt budget.
+const groupColumns = ['stream', 'event', 'to', 'reason', 'count', 'retried', 'examples'] as const
+const exampleColumns = ['id', 'entityId', 'repository', 'itemNumber', 'occurredAt'] as const
 
 /** Durable controller evidence. Never export credentials, prompts, or raw transcripts. */
 export function collectAgentRetroEvidence(
@@ -35,10 +39,20 @@ export function collectAgentRetroEvidence(
       systemLogs: 'unavailable' as const,
     },
     summary,
-    failureGroups: groups.slice(0, failureGroupLimit).map(group => ({
-      ...group,
-      reason: group.reason === null ? null : redactSecrets(group.reason),
-    })),
+    failureGroups: {
+      columns: groupColumns,
+      exampleColumns,
+      rows: groups.slice(0, failureGroupLimit).map((group, index) => [
+        group.stream,
+        group.event,
+        group.to,
+        group.reason === null ? null : redactSecrets(group.reason),
+        group.count,
+        group.retried,
+        (index < detailedGroupLimit ? group.examples : group.examples.slice(0, 1))
+          .map(example => [example.id, example.entityId, example.repository, example.itemNumber, example.occurredAt] as const),
+      ] as const),
+    },
     failureSample: sample.map(event => ({
       ...event,
       reason: event.reason === null ? null : redactSecrets(event.reason).slice(0, sampleReasonLength),

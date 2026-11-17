@@ -40,6 +40,16 @@ function successes(count: number): Row[] {
   return Array.from({ length: count }, (_, index) => ['task', 'completed', `task-${index}`, 'Completed', null, 1, hoursAgo(1 + index / 1000)])
 }
 
+/** Reads group rows back into objects through the evidence's own legend. */
+function decodeGroups({ failureGroups }: ReturnType<typeof collectAgentRetroEvidence>) {
+  return failureGroups.rows.map(row => Object.fromEntries(failureGroups.columns.map((column, index) => [
+    column,
+    column === 'examples'
+      ? (row[index] as ReadonlyArray<readonly unknown[]>).map(example => Object.fromEntries(failureGroups.exampleColumns.map((name, position) => [name, example[position]])))
+      : row[index],
+  ])))
+}
+
 const outsideWindow: Row = ['task', 'failed', 'task-old', 'Failed', 'outside the window', 2, hoursAgo(24 * 9)]
 
 it('keeps a week-old failure that a thousand newer events would push out', () => {
@@ -50,7 +60,7 @@ it('keeps a week-old failure that a thousand newer events would push out', () =>
   ])
   const evidence = collectAgentRetroEvidence(store, now)
   store.close()
-  expect(evidence.failureGroups).toMatchObject([{ reason: 'provider returned 500', count: 1, examples: [{ entityId: 'task-buried' }] }])
+  expect(decodeGroups(evidence)).toMatchObject([{ reason: 'provider returned 500', count: 1, examples: [{ entityId: 'task-buried' }] }])
   expect(JSON.stringify(evidence)).not.toContain('task-old')
 })
 
@@ -81,14 +91,15 @@ it('groups fifteen hundred failures by cause within a bounded prompt', () => {
   ])
   const evidence = collectAgentRetroEvidence(store, now)
   store.close()
-  expect(evidence.failureGroups).toMatchObject([
-    { stream: 'task', event: 'failed', to: 'Failed', reason: providerPrefix, count: 700, retried: 175, newestOccurredAt: hoursAgo(2) },
+  const groups = decodeGroups(evidence)
+  expect(groups).toMatchObject([
+    { stream: 'task', event: 'failed', to: 'Failed', reason: providerPrefix, count: 700, retried: 175 },
     { stream: 'worker_task', event: 'failed', to: 'Failed', reason: leaseExpired.slice(0, 80), count: 500, retried: 0 },
     { stream: 'review_status', event: 'failed', to: 'Retrying', reason: rateLimited.slice(0, 80), count: 298, retried: 149 },
     { stream: 'task', event: 'retried', to: 'Queued', reason: null, count: 1, retried: 1, examples: [{ entityId: 'task-retry' }] },
     { stream: 'task', event: 'failed', to: 'Failed', reason: buriedReason.slice(0, 80), count: 1, retried: 0, examples: [{ entityId: 'task-buried' }] },
   ])
-  expect(evidence.failureGroups[0]?.examples).toEqual([
+  expect(groups[0]?.examples).toEqual([
     { id: expect.any(Number), entityId: 'provider-0', repository: 'harlan-zw/example', itemNumber: 7, occurredAt: hoursAgo(2) },
     { id: expect.any(Number), entityId: 'provider-1', repository: 'harlan-zw/example', itemNumber: 7, occurredAt: hoursAgo(2 + 1 / 100) },
     { id: expect.any(Number), entityId: 'provider-2', repository: 'harlan-zw/example', itemNumber: 7, occurredAt: hoursAgo(2 + 2 / 100) },
@@ -97,5 +108,27 @@ it('groups fifteen hundred failures by cause within a bounded prompt', () => {
   expect(evidence.failureSample).toHaveLength(40)
   expect(evidence.failureSample.map(event => event.entityId)).not.toContain('task-buried')
   expect(JSON.stringify(evidence)).not.toContain('task-old')
+  expect(JSON.stringify(evidence).length).toBeLessThan(60_000)
+})
+
+it('fits every cause of a week with a hundred and fifty failure groups', () => {
+  const store = journalWith([
+    ...Array.from({ length: 150 }, (_, cause) => Array.from({ length: cause < 20 ? 5 : 1 }, (_, index): Row => [
+      'task',
+      'failed',
+      `00000000-0000-4000-8000-${String(cause * 10 + index).padStart(12, '0')}`,
+      'Failed',
+      `cause ${cause}: GitHub API returned 422 because the head commit left the pull request branch before the check`,
+      index === 0 ? 2 : 1,
+      hoursAgo(2 + cause + index / 100),
+    ])).flat(),
+    ...successes(1000),
+  ])
+  const evidence = collectAgentRetroEvidence(store, now)
+  store.close()
+  expect(evidence.coverage).toMatchObject({ events: 'complete', failureEvents: 230, failureGroups: 150, omittedFailureGroups: 0 })
+  const groups = decodeGroups(evidence)
+  expect(groups.map(group => String(group.reason).split(':')[0]).sort()).toEqual(Array.from({ length: 150 }, (_, cause) => `cause ${cause}`).sort())
+  expect(groups.map(group => (group.examples as unknown[]).length)).toEqual([...Array.from({ length: 20 }).fill(3), ...Array.from({ length: 130 }).fill(1)])
   expect(JSON.stringify(evidence).length).toBeLessThan(60_000)
 })
