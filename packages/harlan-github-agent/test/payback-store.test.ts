@@ -1,7 +1,10 @@
 import type { AgentTurnRecord } from '../src/agent-turn-store.ts'
+import type { GitHubIssuePublisher } from '../src/github.ts'
 import { afterEach, describe, expect, it } from 'vitest'
+import { candidateIssueCommands, createCandidateIssueController } from '../src/candidate-issue-controller.ts'
+import { ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 afterEach(() => {
@@ -89,5 +92,60 @@ describe('listPaybackTasks', () => {
       published: true,
       pullRequest: 'Merged',
     }))
+  })
+})
+
+describe('listPaybackRoutineRuns', () => {
+  const routine = { repository: 'harlan-zw/example', name: 'pr-triage', scheduledFor: '2026-08-13T01:00:00.000Z' } as const
+  const routineId = 'harlan-zw/example:pr-triage'
+  const found = `${routineId}:2026-08-13T01:00:00.000Z`
+  const quiet = `${routineId}:2026-08-13T02:00:00.000Z`
+
+  function publisher(): GitHubIssuePublisher {
+    return {
+      updateIssue: async () => ok(undefined),
+      findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
+      findRoutineTrackingIssue: () => Promise.resolve(ok(null)),
+      findIssueCommentByMarker: () => Promise.resolve(ok(null)),
+      createComment: async () => ok({ id: 1 }),
+      createIssue: async () => ok({ number: 101, url: 'https://github.com/harlan-zw/example/issues/101' }),
+    }
+  }
+
+  it('names the Routine of each spent run and counts its Candidates by result', async () => {
+    const store = openJournalStore(':memory:')
+    stores.push(store)
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.setRepositoryWritesEnabled('harlan-zw/example', true)
+    store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha: 'abc123',
+      entries: [{ name: 'pr-triage', crons: ['0 * * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+      at: '2026-08-13T00:00:00.000Z',
+    })
+    for (const scheduledFor of ['2026-08-13T01:00:00.000Z', '2026-08-13T02:00:00.000Z'])
+      store.openRoutineRun({ routineId, scheduledFor, specSha: 'abc123', at: scheduledFor })
+    const proposal = { title: 'Unused helper', target: 'src/a.ts', claim: 'Never called.', verification: 'pnpm test', estimatedChangedFiles: 1 }
+    store.recordCandidates({
+      routineId,
+      runId: found,
+      candidates: [{ ...proposal, fingerprint: 'src/a.ts#rejected' }, { ...proposal, fingerprint: 'src/a.ts#pending' }],
+      at: '2026-08-13T01:00:30.000Z',
+    })
+    const rejected = store.listCandidates(routineId).filter(candidate => candidate.fingerprint === 'src/a.ts#rejected')
+    store.stageCandidateIssues({ commands: candidateIssueCommands(rejected, routine), at: '2026-08-13T01:01:00.000Z' })
+    const at = () => new Date('2026-08-13T01:02:00.000Z')
+    await createCandidateIssueController({ github: publisher(), now: at, store, workerId: 'publisher' }).publishPending(new AbortController().signal)
+    store.recordObservation({ externalId: 'rejected', observedAt: '2026-08-13T01:03:00.000Z', source: 'poll', subject: issueItem({ number: 101, state: 'closed', closureReason: 'not_planned', closureDetail: 'Expected.' }) })
+    store.reconcileRoutineCandidates('2026-08-13T01:04:00.000Z')
+    store.recordAgentTurn(turn(found, 'routine_scan'))
+    store.recordAgentTurn(turn(quiet, 'routine_scan'))
+    store.recordAgentTurn(turn('run-the-journal-lost', 'routine_scan'))
+    store.recordAgentTurn(turn('task-1', 'issue_work'))
+
+    expect(store.listPaybackRoutineRuns(range)).toEqual([
+      { runId: found, work: { _tag: 'Routine', name: 'pr-triage' }, mode: 'propose', state: 'Queued', candidates: { merged: 0, open: 1, closed: 1 } },
+      { runId: quiet, work: { _tag: 'Routine', name: 'pr-triage' }, mode: 'propose', state: 'Queued', candidates: { merged: 0, open: 0, closed: 0 } },
+    ])
   })
 })

@@ -1,4 +1,4 @@
-import type { PaybackKind, PaybackReport, PaybackVerdict } from '../../../src/payback.ts'
+import type { PaybackKind, PaybackReport, PaybackVerdict, PaybackWork } from '../../../src/payback.ts'
 import type { WorkKey } from './dashboard.ts'
 
 /**
@@ -9,6 +9,8 @@ import type { WorkKey } from './dashboard.ts'
 export interface PaybackRow {
   key: string
   work: WorkKey
+  /** The Routine this row reports on, printed beside its chip. */
+  routine: string | null
   agentTurns: number
   cost: string
   useful: string
@@ -21,8 +23,16 @@ export interface PaybackRow {
 
 const dollars = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 
-function workKey(kind: PaybackKind): WorkKey {
-  return kind.work === 'routine' ? 'routine_scan' : kind.work
+function workKey(work: PaybackWork): WorkKey {
+  return work._tag === 'Role' ? work.role : 'routine_scan'
+}
+
+function rowKey(work: PaybackWork): string {
+  switch (work._tag) {
+    case 'Role': return work.role
+    case 'Routine': return `routine:${work.name}`
+    case 'UnnamedRoutine': return 'routine'
+  }
 }
 
 function costText(kind: PaybackKind): string {
@@ -67,8 +77,9 @@ function verdictTone(verdict: PaybackVerdict): PaybackRow['verdictTone'] {
 
 export function paybackRows(report: PaybackReport): PaybackRow[] {
   return report.kinds.map(kind => ({
-    key: kind.work,
-    work: workKey(kind),
+    key: rowKey(kind.work),
+    work: workKey(kind.work),
+    routine: kind.work._tag === 'Routine' ? kind.work.name : null,
     agentTurns: kind.agentTurns,
     cost: costText(kind),
     useful: usefulText(kind),

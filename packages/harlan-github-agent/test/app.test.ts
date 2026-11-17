@@ -72,6 +72,7 @@ const agentControls = {
   listWorkflowEvents: () => [],
   listAgentTurns: () => [],
   listPaybackTasks: () => [],
+  listPaybackRoutineRuns: () => [],
 }
 
 afterEach(() => vi.useRealTimers())
@@ -1142,7 +1143,7 @@ describe('dashboard HTTP app', () => {
       ratesCheckedOn: '2026-11-17',
       hourlyValue: null,
       kinds: [expect.objectContaining({
-        work: 'issue_work',
+        work: { _tag: 'Role', role: 'issue_work' },
         cost: { _tag: 'Priced', usd: 0.1, unpricedTurns: 0 },
         outcomes: { useful: 1, wasted: 0, actionRequired: 0, open: 0, unrecorded: 0 },
         verdict: { _tag: 'Keep' },

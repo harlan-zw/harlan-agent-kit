@@ -1,9 +1,27 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { PaybackPullRequest, PaybackTaskFact } from './payback.ts'
+import type { PaybackPullRequest, PaybackRoutineRunFact, PaybackTaskFact } from './payback.ts'
+import { ROUTINE_NAMES } from './routines/index.ts'
 
 export interface PaybackStore {
   /** Each Task, Review run, Routine run, or Batch that spent an Agent turn in the range, and what its pull request became. */
   listPaybackTasks: (range: { from: string, to: string }) => PaybackTaskFact[]
+  /** Each Routine run that spent an Agent turn in the range, and what its Candidates became. */
+  listPaybackRoutineRuns: (range: { from: string, to: string }) => PaybackRoutineRunFact[]
+}
+
+interface PaybackRoutineRunRow {
+  run_id: string
+  routine_name: string
+  mode: PaybackRoutineRunFact['mode']
+  state: PaybackRoutineRunFact['state']
+  merged: number
+  open: number
+  closed: number
+}
+
+function routineWork(name: string): PaybackRoutineRunFact['work'] {
+  const known = ROUTINE_NAMES.find(routine => routine === name)
+  return known === undefined ? { _tag: 'UnnamedRoutine' } : { _tag: 'Routine', name: known }
 }
 
 interface PaybackTaskRow {
@@ -54,12 +72,42 @@ export function createPaybackStore(database: DatabaseSync): PaybackStore {
     LEFT JOIN revisions AS pull_request_revisions ON pull_request_revisions.id = pull_requests.current_revision_id
     ORDER BY spent.task_id
   `)
+  // candidates.run_id has no index. The routine_id term lets candidates_routine find a run's few rows.
+  const routineRuns = database.prepare(`
+    WITH spent AS (
+      SELECT DISTINCT task_id FROM agent_turns
+      WHERE completed_at >= ? AND completed_at < ? AND role IN ('routine_scan', 'routine_fix')
+    )
+    SELECT
+      routine_runs.id AS run_id,
+      routines.name AS routine_name,
+      routine_runs.mode,
+      routine_runs.state_tag AS state,
+      COUNT(CASE WHEN candidates.result_tag = 'Merged' THEN 1 END) AS merged,
+      COUNT(CASE WHEN candidates.result_tag = 'Proposed' THEN 1 END) AS open,
+      COUNT(CASE WHEN candidates.result_tag IN ('Rejected', 'Superseded') THEN 1 END) AS closed
+    FROM spent
+    JOIN routine_runs ON routine_runs.id = spent.task_id
+    JOIN routines ON routines.id = routine_runs.routine_id
+    LEFT JOIN candidates
+      ON candidates.routine_id = routine_runs.routine_id
+      AND candidates.run_id = routine_runs.id
+    GROUP BY routine_runs.id
+    ORDER BY routine_runs.id
+  `)
   return {
     listPaybackTasks: range => (tasks.all(range.from, range.to) as unknown as PaybackTaskRow[]).map(row => ({
       taskId: row.task_id,
       state: row.state,
       published: row.published === 1,
       pullRequest: pullRequest(row),
+    })),
+    listPaybackRoutineRuns: range => (routineRuns.all(range.from, range.to) as unknown as PaybackRoutineRunRow[]).map(row => ({
+      runId: row.run_id,
+      work: routineWork(row.routine_name),
+      mode: row.mode,
+      state: row.state,
+      candidates: { merged: row.merged, open: row.open, closed: row.closed },
     })),
   }
 }

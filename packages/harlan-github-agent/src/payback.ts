@@ -1,16 +1,47 @@
 import type { AgentTokenUsage } from './agent-provider.ts'
 import type { AgentTurnRecord } from './agent-turn-store.ts'
-import type { AgentRole } from './types.ts'
+import type { RoutineName } from './routines/index.ts'
+import type { AgentRole, RoutineMode, RoutineRunState } from './types.ts'
 
-/** The work Payback reports on: one Task kind, Review runs, Issue triage, Routines, or Batch planning. */
-export type PaybackWork = 'issue_work' | 'review_fix' | 'baseline_repair' | 'conflict_resolution' | 'adversarial_review' | 'issue_triage' | 'routine' | 'batch_plan'
+type RoutineRole = Extract<AgentRole, 'routine_scan' | 'routine_fix'>
 
-const PAYBACK_WORK: readonly PaybackWork[] = ['issue_work', 'review_fix', 'baseline_repair', 'conflict_resolution', 'adversarial_review', 'issue_triage', 'routine', 'batch_plan']
+/** Every Agent role except a Routine's. Payback splits Routine turns by Routine instead. */
+export type PaybackRole = Exclude<AgentRole, RoutineRole>
 
-export function paybackWork(role: AgentRole): PaybackWork {
-  if (role === 'routine_scan' || role === 'routine_fix')
-    return 'routine'
-  return role
+/**
+ * The work one Payback row reports on: one Agent role, or one Routine.
+ * Each Routine gets its own row, because a trial switches one Routine at a time.
+ */
+export type PaybackWork
+  = | { _tag: 'Role', role: PaybackRole }
+    | { _tag: 'Routine', name: RoutineName }
+    /** Routine turns whose run names no Routine this service defines. */
+    | { _tag: 'UnnamedRoutine' }
+
+// A Record, so a new Agent role is a type error here until it has a place.
+const ROLE_RANK: Record<PaybackRole, number> = { issue_work: 0, review_fix: 1, baseline_repair: 2, conflict_resolution: 3, adversarial_review: 4, issue_triage: 5, batch_plan: 6 }
+const ROUTINE_RANK = Object.keys(ROLE_RANK).length
+
+function isRoutineRole(role: AgentRole): role is RoutineRole {
+  return role === 'routine_scan' || role === 'routine_fix'
+}
+
+/** Groups turns by work. Never shown, so it only has to be unique. */
+function workKey(work: PaybackWork): string {
+  switch (work._tag) {
+    case 'Role': return `role:${work.role}`
+    case 'Routine': return `routine:${work.name}`
+    case 'UnnamedRoutine': return 'routine'
+  }
+}
+
+/** Roles in a fixed order, then Routines by name, then turns no Routine claims. */
+function compareWork(left: PaybackWork, right: PaybackWork): number {
+  const rank = (work: PaybackWork) => work._tag === 'Role' ? ROLE_RANK[work.role] : work._tag === 'Routine' ? ROUTINE_RANK : ROUTINE_RANK + 1
+  const byRank = rank(left) - rank(right)
+  if (byRank !== 0 || left._tag !== 'Routine' || right._tag !== 'Routine')
+    return byRank
+  return left.name.localeCompare(right.name)
 }
 
 /** US dollars per million tokens for one model, on the date the rates were checked. */
@@ -41,10 +72,28 @@ export interface PaybackTaskFact {
   pullRequest: PaybackPullRequest
 }
 
+/** Candidates one Routine run recorded, counted by what became of them. */
+export interface PaybackCandidates {
+  merged: number
+  /** Still Proposed: the issue is open, or its pull request has not merged yet. */
+  open: number
+  /** Rejected or Superseded: the issue closed with no merged fix. */
+  closed: number
+}
+
+/** One Routine run that spent an Agent turn in the range, and what its Candidates became. */
+export interface PaybackRoutineRunFact {
+  runId: string
+  work: Extract<PaybackWork, { _tag: 'Routine' | 'UnnamedRoutine' }>
+  mode: RoutineMode
+  state: RoutineRunState['_tag']
+  candidates: PaybackCandidates
+}
+
 /** What one unit of work produced, as far as the Journal can tell. */
 export type PaybackOutcome
   = | { _tag: 'Useful' }
-    | { _tag: 'Wasted', reason: 'ClosedUnmerged' | 'NothingPublished' }
+    | { _tag: 'Wasted', reason: 'ClosedUnmerged' | 'NothingPublished' | 'NothingProposed' }
     | { _tag: 'Open' }
     /** Stopped on a blocker only a person can clear. It spent turns and has nothing to show yet. */
     | { _tag: 'ActionRequired' }
@@ -66,6 +115,34 @@ export function paybackOutcome(fact: PaybackTaskFact): PaybackOutcome {
   if (fact.state === 'ActionRequired')
     return { _tag: 'ActionRequired' }
   return { _tag: 'Open' }
+}
+
+/**
+ * A Routine run is useful when one of its Candidates merged. A settled run
+ * that filed none is Wasted, as a Task that published nothing is. A report
+ * run files no issue, so the Journal cannot see what it produced.
+ */
+export function paybackRoutineRunOutcome(fact: PaybackRoutineRunFact): PaybackOutcome {
+  if (fact.mode === 'report')
+    return { _tag: 'Unrecorded' }
+  if (fact.candidates.merged > 0)
+    return { _tag: 'Useful' }
+  if (fact.candidates.open > 0)
+    return { _tag: 'Open' }
+  if (fact.candidates.closed > 0)
+    return { _tag: 'Wasted', reason: 'ClosedUnmerged' }
+  switch (fact.state) {
+    case 'Completed':
+    case 'Failed':
+    case 'Skipped':
+    case 'Superseded':
+      return { _tag: 'Wasted', reason: 'NothingProposed' }
+    case 'ActionRequired':
+      return { _tag: 'ActionRequired' }
+    case 'Queued':
+    case 'Running':
+      return { _tag: 'Open' }
+  }
 }
 
 export type PaybackCost
@@ -145,13 +222,27 @@ function verdict(outcomes: PaybackKind['outcomes'], unrecordedShare: number, was
  * Every number is measured except dollars, which come from dated rates, and
  * break-even minutes, which also need Harlan's hourly value.
  */
-export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: readonly PaybackTaskFact[], pricing: PaybackPricing }): PaybackReport {
+export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: readonly PaybackTaskFact[], routineRuns: readonly PaybackRoutineRunFact[], pricing: PaybackPricing }): PaybackReport {
   const outcomeByTask = new Map(input.tasks.map(fact => [fact.taskId, paybackOutcome(fact)]))
-  const turnsByWork = Map.groupBy(input.turns, turn => paybackWork(turn.role))
-  const kinds = PAYBACK_WORK.flatMap((work): PaybackKind[] => {
-    const turns = turnsByWork.get(work) ?? []
-    if (turns.length === 0)
-      return []
+  const routineRunById = new Map(input.routineRuns.map(fact => [fact.runId, { work: fact.work, outcome: paybackRoutineRunOutcome(fact) }]))
+  // The Task facts also list Routine run ids, with no state, so a Routine turn reads only its run.
+  const workOf = (turn: AgentTurnRecord): PaybackWork => isRoutineRole(turn.role)
+    ? routineRunById.get(turn.taskId)?.work ?? { _tag: 'UnnamedRoutine' }
+    : { _tag: 'Role', role: turn.role }
+  const outcomeOf = (turn: AgentTurnRecord): PaybackOutcome['_tag'] => (isRoutineRole(turn.role)
+    ? routineRunById.get(turn.taskId)?.outcome
+    : outcomeByTask.get(turn.taskId))?._tag ?? 'Unrecorded'
+
+  const groups = new Map<string, { work: PaybackWork, turns: AgentTurnRecord[] }>()
+  for (const turn of input.turns) {
+    const work = workOf(turn)
+    const group = groups.get(workKey(work))
+    if (group === undefined)
+      groups.set(workKey(work), { work, turns: [turn] })
+    else
+      group.turns.push(turn)
+  }
+  const kinds = [...groups.values()].sort((left, right) => compareWork(left.work, right.work)).map(({ work, turns }): PaybackKind => {
     const tokens = emptyTokens()
     let usd = 0
     let pricedTurns = 0
@@ -179,22 +270,21 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
       ? { _tag: 'Priced', usd, unpricedTurns }
       : { _tag: 'Unpriced', models: [...unpricedModels].sort() }
 
-    const taskIds = [...new Set(turns.map(turn => turn.taskId))]
+    const turnByTask = new Map(turns.map(turn => [turn.taskId, turn]))
     const outcomes = { useful: 0, wasted: 0, actionRequired: 0, open: 0, unrecorded: 0 }
-    for (const taskId of taskIds) {
-      const outcome = outcomeByTask.get(taskId) ?? { _tag: 'Unrecorded' as const }
-      if (outcome._tag === 'Useful')
+    for (const turn of turnByTask.values()) {
+      const outcome = outcomeOf(turn)
+      if (outcome === 'Useful')
         outcomes.useful += 1
-      else if (outcome._tag === 'Wasted')
+      else if (outcome === 'Wasted')
         outcomes.wasted += 1
-      else if (outcome._tag === 'ActionRequired')
+      else if (outcome === 'ActionRequired')
         outcomes.actionRequired += 1
-      else if (outcome._tag === 'Open')
+      else if (outcome === 'Open')
         outcomes.open += 1
       else
         outcomes.unrecorded += 1
     }
-    const outcomeOf = (turn: AgentTurnRecord) => outcomeByTask.get(turn.taskId)?._tag ?? 'Unrecorded'
     const settledTurns = turns.filter(turn => ['Useful', 'Wasted', 'ActionRequired'].includes(outcomeOf(turn)))
     const wastedTurns = settledTurns.filter(turn => outcomeOf(turn) !== 'Useful')
     const wastedShare = settledTurns.length === 0 ? null : wastedTurns.length / settledTurns.length
@@ -204,7 +294,7 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
       ? costPerUseful / input.pricing.hourlyValue * 60
       : null
     const spent = turns.some(turn => turn.usage._tag === 'Available' && turn.usage.input + turn.usage.output > 0)
-    return [{
+    return {
       work,
       agentTurns: turns.length,
       failedTurns: turns.filter(turn => turn.outcome === 'Failed').length,
@@ -216,7 +306,7 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
       wastedShare,
       breakEvenMinutes,
       verdict: verdict(outcomes, unrecordedShare, wastedShare, spent),
-    }]
+    }
   })
   return { ratesCheckedOn: input.pricing.ratesCheckedOn, hourlyValue: input.pricing.hourlyValue, kinds }
 }

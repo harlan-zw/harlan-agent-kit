@@ -4,7 +4,7 @@ import { paybackRatesText, paybackRows } from '../dashboard/app/utils/payback.ts
 
 function kind(overrides: Partial<PaybackKind>): PaybackKind {
   return {
-    work: 'issue_work',
+    work: { _tag: 'Role', role: 'issue_work' },
     agentTurns: 10,
     failedTurns: 0,
     turnsWithoutUsage: 0,
@@ -28,6 +28,7 @@ describe('payback rows', () => {
     expect(paybackRows(report([kind({})]))).toEqual([{
       key: 'issue_work',
       work: 'issue_work',
+      routine: null,
       agentTurns: 10,
       cost: '$12.50',
       useful: '5 of 7',
@@ -46,7 +47,7 @@ describe('payback rows', () => {
   })
 
   it('keeps the reason beside a verdict that asks for a change', () => {
-    const [row] = paybackRows(report([kind({ work: 'conflict_resolution', wastedShare: 0.86, verdict: { _tag: 'Tune', reason: '86% of settled Agent turns produced nothing.' } })]))
+    const [row] = paybackRows(report([kind({ work: { _tag: 'Role', role: 'conflict_resolution' }, wastedShare: 0.86, verdict: { _tag: 'Tune', reason: '86% of settled Agent turns produced nothing.' } })]))
 
     expect(row).toEqual(expect.objectContaining({ verdict: 'Tune', verdictTone: 'warning', reason: '86% of settled Agent turns produced nothing.' }))
   })
@@ -57,10 +58,22 @@ describe('payback rows', () => {
     expect(row).toEqual(expect.objectContaining({ cost: 'Unpriced', perUseful: '' }))
   })
 
-  it('names a Routine with the Routine chip and says its outcome is not recorded', () => {
-    const [row] = paybackRows(report([kind({ work: 'routine', outcomes: { useful: 0, wasted: 0, actionRequired: 0, open: 0, unrecorded: 4 }, verdict: { _tag: 'MeasureFirst', reason: 'No useful outcome is recorded for this work yet.' } })]))
+  it('gives each Routine its own row, named beside the Routine chip', () => {
+    const rows = paybackRows(report([
+      kind({ work: { _tag: 'Routine', name: 'ci-review' }, outcomes: { useful: 19, wasted: 84, actionRequired: 0, open: 6, unrecorded: 0 } }),
+      kind({ work: { _tag: 'Routine', name: 'seo-review' }, outcomes: { useful: 2, wasted: 41, actionRequired: 0, open: 0, unrecorded: 0 } }),
+    ]))
 
-    expect(row).toEqual(expect.objectContaining({ work: 'routine_scan', useful: 'Not recorded', verdict: 'Measure first' }))
+    expect(rows.map(row => [row.key, row.work, row.routine, row.useful])).toEqual([
+      ['routine:ci-review', 'routine_scan', 'ci-review', '19 of 103'],
+      ['routine:seo-review', 'routine_scan', 'seo-review', '2 of 43'],
+    ])
+  })
+
+  it('shows a Routine turn with no named run under the chip alone, as not recorded', () => {
+    const [row] = paybackRows(report([kind({ work: { _tag: 'UnnamedRoutine' }, outcomes: { useful: 0, wasted: 0, actionRequired: 0, open: 0, unrecorded: 4 }, verdict: { _tag: 'MeasureFirst', reason: 'No useful outcome is recorded for this work yet.' } })]))
+
+    expect(row).toEqual(expect.objectContaining({ key: 'routine', work: 'routine_scan', routine: null, useful: 'Not recorded', verdict: 'Measure first' }))
   })
 })
 
