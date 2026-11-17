@@ -582,6 +582,29 @@ if (process.argv[2] === 'serve') {
   }
 }, 30_000)
 
+it('follows a pnpm upgrade to its current package instead of refusing the next deploy', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-pnpm-'))
+  const home = join(root, 'controller')
+  const shims = join(home, '.local/share/pnpm/bin')
+  const current = join(home, '.local/share/pnpm/global/v11/bb644-new/node_modules/pnpm')
+  await Promise.all([mkdir(shims, { recursive: true }), mkdir(current, { recursive: true }), mkdir(join(root, 'worker'))])
+  await writeFile(join(current, 'pnpm'), '#!/bin/sh\n', { mode: 0o755 })
+  await writeFile(join(shims, 'pnpm'), `#!/bin/sh\n# cmd-shim-target=${join(current, 'pnpm')}\nexec "${join(current, 'pnpm')}" "$@"\n`, { mode: 0o755 })
+  const provider = join(root, 'provider')
+  await copyFile('/usr/bin/true', provider)
+  const profile = join(root, 'worker.json')
+  await writeFile(profile, JSON.stringify({
+    home: join(root, 'worker'),
+    codex: provider,
+    opencode: provider,
+    tools: [shims],
+    // The pnpm upgrade removed this package directory.
+    readOnlyPaths: [join(home, '.local/share/pnpm/global/v11/1d66ff-old/node_modules/pnpm')],
+  }))
+
+  await expect(checkAgentWorker({ HOME: home }, profile)).resolves.toBeUndefined()
+})
+
 it('refuses a missing worker configuration instead of launching outside isolation', async () => {
   await expect(prepareAgentSandbox({ workspace: '/tmp', environment: {}, profilePath: '/does-not-exist/worker.json', provider: 'opencode' })).rejects.toThrow()
 })

@@ -72,3 +72,45 @@ export async function resolveWorkerHostTools(home: string, directories: readonly
   }
   return tools
 }
+
+/** A pnpm global package directory. Every pnpm upgrade replaces the hashed segment. */
+const PNPM_PACKAGE = /\/pnpm\/global\/v\d+\/[^/]+\/node_modules\/pnpm$/
+
+/** Whether a worker read-only path names a pnpm global package directory. */
+export function isPnpmPackagePath(path: string): boolean {
+  return PNPM_PACKAGE.test(path)
+}
+
+/**
+ * The pnpm package directory the installed shim runs today, or undefined.
+ *
+ * A worker profile records this path once, so a pnpm upgrade would leave it
+ * pointing at a deleted directory and refuse every deploy.
+ */
+export async function resolvePnpmPackage(home: string, directories: readonly string[]): Promise<string | undefined> {
+  const trusted = [...new Set([join(home, '.local/share/pnpm/bin'), join(home, '.local/share/pnpm'), join(home, '.local/bin'), ...directories])]
+  for (const directory of trusted) {
+    const shim = join(directory, 'pnpm')
+    const binary = await realpath(shim).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.code === 'EACCES')
+        return undefined
+      throw error
+    })
+    if (binary === undefined)
+      continue
+    const file = await open(binary, 'r')
+    const head = await file.read({ buffer: Buffer.alloc(65536) }).then(result => result.buffer.subarray(0, result.bytesRead).toString()).finally(() => file.close())
+    const target = /^# cmd-shim-target=(\/[^\r\n]+)$/m.exec(head)?.[1] ?? binary
+    const candidate = dirname(target)
+    if (!isPnpmPackagePath(candidate))
+      continue
+    const present = await access(candidate).then(() => true).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR')
+        return false
+      throw error
+    })
+    if (present)
+      return candidate
+  }
+  return undefined
+}

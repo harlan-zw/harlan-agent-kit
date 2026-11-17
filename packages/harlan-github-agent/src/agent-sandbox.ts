@@ -16,7 +16,7 @@ import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
 import { VITALS_COMPARISON_GUEST_SCRIPT, VITALS_EVIDENCE_GUEST_DIRECTORY, vitalsComparisonScript } from './vitals-comparison-runtime.ts'
 import { resolveBrowserSetupRuntime } from './worker-browser-runtime.ts'
-import { resolveWorkerHostTools } from './worker-host-tools.ts'
+import { isPnpmPackagePath, resolvePnpmPackage, resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
 import { resolveWorkerNuxtseo, workerNuxtseoEnvironment, workerNuxtseoRoutine } from './worker-nuxtseo.ts'
 import { resolveWorkerPackage } from './worker-package.ts'
@@ -186,6 +186,9 @@ async function currentWorkerConfiguration(home: string, profilePath: string) {
     ...profile.tools.filter(path => !obsoleteProviderDirectories.includes(path)),
     ...['codex', 'opencode'].flatMap(provider => hostTools[provider] === undefined ? [] : [dirname(hostTools[provider])]),
   ])]
+  const pnpmPackage = await resolvePnpmPackage(home, profile.tools)
+  if (pnpmPackage !== undefined)
+    profile.readOnlyPaths = [...new Set(profile.readOnlyPaths.map(path => isPnpmPackagePath(path) ? pnpmPackage : path))]
   return { profile, hostTools }
 }
 
