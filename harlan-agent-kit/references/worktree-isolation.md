@@ -8,7 +8,7 @@ The primary checkout is a control checkout. Keep it clean on `main`, with `HEAD`
 
 `wt` is the only tool that may create, enter, or remove a worktree.
 
-Never run `git worktree add`. Never use a harness worktree feature: Claude Code's `EnterWorktree` tool, an `Agent` call with `isolation: "worktree"`, or a workflow step with `isolation: 'worktree'`. Those write to `.claude/worktrees/`, which is banned. If a harness worktree already exists, do not extend it. Move the work into a `wt` worktree.
+Never run `git worktree add`. Never use a harness worktree feature: Claude Code's `EnterWorktree` tool, an `Agent` call with `isolation: "worktree"`, or a workflow step with `isolation: 'worktree'`. Create worktrees with `wt switch --create` instead. Where the kit plugin loads, its `WorktreeCreate` hook sends a harness worktree through `wt` to `<parent>/<repo>.worktree-<name>`. Without the plugin, those features write to `.claude/worktrees/`, which is banned. If a harness worktree already exists, do not extend it. Move the work into a `wt` worktree.
 
 `~/.config/worktrunk/config.toml` fixes the location for every repository:
 

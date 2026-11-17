@@ -50,6 +50,7 @@ did not cover it.
 | Issue triage | `worker_tasks.kind` | Scheduler | One Task for one issue Revision | issue triage |
 | Issue triage comment | `issue_triage_comment_commands` | Controller | One canonical comment per issue | automated triage |
 | Issue triage label | `harlan-agent-ready-to-implement`, `harlan-agent-ready-to-spec`, `harlan-agent-needs-info`, or `harlan-agent-wait-to-implement` | GitHub | One per triaged issue Revision | triage route |
+| Discussion route | `issue_triage_runs.route_tag = DISCUSSION`, `harlan-agent-discussion` label | Controller | One Classification per issue Revision | Discussion |
 | Issue work | `tasks.kind` | Scheduler | One authorized Task for one issue Revision | issue work |
 | Batch | `batches`, `batch_units`, `batch_tasks` | Scheduler | One per repository at a time, 1 to N Issue work Tasks, 1 to N units | Batch |
 | Pull request triage | Pull request title, `pull_request_triage` Agent role, or `pull_request_triage_runs` | Controller, Runner | One deterministic or low-cost decision per pull request head commit | pull request triage |
@@ -490,6 +491,16 @@ The four labels are `harlan-agent-ready-to-implement`, `harlan-agent-ready-to-sp
 ### Issue triage comment
 
 One self identified automated triage record on an issue. Re-runs update the canonical comment.
+
+### Discussion route
+
+One Classification route for an issue that is a question, proposal, idea, or conversation. It reports no defect and names no concrete change to make yet.
+
+The word follows GitHub Discussions, where such a thread usually belongs. The route never converts the issue.
+
+`issue_discussion_band` turns it on, independent of the Issue triage band. Shadow mode records each answer as an `issue_triage_status` workflow event and still runs Issue triage. Live mode skips Issue triage only for a DISCUSSION answer at or above the band that needs no code read. It stamps `harlan-agent-discussion` and posts no Issue triage comment.
+
+Use Discussion route. Do not use question route or chat route. Shadow mode and live mode are the two values of `issue_discussion_mode`.
 
 ### Pull request triage
 

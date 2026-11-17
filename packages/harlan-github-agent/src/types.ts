@@ -30,14 +30,14 @@ export type RepositoryAuthentication = 'app' | 'user'
  * Which pull requests Auto merge may take in one repository.
  *
  * `Labelled` is the default: only a pull request carrying the
- * `harlan-agent-auto-merge` label, at or above the service-wide minimum
- * confidence. `Every` takes every trusted-author pull request at or above the
+ * `harlan-agent-auto-merge` label, at or above the repository's own minimum
+ * confidence, or the service-wide one when the repository names none. `Every` takes every trusted-author pull request at or above the
  * repository's own minimum confidence. It suits a repository where a wrong
  * merge costs little, such as a demo site, and never a repository Harlan would
  * want to read first.
  */
 export type RepositoryAutoMergeScope
-  = | { _tag: 'Labelled' }
+  = | { _tag: 'Labelled', minimumConfidence: number | null }
     | { _tag: 'Every', minimumConfidence: number }
     /**
      * Auto merge covers a pull request the Merge risk calls Contained.
@@ -110,7 +110,20 @@ export type ClassificationConfig
       model: string
       /** The confidence an Issue triage route needs before it bypasses the Agent turn. Null never bypasses. */
       issueTriageBand: number | null
+      issueDiscussion: IssueDiscussionRoute
     }
+
+/**
+ * The Discussion route trial, independent of the Issue triage band.
+ *
+ * `Shadow` asks the classification for every issue state and records what it
+ * answered, while Agent triage still runs. `Live` also skips Agent triage for
+ * a discussion at or above the band that needs no code read.
+ */
+export type IssueDiscussionRoute
+  = | { _tag: 'Off' }
+    | { _tag: 'Shadow', band: number }
+    | { _tag: 'Live', band: number }
 
 /**
  * What may start work on this machine.
@@ -1144,6 +1157,33 @@ export interface WorkflowEvent {
   durationMilliseconds: number | null
   usage: AgentTokenUsage | null
   occurredAt: string
+}
+
+/** Workflow events in one window, counted by stream, event, and resulting state. */
+export interface WorkflowEventSummary {
+  stream: WorkflowEventStream
+  event: string
+  to: string
+  count: number
+  /** Events that carry a failure or decision reason. */
+  failed: number
+  /** Events past their first attempt. */
+  retried: number
+}
+
+/** Failed or retried workflow events in one window that share a stream, event, state, and reason prefix. */
+export interface WorkflowFailureGroup {
+  stream: WorkflowEventStream
+  event: string
+  to: string
+  /** First 80 characters of the stored reason. Null for a retry without a reason. */
+  reason: string | null
+  count: number
+  /** Events past their first attempt. */
+  retried: number
+  newestOccurredAt: string
+  /** Up to three of the newest events, newest first. */
+  examples: Array<Pick<WorkflowEvent, 'id' | 'entityId' | 'repository' | 'itemNumber' | 'occurredAt'>>
 }
 
 export type ProviderFailureClass

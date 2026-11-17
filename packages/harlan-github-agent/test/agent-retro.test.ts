@@ -1,4 +1,4 @@
-import type { WorkflowEvent } from '../src/types.ts'
+import type { WorkflowEvent, WorkflowFailureGroup } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { collectAgentRetroEvidence } from '../src/agent-retro.ts'
 import { getRoutine } from '../src/routines/index.ts'
@@ -23,20 +23,41 @@ const event: WorkflowEvent = {
   occurredAt: at,
 }
 
+const group: WorkflowFailureGroup = {
+  stream: 'task',
+  event: 'failed',
+  to: 'Failed',
+  reason: 'Bearer abcdefghijklmnopqrstuvwxyz',
+  count: 2,
+  retried: 1,
+  newestOccurredAt: at,
+  examples: [{ id: 1, entityId: 'task-1', repository: 'harlan-zw/example', itemNumber: 7, occurredAt: at }],
+}
+
 describe('agent retro evidence', () => {
   it('keeps failure identity and timing while redacting known token shapes', () => {
-    const result = collectAgentRetroEvidence({ listIncidents: () => [], listWorkflowEvents: () => [event] }, new Date(at))
-    expect(result.events[0]).toMatchObject({ id: 1, taskId: 'task-1', reason: 'Bearer ***', durationMilliseconds: 60000 })
-    expect(result.coverage.events).toBe('complete')
+    const result = collectAgentRetroEvidence({
+      listIncidents: () => [],
+      listWorkflowEvents: () => [{ ...event, reason: `Bearer abcdefghijklmnopqrstuvwxyz ${'x'.repeat(1000)}` }],
+      summarizeWorkflowEvents: () => [],
+      groupWorkflowFailures: () => [group],
+    }, new Date(at))
+    expect(result.failureSample[0]).toMatchObject({ id: 1, taskId: 'task-1', reason: expect.stringMatching(/^Bearer \*\*\* x+$/), durationMilliseconds: 60000 })
+    expect(result.failureSample[0]?.reason).toHaveLength(400)
+    expect(result.failureGroups.rows).toEqual([['task', 'failed', 'Failed', 'Bearer ***', 2, 1, [[1, 'task-1', 'harlan-zw/example', 7, at]]]])
+    expect(result.coverage).toMatchObject({ events: 'complete', failureEvents: 2, failureGroups: 1, omittedFailureGroups: 0 })
   })
 
-  it('excludes old events and states when the window exceeds the source limit', () => {
-    const result = collectAgentRetroEvidence({ listIncidents: () => [], listWorkflowEvents: () => Array.from({ length: 1000 }, (_, id) => ({ ...event, id })) }, new Date(at))
-    expect(result.coverage.events).toBe('incomplete')
-    expect(result.events).toHaveLength(200)
-    expect(result.coverage.omittedEvents).toBe(800)
-    const old = collectAgentRetroEvidence({ listIncidents: () => [], listWorkflowEvents: () => [{ ...event, occurredAt: '2026-09-01T00:00:00Z' }] }, new Date(at))
-    expect(old.events).toEqual([])
+  it('states incomplete coverage when failure groups exceed the limit', () => {
+    const groups = Array.from({ length: 151 }, (_, index) => ({ ...group, reason: `cause ${index}` }))
+    const result = collectAgentRetroEvidence({
+      listIncidents: () => [],
+      listWorkflowEvents: () => [],
+      summarizeWorkflowEvents: () => [],
+      groupWorkflowFailures: () => groups,
+    }, new Date(at))
+    expect(result.failureGroups.rows).toHaveLength(150)
+    expect(result.coverage).toMatchObject({ events: 'incomplete', failureEvents: 302, failureGroups: 151, omittedFailureGroups: 1 })
   })
 
   it('refuses scans on another repository', () => {

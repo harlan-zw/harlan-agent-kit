@@ -1,7 +1,7 @@
 import type { ApprovalController } from './approval-controller.ts'
 import type { AutoMergeController } from './auto-merge-controller.ts'
 import type { GitHubSource } from './github.ts'
-import type { IssueClassificationController, IssueClassificationDecision } from './issue-classification.ts'
+import type { IssueClassificationController, IssueClassificationDecision, IssueRouteSettlement } from './issue-classification.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PullRequestTriageController, PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { Result } from './result.ts'
@@ -154,8 +154,8 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   // with a stored route needs no second decision, so only new content pays
   // for the read and the classification.
   const issueDecisions = new Map<number, IssueClassificationDecision>()
-  /** Routed decisions to settle: fresh ones, plus stored ones a failed settle left behind. */
-  const settleResults = new Map<number, Extract<IssueClassificationDecision, { _tag: 'Routed' }>['result']>()
+  /** Routed and Discussion decisions to settle: fresh ones, plus stored ones a failed settle left behind. */
+  const settleResults = new Map<number, IssueRouteSettlement>()
   if (writesEnabled && dependencies.issueClassification !== undefined) {
     await Promise.all(eligibleItems.map(async (subject) => {
       // An external repository is watched, never acted in: its issues carry
@@ -179,8 +179,8 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
         // A stored routed decision settles again until its comment and label
         // land; an Agent-kept Revision needs nothing here, and an Agent
         // answer outranks both.
-        if (stored._tag === 'Routed' && !dependencies.store.hasIssueTriageEvidence(repository.github, subject.number, revisionId))
-          settleResults.set(subject.number, stored.result)
+        if (stored._tag !== 'AgentTriage' && !dependencies.store.hasIssueTriageEvidence(repository.github, subject.number, revisionId))
+          settleResults.set(subject.number, stored._tag === 'Routed' ? stored.result : { _tag: 'DISCUSSION' })
         return
       }
       if (dependencies.store.hasIssueTriageEvidence(repository.github, subject.number, revisionId))
@@ -273,8 +273,8 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
         return
       const decision = issueDecisions.get(subject.number)
       const write = eligibleWrites[index]
-      if (decision !== undefined && decision._tag === 'Routed' && (write?._tag === 'Inserted' || write?._tag === 'Duplicate'))
-        settleResults.set(subject.number, decision.result)
+      if (decision !== undefined && decision._tag !== 'AgentTriage' && (write?._tag === 'Inserted' || write?._tag === 'Duplicate'))
+        settleResults.set(subject.number, decision._tag === 'Routed' ? decision.result : { _tag: 'DISCUSSION' })
     })
     const settledIssues = await Promise.all(eligibleItems.map((subject) => {
       if (subject.kind !== 'issue')

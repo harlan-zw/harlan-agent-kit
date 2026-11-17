@@ -187,6 +187,32 @@ describe('configuration boundary', () => {
     expect(parsed._tag === 'Ok' && parsed.value.server.allowedOrigin).toBe('https://harlan-github-agent.localhost')
   })
 
+  it('reads the Discussion route band and mode independently of the triage band', () => {
+    const classified = (lines: string) => parseConfigText(`${configText}classification:
+  account_id: account
+  token_path: /keys/classification
+  model: typesafe/jev
+${lines}`)
+    const discussion = (lines: string) => {
+      const parsed = classified(lines)
+      return parsed._tag === 'Ok' && parsed.value.classification._tag === 'Enabled' ? parsed.value.classification : parsed
+    }
+
+    expect(discussion('')).toMatchObject({ issueTriageBand: null, issueDiscussion: { _tag: 'Off' } })
+    expect(discussion('  issue_discussion_band: 0.9\n')).toMatchObject({ issueTriageBand: null, issueDiscussion: { _tag: 'Shadow', band: 0.9 } })
+    expect(discussion('  issue_discussion_band: 0.95\n  issue_discussion_mode: live\n')).toMatchObject({ issueDiscussion: { _tag: 'Live', band: 0.95 } })
+    expect(discussion('  issue_triage_band: 0.8\n  issue_discussion_band: 0.9\n  issue_discussion_mode: shadow\n')).toMatchObject({ issueTriageBand: 0.8, issueDiscussion: { _tag: 'Shadow', band: 0.9 } })
+    for (const [lines, path] of [
+      ['  issue_discussion_mode: live\n', '$.classification.issue_discussion_mode'],
+      ['  issue_discussion_band: 0.9\n  issue_discussion_mode: on\n', '$.classification.issue_discussion_mode'],
+      ['  issue_discussion_band: 1\n', '$.classification.issue_discussion_band'],
+      ['  issue_discussion_band: "0.9"\n', '$.classification.issue_discussion_band'],
+    ] as const) {
+      const parsed = classified(lines)
+      expect(parsed._tag === 'Err' && parsed.error.map(issue => issue.path)).toContain(path)
+    }
+  })
+
   it('keeps the Agent provider default when the file names no agent count', () => {
     const parsed = parseConfigText(configText)
 
@@ -378,13 +404,25 @@ agent:
 
   it('scopes auto merge to labelled pull requests unless a repository widens it', () => {
     const labelled = parseConfigText(configText)
-    expect(labelled._tag === 'Ok' && labelled.value.repositories[0]?.autoMerge).toEqual({ _tag: 'Labelled' })
+    expect(labelled._tag === 'Ok' && labelled.value.repositories[0]?.autoMerge).toEqual({ _tag: 'Labelled', minimumConfidence: null })
 
     const every = parseConfigText(configText.replace(
       'issue_work: true',
       'issue_work: true\n    auto_merge:\n      pull_requests: every\n      minimum_confidence: 80',
     ))
     expect(every._tag === 'Ok' && every.value.repositories[0]?.autoMerge).toEqual({ _tag: 'Every', minimumConfidence: 80 })
+
+    const strict = parseConfigText(configText.replace(
+      'issue_work: true',
+      'issue_work: true\n    auto_merge:\n      pull_requests: labelled\n      minimum_confidence: 100',
+    ))
+    expect(strict._tag === 'Ok' && strict.value.repositories[0]?.autoMerge).toEqual({ _tag: 'Labelled', minimumConfidence: 100 })
+
+    const invalid = parseConfigText(configText.replace(
+      'issue_work: true',
+      'issue_work: true\n    auto_merge:\n      pull_requests: labelled\n      minimum_confidence: 101',
+    ))
+    expect(invalid._tag === 'Err' && invalid.error).toContainEqual({ path: '$.repositories[0].auto_merge.minimum_confidence', message: 'Expected an integer from 0 to 100.' })
   })
 
   it('reads a contained pull request scope with its Merge risk policy', () => {
@@ -492,9 +530,6 @@ agent:
       path: '$.repositories[0].auto_merge.pull_requests',
       message: 'Auto merge for every pull request requires pull request review.',
     })
-
-    const labelledWithMinimum = parseConfigText(configText.replace('issue_work: true', 'issue_work: true\n    auto_merge:\n      pull_requests: labelled\n      minimum_confidence: 80'))
-    expect(labelledWithMinimum._tag === 'Err' && labelledWithMinimum.error.map(issue => issue.path)).toContain('$.repositories[0].auto_merge.minimum_confidence')
   })
 
   it('parses an enabled auto merge policy with its defaults', () => {

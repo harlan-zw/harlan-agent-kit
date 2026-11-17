@@ -112,7 +112,7 @@ Never publish under my name without approval. Draft it, show the exact text, wai
 
 ## Worktrees
 
-`wt` (worktrunk) owns every worktree. Never `git worktree add`. Never `EnterWorktree` or `isolation: "worktree"`; those write to the banned `.claude/worktrees/`.
+`wt` (worktrunk) owns every worktree. Never `git worktree add`. Never `EnterWorktree` or `isolation: "worktree"`; use `wt switch --create`. Where the Harlan Agent Kit plugin loads, its WorktreeCreate hook sends any harness worktree through `wt`. Elsewhere those features write to the banned `.claude/worktrees/`.
 
 - The primary checkout is a control checkout. Keep it clean on `main`, equal to `origin/main`. Never edit it.
 - Read-only work may use the primary checkout. Every mutation uses a task-owned `wt` worktree.

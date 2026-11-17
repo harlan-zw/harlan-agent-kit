@@ -18,7 +18,7 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
-it('upgrades version 95 Routines so a spec can set when', () => {
+it('upgrades version 96 Routines so a spec can set when', () => {
   const path = join(directory, 'state.sqlite')
   const at = '2026-11-17T01:00:00.000Z'
   const entry = { name: 'daily-checkin' as const, crons: ['40 8 * * *'], timeZone: 'UTC', mode: 'propose' as const, enabled: true }
@@ -26,7 +26,7 @@ it('upgrades version 95 Routines so a spec can set when', () => {
   before.syncRoutines({ repository: 'harlan-zw/example', specSha: 'head', entries: [entry], at })
   before.close()
   const legacy = new DatabaseSync(path)
-  legacy.exec('ALTER TABLE routines DROP COLUMN run_when; PRAGMA user_version = 95;')
+  legacy.exec('ALTER TABLE routines DROP COLUMN run_when; PRAGMA user_version = 96;')
   legacy.close()
   const migrated = openJournalStore(path)
   try {
@@ -1062,6 +1062,57 @@ it('converges a sibling journal that carries no issue triage runs', () => {
     if (observed._tag !== 'Inserted')
       throw new Error('Expected one inserted Revision.')
     expect(migrated.getLatestIssueTriageRun(issue.repository, issue.number, observed.revisionId)).toMatchObject({ _tag: 'Routed', confidence: 0.95 })
+  }
+  finally {
+    migrated.close()
+  }
+})
+
+it('widens a stored issue triage journal to hold the Discussion route', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  before.syncRepositories([repositoryMapping({ issueWork: true })], '2026-09-18T00:00:00.000Z')
+  const issue = issueItem({ author: 'harlan-zw' })
+  const kept = before.recordObservation({
+    externalId: 'pre-discussion-route',
+    observedAt: '2026-09-18T00:01:00.000Z',
+    source: 'poll',
+    subject: issue,
+    issueTriage: { _tag: 'AgentTriage', reason: 'The classification left the route to the Agent turn.' },
+  })
+  before.close()
+  // The journal as version 95 left it: three routes and nothing else.
+  const previous = new DatabaseSync(path)
+  const shape = previous.prepare(`SELECT sql FROM sqlite_master WHERE name = 'issue_triage_runs'`).get() as { sql: string }
+  previous.exec(`PRAGMA foreign_keys = OFF;
+    ${shape.sql.replace(/^CREATE TABLE[^(]+/, 'CREATE TABLE issue_triage_runs_v95 ').replace(`, 'DISCUSSION'`, '')};
+    INSERT INTO issue_triage_runs_v95 SELECT * FROM issue_triage_runs;
+    DROP TABLE issue_triage_runs;
+    ALTER TABLE issue_triage_runs_v95 RENAME TO issue_triage_runs;
+    PRAGMA user_version = 95;`)
+  previous.close()
+
+  const migrated = openJournalStore(path)
+  try {
+    if (kept._tag !== 'Inserted')
+      throw new Error('Expected one inserted Revision.')
+    expect(migrated.getLatestIssueTriageRun(issue.repository, issue.number, kept.revisionId)).toMatchObject({ _tag: 'AgentTriage' })
+    const later = issueItem({ author: 'harlan-zw', number: issue.number + 1 })
+    const observed = migrated.recordObservation({
+      externalId: 'post-discussion-route',
+      observedAt: '2026-09-18T00:02:00.000Z',
+      source: 'poll',
+      subject: later,
+      issueTriage: {
+        _tag: 'Discussion',
+        reading: { mode: 'Live', band: 0.9, route: 'DISCUSSION', confidence: 0.95, needsCodebaseReview: 0.1, skipsTriage: true },
+        title: 'Ideas for v6',
+        body: 'What should the next major focus on?',
+      },
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected one inserted Revision.')
+    expect(migrated.getLatestIssueTriageRun(later.repository, later.number, observed.revisionId)).toMatchObject({ _tag: 'Discussion', confidence: 0.95 })
   }
   finally {
     migrated.close()

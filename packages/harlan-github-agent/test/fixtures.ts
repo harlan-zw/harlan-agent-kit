@@ -24,7 +24,7 @@ export function repositoryMapping(overrides: Partial<RepositoryMapping> = {}): R
     pullRequestReview: true,
     conflictResolution: true,
     takeOwnership: { _tag: 'Disabled' },
-    autoMerge: { _tag: 'Labelled' },
+    autoMerge: { _tag: 'Labelled', minimumConfidence: null },
     ...overrides,
   }
 }

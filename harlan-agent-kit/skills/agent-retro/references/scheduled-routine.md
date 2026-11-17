@@ -1,8 +1,8 @@
 # Scheduled Routine mode
 
 Review the supplied Service evidence and current repository code. Keep this scan read only.
-The controller supplies recent Workflow events and open Incidents across its repositories.
-These logs include failed work, retries, durations, and available token use.
+The controller supplies Service evidence for the last 7 days and open Incidents.
+A failure is a Workflow event with a reason or a retry.
 Each finding belongs to this repository's Service or Skills, even when another repository exposed it.
 
 ## Evidence
@@ -11,8 +11,15 @@ Each finding belongs to this repository's Service or Skills, even when another r
 - Cite event or Incident IDs, timestamps, and the current file and symbol.
 - Confirm the defect still exists. Check deployment before calling old evidence a regression.
 - Missing transcripts, resolved Incidents, and system logs remain explicit coverage gaps.
-- Event samples prioritize failures and retries. They cannot prove overall success rates.
-- State source limits, omitted counts, and the oldest supplied event.
+- `summary` counts every event in the window by stream, event, and state. Use it for rates.
+- `failureGroups` groups every failure by stream, event, state, and the first 80 characters of the reason.
+- Each row in `failureGroups.rows` follows `failureGroups.columns`: stream, event, state, reason, count, retried count, and examples.
+- Each example follows `failureGroups.exampleColumns`: event ID, entity ID, repository, item number, and time. The first example is the newest event.
+- The largest groups come first. The 20 largest groups hold up to three examples. The rest hold one.
+- `failureSample` holds the newest 40 failures in full. Their reasons stop at 400 characters. Durations and token use appear only here.
+- The sample cannot prove a rate or a pattern. Use the groups for patterns and `summary` for rates.
+- State `windowEvents`, `failureEvents`, `failureGroups`, and `omittedFailureGroups` from `coverage`.
+- `coverage.events` is `incomplete` only when more than 150 groups exist. The omitted groups are the smallest.
 - Never read credentials, the live journal, provider databases, raw transcripts, or host logs.
 - Never start analyst Agents, change host settings, restart, deploy, or write GitHub state.
 

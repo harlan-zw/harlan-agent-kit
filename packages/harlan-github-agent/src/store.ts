@@ -6,7 +6,7 @@ import type { FindingThreadSyncStore } from './finding-thread-sync-store.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { AgentHost, AgentSlotSetting } from './host-capacity.ts'
 import type { IncidentResolutionError, IncidentResolutionReceipt, IncidentResolutionRequest } from './incident-resolution.ts'
-import type { IssueClassificationDecision } from './issue-classification.ts'
+import type { IssueClassificationDecision, IssueRouteReading } from './issue-classification.ts'
 import type { IssueTriageResult, IssueTriageState } from './issue-triage.ts'
 import type { LoggedFindingStore } from './logged-finding-store.ts'
 import type { PullRequestFile } from './merge-risk.ts'
@@ -123,6 +123,8 @@ import type {
   TriageSkip,
   WorkflowEvent,
   WorkflowEventStream,
+  WorkflowEventSummary,
+  WorkflowFailureGroup,
 } from './types.ts'
 import type { AgentWorktreeLease } from './worktree.ts'
 import { createHash } from 'node:crypto'
@@ -812,6 +814,7 @@ export type StoredIssueTriageRun
       confidence: number
       decidedAt: string
     }
+    | { _tag: 'Discussion', confidence: number, decidedAt: string }
 
 export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore {
   getTask: (taskId: string) => DashboardTask | null
@@ -1035,8 +1038,15 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
   getStats: (range: StatsRange, generatedAt: string) => StatsSnapshot
-  /** Newest append-only workflow events. Reasons are redacted before storage. */
-  listWorkflowEvents: (input?: { stream?: WorkflowEventStream, limit?: number }) => WorkflowEvent[]
+  /**
+   * Newest append-only workflow events. Reasons are redacted before storage.
+   * `since` bounds the window. `failures` keeps events with a reason or a retry.
+   */
+  listWorkflowEvents: (input?: { stream?: WorkflowEventStream, limit?: number, since?: string, failures?: boolean }) => WorkflowEvent[]
+  /** Counts every workflow event since a time, by stream, event, and state. */
+  summarizeWorkflowEvents: (input: { since: string }) => WorkflowEventSummary[]
+  /** Groups every failed or retried workflow event since a time by cause, largest group first. */
+  groupWorkflowFailures: (input: { since: string }) => WorkflowFailureGroup[]
   /** Whether one provider may accept a normal turn or one half-open canary. */
   providerCanStart: (input: { provider: AgentProviderName, credential: string, model?: string, at: string }) => boolean
   /** Atomically reserves the only half-open canary when one is due. */
@@ -5154,11 +5164,12 @@ function insertIssueTriageRun(
   database: DatabaseSync,
   subjectId: number,
   revisionId: string,
-  decision: Extract<IssueClassificationDecision, { _tag: 'Routed' | 'AgentTriage' }>,
+  decision: IssueClassificationDecision,
   at: string,
 ): void {
   const routed = decision._tag === 'Routed'
-  database.prepare(`
+  const discussion = decision._tag === 'Discussion'
+  const inserted = database.prepare(`
     INSERT OR IGNORE INTO issue_triage_runs (
       subject_id, revision_id, route_tag, confidence, difficulty, impact,
       has_reproduction, state_title, state_body, reason, decided_at
@@ -5166,18 +5177,52 @@ function insertIssueTriageRun(
   `).run(
     subjectId,
     revisionId,
-    routed ? decision.result._tag : 'AGENT_TRIAGE',
-    routed ? decision.confidence : 0,
+    routed ? decision.result._tag : discussion ? 'DISCUSSION' : 'AGENT_TRIAGE',
+    routed ? decision.confidence : discussion ? decision.reading.confidence : 0,
     routed ? decision.result.difficulty : 0,
     routed ? decision.result.impact : 0,
     routed && decision.result.hasReproduction ? 1 : 0,
-    routed ? decision.title : '',
-    routed ? decision.body : '',
+    routed || discussion ? decision.title : '',
+    routed || discussion ? decision.body : '',
     routed
       ? `model: classification routed ${decision.result._tag} with confidence ${Math.round(decision.confidence * 100) / 100}.`
-      : `model: classification left the route to the Agent: ${decision.reason}`,
+      : discussion
+        ? `model: classification routed DISCUSSION with confidence ${decision.reading.confidence}.`
+        : `model: classification left the route to the Agent: ${decision.reason}`,
     at,
-  )
+  ).changes === 1
+  if (inserted && decision.reading !== undefined)
+    recordIssueRouteReading(database, subjectId, revisionId, decision.reading, at)
+}
+
+/**
+ * Counts one Discussion route reading, once per Revision, beside the row it
+ * decided. The reason is JSON so a query can read the numbers back.
+ */
+function recordIssueRouteReading(database: DatabaseSync, subjectId: number, revisionId: string, reading: IssueRouteReading, at: string): void {
+  const item = database.prepare(`
+    SELECT repositories.github AS repository, subjects.github_number AS item_number
+    FROM subjects JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE subjects.id = ?
+  `).get(subjectId) as { repository: string, item_number: number }
+  recordWorkflowEvent(database, {
+    stream: 'issue_triage_status',
+    event: reading.mode === 'Live' ? 'discussion_live' : 'discussion_shadow',
+    entityId: `issue-route:${subjectId}:${revisionId}`,
+    repository: item.repository,
+    itemNumber: item.item_number,
+    revisionId,
+    from: null,
+    to: reading.route,
+    reason: JSON.stringify({
+      confidence: reading.confidence,
+      needsCodebaseReview: reading.needsCodebaseReview,
+      band: reading.band,
+      skipsTriage: reading.skipsTriage,
+    }),
+    durationMilliseconds: null,
+    at,
+  })
 }
 
 /**
@@ -5224,13 +5269,13 @@ function planIssueTriage(
   // An Agent answer for this Revision outranks any later classification: it
   // investigated the repository, and its evidence drives Issue work.
   const agentAnswered = existing?.state_tag === 'Completed' && existing.evidence !== null
-  // Both classified outcomes are durable, so neither is asked twice. The row
+  // Every classified outcome is durable, so none is asked twice. The row
   // lands even when a Task row already exists: a queued Task that has not
   // answered must not leave the decision unpersisted, or every later poll
   // re-asks the classification and re-settles the comment against it.
-  if (!agentAnswered && classification !== undefined && (classification._tag === 'Routed' || classification._tag === 'AgentTriage')) {
+  if (!agentAnswered && classification !== undefined) {
     insertIssueTriageRun(database, subjectId, revisionId, classification, observedAt)
-    if (classification._tag === 'Routed')
+    if (classification._tag !== 'AgentTriage')
       return
   }
   if (existing !== undefined) {
@@ -7277,13 +7322,30 @@ function installSchema(database: DatabaseSync): void {
     version = 95
   }
   if (version === 95) {
-    // A Routine may run only when the site changed. NULL runs every due instant.
-    const columns = database.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>
-    applyMigration(database, `${columns.some(column => column.name === 'run_when') ? '' : 'ALTER TABLE routines ADD COLUMN run_when TEXT CHECK (run_when IS NULL OR run_when = \'changed\');'}
+    // The live Discussion route stores its decision like the other routes.
+    // SQLite cannot widen a CHECK in place, so the table is rebuilt from its
+    // stored definition.
+    const schema = database.prepare('SELECT sql FROM sqlite_master WHERE name = \'issue_triage_runs\'').get() as { sql: string }
+    const expanded = schema.sql
+      .replace(/^CREATE TABLE[^(]+/, 'CREATE TABLE issue_triage_runs_v96 ')
+      .replace('\'WAIT_TO_IMPLEMENT\', \'AGENT_TRIAGE\')', '\'WAIT_TO_IMPLEMENT\', \'DISCUSSION\', \'AGENT_TRIAGE\')')
+    if (!expanded.includes('\'DISCUSSION\''))
+      throw new Error('The issue_triage_runs route constraint could not be widened.')
+    applyForeignKeyMigration(database, `${expanded};
+      INSERT INTO issue_triage_runs_v96 SELECT * FROM issue_triage_runs;
+      DROP TABLE issue_triage_runs;
+      ALTER TABLE issue_triage_runs_v96 RENAME TO issue_triage_runs;
       PRAGMA user_version = 96;`)
     version = 96
   }
-  if (version === 96)
+  if (version === 96) {
+    // A Routine may run only when the site changed. NULL runs every due instant.
+    const columns = database.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>
+    applyMigration(database, `${columns.some(column => column.name === 'run_when') ? '' : 'ALTER TABLE routines ADD COLUMN run_when TEXT CHECK (run_when IS NULL OR run_when = \'changed\');'}
+      PRAGMA user_version = 97;`)
+    version = 97
+  }
+  if (version === 97)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -9181,7 +9243,7 @@ export function openJournalStore(
       WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'issue'
         AND issue_triage_runs.revision_id = ?
     `).get(repository, issueNumber, revisionId) as {
-      route_tag: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' | 'AGENT_TRIAGE'
+      route_tag: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' | 'DISCUSSION' | 'AGENT_TRIAGE'
       confidence: number
       difficulty: number
       impact: number
@@ -9193,6 +9255,8 @@ export function openJournalStore(
       return null
     if (row.route_tag === 'AGENT_TRIAGE')
       return { _tag: 'AgentTriage', reason: row.reason, decidedAt: row.decided_at }
+    if (row.route_tag === 'DISCUSSION')
+      return { _tag: 'Discussion', confidence: row.confidence, decidedAt: row.decided_at }
     return {
       _tag: 'Routed',
       // The rebuild must reproduce the settled decision exactly: the poll
@@ -13919,17 +13983,27 @@ export function openJournalStore(
     return isSafeToRestart(at)
   }
 
+  const workflowFailureCondition = '(reason IS NOT NULL OR attempt > 1)'
+
   const listWorkflowEvents: JournalStore['listWorkflowEvents'] = (input = {}) => {
     const limit = Math.max(1, Math.min(1_000, input.limit ?? 200))
-    const rows = input.stream === undefined
-      ? database.prepare(`
-          SELECT * FROM workflow_events
-          ORDER BY occurred_at DESC, id DESC LIMIT ?
-        `).all(limit)
-      : database.prepare(`
-          SELECT * FROM workflow_events WHERE stream = ?
-          ORDER BY occurred_at DESC, id DESC LIMIT ?
-        `).all(input.stream, limit)
+    const conditions: string[] = []
+    const parameters: Array<string | number> = []
+    if (input.stream !== undefined) {
+      conditions.push('stream = ?')
+      parameters.push(input.stream)
+    }
+    if (input.since !== undefined) {
+      conditions.push('occurred_at >= ?')
+      parameters.push(input.since)
+    }
+    if (input.failures === true)
+      conditions.push(workflowFailureCondition)
+    const where = conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`
+    const rows = database.prepare(`
+      SELECT * FROM workflow_events ${where}
+      ORDER BY occurred_at DESC, id DESC LIMIT ?
+    `).all(...parameters, limit)
     return (rows as unknown as Array<{
       id: number
       stream: WorkflowEventStream
@@ -13965,6 +14039,58 @@ export function openJournalStore(
       usage: row.usage === null ? null : JSON.parse(row.usage) as AgentTokenUsage,
       occurredAt: row.occurred_at,
     }))
+  }
+
+  const groupWorkflowFailures: JournalStore['groupWorkflowFailures'] = ({ since }) => {
+    const rows = database.prepare(`
+      WITH failures AS (
+        SELECT id, stream, event, to_state, substr(reason, 1, 80) AS reason_key, attempt,
+          entity_id, repository, item_number, occurred_at
+        FROM workflow_events WHERE occurred_at >= ? AND ${workflowFailureCondition}
+      ), ranked AS (
+        SELECT *,
+          ROW_NUMBER() OVER (PARTITION BY stream, event, to_state, reason_key ORDER BY occurred_at DESC, id DESC) AS position,
+          COUNT(*) OVER (PARTITION BY stream, event, to_state, reason_key) AS count,
+          SUM(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) OVER (PARTITION BY stream, event, to_state, reason_key) AS retried,
+          MAX(occurred_at) OVER (PARTITION BY stream, event, to_state, reason_key) AS newest
+        FROM failures
+      )
+      SELECT * FROM ranked WHERE position <= 3
+      ORDER BY count DESC, newest DESC, stream, event, to_state, reason_key, position
+    `).all(since) as unknown as Array<{
+      id: number
+      stream: WorkflowEventStream
+      event: string
+      to_state: string
+      reason_key: string | null
+      entity_id: string
+      repository: string | null
+      item_number: number | null
+      occurred_at: string
+      position: number
+      count: number
+      retried: number
+      newest: string
+    }>
+    const groups: WorkflowFailureGroup[] = []
+    for (const row of rows) {
+      const example = { id: row.id, entityId: row.entity_id, repository: row.repository, itemNumber: row.item_number, occurredAt: row.occurred_at }
+      if (row.position > 1) {
+        groups.at(-1)?.examples.push(example)
+        continue
+      }
+      groups.push({
+        stream: row.stream,
+        event: row.event,
+        to: row.to_state,
+        reason: row.reason_key,
+        count: row.count,
+        retried: row.retried,
+        newestOccurredAt: row.newest,
+        examples: [example],
+      })
+    }
+    return groups
   }
 
   const providerFailureThreshold = 3
@@ -17178,6 +17304,14 @@ export function openJournalStore(
     getDashboardSnapshot,
     getStats,
     listWorkflowEvents,
+    groupWorkflowFailures,
+    summarizeWorkflowEvents: ({ since }) => (database.prepare(`
+      SELECT stream, event, to_state AS "to", COUNT(*) AS count,
+        SUM(CASE WHEN reason IS NOT NULL THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) AS retried
+      FROM workflow_events WHERE occurred_at >= ?
+      GROUP BY stream, event, to_state ORDER BY count DESC
+    `).all(since) as unknown as WorkflowEventSummary[]).map(row => ({ ...row })),
     providerCanStart,
     reserveProviderStart,
     releaseProviderStart,
