@@ -1222,9 +1222,8 @@ describe('running a daily check-in only when the site changed', () => {
 
   const withRuns = (workflowRuns: RoutineGitHubEvidence['workflowRuns']): RoutineGitHubEvidenceSource['collect'] => async () => ({ observedAt: now().toISOString(), issues: { _tag: 'Available', entries: [], truncated: false }, pullRequests: { _tag: 'Available', entries: [], truncated: false }, workflowRuns, deployments: { _tag: 'Available', entries: [], truncated: false }, deploymentStatuses: [], jobLogs: { _tag: 'NotRequested' }, ownership: { _tag: 'NotRequested' } })
 
-  async function check(store: ReturnType<typeof openJournalStore>, collect = withRuns({ _tag: 'Unavailable', reason: 'Controller cannot read Actions' })) {
-    const capture = { prompts: [] as string[], requests: [] as AgentTurnRequest[], prepared: 0 }
-    const result = await createRoutineScanWorker({
+  function checkinWorker(store: ReturnType<typeof openJournalStore>, collect: RoutineGitHubEvidenceSource['collect'], capture: { prompts: string[], requests: AgentTurnRequest[], prepared: number }) {
+    return createRoutineScanWorker({
       writeCheckinEvidence: async () => undefined,
       githubEvidence: { collect },
       logger: { error: () => undefined, info: () => undefined },
@@ -1237,7 +1236,12 @@ describe('running a daily check-in only when the site changed', () => {
           return ok({ path: '/tmp/routine', baseSha: 'abc123', headSha: 'abc123', defaultBranchSha: 'abc123' })
         },
       },
-    }).run(claimStoredRun(store), new AbortController().signal)
+    })
+  }
+
+  async function check(store: ReturnType<typeof openJournalStore>, collect = withRuns({ _tag: 'Unavailable', reason: 'Controller cannot read Actions' })) {
+    const capture = { prompts: [] as string[], requests: [] as AgentTurnRequest[], prepared: 0 }
+    const result = await checkinWorker(store, collect, capture).run(claimStoredRun(store), new AbortController().signal)
     return { result, turns: capture.requests.length, prepared: capture.prepared }
   }
 
@@ -1369,6 +1373,49 @@ describe('running a daily check-in only when the site changed', () => {
 
       expect(await check(store, async (_mapping, _signal, _jobs, workflowBranch) => collectRoutineGitHubEvidence({ repository: 'harlan-zw/example', now, read, ...(workflowBranch === undefined ? {} : { workflowBranch }) })))
         .toMatchObject({ result: { _tag: 'Ok' }, turns: 1 })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('keeps comparing through stored unchanged runs until a deploy lands', async () => {
+    const store = storeFor({ takeOwnership: deployProd })
+    try {
+      let runs: RoutineGitHubEvidence['workflowRuns'] = { _tag: 'Available', entries: [deployRun('2026-08-23T12:00:00Z')], truncated: false }
+      const capture = { prompts: [] as string[], requests: [] as AgentTurnRequest[], prepared: 0 }
+      const scheduler = createWorkerTaskScheduler({
+        claim: store.claimNextRoutineRun,
+        complete: store.completeRoutineRun,
+        fail: store.failRoutineRun,
+        heartbeat: store.heartbeatRoutineRun,
+        intervalMilliseconds: 60_000,
+        leaseMilliseconds: 60_000,
+        now,
+        onError: (error) => { throw error },
+        permits: createAgentPermitPool(1),
+        worker: checkinWorker(store, async (...input) => withRuns(runs)(...input), capture),
+        workerId: 'worker-1',
+      })
+      for (const day of ['2026-08-24', '2026-08-25', '2026-08-26']) {
+        open(store, `${day}T07:00:00.000Z`, 'abc123')
+        await scheduler.runNow()
+      }
+      const [first, second] = [`${routineId}:2026-08-24T07:00:00.000Z`, `${routineId}:2026-08-25T07:00:00.000Z`]
+
+      expect(store.listRoutineRuns(routineId).map(run => ({ state: run.state, usage: run.usage }))).toEqual([
+        { state: { _tag: 'Completed', evidence: expect.stringContaining(`| unchanged since run ${second} |`) }, usage: { _tag: 'Unavailable' } },
+        { state: { _tag: 'Completed', evidence: expect.stringContaining(`| unchanged since run ${first} |`) }, usage: { _tag: 'Unavailable' } },
+        { state: { _tag: 'Completed', evidence: 'daily-checkin on harlan-zw/example | 0 found | 0 new | 0 already known | 0 outside allowed scope | 0 over 5 files | 0 issues requested' }, usage: expect.anything() },
+      ])
+      expect(capture.requests).toHaveLength(1)
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)?.runId).toBe(first)
+
+      runs = { _tag: 'Available', entries: [deployRun('2026-08-26T12:00:00Z')], truncated: false }
+      open(store, today, 'abc123')
+      await scheduler.runNow()
+      expect(capture.requests).toHaveLength(2)
+      await scheduler.stop()
     }
     finally {
       store.close()
