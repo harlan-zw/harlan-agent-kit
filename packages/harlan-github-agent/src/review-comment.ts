@@ -1,3 +1,4 @@
+import type { PullRequestCommand } from './repository-policy.ts'
 import type { ReviewFinding } from './types.ts'
 import { cleanText } from './text.ts'
 
@@ -55,6 +56,29 @@ export function automatedDisclosure(input: AutomatedDisclosure): string {
     ...(input.notes ?? []),
     ...(input.updatedAt === undefined ? [] : [`Last updated: ${input.updatedAt}.`]),
   ].join(' ')}`
+}
+
+const COMMAND_LINE_START = 'Comment `@harlan-agent '
+
+const commandPhrases: Record<PullRequestCommand, string> = {
+  Change: '`@harlan-agent <change to make>` to request a change',
+  Rerun: '`@harlan-agent rerun` to review this commit again',
+}
+
+/**
+ * The last line of the canonical comment: the commands this pull request accepts.
+ *
+ * GitHub's mention picker does not offer the App, so a person cannot discover
+ * the commands from the comment box. Code spans keep the handle from notifying
+ * the Organization and keep `<change to make>` visible.
+ */
+export function pullRequestCommandFooter(commands: readonly PullRequestCommand[]): string | undefined {
+  const phrases = (['Change', 'Rerun'] as const).filter(command => commands.includes(command)).map(command => commandPhrases[command])
+  return phrases.length === 0 ? undefined : `Comment ${phrases.join(', or ')}.`
+}
+
+export function isPullRequestCommandFooter(line: string): boolean {
+  return line.startsWith(COMMAND_LINE_START)
 }
 
 export type PriorAutomatedReview

@@ -882,6 +882,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       workerId: randomUUID(),
     })
     const subjectWorkerOptions = {
+      allowedAuthors: config.github.allowedOwners,
       mediaSource,
       activityLog,
       claudeHome: agentContext.value.claudeHome,
@@ -1251,6 +1252,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     if (baseline._tag === 'Err')
       options.logger.error(`Baseline repair: ${baseline.error}`)
     const settled = await refreshReviewGates({
+      allowedAuthors: config.github.allowedOwners,
       github: workerGithub,
       now,
       preflightRepair: (name, refreshSignal) => preflightGitHubWriteAccess(tokens, name, ['contents_write'], refreshSignal),

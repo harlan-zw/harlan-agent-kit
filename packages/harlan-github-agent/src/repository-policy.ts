@@ -86,3 +86,32 @@ export function canReleasePackages(mapping: RepositoryMapping): boolean {
     return true
   return mapping.ownership === 'maintained' && mapping.release.credential._tag === 'User'
 }
+
+/** One pull request comment command, tagged as `parsePullRequestCommand` tags it. */
+export type PullRequestCommand = 'Change' | 'Rerun'
+
+/**
+ * The comment commands the controller accepts on this pull request.
+ *
+ * Mirrors the command sync and the store, so the canonical comment never offers
+ * a command they refuse. An author needs both `allowedAuthors` and a writable
+ * author entry. A change also needs the owner of an owned repository and a
+ * writable head branch. Mergeability, Approval, Dismissal, and a stopped Review
+ * stay with the store, which reads them from the journal.
+ */
+export function acceptedPullRequestCommands(
+  mapping: RepositoryMapping,
+  pullRequest: GitHubPullRequestItem,
+  allowedAuthors: readonly string[],
+): PullRequestCommand[] {
+  if (!mapping.enabled || !mapping.pullRequestReview || pullRequest.state !== 'open' || pullRequest.draft)
+    return []
+  const allowed = new Set(allowedAuthors.map(author => author.toLowerCase()))
+  const authors = mapping.writablePullRequestAuthors.map(author => author.toLowerCase()).filter(author => allowed.has(author))
+  if (authors.length === 0)
+    return []
+  const owner = mapping.github.split('/')[0]!.toLowerCase()
+  return mapping.ownership === 'owned' && authors.includes(owner) && canRepairPullRequestHead(mapping, pullRequest)
+    ? ['Change', 'Rerun']
+    : ['Rerun']
+}

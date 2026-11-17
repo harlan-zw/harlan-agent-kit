@@ -1,5 +1,5 @@
 import type { ReviewFinding } from './types.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedReviewHead } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, isPullRequestCommandFooter } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type LoggedReviewFinding = Extract<ReviewFinding, { _tag: 'Logged' }>
@@ -26,7 +26,7 @@ const statusPattern = /^ {2}(?:- \[[ xX]\] Ask an agent to verify and fix this f
 
 /** Removes controller decorations when another canonical writer compares its source body. */
 export function withoutLoggedFindingControls(body: string): string {
-  return body.replace(statusPattern, '').split('\n').filter(line => line !== pickupHint).join('\n').trimEnd()
+  return body.replace(statusPattern, '').replaceAll(`\n\n${pickupHint}`, '').split('\n').filter(line => line !== pickupHint).join('\n').trimEnd()
 }
 
 export function normalizeLoggedFindingControls(body: string): string {
@@ -55,7 +55,13 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
       ? control(finding.details.fingerprint)
       : `  Repair: ${status.status.replace(/\s+/g, ' ').trim()} <!-- logged-finding: ${finding.details.fingerprint} -->`]
   }).join('\n')
-  return decorated.includes('Ask an agent to verify and fix this finding') ? `${decorated}\n\n${pickupHint}` : decorated
+  if (!decorated.includes('Ask an agent to verify and fix this finding'))
+    return decorated
+  // The command line stays last, so the hint goes above it.
+  const commandLine = decorated.split('\n').at(-1)
+  return commandLine !== undefined && isPullRequestCommandFooter(commandLine)
+    ? `${decorated.slice(0, -commandLine.length)}${pickupHint}\n\n${commandLine}`
+    : `${decorated}\n\n${pickupHint}`
 }
 
 function object(value: unknown): Record<string, unknown> {
