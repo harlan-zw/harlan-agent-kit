@@ -1,6 +1,6 @@
 import type { ImplicitSignal, ImplicitSignalQuery } from '../implicit-signal-store.ts'
 import type { Result } from '../result.ts'
-import type { AgentFeedbackSignal, Candidate, RoutineMode, RoutineName } from '../types.ts'
+import type { AgentFeedbackSignal, Candidate, OpenCandidateIssue, RoutineMode, RoutineName } from '../types.ts'
 
 export type RoutineCandidate = Pick<Candidate, 'fingerprint' | 'title' | 'target' | 'claim' | 'verification' | 'estimatedChangedFiles'>
 
@@ -32,6 +32,8 @@ export interface RoutineScanInput {
   repository: string
   mode: RoutineMode
   priorCandidates: readonly Candidate[]
+  /** Issues this Routine filed that are still open. Absent means none. */
+  openIssues?: readonly OpenCandidateIssue[]
   feedback?: readonly AgentFeedbackSignal[]
   /** What a person did on GitHub to agent work. Never Agent feedback. */
   signals?: readonly ImplicitSignal[]
@@ -53,7 +55,8 @@ export interface RoutineDefinition {
   prepare: (repository: string, evidence: RoutineEvidence) => Result<RoutinePreparation, string>
   scanPrompt: (input: RoutineScanInput) => string
   parseResponse: (input: unknown) => Result<RoutineScanResponse, string>
-  selectCandidates: (candidates: readonly RoutineCandidate[]) => RoutineCandidate[]
+  /** Open issues let a Routine drop work that an open issue already holds. */
+  selectCandidates: (candidates: readonly RoutineCandidate[], openIssues?: readonly OpenCandidateIssue[]) => RoutineCandidate[]
   maximumChangedFiles: number | null
   findingsLabel: string
   issueFingerprint: (candidateFingerprint: string) => string

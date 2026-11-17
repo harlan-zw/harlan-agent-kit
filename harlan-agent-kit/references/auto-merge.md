@@ -26,7 +26,7 @@ Remove the label when a pull request grows past the change it was added for.
 
 ## Dependency updates
 
-The dependency-updates Routine files up to two issues for each repository: one for minor and patch updates, and one for major updates. A `0.x` minor, a `0.0.x` patch, and a prerelease count as major. Only the minor and patch pull request can qualify for the label.
+The dependency-updates Routine files up to two issues for each repository: one for minor and patch updates, and one for major updates. A `0.x` minor, a `0.0.x` patch, and a prerelease count as major. Only the minor and patch pull request can qualify for the label. An open issue of one kind never stops a Candidate of the other kind. A combined issue from before the split holds both kinds until it closes.
 
 The controller adds the label itself to a pull request from the dependency-updates Routine. It reads the published commit, never the Agent's description. It adds the label only when all of these hold:
 

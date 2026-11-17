@@ -69,6 +69,7 @@ import type {
   ItemSummary,
   MergeRiskRecord,
   OpenAgentPullRequest,
+  OpenCandidateIssue,
   PinnedAgentSelection,
   PreparedPublication,
   ProviderCircuit,
@@ -972,6 +973,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   reconcileRoutineCandidates: (at: string, repository?: string) => number
   /** Finds controller-owned Routine provenance for one published Candidate issue. */
   getRoutineIssueSource: (repository: string, issueNumber: number) => RoutineIssueSource | null
+  listOpenCandidateIssues: (routineId: string) => OpenCandidateIssue[]
   /** Requests one issue per Candidate. Answers how many are new. */
   stageCandidateIssues: (input: { commands: readonly CandidateIssueCommand[], at: string }) => number
   claimNextCandidateIssue: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedCandidateIssueCommand | null
@@ -16525,6 +16527,17 @@ export function openJournalStore(
     return row === undefined ? null : { routineName: row.routine_name, target: row.target, fingerprint: row.fingerprint, claim: row.claim }
   }
 
+  /** Reconcile keeps a filed Candidate Proposed until its issue closes or its pull request merges. */
+  const listOpenCandidateIssues: JournalStore['listOpenCandidateIssues'] = routineId =>
+    (database.prepare(`
+      SELECT candidates.fingerprint, commands.github_issue_number
+      FROM candidates
+      JOIN candidate_issue_commands commands ON commands.candidate_id = candidates.id AND commands.state_tag = 'Published'
+      WHERE candidates.routine_id = ? AND candidates.result_tag = 'Proposed'
+      ORDER BY commands.github_issue_number, candidates.fingerprint
+    `).all(routineId) as Array<{ fingerprint: string, github_issue_number: number }>)
+      .map(row => ({ fingerprint: row.fingerprint, issueNumber: row.github_issue_number }))
+
   /** Rebuild outcomes from controller publication provenance and current GitHub Observations. */
   const reconcileRoutineCandidates: JournalStore['reconcileRoutineCandidates'] = (at, repository) => {
     const rows = database.prepare(`
@@ -17393,6 +17406,7 @@ export function openJournalStore(
     skipRoutineRun,
     getRoutineRun: readRunById,
     getRoutineIssueSource,
+    listOpenCandidateIssues,
     listRoutineRuns,
     retireRoutines,
     recordCandidates,

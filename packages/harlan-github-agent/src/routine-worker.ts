@@ -2,9 +2,10 @@ import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentPhase } from './agent-progress.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
+import type { GitHubSource } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { ClaimedRoutineRun, ServiceUpdateStatus } from './types.ts'
+import type { ClaimedRoutineRun, OpenCandidateIssue, ServiceUpdateStatus } from './types.ts'
 import type { RoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
 import { agentPhase } from './agent-progress.ts'
@@ -21,6 +22,7 @@ import { getRoutine } from './routines/index.ts'
 import { collectTrialReportEvidence } from './trial-report.ts'
 
 export interface RoutineScanWorkerOptions {
+  github: Pick<GitHubSource, 'getIssue'>
   serviceEvidence?: Pick<JournalStore, 'groupWorkflowFailures' | 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents' | 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt' | 'listTrialRetroCandidates' | 'listReadyPullRequests'>
   /** Repositories GitHub reports as public. The `ready-digest` list shows titles only for these. */
   publicRepositories?: ReadonlySet<string>
@@ -32,7 +34,7 @@ export interface RoutineScanWorkerOptions {
   maximumChangedFiles?: number
   now: () => Date
   runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'agentSessionTotal' | 'listAgentFeedback' | 'listCandidates' | 'listImplicitSignals' | 'listRoutineRuns' | 'listRoutines' | 'recordAgentTurn' | 'recordCandidates' | 'stageCandidateIssues' | 'stageRoutineReport' | 'updateRoutineRunProgress'>
+  store: Pick<JournalStore, 'agentSessionTotal' | 'listAgentFeedback' | 'listCandidates' | 'listImplicitSignals' | 'listOpenCandidateIssues' | 'listRoutineRuns' | 'listRoutines' | 'recordAgentTurn' | 'recordCandidates' | 'recordPollObservation' | 'reconcileRoutineCandidates' | 'stageCandidateIssues' | 'stageRoutineReport' | 'updateRoutineRunProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareRoutine'>
 }
 
@@ -186,6 +188,19 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           : task.name === 'trial-report'
             ? collectTrialReportEvidence(options.serviceEvidence, options.now())
             : collectAgentRetroEvidence(options.serviceEvidence, options.now())
+      // Only dependency-updates reads its open issues, so no other Routine pays for these reads.
+      // Routine-only services have no poller to observe closure, so read each issue exactly.
+      let openIssues: OpenCandidateIssue[] = []
+      if (task.name === 'dependency-updates') {
+        for (const number of new Set(options.store.listOpenCandidateIssues(task.routineId).map(issue => issue.issueNumber))) {
+          const issue = await options.github.getIssue(task.repositoryMapping, number, signal)
+          if (issue._tag === 'Err')
+            return err(issue.error.message)
+          options.store.recordPollObservation({ subject: issue.value, observedAt: options.now().toISOString() })
+        }
+        options.store.reconcileRoutineCandidates(options.now().toISOString(), task.repository)
+        openIssues = options.store.listOpenCandidateIssues(task.routineId)
+      }
       const turn = await runAgentTurn(
         {
           ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),
@@ -202,6 +217,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
             mode: task.mode,
             name: task.name,
             priorCandidates: options.store.listCandidates(task.routineId),
+            openIssues,
             repository: task.repository,
             feedback: preparation.value.feedback,
             ...(preparation.value.signals === undefined ? {} : { signals: preparation.value.signals }),
@@ -237,7 +253,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
 
       // Oversized proposals are dropped here rather than recorded and skipped
       // later, so the ledger never holds a Candidate nothing will ever open.
-      const inScope = definition.selectCandidates(response.candidates)
+      const inScope = definition.selectCandidates(response.candidates, openIssues)
       const withinSize = maximumChangedFiles === null
         ? inScope
         : inScope.filter(candidate => candidate.estimatedChangedFiles <= maximumChangedFiles)

@@ -187,6 +187,7 @@ describe('ready-digest', () => {
       throw new Error('Expected the ready-digest run.')
     const turns: string[] = []
     const worker = createRoutineScanWorker({
+      github: { getIssue: async () => { throw new Error('ready-digest reads no issue.') } },
       serviceEvidence: store,
       publicRepositories: new Set(['harlan-zw/example']),
       logger: { error: () => undefined, info: () => undefined },
@@ -212,8 +213,8 @@ describe('ready-digest', () => {
   })
 
   it('runs only in the kit', () => {
-    expect(getRoutine('ready-digest').prepare('harlan-zw/example', { listAgentFeedback: () => [] })._tag).toBe('Err')
-    expect(getRoutine('ready-digest').prepare(kit, { listAgentFeedback: () => [] })._tag).toBe('Ok')
+    expect(getRoutine('ready-digest').prepare('harlan-zw/example', { listAgentFeedback: () => [], listImplicitSignals: () => [] })._tag).toBe('Err')
+    expect(getRoutine('ready-digest').prepare(kit, { listAgentFeedback: () => [], listImplicitSignals: () => [] })._tag).toBe('Ok')
   })
 })
 
