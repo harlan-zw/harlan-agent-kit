@@ -197,6 +197,9 @@ const TUNE_WASTED_SHARE = 0.5
 /** Below this many settled outcomes, one outcome can swing the verdict, so none is given. */
 const MINIMUM_SETTLED = 5
 
+/** Below this much of Harlan's time in spend, cutting saves less than deciding to cut costs. */
+const CUT_MINIMUM_MINUTES = 15
+
 /** Above this share of Agent turns with no recorded outcome, no verdict is honest. */
 const MEASURE_FIRST_UNRECORDED_SHARE = 0.5
 
@@ -211,7 +214,12 @@ function turnUsd(usage: Extract<AgentTokenUsage, { _tag: 'Available' }>, rate: P
   return (fresh * rate.input + usage.cachedInput * rate.cachedInput + usage.cacheWrite * rate.cacheWrite + usage.output * rate.output) / 1_000_000
 }
 
-function verdict(work: PaybackWork, outcomes: PaybackKind['outcomes'], unrecordedShare: number, wastedShare: number | null, spent: boolean): PaybackVerdict {
+/** Spend worth cutting: any spend when its minutes are unknown, otherwise at least the floor. */
+function worthCutting(spent: boolean, spendMinutes: number | null): boolean {
+  return spent && (spendMinutes === null || spendMinutes >= CUT_MINIMUM_MINUTES)
+}
+
+function verdict(work: PaybackWork, outcomes: PaybackKind['outcomes'], unrecordedShare: number, wastedShare: number | null, cuttable: boolean): PaybackVerdict {
   if (unrecordedShare > MEASURE_FIRST_UNRECORDED_SHARE)
     return { _tag: 'MeasureFirst', reason: 'No useful outcome is recorded for most of this work yet.' }
   const settled = outcomes.useful + outcomes.wasted + outcomes.actionRequired + outcomes.quiet
@@ -220,8 +228,8 @@ function verdict(work: PaybackWork, outcomes: PaybackKind['outcomes'], unrecorde
   if (settled < MINIMUM_SETTLED)
     return { _tag: 'MeasureFirst', reason: `Fewer than ${MINIMUM_SETTLED} settled in this range.` }
   if (work._tag !== 'Role')
-    return routineVerdict(outcomes, wastedShare, spent)
-  if (outcomes.useful === 0 && outcomes.wasted > 0 && spent)
+    return routineVerdict(outcomes, wastedShare, cuttable)
+  if (outcomes.useful === 0 && outcomes.wasted > 0 && cuttable)
     return { _tag: 'Cut', reason: `${outcomes.wasted} settled, none useful.` }
   if (wastedShare !== null && wastedShare > TUNE_WASTED_SHARE)
     return { _tag: 'Tune', reason: `${Math.round(wastedShare * 100)}% of Agent turns went to work that produced nothing or needs Action required.` }
@@ -229,9 +237,9 @@ function verdict(work: PaybackWork, outcomes: PaybackKind['outcomes'], unrecorde
 }
 
 /** A Routine pays for its Quiet runs, but only closed proposals, failed scans, and blockers count as wasted. */
-function routineVerdict(outcomes: PaybackKind['outcomes'], wastedShare: number | null, spent: boolean): PaybackVerdict {
+function routineVerdict(outcomes: PaybackKind['outcomes'], wastedShare: number | null, cuttable: boolean): PaybackVerdict {
   const runs = outcomes.quiet + outcomes.wasted
-  if (outcomes.useful === 0 && runs > 0 && spent)
+  if (outcomes.useful === 0 && runs > 0 && cuttable)
     return { _tag: 'Cut', reason: `${runs} ${runs === 1 ? 'run' : 'runs'}, no merged proposal.` }
   if (wastedShare !== null && wastedShare > TUNE_WASTED_SHARE)
     return { _tag: 'Tune', reason: `${Math.round(wastedShare * 100)}% of settled Agent turns went to closed proposals, failed scans, or Action required.` }
@@ -318,6 +326,9 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
       ? costPerUseful / input.pricing.hourlyValue * 60
       : null
     const spent = turns.some(turn => turn.usage._tag === 'Available' && turn.usage.input + turn.usage.output > 0)
+    const spendMinutes = cost._tag === 'Priced' && input.pricing.hourlyValue !== null && input.pricing.hourlyValue > 0
+      ? cost.usd / input.pricing.hourlyValue * 60
+      : null
     return {
       work,
       agentTurns: turns.length,
@@ -329,7 +340,7 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
       costPerUseful,
       wastedShare,
       breakEvenMinutes,
-      verdict: verdict(work, outcomes, unrecordedShare, wastedShare, spent),
+      verdict: verdict(work, outcomes, unrecordedShare, wastedShare, worthCutting(spent, spendMinutes)),
     }
   })
   return { ratesCheckedOn: input.pricing.ratesCheckedOn, hourlyValue: input.pricing.hourlyValue, kinds }

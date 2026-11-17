@@ -62,6 +62,7 @@ did not cover it.
 | Agent turn | `agent_turns` | Runner | N to 1 Task, Review run, or Routine run | Agent turn |
 | Turn usage | `agent_turns.usage` | Runner | One per Agent turn | usage |
 | Payback | derived from `agent_turns` and Task outcomes | Control API | One per kind of work per date range | Payback |
+| Agent blocker | `baseline_repair_blockers` | Scheduler | One per pull request head commit and failure | blocker |
 | Review gate | `review_runs.gates` | Controller | Three per Review run | gate |
 | Review outcome | `review_runs.outcome_tag` | Controller | One per Review run | READY, PENDING, or BLOCKED |
 | Running label | `harlan-agent-running` label | GitHub | One per Item with a Running Task | none |
@@ -593,8 +594,18 @@ Each Routine gets its own row, judged by the issues its runs filed. A completed 
 Work whose outcome the Journal does not record reads Measure first. So does work with fewer than 5 settled outcomes in the range.
 Dollars come from the dated rates in `payback.rates`. Break-even minutes also need `payback.hourly_value`.
 Each kind gets one verdict: Keep, Tune, Cut, or Measure first. A verdict recommends a change; Harlan decides it.
+Cut needs spend of at least 15 minutes of Harlan's time in the range. Cheaper work with nothing to show reads Keep.
 
 Do not use ROI, value score, impact score, cost-benefit, efficiency, or worth.
+
+### Agent blocker
+
+The reason an Agent stopped a Baseline repair, kept for one pull request head commit and one failure.
+
+A later Baseline repair with the same failure on the same head goes straight to Action required with that reason. It starts no Agent turn.
+A new head commit or a different failure starts a new Agent turn.
+
+Use Agent blocker. Do not use stuck, blocked reason, or stop reason.
 
 ### Agent feedback
 
