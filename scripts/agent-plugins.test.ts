@@ -1,6 +1,6 @@
 import type { ProviderState } from './agent-plugins.ts'
 import { describe, expect, it } from 'vitest'
-import { planPluginSync } from './agent-plugins.ts'
+import { planPluginSync, pluginStateProblems } from './agent-plugins.ts'
 
 const checkout = '/home/harlan/pkg/harlan-agent-kit'
 const absent: ProviderState = { _tag: 'Absent' }
@@ -42,5 +42,18 @@ describe('planPluginSync', () => {
 
   it('keeps a plugin the user disabled', () => {
     expect(planPluginSync(checkout, { claude: current('Disabled'), codex: current('Disabled') })).toEqual([])
+  })
+})
+
+describe('pluginStateProblems', () => {
+  // A settings rewrite once dropped the kit's enable flag, and the check stayed green.
+  it('reports a disabled plugin, because a settings rewrite can disable it without anyone choosing to', () => {
+    expect(pluginStateProblems(checkout, { claude: current('Disabled'), codex: absent })).toEqual([
+      'The claude kit plugin is disabled. If that was not deliberate, run: claude plugin enable harlan-agent-kit@harlan-agent-kit',
+    ])
+  })
+
+  it('reports nothing for a current, enabled install', () => {
+    expect(pluginStateProblems(checkout, { claude: current('Enabled'), codex: current('Enabled') })).toEqual([])
   })
 })

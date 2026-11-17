@@ -91,18 +91,33 @@ async function fastForward(checkout: string): Promise<void> {
   await git(['merge', '--ff-only', '--quiet', 'origin/main'])
 }
 
-/** Reports a missing install, a marketplace on another folder, or a stale Codex copy. */
-async function check(checkout: string, states: Record<Provider, ProviderState>): Promise<string[]> {
-  const problems: string[] = []
-  for (const provider of providers) {
+/**
+ * Reports a missing, disabled, or misplaced install. Sync leaves a disabled plugin alone,
+ * but a settings rewrite can disable it without anyone choosing to, so the check says so.
+ */
+export function pluginStateProblems(checkout: string, states: Record<Provider, ProviderState>): string[] {
+  return providers.flatMap((provider) => {
     const state = states[provider]
-    if (state._tag === 'Absent' || state.plugin === 'Disabled')
-      continue
+    if (state._tag === 'Absent')
+      return []
+    if (state.plugin === 'Disabled') {
+      const enable = provider === 'claude'
+        ? `run: claude plugin enable ${pluginId}`
+        : `set enabled = true under [plugins."${pluginId}"] in ~/.codex/config.toml`
+      return [`The ${provider} kit plugin is disabled. If that was not deliberate, ${enable}`]
+    }
+    const problems: string[] = []
     if (state.plugin === 'Missing')
       problems.push(`The ${provider} kit plugin is not installed.`)
     if (state.marketplaceRoot !== checkout)
       problems.push(`The ${provider} kit marketplace reads ${state.marketplaceRoot ?? 'nothing'}, not ${checkout}.`)
-  }
+    return problems
+  })
+}
+
+/** Adds a stale Codex copy to the state problems. */
+async function check(checkout: string, states: Record<Provider, ProviderState>): Promise<string[]> {
+  const problems = pluginStateProblems(checkout, states)
   if (states.codex._tag === 'Present' && states.codex.plugin === 'Enabled') {
     const manifest = JSON.parse(await readFile(join(checkout, 'harlan-agent-kit/.codex-plugin/plugin.json'), 'utf8')) as { version: string }
     const cache = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'plugins/cache', marketplace, 'harlan-agent-kit', manifest.version)
