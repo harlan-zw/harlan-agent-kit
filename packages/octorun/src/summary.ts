@@ -15,9 +15,11 @@ Select:
 - Default to one or two sentences and no bullets.
 - Add bullets only for other independent changes the reader notices. Most pull requests need none.
 - Leave out tests, documentation, refactors, file lists, edge cases, and internal function, type, or store names.
+- If nothing changes for the reader, say what changed in one sentence.
 
 Write:
 - Describe the new behavior in plain words. No praise.
+- Keep the condition that turns a behavior on. Say when a new feature is off by default.
 - Keep exact package names, options, commands, labels, and versions that the reader uses.
 - Keep a measured number only with its baseline. Never estimate one.
 - Name a limit only when it changes the reader's decision.
