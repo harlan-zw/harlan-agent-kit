@@ -26,7 +26,9 @@ branch=$(git branch --show-current 2>/dev/null)
 [ "$branch" = "main" ] || [ "$branch" = "master" ] && exit 0
 
 # Check if branch has a merged PR (cache per session)
-CACHE_FILE="/tmp/claude-merged-branch-${CLAUDE_SESSION_ID:-$$}"
+# Claude Code sends session_id on stdin. The opencode plugin sets CLAUDE_SESSION_ID.
+session=$(echo "$input" | jq -r '.session_id // empty')
+CACHE_FILE="/tmp/claude-merged-branch-${session:-${CLAUDE_SESSION_ID:-$$}}"
 if [ -f "$CACHE_FILE" ] && grep -qF "$branch" "$CACHE_FILE"; then
   deny "Branch \`$branch\` has a merged PR. Switch to a new branch or main before making changes."
 fi
