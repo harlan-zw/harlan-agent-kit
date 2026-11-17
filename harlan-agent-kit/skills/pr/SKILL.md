@@ -205,7 +205,8 @@ Log the URL to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
 For an Agent-submitted pull request in a repository tracked by `harlan-github-agent`, decide whether it needs `harlan-agent-review`.
 Read the Selection mode from `harlan-github-agent control status` (`.state.selectionMode`).
 In `auto` mode the Service reviews every pull request that changes a non-prose path, so add no label.
-Prose paths are `.md`, `.mdx`, `.txt`, `LICENSE*`, `CHANGELOG*`, and `docs/`. Skills, `AGENTS.md`, `CLAUDE.md`, `GLOSSARY.md`, `.github/`, `.claude/`, and `agent-context/` are not prose.
+Prose paths are `.md`, `.mdx`, `.txt`, `LICENSE*`, `CHANGELOG*`, and `docs/`. `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, `GLOSSARY.md`, and files under `.github/`, `.claude/`, `.codex*/`, or `agent-context/` are not prose.
+A Skill's `references/` Markdown is prose, so a change to it alone needs the label.
 Add the label only when the mode is `manual`, or when every changed path is prose and classification could skip Review.
 If the control CLI fails, add the label. A missing Review costs more than two label events.
 Each label add and its consume write two events to the pull request's Activity panel.
