@@ -18,12 +18,12 @@ import { contextBudgetExhaustedReason, repeatedAgentResultReason } from './failu
 import { err, ok } from './result.ts'
 
 /**
- * How often one unchanged phase restates itself on the pull request.
+ * How often one unchanged phase restates itself to the Journal.
  *
  * Progress only moves forward, so a Repair that edits files for forty minutes
- * publishes one line and then goes quiet. A reader could not tell that from an
- * agent that had died. A slow beat proves the agent is still producing events,
- * and stays far below the noise of a comment per file.
+ * reports one phase and then goes quiet. The Dashboard could not tell that
+ * from an agent that had died. A slow beat proves the agent still produces
+ * events. The canonical comment holds still, so a beat writes nothing to GitHub.
  */
 const PROGRESS_HEARTBEAT_MILLISECONDS = 15 * 60_000
 
@@ -177,8 +177,7 @@ export async function runAgentTurn(
   let lastUsage: Extract<AgentEvent, { _tag: 'Usage' }> | undefined
   let answered = false
   let current = input.progress?.current
-  let phaseSince = options.now().toISOString()
-  let reportedAt = phaseSince
+  let reportedAt = options.now().toISOString()
   // Every turn lands in the ledger, a failed or thrown one included.
   const usage = (): AgentTokenUsage => lastUsage === undefined
     ? { _tag: 'Unavailable' }
@@ -224,9 +223,7 @@ export async function runAgentTurn(
         const stale = new Date(at).getTime() - new Date(reportedAt).getTime() >= PROGRESS_HEARTBEAT_MILLISECONDS
         if (advanced !== undefined || stale) {
           const phase = advanced ?? current
-          if (advanced !== undefined)
-            phaseSince = at
-          const reported = await input.progress.report({ ...phase, since: phaseSince })
+          const reported = await input.progress.report(phase)
           if (reported._tag === 'Err') {
             failure ??= reported.error
           }

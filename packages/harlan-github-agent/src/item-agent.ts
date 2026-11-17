@@ -2,7 +2,7 @@ import type { AgentActivityLog } from './agent-activity.ts'
 import type { RepositoryMemory } from './agent-context.ts'
 import type { AgentLabelState } from './agent-label.ts'
 import type { AgentRuntime, AgentRuntimeSource } from './agent-profile.ts'
-import type { AgentPhase, AgentPhaseTag } from './agent-progress.ts'
+import type { AgentPhase } from './agent-progress.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
 import type { CiGateCause } from './ci-gate-pending.ts'
 import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, IssueTriageSnapshot, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
@@ -15,7 +15,7 @@ import type { PullRequestCommand } from './repository-policy.ts'
 import type { Result } from './result.ts'
 import type { ReviewReasoningEffort, ReviewReasoningEffortPolicy } from './review-effort.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
-import type { JournalStore } from './store.ts'
+import type { JournalStore, QueuedReviewHistory } from './store.ts'
 import type {
   ClaimedAdversarialReviewTask,
   ClaimedAgentTask,
@@ -36,7 +36,7 @@ import type { AgentWorkspaceManager } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { findRepositoryMemory, GITHUB_MEDIA_LINES, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
 import { agentProfile } from './agent-profile.ts'
-import { agentPhase, formatPhaseDuration } from './agent-progress.ts'
+import { agentPhase } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { REVIEW_REPAIR_REFUSALS } from './failure.ts'
@@ -45,6 +45,7 @@ import { currentGitHubChecks } from './github-agent-source.ts'
 import { mediaEvidenceLines, snapshotMedia } from './github-media.ts'
 import { parseStoredIssueTriage } from './issue-triage.ts'
 import { combineMergeRisk, describeMergeRisk, mergeRiskFloor } from './merge-risk.ts'
+import { queuedReviewHistoryLine } from './queue-position-sweep.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { acceptedPullRequestCommands, canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
@@ -110,7 +111,7 @@ export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'
   /** Logins whose pull request comments count as commands: `github.allowed_owners`. Absent offers no command. */
   allowedAuthors?: readonly string[]
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
-  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress' | 'priorReviewHistory'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
@@ -1042,35 +1043,32 @@ export function reviewOutcome(gates: ReviewGates): ReviewOutcomeName {
 }
 
 /**
- * What the Review does after each phase.
+ * The canonical comment while a Review runs.
  *
- * Keyed on the phase, never on its percentage. Reading a phase back out of a
- * number needed thresholds that drifted from the ladder, and an unlisted
- * percentage silently picked the wrong line.
+ * It holds still from the first phase to the last. It used to name the phase,
+ * a percentage, and a timestamp, so one Review rewrote it three or four
+ * times, and a Review that stopped left `REVIEWING · 35%` behind. Live
+ * progress belongs to the Dashboard.
+ *
+ * A new head used to wipe the last verdict until this Review finished. The
+ * history line keeps the verdict a person already read in view
+ * (unjs/unhead#1086, 2026-11-17).
  */
-const reviewNextAction: Record<AgentPhaseTag, string> = {
-  Loaded: 'Create a Git worktree.',
-  WorktreeReady: 'Review the diff.',
-  ReadingDiff: 'Finish checking the changed files and docs.',
-  CheckingDocs: 'Finish checking the changed files and docs.',
-  Editing: 'Verify findings or fixes.',
-  Verifying: 'Finish the checks, then write up the findings.',
-  Reported: 'Finish the review.',
-  Reporting: 'Check the head commit and CI.',
-  Checked: 'Post the review comment.',
-  Committed: 'Post the review comment.',
-}
-
-function progressComment(headSha: string, baseSha: string, phase: AgentPhase, at: string): string {
-  const workflow = JSON.stringify({ _tag: 'Reviewing', headSha, baseSha, progress: phase.percent })
-  return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${headSha} -->
-<!-- workflow-state: ${workflow} -->
-### 🤖 REVIEWING · ${phase.percent}% · ${phase.label}${formatPhaseDuration(phase.since, at)}
-
-${automatedDisclosure({ kind: 'review', updatedAt: updatedAtLabel(at) })}
-
-Next: ${reviewNextAction[phase._tag]}`
+export function progressComment(headSha: string, baseSha: string, history: QueuedReviewHistory): string {
+  const workflow = JSON.stringify({ _tag: 'Reviewing', headSha, baseSha })
+  const prior = queuedReviewHistoryLine(history)
+  return [
+    AUTOMATED_REVIEW_MARKER,
+    `<!-- reviewed-sha: ${headSha} -->`,
+    `<!-- workflow-state: ${workflow} -->`,
+    '### 🤖 REVIEWING',
+    '',
+    automatedDisclosure({ kind: 'review' }),
+    '',
+    '> [!NOTE]',
+    `> The Review of \`${headSha.slice(0, 12)}\` is running. This comment changes when it finishes.`,
+    ...(prior === null ? [] : ['', prior]),
+  ].join('\n')
 }
 
 function baselineWaitingComment(headSha: string, baseSha: string, at: string): string {
@@ -1183,7 +1181,7 @@ function saveAgentProgress(options: ItemAgentOptions, task: ClaimedAgentTask, ph
  * turn for a bar nobody had read yet. Only the first still stops the turn.
  */
 async function reportReviewProgress(
-  options: ItemAgentOptions,
+  options: ReviewWorkerOptions,
   task: ClaimedAdversarialReviewTask,
   publicationPhase: 'snapshot' | 'review',
   phase: AgentPhase,
@@ -1192,7 +1190,8 @@ async function reportReviewProgress(
   const saved = saveAgentProgress(options, task, phase)
   if (saved._tag === 'Err')
     return saved
-  const posted = await options.status.publish(task, publicationPhase, progressComment(task.pullRequest.headSha, task.pullRequest.baseSha, phase, options.now().toISOString()), signal)
+  const history = options.store.priorReviewHistory(task.revisionId)
+  const posted = await options.status.publish(task, publicationPhase, progressComment(task.pullRequest.headSha, task.pullRequest.baseSha, history), signal)
   if (posted._tag === 'Err' && !signal.aborted)
     options.onProgressPublishFailure?.(task, posted.error)
   else

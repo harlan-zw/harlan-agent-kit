@@ -93,6 +93,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       saveWorkerSession: () => undefined,
       ...agentTurnLedger,
       updateAgentProgress: () => true,
+      priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       recordReviewRun: (run) => {
         runs.push(run)
         return { _tag: 'Inserted', reviewRunId: run.id }

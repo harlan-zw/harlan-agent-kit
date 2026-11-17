@@ -1145,6 +1145,13 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
    * number a person reads is the number of Tasks that must finish first.
    */
   listQueuedReviewStatuses: () => QueuedReviewStatus[]
+  /**
+   * What the newest Review of an earlier head of this pull request answered.
+   *
+   * The same reading as a queued Task's history, so a running Review and a
+   * queued one name the last verdict in the same words.
+   */
+  priorReviewHistory: (revisionId: string) => QueuedReviewHistory
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
   listReviewGateRefreshes: () => ReviewGateRefresh[]
   listStoppedReviews: () => StoppedReview[]
@@ -15406,6 +15413,41 @@ export function openJournalStore(
     publishedBody: row.published_body,
   }))
 
+  const priorReviewHistory: JournalStore['priorReviewHistory'] = (revisionId) => {
+    const row = database.prepare(`
+      SELECT
+        prior_run.head_sha AS prior_head_sha,
+        prior_run.outcome_tag AS prior_outcome,
+        json_array_length(prior_run.findings) AS prior_findings,
+        EXISTS (
+          SELECT 1 FROM publication_commands
+          JOIN tasks AS repair ON repair.id = publication_commands.task_id
+          WHERE repair.subject_id = revisions.subject_id
+            AND repair.kind = 'review_fix'
+            AND publication_commands.state_tag = 'Published'
+            AND publication_commands.commit_sha = json_extract(revisions.payload, '$.headSha')
+        ) AS head_from_repair
+      FROM revisions
+      JOIN review_runs AS prior_run
+        ON prior_run.subject_id = revisions.subject_id
+        AND prior_run.revision_id != revisions.id
+        -- A rerun or a base branch move keeps the head. A Review of that same
+        -- head answers this commit, so it is no earlier verdict.
+        AND prior_run.head_sha != json_extract(revisions.payload, '$.headSha')
+      WHERE revisions.id = ?
+      ORDER BY prior_run.completed_at DESC, prior_run.id DESC
+      LIMIT 1
+    `).get(revisionId) as { prior_head_sha: string, prior_outcome: string, prior_findings: number | null, head_from_repair: number } | undefined
+    return row === undefined
+      ? { _tag: 'FirstReview' }
+      : {
+          _tag: row.head_from_repair === 1 ? 'AfterRepair' : 'AfterPush',
+          priorHeadSha: row.prior_head_sha,
+          priorOutcome: row.prior_outcome,
+          findings: row.prior_findings ?? 0,
+        }
+  }
+
   const recordQueuedReviewStatus: JournalStore['recordQueuedReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)
     const taskTable = input.taskKind === 'adversarial_review' ? 'worker_tasks' : 'tasks'
@@ -17410,6 +17452,7 @@ export function openJournalStore(
     listActiveTaskLeases,
     listRunningTaskItems,
     listQueuedReviewStatuses,
+    priorReviewHistory,
     recordReviewApprovalLabelIntent,
     getReviewApprovalLabelIntent,
     clearReviewApprovalLabelIntent,

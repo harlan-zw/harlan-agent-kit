@@ -1378,14 +1378,6 @@ export interface AgentProgress {
   /** Internal phase rank for monotonic updates and next-step selection. Never show it as completion. */
   percent: number
   label: string
-  /**
-   * When this phase started, so a reader can tell a slow agent from a dead one.
-   *
-   * Progress only ever moves forward, so a long phase reports nothing after its
-   * first line and the comment freezes. A frozen comment and a wedged agent
-   * looked identical on the pull request. Absent before the phase is known.
-   */
-  since?: string
 }
 
 /**

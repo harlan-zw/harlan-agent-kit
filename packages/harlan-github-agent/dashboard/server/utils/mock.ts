@@ -97,7 +97,7 @@ function fixture(): DashboardSnapshot {
         commitUrl: `https://github.com/${nuxtSeo}/commit/${reviewPullRequest.headSha}`,
         startedAt: minutesAgo(4),
         updatedAt: minutesAgo(0),
-        progress: { percent: 40, label: 'Repair', since: minutesAgo(2) },
+        progress: { percent: 40, label: 'Repair' },
         activity: [
           { _tag: 'Command', at: minutesAgo(3), command: 'pnpm test --filter sitemap', output: 'Tests  2 failed | 41 passed (43)', exitCode: 1 },
           { _tag: 'FileChange', at: minutesAgo(1), changes: [{ path: 'src/runtime/sitemap/urlset.ts', kind: 'update' }] },

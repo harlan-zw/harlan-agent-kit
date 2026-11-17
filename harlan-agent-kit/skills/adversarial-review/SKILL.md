@@ -59,7 +59,7 @@ Recognize the old `- Reviewed \`HEAD_SHA\` against` line for comments created be
 
 Establish comment authority, then create or update the single marked automated review comment from the review contract.
 
-Set it to `REVIEWING · Pull request loaded`. Edit this comment after each phase transition. Show the progress bar, percentage, last update time, and next action. Never create progress comments or heartbeat comments.
+Set it to `REVIEWING` when Review starts. Edit it again only when Review finishes. Keep it steady between them: no percentage, phase, or timestamp. If an earlier head has a Review, name its outcome. Never create progress comments or heartbeat comments.
 
 ### 3. Snapshot remote state
 

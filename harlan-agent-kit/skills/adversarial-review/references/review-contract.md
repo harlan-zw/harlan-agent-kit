@@ -92,7 +92,7 @@ Use this marker exactly:
 <!-- harlan-agent-kit:pr-triage -->
 ```
 
-Create the marked comment when review starts. Edit that same comment after each phase transition. Never create a second progress comment.
+Create the marked comment when review starts. Edit that same comment again when review finishes. Never create a second progress comment.
 
 Before dispatch, find trusted marked comments for the current head commit. Trust the GitHub App and repository owners, members, or collaborators. Ignore marked comments from outside contributors. A terminal comment means the head commit is already reviewed. A `REVIEWING` comment is status only. Local Task ownership decides whether work is active.
 
@@ -103,16 +103,20 @@ Use this nonterminal shape:
 ```markdown
 <!-- harlan-agent-kit:pr-triage -->
 <!-- reviewed-sha: HEAD_SHA -->
-### 🤖 REVIEWING · 35% · PHASE
+<!-- workflow-state: {"_tag":"Reviewing","headSha":"HEAD_SHA","baseSha":"BASE_SHA"} -->
+### 🤖 REVIEWING
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Last updated: UTC_TIME.
+> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).
 
-Next: SHORT_ACTION
+> [!NOTE]
+> The Review of `SHORT_HEAD_SHA` is running. This comment changes when it finishes.
+
+The last Review of `SHORT_PRIOR_SHA` answered OUTCOME. A new commit replaced it, so this Review answers the new commit.
 ```
 
-Use the controller's phase percentage. Update only at a phase transition or changed blocker. Keep findings out until verified.
+Keep this body steady while Review runs, so one Review writes one in-progress edit. Include the last line only when an earlier head has a Review. Keep findings out until verified.
 
-The controller reads the Agent's own `▓▓▓░░ NN% next-step` line and publishes that text as the phase. So the line a review prints during its work becomes the line a reader sees on the pull request. Without one, the controller guesses the phase from the shape of each shell command.
+The controller reads the Agent's own `▓▓▓░░ NN% next-step` line and records that text as the phase in the Dashboard. Without one, the controller guesses the phase from the shape of each shell command.
 
 Keep the reviewed SHA in hidden metadata. Render one robot emoji. Put disclosure,
 policy, waiting state, and human ownership in one blockquoted line. The visible

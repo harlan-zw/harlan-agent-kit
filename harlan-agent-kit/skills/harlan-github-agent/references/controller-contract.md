@@ -262,7 +262,7 @@ Link it to the canonical comment so the bot appears in GitHub's Reviewers sideba
 Reuse one native review per head commit. Update it when Review runs again.
 Never submit it through Harlan's user token.
 
-When a pull request review starts, create its single marked bot comment. Edit it in place as phases change. Never add separate progress comments.
+When a pull request review starts, create its single marked bot comment. Edit it in place when Review or Repair starts and when it finishes. Keep it steady between them, and show live progress in the Dashboard. While a new head is reviewed, name the outcome of the last Review of an earlier head. Never add separate progress comments.
 
 Treat GitHub as the durable workflow record. Publish each Review gate, the next action, and the exact head and base commits.
 

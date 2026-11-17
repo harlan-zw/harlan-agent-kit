@@ -1,9 +1,8 @@
 import type { ReviewCheckRunOutcome, ReviewCheckRunUpdate } from '../src/review-check-run.ts'
 import type { ClaimedReviewFixTask } from '../src/types.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { agentPhase } from '../src/agent-progress.ts'
 import { err, ok } from '../src/result.ts'
-import { createReviewStatusController } from '../src/review-status-controller.ts'
+import { createReviewStatusController, repairProgressComment } from '../src/review-status-controller.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 describe('review status controller', () => {
@@ -98,54 +97,44 @@ describe('review status controller', () => {
   it('replaces the blocked review comment with repair progress', async () => {
     const { controller, task, read } = harness()
 
-    expect(await controller.publishRepair(task, agentPhase('WorktreeReady', 'Git worktree ready'), new AbortController().signal)).toEqual(ok(undefined))
+    expect(await controller.publishRepair(task, new AbortController().signal)).toEqual(ok(undefined))
 
     expect(read().replaced).toBe(true)
-    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 35% · Git worktree ready')
+    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3\n')
   })
 
   it('publishes progress after reading only the pull request identity', async () => {
     const { controller, task } = harness(false, true)
 
-    expect(await controller.publishRepair(task, agentPhase('WorktreeReady', 'Git worktree ready'), new AbortController().signal)).toEqual(ok(undefined))
+    expect(await controller.publishRepair(task, new AbortController().signal)).toEqual(ok(undefined))
   })
 
   it.each(['closed', 'head', 'base'] as const)('refuses progress when the pull request changed: %s', async (change) => {
     const { controller, task, read } = harness(false, true, change)
 
-    expect((await controller.publishRepair(task, agentPhase('WorktreeReady', 'Git worktree ready'), new AbortController().signal))._tag).toBe('Err')
+    expect((await controller.publishRepair(task, new AbortController().signal))._tag).toBe('Err')
     expect(read().body).toBe('')
   })
 
   it.each([false, true])('offers a checkbox only with webhook controls enabled: %s', async (enabled) => {
     const { controller, task, read } = harness(enabled)
-    await controller.publishRepair(task, agentPhase('WorktreeReady', 'Reviewing'), new AbortController().signal)
+    await controller.publishRepair(task, new AbortController().signal)
     expect(read().body.includes('- [ ] Stop Review and any follow-up repair')).toBe(enabled)
   })
 
-  it('says how long one phase has run, so a slow agent reads as alive', async () => {
-    const { controller, task, read } = harness()
+  it('names the round and the head, and what happens after the Repair', () => {
+    const { task } = harness()
 
-    // The clock reads 01:00, so this phase started 35 minutes ago.
-    expect(await controller.publishRepair(
-      task,
-      { ...agentPhase('Editing', 'Editing files'), since: '2026-08-13T00:25:00.000Z' },
-      new AbortController().signal,
-    )).toEqual(ok(undefined))
-
-    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 65% · Editing files for 35 min')
-  })
-
-  it('leaves a phase that just started without a duration', async () => {
-    const { controller, task, read } = harness()
-
-    expect(await controller.publishRepair(
-      task,
-      { ...agentPhase('Editing', 'Editing files'), since: '2026-08-13T00:59:40.000Z' },
-      new AbortController().signal,
-    )).toEqual(ok(undefined))
-
-    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3 · 65% · Editing files\n')
+    expect(repairProgressComment(task)).toBe([
+      '<!-- harlan-agent-kit:pr-triage -->',
+      `<!-- reviewed-sha: ${task.pullRequest.headSha} -->`,
+      '### 🤖 REPAIR · round 1 of 3',
+      '',
+      '> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated repair update. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).',
+      '',
+      '> [!NOTE]',
+      `> Repair is fixing the Review findings on \`${task.pullRequest.headSha.slice(0, 12)}\`. If it pushes a commit, a new Review reads that commit.`,
+    ].join('\n'))
   })
 })
 
@@ -239,12 +228,12 @@ describe('review status check run sink', () => {
   it('publishes the check run beside the comment, on the reviewed head', async () => {
     const { controller, deferred, task, upsert } = harness()
 
-    expect(await controller.publishRepair(task, agentPhase('WorktreeReady', 'Git worktree ready'), new AbortController().signal)).toEqual(ok(undefined))
+    expect(await controller.publishRepair(task, new AbortController().signal)).toEqual(ok(undefined))
 
     expect(upsert).toHaveBeenCalledWith(
       repositoryMapping(),
       task.pullRequest.headSha,
-      expect.objectContaining({ _tag: 'Running', title: '🤖 REPAIR · round 1 of 3 · 35% · Git worktree ready' }),
+      expect.objectContaining({ _tag: 'Running', title: '🤖 REPAIR · round 1 of 3' }),
       expect.anything(),
       expect.anything(),
     )
@@ -253,7 +242,7 @@ describe('review status check run sink', () => {
 
   it('publishes and reports when the check run write fails', async () => {
     const { controller, deferred, reports, task } = harness(() => Promise.resolve(err('GitHub timed out.')))
-    const result = await controller.publishRepair(task, agentPhase('WorktreeReady', 'Git worktree ready'), new AbortController().signal)
+    const result = await controller.publishRepair(task, new AbortController().signal)
 
     expect(result).toEqual(ok(undefined))
     expect(deferred).toEqual([])

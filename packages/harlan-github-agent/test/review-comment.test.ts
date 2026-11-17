@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { progressComment } from '../src/item-agent.ts'
 import { priorAutomatedReviewForHead, reviewFindingFollowUp } from '../src/review-comment.ts'
 
 const headSha = '69c7ef6eaf1ec7bb186f27f46fa343d3d38f1f23'
@@ -98,5 +99,45 @@ describe('automated review comments', () => {
         state: 'complete',
         url: 'https://example.com/current-agent-ready',
       })
+  })
+})
+
+describe('running Review comment', () => {
+  const priorHeadSha = 'a83128aac51194195b55e94b7a628e3aee018216'
+
+  it('keeps the verdict of the earlier head in view while the new head is reviewed', () => {
+    const body = progressComment(headSha, baseSha, { _tag: 'AfterPush', priorHeadSha, priorOutcome: 'Ready', findings: 0 })
+
+    expect(body).toContain('### 🤖 REVIEWING\n')
+    expect(body).toContain(`> The Review of \`${headSha.slice(0, 12)}\` is running. This comment changes when it finishes.`)
+    expect(body.endsWith(`The last Review of \`${priorHeadSha.slice(0, 12)}\` answered ready. A new commit replaced it, so this Review answers the new commit.`)).toBe(true)
+  })
+
+  it('says nothing about an earlier verdict on a first Review', () => {
+    const body = progressComment(headSha, baseSha, { _tag: 'FirstReview' })
+
+    expect(body.endsWith('This comment changes when it finishes.')).toBe(true)
+  })
+
+  it('reads as a running Review, never as the earlier verdict it quotes', () => {
+    const body = progressComment(headSha, baseSha, { _tag: 'AfterPush', priorHeadSha, priorOutcome: 'Ready', findings: 0 })
+
+    expect(priorAutomatedReviewForHead([{
+      authorAssociation: 'OWNER',
+      authorLogin: 'harlan-zw',
+      body,
+      url: 'https://example.com/running',
+    }], headSha, 'harlan-github-agent[bot]')).toEqual({
+      _tag: 'Found',
+      authorLogin: 'harlan-zw',
+      state: 'active',
+      url: 'https://example.com/running',
+    })
+    expect(priorAutomatedReviewForHead([{
+      authorAssociation: 'NONE',
+      authorLogin: 'harlan-github-agent[bot]',
+      body,
+      url: 'https://example.com/running',
+    }], headSha, 'harlan-github-agent[bot]')).toEqual({ _tag: 'None' })
   })
 })

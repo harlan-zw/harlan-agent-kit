@@ -200,6 +200,13 @@ describe('listQueuedReviewStatuses', () => {
         },
       }),
     ])
+    // The running Review reads the same history, so its comment names the Repair too.
+    expect(store.priorReviewHistory(repaired.revisionId)).toEqual({
+      _tag: 'AfterRepair',
+      priorHeadSha: 'head30',
+      priorOutcome: 'Blocked',
+      findings: 1,
+    })
   })
 
   it('agrees with the claim, so position 1 is the Task the next agent takes', () => {
@@ -717,5 +724,48 @@ describe('a Review whose attempt failed', () => {
     queuedRepair(store, 43, '2026-08-13T01:00:00.000Z')
 
     expect(store.listQueuedReviewStatuses()).toEqual([expect.objectContaining({ attempt: { _tag: 'FirstAttempt' } })])
+  })
+})
+
+describe('priorReviewHistory', () => {
+  function observe(store: ReturnType<typeof openJournalStore>, number: number, headSha: string, baseSha: string, at: string): string {
+    const observed = store.recordObservation({
+      externalId: `prior-review-${number}-${headSha}-${baseSha}`,
+      observedAt: at,
+      source: 'poll',
+      subject: pullRequestItem({
+        number,
+        headRef: `fix/thing-${number}`,
+        headSha,
+        baseSha,
+        mergeState: 'clean',
+        url: `https://github.com/harlan-zw/example/pull/${number}`,
+        updatedAt: at,
+      }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    return observed.revisionId
+  }
+
+  it('names the last verdict of an earlier head after a person pushes', () => {
+    const store = createStore()
+    queuedRepair(store, 40, '2026-08-13T01:00:00.000Z')
+    const revisionId = observe(store, 40, 'e'.repeat(40), 'base123', '2026-08-13T01:05:00.000Z')
+
+    expect(store.priorReviewHistory(revisionId)).toEqual({
+      _tag: 'AfterPush',
+      priorHeadSha: 'head40',
+      priorOutcome: 'Blocked',
+      findings: 1,
+    })
+  })
+
+  it('reads no earlier verdict when only the base branch moved', () => {
+    const store = createStore()
+    queuedRepair(store, 41, '2026-08-13T01:00:00.000Z')
+    const revisionId = observe(store, 41, 'head41', 'base456', '2026-08-13T01:05:00.000Z')
+
+    expect(store.priorReviewHistory(revisionId)).toEqual({ _tag: 'FirstReview' })
   })
 })
