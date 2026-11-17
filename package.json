@@ -52,7 +52,8 @@
     "browser:install": "python3 scripts/harlan-browser.py install",
     "test:agent-cli": "vitest run scripts/agent-cli.test.ts",
     "test:hook-output": "bash harlan-agent-kit/hooks/output-contract.test.sh",
-    "test:codex-hooks": "vitest run scripts/codex-hooks.test.ts"
+    "test:codex-hooks": "vitest run scripts/codex-hooks.test.ts",
+    "test:wt-worktree": "bash harlan-agent-kit/hooks/wt-worktree.test.sh"
   },
   "dependencies": {
     "@antfu/eslint-config": "catalog:",

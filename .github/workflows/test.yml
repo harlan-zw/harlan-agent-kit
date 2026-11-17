@@ -188,6 +188,7 @@ jobs:
           pnpm test:wt-only
           pnpm test:pr-skill-only
           pnpm test:hook-output
+          pnpm test:wt-worktree
           pnpm test:worktree-claim
 
       - name: Sentry check in
