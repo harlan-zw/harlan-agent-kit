@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AGENT_LABELS, agentLabelItem, planAgentLabels, staleAgentLabels } from '../src/agent-label.ts'
+import { AGENT_LABELS, agentLabelItem, planAgentLabels, reviewVerdictLabel, staleAgentLabels } from '../src/agent-label.ts'
 
 describe('planAgentLabels', () => {
   it('adds the label for the verdict the Review reached', () => {
@@ -137,5 +137,32 @@ describe('agentLabelItem', () => {
 
   it('names no Item for a Routine run, so a clock writes no label', () => {
     expect(agentLabelItem({ id: 'routine-run', state: { fence: 1 } })).toBeUndefined()
+  })
+
+  it.each(['adversarial_review', 'review_fix'])('names no Item for a %s Task, which the canonical comment reports', (kind) => {
+    expect(agentLabelItem({ kind, repositoryMapping, pullRequestNumber: 24 })).toBeUndefined()
+  })
+
+  it('names the pull request for other work on it, such as conflict resolution', () => {
+    expect(agentLabelItem({ kind: 'conflict_resolution', repositoryMapping, pullRequestNumber: 24 }))
+      .toEqual({ repositoryMapping, itemNumber: 24 })
+  })
+})
+
+describe('no verdict', () => {
+  it('takes off verdict and route labels, and keeps the Running label and other labels', () => {
+    const current = ['harlan-agent-ready', 'harlan-agent-review-required', 'harlan-agent-running', 'bug']
+    expect(planAgentLabels('NO_VERDICT', current)).toEqual({ add: null, remove: ['harlan-agent-ready', 'harlan-agent-review-required'] })
+  })
+
+  it('writes nothing on a pull request without a verdict', () => {
+    expect(planAgentLabels('NO_VERDICT', ['bug'])).toEqual({ add: null, remove: [] })
+  })
+
+  it('keeps a PENDING verdict off the pull request, and labels only a wait on a Baseline repair', () => {
+    expect(reviewVerdictLabel('PENDING')).toBe('NO_VERDICT')
+    expect(reviewVerdictLabel('WAITING')).toBe('PENDING')
+    expect(reviewVerdictLabel('READY')).toBe('READY')
+    expect(reviewVerdictLabel('BLOCKED')).toBe('BLOCKED')
   })
 })

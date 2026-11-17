@@ -197,6 +197,7 @@ describe('subject Workers', () => {
   it.each(['None', 'Stale'] as const)('reviews afresh when a complete comment has %s local target evidence', async (storedTag) => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     let workspaceCreated = false
+    const stamped: string[] = []
     const capture: ProviderCapture = { requests: [] }
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([], capture)),
@@ -208,7 +209,10 @@ describe('subject Workers', () => {
         clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
         clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
         listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
-        stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        stampAgentLabel: (_repository, _number, state) => {
+          stamped.push(state)
+          return Promise.resolve(ok(undefined))
+        },
         findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
         getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
         getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
@@ -287,6 +291,8 @@ describe('subject Workers', () => {
     expect(result).toEqual(err('Stopped at the worktree on purpose.'))
     expect(capture.requests).toEqual([])
     expect(workspaceCreated).toBe(true)
+    // A fresh Review takes the verdict of an earlier head off, and writes no route label.
+    expect(stamped).toEqual(['NO_VERDICT'])
   })
 
   it.each([

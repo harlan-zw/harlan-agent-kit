@@ -12,7 +12,7 @@ import type { PriorAutomatedReview } from './review-comment.ts'
 import type { FindingDiscussion, ReviewFindingThread, ReviewFindingThreadSource } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
 import { readArtifactText } from './actions-artifact.ts'
-import { AGENT_LABELS, planAgentLabels, staleAgentLabels } from './agent-label.ts'
+import { AGENT_LABELS, agentLabelStateName, planAgentLabels, staleAgentLabels } from './agent-label.ts'
 import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
@@ -965,7 +965,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         const settled = planAgentLabels(state, held)
         return settled.add === null && settled.remove.length === 0
           ? ok(undefined)
-          : err(`GitHub did not stamp the ${AGENT_LABELS[state].name} label. GitHub answered with ${held.length === 0 ? 'no labels' : held.join(', ')}.`)
+          : err(`GitHub did not stamp the ${agentLabelStateName(state)} label. GitHub answered with ${held.length === 0 ? 'no labels' : held.join(', ')}.`)
       })
     },
 

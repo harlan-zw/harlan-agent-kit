@@ -4,6 +4,7 @@ import type { Result } from './result.ts'
 import type { ReviewCheckRunMirror } from './review-check-run.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewGates, ReviewStatusTaskPhase } from './types.ts'
+import { reviewVerdictLabel } from './agent-label.ts'
 import { nativeReviewBody } from './native-review.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
@@ -98,7 +99,7 @@ async function publishExistingReviewLabel(
   const stamped = await options.github.stampAgentLabel(
     command.repositoryMapping,
     command.pullRequestNumber,
-    existing.value.label,
+    existing.value.label === 'PENDING' ? reviewVerdictLabel('PENDING') : existing.value.label,
     signal,
     () => authorizeWrite(options, command),
   )
@@ -227,11 +228,9 @@ export async function publishClaimedReviewStatus(
 
   const label = command.phase !== 'terminal'
     ? null
-    : command.desiredOutcome === 'READY' || command.desiredOutcome === 'BLOCKED' || command.desiredOutcome === 'PENDING'
-      ? command.desiredOutcome
-      : command.desiredOutcome === 'WAITING'
-        ? 'PENDING'
-        : null
+    : command.desiredOutcome === 'READY' || command.desiredOutcome === 'BLOCKED' || command.desiredOutcome === 'PENDING' || command.desiredOutcome === 'WAITING'
+      ? reviewVerdictLabel(command.desiredOutcome)
+      : null
   if (label !== null) {
     const labelAuthorization = authorizeWrite(options, command)
     if (labelAuthorization._tag === 'Err')

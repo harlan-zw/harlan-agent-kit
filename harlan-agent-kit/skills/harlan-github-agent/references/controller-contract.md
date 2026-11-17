@@ -15,8 +15,10 @@ If every changed path is prose, reuse the stored decision for the same head comm
 Classification skips only clearly judgment-free prose, formatting, or comment-only changes, and a skip needs confidence at or above 0.7. Uncertainty or failure requires Review.
 Store the decision source in the reason. A stored reason starts with `rule: ` or `model: `.
 Stamp `harlan-agent-review-skipped` when Review is skipped.
-Stamp `harlan-agent-review-required` when Pull request triage requires Review.
-Replace that route label with exactly one Review outcome label when Review finishes.
+Write no label when Pull request triage requires Review. The canonical comment says that Review runs.
+When a fresh Review starts, remove the verdict and route labels of earlier heads.
+When Review finishes, stamp `harlan-agent-ready` or `harlan-agent-blocked`. A `PENDING` outcome writes no label. Stamp `harlan-agent-pending` only while Review waits on a Baseline repair.
+Never stamp `harlan-agent-running` for Review or Repair. Their canonical comment reports that work.
 
 Treat `harlan-agent-review` as a manual override that always requires adversarial Review for the exact current head commit. For an outside contributor, create one fixed, self-identified instruction comment. Name the exact head commit. Require `harlan-agent-review` before review.
 If signed webhooks are ready, offer `Review and repair` in the paused comment.
