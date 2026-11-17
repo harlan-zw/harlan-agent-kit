@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import type { PaybackReport } from '../../../src/payback.ts'
 import type { StatsSnapshot } from '../../../src/stats.ts'
 import { activeStatsPreset, coverageText, hasStatsResults, outcomeStats, statsDateRange, statsPresets, statsRequestRange } from '../utils/stats.ts'
 import StatsDailyChart from './_StatsDailyChart.vue'
+import StatsPaybackTable from './_StatsPaybackTable.vue'
 import StatsRepositoryTable from './_StatsRepositoryTable.vue'
 import StatsWorkTable from './_StatsWorkTable.vue'
 
@@ -9,7 +11,7 @@ import StatsWorkTable from './_StatsWorkTable.vue'
  * What the work produced over a range. A stats strip, one chart, one table.
  *
  * The URL query is the source of truth for the range: the form writes it,
- * and every change of it refetches. The page never scores or ranks.
+ * and every change of it refetches. Only Payback shows money or a verdict.
  */
 const route = useRoute()
 const terminalHost = useTerminalHost()
@@ -17,6 +19,8 @@ const from = ref('')
 const to = ref('')
 const timeZone = ref('UTC')
 const snapshot = ref<StatsSnapshot>()
+const payback = ref<PaybackReport>()
+const paybackMessage = ref<string>()
 const pending = ref(false)
 const rangeMessage = ref<string>()
 const loadMessage = ref<string>()
@@ -39,6 +43,7 @@ async function loadStats(): Promise<void> {
     await terminalHost.start()
   rangeMessage.value = undefined
   loadMessage.value = undefined
+  paybackMessage.value = undefined
   const range = statsRequestRange({ from: from.value, to: to.value }, timeZone.value)
   if (range._tag === 'Invalid') {
     rangeMessage.value = range.message
@@ -46,18 +51,25 @@ async function loadStats(): Promise<void> {
     return
   }
   pending.value = true
-  await $fetch<StatsSnapshot>(terminalHost.controllerPath('/api/stats'), {
-    query: {
-      from: range.range.from,
-      to: range.range.to,
-      time_zone: range.range.timeZone,
-    },
-  }).then((value) => {
-    snapshot.value = value
-  }).catch((cause: unknown) => {
-    snapshot.value = undefined
-    loadMessage.value = cause instanceof Error ? cause.message : 'Stats did not load.'
-  }).finally(() => {
+  const query = {
+    from: range.range.from,
+    to: range.range.to,
+    time_zone: range.range.timeZone,
+  }
+  await Promise.all([
+    $fetch<StatsSnapshot>(terminalHost.controllerPath('/api/stats'), { query }).then((value) => {
+      snapshot.value = value
+    }).catch((cause: unknown) => {
+      snapshot.value = undefined
+      loadMessage.value = cause instanceof Error ? cause.message : 'Stats did not load.'
+    }),
+    $fetch<PaybackReport>(terminalHost.controllerPath('/api/stats/payback'), { query }).then((value) => {
+      payback.value = value
+    }).catch((cause: unknown) => {
+      payback.value = undefined
+      paybackMessage.value = cause instanceof Error ? `Payback did not load: ${cause.message}` : 'Payback did not load.'
+    }),
+  ]).finally(() => {
     pending.value = false
   })
 }
@@ -191,6 +203,10 @@ useHead({
         <StatsDailyChart :days="snapshot.days" />
         <StatsRepositoryTable :repositories="snapshot.repositories" />
         <StatsWorkTable :work="snapshot.work" :from="from" :to="to" />
+        <StatsPaybackTable v-if="payback && payback.kinds.length > 0" :report="payback" />
+        <p v-if="paybackMessage" class="status-error text-sm" role="alert">
+          {{ paybackMessage }}
+        </p>
       </div>
 
       <UiEmptyState v-else compact icon="chart" title="Nothing in this range" description="No completed work exists in this range.">
