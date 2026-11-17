@@ -86,7 +86,12 @@ ${memoryLines === '' ? '' : `\n${memoryLines}\n`}
 
 ${checkBudgetLines(CHECK_SCOPES.conflictedFiles)}
 ${TOOLCHAIN_LINES}
-Do not install or update the toolchain. The controller prepared this worktree.
+Do not install or update the toolchain. The controller prepared dependencies, but generated outputs may still be missing.
+Generated workspace and native outputs are verification setup.
+If a focused check cannot import generated output, inspect documented scripts and declare the smallest prepare or build prerequisite.
+Run that prerequisite and rerun the same focused checks within the check budget.
+Keep tracked edits within the listed paths and generated artifacts out of the patch.
+If setup fails, report the exact command and error, then return outcome blocked.
 Unchanged tests and call sites can fail because the merge changed their dependencies.
 If verification fails outside the files the merge touched, report the failure and return outcome blocked.
 If the resolution breaks a test or call site that the base branch moved, fix that file too. The controller accepts edits to files the merge touched.
