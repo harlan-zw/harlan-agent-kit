@@ -162,6 +162,8 @@ export type TrialMetrics
   }
   | {
     _tag: 'RetroFollowThrough'
+    /** Days a Candidate has to reach a merged pull request. */
+    mergeDays: number
     weeks: RetroWeek[]
     toDate: RetroToDate
   }
@@ -572,7 +574,7 @@ export function readRetroTrial(input: {
       ? { _tag: 'Met', detail: judged }
       : { _tag: 'NotMet', detail: `${judged} Keep needs ${percent(measure.minimumMergedShare)}, so the retro prompt needs work.` }]
   // Measurement only: nothing about this trial can end it.
-  return { metrics: { _tag: 'RetroFollowThrough', weeks, toDate }, keep, kill: [] }
+  return { metrics: { _tag: 'RetroFollowThrough', mergeDays: measure.mergeDays, weeks, toDate }, keep, kill: [] }
 }
 
 /** Keep, kill, revise, or continue, from the state and the rule readings. Pure. */
@@ -690,11 +692,11 @@ function metricLines(metrics: TrialMetrics): string[] {
     case 'RetroFollowThrough': {
       const total = metrics.toDate
       return [
-        '| Week | Candidates | Issues | Merged within 14 days | Still waiting |',
+        `| Week | Candidates | Issues | Merged within ${metrics.mergeDays} days | Still waiting |`,
         '| --- | ---: | ---: | ---: | ---: |',
         ...metrics.weeks.map(week => `| Week ${week.week} | ${week.candidates} | ${week.issues} | ${week.mergedInTime} | ${week.open} |`),
         '',
-        `Trial to date: ${total.mergedInTime} of ${plural(total.judged, 'judged Candidate')} merged within 14 days (${percent(total.mergedShare)}). ${plural(total.open, 'Candidate')} still ${total.open === 1 ? 'has' : 'have'} time.`,
+        `Trial to date: ${total.mergedInTime} of ${plural(total.judged, 'judged Candidate')} merged within ${metrics.mergeDays} days (${percent(total.mergedShare)}). ${plural(total.open, 'Candidate')} still ${total.open === 1 ? 'has' : 'have'} time.`,
       ]
     }
   }
