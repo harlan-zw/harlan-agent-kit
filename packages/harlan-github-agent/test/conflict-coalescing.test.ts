@@ -114,6 +114,40 @@ describe('base movement conflict dispatch', () => {
     expect(claim(store, 11)?.pullRequest).toMatchObject(change)
   })
 
+  // gscdump.com#1094 ran 48 Agent turns on one head commit in 6 days, one Task per base move.
+  it('keeps an Agent blocker across base moves until the head commit changes', () => {
+    const store = setup()
+    observe(store, 0)
+    const task = claim(store, 0)!
+    const reason = 'Duplicate ADR-0023 fails validation.'
+    expect(store.needsAttentionTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: at(1), reason, evidence: 'local fixture' })).toBe(true)
+
+    observe(store, 10, { baseSha: 'base2', mergeState: 'unknown' })
+    observe(store, 20, { baseSha: 'base2' })
+    observe(store, 30, { baseSha: 'base3' })
+
+    expect(claim(store, 400)).toBeNull()
+    const snapshot = store.getDashboardSnapshot(at(400))
+    expect(snapshot.queue.map(entry => entry.state)).toEqual([{ _tag: 'ActionRequired', reason }])
+    expect(snapshot.tasks.filter(value => value.kind === 'resolve_conflict').map(value => [value.id, value.state]))
+      .toEqual([[task.id, { _tag: 'ActionRequired', reason }]])
+
+    observe(store, 401, { baseSha: 'base3', headSha: 'new-head' })
+    expect(claim(store, 401)?.pullRequest.headSha).toBe('new-head')
+  })
+
+  it('reopens the same Task when a draft round trip restores the blocked pull request', () => {
+    const store = setup()
+    observe(store, 0)
+    const task = claim(store, 0)!
+    expect(store.needsAttentionTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: at(1), reason: 'Verification failed.', evidence: 'local fixture' })).toBe(true)
+
+    observe(store, 10, { draft: true })
+    observe(store, 20)
+
+    expect(claim(store, 21)?.id).toBe(task.id)
+  })
+
   it('keeps cancelled Tasks stopped and starts a fresh contributor head immediately', () => {
     const store = setup()
     observe(store, 0)

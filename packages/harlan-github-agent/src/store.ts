@@ -3992,14 +3992,20 @@ function supersededAfterStarting(database: DatabaseSync, taskId: string): boolea
   return row?.from_tag === 'Running' || row?.from_tag === 'Publishing'
 }
 
-/** Branch authority blocks creation or claiming. Agent blockers stop a running Task. */
-function conflictTaskWaitsForAuthority(database: DatabaseSync, taskId: string): boolean {
+/** The state a Task last left for Action required. Null means it was created there. */
+function actionRequiredSource(database: DatabaseSync, taskId: string): TaskRow['state_tag'] | null | undefined {
   const row = database.prepare(`
     SELECT from_tag FROM task_transitions
     WHERE task_id = ? AND to_tag = 'ActionRequired'
     ORDER BY id DESC LIMIT 1
   `).get(taskId) as { from_tag: TaskRow['state_tag'] | null } | undefined
-  return row?.from_tag === null || row?.from_tag === 'Queued'
+  return row?.from_tag
+}
+
+/** Branch authority blocks creation or claiming. Agent blockers stop a running Task. */
+function conflictTaskWaitsForAuthority(database: DatabaseSync, taskId: string): boolean {
+  const source = actionRequiredSource(database, taskId)
+  return source === null || source === 'Queued'
 }
 
 /** Wait for quiet base inputs, but never delay a burst beyond five minutes. */
@@ -4039,20 +4045,27 @@ function planConflictResolution(
   mapping: RepositoryMapping,
   reviewApproved: boolean,
 ): void {
-  const eligible = subject.kind === 'pull_request'
+  const open = subject.kind === 'pull_request'
     && subject.state === 'open'
     && !subject.draft
-    && subject.mergeState === 'conflicting'
     && mapping.enabled
     && mapping.conflictResolution
+  const eligible = open && subject.mergeState === 'conflicting'
 
   if (!eligible) {
-    supersedeTasks(database, subjectId, observedAt, 'The pull request no longer needs conflict resolution.')
+    // GitHub recomputes mergeability after each base move. A conflict Task on
+    // this unanswered Revision is an Agent blocker that followed its head.
+    const unanswered = open && subject.mergeState === 'unknown'
+    supersedeTasks(database, subjectId, observedAt, 'The pull request no longer needs conflict resolution.', unanswered ? revisionId : undefined)
     resolveCleanMergeIncidents(database, subjectId, observedAt)
     return
   }
 
   supersedeTasks(database, subjectId, observedAt, 'A newer pull request head commit replaced this task.', revisionId)
+  const taskId = digest(`${mapping.github}:pull_request:${subject.number}:${revisionId}:resolve_conflict`)
+  // A Task that followed its head and then retired keeps the id of this
+  // Revision. A draft round trip restores the Revision, so the Task returns.
+  database.prepare('UPDATE tasks SET revision_id = ? WHERE id = ? AND revision_id != ?').run(revisionId, taskId, revisionId)
   const existing = database.prepare(`
     SELECT id, state_tag, reason, fence, recovery_attempts, updated_at,
       EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = tasks.id) AS cancelled
@@ -4159,7 +4172,6 @@ function planConflictResolution(
     : stale
       ? { _tag: 'ActionRequired', reason: `The controller resolved this conflict ${finishedTurns} times in one day and the pull request conflicts again. Rebase it by hand.` }
       : { _tag: 'Queued' }
-  const taskId = digest(`${mapping.github}:pull_request:${subject.number}:${revisionId}:resolve_conflict`)
   const reason = state._tag === 'ActionRequired' ? state.reason : null
   // A stale task starts with its budget spent, so the approval path above
   // never wakes it. Only a new head commit makes a new task.
@@ -4412,6 +4424,8 @@ const REVIEW_ALREADY_RECORDED_REASON = 'The current head commit already has an a
  *
  * A different target branch changes the reviewed diff. Those rows stay on their original Revision.
  * Conflict resolution and Baseline repair answer a base commit, so they stay.
+ * One exception: a conflict resolution its Agent blocked follows the head, so
+ * only a new head commit starts another Agent turn on that blocker.
  */
 function followHeadCommit(database: DatabaseSync, subjectId: number, revisionId: string, headSha: string): void {
   const sameHead = `
@@ -4460,6 +4474,16 @@ function followHeadCommit(database: DatabaseSync, subjectId: number, revisionId:
     WHERE subject_id = ? AND kind = 'review_fix' AND state_tag != 'Superseded'
       AND revision_id IN (${sameHead})
   `).run(revisionId, subjectId, ...sameHeadArgs)
+  // gscdump.com#1094 ran 48 Agent turns on one head commit in 6 days, one Task per base move.
+  const blockedConflicts = database.prepare(`
+    SELECT id FROM tasks
+    WHERE subject_id = ? AND kind = 'resolve_conflict' AND state_tag = 'ActionRequired'
+      AND revision_id IN (${sameHead})
+  `).all(subjectId, ...sameHeadArgs) as unknown as Array<{ id: string }>
+  const followConflict = database.prepare('UPDATE tasks SET revision_id = ? WHERE id = ?')
+  blockedConflicts
+    .filter(task => actionRequiredSource(database, task.id) === 'Running')
+    .forEach(task => followConflict.run(revisionId, task.id))
   database.prepare(`
     UPDATE review_status_commands SET revision_id = ?
     WHERE revision_id IN (${sameHead})
