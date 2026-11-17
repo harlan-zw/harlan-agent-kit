@@ -34,7 +34,7 @@ function costText(kind: PaybackKind): string {
 }
 
 function usefulText(kind: PaybackKind): string {
-  const settled = kind.outcomes.useful + kind.outcomes.wasted
+  const settled = kind.outcomes.useful + kind.outcomes.wasted + kind.outcomes.actionRequired
   if (settled === 0)
     return kind.outcomes.open > 0 ? `${kind.outcomes.open} open` : 'Not recorded'
   return `${kind.outcomes.useful} of ${settled}`
@@ -44,11 +44,14 @@ function perUsefulText(kind: PaybackKind): string {
   if (kind.costPerUseful === null)
     return ''
   const perUseful = dollars.format(kind.costPerUseful)
-  return kind.breakEvenMinutes === null ? perUseful : `${perUseful}, ${Math.max(1, Math.round(kind.breakEvenMinutes))} min`
+  if (kind.breakEvenMinutes === null)
+    return perUseful
+  return kind.breakEvenMinutes < 1 ? `${perUseful}, <1 min` : `${perUseful}, ${Math.round(kind.breakEvenMinutes)} min`
 }
 
+/** Keep is the normal case, so its cell stays empty and the exceptions stand out. */
 const verdictLabels: Record<PaybackVerdict['_tag'], string> = {
-  Keep: 'Keep',
+  Keep: '',
   Tune: 'Tune',
   Cut: 'Cut',
   MeasureFirst: 'Measure first',

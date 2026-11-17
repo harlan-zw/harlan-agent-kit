@@ -65,9 +65,9 @@ async function loadStats(): Promise<void> {
     }),
     $fetch<PaybackReport>(terminalHost.controllerPath('/api/stats/payback'), { query }).then((value) => {
       payback.value = value
-    }).catch((cause: unknown) => {
+    }).catch(() => {
       payback.value = undefined
-      paybackMessage.value = cause instanceof Error ? `Payback did not load: ${cause.message}` : 'Payback did not load.'
+      paybackMessage.value = 'Could not load Payback. Retry.'
     }),
   ]).finally(() => {
     pending.value = false
@@ -204,8 +204,11 @@ useHead({
         <StatsRepositoryTable :repositories="snapshot.repositories" />
         <StatsWorkTable :work="snapshot.work" :from="from" :to="to" />
         <StatsPaybackTable v-if="payback && payback.kinds.length > 0" :report="payback" />
-        <p v-if="paybackMessage" class="status-error text-sm" role="alert">
-          {{ paybackMessage }}
+        <p v-if="paybackMessage" class="flex flex-wrap items-center gap-3 text-sm" role="alert">
+          <span class="status-error">{{ paybackMessage }}</span>
+          <UButton size="xs" color="neutral" variant="outline" @click="loadStats">
+            Retry
+          </UButton>
         </p>
       </div>
 

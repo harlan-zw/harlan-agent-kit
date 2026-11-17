@@ -42,20 +42,20 @@ const ratesText = computed(() => paybackRatesText(report))
           <UiTableMetricCell :value="row.agentTurns" />
         </UiTableTd>
         <UiTableTd numeric size="sm">
-          <span class="font-mono text-sm">{{ row.cost }}</span>
+          <span class="whitespace-nowrap font-mono text-sm">{{ row.cost }}</span>
         </UiTableTd>
         <UiTableTd numeric size="sm">
-          <span class="text-sm">{{ row.useful }}</span>
+          <span class="whitespace-nowrap text-sm">{{ row.useful }}</span>
         </UiTableTd>
         <UiTableTd numeric size="sm">
           <span class="font-mono text-sm text-muted">{{ row.wasted }}</span>
         </UiTableTd>
         <UiTableTd numeric size="sm">
-          <span class="font-mono text-sm text-muted">{{ row.perUseful }}</span>
+          <span class="whitespace-nowrap font-mono text-sm text-muted">{{ row.perUseful }}</span>
         </UiTableTd>
         <UiTableTd size="sm">
           <span class="flex flex-col gap-0.5">
-            <UiStatusBadge :status="row.verdictTone" :label="row.verdict" />
+            <UiStatusBadge v-if="row.verdict" :status="row.verdictTone" :label="row.verdict" />
             <span v-if="row.reason" class="whitespace-normal text-xs text-muted">{{ row.reason }}</span>
           </span>
         </UiTableTd>
