@@ -39,6 +39,39 @@ export type TrialMeasure
     minimumFlaggedShare: number
     listLimit: number
   }
+  | {
+    _tag: 'ReadyWait'
+    /** A pull request READY with passing CI for longer than this counts as overdue. */
+    overdueDays: number
+    /** The reading at the first run. Each weekly reading compares against it. */
+    baseline: ReadyWait & { measuredAt: string }
+    /** How far the overdue count must fall by the end, as a share of the baseline. */
+    minimumDrop: number
+    /** From this trial week on, Harlan says whether he still reads the ready digest. */
+    readCheckWeek: number
+  }
+  | {
+    _tag: 'RetroFollowThrough'
+    /** Days a Candidate has to reach a merged pull request. */
+    mergeDays: number
+    /** The share of judged Candidates that must merge in time. */
+    minimumMergedShare: number
+  }
+
+/** Open pull requests whose current head is READY with passing CI, at one instant. */
+export interface ReadyWait {
+  ready: number
+  /** Those READY for longer than the trial's overdue days. */
+  overdue: number
+  /** Whole days since READY of the oldest overdue one, or null when none is overdue. */
+  oldestDays: number | null
+}
+
+/** What an ended trial that misses its keep rule leads to. */
+export type TrialMiss
+  = | { _tag: 'Kill' }
+    /** A measurement trial is never killed. A miss names what needs work. */
+    | { _tag: 'Revise', what: string }
 
 export type Trial
   = | {
@@ -52,6 +85,7 @@ export type Trial
     killRule: string
     /** What the proposal measured before the trial, in its own words. */
     before: string
+    onMiss: TrialMiss
     measure: TrialMeasure
   }
   | { _tag: 'Parked', id: string, title: string, reason: string }
@@ -67,6 +101,7 @@ export const TRIALS: readonly Trial[] = [
     keepRule: 'Sites with `when: changed` request at least as many issues per site per week, with at least 50% fewer Agent runs per site per week.',
     killRule: 'A site with `when: changed` misses a production problem.',
     before: '140 runs, 244M input tokens, and 1 issue requested across 10 sites in the 14 days to 17 November.',
+    onMiss: { _tag: 'Kill' },
     measure: {
       _tag: 'CheckinWhenChanged',
       whenChangedRepositories: ['harlan-zw/nuxtseo.com', 'harlan-zw/zhead.dev', 'harlan-zw/requestindexing.com', 'harlan-zw/unhead.unjs.io', 'harlan-zw/mdream.dev'],
@@ -90,6 +125,7 @@ export const TRIALS: readonly Trial[] = [
     keepRule: 'Precision is at least 95% on the labelled sample, and live mode later keeps at least 10% of issues out of Issue triage.',
     killRule: 'A real defect is routed DISCUSSION at confidence 0.9 or above.',
     before: '172 Agent triage runs in the 30 days to 17 November, with no route.',
+    onMiss: { _tag: 'Kill' },
     measure: { _tag: 'DiscussionRouteShadow', labelSample: 10, killConfidence: 0.9, minimumTriageShare: 0.1, listLimit: 25 },
   },
   {
@@ -102,6 +138,39 @@ export const TRIALS: readonly Trial[] = [
     keepRule: 'No flagged head ended Blocked, and at least 15% of reviewed heads qualify.',
     killRule: 'A flagged head ended Blocked for a real defect.',
     before: '872 Review runs in the 14 days to 17 November: 99 Ready and 44 Blocked.',
+    onMiss: { _tag: 'Kill' },
     measure: { _tag: 'PathRuleShadow', minimumFlaggedShare: 0.15, listLimit: 20 },
+  },
+  {
+    _tag: 'Measured',
+    id: 'ready-digest',
+    title: '6. Weekly `ready-digest` of pull requests ready for Harlan',
+    start: { _tag: 'On', at: '2026-11-18T00:00:00+11:00' },
+    weeks: 4,
+    metric: 'Open pull requests whose current head has been READY with passing CI for more than 3 days, and the age of the oldest, read at each weekly run.',
+    keepRule: 'By the end of week 4, that count falls by at least 50% from the first run.',
+    killRule: 'Harlan stops reading the ready digest by week 2.',
+    before: 'On 18 November, when the trial started, 9 of 33 READY pull requests had waited more than 3 days. The oldest had waited 50 days.',
+    onMiss: { _tag: 'Kill' },
+    measure: {
+      _tag: 'ReadyWait',
+      overdueDays: 3,
+      baseline: { measuredAt: '2026-11-17T21:34:50.000Z', ready: 33, overdue: 9, oldestDays: 50 },
+      minimumDrop: 0.5,
+      readCheckWeek: 2,
+    },
+  },
+  {
+    _tag: 'Measured',
+    id: 'retro-follow-through',
+    title: '7. `agent-retro` follow-through',
+    start: { _tag: 'On', at: '2026-11-18T00:00:00+11:00' },
+    weeks: 6,
+    metric: 'Each week\'s `agent-retro` Candidates, how many became issues, and how many merged a pull request within 14 days.',
+    keepRule: 'At least half of the Candidates merge a pull request within 14 days.',
+    killRule: 'None. This trial only measures, so a miss means the retro prompt needs work.',
+    before: '7 Candidates from 12 October to 13 November. All 7 became issues and all 7 merged.',
+    onMiss: { _tag: 'Revise', what: 'The `agent-retro` prompt' },
+    measure: { _tag: 'RetroFollowThrough', mergeDays: 14, minimumMergedShare: 0.5 },
   },
 ]

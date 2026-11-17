@@ -27,6 +27,7 @@ did not cover it.
 | Routine | `routines` | Scheduler | N to 1 Repository mapping, 1 to N Routine runs | Routine |
 | Routine run | `routine_runs` | Scheduler | N to 1 Routine | run |
 | d1-query-review | compiled Routine definition | Scheduler | One weekly Routine per production site | d1-query-review |
+| ready-digest | compiled Routine definition | Scheduler | One weekly Routine, kit only | ready-digest |
 | Lease holder | `tasks.worker_id` | Scheduler | One per Running Task | none |
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
 | Stats | derived from Journal records | Dashboard | N completed records per date range | Stats |
@@ -58,6 +59,7 @@ did not cover it.
 | Publication command | `publication_commands` | Controller | One to one Task | none |
 | Review run | `review_runs` | Runner | N to 1 Revision, 1 to N Publications | review |
 | Agent feedback | `agent_feedback` | Controller | One per Review run | Agent feedback |
+| Implicit signal | `implicit_signals` | Controller | N per pull request the service opened or reviewed | Implicit signal |
 | Review usage | `review_runs.usage` | Runner | One per Review run | Review usage |
 | Agent turn | `agent_turns` | Runner | N to 1 Task, Review run, or Routine run | Agent turn |
 | Turn usage | `agent_turns.usage` | Runner | One per Agent turn | usage |
@@ -116,6 +118,7 @@ Collisions
 - "Auto" names a Selection mode. GitHub's merge feature is always written "auto-merge", hyphenated.
 - "Automatic" names an Agent selection state and is always written in full. "Auto" alone always means the Selection mode. The two decide different things: `Auto` decides which pull requests to act on, `Automatic` decides which Agent provider answers.
 - "Dismiss" is this service's Dismissal. GitHub's own Dismiss applies to alerts, which this service does not touch, so the two never appear together.
+- "signal" alone names nothing. Code calls one Agent feedback row an `AgentFeedbackSignal`. An Implicit signal is a separate record, and never Agent feedback.
 - "approval" means this service's local Approval. A GitHub pull request review is always "review" or "approving review".
 - "check" means a GitHub check run. This service's own conditions are always "Review gate", never bare "check".
 - "job" means a GitHub Actions job. This service's unit of work is a Task.
@@ -302,6 +305,15 @@ One durable answer to one exact cron instant for a Routine.
 A skipped instant remains a Routine run. This keeps missed work visible.
 
 An unchanged run is a Completed Routine run with no Agent turn. Its evidence contains `unchanged since run`.
+
+### ready-digest
+
+One weekly run log comment that lists each open pull request whose current head has a READY Review and passing CI, oldest READY first.
+
+The controller writes it from its own Review records and posts it to the run log. It starts no Agent turn.
+A repository GitHub does not report as public shows its name and number only, because the run log is public.
+
+Write `ready-digest` for the Routine and "ready digest" in prose. Never shorten it to "digest": that word names a SHA-256 here.
 
 ### Queue
 
@@ -595,6 +607,7 @@ Work whose outcome the Journal does not record reads Measure first. So does work
 Dollars come from the dated rates in `payback.rates`. Break-even minutes also need `payback.hourly_value`.
 Each kind gets one verdict: Keep, Tune, Cut, or Measure first. A verdict recommends a change; Harlan decides it.
 Cut needs spend of at least 15 minutes of Harlan's time in the range. Cheaper work with nothing to show reads Keep.
+Each kind also counts the Implicit signals in the range, on pull requests the service opened. A signal counts for the work that opened the pull request, and for Review when it names a Review run.
 
 Do not use ROI, value score, impact score, cost-benefit, efficiency, or worth.
 
@@ -614,6 +627,28 @@ One explicit human judgment about one Review run: Useful, Noisy, or Wrong.
 Noisy and Wrong need a reason. Useful may include a reason.
 
 Use Agent feedback. Do not use rating, vote, or reaction.
+
+### Implicit signal
+
+One action a person took on GitHub on agent work. The service reads it from state it already observes, so it needs no click.
+
+The service records each one once. There are four kinds:
+
+- Human commit: a head the service did not publish replaced the head of a READY Review run.
+- Closed unmerged: a person closed the pull request without a merge.
+- Merged untouched: the pull request merged, and the service published every head after the first.
+- Logged finding pickup: a person asked an agent to fix one Logged Review finding.
+
+Only pull requests the service opened or reviewed get one.
+A contributor's pull request gets no human commit, close, or merge signal. A Logged finding pickup still counts there.
+Only a close or merge that GitHub confirmed counts.
+The service never reads the commit author. Sessions on the service host commit as the GitHub App.
+So a head with no Publication command counts as a human commit. A person's rebase or base branch merge counts too.
+On a pull request Harlan opened, a human commit is often planned work. The agent-feedback Routine reads human commits and closes only on pull requests the service opened.
+
+An Implicit signal records an action, not a judgment. It is never Agent feedback, and it never changes a Payback verdict.
+
+Use Implicit signal. Do not use implicit feedback, passive feedback, behavior signal, or outcome signal.
 
 ### Review gate
 
@@ -808,6 +843,7 @@ Evidence that a skill, policy, or workflow should change.
 | worker, for the thing that answers a turn | Agent | Two words for the running agent. `worker_id` keeps the word, because there it means Lease holder |
 | attempt as a noun, pass | Review run | Named after GitHub's check run |
 | rating, vote, reaction | Agent feedback | One explicit judgment about one Review run |
+| implicit feedback, passive feedback, behavior signal, outcome signal | Implicit signal | Agent feedback is an explicit judgment. An Implicit signal is an action, never a judgment |
 | annotation | Review finding | GitHub anchors annotations to a line; findings are prose |
 | needs attention, stuck, human required | Action required | GitHub's own check conclusion |
 | waiting, in progress | PENDING | GitHub's own check status and review state |

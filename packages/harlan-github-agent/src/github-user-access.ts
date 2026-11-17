@@ -48,20 +48,21 @@ export function createGitHubUserAccess(options: GitHubUserAccessOptions = {}): G
         'api',
         'graphql',
         '-f',
-        'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){nameWithOwner defaultBranchRef{name} isArchived isFork repositoryTopics(first:100){nodes{topic{name}}} owner{login __typename}}}',
+        'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){nameWithOwner defaultBranchRef{name} isArchived isFork isPrivate repositoryTopics(first:100){nodes{topic{name}}} owner{login __typename}}}',
         '-f',
         `owner=${owner}`,
         '-f',
         `name=${repo}`,
         '--jq',
-        '.data.repository | if . == null then null else {github: .nameWithOwner, defaultBranch: (.defaultBranchRef.name // "main"), archived: .isArchived, fork: .isFork, topics: [.repositoryTopics.nodes[].topic.name], owner: {login: .owner.login, type: .owner.__typename}} end',
+        '.data.repository | if . == null then null else {github: .nameWithOwner, defaultBranch: (.defaultBranchRef.name // "main"), archived: .isArchived, fork: .isFork, private: (.isPrivate != false), topics: [.repositoryTopics.nodes[].topic.name], owner: {login: .owner.login, type: .owner.__typename}} end',
       ])
         .then((output) => {
           const repository = JSON.parse(output) as Omit<InstalledRepository, 'authentication'> | null
           if (repository === null)
             return undefined
           return repository.owner.type === 'User' || repository.owner.type === 'Organization'
-            ? { ...repository, topics: repository.topics ?? [] }
+            // An answer without the flag counts as private, so no title reaches a public log.
+            ? { ...repository, private: repository.private !== false, topics: repository.topics ?? [] }
             : undefined
         })
         .catch(() => {

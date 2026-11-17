@@ -2,9 +2,17 @@
 # PreToolUse (Bash): keep public reads on the separate GitHub account.
 source "$(dirname "$0")/check-config.sh"
 source "$(dirname "$0")/command-text.sh"
+source "$(dirname "$0")/hit-log.sh"
 is_hook_disabled "github-read-routing" && exit 0
 
 input=$(cat)
+
+deny() {
+  jq -nc --arg reason "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
+  log_hook_hit deny "$1" "$input"
+  exit 0
+}
+
 command=$(printf '%s' "$input" | jq -r '.tool_input.command // .tool_input.cmd // empty')
 [ -n "$command" ] || exit 0
 code=$(command_code "$command" true)
@@ -49,9 +57,7 @@ for call in "${calls[@]}"; do
       esac
     done
     if [ "$pending" = true ] || [[ ! "$interval" =~ ^[0-9]{1,9}$ ]] || ((10#$interval < 60)); then
-      reason='If you must watch private CI, set --interval 60 or higher. Use the Service Control API for tracked pull requests.'
-      jq -nc --arg reason "$reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
-      exit 0
+      deny 'If you must watch private CI, set --interval 60 or higher. Use the Service Control API for tracked pull requests.'
     fi
   fi
 
@@ -81,7 +87,5 @@ for call in "${calls[@]}"; do
       [ "$matched" = true ] && [ "$mismatch" = false ] && continue
     fi
   fi
-  reason='Use agent-gh for public GitHub reads. For verified private repositories, set HARLAN_AGENT_GITHUB_PRIVATE=owner/repo on that command. Specify the same repository. Never switch credentials after agent-gh fails. Use the Service Control API to watch a tracked pull request.'
-  jq -nc --arg reason "$reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
-  exit 0
+  deny 'Use agent-gh for public GitHub reads. For verified private repositories, set HARLAN_AGENT_GITHUB_PRIVATE=owner/repo on that command. Specify the same repository. Never switch credentials after agent-gh fails. Use the Service Control API to watch a tracked pull request.'
 done

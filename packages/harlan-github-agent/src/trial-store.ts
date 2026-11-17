@@ -43,6 +43,25 @@ export interface TrialReviewedHead {
   fileCount: number | null
 }
 
+/** One open pull request whose current head has a READY Review and passing CI. */
+export interface ReadyPullRequest {
+  repository: string
+  pullRequestNumber: number
+  title: string
+  /** When a Review first read READY on this head. */
+  readyAt: string
+}
+
+/** One `agent-retro` Candidate, and what it became. */
+export interface TrialRetroCandidate {
+  repository: string
+  createdAt: string
+  /** The issue the controller filed for it, or null while none is published. */
+  issueNumber: number | null
+  /** When the pull request that resolved it merged, or null while none has. */
+  mergedAt: string | null
+}
+
 export interface TrialStore {
   /** Every run of one Routine whose cron instant falls in the range. */
   listTrialRoutineRuns: (input: { routineName: RoutineName, range: TrialRange }) => TrialRoutineRun[]
@@ -52,7 +71,40 @@ export interface TrialStore {
   listTrialReviewedHeads: (range: TrialRange) => TrialReviewedHead[]
   /** When one kind of workflow event was first recorded, or null when it never was. */
   firstTrialEventAt: (input: { stream: 'review_run' | 'issue_triage_status', event: string }) => string | null
+  /** Open pull requests in enabled repositories whose current head is READY with passing CI, oldest READY first. */
+  listReadyPullRequests: () => ReadyPullRequest[]
+  /** `agent-retro` Candidates recorded in the range. */
+  listTrialRetroCandidates: (range: TrialRange) => TrialRetroCandidate[]
 }
+
+/**
+ * When a Review first read READY on each head, for one base branch.
+ *
+ * A run can finish READY, or turn READY later when the controller reprojects
+ * its gates. Some reprojections record a `review_gate` event and some only
+ * move the projection row, so all three sources count.
+ */
+const firstReadySql = `
+  first_ready AS (
+    SELECT subject_id, head_sha, base_ref, min(at) AS ready_at FROM (
+      SELECT subject_id, head_sha, base_ref, completed_at AS at
+      FROM review_runs
+      WHERE kind = 'adversarial_review' AND outcome_tag = 'Ready'
+      UNION ALL
+      SELECT review_runs.subject_id, review_runs.head_sha, review_runs.base_ref, workflow_events.occurred_at
+      FROM workflow_events
+      JOIN review_runs ON review_runs.id = workflow_events.entity_id
+      WHERE workflow_events.stream = 'review_gate' AND workflow_events.event = 'Projected'
+        AND workflow_events.to_state = 'Ready' AND review_runs.kind = 'adversarial_review'
+      UNION ALL
+      SELECT review_runs.subject_id, review_runs.head_sha, review_runs.base_ref, review_gate_projections.updated_at
+      FROM review_gate_projections
+      JOIN review_runs ON review_runs.id = review_gate_projections.review_run_id
+      WHERE review_gate_projections.outcome_tag = 'Ready' AND review_runs.kind = 'adversarial_review'
+    )
+    GROUP BY subject_id, head_sha, base_ref
+  )
+`
 
 const GATE_NAMES: readonly ReviewGateName[] = ['merge', 'review', 'ci']
 
@@ -105,6 +157,20 @@ interface ReviewedHeadRow {
   file_count: number | null
 }
 
+interface ReadyPullRequestRow {
+  repository: string
+  pull_request_number: number
+  title: string
+  ready_at: string
+}
+
+interface RetroCandidateRow {
+  repository: string
+  created_at: string
+  issue_number: number | null
+  merged_at: string | null
+}
+
 export function createTrialStore(database: DatabaseSync): TrialStore {
   const routineRuns = database.prepare(`
     SELECT routines.repository, routine_runs.scheduled_for, routine_runs.state_tag, routine_runs.evidence,
@@ -150,6 +216,51 @@ export function createTrialStore(database: DatabaseSync): TrialStore {
   const firstEvent = database.prepare(`
     SELECT min(occurred_at) AS at FROM workflow_events WHERE stream = ? AND event = ?
   `)
+  // The latest Review run on the current head and base decides; a settled run counts through its settlement.
+  const readyPullRequests = database.prepare(`
+    WITH ${firstReadySql}, latest AS (
+      SELECT review_runs.subject_id, review_runs.head_sha, review_runs.base_ref,
+        COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
+        json_extract(COALESCE(review_gate_projections.gates, review_runs.gates), '$.ci._tag') AS ci_tag,
+        ROW_NUMBER() OVER (
+          PARTITION BY review_runs.subject_id, review_runs.head_sha, review_runs.base_ref
+          ORDER BY review_runs.completed_at DESC, review_runs.id DESC
+        ) AS position
+      FROM review_runs
+      LEFT JOIN review_gate_projections ON review_gate_projections.review_run_id = review_runs.id
+      WHERE review_runs.kind = 'adversarial_review'
+        AND NOT EXISTS (SELECT 1 FROM review_runs AS settled WHERE settled.supersedes_review_run_id = review_runs.id)
+    )
+    SELECT repositories.github AS repository, subjects.github_number AS pull_request_number,
+      json_extract(revisions.payload, '$.title') AS title, first_ready.ready_at
+    FROM subjects
+    JOIN repositories ON repositories.id = subjects.repository_id
+    JOIN revisions ON revisions.id = subjects.current_revision_id
+    JOIN latest ON latest.subject_id = subjects.id AND latest.position = 1
+      AND latest.head_sha = json_extract(revisions.payload, '$.headSha')
+      AND latest.base_ref IS json_extract(revisions.payload, '$.baseRef')
+    JOIN first_ready ON first_ready.subject_id = latest.subject_id
+      AND first_ready.head_sha = latest.head_sha AND first_ready.base_ref IS latest.base_ref
+    WHERE subjects.kind = 'pull_request' AND repositories.enabled = 1
+      AND json_extract(revisions.payload, '$.state') = 'open'
+      AND json_extract(revisions.payload, '$.draft') = 0
+      AND latest.outcome_tag = 'Ready' AND latest.ci_tag = 'Passed'
+    ORDER BY first_ready.ready_at, repositories.github, subjects.github_number
+  `)
+  // Reconciliation marks a Candidate Merged with its pull request; the merge instant lives on that pull request.
+  const retroCandidates = database.prepare(`
+    SELECT routines.repository, candidates.created_at, commands.github_issue_number AS issue_number,
+      CASE WHEN candidates.result_tag = 'Merged' THEN json_extract(revisions.payload, '$.mergedAt') END AS merged_at
+    FROM candidates
+    JOIN routines ON routines.id = candidates.routine_id
+    LEFT JOIN candidate_issue_commands AS commands ON commands.candidate_id = candidates.id AND commands.state_tag = 'Published'
+    LEFT JOIN repositories ON repositories.github = commands.repository
+    LEFT JOIN subjects ON subjects.repository_id = repositories.id
+      AND subjects.kind = 'pull_request' AND subjects.github_number = candidates.pull_request
+    LEFT JOIN revisions ON revisions.id = subjects.current_revision_id
+    WHERE routines.name = 'agent-retro' AND candidates.created_at >= ? AND candidates.created_at < ?
+    ORDER BY candidates.created_at, candidates.id
+  `)
 
   return {
     listTrialRoutineRuns: ({ routineName, range }) => (routineRuns.all(routineName, range.from, range.to) as unknown as RoutineRunRow[])
@@ -192,5 +303,9 @@ export function createTrialStore(database: DatabaseSync): TrialStore {
         fileCount: typeof row.file_count === 'number' ? row.file_count : null,
       })),
     firstTrialEventAt: ({ stream, event }) => (firstEvent.get(stream, event) as { at: string | null } | undefined)?.at ?? null,
+    listReadyPullRequests: () => (readyPullRequests.all() as unknown as ReadyPullRequestRow[])
+      .map(row => ({ repository: row.repository, pullRequestNumber: row.pull_request_number, title: row.title, readyAt: row.ready_at })),
+    listTrialRetroCandidates: range => (retroCandidates.all(range.from, range.to) as unknown as RetroCandidateRow[])
+      .map(row => ({ repository: row.repository, createdAt: row.created_at, issueNumber: row.issue_number, mergedAt: row.merged_at })),
   }
 }

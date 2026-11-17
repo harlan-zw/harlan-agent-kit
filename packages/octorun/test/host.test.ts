@@ -6,6 +6,7 @@ import { createGitHubAppAuth, createGitHubClient, ok } from '@harlan-zw/octorun'
 import { afterEach, expect, it } from 'vitest'
 import { stringify } from 'yaml'
 import { createKitHost } from '../src/host.ts'
+import { KIT_SUMMARY_INSTRUCTIONS } from '../src/summary.ts'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -81,6 +82,25 @@ it('runs the installed workflow chain and publishes one disclosed summary across
   }
   finally {
     await second.value.close()
+  }
+})
+
+it('writes the summary with the kit release note brief', async () => {
+  const f = await fixture()
+  const systems: string[] = []
+  const provider: AgentProvider = { id: 'brief-test', generate: async (request) => {
+    systems.push(request.messages[0]!.content)
+    return f.options.provider.generate(request)
+  } }
+  const host = await createKitHost({ ...f.options, provider })
+  if (host._tag === 'Err')
+    throw new Error(host.error.message)
+  try {
+    expect(await host.value.command('run', { repository: 'harlan-zw/harlan-agent-kit', number: 7, workflow: 'change-summary', requestId: 'kit-brief' })).toMatchObject({ _tag: 'Ok', value: { state: 'Succeeded' } })
+    expect(systems).toEqual([expect.stringContaining(KIT_SUMMARY_INSTRUCTIONS)])
+  }
+  finally {
+    await host.value.close()
   }
 })
 

@@ -73,6 +73,7 @@ const agentControls = {
   listAgentTurns: () => [],
   listPaybackTasks: () => [],
   listPaybackRoutineRuns: () => [],
+  listPaybackSignals: () => [],
 }
 
 afterEach(() => vi.useRealTimers())

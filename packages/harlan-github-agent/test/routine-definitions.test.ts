@@ -11,21 +11,53 @@ describe('built-in Routine contracts', () => {
         reads.push(limit)
         return []
       },
+      listImplicitSignals: () => {
+        reads.push(0)
+        return []
+      },
     })
     expect(result._tag).toBe('Err')
     expect(reads).toEqual([])
   })
 
-  it('skips empty Agent feedback scans after reading the latest ten signals', () => {
-    const reads: number[] = []
+  it('skips Agent feedback scans only when neither Agent feedback nor an Implicit signal exists', () => {
+    const reads: unknown[] = []
     const result = getRoutine('agent-feedback').prepare('harlan-zw/harlan-agent-kit', {
       listAgentFeedback: (limit) => {
         reads.push(limit)
         return []
       },
+      listImplicitSignals: (input) => {
+        reads.push(input)
+        return []
+      },
     })
     expect(result).toMatchObject({ _tag: 'Ok', value: { _tag: 'Skip', evidence: expect.stringContaining('0 signals') } })
-    expect(reads).toEqual([10])
+    expect(reads).toEqual([
+      10,
+      { kinds: ['HumanCommit', 'ClosedUnmerged'], limitPerKind: 5, origin: 'ServiceOpened' },
+      { kinds: ['LoggedFindingPickedUp'], limitPerKind: 5, origin: 'Any' },
+    ])
+  })
+
+  it('runs on Implicit signals alone and keeps them apart from Agent feedback', () => {
+    const signal = {
+      _tag: 'ClosedUnmerged' as const,
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      title: 'Fix the parser',
+      headSha: 'abc123',
+      occurredAt: '2026-11-18T00:00:00.000Z',
+      openedBy: 'issue_work' as const,
+      reviewRun: null,
+    }
+    const definition = getRoutine('agent-feedback')
+    const result = definition.prepare('harlan-zw/harlan-agent-kit', { listAgentFeedback: () => [], listImplicitSignals: input => input.origin === 'ServiceOpened' ? [signal] : [] })
+    expect(result).toEqual({ _tag: 'Ok', value: { _tag: 'Run', feedback: [], signals: [signal] } })
+
+    const prompt = definition.scanPrompt({ name: 'agent-feedback', repository: 'harlan-zw/harlan-agent-kit', mode: 'propose', priorCandidates: [], feedback: [], signals: [signal] })
+    expect(prompt).toContain('never Agent feedback')
+    expect(prompt).toContain(JSON.stringify([signal]))
   })
 
   it('requires the Sentry report even with no code proposals', () => {

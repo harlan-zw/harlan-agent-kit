@@ -35,6 +35,8 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 
 **Email is read only** (`hooks/himalaya-read-only.sh`): an agent may read mail and must never change or send it. The hook allows a fixed read set and denies everything else, because a denylist would miss the next subcommand himalaya adds. Hogwild carries a second, stronger guarantee: its `~/.config/himalaya/config.toml` has no send backend at all, so a send fails there whatever the agent does.
 
+**Hook hit log** (`hooks/hit-log.sh`): a Hook that denies or rewrites calls `log_hook_hit` once. It appends one JSON line to `${XDG_STATE_HOME:-$HOME/.local/state}/harlan-agent-kit/hook-hits.jsonl`, without the command. A failed write never changes the decision. `pnpm hook-hits` counts hits per Hook, surface, and ISO week. A test that runs a Hook sets `XDG_STATE_HOME` to a temporary directory.
+
 **Disable hooks per-project**: `.claude/hooks.json` with `{"disabled": ["eslint", "pre-commit-push"]}`
 
 **Workflow** (`.github/workflows/test.yml`): select jobs from changed paths with `scripts/ci-changes.ts`. Executable Markdown runs tests. Code runs lint, typecheck, build, and tests. README, changelog, license, and plan prose skip these jobs. Keep path selection at the job level so required checks report. Use GitHub hosted runners. The test job installs a pinned `wt` for real worktree workflows.

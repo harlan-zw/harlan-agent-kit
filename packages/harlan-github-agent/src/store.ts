@@ -5,6 +5,7 @@ import type { TransientKind } from './failure.ts'
 import type { FindingThreadSyncStore } from './finding-thread-sync-store.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { AgentHost, AgentSlotSetting } from './host-capacity.ts'
+import type { ImplicitSignalStore } from './implicit-signal-store.ts'
 import type { IncidentResolutionError, IncidentResolutionReceipt, IncidentResolutionRequest } from './incident-resolution.ts'
 import type { IssueClassificationDecision, IssueRouteReading } from './issue-classification.ts'
 import type { IssueTriageResult, IssueTriageState } from './issue-triage.ts'
@@ -142,6 +143,7 @@ import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS,
 import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
 import { gitHubRateLimitRetryAt } from './github-rate-limit.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
+import { createImplicitSignalStore, implicitSignalSchema, isAgentPullRequest, recordClosureSignal, recordHeadChangeSignal } from './implicit-signal-store.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { createLoggedFindingStore, loggedFindingSchema } from './logged-finding-store.ts'
@@ -826,7 +828,7 @@ export type StoredIssueTriageRun
     }
     | { _tag: 'Discussion', confidence: number, decidedAt: string }
 
-export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore, TrialStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore, TrialStore, ImplicitSignalStore {
   getTask: (taskId: string) => DashboardTask | null
   listTasks: () => DashboardTask[]
   getOpenPullRequest: (repository: string, number: number) => GitHubPullRequestItem | null
@@ -7439,7 +7441,11 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 99;`)
     version = 99
   }
-  if (version === 99)
+  if (version === 99) {
+    applyMigration(database, `${implicitSignalSchema} PRAGMA user_version = 100;`)
+    version = 100
+  }
+  if (version === 100)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7733,6 +7739,7 @@ export function openJournalStore(
   const agentTurnStore = createAgentTurnStore(database)
   const paybackStore = createPaybackStore(database)
   const trialStore = createTrialStore(database)
+  const implicitSignalStore = createImplicitSignalStore(database)
   const loggedFindingStore = createLoggedFindingStore(database, {
     writeAuthoritySql: repositoryWriteAuthoritySql,
     digest,
@@ -8471,6 +8478,13 @@ export function openJournalStore(
       const mapping = JSON.parse(repository.policy_json) as RepositoryMapping
       const dismissed = (): boolean =>
         database.prepare('SELECT 1 FROM item_dismissals WHERE subject_id = ?').get(subject.id) !== undefined
+      const recordHeadSignal = (): void => {
+        const prior = subject.current_payload === null ? null : JSON.parse(subject.current_payload) as GitHubItem
+        if (input.subject.kind === 'pull_request' && prior?.kind === 'pull_request' && prior.headSha !== input.subject.headSha
+          && isAgentPullRequest(input.subject, mapping.writablePullRequestAuthors)) {
+          recordHeadChangeSignal(database, { subjectId: subject.id, headSha: input.subject.headSha, occurredAt: input.subject.updatedAt, at: input.observedAt })
+        }
+      }
       const planCurrentWork = (): void => {
         updateConflictDispatchWindow(database, subject.id, subject.current_payload === null ? null : JSON.parse(subject.current_payload) as GitHubItem, input.subject, input.observedAt)
         // A Dismissal outranks every planner. Nothing is queued, whatever changed.
@@ -8643,6 +8657,7 @@ export function openJournalStore(
         database.prepare('UPDATE revisions SET observed_at = ?, source = ?, payload = ? WHERE id = ?')
           .run(input.observedAt, input.source, payload, revisionId)
         database.prepare('UPDATE subjects SET current_revision_id = ? WHERE id = ?').run(revisionId, subject.id)
+        recordHeadSignal()
         planCurrentWork()
         database.exec('COMMIT')
         return { _tag: 'Duplicate', revisionId }
@@ -8673,6 +8688,7 @@ export function openJournalStore(
       }
 
       database.prepare('UPDATE subjects SET current_revision_id = ? WHERE id = ?').run(revisionId, subject.id)
+      recordHeadSignal()
       planCurrentWork()
 
       database.exec('COMMIT')
@@ -15867,7 +15883,7 @@ export function openJournalStore(
 
   const recordVerifiedPullRequestClosure: JournalStore['recordVerifiedPullRequestClosure'] = (input) => {
     const row = database.prepare(`
-      SELECT subjects.id AS subject_id, revisions.payload
+      SELECT subjects.id AS subject_id, revisions.payload, repositories.policy_json
       FROM subjects
       JOIN repositories ON repositories.id = subjects.repository_id
       JOIN revisions ON revisions.id = subjects.current_revision_id
@@ -15876,6 +15892,7 @@ export function openJournalStore(
     `).get(input.repository, input.pullRequestNumber, input.revisionId) as {
       subject_id: number
       payload: string
+      policy_json: string
     } | undefined
     const pullRequest = row === undefined ? undefined : JSON.parse(row.payload) as GitHubItem
     if (
@@ -15888,19 +15905,30 @@ export function openJournalStore(
     ) {
       return false
     }
-    database.prepare(`
-      INSERT INTO pull_request_closure_verifications (
-        subject_id, revision_id, head_sha, base_sha, disposition_tag, verified_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT (subject_id, revision_id) DO UPDATE SET verified_at = excluded.verified_at
-    `).run(
-      row.subject_id,
-      input.revisionId,
-      input.headSha,
-      input.baseSha,
-      input.disposition._tag,
-      input.at,
-    )
+    // Only a closure GitHub confirmed carries a signal. An inferred one may hide a merge.
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      database.prepare(`
+        INSERT INTO pull_request_closure_verifications (
+          subject_id, revision_id, head_sha, base_sha, disposition_tag, verified_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (subject_id, revision_id) DO UPDATE SET verified_at = excluded.verified_at
+      `).run(
+        row.subject_id,
+        input.revisionId,
+        input.headSha,
+        input.baseSha,
+        input.disposition._tag,
+        input.at,
+      )
+      if (isAgentPullRequest(pullRequest, (JSON.parse(row.policy_json) as RepositoryMapping).writablePullRequestAuthors))
+        recordClosureSignal(database, { subjectId: row.subject_id, pullRequest, at: input.at })
+      database.exec('COMMIT')
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
     return true
   }
 
@@ -17368,6 +17396,7 @@ export function openJournalStore(
     ...agentTurnStore,
     ...paybackStore,
     ...trialStore,
+    ...implicitSignalStore,
     ...reviewProofStore,
     ...loggedFindingStore,
     approveIssue,

@@ -4,7 +4,21 @@ import { basename, dirname, join } from 'node:path'
 import { adversarialReviewPreset, changeSummaryPreset, createGitHubAppAuth, createGitHubClient, createOctorun, err } from '@harlan-zw/octorun'
 import { createKitRunAuthorizer, loadKitAppPrivateKey, loadKitServiceSettings } from './authority.ts'
 import { buildKitOctorunConfig, KIT_PRIVATE_KEY_ENV, KIT_REPOSITORY } from './config.ts'
+import { KIT_SUMMARY_INSTRUCTIONS } from './summary.ts'
 import { createKitTaskTypes } from './tasks.ts'
+
+/** Summarize with the kit brief and publish through the kit's head-checked comment task. */
+function kitSummaryPreset() {
+  const preset = changeSummaryPreset()
+  return {
+    ...preset,
+    tasks: preset.tasks.map((task) => {
+      if (task.uses === 'changes.summarize')
+        return { ...task, with: { ...task.with, instructions: KIT_SUMMARY_INSTRUCTIONS } }
+      return task.uses === 'changes.comment' ? { ...task, uses: 'kit.summary.publish' } : task
+    }),
+  }
+}
 
 export interface KitHostOptions {
   configurationPath: string
@@ -33,7 +47,7 @@ export async function createKitHost(options: KitHostOptions) {
     repository: repository.value.ref,
     stateDir: options.stateDir,
     provider: { _tag: 'Claude' as const, command: 'claude', model: options.model, timeoutMs: 180000, maxResponseBytes: 1048576, maxInputBytes: 262144 },
-    presets: { summary: { ...changeSummaryPreset(), tasks: changeSummaryPreset().tasks.map(task => task.uses === 'changes.comment' ? { ...task, uses: 'kit.summary.publish' } : task) }, review: adversarialReviewPreset() },
+    presets: { summary: kitSummaryPreset(), review: adversarialReviewPreset() },
   }
   const candidate = buildKitOctorunConfig(setup)
   if (candidate._tag === 'Err')

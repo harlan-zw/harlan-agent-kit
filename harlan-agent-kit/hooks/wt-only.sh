@@ -15,6 +15,7 @@
 # known gap in this shape. A quoted real path is not matched either.
 source "$(dirname "$0")/check-config.sh"
 source "$(dirname "$0")/command-text.sh"
+source "$(dirname "$0")/hit-log.sh"
 is_hook_disabled "wt-only" && exit 0
 
 input=$(cat)
@@ -24,6 +25,7 @@ command=$(echo "$input" | jq -r '.tool_input.command // empty')
 
 block() {
   jq -nc --arg reason "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
+  log_hook_hit deny "$1" "$input"
   exit 0
 }
 
