@@ -10,7 +10,7 @@ const DEPENDENCY_UPDATE_FINGERPRINT = 'dependency-updates'
 /** Minor and patch work gets its own issue, so it can merge without waiting for majors. */
 const MINOR_AND_PATCH_FINGERPRINT = 'dependency-updates:minor-and-patch'
 const MINOR_AND_PATCH_TARGET = 'package.json#minor-and-patch'
-const MINOR_AND_PATCH_SCOPE = 'Do not move any dependency to a new major version. Change only dependency versions in package.json files and pnpm-workspace.yaml catalogs, and refresh pnpm-lock.yaml. Leave every other file unchanged. Exclude any update that needs another change, such as migration code or a release age exclusion, and list its blocker.'
+const MINOR_AND_PATCH_SCOPE = 'Do not move any dependency to a new major version. Keep each range prefix as it is. Change only dependency versions in package.json files and pnpm-workspace.yaml catalogs, and refresh pnpm-lock.yaml. Leave every other file unchanged. Exclude any update that needs another change, such as migration code or a release age exclusion, and list its blocker.'
 
 const DEPENDENCY_UPDATE_SCHEMA = {
   type: 'object',

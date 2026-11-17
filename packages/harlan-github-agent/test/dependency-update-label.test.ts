@@ -11,8 +11,9 @@ function workspace(catalog: Record<string, string>, extra = ''): string {
 }
 
 /** A pnpm 9 lockfile with one root importer. A version may carry pnpm's peer suffix. */
-function lockfile(dependencies: Record<string, string>): string {
-  return `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n${Object.entries(dependencies).map(([name, version]) => `      '${name}':\n        specifier: ^${version.replace(/\(.*$/, '')}\n        version: ${version}`).join('\n')}\npackages: {}\n`
+function lockfile(dependencies: Record<string, string>, resolution = (name: string, version: string) => `{integrity: sha512-${name}${version}}`, extra = ''): string {
+  const entries = Object.entries(dependencies).map(([name, version]) => [name, version.replace(/\(.*$/, '')] as const)
+  return `lockfileVersion: '9.0'\n${extra}importers:\n  .:\n    dependencies:\n${Object.entries(dependencies).map(([name, version]) => `      '${name}':\n        specifier: ^${version.replace(/\(.*$/, '')}\n        version: ${version}`).join('\n')}\npackages:\n${entries.map(([name, version]) => `  '${name}@${version}':\n    resolution: ${resolution(name, version)}`).join('\n')}\n`
 }
 
 /** A clean root update: one manifest, the workspace catalog, and the lockfile. */
@@ -44,6 +45,14 @@ describe('dependency update Auto merge label', () => {
     expect(dependencyUpdateLabel(input())._tag).toBe('Label')
   })
 
+  it('reads the toolchain document pnpm writes before the lockfile', () => {
+    const toolchain = (pnpm: string) => `---\nlockfileVersion: '9.0'\nimporters:\n  .:\n    packageManagerDependencies:\n      pnpm:\n        specifier: ${pnpm}\n        version: ${pnpm}\npackages: {}\n---\n`
+    const decision = (pnpm: string) => dependencyUpdateLabel(withManifest('pnpm-lock.yaml', toolchain('12.3.4') + lockfile({ h3: '2.1.0' }), toolchain(pnpm) + lockfile({ h3: '2.3.0' })))
+
+    expect(decision('12.3.4')._tag).toBe('Label')
+    expect(decision('12.4.0').reason).toBe('pnpm-lock.yaml importer . changes packageManagerDependencies. Only versions in dependencies, devDependencies, optionalDependencies may change.')
+  })
+
   it('labels a lockfile refresh that keeps each direct dependency inside its major', () => {
     const refresh = input({ paths: [{ status: 'M', path: 'pnpm-lock.yaml' }] })
 
@@ -66,6 +75,8 @@ describe('dependency update Auto merge label', () => {
     ['a version with a leading zero', withManifest('package.json', manifest({ h3: '^2.1.0' }), manifest({ h3: '^2.01.0' })), 'Only a plain x.y.z version can be compared.'],
     ['a lockfile major', withManifest('pnpm-lock.yaml', lockfile({ h3: '2.1.0' }), lockfile({ h3: '3.0.0' })), 'pnpm-lock.yaml importer .: h3 moves from 2.1.0 to 3.0.0, a new major version.'],
     ['a lockfile prerelease', withManifest('pnpm-lock.yaml', lockfile({ h3: '2.1.0' }), lockfile({ h3: '2.2.0-beta.1' })), 'Only a plain x.y.z version can be compared.'],
+    ['a lockfile that redirects a package to a tarball', withManifest('pnpm-lock.yaml', lockfile({ h3: '2.1.0' }), lockfile({ h3: '2.1.0' }, () => '{tarball: https://example.com/h3.tgz}')), 'pnpm-lock.yaml resolves h3@2.1.0 from somewhere other than the registry.'],
+    ['a lockfile setting change', withManifest('pnpm-lock.yaml', lockfile({ h3: '2.1.0' }), lockfile({ h3: '2.1.0' }, undefined, 'overrides:\n  h3: 2.1.0\n')), 'pnpm-lock.yaml changes overrides.'],
     ['a lockfile without importers', withManifest('pnpm-lock.yaml', 'lockfileVersion: \'9.0\'\n', 'lockfileVersion: \'9.0\'\n'), 'pnpm-lock.yaml has no importers to compare.'],
   ])('leaves %s for a person', (_case, value, reason) => {
     const decision = dependencyUpdateLabel(value)

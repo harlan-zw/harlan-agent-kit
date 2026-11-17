@@ -1,8 +1,9 @@
 import type { GitHubIssuePublisher } from '../src/github.ts'
 import type { Candidate, ClaimedRoutineRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { candidateIssueBody, candidateIssueCommands, candidateIssueTitle, createCandidateIssueController, routineIssueLabel } from '../src/candidate-issue-controller.ts'
+import { candidateFingerprintMarker, candidateIssueBody, candidateIssueCommands, candidateIssueTitle, createCandidateIssueController, routineIssueLabel } from '../src/candidate-issue-controller.ts'
 import { err, ok } from '../src/result.ts'
+import { getRoutine } from '../src/routines/index.ts'
 import { openJournalStore } from '../src/store.ts'
 import { issueItem, repositoryMapping } from './fixtures.ts'
 
@@ -325,6 +326,54 @@ describe('filing the issues Candidates propose', () => {
       expect(created).toHaveLength(1)
       expect(created[0]).toContain('<!-- candidate-fingerprint: dependency-updates -->')
       expect(searched).toEqual(['dependency-updates', 'dependency-updates'])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('files minor and patch work and major work as two dependency issues', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      const dependencyRoutine = { ...routine, name: 'dependency-updates' as const }
+      const parsed = getRoutine('dependency-updates').parseResponse({
+        outcome: 'complete',
+        report: 'Registry scan completed.',
+        updates: [
+          { manifest: 'package.json', name: 'vue', current: '3.5.0', latest: '3.6.0' },
+          { manifest: 'package.json', name: 'nuxt', current: '4.0.0', latest: '5.0.0' },
+        ],
+      })
+      if (parsed._tag !== 'Ok')
+        throw new Error('Expected dependency proposals.')
+      store.recordCandidates({ routineId: routine.routineId, runId: routine.id, candidates: parsed.value.candidates, at: now().toISOString() })
+      store.stageCandidateIssues({
+        commands: candidateIssueCommands(store.listCandidates(routine.routineId).filter(value => value.fingerprint.startsWith('dependency-updates:')), dependencyRoutine),
+        at: now().toISOString(),
+      })
+      // GitHub finds an open issue by its exact marker, as the real search does.
+      const bodies: string[] = []
+      const controller = createCandidateIssueController({
+        now,
+        store,
+        workerId: 'controller-1',
+        github: {
+          findOpenIssueByFingerprint: async ({ fingerprint }) => {
+            const index = bodies.findIndex(body => body.includes(candidateFingerprintMarker(fingerprint)))
+            return ok(index === -1 ? null : { number: 7 + index, url: `https://github.com/harlan-zw/example/issues/${7 + index}` })
+          },
+          createIssue: async ({ body }) => {
+            bodies.push(body)
+            return ok({ number: 6 + bodies.length, url: `https://github.com/harlan-zw/example/issues/${6 + bodies.length}` })
+          },
+        },
+      })
+
+      const results = await controller.publishPending(new AbortController().signal)
+
+      expect(results.map(result => result._tag === 'Ok' ? result.value.issueNumber : result.error).sort()).toEqual([7, 8])
+      expect(bodies).toHaveLength(2)
     }
     finally {
       store.close()

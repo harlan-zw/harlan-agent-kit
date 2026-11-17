@@ -1,6 +1,6 @@
 import type { RepositoryOwnership, RoutineName } from './types.ts'
 import { isDeepStrictEqual } from 'node:util'
-import { parse as parseYaml } from 'yaml'
+import { parseAllDocuments, parse as parseYaml } from 'yaml'
 
 /**
  * Whether the controller labels a dependency update for Auto merge.
@@ -29,6 +29,8 @@ export interface DependencyUpdateLabelInput {
 
 const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies']
 const CATALOG_FIELDS = ['catalog', 'catalogs']
+/** pnpm derives these from the manifests. Every other lockfile key must stay equal. */
+const LOCKFILE_SECTIONS = ['importers', 'packages', 'snapshots', 'catalogs']
 const PLAIN_RANGE = /^([~^]?)(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -128,10 +130,27 @@ function resolvedVersions(dependencies: unknown): unknown {
     [name, isRecord(entry) && typeof entry.version === 'string' ? entry.version.replace(/\(.*$/, '') : entry]))
 }
 
+/** A new or changed package must come from the registry by name and version, with only an integrity hash. */
+function packageSourceChange(path: string, before: unknown, after: unknown): string | null {
+  if (!isRecord(after))
+    return after === undefined ? null : `${path} reshapes packages.`
+  const old = isRecord(before) ? before : {}
+  const redirected = Object.entries(after).find(([key, entry]) => {
+    if (isDeepStrictEqual(entry, old[key]))
+      return false
+    const resolution = isRecord(entry) ? entry.resolution : undefined
+    return !isRecord(resolution) || Object.keys(resolution).join() !== 'integrity' || typeof resolution.integrity !== 'string'
+  })
+  return redirected === undefined ? null : `${path} resolves ${redirected[0]} from somewhere other than the registry.`
+}
+
 /** A refresh can move a direct dependency without a manifest change, so each importer's resolved versions count. */
 function lockfileChange(path: string, before: Record<string, unknown>, after: Record<string, unknown>): string | null {
   if (!isRecord(before.importers) || !isRecord(after.importers))
     return `${path} has no importers to compare.`
+  const settings = otherFieldChange(path, before, after, LOCKFILE_SECTIONS)
+  if (settings !== null)
+    return settings
   const old = before.importers
   const next = after.importers
   for (const importer of [...new Set([...Object.keys(old), ...Object.keys(next)])].sort()) {
@@ -144,17 +163,47 @@ function lockfileChange(path: string, before: Record<string, unknown>, after: Re
       if (reason !== null)
         return reason
     }
+    const fields = otherFieldChange(`${path} importer ${importer}`, from, to, DEPENDENCY_FIELDS)
+    if (fields !== null)
+      return fields
+  }
+  return packageSourceChange(path, before.packages, after.packages)
+}
+
+/** pnpm 11 and later write their own toolchain as a first document, so a lockfile is a list of documents. */
+function parseLockfile(text: string): Record<string, unknown>[] | null {
+  try {
+    const values = parseAllDocuments(text).map(document => document.errors.length === 0 ? document.toJS() as unknown : undefined)
+    return values.length > 0 && values.every(isRecord) ? values : null
+  }
+  catch {
+    // The caller names the unreadable lockfile as the reason for no label.
+    return null
+  }
+}
+
+function lockfileDocumentsChange(path: string, before: string, after: string): string | null {
+  const old = parseLockfile(before)
+  const next = parseLockfile(after)
+  if (old === null || next === null)
+    return `${path} could not be parsed.`
+  if (old.length !== next.length)
+    return `${path} adds or removes a document.`
+  for (const [index, document] of next.entries()) {
+    const reason = lockfileChange(path, old[index]!, document)
+    if (reason !== null)
+      return reason
   }
   return null
 }
 
 function dependencyFileChange(path: string, before: string, after: string): string | null {
+  if (fileName(path) === 'pnpm-lock.yaml')
+    return lockfileDocumentsChange(path, before, after)
   const old = parseManifest(path, before)
   const next = parseManifest(path, after)
   if (old === null || next === null)
     return `${path} could not be parsed.`
-  if (fileName(path) === 'pnpm-lock.yaml')
-    return lockfileChange(path, old, next)
   if (fileName(path) === 'package.json') {
     for (const field of DEPENDENCY_FIELDS) {
       const reason = dependencyMapChange(path, field, old[field], next[field])

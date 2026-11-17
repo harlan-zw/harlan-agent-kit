@@ -1,13 +1,13 @@
 ---
 name: dependency-updates
-description: Update repository dependencies weekly, including majors, in one pull request. Use for the dependency-updates Routine and its Issue work.
+description: Update repository dependencies weekly, with minor and patch updates and majors in separate pull requests. Use for the dependency-updates Routine and its Issue work.
 license: MIT
 ---
 
 # Dependency updates
 
-One repository, one active issue, one pull request for every passing update.
-Attempt major upgrades and their migrations. Keep blocked upgrades out of the final dependency set.
+One repository, up to two active issues: one for minor and patch updates, and one for majors. Each issue gets one pull request.
+Attempt major upgrades and their migrations in the major issue. Keep blocked upgrades out of the final dependency set.
 
 The controller names scan mode or implementation mode. Follow that mode only.
 Read repository Agent instructions and its package manager configuration first.
@@ -55,7 +55,7 @@ Do not stage, commit, push, publish, or alter GitHub metadata. The controller ow
 
 1. Establish the current baseline using the repository Check and build.
 2. If the baseline fails, identify that failure before attributing it to dependency updates.
-3. Attempt all eligible dependencies together, including majors. Preserve the TypeScript exception.
+3. Attempt every update the issue lists together. A minor and patch issue lists no majors; follow its scope. Preserve the TypeScript exception.
 4. Update catalog declarations at their source. Preserve `catalog:` and `workspace:` references in consumers.
 5. Refresh the lockfile. Let parent constraints determine transitive versions. Do not override every transitive package to latest.
 6. Read official migration instructions for breaking upgrades. Repair affected code and configuration within the same change.
@@ -76,11 +76,12 @@ If required, include them in this same pull request and require human review.
 ## Existing work and review
 
 If another dependency pull request already owns the work, report its link.
+A minor and patch issue and a major issue may be open together. The other kind's pull request is not existing work for this issue.
 In scan mode, return `outcome: existing_work` with an empty update list.
 In implementation mode, return blocked.
 Do not create a second pull request or push to a branch this Task does not own.
 The existing Review and Repair continue work on the published pull request.
 
-Pure dependency changes may qualify for the existing auto-merge policy.
+The controller adds the auto-merge label to a minor and patch pull request that changes only versions.
 Migration code, configuration changes, and uncertain major upgrades require Harlan's merge decision.
 Never add the auto-merge label yourself.
