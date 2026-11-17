@@ -920,6 +920,10 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   const issueBatches = typeof issueBatchesValue === 'boolean' ? issueBatchesValue : undefined
   if (issueBatches === undefined)
     issues.push({ path: '$.issue_batches', message: 'Expected a boolean.' })
+  const actionRequiredOnceValue = document.value.action_required_once ?? false
+  const actionRequiredOnce = typeof actionRequiredOnceValue === 'boolean' ? actionRequiredOnceValue : undefined
+  if (actionRequiredOnce === undefined)
+    issues.push({ path: '$.action_required_once', message: 'Expected a boolean.' })
   const serviceUpdate = serviceUpdateSchedule(document.value, issues)
 
   const externalRepositoriesValue = document.value.external_repositories
@@ -1022,6 +1026,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     || maxOpenPullRequests === undefined
     || issueCutoff === undefined
     || issueBatches === undefined
+    || actionRequiredOnce === undefined
     || serviceUpdate === undefined
     || externalRepositories === undefined
     || repositories === undefined
@@ -1043,6 +1048,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     payback,
     maxOpenPullRequests,
     issueBatches,
+    actionRequiredOnce,
     ...(serviceUpdate === null ? {} : { serviceUpdate }),
     pollIntervalSeconds,
     issueCutoff,

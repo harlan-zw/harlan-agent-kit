@@ -518,6 +518,17 @@ agent:
     expect(limit._tag === 'Err' && limit.error.map(issue => issue.path)).toContain('$.max_open_pull_requests')
   })
 
+  it('keeps action_required_once off until the configuration turns it on', () => {
+    const omitted = parseConfigText(configText)
+    expect(omitted._tag === 'Ok' && omitted.value.actionRequiredOnce).toBe(false)
+
+    const enabled = parseConfigText(`action_required_once: true\n${configText}`)
+    expect(enabled._tag === 'Ok' && enabled.value.actionRequiredOnce).toBe(true)
+
+    const invalid = parseConfigText(`action_required_once: yes please\n${configText}`)
+    expect(invalid._tag === 'Err' && invalid.error.map(issue => issue.path)).toContain('$.action_required_once')
+  })
+
   it('runs Codex until the configuration names another agent provider', () => {
     const parsed = parseConfigText(configText)
     expect(parsed._tag === 'Ok' && parsed.value.agent.provider).toBe('codex')
