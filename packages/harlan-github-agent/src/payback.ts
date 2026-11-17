@@ -120,9 +120,9 @@ function turnUsd(usage: Extract<AgentTokenUsage, { _tag: 'Available' }>, rate: P
   return (fresh * rate.input + usage.cachedInput * rate.cachedInput + usage.cacheWrite * rate.cacheWrite + usage.output * rate.output) / 1_000_000
 }
 
-function verdict(work: PaybackWork, outcomes: PaybackKind['outcomes'], wastedShare: number | null, spent: boolean): PaybackVerdict {
+function verdict(outcomes: PaybackKind['outcomes'], wastedShare: number | null, spent: boolean): PaybackVerdict {
   if (outcomes.unrecorded > 0 && outcomes.useful + outcomes.wasted + outcomes.open === 0)
-    return { _tag: 'MeasureFirst', reason: `The Journal records no useful outcome for ${work} yet.` }
+    return { _tag: 'MeasureFirst', reason: 'No useful outcome is recorded for this work yet.' }
   if (outcomes.useful + outcomes.wasted === 0)
     return { _tag: 'MeasureFirst', reason: 'No work settled in this range.' }
   if (outcomes.useful === 0 && spent)
@@ -204,7 +204,7 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
       costPerUseful,
       wastedShare,
       breakEvenMinutes,
-      verdict: verdict(work, outcomes, wastedShare, spent),
+      verdict: verdict(outcomes, wastedShare, spent),
     }]
   })
   return { ratesCheckedOn: input.pricing.ratesCheckedOn, hourlyValue: input.pricing.hourlyValue, kinds }
