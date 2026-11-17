@@ -15,6 +15,7 @@ function kind(overrides: Partial<PaybackKind>): PaybackKind {
     wastedShare: 0.1,
     breakEvenMinutes: 1,
     verdict: { _tag: 'Keep' },
+    signals: { humanCommit: 0, closedUnmerged: 0, mergedUntouched: 0, loggedFindingPickedUp: 0 },
     ...overrides,
   }
 }

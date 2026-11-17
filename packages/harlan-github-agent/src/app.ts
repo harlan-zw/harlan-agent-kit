@@ -51,7 +51,7 @@ export interface AgentAppOptions {
   hostSlotPolicy?: () => { hogwild: number, desktop: number }
   /** Dated rates and an hourly value for Payback. Absent leaves every cost unpriced. */
   paybackPricing?: PaybackPricing
-  store: Pick<JournalStore, 'getTask' | 'listTasks' | 'listCompletionTasks' | 'listIncidents' | 'getOpenPullRequest' | 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listAgentTurns' | 'listPaybackRoutineRuns' | 'listPaybackTasks' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'finishUpdatePreparation' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
+  store: Pick<JournalStore, 'getTask' | 'listTasks' | 'listCompletionTasks' | 'listIncidents' | 'getOpenPullRequest' | 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listAgentTurns' | 'listPaybackRoutineRuns' | 'listPaybackSignals' | 'listPaybackTasks' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'finishUpdatePreparation' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
   allowedOrigin: string
   /**
    * The service's own listen address, such as `http://127.0.0.1:3210`. The
@@ -779,6 +779,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       turns: options.store.listAgentTurns(range.value),
       tasks: options.store.listPaybackTasks(range.value),
       routineRuns: options.store.listPaybackRoutineRuns(range.value),
+      signals: options.store.listPaybackSignals(range.value),
       pricing: options.paybackPricing ?? { rates: {}, ratesCheckedOn: null, hourlyValue: null },
     })
   })

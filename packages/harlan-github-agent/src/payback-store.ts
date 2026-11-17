@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { PaybackPullRequest, PaybackRoutineRunFact, PaybackTaskFact } from './payback.ts'
+import type { PaybackPullRequest, PaybackRoutineRunFact, PaybackSignalFact, PaybackTaskFact } from './payback.ts'
 import { ROUTINE_NAMES } from './routines/index.ts'
 
 export interface PaybackStore {
@@ -7,6 +7,8 @@ export interface PaybackStore {
   listPaybackTasks: (range: { from: string, to: string }) => PaybackTaskFact[]
   /** Each Routine run that spent an Agent turn in the range, and what its Candidates became. */
   listPaybackRoutineRuns: (range: { from: string, to: string }) => PaybackRoutineRunFact[]
+  /** Each Implicit signal that occurred in the range. Payback counts only those the service opened. */
+  listPaybackSignals: (range: { from: string, to: string }) => PaybackSignalFact[]
 }
 
 interface PaybackRoutineRunRow {
@@ -95,7 +97,18 @@ export function createPaybackStore(database: DatabaseSync): PaybackStore {
     GROUP BY routine_runs.id
     ORDER BY routine_runs.id
   `)
+  const signals = database.prepare(`
+    SELECT kind, opened_by, review_run_id IS NOT NULL AS reviewed
+    FROM implicit_signals
+    WHERE occurred_at >= ? AND occurred_at < ?
+    ORDER BY occurred_at, id
+  `)
   return {
+    listPaybackSignals: range => (signals.all(range.from, range.to) as unknown as Array<{ kind: PaybackSignalFact['kind'], opened_by: PaybackSignalFact['openedBy'], reviewed: number }>).map(row => ({
+      kind: row.kind,
+      openedBy: row.opened_by,
+      reviewed: row.reviewed === 1,
+    })),
     listPaybackTasks: range => (tasks.all(range.from, range.to) as unknown as PaybackTaskRow[]).map(row => ({
       taskId: row.task_id,
       state: row.state,

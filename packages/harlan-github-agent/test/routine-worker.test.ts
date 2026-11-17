@@ -1206,7 +1206,7 @@ describe('trial report scan', () => {
   })
 
   it('refuses a scan outside the kit before reading any evidence', () => {
-    expect(getRoutine('trial-report').prepare('harlan-zw/example', { listAgentFeedback: () => [] })._tag).toBe('Err')
+    expect(getRoutine('trial-report').prepare('harlan-zw/example', { listAgentFeedback: () => [], listImplicitSignals: () => [] })._tag).toBe('Err')
   })
 
   it('refuses an answer without a report', () => {

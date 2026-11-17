@@ -1,3 +1,4 @@
+import type { ImplicitSignal, ImplicitSignalQuery } from '../implicit-signal-store.ts'
 import type { Result } from '../result.ts'
 import type { AgentFeedbackSignal, Candidate, RoutineMode, RoutineName } from '../types.ts'
 
@@ -32,16 +33,24 @@ export interface RoutineScanInput {
   mode: RoutineMode
   priorCandidates: readonly Candidate[]
   feedback?: readonly AgentFeedbackSignal[]
+  /** What a person did on GitHub to agent work. Never Agent feedback. */
+  signals?: readonly ImplicitSignal[]
 }
 
 export type RoutinePreparation
-  = | { _tag: 'Run', feedback: readonly AgentFeedbackSignal[] }
+  = | { _tag: 'Run', feedback: readonly AgentFeedbackSignal[], signals?: readonly ImplicitSignal[] }
     | { _tag: 'Skip', evidence: string, progressLabel: string }
+
+/** Journal reads a Routine may make before its Agent turn. */
+export interface RoutineEvidence {
+  listAgentFeedback: (limit: number) => AgentFeedbackSignal[]
+  listImplicitSignals: (input: ImplicitSignalQuery) => ImplicitSignal[]
+}
 
 /** Built-in policy only. Repository YAML cannot supply implementations. */
 export interface RoutineDefinition {
   schema: Record<string, unknown>
-  prepare: (repository: string, evidence: { listAgentFeedback: (limit: number) => AgentFeedbackSignal[] }) => Result<RoutinePreparation, string>
+  prepare: (repository: string, evidence: RoutineEvidence) => Result<RoutinePreparation, string>
   scanPrompt: (input: RoutineScanInput) => string
   parseResponse: (input: unknown) => Result<RoutineScanResponse, string>
   selectCandidates: (candidates: readonly RoutineCandidate[]) => RoutineCandidate[]

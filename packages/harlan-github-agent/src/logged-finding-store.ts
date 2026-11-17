@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { LoggedFindingPickup, LoggedFindingStatus, LoggedReviewFinding } from './logged-finding-pickup.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewFinding } from './types.ts'
+import { recordLoggedFindingSignal } from './implicit-signal-store.ts'
 import { normalizeLoggedFindingControls, withLoggedFindingControls } from './logged-finding-pickup.ts'
 import { canRepairBaseline } from './repository-policy.ts'
 import { automatedReviewHead } from './review-comment.ts'
@@ -59,6 +60,7 @@ interface Candidate {
   github_number: number
   payload: string
   policy_json: string
+  review_run_id: string
   findings: string
   body: string
   github_comment_id: number
@@ -82,7 +84,7 @@ const candidatesSql = `
     SELECT *, ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY at DESC, source_rank DESC, body DESC) AS rank FROM publications
   )
   SELECT subjects.id AS subject_id, repositories.github AS repository, subjects.github_number,
-    revisions.payload, repositories.policy_json, review_runs.findings, ranked.body, ranked.github_comment_id
+    revisions.payload, repositories.policy_json, review_runs.id AS review_run_id, review_runs.findings, ranked.body, ranked.github_comment_id
   FROM subjects
   JOIN repositories ON repositories.id = subjects.repository_id
   JOIN revisions ON revisions.id = subjects.current_revision_id
@@ -176,6 +178,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
             (id, subject_id, head_sha, base_ref, fingerprint, finding_json, requested_by, requested_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
           `).run(options.digest(`${candidate.subject_id}:${input.headSha}:${finding.details.fingerprint}`), candidate.subject_id, input.headSha, pullRequest.baseRef, finding.details.fingerprint, JSON.stringify(finding), input.requestedBy, input.at)
+          recordLoggedFindingSignal(database, { subjectId: candidate.subject_id, headSha: input.headSha, fingerprint: finding.details.fingerprint, reviewRunId: candidate.review_run_id, at: input.at })
         }
         database.exec('COMMIT')
         return true
