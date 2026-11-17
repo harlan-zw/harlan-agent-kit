@@ -194,6 +194,9 @@ export interface PaybackReport {
 /** Above this share of settled or blocked Agent turns producing nothing, the work needs tuning. */
 const TUNE_WASTED_SHARE = 0.5
 
+/** Below this many settled outcomes, one outcome can swing the verdict, so none is given. */
+const MINIMUM_SETTLED = 5
+
 /** Above this share of Agent turns with no recorded outcome, no verdict is honest. */
 const MEASURE_FIRST_UNRECORDED_SHARE = 0.5
 
@@ -211,8 +214,11 @@ function turnUsd(usage: Extract<AgentTokenUsage, { _tag: 'Available' }>, rate: P
 function verdict(work: PaybackWork, outcomes: PaybackKind['outcomes'], unrecordedShare: number, wastedShare: number | null, spent: boolean): PaybackVerdict {
   if (unrecordedShare > MEASURE_FIRST_UNRECORDED_SHARE)
     return { _tag: 'MeasureFirst', reason: 'No useful outcome is recorded for most of this work yet.' }
-  if (outcomes.useful + outcomes.wasted + outcomes.actionRequired + outcomes.quiet === 0)
+  const settled = outcomes.useful + outcomes.wasted + outcomes.actionRequired + outcomes.quiet
+  if (settled === 0)
     return { _tag: 'MeasureFirst', reason: 'No work settled in this range.' }
+  if (settled < MINIMUM_SETTLED)
+    return { _tag: 'MeasureFirst', reason: `Fewer than ${MINIMUM_SETTLED} settled in this range.` }
   if (work._tag !== 'Role')
     return routineVerdict(outcomes, wastedShare, spent)
   if (outcomes.useful === 0 && outcomes.wasted > 0 && spent)

@@ -588,7 +588,7 @@ What one kind of work cost in one date range, set against the useful outcomes it
 
 A useful outcome is a merged pull request. A Task in Action required counts against its work until it publishes.
 Each Routine gets its own row, judged by the issues its runs filed. A completed run that filed none is Quiet: its cost counts, but it is neither useful nor wasted.
-Work whose outcome the Journal does not record reads Measure first.
+Work whose outcome the Journal does not record reads Measure first. So does work with fewer than 5 settled outcomes in the range.
 Dollars come from the dated rates in `payback.rates`. Break-even minutes also need `payback.hourly_value`.
 Each kind gets one verdict: Keep, Tune, Cut, or Measure first. A verdict recommends a change; Harlan decides it.
 
