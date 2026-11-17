@@ -77,7 +77,7 @@ export interface BaselineRepairWorkerOptions {
   now: () => Date
   runtime: AgentRuntimeSource
   activityLog?: Pick<AgentActivityLog, 'record'>
-  store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'updateAgentProgress' | 'recordBaselineRepairBlocker' | 'findBaselineRepairBlocker'>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
   worktrees: BaselineRepairWorktreeManager
 }
@@ -118,6 +118,12 @@ export function baselineRepairHeadRef(prefix: string, baseSha: string): string {
 export type FailedCheckContext
   = | { _tag: 'Available', check: GitHubCheck, job: FailedJobContext }
     | { _tag: 'Unavailable', check: GitHubCheck, reason: string }
+
+/** Each failing check and its failed step. Run ids and logs change on every run, so they stay out. */
+function failureKey(contexts: FailedCheckContext[]): string {
+  const entries = contexts.map(context => JSON.stringify([context.check.name, context._tag === 'Available' ? context.job.failedStep : null]))
+  return `[${[...new Set(entries)].sort().join(',')}]`
+}
 
 const nodeOptionsPattern = /^\s*NODE_OPTIONS:\s*(?:"([^"]*)"|'([^']*)'|([^#\n]*))/m
 
@@ -394,6 +400,18 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
           evidence: JSON.stringify(infrastructure.map(entry => ({ check: entry.check.name, reason: entry.reason }))),
         })
       }
+      // gscdump.com#1094 ran 12 blocked Agent turns, and 8 stopped on one failed
+      // step. Only a new head commit or a different failure asks again.
+      const failure = failureKey(repairable)
+      const blocker = options.store.findBaselineRepairBlocker({ taskId: task.id, failure })
+      if (blocker !== null) {
+        return ok({
+          _tag: 'ActionRequired',
+          // The stored reason is already one clean line. Keep all of it.
+          reason: `The Agent stopped on this failure at ${blocker.baseSha.slice(0, 12)}. A new pull request head commit or a different failure starts another Agent turn. ${blocker.reason}`,
+          evidence: JSON.stringify({ blockerTaskId: blocker.taskId, baseSha: blocker.baseSha, failure }),
+        })
+      }
       const prepared = await options.worktrees.prepare({ ...task, repositoryMapping: validated.value }, signal)
       if (prepared._tag === 'Err')
         return prepared
@@ -442,9 +460,12 @@ export function createBaselineRepairWorker(options: BaselineRepairWorkerOptions)
       }
       else {
         if (turn.value.value.outcome === 'blocked') {
+          const reason = cleanLine(turn.value.value.summary)
+          if (!options.store.recordBaselineRepairBlocker({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: options.now().toISOString(), failure, reason }))
+            return err('This agent is no longer assigned to the Baseline repair.')
           return ok({
             _tag: 'ActionRequired',
-            reason: cleanLine(turn.value.value.summary),
+            reason,
             evidence: JSON.stringify(turn.value.value),
             usage: turn.value.usage,
           })

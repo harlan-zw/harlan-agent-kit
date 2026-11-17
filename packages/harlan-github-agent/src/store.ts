@@ -571,6 +571,13 @@ export type BaselineRepairRetirementEvidence
   = | { _tag: 'BaseChanged', baseSha: string }
     | { _tag: 'ChecksPassed', baseSha: string }
 
+/** The Agent answer that stopped a Baseline repair for one pull request head commit and one failure. */
+export interface BaselineRepairBlocker {
+  taskId: string
+  baseSha: string
+  reason: string
+}
+
 /** The pull request Revision one Baseline repair is queued for. */
 interface BaselineRepairSubjectRow {
   subject_id: number
@@ -883,6 +890,14 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   }) => ReviewFixQueueResult
   /** Stores one Repair Agent's report under its fenced lease, before its commit is staged. */
   recordRepairReport: (input: { taskId: string, workerId: string, fence: number, at: string, summary: string, checks: string[] }) => boolean
+  /**
+   * Stores the failure an Agent stopped on, under the Baseline repair lease.
+   *
+   * `failure` names each failing check and its failed step, never a run id or log.
+   */
+  recordBaselineRepairBlocker: (input: { taskId: string, workerId: string, fence: number, at: string, failure: string, reason: string }) => boolean
+  /** The Agent blocker for this Task's pull request head commit and failure, or null when no Agent stopped on it. */
+  findBaselineRepairBlocker: (input: { taskId: string, failure: string }) => BaselineRepairBlocker | null
   queueBaselineRepairForReview: (input: {
     taskId: string
     workerId: string
@@ -7345,7 +7360,24 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 97;`)
     version = 97
   }
-  if (version === 97)
+  if (version === 97) {
+    // A Task ends with its default branch commit. This row outlives it, so
+    // the next red commit does not spend an Agent turn on the same blocker.
+    applyMigration(database, `
+      CREATE TABLE IF NOT EXISTS baseline_repair_blockers (
+        subject_id INTEGER NOT NULL REFERENCES subjects(id),
+        head_sha TEXT NOT NULL,
+        failure TEXT NOT NULL CHECK (json_valid(failure)),
+        task_id TEXT NOT NULL REFERENCES tasks(id),
+        base_sha TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        PRIMARY KEY (subject_id, head_sha, failure)
+      );
+      PRAGMA user_version = 98;`)
+    version = 98
+  }
+  if (version === 98)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -10599,6 +10631,31 @@ export function openJournalStore(
       recordTransition(database, { taskId: task.id, from: 'Failed', to: 'Superseded', reason, fence: task.fence, at: input.at })
       return total + 1
     }, 0)
+  }
+
+  const recordBaselineRepairBlocker: JournalStore['recordBaselineRepairBlocker'] = input => database.prepare(`
+    INSERT INTO baseline_repair_blockers (subject_id, head_sha, failure, task_id, base_sha, reason, recorded_at)
+    SELECT tasks.subject_id, json_extract(revisions.payload, '$.headSha'), ?, tasks.id,
+      json_extract(revisions.payload, '$.baseSha'), ?, ?
+    FROM tasks
+    JOIN revisions ON revisions.id = tasks.revision_id
+    WHERE tasks.id = ? AND tasks.kind = 'baseline_repair' AND tasks.state_tag = 'Running'
+      AND tasks.worker_id = ? AND tasks.fence = ? AND tasks.lease_expires_at > ?
+    ON CONFLICT (subject_id, head_sha, failure) DO UPDATE SET
+      task_id = excluded.task_id, base_sha = excluded.base_sha,
+      reason = excluded.reason, recorded_at = excluded.recorded_at
+  `).run(input.failure, input.reason, input.at, input.taskId, input.workerId, input.fence, input.at).changes === 1
+
+  const findBaselineRepairBlocker: JournalStore['findBaselineRepairBlocker'] = (input) => {
+    const row = database.prepare(`
+      SELECT blockers.task_id, blockers.base_sha, blockers.reason
+      FROM tasks
+      JOIN revisions ON revisions.id = tasks.revision_id
+      JOIN baseline_repair_blockers AS blockers ON blockers.subject_id = tasks.subject_id
+        AND blockers.head_sha = json_extract(revisions.payload, '$.headSha')
+      WHERE tasks.id = ? AND tasks.kind = 'baseline_repair' AND blockers.failure = ?
+    `).get(input.taskId, input.failure) as { task_id: string, base_sha: string, reason: string } | undefined
+    return row === undefined ? null : { taskId: row.task_id, baseSha: row.base_sha, reason: row.reason }
   }
 
   /**
@@ -17270,6 +17327,8 @@ export function openJournalStore(
     repairRoundPlan,
     recordCiRepairFinding,
     recordRepairReport,
+    recordBaselineRepairBlocker,
+    findBaselineRepairBlocker,
     listBaselineRepairRetirementCandidates,
     retireBaselineRepairCandidate,
     settleEndedBaselineRepairs,
