@@ -387,6 +387,58 @@ describe('incident log', () => {
 })
 
 describe('recoverable failure budget', () => {
+  it.each([
+    'Git fetch failed: fatal: couldn\'t find remote ref refs/pull/24/head',
+    'fetch failed',
+  ])('preserves Review recovery deadlines across unchanged polls: %s', (reason) => {
+    const store = createStore()
+    const at = (second: number) => new Date(Date.parse('2026-11-13T00:00:00Z') + second * 1000).toISOString()
+    const subject = pullRequestItem({ mergeState: 'clean' })
+    const observe = (second: number) => store.recordObservation({ externalId: `recovery-${second}`, observedAt: at(second), source: 'poll', subject })
+    const claim = (second: number) => store.claimNextAdversarialReviewTask('worker', at(second), 60_000)
+    const exhaustAttempts = (second: number) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const task = claim(second + attempt)!
+        expect(task).not.toBeNull()
+        expect(store.failWorkerTask({
+          taskId: task.id,
+          workerId: task.state.workerId,
+          fence: task.state.fence,
+          at: at(second + attempt),
+          reason,
+        })).toBe(attempt === 2 ? 'Failed' : 'Retrying')
+      }
+    }
+    try {
+      store.syncRepositories([repositoryMapping()], at(0))
+      observe(0)
+      exhaustAttempts(1)
+      let failedAt = 3
+      // The first recovery is immediate. Later recoveries back off.
+      for (const delay of [0, 60, 120, 240, 480]) {
+        const deadline = failedAt + delay
+        if (delay > 0) {
+          for (const early of [failedAt + 1, deadline - 1]) {
+            expect(store.retryRecoverableWorkerFailures(at(early))).toBe(0)
+            observe(early)
+            expect(claim(early)).toBeNull()
+          }
+          expect(store.listIncidents()[0]?.recovery).toMatchObject({ _tag: 'Retrying', nextAttemptAt: at(deadline) })
+        }
+        observe(deadline)
+        exhaustAttempts(deadline + 1)
+        failedAt = deadline + 3
+      }
+      observe(failedAt + 3600)
+      expect(claim(failedAt + 3600)).toBeNull()
+      expect(store.retryRecoverableWorkerFailures(at(failedAt + 3600))).toBe(0)
+      expect(store.listIncidents()[0]?.recovery).toEqual({ _tag: 'Exhausted' })
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('stops requeuing one task after its recovery budget runs out', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-18T00:00:00.000Z')
