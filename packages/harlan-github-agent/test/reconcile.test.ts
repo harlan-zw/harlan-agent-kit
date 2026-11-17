@@ -316,6 +316,47 @@ describe('gitHub reconciliation', () => {
     }
   })
 
+  it('labels a live Discussion route once, queues no triage, and retries the label from the stored row', async () => {
+    const store = openJournalStore(':memory:', true)
+    const repository = repositoryMapping({ issueWork: true })
+    store.syncRepositories([repository], '2026-09-18T01:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
+    const issue = issueItem({ author: 'harlan-zw' })
+    let verdicts = 0
+    const settled: string[] = []
+    let minute = 0
+    const poll = () => reconcileRepository(repository, {
+      github: { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([issue])) },
+      store,
+      now: () => new Date(`2026-09-18T01:0${minute++}:00.000Z`),
+      issueClassification: {
+        verdict: async () => {
+          verdicts++
+          return {
+            _tag: 'Discussion' as const,
+            reading: { mode: 'Live' as const, band: 0.9, route: 'DISCUSSION' as const, confidence: 0.95, needsCodebaseReview: 0.1, skipsTriage: true },
+            title: 'Should sitemaps support i18n?',
+            body: 'Curious what you think.',
+          }
+        },
+        settle: async (_repository, _issue, route) => {
+          settled.push(route._tag)
+          return settled.length === 1 ? err('GitHub refused the label.') : ok(undefined)
+        },
+      },
+    })
+    try {
+      expect((await poll())._tag).toBe('Ok')
+      expect((await poll())._tag).toBe('Ok')
+      expect(verdicts).toBe(1)
+      expect(settled).toEqual(['DISCUSSION', 'DISCUSSION'])
+      expect(store.claimNextIssueTriageTask('triager-1', '2026-09-18T01:05:00.000Z', 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('a failed routed settle records the failure without stopping the pass', async () => {
     const store = openJournalStore(':memory:', true)
     const repository = repositoryMapping({ issueWork: true })

@@ -6,7 +6,7 @@ import type { FindingThreadSyncStore } from './finding-thread-sync-store.ts'
 import type { ForeignReviewCommentReason } from './github-agent-source.ts'
 import type { AgentHost, AgentSlotSetting } from './host-capacity.ts'
 import type { IncidentResolutionError, IncidentResolutionReceipt, IncidentResolutionRequest } from './incident-resolution.ts'
-import type { IssueClassificationDecision } from './issue-classification.ts'
+import type { IssueClassificationDecision, IssueRouteReading } from './issue-classification.ts'
 import type { IssueTriageResult, IssueTriageState } from './issue-triage.ts'
 import type { LoggedFindingStore } from './logged-finding-store.ts'
 import type { PullRequestFile } from './merge-risk.ts'
@@ -814,6 +814,7 @@ export type StoredIssueTriageRun
       confidence: number
       decidedAt: string
     }
+    | { _tag: 'Discussion', confidence: number, decidedAt: string }
 
 export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore {
   getTask: (taskId: string) => DashboardTask | null
@@ -5163,11 +5164,12 @@ function insertIssueTriageRun(
   database: DatabaseSync,
   subjectId: number,
   revisionId: string,
-  decision: Extract<IssueClassificationDecision, { _tag: 'Routed' | 'AgentTriage' }>,
+  decision: IssueClassificationDecision,
   at: string,
 ): void {
   const routed = decision._tag === 'Routed'
-  database.prepare(`
+  const discussion = decision._tag === 'Discussion'
+  const inserted = database.prepare(`
     INSERT OR IGNORE INTO issue_triage_runs (
       subject_id, revision_id, route_tag, confidence, difficulty, impact,
       has_reproduction, state_title, state_body, reason, decided_at
@@ -5175,18 +5177,52 @@ function insertIssueTriageRun(
   `).run(
     subjectId,
     revisionId,
-    routed ? decision.result._tag : 'AGENT_TRIAGE',
-    routed ? decision.confidence : 0,
+    routed ? decision.result._tag : discussion ? 'DISCUSSION' : 'AGENT_TRIAGE',
+    routed ? decision.confidence : discussion ? decision.reading.confidence : 0,
     routed ? decision.result.difficulty : 0,
     routed ? decision.result.impact : 0,
     routed && decision.result.hasReproduction ? 1 : 0,
-    routed ? decision.title : '',
-    routed ? decision.body : '',
+    routed || discussion ? decision.title : '',
+    routed || discussion ? decision.body : '',
     routed
       ? `model: classification routed ${decision.result._tag} with confidence ${Math.round(decision.confidence * 100) / 100}.`
-      : `model: classification left the route to the Agent: ${decision.reason}`,
+      : discussion
+        ? `model: classification routed DISCUSSION with confidence ${decision.reading.confidence}.`
+        : `model: classification left the route to the Agent: ${decision.reason}`,
     at,
-  )
+  ).changes === 1
+  if (inserted && decision.reading !== undefined)
+    recordIssueRouteReading(database, subjectId, revisionId, decision.reading, at)
+}
+
+/**
+ * Counts one Discussion route reading, once per Revision, beside the row it
+ * decided. The reason is JSON so a query can read the numbers back.
+ */
+function recordIssueRouteReading(database: DatabaseSync, subjectId: number, revisionId: string, reading: IssueRouteReading, at: string): void {
+  const item = database.prepare(`
+    SELECT repositories.github AS repository, subjects.github_number AS item_number
+    FROM subjects JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE subjects.id = ?
+  `).get(subjectId) as { repository: string, item_number: number }
+  recordWorkflowEvent(database, {
+    stream: 'issue_triage_status',
+    event: reading.mode === 'Live' ? 'discussion_live' : 'discussion_shadow',
+    entityId: `issue-route:${subjectId}:${revisionId}`,
+    repository: item.repository,
+    itemNumber: item.item_number,
+    revisionId,
+    from: null,
+    to: reading.route,
+    reason: JSON.stringify({
+      confidence: reading.confidence,
+      needsCodebaseReview: reading.needsCodebaseReview,
+      band: reading.band,
+      skipsTriage: reading.skipsTriage,
+    }),
+    durationMilliseconds: null,
+    at,
+  })
 }
 
 /**
@@ -5233,13 +5269,13 @@ function planIssueTriage(
   // An Agent answer for this Revision outranks any later classification: it
   // investigated the repository, and its evidence drives Issue work.
   const agentAnswered = existing?.state_tag === 'Completed' && existing.evidence !== null
-  // Both classified outcomes are durable, so neither is asked twice. The row
+  // Every classified outcome is durable, so none is asked twice. The row
   // lands even when a Task row already exists: a queued Task that has not
   // answered must not leave the decision unpersisted, or every later poll
   // re-asks the classification and re-settles the comment against it.
-  if (!agentAnswered && classification !== undefined && (classification._tag === 'Routed' || classification._tag === 'AgentTriage')) {
+  if (!agentAnswered && classification !== undefined) {
     insertIssueTriageRun(database, subjectId, revisionId, classification, observedAt)
-    if (classification._tag === 'Routed')
+    if (classification._tag !== 'AgentTriage')
       return
   }
   if (existing !== undefined) {
@@ -7285,7 +7321,24 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${agentTurnSchema} PRAGMA user_version = 95;`)
     version = 95
   }
-  if (version === 95)
+  if (version === 95) {
+    // The live Discussion route stores its decision like the other routes.
+    // SQLite cannot widen a CHECK in place, so the table is rebuilt from its
+    // stored definition.
+    const schema = database.prepare('SELECT sql FROM sqlite_master WHERE name = \'issue_triage_runs\'').get() as { sql: string }
+    const expanded = schema.sql
+      .replace(/^CREATE TABLE[^(]+/, 'CREATE TABLE issue_triage_runs_v96 ')
+      .replace('\'WAIT_TO_IMPLEMENT\', \'AGENT_TRIAGE\')', '\'WAIT_TO_IMPLEMENT\', \'DISCUSSION\', \'AGENT_TRIAGE\')')
+    if (!expanded.includes('\'DISCUSSION\''))
+      throw new Error('The issue_triage_runs route constraint could not be widened.')
+    applyForeignKeyMigration(database, `${expanded};
+      INSERT INTO issue_triage_runs_v96 SELECT * FROM issue_triage_runs;
+      DROP TABLE issue_triage_runs;
+      ALTER TABLE issue_triage_runs_v96 RENAME TO issue_triage_runs;
+      PRAGMA user_version = 96;`)
+    version = 96
+  }
+  if (version === 96)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -9183,7 +9236,7 @@ export function openJournalStore(
       WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'issue'
         AND issue_triage_runs.revision_id = ?
     `).get(repository, issueNumber, revisionId) as {
-      route_tag: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' | 'AGENT_TRIAGE'
+      route_tag: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' | 'DISCUSSION' | 'AGENT_TRIAGE'
       confidence: number
       difficulty: number
       impact: number
@@ -9195,6 +9248,8 @@ export function openJournalStore(
       return null
     if (row.route_tag === 'AGENT_TRIAGE')
       return { _tag: 'AgentTriage', reason: row.reason, decidedAt: row.decided_at }
+    if (row.route_tag === 'DISCUSSION')
+      return { _tag: 'Discussion', confidence: row.confidence, decidedAt: row.decided_at }
     return {
       _tag: 'Routed',
       // The rebuild must reproduce the settled decision exactly: the poll

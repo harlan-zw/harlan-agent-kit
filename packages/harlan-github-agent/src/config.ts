@@ -2,7 +2,7 @@ import type { AgentProviderName } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PaybackPricing, PaybackRate } from './payback.ts'
 import type { Result } from './result.ts'
-import type { AgentConfig, AgentRole, AgentSessionsCodexMode, ClassificationConfig, CodexReasoningEffort, ExternalRepositoryWatch, GitHubAccount, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, ServiceUpdateSchedule, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
+import type { AgentConfig, AgentRole, AgentSessionsCodexMode, ClassificationConfig, CodexReasoningEffort, ExternalRepositoryWatch, GitHubAccount, IssueDiscussionRoute, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, ServiceUpdateSchedule, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
 import { execFile } from 'node:child_process'
 import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -598,15 +598,41 @@ function classificationConfig(source: UnknownRecord, issues: ConfigIssue[]): Cla
     issues.push({ path: '$.classification.token_path', message: 'Expected an absolute path.' })
   const gatewayId = optionalString(value, 'gateway_id', '$.classification', issues)
   const model = requiredString(value, 'model', '$.classification', issues)
-  const bandValue = value.issue_triage_band
-  const issueTriageBand = bandValue === undefined
-    ? null
-    : typeof bandValue === 'number' && bandValue >= 0.5 && bandValue <= 0.99 ? bandValue : undefined
-  if (issueTriageBand === undefined)
-    issues.push({ path: '$.classification.issue_triage_band', message: 'Expected a number from 0.5 to 0.99.' })
-  if (accountId === undefined || tokenPath === undefined || model === undefined || gatewayId === undefined || issueTriageBand === undefined)
+  const issueTriageBand = classificationBand(value, 'issue_triage_band', issues)
+  const issueDiscussion = issueDiscussionRoute(value, issues)
+  if (accountId === undefined || tokenPath === undefined || model === undefined || gatewayId === undefined || issueTriageBand === undefined || issueDiscussion === undefined)
     return undefined
-  return { _tag: 'Enabled', accountId, tokenPath, ...(gatewayId === null ? {} : { gatewayId }), model, issueTriageBand }
+  return { _tag: 'Enabled', accountId, tokenPath, ...(gatewayId === null ? {} : { gatewayId }), model, issueTriageBand, issueDiscussion }
+}
+
+/** A confidence band from 0.5 to 0.99. Absent is null; anything else is an issue. */
+function classificationBand(value: UnknownRecord, key: string, issues: ConfigIssue[]): number | null | undefined {
+  const band = value[key]
+  if (band === undefined)
+    return null
+  if (typeof band === 'number' && band >= 0.5 && band <= 0.99)
+    return band
+  issues.push({ path: `$.classification.${key}`, message: 'Expected a number from 0.5 to 0.99.' })
+  return undefined
+}
+
+/** A band turns the Discussion route on in shadow mode; only an explicit `live` skips Agent triage. */
+function issueDiscussionRoute(value: UnknownRecord, issues: ConfigIssue[]): IssueDiscussionRoute | undefined {
+  const band = classificationBand(value, 'issue_discussion_band', issues)
+  const mode = value.issue_discussion_mode
+  if (mode !== undefined && mode !== 'shadow' && mode !== 'live') {
+    issues.push({ path: '$.classification.issue_discussion_mode', message: 'Expected shadow or live.' })
+    return undefined
+  }
+  if (band === null && mode !== undefined) {
+    issues.push({ path: '$.classification.issue_discussion_mode', message: 'Set issue_discussion_band before a mode.' })
+    return undefined
+  }
+  if (band === undefined)
+    return undefined
+  if (band === null)
+    return { _tag: 'Off' }
+  return mode === 'live' ? { _tag: 'Live', band } : { _tag: 'Shadow', band }
 }
 
 /**
