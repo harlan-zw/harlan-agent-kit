@@ -14,7 +14,7 @@ export interface ReadyDigestLine {
   daysSinceReady: number
 }
 
-/** The Monday list of pull requests that wait only for Harlan. */
+/** The ready digest: the pull requests that wait only for Harlan's merge. */
 export interface ReadyDigest {
   total: number
   pullRequests: ReadyDigestLine[]

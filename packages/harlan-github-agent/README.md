@@ -641,9 +641,12 @@ It lists each open pull request whose current head has a READY Review and passin
 Each line gives the repository, number, title, and days since READY.
 The controller reads its own Review records. It starts no Agent turn and reads nothing from GitHub.
 A repository that GitHub does not report as public shows no title, because the run log is public.
-References and titles sit in code spans, so the list adds no timeline event to a pull request and notifies nobody.
+References and titles sit in code spans, so the ready digest adds no timeline event to a pull request and notifies nobody.
 
 Only `harlan-zw/harlan-agent-kit` may enable it. Enable it with `mode: report` only after Hogwild runs a controller that defines it.
+
+The `ready-digest` trial counts only heads a person merged. It leaves out merges by the App, pull requests with the Auto merge label, and repositories where Auto merge takes every pull request.
+The controller records who merged a pull request from this change on. Its baseline was measured once from GitHub, because older Revisions name no merger.
 
 ## Weekly performance review
 

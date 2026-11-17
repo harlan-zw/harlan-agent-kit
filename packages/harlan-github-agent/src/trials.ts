@@ -41,11 +41,16 @@ export type TrialMeasure
   }
   | {
     _tag: 'ReadyToMerge'
-    /** How many days before the start the baseline covers. */
-    priorDays: number
+    /**
+     * The wait before the trial, for pull requests a person merged.
+     *
+     * Measured once from GitHub, because Revisions stored before the trial name
+     * no merger, so the Journal cannot leave Auto merge out of them.
+     */
+    baseline: ReadyToMergeBaseline
     /** How far the median wait from READY to merge must fall, as a share of the baseline. */
     minimumDrop: number
-    /** From this trial week on, Harlan says whether he still reads the list. */
+    /** From this trial week on, Harlan says whether he still reads the ready digest. */
     readCheckWeek: number
   }
   | {
@@ -55,6 +60,17 @@ export type TrialMeasure
     /** The share of judged Candidates that must merge in time. */
     minimumMergedShare: number
   }
+
+export interface ReadyToMergeBaseline {
+  from: string
+  to: string
+  /** Heads a person merged after a READY Review. */
+  mergedHeads: number
+  medianDays: number
+  waitedDayOrMore: number
+  /** Heads left out because Auto merge or the App merged them. */
+  autoMerged: number
+}
 
 /** What an ended trial that misses its keep rule leads to. */
 export type TrialMiss
@@ -136,12 +152,17 @@ export const TRIALS: readonly Trial[] = [
     title: '6. Weekly `ready-digest` of pull requests ready for Harlan',
     start: { _tag: 'On', at: '2026-11-18T00:00:00+11:00' },
     weeks: 4,
-    metric: 'The median wait from a head\'s first READY Review to its merge, against the 28 days before the trial.',
+    metric: 'The median wait from a head\'s first READY Review to its merge by a person, against the 28 days before the trial. Merges by the App, by the Auto merge label, or in a repository where Auto merge takes every pull request are left out.',
     keepRule: 'The median wait falls by at least 30%.',
-    killRule: 'Harlan stops reading the Monday list by week 2.',
-    before: '762 heads merged after a READY Review in the 28 days to 17 November, with a median wait of 10 minutes. 62 waited a day or more. 579 were in the 10 repositories where Auto merge covers Contained pull requests.',
+    killRule: 'Harlan stops reading the ready digest by week 2.',
+    before: 'In the 28 days to 17 November, GitHub names a person as the merger of 739 of 762 heads merged after a READY Review. Their median wait was 10 minutes, and 62 waited a day or more. The App merged 3, and 20 carried the Auto merge label.',
     onMiss: { _tag: 'Kill' },
-    measure: { _tag: 'ReadyToMerge', priorDays: 28, minimumDrop: 0.3, readCheckWeek: 2 },
+    measure: {
+      _tag: 'ReadyToMerge',
+      baseline: { from: '2026-10-20T13:00:00.000Z', to: '2026-11-17T13:00:00.000Z', mergedHeads: 739, medianDays: 0.00713, waitedDayOrMore: 62, autoMerged: 23 },
+      minimumDrop: 0.3,
+      readCheckWeek: 2,
+    },
   },
   {
     _tag: 'Measured',

@@ -98,11 +98,15 @@ export interface BlockedFlaggedHead {
 
 export interface ReadyToMergeWindow {
   window: TrialWindow
-  /** Heads merged in the window after a READY Review. */
+  /** Heads a person merged in the window after a READY Review. */
   mergedHeads: number
   medianDays: number | null
-  /** Merged heads that waited a day or more after READY. */
+  /** Heads a person merged a day or more after READY. */
   waitedDayOrMore: number
+  /** Heads left out because Auto merge or the App merged them. */
+  autoMerged: number
+  /** Heads left out because their Revision names no merger. */
+  unrecorded: number
 }
 
 export interface RetroWeek {
@@ -158,7 +162,7 @@ export type TrialMetrics
     _tag: 'ReadyToMerge'
     lastSevenDays: ReadyToMergeWindow
     toDate: ReadyToMergeWindow
-    beforeTrial: ReadyToMergeWindow
+    baseline: ReadyToMergeWindow
   }
   | {
     _tag: 'RetroFollowThrough'
@@ -495,10 +499,19 @@ export function readPathRuleTrial(input: {
 }
 
 function readyToMergeWindow(heads: readonly TrialMergedReadyHead[], span: TrialWindow): ReadyToMergeWindow {
-  const waits = heads
-    .filter(head => Date.parse(head.mergedAt) >= Date.parse(span.from) && Date.parse(head.mergedAt) < Date.parse(span.to))
+  const inside = heads.filter(head => Date.parse(head.mergedAt) >= Date.parse(span.from) && Date.parse(head.mergedAt) < Date.parse(span.to))
+  // Only a person's merge measures how long a READY head waited for Harlan.
+  const waits = inside
+    .filter(head => head.merger._tag === 'Person')
     .map(head => (Date.parse(head.mergedAt) - Date.parse(head.readyAt)) / dayMilliseconds)
-  return { window: span, mergedHeads: waits.length, medianDays: median(waits), waitedDayOrMore: waits.filter(wait => wait >= 1).length }
+  return {
+    window: span,
+    mergedHeads: waits.length,
+    medianDays: median(waits),
+    waitedDayOrMore: waits.filter(wait => wait >= 1).length,
+    autoMerged: inside.filter(head => head.merger._tag === 'AutoMerge').length,
+    unrecorded: inside.filter(head => head.merger._tag === 'Unrecorded').length,
+  }
 }
 
 /** Reads the `ready-digest` trial from the heads that merged after a READY Review. Pure. */
@@ -507,26 +520,33 @@ export function readReadyToMergeTrial(input: {
   heads: readonly TrialMergedReadyHead[]
   /** The trial week this reading falls in. */
   week: number
-  windows: { lastSevenDays: TrialWindow, toDate: TrialWindow, beforeTrial: TrialWindow }
+  windows: { lastSevenDays: TrialWindow, toDate: TrialWindow }
 }): { metrics: Extract<TrialMetrics, { _tag: 'ReadyToMerge' }>, keep: RuleReading[], kill: RuleReading[] } {
   const { measure } = input
   const toDate = readyToMergeWindow(input.heads, input.windows.toDate)
-  const beforeTrial = readyToMergeWindow(input.heads, input.windows.beforeTrial)
-  const baseline = beforeTrial.medianDays
+  const baseline: ReadyToMergeWindow = {
+    window: window(Date.parse(measure.baseline.from), Date.parse(measure.baseline.to)),
+    mergedHeads: measure.baseline.mergedHeads,
+    medianDays: measure.baseline.medianDays,
+    waitedDayOrMore: measure.baseline.waitedDayOrMore,
+    autoMerged: measure.baseline.autoMerged,
+    unrecorded: 0,
+  }
+  const before = measure.baseline.medianDays
   const current = toDate.medianDays
-  const keep: RuleReading[] = [baseline === null || baseline === 0
-    ? { _tag: 'NotYetMeasurable', detail: `No wait from READY to merge was recorded in the ${measure.priorDays} days before the trial, so no fall can be measured.` }
+  const keep: RuleReading[] = [before <= 0
+    ? { _tag: 'NotYetMeasurable', detail: 'The baseline median is zero, so no fall can be measured.' }
     : current === null
-      ? { _tag: 'NotYetMeasurable', detail: 'No head has merged after a READY Review since the trial started.' }
+      ? { _tag: 'NotYetMeasurable', detail: 'No head has been merged by a person after a READY Review since the trial started.' }
       : {
-          _tag: 1 - current / baseline >= measure.minimumDrop ? 'Met' : 'NotMet',
-          detail: `Median ${duration(current)} from READY to merge, against ${duration(baseline)} in the ${measure.priorDays} days before: ${current <= baseline ? `${percent(1 - current / baseline)} lower` : `${percent(current / baseline - 1)} higher`}. Keep needs ${percent(measure.minimumDrop)} lower.`,
+          _tag: 1 - current / before >= measure.minimumDrop ? 'Met' : 'NotMet',
+          detail: `Median ${duration(current)} from READY to a person's merge, against ${duration(before)} before the trial: ${current <= before ? `${percent(1 - current / before)} lower` : `${percent(current / before - 1)} higher`}. Keep needs ${percent(measure.minimumDrop)} lower.`,
         }]
   const kill: RuleReading[] = [input.week < measure.readCheckWeek
-    ? { _tag: 'NotYetMeasurable', detail: `From week ${measure.readCheckWeek}, Harlan says whether he still reads the Monday list.` }
-    : { _tag: 'OwnerCheck', detail: `Do you still read the Monday \`ready-digest\` list? If you stopped by week ${measure.readCheckWeek}, the trial ends.` }]
+    ? { _tag: 'NotYetMeasurable', detail: `From week ${measure.readCheckWeek}, Harlan says whether he still reads the ready digest.` }
+    : { _tag: 'OwnerCheck', detail: `Do you still read the \`ready-digest\` comment each Monday? If you stopped by week ${measure.readCheckWeek}, the trial ends.` }]
   return {
-    metrics: { _tag: 'ReadyToMerge', lastSevenDays: readyToMergeWindow(input.heads, input.windows.lastSevenDays), toDate, beforeTrial },
+    metrics: { _tag: 'ReadyToMerge', lastSevenDays: readyToMergeWindow(input.heads, input.windows.lastSevenDays), toDate, baseline },
     keep,
     kill,
   }
@@ -680,13 +700,15 @@ function metricLines(metrics: TrialMetrics): string[] {
     }
     case 'ReadyToMerge': {
       const row = (label: string, read: (window: ReadyToMergeWindow) => string) =>
-        `| ${label} | ${[metrics.lastSevenDays, metrics.toDate, metrics.beforeTrial].map(read).join(' | ')} |`
+        `| ${label} | ${[metrics.lastSevenDays, metrics.toDate, metrics.baseline].map(read).join(' | ')} |`
       return [
-        `| READY to merge | Last 7 days | Trial to date | ${number(metrics.beforeTrial.window.days)} days before |`,
+        `| READY to a person's merge | Last 7 days | Trial to date | ${number(metrics.baseline.window.days)} days before |`,
         '| --- | ---: | ---: | ---: |',
-        row('Merged heads', window => String(window.mergedHeads)),
+        row('Merged by a person', window => String(window.mergedHeads)),
         row('Median wait', window => duration(window.medianDays)),
         row('Waited a day or more', window => String(window.waitedDayOrMore)),
+        row('Left out: Auto merge or the App', window => String(window.autoMerged)),
+        row('Left out: no merger recorded', window => String(window.unrecorded)),
       ]
     }
     case 'RetroFollowThrough': {
@@ -775,12 +797,11 @@ function readMeasuredTrial(store: TrialReportSource, trial: MeasuredTrial, now: 
       return finish(read.metrics, read.keep, read.kill)
     }
     case 'ReadyToMerge': {
-      const beforeTrial = window(start - measure.priorDays * dayMilliseconds, start)
       const read = readReadyToMergeTrial({
         measure,
-        heads: store.listTrialMergedReadyHeads({ from: beforeTrial.from, to: toDate.to }),
+        heads: store.listTrialMergedReadyHeads(toDate),
         week: state._tag === 'Running' ? state.week : trial.weeks,
-        windows: { lastSevenDays, toDate, beforeTrial },
+        windows: { lastSevenDays, toDate },
       })
       return finish(read.metrics, read.keep, read.kill)
     }

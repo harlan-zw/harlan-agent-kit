@@ -306,12 +306,12 @@ An unchanged run is a Completed Routine run with no Agent turn. Its evidence con
 
 ### ready-digest
 
-The Monday list of open pull requests whose current head has a READY Review and passing CI, oldest READY first.
+One weekly run log comment that lists each open pull request whose current head has a READY Review and passing CI, oldest READY first.
 
 The controller writes it from its own Review records and posts it to the run log. It starts no Agent turn.
 A repository GitHub does not report as public shows its name and number only, because the run log is public.
 
-Write `ready-digest` for the Routine. In prose, "the Monday list" is fine. Never shorten it to "digest": that word names a SHA-256 here.
+Write `ready-digest` for the Routine and "ready digest" in prose. Never shorten it to "digest": that word names a SHA-256 here.
 
 ### Queue
 

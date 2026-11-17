@@ -251,6 +251,9 @@ function pullRequestItem(
     state: pull.state === 'closed' ? 'closed' : 'open',
     mergedAt: pull.merged_at,
     mergeCommitSha: pull.merge_commit_sha,
+    ...(pull.merged_at === null || pull.merged_by === null || pull.merged_by === undefined
+      ? {}
+      : { mergeRecord: { mergedBy: pull.merged_by.login, autoMergeLabel: hasAutoMergeLabel(labels) } }),
     title: pull.title,
     body: pull.body ?? '',
     author: pull.user?.login ?? 'ghost',

@@ -7,12 +7,12 @@ const repository = 'harlan-zw/harlan-agent-kit'
 /**
  * Lists pull requests that wait only for Harlan, every Monday.
  *
- * The controller writes the list from its own Review records and posts it to
+ * The controller writes the ready digest from its own Review records and posts it to
  * the run log, so this Routine never starts an Agent turn.
  */
 export const readyDigest: RoutineDefinition = {
   ...candidateRoutine,
-  // The list covers every mapped repository, so only the kit may publish it.
+  // The ready digest covers every mapped repository, so only the kit may publish it.
   prepare: target => target === repository
     ? ok({ _tag: 'Run', feedback: [] })
     : err(`The ready-digest Routine only runs in ${repository}.`),

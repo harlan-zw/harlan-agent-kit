@@ -52,12 +52,21 @@ export interface ReadyPullRequest {
   readyAt: string
 }
 
+/** Who merged one pull request, as far as its stored Revision says. */
+export type TrialMerger
+  = | { _tag: 'Person', login: string }
+    /** The App merged it, it carried the Auto merge label, or its repository lets Auto merge take every pull request. */
+    | { _tag: 'AutoMerge', reason: 'App' | 'Label' | 'EveryPullRequest' }
+    /** Observed before the controller recorded who merged. */
+    | { _tag: 'Unrecorded' }
+
 /** One pull request merged at a head that a Review read READY first. */
 export interface TrialMergedReadyHead {
   repository: string
   pullRequestNumber: number
   readyAt: string
   mergedAt: string
+  merger: TrialMerger
 }
 
 /** One `agent-retro` Candidate, and what it became. */
@@ -179,6 +188,20 @@ interface MergedReadyHeadRow {
   pull_request_number: number
   ready_at: string
   merged_at: string
+  merged_by: string | null
+  auto_merge_label: number | null
+  auto_merge_scope: string | null
+}
+
+function trialMerger(row: MergedReadyHeadRow): TrialMerger {
+  if (row.auto_merge_scope === 'Every')
+    return { _tag: 'AutoMerge', reason: 'EveryPullRequest' }
+  if (row.merged_by === null)
+    return { _tag: 'Unrecorded' }
+  if (row.auto_merge_label === 1)
+    return { _tag: 'AutoMerge', reason: 'Label' }
+  // GitHub names an App by its bot login, such as harlan-github-agent[bot].
+  return row.merged_by.endsWith('[bot]') ? { _tag: 'AutoMerge', reason: 'App' } : { _tag: 'Person', login: row.merged_by }
 }
 
 interface RetroCandidateRow {
@@ -268,7 +291,10 @@ export function createTrialStore(database: DatabaseSync): TrialStore {
   const mergedReadyHeads = database.prepare(`
     WITH ${firstReadySql}
     SELECT repositories.github AS repository, subjects.github_number AS pull_request_number,
-      first_ready.ready_at, json_extract(revisions.payload, '$.mergedAt') AS merged_at
+      first_ready.ready_at, json_extract(revisions.payload, '$.mergedAt') AS merged_at,
+      json_extract(revisions.payload, '$.mergeRecord.mergedBy') AS merged_by,
+      json_extract(revisions.payload, '$.mergeRecord.autoMergeLabel') AS auto_merge_label,
+      json_extract(repositories.policy_json, '$.autoMerge._tag') AS auto_merge_scope
     FROM subjects
     JOIN repositories ON repositories.id = subjects.repository_id
     JOIN revisions ON revisions.id = subjects.current_revision_id
@@ -340,7 +366,7 @@ export function createTrialStore(database: DatabaseSync): TrialStore {
     listReadyPullRequests: () => (readyPullRequests.all() as unknown as ReadyPullRequestRow[])
       .map(row => ({ repository: row.repository, pullRequestNumber: row.pull_request_number, title: row.title, readyAt: row.ready_at })),
     listTrialMergedReadyHeads: range => (mergedReadyHeads.all(range.from, range.to) as unknown as MergedReadyHeadRow[])
-      .map(row => ({ repository: row.repository, pullRequestNumber: row.pull_request_number, readyAt: row.ready_at, mergedAt: row.merged_at })),
+      .map(row => ({ repository: row.repository, pullRequestNumber: row.pull_request_number, readyAt: row.ready_at, mergedAt: row.merged_at, merger: trialMerger(row) })),
     listTrialRetroCandidates: range => (retroCandidates.all(range.from, range.to) as unknown as RetroCandidateRow[])
       .map(row => ({ repository: row.repository, createdAt: row.created_at, issueNumber: row.issue_number, mergedAt: row.merged_at })),
   }
