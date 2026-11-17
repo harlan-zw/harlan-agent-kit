@@ -217,7 +217,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       const validated = await options.validateMapping(task.repositoryMapping)
       if (validated._tag === 'Err')
         return validated
-      const snapshot = await options.github.getPullRequestReviewSnapshot(validated.value, task.pullRequestNumber, signal)
+      const snapshot = await options.github.getPullRequestReviewSnapshot(validated.value, task.pullRequestNumber, signal, 'rendered')
       if (snapshot._tag === 'Err')
         return snapshot
       const current = snapshot.value.pullRequest
