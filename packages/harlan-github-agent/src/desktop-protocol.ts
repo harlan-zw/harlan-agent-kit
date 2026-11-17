@@ -29,8 +29,9 @@ function record(value: unknown): value is Record<string, unknown> {
  * 11: proposed next actions carried by selected Logged findings.
  * 13: trusted SEO and vitals Routine provenance carried into implementation turns.
  * 14: fresh vitals comparison requests and provider-verified evidence carried across hosts.
+ * 15: Usage events say whether they count one turn or the whole session.
  */
-export const DESKTOP_PROTOCOL = 14
+export const DESKTOP_PROTOCOL = 15
 
 export const DESKTOP_TURN_LEASE_MILLISECONDS = 15_000
 
@@ -194,10 +195,10 @@ export function parseDesktopEvents(value: unknown): AgentEvent[] {
     }
     if (event._tag === 'ContextBudgetExhausted' && Number.isFinite(event.cachedTokensRead) && Number(event.cachedTokensRead) >= 0)
       return { _tag: 'ContextBudgetExhausted', cachedTokensRead: Number(event.cachedTokensRead) }
-    if (event._tag === 'Usage' && record(event.usage) && event.usage._tag === 'Available') {
+    if (event._tag === 'Usage' && record(event.usage) && event.usage._tag === 'Available' && (event.scope === 'Turn' || event.scope === 'Session')) {
       const usage = event.usage
       if (['input', 'cachedInput', 'cacheWrite', 'output', 'reasoning'].every(key => Number.isFinite(usage[key]) && Number(usage[key]) >= 0))
-        return { _tag: 'Usage', usage: { _tag: 'Available', input: Number(usage.input), cachedInput: Number(usage.cachedInput), cacheWrite: Number(usage.cacheWrite), output: Number(usage.output), reasoning: Number(usage.reasoning) } }
+        return { _tag: 'Usage', scope: event.scope, usage: { _tag: 'Available', input: Number(usage.input), cachedInput: Number(usage.cachedInput), cacheWrite: Number(usage.cacheWrite), output: Number(usage.output), reasoning: Number(usage.reasoning) } }
     }
     throw new Error('Desktop event is unsupported.')
   })

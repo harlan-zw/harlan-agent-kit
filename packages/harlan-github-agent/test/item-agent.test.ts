@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE, createAgentRuntimeSource } from '../src/agent-profile.ts'
 import { createIssueTriageWorker, createReviewWorker, issueMovedUnderTriage, reviewSnapshotDigest } from '../src/item-agent.ts'
 import { err, ok } from '../src/result.ts'
-import { agentRuntime, githubOwnershipEvidence, issueItem, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, githubOwnershipEvidence, issueItem, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('subject Workers', () => {
   it('keeps one review identity while GitHub activity time and CI results move', () => {
@@ -137,6 +137,7 @@ describe('subject Workers', () => {
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
         recordReviewRun: (input) => {
           attempt = input
@@ -246,6 +247,7 @@ describe('subject Workers', () => {
         queueBaselineRepairForReview: () => { throw new Error('A second review must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
         recordReviewRun: () => { throw new Error('A second review must not be recorded.') },
         recordReviewPublication: () => { throw new Error('A second comment must not be recorded.') },
@@ -363,6 +365,7 @@ describe('subject Workers', () => {
         },
         recordReviewPublication: () => { throw new Error('A repaired head must not publish the old terminal review.') },
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       status: {
@@ -497,6 +500,7 @@ describe('subject Workers', () => {
         },
         recordReviewPublication: () => { throw new Error('A repaired head must not publish the old terminal review.') },
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       status: {
@@ -607,6 +611,7 @@ describe('subject Workers', () => {
         },
         recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       status: {
@@ -730,6 +735,7 @@ describe('subject Workers', () => {
         },
         recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       status: {
@@ -818,6 +824,7 @@ describe('subject Workers', () => {
         recordReviewRun: () => { throw new Error('Review must not record an Attempt.') },
         recordReviewPublication: () => { throw new Error('Review must not record a Publication.') },
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       status: {
@@ -916,6 +923,7 @@ describe('subject Workers', () => {
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),
         recordReviewPublication: () => ({ _tag: 'Inserted', publicationId: 'publication-1' }),
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       status: {
@@ -1008,6 +1016,7 @@ describe('subject Workers', () => {
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),
         recordReviewPublication: () => ({ _tag: 'Inserted', publicationId: 'publication-1' }),
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       status: {
@@ -1099,6 +1108,7 @@ describe('subject Workers', () => {
         recordReviewRun: () => ({ _tag: 'Inserted', reviewRunId: 'attempt-1' }),
         recordReviewPublication: () => ({ _tag: 'Inserted', publicationId: 'publication-1' }),
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       status: {
@@ -1199,6 +1209,7 @@ describe('subject Workers', () => {
       store: {
         getWorkerSession: () => 'poisoned-session',
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
         recordReviewRun: () => { throw new Error('Unexpected review Attempt.') },
         recordReviewPublication: () => { throw new Error('Unexpected review Publication.') },

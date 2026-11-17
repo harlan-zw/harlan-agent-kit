@@ -8,7 +8,7 @@ import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { BASELINE_REPAIR_MARKER } from '../src/baseline-repair-state.ts'
 import { createBaselineRepairWorker, workspaceFactsFromFiles } from '../src/baseline-repair-worker.ts'
 import { err, ok } from '../src/result.ts'
-import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const disclosure = '> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).'
 
@@ -95,6 +95,7 @@ function runWorker(input: WorkerInput = {}) {
     store: {
       getWorkerSession: () => null,
       saveWorkerSession: () => undefined,
+      ...agentTurnLedger,
       updateAgentProgress: () => true,
     },
     validateMapping: value => Promise.resolve(ok(value)),
@@ -314,7 +315,7 @@ describe('baseline repair worker', () => {
       },
       inspectWorkspace: () => Promise.resolve({ hasAgentsFile: false, nodeOptions: null }),
       now: () => new Date('2026-08-13T01:00:00.000Z'),
-      store: { getWorkerSession: () => null, saveWorkerSession: () => undefined, updateAgentProgress: () => true },
+      store: { getWorkerSession: () => null, saveWorkerSession: () => undefined, ...agentTurnLedger, updateAgentProgress: () => true },
       validateMapping: value => Promise.resolve(ok(value)),
       worktrees: {
         prepare: () => Promise.resolve(ok({ path: '/tmp/baseline-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.baseSha })),

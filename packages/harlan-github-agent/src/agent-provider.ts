@@ -15,6 +15,7 @@ export function agentProviderFailureReason(provider: AgentProviderName, reason: 
   return `The ${provider} session failed: ${reason}`
 }
 
+/** `input` counts every input token, so `cachedInput` and `cacheWrite` are parts of it. */
 export type AgentTokenUsage
   = | { _tag: 'Unavailable' }
     | {
@@ -25,6 +26,40 @@ export type AgentTokenUsage
       output: number
       reasoning: number
     }
+
+/**
+ * What one Usage event counts. `Turn` counts this turn so far.
+ * `Session` counts the whole provider session, earlier turns included.
+ */
+export type AgentUsageScope = 'Turn' | 'Session'
+
+type AvailableUsage = Extract<AgentTokenUsage, { _tag: 'Available' }>
+
+/**
+ * The tokens one turn spent.
+ *
+ * A Session count needs the total the previous turn left. Without one, the
+ * turn's own share is unknown, so it reports none rather than the whole session.
+ */
+export function turnTokenUsage(reported: AvailableUsage, scope: AgentUsageScope, previous: { _tag: 'Fresh' } | { _tag: 'Resumed', total: AvailableUsage | null }): AgentTokenUsage {
+  if (scope === 'Turn' || previous._tag === 'Fresh')
+    return reported
+  const total = previous.total
+  if (total === null)
+    return { _tag: 'Unavailable' }
+  const keys = ['input', 'cachedInput', 'cacheWrite', 'output', 'reasoning'] as const
+  // A total below the last one means the provider started counting again.
+  if (keys.some(key => reported[key] < total[key]))
+    return reported
+  return {
+    _tag: 'Available',
+    input: reported.input - total.input,
+    cachedInput: reported.cachedInput - total.cachedInput,
+    cacheWrite: reported.cacheWrite - total.cacheWrite,
+    output: reported.output - total.output,
+    reasoning: reported.reasoning - total.reasoning,
+  }
+}
 
 export function addAgentTokenUsage(left: AgentTokenUsage, right: AgentTokenUsage): AgentTokenUsage {
   if (left._tag === 'Unavailable' || right._tag === 'Unavailable')
@@ -49,7 +84,7 @@ export type AgentEvent
     | { _tag: 'Progress', percent: number, text: string }
     | { _tag: 'WebSearch' }
     | { _tag: 'Message', text: string }
-    | { _tag: 'Usage', usage: Extract<AgentTokenUsage, { _tag: 'Available' }> }
+    | { _tag: 'Usage', usage: Extract<AgentTokenUsage, { _tag: 'Available' }>, scope: AgentUsageScope }
     | { _tag: 'TurnCompleted' }
     /** The session read most of its Context budget, so the provider asked it to wrap up. */
     | { _tag: 'ContextBudgetWarned', cachedTokensRead: number, delivery: ContextBudgetWarningDelivery }

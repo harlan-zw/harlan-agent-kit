@@ -1,7 +1,7 @@
 import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentPhase, AgentProgressWork } from './agent-progress.ts'
-import type { AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
+import type { AgentEvent, AgentTokenUsage, AgentTurnRequest } from './agent-provider.ts'
 import type { AgentMedia } from './github-media.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
@@ -13,7 +13,7 @@ import { agentActivityFromEvent } from './agent-activity.ts'
 import { parseAgentJson } from './agent-json.ts'
 import { roleProfile } from './agent-profile.ts'
 import { advancedPhase, agentEventPhase } from './agent-progress.ts'
-import { addAgentTokenUsage, extractJsonObject } from './agent-provider.ts'
+import { addAgentTokenUsage, extractJsonObject, turnTokenUsage } from './agent-provider.ts'
 import { contextBudgetExhaustedReason, repeatedAgentResultReason } from './failure.ts'
 import { err, ok } from './result.ts'
 
@@ -48,7 +48,7 @@ export interface AgentTurnOptions {
   now: () => Date
   /** Read when a turn starts, so a switch never disturbs a turn already running. */
   runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession'>
+  store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal'>
 }
 
 export interface AgentTurnInput {
@@ -152,6 +152,7 @@ export async function runAgentTurn(
     : options.store.getWorkerSession(input.repository, input.number, sessionRole, input.scopeDigest)
   const runtime = options.runtime(input.repository)
   const profile = roleProfile(runtime.profile, input.role)
+  const startedAt = options.now().toISOString()
   const events = runtime.provider.runTurn({
     ...(input.vitalsComparison === undefined ? {} : { vitalsComparison: input.vitalsComparison }),
     ...(input.routineContext === undefined ? {} : { routineContext: input.routineContext }),
@@ -173,66 +174,97 @@ export async function runAgentTurn(
   let vitalsEvidenceDirectory: string | null | undefined
   let currentSessionId = sessionId
   let failure: string | undefined
-  let usage: AgentTokenUsage = { _tag: 'Unavailable' }
+  let lastUsage: Extract<AgentEvent, { _tag: 'Usage' }> | undefined
+  let answered = false
   let current = input.progress?.current
   let phaseSince = options.now().toISOString()
   let reportedAt = phaseSince
-  for await (const event of events) {
-    if (event._tag === 'VitalsComparison') {
-      vitalsComparison = event.result
-      vitalsEvidenceDirectory = event.retainedDirectory
-    }
-    if (event._tag === 'SessionStarted') {
-      currentSessionId = event.sessionId
-      options.store.saveWorkerSession(input.repository, input.number, sessionRole, event.sessionId, options.now().toISOString(), input.scopeDigest)
-    }
-    if (event._tag === 'Message')
-      response = event.text
-    if (event._tag === 'Usage')
-      usage = event.usage
-    if (event._tag === 'ContextBudgetExhausted') {
-      // The turn names the Item, so the Incident names the pull request a
-      // person must look at. The provider only knows how much it read.
-      failure ??= contextBudgetExhaustedReason({
-        cachedTokensRead: event.cachedTokensRead,
-        itemNumber: input.number,
-        repository: input.repository,
-      })
-    }
-    if (event._tag === 'Failed')
-      failure ??= event.reason
-    const activity = agentActivityFromEvent(event, options.now().toISOString())
-    if (activity !== undefined)
-      options.activityLog?.record(input.taskId, activity)
-    if (input.progress !== undefined && current !== undefined) {
-      const at = options.now().toISOString()
-      const next = agentEventPhase(event, input.progress.work)
-      // A new phase restates the line. Otherwise the same phase restates it on
-      // a slow beat, so a reader can see the agent is alive without a comment
-      // for every file it touches.
-      const advanced = next === undefined ? undefined : advancedPhase(current, next)
-      const stale = new Date(at).getTime() - new Date(reportedAt).getTime() >= PROGRESS_HEARTBEAT_MILLISECONDS
-      if (advanced !== undefined || stale) {
-        const phase = advanced ?? current
-        if (advanced !== undefined)
-          phaseSince = at
-        const reported = await input.progress.report({ ...phase, since: phaseSince })
-        if (reported._tag === 'Err') {
-          failure ??= reported.error
-        }
-        else {
-          current = phase
-          reportedAt = at
+  // Every turn lands in the ledger, a failed or thrown one included.
+  const usage = (): AgentTokenUsage => lastUsage === undefined
+    ? { _tag: 'Unavailable' }
+    : turnTokenUsage(lastUsage.usage, lastUsage.scope, sessionId === null
+        ? { _tag: 'Fresh' }
+        : { _tag: 'Resumed', total: options.store.agentSessionTotal(sessionId) })
+  let spent: AgentTokenUsage = { _tag: 'Unavailable' }
+  try {
+    for await (const event of events) {
+      if (event._tag === 'VitalsComparison') {
+        vitalsComparison = event.result
+        vitalsEvidenceDirectory = event.retainedDirectory
+      }
+      if (event._tag === 'SessionStarted') {
+        currentSessionId = event.sessionId
+        options.store.saveWorkerSession(input.repository, input.number, sessionRole, event.sessionId, options.now().toISOString(), input.scopeDigest)
+      }
+      if (event._tag === 'Message')
+        response = event.text
+      if (event._tag === 'Usage')
+        lastUsage = event
+      if (event._tag === 'ContextBudgetExhausted') {
+        // The turn names the Item, so the Incident names the pull request a
+        // person must look at. The provider only knows how much it read.
+        failure ??= contextBudgetExhaustedReason({
+          cachedTokensRead: event.cachedTokensRead,
+          itemNumber: input.number,
+          repository: input.repository,
+        })
+      }
+      if (event._tag === 'Failed')
+        failure ??= event.reason
+      const activity = agentActivityFromEvent(event, options.now().toISOString())
+      if (activity !== undefined)
+        options.activityLog?.record(input.taskId, activity)
+      if (input.progress !== undefined && current !== undefined) {
+        const at = options.now().toISOString()
+        const next = agentEventPhase(event, input.progress.work)
+        // A new phase restates the line. Otherwise the same phase restates it on
+        // a slow beat, so a reader can see the agent is alive without a comment
+        // for every file it touches.
+        const advanced = next === undefined ? undefined : advancedPhase(current, next)
+        const stale = new Date(at).getTime() - new Date(reportedAt).getTime() >= PROGRESS_HEARTBEAT_MILLISECONDS
+        if (advanced !== undefined || stale) {
+          const phase = advanced ?? current
+          if (advanced !== undefined)
+            phaseSince = at
+          const reported = await input.progress.report({ ...phase, since: phaseSince })
+          if (reported._tag === 'Err') {
+            failure ??= reported.error
+          }
+          else {
+            current = phase
+            reportedAt = at
+          }
         }
       }
     }
+
+    answered = failure === undefined && response !== undefined && currentSessionId !== null
+  }
+  finally {
+    spent = usage()
+    options.store.recordAgentTurn({
+      id: randomUUID(),
+      taskId: input.taskId,
+      role: input.role,
+      repository: input.repository,
+      itemNumber: input.number,
+      provider: runtime.provider.name,
+      model: profile.model,
+      reasoningEffort: profile.reasoningEffort ?? null,
+      sessionId: currentSessionId,
+      startedAt,
+      completedAt: options.now().toISOString(),
+      outcome: answered ? 'Answered' : 'Failed',
+      usage: spent,
+      sessionTotal: lastUsage?.scope === 'Session' ? lastUsage.usage : null,
+    })
   }
 
   if (failure !== undefined)
     return err(failure)
   if (response === undefined || currentSessionId === null)
     return err('The agent finished without a result.')
-  return ok({ response, sessionId: currentSessionId, usage, ...(input.vitalsComparison === undefined ? {} : { vitalsComparisonRequestId: input.vitalsComparison.id }), ...(vitalsComparison === undefined ? {} : { vitalsComparison, vitalsEvidenceDirectory: vitalsEvidenceDirectory ?? null }) })
+  return ok({ response, sessionId: currentSessionId, usage: spent, ...(input.vitalsComparison === undefined ? {} : { vitalsComparisonRequestId: input.vitalsComparison.id }), ...(vitalsComparison === undefined ? {} : { vitalsComparison, vitalsEvidenceDirectory: vitalsEvidenceDirectory ?? null }) })
 }
 
 export interface ParsedAgentTurnOptions<Value> extends AgentTurnOptions {
@@ -284,8 +316,8 @@ export async function runRepairedAgentTurn<Value>(
   const correctionOptions = {
     ...frozen,
     store: {
+      ...frozen.store,
       getWorkerSession: () => turn.value.sessionId,
-      saveWorkerSession: frozen.store.saveWorkerSession.bind(frozen.store),
     },
   }
   const repaired = await runAgentTurn(correctionOptions, {

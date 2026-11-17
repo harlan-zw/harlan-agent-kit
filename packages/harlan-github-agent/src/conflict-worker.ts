@@ -30,7 +30,7 @@ export interface ConflictWorkerOptions {
   now: () => Date
   runtime: AgentRuntimeSource
   activityLog?: Pick<AgentActivityLog, 'record'>
-  store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getWorkerSession' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'updateAgentProgress'>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
   worktrees: ConflictWorktreeManager
 }

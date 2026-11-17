@@ -1,6 +1,6 @@
 import type { Input, ThreadEvent, ThreadOptions, TurnOptions } from '@openai/codex-sdk'
 import type { SpawnOptionsWithoutStdio } from 'node:child_process'
-import type { AgentProvider } from './agent-provider.ts'
+import type { AgentProvider, AgentTokenUsage } from './agent-provider.ts'
 import { spawn } from 'node:child_process'
 import { delimiter, join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -58,7 +58,7 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
           const event = codexAgentEvent(raw)
           if (raw.type === 'turn.completed') {
             const usage = raw.usage
-            yield { _tag: 'Usage', usage: { _tag: 'Available', input: usage.input_tokens, output: usage.output_tokens, cachedInput: usage.cached_input_tokens, cacheWrite: usage.cache_write_input_tokens ?? 0, reasoning: usage.reasoning_output_tokens ?? 0 } }
+            yield { _tag: 'Usage', scope: 'Session', usage: { _tag: 'Available', input: usage.input_tokens, output: usage.output_tokens, cachedInput: usage.cached_input_tokens, cacheWrite: usage.cache_write_input_tokens ?? 0, reasoning: usage.reasoning_output_tokens ?? 0 } }
           }
           if (event !== undefined)
             yield event
@@ -109,6 +109,8 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
       let answered = false
       let failed = false
       let sessionId = request.sessionId
+      // opencode reports each model step, so the turn reports their running sum.
+      let turnUsage: Extract<AgentTokenUsage, { _tag: 'Available' }> | undefined
       try {
         if (child.stdout === null)
           throw new Error('The opencode session has no output stream.')
@@ -130,8 +132,12 @@ export function createDesktopSessionProvider(options: DesktopSessionProviderOpti
             ? agentTextEvent(value.part.text)
             : opencodeAgentEvent(value)
           const usage = opencodeAgentUsage(value)
-          if (usage !== undefined)
-            yield { _tag: 'Usage', usage }
+          if (usage !== undefined) {
+            turnUsage = turnUsage === undefined
+              ? usage
+              : { _tag: 'Available', input: turnUsage.input + usage.input, cachedInput: turnUsage.cachedInput + usage.cachedInput, cacheWrite: turnUsage.cacheWrite + usage.cacheWrite, output: turnUsage.output + usage.output, reasoning: turnUsage.reasoning + usage.reasoning }
+            yield { _tag: 'Usage', usage: turnUsage, scope: 'Turn' }
+          }
           if (event?._tag === 'TurnCompleted') {
             completed = true
           }

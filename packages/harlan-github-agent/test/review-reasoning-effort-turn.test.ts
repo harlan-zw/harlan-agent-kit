@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE, resolveAgentProfile } from '../src/agent-profile.ts'
 import { createReviewWorker } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
-import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }
 
@@ -70,6 +70,7 @@ async function reviewWith(files: PullRequestFile[], profile: AgentProfile = CODE
       queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
       retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,
+      ...agentTurnLedger,
       updateAgentProgress: () => true,
       recordReviewRun: (input) => {
         recorded.push(input.reasoningEffort)

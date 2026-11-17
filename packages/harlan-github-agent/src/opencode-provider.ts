@@ -285,9 +285,10 @@ export function opencodeAgentUsage(line: OpencodeLine): Extract<AgentTokenUsage,
   const tokens = (line.part as { tokens?: { input?: unknown, output?: unknown, reasoning?: unknown, cache?: { read?: unknown, write?: unknown } } } | undefined)?.tokens
   if (tokens === undefined)
     return undefined
+  // opencode leaves cache reads and writes out of input. Codex counts them in.
   return {
     _tag: 'Available',
-    input: tokenCount(tokens.input),
+    input: tokenCount(tokens.input) + tokenCount(tokens.cache?.read) + tokenCount(tokens.cache?.write),
     cachedInput: tokenCount(tokens.cache?.read),
     cacheWrite: tokenCount(tokens.cache?.write),
     output: tokenCount(tokens.output),
@@ -578,7 +579,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
       }
       if (completed && exit.code === 0) {
         if (usageAvailable)
-          yield { _tag: 'Usage', usage }
+          yield { _tag: 'Usage', usage, scope: 'Turn' }
         yield { _tag: 'TurnCompleted' }
       }
       else if (exit.code !== 0 && !failed) {
@@ -613,7 +614,7 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
             yield event
         }
         if (usageAvailable)
-          yield { _tag: 'Usage', usage }
+          yield { _tag: 'Usage', usage, scope: 'Turn' }
         yield { _tag: 'TurnCompleted' }
       }
     }

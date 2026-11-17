@@ -8,7 +8,7 @@ import { agentPhase } from '../src/agent-progress.ts'
 import { runAgentTurn, runParsedAgentTurn, runRepairedAgentTurn } from '../src/agent-turn.ts'
 import { classifyFailure, mayRetryFailure } from '../src/failure.ts'
 import { err, ok } from '../src/result.ts'
-import { agentRuntime, turnEvents } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, turnEvents } from './fixtures.ts'
 
 function replies(responses: unknown[], capture: { prompts: string[] }): AgentProvider {
   return {
@@ -30,6 +30,7 @@ function options(provider: AgentProvider) {
     store: {
       getWorkerSession: () => null,
       saveWorkerSession: () => undefined,
+      ...agentTurnLedger,
     },
     parse: (response: string): Result<{ outcome: string }, string> => {
       const value = JSON.parse(response) as { outcome?: string }
@@ -156,7 +157,7 @@ describe('runParsedAgentTurn', () => {
       },
     }
 
-    const result = await runParsedAgentTurn({ ...options(provider), store: { getWorkerSession: () => 'other-session', saveWorkerSession: () => undefined } }, { ...input, freshSession: true }, new AbortController().signal)
+    const result = await runParsedAgentTurn({ ...options(provider), store: { getWorkerSession: () => 'other-session', saveWorkerSession: () => undefined, ...agentTurnLedger } }, { ...input, freshSession: true }, new AbortController().signal)
 
     expect(result).toEqual(ok({ value: { outcome: 'resolved' }, sessionId: 'session-1', usage: { _tag: 'Unavailable' } }))
     expect(requests.map(request => request.sessionId)).toEqual([null, 'session-1'])
@@ -243,6 +244,7 @@ describe('review usage', () => {
           yield { _tag: 'Message', text: JSON.stringify(response) } as AgentEvent
           yield {
             _tag: 'Usage',
+            scope: 'Turn',
             usage: { _tag: 'Available', input: 100, cachedInput: 500, cacheWrite: 10, output: 20, reasoning: 5 },
           } as AgentEvent
           yield { _tag: 'TurnCompleted' } as AgentEvent

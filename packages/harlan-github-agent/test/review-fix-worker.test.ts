@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { err, ok } from '../src/result.ts'
 import { createReviewFixWorker } from '../src/review-fix-worker.ts'
-import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 describe('review fix Worker', () => {
   it('preserves the next action when Repair returns no file changes', async () => {
@@ -66,6 +66,7 @@ describe('review fix Worker', () => {
         getWorkerSession: () => 'review-session-must-not-resume',
         requestReviewRerun: () => { throw new Error('A successful Repair must not queue another Review.') },
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       validateMapping: () => Promise.resolve(ok(mapping)),
@@ -179,6 +180,7 @@ describe('review fix Worker', () => {
         getWorkerSession: () => 'review-session-must-not-resume',
         requestReviewRerun: () => { throw new Error('A successful Repair must not queue another Review.') },
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       validateMapping: () => Promise.resolve(ok(mapping)),
@@ -298,6 +300,7 @@ describe('review fix Worker', () => {
         },
         requestReviewRerun: () => { throw new Error('A successful Repair must not queue another Review.') },
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       validateMapping: () => Promise.resolve(ok(mapping)),
@@ -418,6 +421,7 @@ describe('review fix Worker', () => {
           return { _tag: 'Queued', taskId: 'review-task' }
         },
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       validateMapping: () => Promise.resolve(ok(mapping)),
@@ -511,6 +515,7 @@ describe('review fix Worker', () => {
             return { _tag: 'Queued', taskId: 'review-task' }
           },
           saveWorkerSession: () => undefined,
+          ...agentTurnLedger,
           updateAgentProgress: () => true,
         },
         validateMapping: () => Promise.resolve(ok(mapping)),
@@ -588,6 +593,7 @@ describe('review fix Worker', () => {
         getWorkerSession: () => null,
         requestReviewRerun: () => ({ _tag: 'Rejected', reason: { _tag: 'DisputeCapReached' } }),
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       validateMapping: () => Promise.resolve(ok(mapping)),
@@ -663,6 +669,7 @@ describe('review fix Worker', () => {
         getWorkerSession: () => null,
         requestReviewRerun: () => { throw new Error('An invalid result must not queue another Review.') },
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
       },
       validateMapping: () => Promise.resolve(ok(mapping)),

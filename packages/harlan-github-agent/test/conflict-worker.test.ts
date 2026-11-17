@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE, OPENCODE_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { conflictResolutionPrompt, createConflictWorker } from '../src/conflict-worker.ts'
 import { err, ok } from '../src/result.ts'
-import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const resolved = {
   outcome: 'resolved',
@@ -41,6 +41,7 @@ function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>,
     store: {
       getWorkerSession: () => 'stale-session',
       saveWorkerSession: () => undefined,
+      ...agentTurnLedger,
       updateAgentProgress: () => true,
     },
     validateMapping: () => Promise.resolve(ok(repository)),

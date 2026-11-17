@@ -27,7 +27,7 @@ export interface RoutineScanWorkerOptions {
   maximumChangedFiles?: number
   now: () => Date
   runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'listAgentFeedback' | 'listCandidates' | 'recordCandidates' | 'stageCandidateIssues' | 'stageRoutineReport' | 'updateRoutineRunProgress'>
+  store: Pick<JournalStore, 'agentSessionTotal' | 'listAgentFeedback' | 'listCandidates' | 'recordAgentTurn' | 'recordCandidates' | 'stageCandidateIssues' | 'stageRoutineReport' | 'updateRoutineRunProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareRoutine'>
 }
 
@@ -52,6 +52,8 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
   const sessionlessStore = {
     getWorkerSession: () => null,
     saveWorkerSession: () => undefined,
+    recordAgentTurn: options.store.recordAgentTurn,
+    agentSessionTotal: options.store.agentSessionTotal,
   }
 
   return {

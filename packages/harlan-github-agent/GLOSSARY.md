@@ -58,6 +58,8 @@ did not cover it.
 | Review run | `review_runs` | Runner | N to 1 Revision, 1 to N Publications | review |
 | Agent feedback | `agent_feedback` | Controller | One per Review run | Agent feedback |
 | Review usage | `review_runs.usage` | Runner | One per Review run | Review usage |
+| Agent turn | `agent_turns` | Runner | N to 1 Task, Review run, or Routine run | Agent turn |
+| Turn usage | `agent_turns.usage` | Runner | One per Agent turn | usage |
 | Review gate | `review_runs.gates` | Controller | Three per Review run | gate |
 | Review outcome | `review_runs.outcome_tag` | Controller | One per Review run | READY, PENDING, or BLOCKED |
 | Running label | `harlan-agent-running` label | GitHub | One per Item with a Running Task | none |
@@ -545,6 +547,24 @@ Do not use agent check, review status check, or status check. Do not require it 
 The total input, cached input, cache write, output, and reasoning tokens one Review run used.
 
 Use `Unavailable` when the Agent provider reports no usage. Never infer usage from text length.
+
+### Agent turn
+
+One prompt sent to an Agent provider and everything the provider answered to it.
+
+A Task, Review run, or Routine run spends one Agent turn, or two when its answer needs a correction.
+Every Agent turn is recorded, whether it answered or failed.
+
+Do not use run, call, or request for this.
+
+### Turn usage
+
+The tokens one Agent turn spent, and none from earlier turns in the same session.
+
+`input` counts every input token. `cachedInput` and `cacheWrite` are parts of it.
+
+Codex reports a running total for a resumed session. Turn usage subtracts the total the previous turn left.
+If no earlier total is on record, Turn usage is `Unavailable`.
 
 ### Agent feedback
 

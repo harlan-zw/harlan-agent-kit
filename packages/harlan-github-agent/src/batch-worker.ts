@@ -138,7 +138,7 @@ export interface BatchWorkerOptions {
   onTaskSettled?: (taskId: string, task: ClaimedIssueWorkTask) => void
   onTaskStarted?: (task: ClaimedIssueWorkTask) => void
   runtime: AgentRuntimeSource
-  store: ClaimedTaskStore & Pick<JournalStore, 'claimBatchUnitTask' | 'getBatchDependency' | 'recordBatchPlan' | 'settleBatchUnit'>
+  store: ClaimedTaskStore & Pick<JournalStore, 'agentSessionTotal' | 'claimBatchUnitTask' | 'getBatchDependency' | 'recordAgentTurn' | 'recordBatchPlan' | 'settleBatchUnit'>
   unitConcurrency?: number
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
   workerId: string
@@ -150,9 +150,13 @@ export interface BatchWorker {
   run: (batch: ClaimedBatch, signal: AbortSignal) => Promise<Result<{ _tag: 'Completed', units: number } | { _tag: 'Suspended' }, string>>
 }
 
-const sessionlessStore = {
-  getWorkerSession: () => null,
-  saveWorkerSession: () => undefined,
+function sessionlessStore(store: Pick<JournalStore, 'agentSessionTotal' | 'recordAgentTurn'>) {
+  return {
+    getWorkerSession: () => null,
+    saveWorkerSession: () => undefined,
+    recordAgentTurn: store.recordAgentTurn,
+    agentSessionTotal: store.agentSessionTotal,
+  }
 }
 
 function sleep(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -211,7 +215,7 @@ export function createBatchWorker(options: BatchWorkerOptions): BatchWorker {
         now: options.now,
         parse: parseBatchPlan,
         runtime: options.runtime,
-        store: sessionlessStore,
+        store: sessionlessStore(options.store),
       },
       {
         freshSession: true,
