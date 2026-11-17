@@ -182,7 +182,7 @@ jobs:
         run: pnpm test:ci-changes
 
       - name: Hook hit summary
-        run: pnpm test:guard-hits
+        run: pnpm test:hook-hits
 
       # These enforce the worktree, pull request, and hook output rules. `pnpm test`
       # does not run them.

@@ -25,12 +25,12 @@ command_input() { jq -nc --arg c "$1" '{tool_input:{command:$c}}'; }
 
 # Counts the lines in a state directory's hit log. A missing log counts as zero.
 hit_count() {
-  local log="$1/harlan-agent-kit/guard-hits.jsonl"
+  local log="$1/harlan-agent-kit/hook-hits.jsonl"
   [ -f "$log" ] || { echo 0; return; }
   wc -l < "$log" | tr -d ' '
 }
 
-hit_line() { cat "$1/harlan-agent-kit/guard-hits.jsonl"; }
+hit_line() { cat "$1/harlan-agent-kit/hook-hits.jsonl"; }
 
 # Checks one Hook call that should log exactly one line with these fields.
 # Usage: expect_hit <label> <hook> <stdin> <decision> <surface> [NAME=value ...]
@@ -44,10 +44,10 @@ expect_hit() {
   line=$(hit_line "$state")
   reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason')
   printf '%s' "$line" | jq -e \
-    --arg guard "$hook" --arg decision "$decision" --arg surface "$surface" \
+    --arg hook "$hook" --arg decision "$decision" --arg surface "$surface" \
     --arg reason "$reason" --arg time_pattern "$time_pattern" '
-      (keys == ["decision", "guard", "reason", "surface", "time"])
-      and .guard == $guard
+      (keys == ["decision", "hook", "reason", "surface", "time"])
+      and .hook == $hook
       and .decision == $decision
       and .surface == $surface
       and .reason == $reason[0:80]
@@ -126,6 +126,35 @@ expect_surface 'unknown value falls through' claude "$deny_input" HARLAN_AGENT_H
 # Variables a parent shell leaks into a child mark no surface.
 expect_surface 'leaked Claude Code shell' unknown "$deny_input" CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=x CLAUDE_PLUGIN_ROOT=/plugin
 expect_surface 'leaked Codex shell' unknown "$deny_input" CODEX_THREAD_ID=x
+
+# A Hook registered twice runs twice for one tool call, for example from Codex user
+# Hooks and an enabled Codex Plugin copy that still declares hooks. That call logs once.
+call_input() { jq -nc --arg id "$1" '{session_id:"session-1",turn_id:"t",tool_use_id:$id,tool_input:{command:"git worktree prune"}}'; }
+expect_lines() {
+  local label=$1 want=$2 state=$3
+  [ "$(hit_count "$state")" = "$want" ] || bad "$label: expected $want lines, got $(hit_count "$state")"
+}
+state="$work/state-double"
+run_hook wt-only.sh "$(call_input call-1)" "$state" >/dev/null
+run_hook wt-only.sh "$(call_input call-1)" "$state" PLUGIN_ROOT=/plugin >/dev/null
+expect_lines 'one call, two runs' 1 "$state"
+run_hook wt-only.sh "$(call_input call-2)" "$state" >/dev/null
+expect_lines 'a second call' 2 "$state"
+run_hook pr-skill-only.sh "$(jq -nc '{session_id:"session-1",tool_use_id:"call-2",tool_input:{command:"gh pr create --fill"}}')" "$state" >/dev/null
+expect_lines 'another Hook on the same call' 3 "$state"
+state="$work/state-parallel"
+for _ in 1 2 3 4; do run_hook wt-only.sh "$(call_input call-3)" "$state" >/dev/null & done
+wait
+expect_lines 'parallel runs of one call' 1 "$state"
+# Without both ids nothing marks the call, so each run logs.
+state="$work/state-no-ids"
+run_hook wt-only.sh "$deny_input" "$state" >/dev/null
+run_hook wt-only.sh "$deny_input" "$state" >/dev/null
+expect_lines 'no call ids' 2 "$state"
+# The second run still prints its decision.
+want=$(run_hook wt-only.sh "$(call_input call-4)" "$work/state-output")
+got=$(run_hook wt-only.sh "$(call_input call-4)" "$work/state-output")
+[ -n "$want" ] && [ "$got" = "$want" ] || bad "duplicate run: output changed: $got"
 
 # Without XDG_STATE_HOME the log sits under HOME.
 printf '%s' "$deny_input" | env -i PATH="$PATH" HOME="$work/home" CLAUDE_PROJECT_DIR=/project bash "$dir/wt-only.sh" >/dev/null

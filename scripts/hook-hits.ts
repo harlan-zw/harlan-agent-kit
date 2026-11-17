@@ -1,5 +1,5 @@
-// Summarises the Hook hit log: hits per guard, per surface, per ISO week (UTC).
-// harlan-agent-kit/hooks/hit-log.sh writes the log. Run: pnpm guard-hits [--file <path>]
+// Summarises the Hook hit log: hits per Hook, per surface, per ISO week (UTC).
+// harlan-agent-kit/hooks/hit-log.sh writes the log. Run: pnpm hook-hits [--file <path>]
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -7,7 +7,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 /** The log file name. hit-log.sh writes the same name. */
-const hitLogFile = 'guard-hits.jsonl'
+const hitLogFile = 'hook-hits.jsonl'
 
 const decisions = ['deny', 'rewrite'] as const
 const surfaces = ['claude', 'codex', 'opencode', 'unknown'] as const
@@ -15,7 +15,7 @@ const utcTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/
 
 export interface Hit {
   time: Date
-  guard: string
+  hook: string
   decision: typeof decisions[number]
   surface: typeof surfaces[number]
   reason: string
@@ -23,7 +23,7 @@ export interface Hit {
 
 export interface MalformedLine { line: number, problem: string }
 
-export interface SummaryRow { week: string, guard: string, surface: string, hits: number }
+export interface SummaryRow { week: string, hook: string, surface: string, hits: number }
 
 type LineRead = { _tag: 'Ok', hit: Hit } | { _tag: 'Err', problem: string }
 
@@ -47,16 +47,16 @@ function readLine(text: string): LineRead {
   }
   if (typeof parsed !== 'object' || parsed === null)
     return { _tag: 'Err', problem: 'not an object' }
-  const { time, guard, decision, surface, reason } = parsed as Record<string, unknown>
+  const { time, hook, decision, surface, reason } = parsed as Record<string, unknown>
   if (typeof time !== 'string' || !utcTime.test(time) || Number.isNaN(Date.parse(time)))
     return { _tag: 'Err', problem: 'no UTC time' }
-  if (typeof guard !== 'string' || guard === '')
-    return { _tag: 'Err', problem: 'no guard' }
+  if (typeof hook !== 'string' || hook === '')
+    return { _tag: 'Err', problem: 'no hook' }
   if (!isOneOf(decisions, decision))
     return { _tag: 'Err', problem: 'unknown decision' }
   if (!isOneOf(surfaces, surface))
     return { _tag: 'Err', problem: 'unknown surface' }
-  return { _tag: 'Ok', hit: { time: new Date(time), guard, decision, surface, reason: typeof reason === 'string' ? reason : '' } }
+  return { _tag: 'Ok', hit: { time: new Date(time), hook, decision, surface, reason: typeof reason === 'string' ? reason : '' } }
 }
 
 /** Parses the log once. Blank lines are skipped; every other unreadable line is reported. */
@@ -85,22 +85,22 @@ export function isoWeek(date: Date): string {
   return `${year}-W${String(week).padStart(2, '0')}`
 }
 
-/** Counts hits per ISO week, guard, and surface. Oldest week first, then most hits. */
+/** Counts hits per ISO week, Hook, and surface. Oldest week first, then most hits. */
 export function summariseHits(hits: readonly Hit[]): SummaryRow[] {
   const counts = new Map<string, SummaryRow>()
   for (const hit of hits) {
     const week = isoWeek(hit.time)
-    const key = `${week}\0${hit.guard}\0${hit.surface}`
-    const row = counts.get(key) ?? { week, guard: hit.guard, surface: hit.surface, hits: 0 }
+    const key = `${week}\0${hit.hook}\0${hit.surface}`
+    const row = counts.get(key) ?? { week, hook: hit.hook, surface: hit.surface, hits: 0 }
     row.hits++
     counts.set(key, row)
   }
   return [...counts.values()].sort((a, b) =>
-    a.week.localeCompare(b.week) || b.hits - a.hits || a.guard.localeCompare(b.guard) || a.surface.localeCompare(b.surface))
+    a.week.localeCompare(b.week) || b.hits - a.hits || a.hook.localeCompare(b.hook) || a.surface.localeCompare(b.surface))
 }
 
 function formatTable(rows: readonly SummaryRow[]): string {
-  const table = [['week', 'guard', 'surface', 'hits'], ...rows.map(row => [row.week, row.guard, row.surface, String(row.hits)])]
+  const table = [['week', 'hook', 'surface', 'hits'], ...rows.map(row => [row.week, row.hook, row.surface, String(row.hits)])]
   const widths = table[0]!.map((_, column) => Math.max(...table.map(cells => cells[column]!.length)))
   return table
     .map(cells => cells.map((cell, column) => column === 3 ? cell.padStart(widths[column]!) : cell.padEnd(widths[column]!)).join('  '))
@@ -114,7 +114,7 @@ function readOptions(args: readonly string[]): Options {
     return { _tag: 'Ok', file: undefined }
   if (args.length === 2 && args[0] === '--file' && args[1] !== '')
     return { _tag: 'Ok', file: args[1] }
-  return { _tag: 'Err', reason: 'Usage: pnpm guard-hits [--file <path>]' }
+  return { _tag: 'Err', reason: 'Usage: pnpm hook-hits [--file <path>]' }
 }
 
 function main(): number {

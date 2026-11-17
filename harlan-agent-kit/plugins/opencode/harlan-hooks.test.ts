@@ -40,7 +40,7 @@ const workingDirectory = mkdtempSync(join(tmpdir(), 'harlan-hooks-'))
 /** Hook decisions append to the hit log. Test runs write here, never to the real one. */
 const stateDirectory = mkdtempSync(join(tmpdir(), 'harlan-hooks-state-'))
 process.env.XDG_STATE_HOME = stateDirectory
-const hitLog = join(stateDirectory, 'harlan-agent-kit', 'guard-hits.jsonl')
+const hitLog = join(stateDirectory, 'harlan-agent-kit', 'hook-hits.jsonl')
 
 afterAll(() => {
   rmSync(workingDirectory, { recursive: true, force: true })
@@ -181,7 +181,7 @@ describe('tool.execute.before', () => {
     await expect(runShellHook('git worktree add ../copy feature')).rejects.toThrow(/Use wt/)
     vi.unstubAllEnvs()
     const lines = readFileSync(hitLog, 'utf8').trim().split('\n').map(line => JSON.parse(line))
-    expect(lines).toEqual([expect.objectContaining({ guard: 'wt-only.sh', decision: 'deny', surface: 'opencode' })])
+    expect(lines).toEqual([expect.objectContaining({ hook: 'wt-only.sh', decision: 'deny', surface: 'opencode' })])
   })
 
   it('logs a rewrite once and logs nothing for an allowed command', async () => {
@@ -190,7 +190,7 @@ describe('tool.execute.before', () => {
     expect(() => readFileSync(hitLog, 'utf8')).toThrow()
     await expect(runShellHook('npm install')).resolves.toBe('pnpm install')
     const lines = readFileSync(hitLog, 'utf8').trim().split('\n').map(line => JSON.parse(line))
-    expect(lines).toEqual([expect.objectContaining({ guard: 'pnpm-only.sh', decision: 'rewrite', surface: 'opencode' })])
+    expect(lines).toEqual([expect.objectContaining({ hook: 'pnpm-only.sh', decision: 'rewrite', surface: 'opencode' })])
   })
 
   it('runs every PreToolUse Bash hook the manifest registers', async () => {

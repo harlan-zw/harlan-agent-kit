@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
-import { hitLogPath, isoWeek, parseHitLog, summariseHits } from './guard-hits.ts'
+import { hitLogPath, isoWeek, parseHitLog, summariseHits } from './hook-hits.ts'
 
-const script = fileURLToPath(new URL('./guard-hits.ts', import.meta.url))
-const work = mkdtempSync(join(tmpdir(), 'guard-hits-'))
+const script = fileURLToPath(new URL('./hook-hits.ts', import.meta.url))
+const work = mkdtempSync(join(tmpdir(), 'hook-hits-'))
 afterAll(() => rmSync(work, { recursive: true, force: true }))
 
-function line(time: string, guard: string, surface: string, decision = 'deny'): string {
-  return JSON.stringify({ time, guard, decision, surface, reason: 'Use wt, not git worktree.' })
+function line(time: string, hook: string, surface: string, decision = 'deny'): string {
+  return JSON.stringify({ time, hook, decision, surface, reason: 'Use wt, not git worktree.' })
 }
 
 describe('isoWeek', () => {
@@ -33,15 +33,15 @@ describe('parseHitLog', () => {
     const text = [
       line('2026-11-18T01:00:00Z', 'wt-only.sh', 'claude'),
       '{not json',
-      JSON.stringify({ time: '2026-11-18T01:00:00Z', guard: 'wt-only.sh', decision: 'allow', surface: 'claude', reason: '' }),
-      JSON.stringify({ time: 'yesterday', guard: 'wt-only.sh', decision: 'deny', surface: 'claude', reason: '' }),
+      JSON.stringify({ time: '2026-11-18T01:00:00Z', hook: 'wt-only.sh', decision: 'allow', surface: 'claude', reason: '' }),
+      JSON.stringify({ time: 'yesterday', hook: 'wt-only.sh', decision: 'deny', surface: 'claude', reason: '' }),
       JSON.stringify({ time: '2026-11-18T01:00:00Z', decision: 'deny', surface: 'claude', reason: '' }),
       '',
       line('2026-11-18T02:00:00Z', 'pnpm-only.sh', 'codex', 'rewrite'),
       '',
     ].join('\n')
     const parsed = parseHitLog(text)
-    expect(parsed.hits.map(hit => [hit.guard, hit.decision, hit.surface])).toEqual([
+    expect(parsed.hits.map(hit => [hit.hook, hit.decision, hit.surface])).toEqual([
       ['wt-only.sh', 'deny', 'claude'],
       ['pnpm-only.sh', 'rewrite', 'codex'],
     ])
@@ -50,7 +50,7 @@ describe('parseHitLog', () => {
 })
 
 describe('summariseHits', () => {
-  it('counts hits per ISO week, per guard, per surface', () => {
+  it('counts hits per ISO week, per Hook, per surface', () => {
     const { hits } = parseHitLog([
       line('2026-11-16T00:00:00Z', 'wt-only.sh', 'claude'),
       line('2026-11-22T23:59:59Z', 'wt-only.sh', 'claude'),
@@ -62,24 +62,24 @@ describe('summariseHits', () => {
       line('2026-11-10T00:00:00Z', 'github-read-routing.sh', 'opencode'),
     ].join('\n'))
     expect(summariseHits(hits)).toEqual([
-      { week: '2026-W46', guard: 'github-read-routing.sh', surface: 'opencode', hits: 1 },
-      { week: '2026-W47', guard: 'pnpm-only.sh', surface: 'claude', hits: 3 },
-      { week: '2026-W47', guard: 'wt-only.sh', surface: 'claude', hits: 2 },
-      { week: '2026-W47', guard: 'wt-only.sh', surface: 'codex', hits: 1 },
-      { week: '2026-W48', guard: 'wt-only.sh', surface: 'claude', hits: 1 },
+      { week: '2026-W46', hook: 'github-read-routing.sh', surface: 'opencode', hits: 1 },
+      { week: '2026-W47', hook: 'pnpm-only.sh', surface: 'claude', hits: 3 },
+      { week: '2026-W47', hook: 'wt-only.sh', surface: 'claude', hits: 2 },
+      { week: '2026-W47', hook: 'wt-only.sh', surface: 'codex', hits: 1 },
+      { week: '2026-W48', hook: 'wt-only.sh', surface: 'claude', hits: 1 },
     ])
   })
 })
 
 describe('hitLogPath', () => {
   it('follows XDG_STATE_HOME, then HOME', () => {
-    expect(hitLogPath({ XDG_STATE_HOME: '/state' }, '/home/x')).toBe('/state/harlan-agent-kit/guard-hits.jsonl')
-    expect(hitLogPath({ XDG_STATE_HOME: '' }, '/home/x')).toBe('/home/x/.local/state/harlan-agent-kit/guard-hits.jsonl')
-    expect(hitLogPath({}, '/home/x')).toBe('/home/x/.local/state/harlan-agent-kit/guard-hits.jsonl')
+    expect(hitLogPath({ XDG_STATE_HOME: '/state' }, '/home/x')).toBe('/state/harlan-agent-kit/hook-hits.jsonl')
+    expect(hitLogPath({ XDG_STATE_HOME: '' }, '/home/x')).toBe('/home/x/.local/state/harlan-agent-kit/hook-hits.jsonl')
+    expect(hitLogPath({}, '/home/x')).toBe('/home/x/.local/state/harlan-agent-kit/hook-hits.jsonl')
   })
 })
 
-describe('guard-hits CLI', () => {
+describe('hook-hits CLI', () => {
   function run(args: string[], env: NodeJS.ProcessEnv = {}): { status: number | null, stdout: string, stderr: string } {
     const result = spawnSync(process.execPath, ['--experimental-strip-types', '--no-warnings', script, ...args], {
       encoding: 'utf8',
@@ -100,7 +100,7 @@ describe('guard-hits CLI', () => {
     const result = run([], { XDG_STATE_HOME: state })
     expect(result.status).toBe(0)
     expect(result.stdout.trimEnd().split('\n').map(row => row.trim().split(/\s+/).join(' '))).toEqual([
-      'week guard surface hits',
+      'week hook surface hits',
       '2026-W47 wt-only.sh claude 2',
     ])
     expect(result.stderr).toBe(`Skipped 1 malformed line in ${log}: line 3.\n`)

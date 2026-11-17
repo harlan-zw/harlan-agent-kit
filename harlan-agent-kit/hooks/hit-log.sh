@@ -21,6 +21,18 @@ hook_surface() {
   fi
 }
 
+# Succeeds once per Hook and tool call, keyed on stdin session_id and tool_use_id. mkdir is atomic, so
+# one of two parallel runs wins. A Hook registered twice, such as Codex user and Plugin Hooks, logs once.
+first_hook_run() {
+  local seen="$1/hook-hits.seen" call
+  call=$(printf '%s' "$2" | jq -r '[.session_id, .tool_use_id] | select(all(type == "string" and . != "")) | join(".")' 2>/dev/null)
+  [ -n "$call" ] || return 0
+  call="$(basename "$0").${call//[^A-Za-z0-9._-]/_}"
+  mkdir -p "$seen" || return 0
+  find "$seen" -mindepth 1 -maxdepth 1 -mmin +1440 -exec rmdir {} + 2>/dev/null
+  mkdir "$seen/${call:0:200}"
+}
+
 # Appends one line to the hit log. Usage: log_hook_hit <deny|rewrite> <reason> <stdin>
 # The line keeps an 80 character reason prefix and never the command.
 # A failed write is ignorable, so it never changes the decision or the Hook output.
@@ -28,10 +40,11 @@ log_hook_hit() {
   local directory="${XDG_STATE_HOME:-${HOME:-}/.local/state}/harlan-agent-kit"
   {
     mkdir -p "$directory" \
-      && jq -nc --arg guard "$(basename "$0")" --arg decision "$1" --arg reason "$2" \
+      && first_hook_run "$directory" "${3:-}" \
+      && jq -nc --arg hook "$(basename "$0")" --arg decision "$1" --arg reason "$2" \
         --arg surface "$(hook_surface "${3:-}")" \
-        '{time: (now | todate), guard: $guard, decision: $decision, surface: $surface, reason: $reason[0:80]}' \
-        >> "$directory/guard-hits.jsonl"
+        '{time: (now | todate), hook: $hook, decision: $decision, surface: $surface, reason: $reason[0:80]}' \
+        >> "$directory/hook-hits.jsonl"
   } >/dev/null 2>&1
   return 0
 }
