@@ -1,45 +1,47 @@
 import type { JournalStore } from './store.ts'
 import { redactSecrets } from './agent-activity.ts'
 
-const sourceLimit = 1000
+const failureLimit = 1000
 const eventLimit = 200
 const incidentLimit = 50
 const weekMilliseconds = 7 * 24 * 60 * 60 * 1000
 
 /** Durable controller evidence. Never export credentials, prompts, or raw transcripts. */
 export function collectAgentRetroEvidence(
-  store: Pick<JournalStore, 'listIncidents' | 'listWorkflowEvents'>,
+  store: Pick<JournalStore, 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents'>,
   now: Date,
 ) {
   const since = new Date(now.getTime() - weekMilliseconds).toISOString()
-  const source = store.listWorkflowEvents({ limit: sourceLimit })
-  const recent = source.filter(event => Date.parse(event.occurredAt) >= Date.parse(since))
-  // Keep failed and repeated work first, then representative successful work.
-  const ranked = [...recent].sort((left, right) => {
-    const priority = (event: typeof left) => Number(event.reason !== null) + Number(event.attempt > 1)
-    return priority(right) - priority(left) || Date.parse(right.occurredAt) - Date.parse(left.occurredAt)
-  })
+  // A busy week holds more than a thousand events, so failures are read across the whole
+  // window first. A newest-first page would only reach back a few hours.
+  const failures = store.listWorkflowEvents({ since, failures: true, limit: failureLimit })
+  const recent = store.listWorkflowEvents({ since, limit: eventLimit })
+  const failureIds = new Set(failures.map(event => event.id))
+  const events = [...failures, ...recent.filter(event => !failureIds.has(event.id))].slice(0, eventLimit + failureLimit)
+  const summary = store.summarizeWorkflowEvents({ since })
+  const total = summary.reduce((sum, row) => sum + row.count, 0)
   const incidents = store.listIncidents()
   return {
     observedAt: now.toISOString(),
     since,
     coverage: {
-      events: recent.length > eventLimit || (source.length === sourceLimit && recent.length === sourceLimit) ? 'incomplete' as const : 'complete' as const,
-      sourceLimit,
-      sampledEvents: Math.min(eventLimit, recent.length),
-      omittedEvents: Math.max(0, recent.length - eventLimit),
-      oldestSourceEventAt: source.at(-1)?.occurredAt ?? null,
+      events: failures.length === failureLimit ? 'incomplete' as const : 'complete' as const,
+      windowEvents: total,
+      failureEvents: failures.length,
+      sampledEvents: events.length,
+      omittedEvents: Math.max(0, total - events.length),
       incidents: incidents.length > incidentLimit ? 'incomplete' as const : 'complete' as const,
       omittedIncidents: Math.max(0, incidents.length - incidentLimit),
       transcripts: 'unavailable' as const,
       resolvedIncidents: 'unavailable' as const,
       systemLogs: 'unavailable' as const,
     },
+    summary,
     incidents: incidents.slice(0, incidentLimit).map(incident => ({
       ...incident,
       message: redactSecrets(incident.message).slice(0, 1600),
     })),
-    events: ranked.slice(0, eventLimit).map(event => ({
+    events: events.map(event => ({
       ...event,
       reason: event.reason === null ? null : redactSecrets(event.reason).slice(0, 1600),
     })),

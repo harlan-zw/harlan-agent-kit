@@ -120,6 +120,7 @@ import type {
   TaskState,
   TriageSkip,
   WorkflowEvent,
+  WorkflowEventSummary,
   WorkflowEventStream,
 } from './types.ts'
 import type { AgentWorktreeLease } from './worktree.ts'
@@ -1031,8 +1032,13 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
   getStats: (range: StatsRange, generatedAt: string) => StatsSnapshot
-  /** Newest append-only workflow events. Reasons are redacted before storage. */
-  listWorkflowEvents: (input?: { stream?: WorkflowEventStream, limit?: number }) => WorkflowEvent[]
+  /**
+   * Newest append-only workflow events. Reasons are redacted before storage.
+   * `since` bounds the window. `failures` keeps events with a reason or a retry.
+   */
+  listWorkflowEvents: (input?: { stream?: WorkflowEventStream, limit?: number, since?: string, failures?: boolean }) => WorkflowEvent[]
+  /** Counts every workflow event since a time, by stream, event, and state. */
+  summarizeWorkflowEvents: (input: { since: string }) => WorkflowEventSummary[]
   /** Whether one provider may accept a normal turn or one half-open canary. */
   providerCanStart: (input: { provider: AgentProviderName, credential: string, model?: string, at: string }) => boolean
   /** Atomically reserves the only half-open canary when one is due. */
@@ -13880,15 +13886,23 @@ export function openJournalStore(
 
   const listWorkflowEvents: JournalStore['listWorkflowEvents'] = (input = {}) => {
     const limit = Math.max(1, Math.min(1_000, input.limit ?? 200))
-    const rows = input.stream === undefined
-      ? database.prepare(`
-          SELECT * FROM workflow_events
-          ORDER BY occurred_at DESC, id DESC LIMIT ?
-        `).all(limit)
-      : database.prepare(`
-          SELECT * FROM workflow_events WHERE stream = ?
-          ORDER BY occurred_at DESC, id DESC LIMIT ?
-        `).all(input.stream, limit)
+    const conditions: string[] = []
+    const parameters: Array<string | number> = []
+    if (input.stream !== undefined) {
+      conditions.push('stream = ?')
+      parameters.push(input.stream)
+    }
+    if (input.since !== undefined) {
+      conditions.push('occurred_at >= ?')
+      parameters.push(input.since)
+    }
+    if (input.failures === true)
+      conditions.push('(reason IS NOT NULL OR attempt > 1)')
+    const where = conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`
+    const rows = database.prepare(`
+      SELECT * FROM workflow_events ${where}
+      ORDER BY occurred_at DESC, id DESC LIMIT ?
+    `).all(...parameters, limit)
     return (rows as unknown as Array<{
       id: number
       stream: WorkflowEventStream
@@ -17131,6 +17145,13 @@ export function openJournalStore(
     getDashboardSnapshot,
     getStats,
     listWorkflowEvents,
+    summarizeWorkflowEvents: ({ since }) => (database.prepare(`
+      SELECT stream, event, to_state AS "to", COUNT(*) AS count,
+        SUM(CASE WHEN reason IS NOT NULL THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) AS retried
+      FROM workflow_events WHERE occurred_at >= ?
+      GROUP BY stream, event, to_state ORDER BY count DESC
+    `).all(since) as unknown as WorkflowEventSummary[]).map(row => ({ ...row })),
     providerCanStart,
     reserveProviderStart,
     releaseProviderStart,

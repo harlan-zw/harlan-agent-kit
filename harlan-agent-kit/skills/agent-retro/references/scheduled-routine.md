@@ -1,7 +1,7 @@
 # Scheduled Routine mode
 
 Review the supplied Service evidence and current repository code. Keep this scan read only.
-The controller supplies recent Workflow events and open Incidents across its repositories.
+The controller supplies every failed or retried Workflow event in the last 7 days, a sample of the newest other events, counts of every event in the window by stream, event, and state, and open Incidents.
 These logs include failed work, retries, durations, and available token use.
 Each finding belongs to this repository's Service or Skills, even when another repository exposed it.
 
@@ -11,8 +11,8 @@ Each finding belongs to this repository's Service or Skills, even when another r
 - Cite event or Incident IDs, timestamps, and the current file and symbol.
 - Confirm the defect still exists. Check deployment before calling old evidence a regression.
 - Missing transcripts, resolved Incidents, and system logs remain explicit coverage gaps.
-- Event samples prioritize failures and retries. They cannot prove overall success rates.
-- State source limits, omitted counts, and the oldest supplied event.
+- The event list holds every failure and retry, so it can prove a failure pattern. Rates come from `summary`.
+- State the window total, the failure count, and the omitted count from `coverage`. Use `summary` for rates; the sample alone cannot prove them.
 - Never read credentials, the live journal, provider databases, raw transcripts, or host logs.
 - Never start analyst Agents, change host settings, restart, deploy, or write GitHub state.
 

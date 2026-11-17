@@ -25,18 +25,20 @@ const event: WorkflowEvent = {
 
 describe('agent retro evidence', () => {
   it('keeps failure identity and timing while redacting known token shapes', () => {
-    const result = collectAgentRetroEvidence({ listIncidents: () => [], listWorkflowEvents: () => [event] }, new Date(at))
+    const result = collectAgentRetroEvidence({ listIncidents: () => [], listWorkflowEvents: () => [event], summarizeWorkflowEvents: () => [] }, new Date(at))
     expect(result.events[0]).toMatchObject({ id: 1, taskId: 'task-1', reason: 'Bearer ***', durationMilliseconds: 60000 })
     expect(result.coverage.events).toBe('complete')
   })
 
-  it('excludes old events and states when the window exceeds the source limit', () => {
-    const result = collectAgentRetroEvidence({ listIncidents: () => [], listWorkflowEvents: () => Array.from({ length: 1000 }, (_, id) => ({ ...event, id })) }, new Date(at))
+  it('states incomplete coverage when failures fill the limit', () => {
+    const failures = Array.from({ length: 1000 }, (_, id) => ({ ...event, id }))
+    const result = collectAgentRetroEvidence({
+      listIncidents: () => [],
+      listWorkflowEvents: input => input?.failures === true ? failures : [],
+      summarizeWorkflowEvents: () => [{ stream: 'task', event: 'failed', to: 'Failed', count: 1500, failed: 1500, retried: 1500 }],
+    }, new Date(at))
     expect(result.coverage.events).toBe('incomplete')
-    expect(result.events).toHaveLength(200)
-    expect(result.coverage.omittedEvents).toBe(800)
-    const old = collectAgentRetroEvidence({ listIncidents: () => [], listWorkflowEvents: () => [{ ...event, occurredAt: '2026-09-01T00:00:00Z' }] }, new Date(at))
-    expect(old.events).toEqual([])
+    expect(result.coverage.omittedEvents).toBe(500)
   })
 
   it('refuses scans on another repository', () => {

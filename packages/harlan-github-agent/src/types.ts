@@ -1133,6 +1133,18 @@ export interface WorkflowEvent {
   occurredAt: string
 }
 
+/** Workflow events in one window, counted by stream, event, and resulting state. */
+export interface WorkflowEventSummary {
+  stream: WorkflowEventStream
+  event: string
+  to: string
+  count: number
+  /** Events that carry a failure or decision reason. */
+  failed: number
+  /** Events past their first attempt. */
+  retried: number
+}
+
 export type ProviderFailureClass
   = | 'usage_limit'
     | 'network'
