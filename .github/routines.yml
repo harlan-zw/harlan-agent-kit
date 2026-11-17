@@ -35,3 +35,10 @@ routines:
     timezone: Australia/Melbourne
     mode: report
     enabled: true
+  - name: ready-digest
+    on:
+      schedule:
+        - cron: '30 6 * * 1'
+    timezone: Australia/Melbourne
+    mode: report
+    enabled: true
