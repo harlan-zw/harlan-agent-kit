@@ -192,6 +192,7 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Payback hourly value | Set an hourly value to see break-even minutes. | Payback heading tooltip without an hourly value |
 | Payback unpriced | Unpriced | Cost cell without a rate for the model |
 | Payback unrecorded | Not recorded | Merged cell for work with no recorded outcome |
+| Payback Routine merged | {merged} of {finished} runs | Merged cell for a Routine. Finished runs include Quiet runs |
 | Desktop memory label | Desktop memory | Hosts memory budget |
 | Desktop memory sharing | Shared by Agents and GitHub Actions. | Hosts memory budget |
 | Desktop memory configuration | Change Desktop memory in the host configuration. | Refused memory budget writes |

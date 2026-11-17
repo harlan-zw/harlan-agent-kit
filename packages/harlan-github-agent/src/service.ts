@@ -1766,6 +1766,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       getStats: store.getStats,
       listAgentTurns: store.listAgentTurns,
       listPaybackTasks: store.listPaybackTasks,
+      listPaybackRoutineRuns: store.listPaybackRoutineRuns,
       getOpenPullRequestStatus: store.getOpenPullRequestStatus,
       getOpenPullRequest: store.getOpenPullRequest,
       getTask: store.getTask,

@@ -36,7 +36,10 @@ const ratesText = computed(() => paybackRatesText(report))
       </template>
       <tr v-for="row in rows" :key="row.key">
         <UiTableTd row-header size="sm">
-          <WorkChip :work="row.work" />
+          <span class="flex items-baseline gap-2 whitespace-nowrap">
+            <WorkChip :work="row.work" />
+            <span v-if="row.routine" class="text-sm font-medium text-highlighted">{{ row.routine }}</span>
+          </span>
         </UiTableTd>
         <UiTableTd numeric size="sm">
           <UiTableMetricCell :value="row.agentTurns" />
