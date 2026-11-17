@@ -24,6 +24,9 @@ function turn(overrides: Partial<AgentTurnRecord> & Pick<AgentTurnRecord, 'taskI
   }
 }
 
+/** One turn that costs $10 at GPT-6.1 Sol rates: one million output tokens. */
+const costly = { _tag: 'Available' as const, input: 0, cachedInput: 0, cacheWrite: 0, output: 1_000_000, reasoning: 0 }
+
 function task(taskId: string, overrides: Partial<PaybackTaskFact> = {}): PaybackTaskFact {
   return { taskId, state: 'Completed', published: true, pullRequest: 'Merged', ...overrides }
 }
@@ -181,13 +184,36 @@ describe('buildPayback', () => {
 
   it('cuts a Routine that spent turns and merged no proposal', () => {
     const report = buildPayback({
-      turns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4', 'failed'].map(taskId => turn({ taskId, role: 'routine_scan' })),
+      turns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4', 'failed'].map(taskId => turn({ taskId, role: 'routine_scan', usage: costly })),
       tasks: [],
       routineRuns: [...['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4'].map(runId => routineRun(runId)), routineRun('failed', { state: 'Failed' })],
       pricing,
     })
 
     expect(report.kinds[0]?.verdict).toEqual({ _tag: 'Cut', reason: '5 runs, no merged proposal.' })
+  })
+
+  it('keeps cheap work with no useful outcome when it costs under 15 minutes of Harlan\'s time', () => {
+    // Five $0.39 turns cost under a minute at $150 an hour.
+    const report = buildPayback({
+      turns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4', 'quiet-5'].map(taskId => turn({ taskId, role: 'routine_scan' })),
+      tasks: [],
+      routineRuns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4', 'quiet-5'].map(runId => routineRun(runId)),
+      pricing,
+    })
+
+    expect(report.kinds[0]?.verdict).toEqual({ _tag: 'Keep' })
+  })
+
+  it('still cuts cheap work when no hourly value says what cheap means', () => {
+    const report = buildPayback({
+      turns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4', 'quiet-5'].map(taskId => turn({ taskId, role: 'routine_scan' })),
+      tasks: [],
+      routineRuns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4', 'quiet-5'].map(runId => routineRun(runId)),
+      pricing: { ...pricing, hourlyValue: null },
+    })
+
+    expect(report.kinds[0]?.verdict._tag).toBe('Cut')
   })
 
   it('asks for tuning when most settled turns of a Routine went to closed proposals', () => {
@@ -212,7 +238,7 @@ describe('buildPayback', () => {
 
   it('names a kind with spend and no useful outcome for cutting', () => {
     const report = buildPayback({
-      turns: ['closed-1', 'closed-2', 'closed-3', 'closed-4', 'closed-5'].map(taskId => turn({ taskId, role: 'baseline_repair' })),
+      turns: ['closed-1', 'closed-2', 'closed-3', 'closed-4', 'closed-5'].map(taskId => turn({ taskId, role: 'baseline_repair', usage: costly })),
       tasks: ['closed-1', 'closed-2', 'closed-3', 'closed-4', 'closed-5'].map(taskId => task(taskId, { pullRequest: 'Closed' })),
       routineRuns: [],
       pricing,
