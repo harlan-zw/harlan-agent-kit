@@ -187,6 +187,16 @@ describe('configuration boundary', () => {
     expect(parsed._tag === 'Ok' && parsed.value.server.allowedOrigin).toBe('https://harlan-github-agent.localhost')
   })
 
+  it('keeps the path rule shadow off unless the file turns it on', () => {
+    const off = parseConfigText(configText)
+    const on = parseConfigText(`${configText}path_rule_shadow: true\n`)
+    const invalid = parseConfigText(`${configText}path_rule_shadow: shadow\n`)
+
+    expect(off._tag === 'Ok' && off.value.pathRuleShadow).toBe(false)
+    expect(on._tag === 'Ok' && on.value.pathRuleShadow).toBe(true)
+    expect(invalid._tag === 'Err' && invalid.error.map(issue => issue.path)).toContain('$.path_rule_shadow')
+  })
+
   it('reads the Discussion route band and mode independently of the triage band', () => {
     const classified = (lines: string) => parseConfigText(`${configText}classification:
   account_id: account

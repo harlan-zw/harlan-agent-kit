@@ -117,12 +117,25 @@ export interface PullRequestTriageVerdict {
   decision: PullRequestTriageDecision
   /** The changed files read for this verdict, or null when the verdict needed none. */
   files: PullRequestFile[] | null
+  /** Present only in path rule shadow mode, when every changed file is prose. */
+  pathRuleShadow?: PathRuleShadowReading
+}
+
+/**
+ * What the path rule alone found for one head in shadow mode. The store
+ * records it once per head, and only when Review still runs.
+ */
+export interface PathRuleShadowReading {
+  verdict: 'ProseOnly'
+  fileCount: number
 }
 
 export interface PullRequestTriageControllerOptions {
   classification: ClassificationSource | null
   github: Pick<GitHubAgentSource, 'consumeApprovalLabel' | 'listPullRequestFiles' | 'stampAgentLabel' | 'upsertReviewCheckRun' | 'upsertReviewStatus'>
   now: () => Date
+  /** Reports each prose-only head on its verdict. Review still runs. */
+  pathRuleShadow: boolean
   reportCheckRun: ReviewCheckRunReport
   store: Pick<JournalStore, 'getLatestPullRequestTriageRun' | 'hasActiveReviewTask' | 'markPullRequestTriageSettled' | 'storedReviewForHead'>
 }
@@ -231,12 +244,26 @@ export function classificationDecision(input: {
  * failure of any kind keeps the safe direction, Review.
  */
 export function createPullRequestTriageController(options: PullRequestTriageControllerOptions): PullRequestTriageController {
+  // A label-forced Review is still a Review the path rule could have skipped,
+  // so shadow mode reads its files too. The decision stays the override; a
+  // failed read only loses the reading.
+  const overrideShadow = async (repository: RepositoryMapping, subject: GitHubPullRequestItem, signal: AbortSignal): Promise<Omit<PullRequestTriageVerdict, 'decision'>> => {
+    if (!options.pathRuleShadow)
+      return { files: null }
+    const files = await options.github.listPullRequestFiles(repository, subject.number, signal)
+    if (files._tag === 'Err')
+      return { files: null }
+    const changedFiles = files.value.map(file => file.path)
+    return classifyPullRequestPaths(changedFiles)._tag === 'ProseOnly'
+      ? { files: files.value, pathRuleShadow: { verdict: 'ProseOnly', fileCount: changedFiles.length } }
+      : { files: files.value }
+  }
   return {
     async verdict(repository, subject, signal) {
       // The manual Review label is late authority. It wins before any other
       // check and its decision consumes it.
       if (subject.approvalLabels.includes('review'))
-        return { decision: { _tag: 'RequiredOverride' }, files: null }
+        return { decision: { _tag: 'RequiredOverride' }, ...await overrideShadow(repository, subject, signal) }
 
       const reused = reuseStoredDecision(options.store, repository, subject)
       if (reused !== null)
@@ -258,11 +285,12 @@ export function createPullRequestTriageController(options: PullRequestTriageCont
       if (verdict._tag === 'ReviewRequired')
         return { decision: { _tag: 'Required', reason: `rule: ${verdict.path} is outside the prose set.`, source: 'rule' }, files: files.value }
 
+      const shadow = options.pathRuleShadow ? { pathRuleShadow: { verdict: verdict._tag, fileCount: changedFiles.length } } : {}
       if (options.classification === null) {
-        return { decision: { _tag: 'Required', reason: 'rule: the classification service is not configured, so Review runs.', source: 'rule' }, files: files.value }
+        return { decision: { _tag: 'Required', reason: 'rule: the classification service is not configured, so Review runs.', source: 'rule' }, files: files.value, ...shadow }
       }
       const decision = await classificationDecision({ classification: options.classification, subject, changedFiles, signal })
-      return { decision, files: files.value }
+      return { decision, files: files.value, ...shadow }
     },
 
     async settle(repository, subject, decision, signal) {

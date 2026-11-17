@@ -512,6 +512,8 @@ A prose-only pull request reuses the stored decision for the same head commit. O
 
 `harlan-agent-review-required` records the automatic route to Review. `harlan-agent-review-skipped` records a skipped Review.
 
+`path_rule_shadow: true` turns on path rule shadow mode. If every changed file of a head is in the prose set and Review still runs, the controller records one `review_run` workflow event, `path_rule_shadow`, for that head. Review is unchanged. The event counts what the path rule alone would skip.
+
 ### Classification
 
 A typed decision from the Jev model, reached through the Cloudflare AI endpoint. Answers carry probabilities and a confidence, never prose.

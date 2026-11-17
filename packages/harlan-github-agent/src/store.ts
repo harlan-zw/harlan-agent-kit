@@ -12,7 +12,7 @@ import type { LoggedFindingStore } from './logged-finding-store.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PaybackStore } from './payback-store.ts'
-import type { PullRequestTriageDecision } from './pull-request-triage.ts'
+import type { PathRuleShadowReading, PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { PullRequestWatchState } from './pull-request-watch.ts'
 import type { RepairRecoveryTarget } from './repair-recovery.ts'
 import type { RepairRoundPlan } from './repair-rounds.ts'
@@ -1284,6 +1284,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     pullRequestTriage?: PullRequestTriageDecision
     /** The changed files read while deciding, recorded once per Revision. */
     pullRequestFiles?: readonly PullRequestFile[]
+    /** The path rule shadow reading for this head, recorded once when Review still runs. */
+    pathRuleShadow?: PathRuleShadowReading
     /** The Issue triage classification decision computed for this observation, when one was. */
     issueTriage?: IssueClassificationDecision
   }) => RecordObservationResult
@@ -3518,6 +3520,13 @@ function telemetryReason(reason: string | null | undefined): string | null {
   return truncateOutput(redactSecrets(reason)).replace(/\s+/g, ' ').trim()
 }
 
+/**
+ * A shadow trial event stores its reading as JSON in `reason`. It is a
+ * measurement, never a failure, so the failure queries leave it out.
+ */
+const shadowTrialEvent = 'event GLOB \'*_shadow\''
+const workflowFailureCondition = `((reason IS NOT NULL OR attempt > 1) AND NOT ${shadowTrialEvent})`
+
 function recordWorkflowEvent(database: DatabaseSync, input: WorkflowEventInput): void {
   const previous = database.prepare(`
     SELECT occurred_at FROM workflow_events
@@ -4860,6 +4869,41 @@ function parseRevisionFiles(filesJson: string): PullRequestFile[] | null {
   return files
 }
 
+/**
+ * Counts one prose-only head that Review still runs on, once per head.
+ *
+ * The entity carries the head, so a new Revision of the same head finds the
+ * first event and records nothing.
+ */
+function recordPathRuleShadow(database: DatabaseSync, input: {
+  subjectId: number
+  revisionId: string
+  repository: string
+  itemNumber: number
+  headSha: string
+  reading: PathRuleShadowReading
+  at: string
+}): void {
+  const entityId = `path-rule-shadow:${input.subjectId}:${input.headSha}`
+  const recorded = database.prepare(`
+    SELECT 1 FROM workflow_events WHERE stream = 'review_run' AND entity_id = ? LIMIT 1
+  `).get(entityId) !== undefined
+  if (recorded)
+    return
+  recordWorkflowEvent(database, {
+    stream: 'review_run',
+    event: 'path_rule_shadow',
+    entityId,
+    repository: input.repository,
+    itemNumber: input.itemNumber,
+    revisionId: input.revisionId,
+    from: null,
+    to: input.reading.verdict,
+    reason: JSON.stringify({ verdict: input.reading.verdict, fileCount: input.reading.fileCount }),
+    at: input.at,
+  })
+}
+
 function planAdversarialReview(
   database: DatabaseSync,
   subject: GitHubItem,
@@ -4870,6 +4914,7 @@ function planAdversarialReview(
   reviewApproved: boolean,
   manualReviewRequested: boolean,
   triage?: PullRequestTriageDecision,
+  pathRuleShadow?: PathRuleShadowReading,
 ): void {
   const approvalRequired = subject.kind === 'pull_request' && requiresPullRequestApproval(database, mapping, subject.author)
   const rerunRequested = database.prepare(`
@@ -5037,6 +5082,8 @@ function planAdversarialReview(
       tag: triage._tag === 'Failed' ? 'ReviewRequiredAfterFailure' : 'ReviewRequired',
       reason: triage._tag === 'RequiredOverride' ? PULL_REQUEST_TRIAGE_OVERRIDE_REASON : triage.reason,
     }, observedAt, triage._tag === 'RequiredOverride')
+    if (pathRuleShadow !== undefined)
+      recordPathRuleShadow(database, { subjectId, revisionId, repository: mapping.github, itemNumber: subject.number, headSha: subject.headSha, reading: pathRuleShadow, at: observedAt })
   }
   // Review Tasks follow the head commit, so one Revision can hold several.
   // The live one answers, then the last one that ran.
@@ -8473,6 +8520,7 @@ export function openJournalStore(
           reviewApproved,
           input.subject.kind === 'pull_request' && input.subject.approvalLabels.includes('review'),
           input.subject.kind === 'pull_request' ? input.pullRequestTriage : undefined,
+          input.subject.kind === 'pull_request' ? input.pathRuleShadow : undefined,
         )
         planIssueTriage(database, input.subject, subject.id, revisionId, input.observedAt, mapping, input.issueTriage)
       }
@@ -14040,8 +14088,6 @@ export function openJournalStore(
     return isSafeToRestart(at)
   }
 
-  const workflowFailureCondition = '(reason IS NOT NULL OR attempt > 1)'
-
   const listWorkflowEvents: JournalStore['listWorkflowEvents'] = (input = {}) => {
     const limit = Math.max(1, Math.min(1_000, input.limit ?? 200))
     const conditions: string[] = []
@@ -17366,7 +17412,7 @@ export function openJournalStore(
     groupWorkflowFailures,
     summarizeWorkflowEvents: ({ since }) => (database.prepare(`
       SELECT stream, event, to_state AS "to", COUNT(*) AS count,
-        SUM(CASE WHEN reason IS NOT NULL THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN reason IS NOT NULL AND NOT ${shadowTrialEvent} THEN 1 ELSE 0 END) AS failed,
         SUM(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) AS retried
       FROM workflow_events WHERE occurred_at >= ?
       GROUP BY stream, event, to_state ORDER BY count DESC

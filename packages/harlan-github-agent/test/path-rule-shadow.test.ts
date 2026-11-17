@@ -1,0 +1,169 @@
+import type { Questions, SystemOneResult } from 'advocaat'
+import type { ClassificationSource } from '../src/classification.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { describe, expect, it } from 'vitest'
+import { createPullRequestTriageController } from '../src/pull-request-triage.ts'
+import { reconcileRepository } from '../src/reconcile.ts'
+import { ok } from '../src/result.ts'
+import { openJournalStore } from '../src/store.ts'
+import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+
+const headSha = 'a'.repeat(40)
+
+const noFinalRead = {
+  getIssue: () => Promise.reject(new Error('No issue should need a final read.')),
+  getPullRequest: () => Promise.reject(new Error('No pull request should need a final read.')),
+}
+
+function skipAnswer(): ClassificationSource {
+  return {
+    classify: <Q extends Questions>() => Promise.resolve(ok({
+      model: 'jev-1.13.0',
+      answers: { review: { type: 'choice', choice: 'ADVERSARIAL_REVIEW_SKIPPED', confidence: 0.95, probabilities: {} } },
+      usage: { input_tokens: 10, output_tokens: 0 },
+    } as SystemOneResult<Q>)),
+  }
+}
+
+/** Polls one clean pull request twice through the real triage controller and store. */
+async function pollTwice(input: { files: string[], pathRuleShadow: boolean, classification?: ClassificationSource, approvalLabels?: Array<'review'> }) {
+  const store = openJournalStore(':memory:', true)
+  const repository = repositoryMapping()
+  store.syncRepositories([repository], '2026-11-17T00:00:00.000Z')
+  store.setRepositoryWritesEnabled(repository.github, true)
+  const subject = pullRequestItem({ mergeState: 'clean', headSha, approvalLabels: input.approvalLabels ?? [] })
+  let minute = 0
+  const now = () => new Date(`2026-11-17T01:0${minute++}:00.000Z`)
+  const pullRequestTriage = createPullRequestTriageController({
+    classification: input.classification ?? null,
+    github: {
+      listPullRequestFiles: () => Promise.resolve(ok(input.files.map(path => ({ path, status: 'modified' as const, additions: 1, deletions: 0, previousFilename: null })))),
+      consumeApprovalLabel: () => Promise.resolve(ok(undefined)),
+      stampAgentLabel: () => Promise.resolve(ok(undefined)),
+      upsertReviewCheckRun: () => Promise.resolve(ok(undefined)),
+      upsertReviewStatus: () => Promise.resolve(ok({ commentId: 7, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-7' })),
+    },
+    now,
+    reportCheckRun: () => {},
+    store,
+    pathRuleShadow: input.pathRuleShadow,
+  })
+  const poll = () => reconcileRepository(repository, {
+    github: { ...noFinalRead, listOpenItems: () => Promise.resolve(ok([subject])) },
+    store,
+    now,
+    pullRequestTriage,
+  })
+  try {
+    expect((await poll())._tag).toBe('Ok')
+    expect((await poll())._tag).toBe('Ok')
+    return {
+      events: store.listWorkflowEvents({ stream: 'review_run' }).filter(event => event.event === 'path_rule_shadow'),
+      review: store.claimNextAdversarialReviewTask('reviewer-1', '2026-11-17T01:10:00.000Z', 60_000),
+    }
+  }
+  finally {
+    store.close()
+  }
+}
+
+describe('path rule shadow', () => {
+  it('records a prose-only head once and still queues its Review', async () => {
+    const { events, review } = await pollTwice({ files: ['README.md', 'docs/guide.md'], pathRuleShadow: true })
+
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ repository: 'harlan-zw/example', itemNumber: 24, from: null, to: 'ProseOnly' })
+    expect(JSON.parse(events[0]!.reason!)).toEqual({ verdict: 'ProseOnly', fileCount: 2 })
+    expect(review?.pullRequest.headSha).toBe(headSha)
+  })
+
+  it.each([
+    ['a lockfile-only change', ['pnpm-lock.yaml']],
+    ['a source change', ['README.md', 'src/index.ts']],
+  ])('records nothing for %s, which the path rule sends to Review', async (_label, files) => {
+    const { events, review } = await pollTwice({ files, pathRuleShadow: true })
+
+    expect(events).toEqual([])
+    expect(review?.pullRequest.headSha).toBe(headSha)
+  })
+
+  it('records a prose-only head whose Review the manual label requested', async () => {
+    const { events, review } = await pollTwice({ files: ['README.md'], pathRuleShadow: true, approvalLabels: ['review'] })
+
+    expect(events.map(event => event.to)).toEqual(['ProseOnly'])
+    expect(review?.pullRequest.headSha).toBe(headSha)
+  })
+
+  it('records one event when a second Revision of the same head carries the reading', () => {
+    const store = openJournalStore(':memory:')
+    store.syncRepositories([repositoryMapping()], '2026-11-17T00:00:00.000Z')
+    const reading = { verdict: 'ProseOnly' as const, fileCount: 1 }
+    const triage = { _tag: 'Required' as const, reason: 'rule: the classification service is not configured, so Review runs.', source: 'rule' as const }
+    try {
+      for (const [index, title] of ['Docs tweak', 'Docs tweak, renamed'].entries()) {
+        store.recordObservation({
+          externalId: `revision-${index}`,
+          observedAt: `2026-11-17T01:0${index}:00.000Z`,
+          source: 'poll',
+          subject: pullRequestItem({ mergeState: 'clean', headSha, title, updatedAt: `2026-11-17T00:0${index}:00.000Z` }),
+          pullRequestTriage: triage,
+          pathRuleShadow: reading,
+        })
+      }
+
+      expect(store.listWorkflowEvents({ stream: 'review_run' }).filter(event => event.event === 'path_rule_shadow')).toHaveLength(1)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('records nothing while the flag is off', async () => {
+    const { events, review } = await pollTwice({ files: ['README.md'], pathRuleShadow: false })
+
+    expect(events).toEqual([])
+    expect(review?.pullRequest.headSha).toBe(headSha)
+  })
+
+  it('records nothing when Pull request triage already skipped Review', async () => {
+    const { events, review } = await pollTwice({ files: ['README.md'], pathRuleShadow: true, classification: skipAnswer() })
+
+    expect(events).toEqual([])
+    expect(review).toBeNull()
+  })
+})
+
+describe('shadow trial events', () => {
+  it('never counts a shadow reading as a workflow failure', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'harlan-shadow-events-'))
+    const path = join(directory, 'state.sqlite')
+    openJournalStore(path).close()
+    const database = new DatabaseSync(path)
+    const insert = database.prepare(`
+      INSERT INTO workflow_events (stream, event, entity_id, repository, item_number, to_state, reason, attempt, fence, occurred_at)
+      VALUES (?, ?, ?, 'harlan-zw/example', 7, ?, ?, 0, 0, '2026-11-17T01:00:00.000Z')
+    `)
+    insert.run('issue_triage_status', 'discussion_shadow', 'issue-route:1:revision', 'DISCUSSION', '{"confidence":0.95,"needsCodebaseReview":0.1,"band":0.9,"skipsTriage":true}')
+    insert.run('review_run', 'path_rule_shadow', `path-rule-shadow:2:${headSha}`, 'ProseOnly', '{"verdict":"ProseOnly","fileCount":2}')
+    insert.run('task', 'Failed', 'task-1', 'Failed', 'provider returned 500 Internal Server Error')
+    database.close()
+    const store = openJournalStore(path)
+    const since = '2026-11-17T00:00:00.000Z'
+    try {
+      expect(store.groupWorkflowFailures({ since }).map(group => group.event)).toEqual(['Failed'])
+      expect(store.listWorkflowEvents({ since, failures: true }).map(event => event.event)).toEqual(['Failed'])
+      expect(store.summarizeWorkflowEvents({ since }).map(row => [row.event, row.count, row.failed]).sort()).toEqual([
+        ['Failed', 1, 1],
+        ['discussion_shadow', 1, 0],
+        ['path_rule_shadow', 1, 0],
+      ])
+    }
+    finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})

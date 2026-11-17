@@ -733,6 +733,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     classification,
     github: workerGithub,
     now,
+    pathRuleShadow: config.pathRuleShadow,
     reportCheckRun,
     store,
   })
