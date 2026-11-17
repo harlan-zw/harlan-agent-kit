@@ -1,12 +1,14 @@
 #!/bin/bash
-# PostToolUse (Bash): detect "command not found" and BSD/GNU incompatibilities
+# PostToolUse and PostToolUseFailure (Bash): detect "command not found" and BSD/GNU incompatibilities
 # Suggests install fix once per session per command
 
 source "$(dirname "$0")/check-config.sh"
 is_hook_disabled "command-not-found" && exit 0
 
 input=$(cat)
-tool_output=$(echo "$input" | jq -r '.tool_output // empty')
+# Claude Code sends `error` on failure and `tool_response` on success. opencode sends `tool_output`.
+tool_output=$(echo "$input" | jq -r '[.error, .tool_response.stdout, .tool_response.stderr, .tool_output] | map(strings) | join("\n")')
+event=$(echo "$input" | jq -r '.hook_event_name // "PostToolUse"')
 command=$(echo "$input" | jq -r '.tool_input.command // empty')
 
 [ -z "$tool_output" ] && exit 0
@@ -23,7 +25,7 @@ mark_suggested() {
 }
 
 suggest() {
-  jq -nc --arg msg "$1" '{"hookSpecificOutput":{"hookEventName":"PostToolUse","decision":"followup_message","message":$msg}}'
+  jq -nc --arg event "$event" --arg msg "$1" '{"hookSpecificOutput":{"hookEventName":$event,"additionalContext":$msg}}'
   exit 0
 }
 
@@ -31,7 +33,9 @@ suggest() {
 cmd_name=""
 if echo "$tool_output" | grep -qiE '(command not found|not found in PATH)'; then
   # Extract command name from common error formats
-  cmd_name=$(echo "$tool_output" | grep -ioE '(bash: |zsh: )?([a-zA-Z0-9_.-]+): (command )?not found' | head -1 | sed -E 's/(bash: |zsh: )//;s/: (command )?not found//')
+  # zsh puts the name last: "(eval):1: command not found: name".
+  cmd_name=$(echo "$tool_output" | grep -ioE 'command not found: [a-zA-Z0-9_.-]+' | head -1 | sed -E 's/.*: //')
+  [ -z "$cmd_name" ] && cmd_name=$(echo "$tool_output" | grep -ioE '(bash: |zsh: )?([a-zA-Z0-9_.-]+): (command )?not found' | head -1 | sed -E 's/(bash: |zsh: )//;s/: (command )?not found//')
 fi
 
 # Detect "No such file or directory" for executables (not regular files)

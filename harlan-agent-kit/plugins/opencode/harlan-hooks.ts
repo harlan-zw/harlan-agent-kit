@@ -5,7 +5,7 @@
 // reach them. This plugin runs the same bash scripts over the same stdin and
 // stdout contract, so one implementation serves both providers. PreToolUse
 // Bash hooks get their decisions from the hook stdout; `command-not-found.sh`
-// gets its `followup_message` appended to the shell tool output.
+// gets its `additionalContext` appended to the shell tool output.
 //
 // `.claude-plugin/plugin.json` is the only place a hook is registered. This
 // plugin reads its chains, their order, and their timeouts from that manifest,
@@ -51,10 +51,9 @@ type HookRun
  *
  * `file` holds the PostToolUse Write and Edit chain.
  *
- * `shellPost` holds the PostToolUse Bash chain. Those hooks answer with a
- * `followup_message`. Claude Code shows that as a message; opencode has no
- * such contract, so the plugin appends the suggestion to the shell tool
- * output instead.
+ * `shellPost` holds the PostToolUse Bash chain. Those hooks answer with
+ * `additionalContext`. Claude Code shows that beside the tool result; opencode
+ * has no such contract, so the plugin appends it to the shell tool output.
  */
 interface HookChains {
   command: readonly HookEntry[]
@@ -304,8 +303,8 @@ function firstString(record: Record<string, unknown>, keys: readonly string[]): 
   return ''
 }
 
-/** Reads a followup message from a PostToolUse hook stdout. Empty when absent. */
-function readFollowupMessage(stdout: string): string {
+/** Reads `additionalContext` from a PostToolUse hook stdout. Empty when absent. */
+function readAdditionalContext(stdout: string): string {
   const trimmed = stdout.trim()
   if (trimmed === '')
     return ''
@@ -322,8 +321,8 @@ function readFollowupMessage(stdout: string): string {
   const specific = (parsed as { hookSpecificOutput?: unknown }).hookSpecificOutput
   if (typeof specific !== 'object' || specific === null)
     return ''
-  const message = (specific as { message?: unknown }).message
-  return typeof message === 'string' ? message : ''
+  const context = (specific as { additionalContext?: unknown }).additionalContext
+  return typeof context === 'string' ? context : ''
 }
 
 /**
@@ -384,7 +383,7 @@ async function suggestForShellOutput(command: string, toolOutput: string, option
       reportHookFailure(run.reason)
       continue
     }
-    const message = readFollowupMessage(run.stdout)
+    const message = readAdditionalContext(run.stdout)
     if (message !== '')
       return message
   }

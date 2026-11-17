@@ -181,12 +181,13 @@ jobs:
       - name: CI change selection
         run: pnpm test:ci-changes
 
-      # These three enforce the worktree and pull request rules. `pnpm test`
+      # These enforce the worktree, pull request, and hook output rules. `pnpm test`
       # does not run them.
       - name: Plugin hooks
         run: |
           pnpm test:wt-only
           pnpm test:pr-skill-only
+          pnpm test:hook-output
           pnpm test:worktree-claim
 
       - name: Sentry check in

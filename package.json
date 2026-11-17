@@ -50,7 +50,8 @@
     "test:skill-doc-paths": "vitest run scripts/skill-doc-paths.test.ts",
     "test:browser": "python3 scripts/harlan-browser.test.py",
     "browser:install": "python3 scripts/harlan-browser.py install",
-    "test:agent-cli": "vitest run scripts/agent-cli.test.ts"
+    "test:agent-cli": "vitest run scripts/agent-cli.test.ts",
+    "test:hook-output": "bash harlan-agent-kit/hooks/output-contract.test.sh"
   },
   "dependencies": {
     "@antfu/eslint-config": "catalog:",
