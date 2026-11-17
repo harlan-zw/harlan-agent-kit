@@ -144,7 +144,7 @@ describe('daily-checkin when changed trial', () => {
     expect(reading.metrics.scheduleMismatches).toEqual([])
 
     expect(reading.keep.map(rule => rule._tag)).toEqual(['Met', 'Met'])
-    expect(reading.kill).toEqual([{ _tag: 'NeedsHuman', detail: expect.stringContaining('3 unchanged runs') }])
+    expect(reading.kill).toEqual([{ _tag: 'OwnerCheck', detail: expect.stringContaining('3 unchanged runs') }])
     expect(reading.suggestion).toEqual({ verdict: 'Continue', reason: expect.stringContaining('Week 3 of 4') })
     expect(reading.markdown).toContain('| Issues requested, `when: changed` | 0 | 0.5 | 0.5 |')
     expect(reading.markdown).toContain('| Agent runs, every run | 2 | 2 | 1 |')
@@ -205,8 +205,8 @@ describe('discussion route shadow trial', () => {
       needsCodebaseReview: 0.1,
       skipsTriage: true,
     }])
-    expect(reading.keep.map(rule => rule._tag)).toEqual(['NeedsHuman', 'Met'])
-    expect(reading.kill).toEqual([{ _tag: 'NeedsHuman', detail: expect.stringContaining('1 issue') }])
+    expect(reading.keep.map(rule => rule._tag)).toEqual(['OwnerCheck', 'Met'])
+    expect(reading.kill).toEqual([{ _tag: 'OwnerCheck', detail: expect.stringContaining('1 issue') }])
     expect(reading.suggestion.verdict).toBe('Continue')
     expect(reading.markdown).toContain('[harlan-zw/example#1](https://github.com/harlan-zw/example/issues/1)')
     expect(reading.markdown).not.toContain('Issue 1 at')
@@ -290,7 +290,7 @@ describe('path rule shadow trial', () => {
       failedGates: ['review'],
     }])
     expect(reading.keep.map(rule => rule._tag)).toEqual(['NotMet', 'Met'])
-    expect(reading.kill).toEqual([{ _tag: 'NeedsHuman', detail: expect.stringContaining('1 flagged head') }])
+    expect(reading.kill).toEqual([{ _tag: 'OwnerCheck', detail: expect.stringContaining('1 flagged head') }])
     expect(reading.markdown).toContain('failed Review gates: review')
   })
 })
@@ -319,18 +319,18 @@ describe('suggested trial verdict', () => {
   const running = { _tag: 'Running' as const, startedAt: start, endsAt: '2026-12-16T00:00:00.000Z', week: 2, weeks: 4 }
   const met = { _tag: 'Met' as const, detail: 'Met in the fixture.' }
   const notMet = { _tag: 'NotMet' as const, detail: 'Missed in the fixture.' }
-  const needsHarlan = { _tag: 'NeedsHuman' as const, detail: 'Check the fixture runs.' }
+  const ownerCheck = { _tag: 'OwnerCheck' as const, detail: 'Check the fixture runs.' }
 
   it('keeps an ended trial whose keep rule is met, and names the checks left for Harlan', () => {
-    expect(suggestVerdict(ended, [met, met], [needsHarlan])).toEqual({ verdict: 'Keep', reason: expect.stringContaining('Check the fixture runs.') })
+    expect(suggestVerdict(ended, [met, met], [ownerCheck])).toEqual({ verdict: 'Keep', reason: expect.stringContaining('Check the fixture runs.') })
   })
 
   it('kills an ended trial whose keep rule is not met', () => {
-    expect(suggestVerdict(ended, [met, notMet], [needsHarlan])).toEqual({ verdict: 'Kill', reason: expect.stringContaining('Missed in the fixture.') })
+    expect(suggestVerdict(ended, [met, notMet], [ownerCheck])).toEqual({ verdict: 'Kill', reason: expect.stringContaining('Missed in the fixture.') })
   })
 
   it('waits for Harlan when a keep rule needs his judgement', () => {
-    expect(suggestVerdict(ended, [needsHarlan, met], [])).toEqual({ verdict: 'Continue', reason: expect.stringContaining('Check the fixture runs.') })
+    expect(suggestVerdict(ended, [ownerCheck, met], [])).toEqual({ verdict: 'Continue', reason: expect.stringContaining('Check the fixture runs.') })
   })
 
   it('kills a running trial once its kill rule is met', () => {

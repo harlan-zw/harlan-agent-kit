@@ -18,13 +18,13 @@ export type TrialState
 /**
  * How one keep or kill rule reads this week.
  *
- * A rule that needs a person's judgement stays `NeedsHuman`, so the report
+ * A rule that only Harlan can settle stays `OwnerCheck`, so the report
  * can never call it met.
  */
 export type RuleReading
   = | { _tag: 'Met', detail: string }
     | { _tag: 'NotMet', detail: string }
-    | { _tag: 'NeedsHuman', detail: string }
+    | { _tag: 'OwnerCheck', detail: string }
     | { _tag: 'NotYetMeasurable', detail: string }
 
 /** A trial verdict recommends; Harlan decides. It is separate from a Payback verdict. */
@@ -289,7 +289,7 @@ export function readCheckinTrial(input: {
       ]
   const kill: RuleReading[] = [changed.unchangedRuns === 0
     ? { _tag: 'NotMet', detail: 'No unchanged run yet, so no check-in was held back.' }
-    : { _tag: 'NeedsHuman', detail: `Check the ${plural(changed.unchangedRuns, 'unchanged run')} for a production problem the check-in missed.` }]
+    : { _tag: 'OwnerCheck', detail: `Check the ${plural(changed.unchangedRuns, 'unchanged run')} for a production problem the check-in missed.` }]
   return {
     metrics: {
       _tag: 'CheckinWhenChanged',
@@ -355,7 +355,7 @@ export function readDiscussionTrial(input: {
   const keep: RuleReading[] = [
     routed.length === 0
       ? { _tag: 'NotYetMeasurable', detail: 'No issue was routed DISCUSSION in the last 7 days.' }
-      : { _tag: 'NeedsHuman', detail: `Label ${routed.length > measure.labelSample ? `the first ${measure.labelSample} listed issues` : `the ${plural(routed.length, 'listed issue')}`}. Keep needs at least 95% to be real discussions.` },
+      : { _tag: 'OwnerCheck', detail: `Label ${routed.length > measure.labelSample ? `the first ${measure.labelSample} listed issues` : `the ${plural(routed.length, 'listed issue')}`}. Keep needs at least 95% to be real discussions.` },
     toDate.skipsTriageShare === null
       ? { _tag: 'NotYetMeasurable', detail: 'No issue was classified yet.' }
       : {
@@ -365,7 +365,7 @@ export function readDiscussionTrial(input: {
   ]
   const kill: RuleReading[] = [confident === 0
     ? { _tag: 'NotMet', detail: `No issue was routed DISCUSSION at ${measure.killConfidence} or above.` }
-    : { _tag: 'NeedsHuman', detail: `Label the ${plural(confident, 'issue')} routed DISCUSSION at ${measure.killConfidence} or above. One real defect kills the trial.` }]
+    : { _tag: 'OwnerCheck', detail: `Label the ${plural(confident, 'issue')} routed DISCUSSION at ${measure.killConfidence} or above. One real defect kills the trial.` }]
   return {
     metrics: {
       _tag: 'DiscussionRouteShadow',
@@ -422,7 +422,7 @@ export function readPathRuleTrial(input: {
       ]
   const kill: RuleReading[] = [blocked.length === 0
     ? { _tag: 'NotMet', detail: 'No flagged head ended Blocked.' }
-    : { _tag: 'NeedsHuman', detail: `Read the ${plural(blocked.length, 'flagged head')} that ended Blocked. A real defect kills the trial.` }]
+    : { _tag: 'OwnerCheck', detail: `Read the ${plural(blocked.length, 'flagged head')} that ended Blocked. A real defect kills the trial.` }]
   return {
     metrics: { _tag: 'PathRuleShadow', lastSevenDays: pathRuleWindow(input.lastSevenDays.heads, input.lastSevenDays.window), toDate, blockedHeads, omittedHeads: blocked.length - blockedHeads.length },
     keep,
@@ -458,7 +458,7 @@ export function suggestVerdict(state: TrialState, keep: readonly RuleReading[], 
 const RULE_LABEL: Record<RuleReading['_tag'], string> = {
   Met: 'met',
   NotMet: 'not met',
-  NeedsHuman: 'needs Harlan',
+  OwnerCheck: 'needs Harlan',
   NotYetMeasurable: 'not measurable yet',
 }
 
