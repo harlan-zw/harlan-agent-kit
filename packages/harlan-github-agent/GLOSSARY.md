@@ -27,6 +27,7 @@ did not cover it.
 | Routine | `routines` | Scheduler | N to 1 Repository mapping, 1 to N Routine runs | Routine |
 | Routine run | `routine_runs` | Scheduler | N to 1 Routine | run |
 | d1-query-review | compiled Routine definition | Scheduler | One weekly Routine per production site | d1-query-review |
+| ready-digest | compiled Routine definition | Scheduler | One weekly Routine, kit only | ready-digest |
 | Lease holder | `tasks.worker_id` | Scheduler | One per Running Task | none |
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
 | Stats | derived from Journal records | Dashboard | N completed records per date range | Stats |
@@ -302,6 +303,15 @@ One durable answer to one exact cron instant for a Routine.
 A skipped instant remains a Routine run. This keeps missed work visible.
 
 An unchanged run is a Completed Routine run with no Agent turn. Its evidence contains `unchanged since run`.
+
+### ready-digest
+
+One weekly run log comment that lists each open pull request whose current head has a READY Review and passing CI, oldest READY first.
+
+The controller writes it from its own Review records and posts it to the run log. It starts no Agent turn.
+A repository GitHub does not report as public shows its name and number only, because the run log is public.
+
+Write `ready-digest` for the Routine and "ready digest" in prose. Never shorten it to "digest": that word names a SHA-256 here.
 
 ### Queue
 

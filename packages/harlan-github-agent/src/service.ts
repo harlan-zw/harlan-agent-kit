@@ -450,6 +450,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   if (activeUserRepositories.length > 0)
     options.logger.info(`${activeUserRepositories.length} repositories answer to @${userLogin} because the GitHub App is not installed: ${activeUserRepositories.map(repository => repository.github).join(', ')}.`)
   const userRepositoryNames = new Set(activeUserRepositories.map(repository => repository.github.toLowerCase()))
+  const publicRepositories = new Set([...installedRepositories, ...activeUserRepositories]
+    .filter(repository => !repository.private)
+    .map(repository => repository.github.toLowerCase()))
   // A repository discovery could not settle keeps its Routines. Without the
   // login, every user repository is dropped for this run, so none is settled.
   const unresolvedRepositories = resolvedLogin._tag === 'Ok'
@@ -1033,6 +1036,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         // GitHub writes remain controller-owned. Sentry propose runs may resolve verified fixes.
         worker: createRoutineScanWorker({
           serviceEvidence: store,
+          publicRepositories,
           serviceUpdate: options.serviceUpdate.read,
           activityLog,
           githubEvidence: workerGitHubEvidence,

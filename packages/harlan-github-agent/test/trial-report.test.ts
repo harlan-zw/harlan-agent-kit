@@ -1,6 +1,9 @@
+import type { GitHubIssuePublisher } from '../src/github.ts'
 import type { Trial } from '../src/trials.ts'
 import type { ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
+import { candidateIssueCommands, createCandidateIssueController } from '../src/candidate-issue-controller.ts'
+import { ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
 import { collectTrialReportEvidence, suggestVerdict } from '../src/trial-report.ts'
 import { TRIALS } from '../src/trials.ts'
@@ -21,7 +24,7 @@ function createStore(repositories: string[]): Store {
 }
 
 const start = '2026-11-18T00:00:00.000Z'
-const trialText = { metric: 'Fixture metric.', keepRule: 'Fixture keep rule.', killRule: 'Fixture kill rule.', before: 'Fixture before.' }
+const trialText = { metric: 'Fixture metric.', keepRule: 'Fixture keep rule.', killRule: 'Fixture kill rule.', before: 'Fixture before.', onMiss: { _tag: 'Kill' as const } }
 
 const checkinTrial: Trial = {
   _tag: 'Measured',
@@ -320,20 +323,185 @@ describe('suggested trial verdict', () => {
   const met = { _tag: 'Met' as const, detail: 'Met in the fixture.' }
   const notMet = { _tag: 'NotMet' as const, detail: 'Missed in the fixture.' }
   const ownerCheck = { _tag: 'OwnerCheck' as const, detail: 'Check the fixture runs.' }
+  const kill = { _tag: 'Kill' as const }
 
   it('keeps an ended trial whose keep rule is met, and names the checks left for Harlan', () => {
-    expect(suggestVerdict(ended, [met, met], [ownerCheck])).toEqual({ verdict: 'Keep', reason: expect.stringContaining('Check the fixture runs.') })
+    expect(suggestVerdict(ended, [met, met], [ownerCheck], kill)).toEqual({ verdict: 'Keep', reason: expect.stringContaining('Check the fixture runs.') })
   })
 
   it('kills an ended trial whose keep rule is not met', () => {
-    expect(suggestVerdict(ended, [met, notMet], [ownerCheck])).toEqual({ verdict: 'Kill', reason: expect.stringContaining('Missed in the fixture.') })
+    expect(suggestVerdict(ended, [met, notMet], [ownerCheck], kill)).toEqual({ verdict: 'Kill', reason: expect.stringContaining('Missed in the fixture.') })
   })
 
   it('waits for Harlan when a keep rule needs his judgement', () => {
-    expect(suggestVerdict(ended, [ownerCheck, met], [])).toEqual({ verdict: 'Continue', reason: expect.stringContaining('Check the fixture runs.') })
+    expect(suggestVerdict(ended, [ownerCheck, met], [], kill)).toEqual({ verdict: 'Continue', reason: expect.stringContaining('Check the fixture runs.') })
+  })
+
+  it('asks for a revision, never a kill, when a measurement trial ends under its keep rule', () => {
+    expect(suggestVerdict(ended, [notMet], [], { _tag: 'Revise', what: 'The fixture prompt' }))
+      .toEqual({ verdict: 'Revise', reason: expect.stringContaining('The fixture prompt needs work. Missed in the fixture.') })
   })
 
   it('kills a running trial once its kill rule is met', () => {
-    expect(suggestVerdict(running, [met, met], [met])).toEqual({ verdict: 'Kill', reason: expect.stringContaining('Met in the fixture.') })
+    expect(suggestVerdict(running, [met, met], [met], kill)).toEqual({ verdict: 'Kill', reason: expect.stringContaining('Met in the fixture.') })
+  })
+})
+
+describe('retro follow-through trial', () => {
+  const kit = 'harlan-zw/harlan-agent-kit'
+  const routineId = `${kit}:agent-retro`
+  const retroTrial: Trial = {
+    _tag: 'Measured',
+    id: 'retro-follow-through',
+    title: '7. Retro follow-through',
+    start: { _tag: 'On', at: start },
+    weeks: 6,
+    ...trialText,
+    onMiss: { _tag: 'Revise', what: 'The agent-retro prompt' },
+    measure: { _tag: 'RetroFollowThrough', mergeDays: 14, minimumMergedShare: 0.5 },
+  }
+
+  const publisher: GitHubIssuePublisher = {
+    updateIssue: async () => ok(undefined),
+    findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
+    findRoutineTrackingIssue: () => Promise.resolve(ok(null)),
+    findIssueCommentByMarker: () => Promise.resolve(ok(null)),
+    createComment: async () => ok({ id: 1 }),
+    createIssue: async (input) => {
+      const number = Number(/#(\d+)/.exec(input.body)?.[1] ?? 0)
+      return ok({ number, url: `https://github.com/${kit}/issues/${number}` })
+    },
+  }
+
+  const later = (at: string, minutes: number) => new Date(Date.parse(at) + minutes * 60_000).toISOString()
+
+  /** Files one agent-retro Candidate as an issue through the real controller, and merges its fix when asked. */
+  async function proposal(store: Store, issueNumber: number, at: string, mergedAt?: string): Promise<void> {
+    store.openRoutineRun({ routineId, scheduledFor: at, specSha: 'abc123', at })
+    store.recordCandidates({
+      routineId,
+      runId: `${routineId}:${at}`,
+      candidates: [{ fingerprint: `retro-${issueNumber}`, title: 'Fixture title', target: 'src/a.ts', claim: `Issue #${issueNumber} wastes a turn.`, verification: 'pnpm test', estimatedChangedFiles: 1 }],
+      at,
+    })
+    const fresh = store.listCandidates(routineId).filter(candidate => candidate.fingerprint === `retro-${issueNumber}`)
+    store.stageCandidateIssues({ commands: candidateIssueCommands(fresh, { repository: kit, name: 'agent-retro', scheduledFor: at }), at: later(at, 1) })
+    await createCandidateIssueController({ github: publisher, now: () => new Date(later(at, 2)), store, workerId: 'publisher' }).publishPending(new AbortController().signal)
+    store.recordObservation({
+      externalId: `issue-${issueNumber}`,
+      observedAt: later(at, 3),
+      source: 'poll',
+      subject: issueItem({ repository: kit, number: issueNumber, author: 'harlan-zw', routineFiled: true, url: `https://github.com/${kit}/issues/${issueNumber}`, createdAt: later(at, 2), updatedAt: later(at, 3) }),
+    })
+    if (mergedAt === undefined) {
+      // Nothing works an unmerged proposal, so it never takes a later proposal's turn.
+      store.dismissItem({ repository: kit, itemNumber: issueNumber, at: later(at, 4) })
+      return
+    }
+    const triage = store.claimNextIssueTriageTask('triage-worker', later(at, 4), 600_000)
+    if (triage === null)
+      throw new Error(`Expected Issue triage for #${issueNumber}.`)
+    store.completeWorkerTask({
+      taskId: triage.id,
+      workerId: 'triage-worker',
+      fence: triage.state.fence,
+      at: later(at, 5),
+      evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT', difficulty: 1, impact: 3, hasReproduction: true, needsCodebaseReview: false, summary: 'Summary', nextAction: 'Fix it', relatedIssues: [] }),
+    })
+    const work = store.claimNextIssueWorkTask('issue-worker', later(at, 6), 600_000)
+    if (work === null)
+      throw new Error(`Expected Issue work for #${issueNumber}.`)
+    const pullRequest = issueNumber + 100
+    store.stagePublication({
+      taskId: work.id,
+      workerId: 'issue-worker',
+      fence: work.state.fence,
+      at: later(at, 7),
+      publication: {
+        _tag: 'OpenPullRequest',
+        taskKind: 'issue_work',
+        issueNumber,
+        pullRequestTitle: 'fix: spend fewer turns',
+        pullRequestBody: `Closes #${issueNumber}.`,
+        diagram: null,
+        commitSha: `commit-${issueNumber}`,
+        baseSha: 'base-1',
+        baseRef: 'main',
+        expectedHeadSha: 'base-1',
+        headRef: `fix/issue-${issueNumber}`,
+        artifactRef: `refs/artifact-${issueNumber}`,
+        patchDigest: `digest-${issueNumber}`,
+        changedFiles: 1,
+      },
+    })
+    const command = store.claimNextPublication('publisher', later(at, 8), 600_000)
+    if (command === null)
+      throw new Error(`Expected the publication for #${issueNumber}.`)
+    store.completePublication({ commandId: command.id, workerId: 'publisher', fence: command.fence, at: later(at, 9), evidence: `Opened pull request #${pullRequest}.`, pullRequestNumber: pullRequest })
+    store.recordObservation({
+      externalId: `merged-${pullRequest}`,
+      observedAt: mergedAt,
+      source: 'poll',
+      subject: pullRequestItem({ repository: kit, number: pullRequest, state: 'closed', mergedAt, headRef: `fix/issue-${issueNumber}`, headRepository: kit, url: `https://github.com/${kit}/pull/${pullRequest}` }),
+    })
+    store.reconcileRoutineCandidates(mergedAt)
+  }
+
+  async function seed(): Promise<Store> {
+    const store = openJournalStore(':memory:', true)
+    stores.push(store)
+    store.syncRepositories([repositoryMapping({ github: kit })], '2026-11-01T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(kit, true)
+    store.syncRoutines({ repository: kit, specSha: 'abc123', entries: [{ name: 'agent-retro', crons: ['0 7 * * 1'], timeZone: 'Australia/Melbourne', mode: 'propose', enabled: true }], at: '2026-11-01T00:00:00.000Z' })
+    // Before the trial.
+    await proposal(store, 1, '2026-11-10T00:00:00.000Z')
+    // Week 1: one merged in 6 days, one never merged.
+    await proposal(store, 2, '2026-11-19T00:00:00.000Z', '2026-11-25T00:00:00.000Z')
+    await proposal(store, 3, '2026-11-20T00:00:00.000Z')
+    // Week 3: merged after 20 days, too late.
+    await proposal(store, 4, '2026-12-03T00:00:00.000Z', '2026-12-23T00:00:00.000Z')
+    return store
+  }
+
+  it('counts each week\'s Candidates, their issues, and the ones merged within 14 days', async () => {
+    const [reading] = collectTrialReportEvidence(await seed(), new Date('2026-12-10T00:00:00.000Z'), [retroTrial]).trials
+    if (reading?._tag !== 'Measured' || reading.metrics?._tag !== 'RetroFollowThrough')
+      throw new Error('Expected a measured retro trial.')
+
+    expect(reading.metrics.weeks.map(week => [week.week, week.candidates, week.issues, week.mergedInTime, week.open])).toEqual([
+      [1, 2, 2, 1, 0],
+      [2, 0, 0, 0, 0],
+      [3, 1, 1, 0, 1],
+      [4, 0, 0, 0, 0],
+    ])
+    expect(reading.metrics.toDate).toMatchObject({ candidates: 3, issues: 3, mergedInTime: 1, judged: 2, mergedShare: 0.5 })
+    expect(reading.keep).toEqual([{ _tag: 'Met', detail: expect.stringContaining('1 of 2') }])
+    expect(reading.kill).toEqual([])
+    expect(reading.markdown).toContain('| Week 1 | 2 | 2 | 1 | 0 |')
+  })
+
+  it('says the retro prompt needs work, and never suggests Kill, when the trial ends under half', async () => {
+    const [reading] = collectTrialReportEvidence(await seed(), new Date('2027-01-05T00:00:00.000Z'), [retroTrial]).trials
+    if (reading?._tag !== 'Measured')
+      throw new Error('Expected a measured retro trial.')
+
+    expect(reading.state._tag).toBe('Ended')
+    expect(reading.keep).toEqual([{ _tag: 'NotMet', detail: expect.stringContaining('1 of 3') }])
+    expect(reading.suggestion).toEqual({ verdict: 'Revise', reason: expect.stringContaining('The agent-retro prompt needs work') })
+  })
+
+  it('waits 14 days before it counts an unmerged Candidate as missed', async () => {
+    const store = openJournalStore(':memory:', true)
+    stores.push(store)
+    store.syncRepositories([repositoryMapping({ github: kit })], '2026-11-01T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(kit, true)
+    store.syncRoutines({ repository: kit, specSha: 'abc123', entries: [{ name: 'agent-retro', crons: ['0 7 * * 1'], timeZone: 'Australia/Melbourne', mode: 'propose', enabled: true }], at: '2026-11-01T00:00:00.000Z' })
+    await proposal(store, 3, '2026-11-20T00:00:00.000Z')
+
+    const [reading] = collectTrialReportEvidence(store, new Date('2026-11-25T00:00:00.000Z'), [retroTrial]).trials
+    if (reading?._tag !== 'Measured' || reading.metrics?._tag !== 'RetroFollowThrough')
+      throw new Error('Expected a measured retro trial.')
+    expect(reading.metrics.toDate).toMatchObject({ candidates: 1, issues: 1, judged: 0, mergedShare: null })
+    expect(reading.keep.map(rule => rule._tag)).toEqual(['NotYetMeasurable'])
   })
 })

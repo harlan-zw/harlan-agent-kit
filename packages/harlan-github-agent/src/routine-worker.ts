@@ -14,13 +14,16 @@ import { candidateIssueCommands } from './candidate-issue-controller.ts'
 import { answersSchedule, checkinChange, readDeployEvidence } from './checkin-change.ts'
 import { writeCheckinGitHubEvidence } from './checkin-github-evidence.ts'
 import { githubAccountInstructions } from './github-account.ts'
+import { collectReadyDigest } from './ready-digest.ts'
 import { err, ok } from './result.ts'
 import { routineReportCommand } from './routine-report-controller.ts'
 import { getRoutine } from './routines/index.ts'
 import { collectTrialReportEvidence } from './trial-report.ts'
 
 export interface RoutineScanWorkerOptions {
-  serviceEvidence?: Pick<JournalStore, 'groupWorkflowFailures' | 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents' | 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt'>
+  serviceEvidence?: Pick<JournalStore, 'groupWorkflowFailures' | 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents' | 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt' | 'listTrialRetroCandidates' | 'listReadyPullRequests'>
+  /** Repositories GitHub reports as public. The `ready-digest` list shows titles only for these. */
+  publicRepositories?: ReadonlySet<string>
   serviceUpdate?: () => ServiceUpdateStatus
   activityLog?: Pick<AgentActivityLog, 'record'>
   githubEvidence?: Pick<RoutineGitHubEvidenceSource, 'collect'>
@@ -61,7 +64,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
   return {
     run: async (task, signal) => {
       const definition = getRoutine(task.name)
-      const readsServiceEvidence = task.name === 'agent-retro' || task.name === 'trial-report'
+      const readsServiceEvidence = task.name === 'agent-retro' || task.name === 'trial-report' || task.name === 'ready-digest'
       if (readsServiceEvidence && options.serviceEvidence === undefined)
         return err(`The controller has no Service evidence source for ${task.name}.`)
       const maximumChangedFiles = definition.maximumChangedFiles === null
@@ -86,6 +89,31 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
             routineName: task.name,
             run: { id: task.id, scheduledFor: task.scheduledFor },
             report: { _tag: 'Completed', evidence },
+          }),
+          at: options.now().toISOString(),
+        })
+        options.logger.info(evidence)
+        return ok({ evidence, usage: { _tag: 'Unavailable' } })
+      }
+
+      // The controller writes this list from its own Review records. An Agent would only copy it.
+      if (task.name === 'ready-digest' && options.serviceEvidence !== undefined) {
+        const list = collectReadyDigest(options.serviceEvidence, { now: options.now(), publicRepositories: options.publicRepositories ?? new Set() })
+        const evidence = `${task.name} on ${task.repository} | ${list.total} ${list.total === 1 ? 'pull request' : 'pull requests'} READY with passing CI`
+        options.store.updateRoutineRunProgress({
+          taskId: task.id,
+          workerId: task.state.workerId,
+          fence: task.state.fence,
+          progress: agentPhase('Reporting', 'Listing READY pull requests'),
+          at: options.now().toISOString(),
+        })
+        options.store.stageRoutineReport({
+          command: routineReportCommand({
+            repository: task.repository,
+            routineId: task.routineId,
+            routineName: task.name,
+            run: { id: task.id, scheduledFor: task.scheduledFor },
+            report: { _tag: 'Completed', evidence, detail: list.markdown },
           }),
           at: options.now().toISOString(),
         })
