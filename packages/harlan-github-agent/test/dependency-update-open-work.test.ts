@@ -101,8 +101,10 @@ describe('dependency work open by kind', () => {
       const queued = store.claimNextRoutineRun('worker-1', at(2), 60_000)
       store.completeRoutineRun({ taskId: queued!.id, workerId: queued!.state.workerId, fence: queued!.state.fence, at: at(2), evidence: 'Filed before the split.' })
 
-      await scan(store, 10, [minor, major])
+      const prompt = await scan(store, 10, [minor, major])
 
+      expect(prompt).toContain('#7 holds minor and patch work and major work')
+      expect(prompt).toContain('Stop before registry reads.')
       expect(fileIssues(store, 10)).toEqual([])
     }
     finally {

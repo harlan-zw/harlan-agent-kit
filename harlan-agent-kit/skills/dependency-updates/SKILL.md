@@ -19,6 +19,7 @@ Keep repository files and GitHub read only. Use the controller's prepared worktr
 1. Read open issues and pull requests. Find existing dependency work, including manually opened updates.
 2. If dependency work this Routine did not file is open, stop before registry reads. Return `outcome: existing_work` with an empty update list.
    Issues labelled `routine:dependency-updates` and their pull requests never stop the scan. The controller files only the kind of work they do not hold.
+   When they hold both kinds, the controller's prompt says to stop. Follow it.
    Report its link, current blocker, and next actor. Do not claim registry coverage or that dependencies are current.
 3. Read root and workspace manifests, catalogs, lockfiles, patches, overrides, and package manager version.
 4. Use that package manager's registry commands to find exact current and target versions.

@@ -26,22 +26,30 @@ function heldKinds(fingerprint: string): DependencyWorkKind[] {
   return ['MinorAndPatch', 'Major']
 }
 
+function heldByOpenIssues(openIssues: readonly OpenCandidateIssue[]): Set<DependencyWorkKind> {
+  return new Set(openIssues.flatMap(issue => heldKinds(issue.fingerprint)))
+}
+
 /** An open issue holds its kinds of work, so only a Candidate of another kind files. */
 function selectUnheldCandidates(candidates: readonly RoutineCandidate[], openIssues: readonly OpenCandidateIssue[] = []): RoutineCandidate[] {
-  const held = new Set(openIssues.flatMap(issue => heldKinds(issue.fingerprint)))
+  const held = heldByOpenIssues(openIssues)
   return candidates.filter(candidate => !heldKinds(candidate.fingerprint).some(kind => held.has(kind)))
 }
 
-function openWorkLine(openIssues: readonly OpenCandidateIssue[]): string {
+/** Names the Routine's open issues. When they hold both kinds, nothing can file, so the scan stops early. */
+function openWorkLines(openIssues: readonly OpenCandidateIssue[]): string {
   if (openIssues.length === 0)
-    return 'This Routine has no open issue.'
+    return 'Issues this Routine filed, labelled routine:dependency-updates, and their pull requests never stop this scan. This Routine has no open issue.'
   const describe = (issue: OpenCandidateIssue): string => {
     const kinds = heldKinds(issue.fingerprint)
     const work = kinds.length === 2 ? 'minor and patch work and major work, from before the split' : kinds[0] === 'Major' ? 'major work' : 'minor and patch work'
     return `#${issue.issueNumber} holds ${work}`
   }
   const issues = [...new Map(openIssues.map(issue => [issue.issueNumber, issue])).values()]
-  return `Open issues this Routine filed: ${issues.map(describe).join('; ')}.`
+  const named = `Open issues this Routine filed: ${issues.map(describe).join('; ')}.`
+  return heldByOpenIssues(openIssues).size === 2
+    ? `${named}\nThey hold every kind of dependency work. Stop before registry reads. Return outcome: existing_work, an empty update list, and their links.`
+    : `Issues this Routine filed, labelled routine:dependency-updates, and their pull requests never stop this scan.\n${named}\nThe controller files no new Candidate for a kind of work an open issue already holds. Still report every eligible update.`
 }
 
 const DEPENDENCY_UPDATE_SCHEMA = {
@@ -160,9 +168,7 @@ Keep the repository and GitHub read only. Return report and updates using the su
 Inspect all root, workspace, and catalog dependencies. Include eligible major versions.
 Keep TypeScript on version 6. Find the latest eligible version 6 update separately from version 7.
 Read open and closed dependency issues, plus open pull requests.
-Issues this Routine filed, labelled routine:dependency-updates, and their pull requests never stop this scan.
-${openWorkLine(input.openIssues ?? [])}
-The controller files no new Candidate for a kind of work an open issue already holds. Still report every eligible update.
+${openWorkLines(input.openIssues ?? [])}
 If other dependency work is open, such as a manually opened update pull request, stop before registry reads. Return outcome: existing_work, an empty update list, and its link.
 Report the existing work's blocker and next actor. This outcome does not establish registry coverage.
 If registry or authentication reads fail, return outcome: blocked, the error, and an empty update list.
