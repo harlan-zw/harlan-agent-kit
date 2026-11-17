@@ -202,9 +202,14 @@ When Step 3 rendered a diagram, add `--attach .pr-lens/<view>-dark-<hash>.svg` f
 Record the pull request URL. Continue to Step 6 after creation or update.
 Log the URL to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
 
-For an Agent-submitted pull request in a repository tracked by `harlan-github-agent`, add `harlan-agent-review`.
-This requests Review in Manual Selection mode and prevents prose classification from skipping it in Auto mode.
-Read the matching Service Item with its authenticated `/api/items/pull-request-status?repository=OWNER%2FREPO&number=NUMBER` endpoint.
+For an Agent-submitted pull request in a repository tracked by `harlan-github-agent`, decide whether it needs `harlan-agent-review`.
+Read the Selection mode from `harlan-github-agent control status` (`.state.selectionMode`).
+In `auto` mode the Service reviews every pull request that changes a non-prose path, so add no label.
+Prose paths are `.md`, `.mdx`, `.txt`, `LICENSE*`, `CHANGELOG*`, and `docs/`. Skills, `AGENTS.md`, `CLAUDE.md`, `GLOSSARY.md`, `.github/`, `.claude/`, and `agent-context/` are not prose.
+Add the label only when the mode is `manual`, or when every changed path is prose and classification could skip Review.
+If the control CLI fails, add the label. A missing Review costs more than two label events.
+Each label add and its consume write two events to the pull request's Activity panel.
+With or without the label, read the matching Service Item with its authenticated `/api/items/pull-request-status?repository=OWNER%2FREPO&number=NUMBER` endpoint.
 If it returns `dismissed: true`, leave the request label unset and report the Dismissal to Harlan.
 A Dismissal survives new head commits.
 If this step just created the pull request, a 404 can mean the Service has not observed it yet.
@@ -218,7 +223,7 @@ Then add it to the pull request:
 HARLAN_AGENT_PR_SKILL=1 gh pr edit NUMBER --add-label harlan-agent-review
 ```
 
-Record the UTC time of this Review request for the current head SHA in the session scratchpad.
+Record the UTC time of this Review request for the current head SHA in the session scratchpad, with or without the label.
 Reset that time after every later push that changes the head.
 Do not add the label to an outside contributor's pull request. Never treat the label as a Review outcome.
 
@@ -287,7 +292,7 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    Read issue comments with `gh api repos/OWNER/REPO/issues/NUMBER/comments --paginate`.
    Match `<!-- harlan-agent-kit:pr-triage -->` and `<!-- reviewed-sha: HEAD_SHA -->`.
    Trust only the GitHub App or a repository owner, member, or collaborator, as the [review contract](../adversarial-review/references/review-contract.md) requires.
-   `REVIEWING` and `harlan-agent-review-required` mean Review has not finished.
+   A `REVIEWING` or `QUEUED` comment means Review has not finished. Older pull requests may still carry `harlan-agent-review-required`, which means the same.
    `harlan-agent-review-skipped` does not satisfy an Agent-submitted pull request. Confirm the Review request was recorded and wait for Review.
    The service may consume the request label before it posts the outcome.
    If Review is `QUEUED`, or no current-head Task appears, check capacity and elapsed time before waiting again.
@@ -309,8 +314,8 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    That comment cannot change the service outcome. Ask Harlan to decide whether to dismiss or rerun the Review.
    Do not change the marked comment or Review outcome label yourself. A `BLOCKED` outcome remains blocked until the service publishes a new outcome.
 6. After a push by the submitting Agent, check the targeted Service Item endpoint for Dismissal again.
-   If dismissed, report it and stop. Otherwise add `harlan-agent-review` for the new head and record a new Review request time.
-   The Service consumes that label per head in Manual Selection mode. Then restart at step 1.
+   If dismissed, report it and stop. Otherwise record a new Review request time for the new head.
+   Add `harlan-agent-review` for the new head only under the Step 5 conditions. The Service consumes it per head. Then restart at step 1.
    A Service Repair commit keeps its own Approval; do not add the label for that commit.
    Never reuse CI or Review evidence from the old head SHA.
    Report success only when current-head CI passes or is correctly absent, the current-head Service Review is `READY` or a stopped Service Review has a completed subagent assessment, and other material comments are handled.
