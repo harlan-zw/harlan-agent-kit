@@ -135,9 +135,10 @@ function readEntry(hook: unknown): HookEntry | undefined {
   const file = command.split('/').pop() ?? ''
   if (file === '')
     return undefined
+  // The manifest uses Claude Code's unit, seconds.
   return {
     file,
-    timeoutMilliseconds: typeof timeout === 'number' && timeout > 0 ? timeout : defaultTimeoutMilliseconds,
+    timeoutMilliseconds: typeof timeout === 'number' && timeout > 0 ? timeout * 1000 : defaultTimeoutMilliseconds,
   }
 }
 
