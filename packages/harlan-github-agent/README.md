@@ -528,6 +528,29 @@ These checks cannot prove semantic compatibility for every possible source chang
 If the branch or release policy changes after authorization, the controller stops instead of expanding the approved release.
 A failed publishing workflow can be rerun in GitHub for the same tag.
 
+## Daily check-in when the site changed
+
+Add `when: changed` to a `daily-checkin` entry in `.github/routines.yml`:
+
+```yaml
+- name: daily-checkin
+  on:
+    schedule:
+      - cron: '40 8 * * *'
+  timezone: Australia/Sydney
+  mode: propose
+  enabled: true
+  when: changed
+```
+
+A scheduled run then compares the site with the last Completed run.
+If the default branch head SHA moved, the check-in runs.
+If a Take Ownership `required_workflows` workflow ran on the default branch since that run opened, the check-in runs.
+Otherwise the run completes with no Agent turn and no report. Its evidence contains `unchanged since run`.
+A repository without required workflows compares the head SHA only, and its evidence says so.
+A manual run, a missing Completed run, or unreadable workflow evidence always runs the check-in.
+Deploy a service version that reads `when` before any repository sets it. An older service refuses the whole spec.
+
 ## Weekly dependency updates
 
 Add this entry to `.github/routines.yml` in each opted-in repository:

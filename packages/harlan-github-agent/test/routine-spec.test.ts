@@ -229,6 +229,45 @@ routines:
   })
 })
 
+describe('running a check-in only when the site changed', () => {
+  const checkin = (extra: string, name = 'daily-checkin') => parseRoutineSpec(`
+version: 1
+routines:
+  - name: ${name}
+    on:
+      schedule:
+        - cron: "40 8 * * *"
+${extra}
+`)
+
+  it('reads when: changed on the daily check-in', () => {
+    expect(checkin('    when: changed')).toMatchObject({ _tag: 'Ok', value: { routines: [{ name: 'daily-checkin', when: 'changed' }] } })
+  })
+
+  it('refuses when on a Routine that cannot honour it', () => {
+    expect(checkin('    when: changed', 'ci-review')).toEqual({ _tag: 'Err', error: 'ci-review: remove `when`. Only daily-checkin runs when the site changed.' })
+  })
+
+  it('refuses any other when value by name', () => {
+    expect(checkin('    when: deployed')).toEqual({ _tag: 'Err', error: 'daily-checkin: set when to changed, or remove it.' })
+  })
+
+  it('stores when, and clears it when the spec drops it', () => {
+    const store = openJournalStore(':memory:')
+    try {
+      const entry = { name: 'daily-checkin' as const, crons: ['40 8 * * *'], timeZone: 'UTC', mode: 'propose' as const, enabled: true }
+      expect(store.syncRoutines({ repository: 'harlan-zw/example', specSha: 'abc', entries: [{ ...entry, when: 'changed' }], at: '2026-08-27T00:00:00.000Z' }))
+        .toMatchObject([{ name: 'daily-checkin', when: 'changed' }])
+      expect(store.syncRoutines({ repository: 'harlan-zw/example', specSha: 'def', entries: [entry], at: '2026-08-27T01:00:00.000Z' })[0])
+        .not
+        .toHaveProperty('when')
+    }
+    finally {
+      store.close()
+    }
+  })
+})
+
 describe('storing Routines and their runs', () => {
   const entries = [{
     name: 'sentry-checkin' as const,

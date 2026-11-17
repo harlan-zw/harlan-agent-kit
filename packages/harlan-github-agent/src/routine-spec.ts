@@ -10,7 +10,7 @@ export const ROUTINE_SPEC_PATH = '.github/routines.yml'
 export const ROUTINE_MODES = ['report', 'propose'] as const satisfies readonly RoutineMode[]
 
 /** Keys a repository spec entry may set. Anything else is refused by name. */
-const ALLOWED_ENTRY_KEYS = new Set(['name', 'on', 'timezone', 'mode', 'enabled'])
+const ALLOWED_ENTRY_KEYS = new Set(['name', 'on', 'timezone', 'mode', 'enabled', 'when'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -83,7 +83,14 @@ function parseEntry(value: unknown, index: number): Result<RoutineSpecEntry, str
   if (typeof enabled !== 'boolean')
     return err(`${name}: set enabled to true or false.`)
 
-  return ok({ name, crons: crons.value, timeZone, mode, enabled })
+  if (value.when === undefined)
+    return ok({ name, crons: crons.value, timeZone, mode, enabled })
+  // Only the check-in compares the site with its last Completed run.
+  if (name !== 'daily-checkin')
+    return err(`${name}: remove \`when\`. Only daily-checkin runs when the site changed.`)
+  if (value.when !== 'changed')
+    return err(`${name}: set when to changed, or remove it.`)
+  return ok({ name, crons: crons.value, timeZone, mode, enabled, when: 'changed' })
 }
 
 /**

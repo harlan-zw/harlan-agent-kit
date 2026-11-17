@@ -18,6 +18,27 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+it('upgrades version 95 Routines so a spec can set when', () => {
+  const path = join(directory, 'state.sqlite')
+  const at = '2026-11-17T01:00:00.000Z'
+  const entry = { name: 'daily-checkin' as const, crons: ['40 8 * * *'], timeZone: 'UTC', mode: 'propose' as const, enabled: true }
+  const before = openJournalStore(path)
+  before.syncRoutines({ repository: 'harlan-zw/example', specSha: 'head', entries: [entry], at })
+  before.close()
+  const legacy = new DatabaseSync(path)
+  legacy.exec('ALTER TABLE routines DROP COLUMN run_when; PRAGMA user_version = 95;')
+  legacy.close()
+  const migrated = openJournalStore(path)
+  try {
+    expect(migrated.listRoutines('harlan-zw/example')).toMatchObject([{ name: 'daily-checkin', specSha: 'head' }])
+    expect(migrated.syncRoutines({ repository: 'harlan-zw/example', specSha: 'head', entries: [{ ...entry, when: 'changed' }], at }))
+      .toMatchObject([{ name: 'daily-checkin', when: 'changed' }])
+  }
+  finally {
+    migrated.close()
+  }
+})
+
 it('upgrades version 90 without blocking an accepted Update', () => {
   const path = join(directory, 'state.sqlite')
   const before = openJournalStore(path)

@@ -291,11 +291,15 @@ One named recurring repository check declared in `.github/routines.yml`.
 
 A Routine answers a clock. It has no Item or Revision. Each due instant creates one Routine run.
 
+`when: changed` limits `daily-checkin` to sites that changed. A scheduled run spends an Agent turn only if the default branch head SHA moved, or a Take Ownership required workflow ran, since the last Completed run. Never call it a gate: Review gate owns that word.
+
 ### Routine run
 
 One durable answer to one exact cron instant for a Routine.
 
 A skipped instant remains a Routine run. This keeps missed work visible.
+
+An unchanged run is a Completed Routine run with no Agent turn. Its evidence contains `unchanged since run`.
 
 ### Queue
 

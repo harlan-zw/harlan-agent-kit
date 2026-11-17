@@ -48,7 +48,7 @@ ${JSON.stringify(evidence)}`
 }
 
 type Read = (path: string) => Promise<Result<unknown, string>>
-const workflowRunFields = ['id', 'name', 'head_sha', 'head_branch', 'status', 'conclusion', 'html_url', 'created_at', 'updated_at']
+const workflowRunFields = ['id', 'name', 'path', 'head_sha', 'head_branch', 'status', 'conclusion', 'html_url', 'created_at', 'updated_at']
 
 function metadataList(value: unknown, key: string): unknown {
   return typeof value === 'object' && value !== null && key in value ? (value as Record<string, unknown>)[key] : null

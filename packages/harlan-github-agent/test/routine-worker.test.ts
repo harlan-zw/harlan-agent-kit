@@ -4,6 +4,7 @@ import type { writeCheckinGitHubEvidence } from '../src/checkin-github-evidence.
 import type { GitHubIssuePublisher } from '../src/github.ts'
 import type { RoutineScanInput } from '../src/routines/contract.ts'
 import type { ClaimedRoutineRun } from '../src/types.ts'
+import type { RoutineGitHubEvidence, RoutineGitHubEvidenceSource } from '../src/worker-github-evidence.ts'
 import { describe, expect, it } from 'vitest'
 import { createAgentActivityLog } from '../src/agent-activity.ts'
 import { createAgentPermitPool } from '../src/agent-permit-pool.ts'
@@ -1167,6 +1168,207 @@ describe('agent retro scan publication', () => {
       expect(store.listCandidates(`${repository}:agent-retro`)).toMatchObject([{ target: 'packages/harlan-github-agent/src/store.ts' }])
       const command = store.claimNextCandidateIssue('publisher', now().toISOString(), 60_000)
       expect(command).toMatchObject({ repository, body: expect.stringContaining('packages/harlan-github-agent/src/store.ts') })
+    }
+    finally {
+      store.close()
+    }
+  })
+})
+
+describe('running a daily check-in only when the site changed', () => {
+  const routineId = 'harlan-zw/example:daily-checkin'
+  const yesterday = '2026-08-26T07:00:00.000Z'
+  const today = '2026-08-27T07:00:00.000Z'
+  const deployProd = { _tag: 'Enabled' as const, productionUrl: 'https://example.com', requiredWorkflows: ['deploy-prod.yml'], smokePaths: ['/'] }
+
+  function sync(store: ReturnType<typeof openJournalStore>, specSha: string, when: 'changed' | null = 'changed'): void {
+    store.syncRoutines({
+      repository: 'harlan-zw/example',
+      specSha,
+      entries: [{ name: 'daily-checkin', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true, ...(when === null ? {} : { when }) }],
+      at: '2026-08-25T00:00:00.000Z',
+    })
+  }
+
+  function storeFor(input: { when?: 'changed' | null, takeOwnership?: typeof deployProd } = {}) {
+    const store = openJournalStore(':memory:')
+    store.syncRepositories([repositoryMapping(input.takeOwnership === undefined ? {} : { takeOwnership: input.takeOwnership })], '2026-08-25T00:00:00.000Z')
+    store.setRepositoryWritesEnabled('harlan-zw/example', true)
+    sync(store, 'abc123', input.when === undefined ? 'changed' : input.when)
+    return store
+  }
+
+  function open(store: ReturnType<typeof openJournalStore>, scheduledFor: string, specSha: string): string {
+    const run = store.openRoutineRun({ routineId, scheduledFor, specSha, at: new Date(Date.parse(scheduledFor) + 5_000).toISOString() })
+    if (run === null)
+      throw new Error('Expected a queued Routine run.')
+    return run.id
+  }
+
+  function settle(store: ReturnType<typeof openJournalStore>, scheduledFor: string, specSha: string, state: 'Completed' | 'Failed'): void {
+    open(store, scheduledFor, specSha)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const at = new Date(Date.parse(scheduledFor) + (attempt + 1) * 60_000).toISOString()
+      const claim = claimStoredRun(store, at)
+      const lease = { taskId: claim.id, workerId: claim.state.workerId, fence: claim.state.fence, at }
+      if (state === 'Completed') {
+        store.completeRoutineRun({ ...lease, evidence: 'daily-checkin on harlan-zw/example | 0 issues requested' })
+        return
+      }
+      if (store.failRoutineRun({ ...lease, reason: 'The provider stopped.' }) === 'Failed')
+        return
+    }
+  }
+
+  const withRuns = (workflowRuns: RoutineGitHubEvidence['workflowRuns']): RoutineGitHubEvidenceSource['collect'] => async () => ({ observedAt: now().toISOString(), issues: { _tag: 'Available', entries: [], truncated: false }, pullRequests: { _tag: 'Available', entries: [], truncated: false }, workflowRuns, deployments: { _tag: 'Available', entries: [], truncated: false }, deploymentStatuses: [], jobLogs: { _tag: 'NotRequested' }, ownership: { _tag: 'NotRequested' } })
+
+  async function check(store: ReturnType<typeof openJournalStore>, collect = withRuns({ _tag: 'Unavailable', reason: 'Controller cannot read Actions' })) {
+    const capture = { prompts: [] as string[], requests: [] as AgentTurnRequest[], prepared: 0 }
+    const result = await createRoutineScanWorker({
+      writeCheckinEvidence: async () => undefined,
+      githubEvidence: { collect },
+      logger: { error: () => undefined, info: () => undefined },
+      now,
+      runtime: () => ({ profile: CODEX_AGENT_PROFILE, provider: scanning({ report: 'GREEN. Production matches yesterday.', candidates: [], verdict: { severity: 'GREEN', coverage: 'complete' } }, capture) }),
+      store,
+      workspaces: {
+        prepareRoutine: async () => {
+          capture.prepared += 1
+          return ok({ path: '/tmp/routine', baseSha: 'abc123', headSha: 'abc123', defaultBranchSha: 'abc123' })
+        },
+      },
+    }).run(claimStoredRun(store), new AbortController().signal)
+    return { result, turns: capture.requests.length, prepared: capture.prepared }
+  }
+
+  it('completes without an Agent turn or report when nothing moved', async () => {
+    const store = storeFor()
+    try {
+      settle(store, yesterday, 'abc123', 'Completed')
+      open(store, today, 'abc123')
+
+      expect(await check(store)).toEqual({
+        result: {
+          _tag: 'Ok',
+          value: {
+            evidence: `daily-checkin on harlan-zw/example | unchanged since run ${routineId}:${yesterday} | head abc123 | no deploy workflow configured, so head SHA only | no Agent turn | 0 issues requested`,
+            usage: { _tag: 'Unavailable' },
+          },
+        },
+        turns: 0,
+        prepared: 0,
+      })
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)).toBeNull()
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('runs when the default branch moved since the last completed run', async () => {
+    const store = storeFor()
+    try {
+      settle(store, yesterday, 'abc123', 'Completed')
+      sync(store, 'def456')
+      open(store, today, 'def456')
+
+      expect(await check(store)).toMatchObject({ result: { _tag: 'Ok' }, turns: 1, prepared: 1 })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('compares with the last completed run, not a newer failed one', async () => {
+    const store = storeFor()
+    try {
+      settle(store, '2026-08-25T07:00:00.000Z', 'abc123', 'Completed')
+      sync(store, 'def456')
+      settle(store, yesterday, 'def456', 'Failed')
+      open(store, today, 'def456')
+
+      expect(await check(store)).toMatchObject({ result: { _tag: 'Ok' }, turns: 1 })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('runs when no completed run exists to compare with', async () => {
+    const store = storeFor()
+    try {
+      open(store, today, 'abc123')
+
+      expect(await check(store)).toMatchObject({ result: { _tag: 'Ok' }, turns: 1 })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('runs every scheduled instant when the Routine does not set when', async () => {
+    const store = storeFor({ when: null })
+    try {
+      settle(store, yesterday, 'abc123', 'Completed')
+      open(store, today, 'abc123')
+
+      expect(await check(store)).toMatchObject({ result: { _tag: 'Ok' }, turns: 1 })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('runs a manual check-in even when nothing moved', async () => {
+    const store = storeFor()
+    try {
+      settle(store, yesterday, 'abc123', 'Completed')
+      open(store, '2026-08-27T07:03:00.000Z', 'abc123')
+
+      expect(await check(store)).toMatchObject({ result: { _tag: 'Ok' }, turns: 1 })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  const deployRun = (createdAt: string) => ({ id: 9, name: 'Deploy to Prod', path: '.github/workflows/deploy-prod.yml', head_sha: 'abc123', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/harlan-zw/example/actions/runs/9', created_at: createdAt, updated_at: createdAt })
+  const codeRun = { ...deployRun('2026-08-26T12:00:00Z'), id: 8, name: 'Code', path: '.github/workflows/code.yml' }
+
+  it.each([
+    { case: 'a deploy after the last completed run', runs: { _tag: 'Available', entries: [codeRun, deployRun('2026-08-26T12:00:00Z')], truncated: false }, turns: 1 },
+    { case: 'a deploy evidence read failure', runs: { _tag: 'Unavailable', reason: 'GitHub answered 502.' }, turns: 1 },
+    { case: 'a truncated run list without the deploy workflow', runs: { _tag: 'Available', entries: [codeRun], truncated: true }, turns: 1 },
+    { case: 'a deploy before the last completed run', runs: { _tag: 'Available', entries: [codeRun, deployRun('2026-08-25T12:00:00Z')], truncated: false }, turns: 0 },
+    { case: 'a deploy workflow that never ran on the default branch', runs: { _tag: 'Available', entries: [codeRun], truncated: false }, turns: 0 },
+  ] satisfies Array<{ case: string, runs: RoutineGitHubEvidence['workflowRuns'], turns: number }>)('reads $case from the required deploy workflow', async ({ runs, turns }) => {
+    const store = storeFor({ takeOwnership: deployProd })
+    try {
+      settle(store, yesterday, 'abc123', 'Completed')
+      open(store, today, 'abc123')
+
+      const checked = await check(store, withRuns(runs))
+      expect(checked.turns).toBe(turns)
+      if (turns === 0)
+        expect(checked.result).toMatchObject({ _tag: 'Ok', value: { evidence: expect.stringContaining('| head abc123 | no deploy-prod.yml run since 2026-08-26T07:00:05.000Z |') } })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('finds a docs redeploy that left the default branch head where it was', async () => {
+    const store = storeFor({ takeOwnership: deployProd })
+    try {
+      settle(store, yesterday, 'abc123', 'Completed')
+      open(store, today, 'abc123')
+      const runs = [deployRun('2026-08-26T12:00:00Z')]
+      const read = async (path: string) => path.endsWith('/actions/workflows?per_page=100')
+        ? ok({ total_count: 1, workflows: [{ id: 5, state: 'active', name: 'Deploy to Prod', path: '.github/workflows/deploy-prod.yml' }] })
+        : ok(path.includes('/actions/workflows/5/runs?') ? { workflow_runs: runs } : [])
+
+      expect(await check(store, async (_mapping, _signal, _jobs, workflowBranch) => collectRoutineGitHubEvidence({ repository: 'harlan-zw/example', now, read, ...(workflowBranch === undefined ? {} : { workflowBranch }) })))
+        .toMatchObject({ result: { _tag: 'Ok' }, turns: 1 })
     }
     finally {
       store.close()

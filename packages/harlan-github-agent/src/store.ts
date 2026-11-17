@@ -7276,7 +7276,14 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${agentTurnSchema} PRAGMA user_version = 95;`)
     version = 95
   }
-  if (version === 95)
+  if (version === 95) {
+    // A Routine may run only when the site changed. NULL runs every due instant.
+    const columns = database.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>
+    applyMigration(database, `${columns.some(column => column.name === 'run_when') ? '' : 'ALTER TABLE routines ADD COLUMN run_when TEXT CHECK (run_when IS NULL OR run_when = \'changed\');'}
+      PRAGMA user_version = 96;`)
+    version = 96
+  }
+  if (version === 96)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -15779,6 +15786,7 @@ export function openJournalStore(
     time_zone: string
     mode: string
     enabled: number
+    run_when: string | null
     spec_sha: string
     last_run_at: string | null
     tracking_issue_number: number | null
@@ -15794,6 +15802,7 @@ export function openJournalStore(
     timeZone: row.time_zone,
     mode: row.mode as Routine['mode'],
     enabled: row.enabled === 1,
+    ...(row.run_when === 'changed' ? { when: 'changed' as const } : {}),
     specSha: row.spec_sha,
     lastRunAt: row.last_run_at,
     trackingIssueNumber: row.tracking_issue_number,
@@ -15814,8 +15823,8 @@ export function openJournalStore(
    */
   const syncRoutines: JournalStore['syncRoutines'] = (input) => {
     const upsert = database.prepare(`
-      INSERT INTO routines (id, repository, name, crons, time_zone, mode, enabled, spec_sha, last_run_at, retired_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+      INSERT INTO routines (id, repository, name, crons, time_zone, mode, enabled, run_when, spec_sha, last_run_at, retired_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
       ON CONFLICT (repository, name) DO UPDATE SET
         last_run_at = CASE
           WHEN routines.crons != excluded.crons
@@ -15828,6 +15837,7 @@ export function openJournalStore(
         time_zone = excluded.time_zone,
         mode = excluded.mode,
         enabled = excluded.enabled,
+        run_when = excluded.run_when,
         spec_sha = excluded.spec_sha,
         retired_at = NULL,
         updated_at = excluded.updated_at
@@ -15844,6 +15854,7 @@ export function openJournalStore(
           entry.timeZone,
           entry.mode,
           entry.enabled ? 1 : 0,
+          entry.when ?? null,
           input.specSha,
           input.at,
         )

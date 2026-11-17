@@ -793,6 +793,14 @@ export type { RoutineName } from './routines/index.ts'
  */
 export type RoutineMode = 'report' | 'propose'
 
+/**
+ * When a scheduled run spends an Agent turn. Absent means every due instant.
+ *
+ * `changed` runs only when the default branch head SHA moved, or a required
+ * deploy workflow ran, since the last Completed run.
+ */
+export type RoutineWhen = 'changed'
+
 /** One Routine entry exactly as a repository spec declares it. */
 export interface RoutineSpecEntry {
   name: RoutineName
@@ -801,6 +809,7 @@ export interface RoutineSpecEntry {
   timeZone: string
   mode: RoutineMode
   enabled: boolean
+  when?: RoutineWhen
 }
 
 /** One repository's whole Routine spec, parsed at the boundary. */
@@ -950,6 +959,7 @@ export interface Routine {
   timeZone: string
   mode: RoutineMode
   enabled: boolean
+  when?: RoutineWhen
   /** The default branch commit the spec was read from. */
   specSha: string
   lastRunAt: string | null

@@ -11,6 +11,7 @@ import { agentPhase } from './agent-progress.ts'
 import { collectAgentRetroEvidence } from './agent-retro.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { candidateIssueCommands } from './candidate-issue-controller.ts'
+import { answersSchedule, checkinChange, readDeployEvidence } from './checkin-change.ts'
 import { writeCheckinGitHubEvidence } from './checkin-github-evidence.ts'
 import { githubAccountInstructions } from './github-account.ts'
 import { err, ok } from './result.ts'
@@ -27,7 +28,7 @@ export interface RoutineScanWorkerOptions {
   maximumChangedFiles?: number
   now: () => Date
   runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'agentSessionTotal' | 'listAgentFeedback' | 'listCandidates' | 'recordAgentTurn' | 'recordCandidates' | 'stageCandidateIssues' | 'stageRoutineReport' | 'updateRoutineRunProgress'>
+  store: Pick<JournalStore, 'agentSessionTotal' | 'listAgentFeedback' | 'listCandidates' | 'listRoutineRuns' | 'listRoutines' | 'recordAgentTurn' | 'recordCandidates' | 'stageCandidateIssues' | 'stageRoutineReport' | 'updateRoutineRunProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareRoutine'>
 }
 
@@ -89,6 +90,35 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         options.logger.info(evidence)
         return ok({ evidence, usage: { _tag: 'Unavailable' } })
       }
+
+      const githubEvidence = task.name === 'agent-feedback'
+        ? null
+        : options.githubEvidence === undefined
+          ? { _tag: 'Unavailable' as const, reason: 'The controller has no GitHub metadata source.' }
+          : await options.githubEvidence.collect(task.repositoryMapping, signal, task.name === 'ci-review', task.name === 'daily-checkin' ? task.repositoryMapping.defaultBranch : undefined, task.name === 'seo-review' || task.name === 'vitals-review' ? 'ownership' : 'metadata')
+      const routine = options.store.listRoutines(task.repository).find(candidate => candidate.id === task.routineId)
+      if (task.name === 'daily-checkin' && githubEvidence !== null && routine?.when === 'changed' && answersSchedule(routine, task.scheduledFor)) {
+        const change = checkinChange({
+          repository: task.repository,
+          headSha: task.specSha,
+          baseline: options.store.listRoutineRuns(task.routineId).find(run => run.id !== task.id && run.state._tag === 'Completed') ?? null,
+          deploys: readDeployEvidence(task.repositoryMapping, 'workflowRuns' in githubEvidence ? githubEvidence.workflowRuns : githubEvidence),
+        })
+        if (change._tag === 'Unchanged') {
+          // No report: the daily issue keeps the last real check-in, which still holds.
+          options.store.updateRoutineRunProgress({
+            taskId: task.id,
+            workerId: task.state.workerId,
+            fence: task.state.fence,
+            progress: agentPhase('Reporting', 'Unchanged since the last check-in'),
+            at: options.now().toISOString(),
+          })
+          options.logger.info(change.evidence)
+          return ok({ evidence: change.evidence, usage: { _tag: 'Unavailable' } })
+        }
+        options.logger.info(`${task.repository}: daily-checkin runs. ${change.reason}`)
+      }
+
       const workspace = await options.workspaces.prepareRoutine(task, signal)
       if (workspace._tag === 'Err')
         return workspace
@@ -106,11 +136,6 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       if (ready._tag === 'Err')
         return ready
 
-      const githubEvidence = task.name === 'agent-feedback'
-        ? null
-        : options.githubEvidence === undefined
-          ? { _tag: 'Unavailable' as const, reason: 'The controller has no GitHub metadata source.' }
-          : await options.githubEvidence.collect(task.repositoryMapping, signal, task.name === 'ci-review', task.name === 'daily-checkin' ? task.repositoryMapping.defaultBranch : undefined, task.name === 'seo-review' || task.name === 'vitals-review' ? 'ownership' : 'metadata')
       if (task.name === 'daily-checkin') {
         await (options.writeCheckinEvidence ?? writeCheckinGitHubEvidence)({
           workspace: workspace.value.path,
