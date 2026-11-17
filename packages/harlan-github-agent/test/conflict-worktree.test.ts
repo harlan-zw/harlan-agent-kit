@@ -1,17 +1,20 @@
 import type { ClaimedConflictResolutionTask } from '../src/types.ts'
 import type { ConflictWorktreeManager, PreparedConflictWorktree } from '../src/worktree.ts'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ok } from '../src/result.ts'
+import { openJournalStore } from '../src/store.ts'
 import { createConflictWorktreeManager, createGitPublicationRemote } from '../src/worktree.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
+const stores: ReturnType<typeof openJournalStore>[] = []
 
 afterEach(() => {
+  stores.splice(0).forEach(store => store.close())
   temporaryDirectories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true }))
 })
 
@@ -91,6 +94,42 @@ async function conflicted(manager: ConflictWorktreeManager, task: ClaimedConflic
 }
 
 describe('conflict worktree', () => {
+  it('retries a blocked conflict in a fresh worktree against the actual current base', async () => {
+    const { checkout, remote, root, task } = fixture()
+    const store = openJournalStore(':memory:', true)
+    stores.push(store)
+    store.syncRepositories([task.repositoryMapping], '2026-08-13T01:00:00.000Z')
+    store.setRepositoryWritesEnabled(task.repository, true)
+    const observed = store.recordObservation({ externalId: 'conflict-retry', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: task.pullRequest })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request.')
+    const first = store.claimNextConflictTask('first-agent', '2026-08-13T01:00:01.000Z', 60_000)!
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    const retained = await conflicted(manager, first)
+    writeFileSync(join(retained.path, 'file.txt'), 'stale unverified resolution\n')
+    store.needsAttentionTask({ taskId: first.id, workerId: first.state.workerId, fence: first.state.fence, at: '2026-08-13T01:00:02.000Z', reason: 'Cargo is unavailable.', evidence: 'Unverified local merge.' })
+    writeFileSync(join(checkout, 'file.txt'), 'newest actual base\n')
+    git(checkout, 'commit', '-am', 'advance the base again')
+    git(checkout, 'push', 'origin', 'main')
+    const actualBaseSha = git(checkout, 'rev-parse', 'HEAD')
+
+    expect(store.requestReviewRerun({ repository: task.repository, pullRequestNumber: task.pullRequestNumber, revisionId: observed.revisionId, requestId: 'toolchain-fixed', source: 'dashboard', requestedBy: 'dashboard', at: '2026-08-13T01:00:03.000Z' })).toEqual({ _tag: 'Queued', taskId: first.id })
+    const retry = store.claimNextConflictTask('fresh-agent', '2026-08-13T01:00:04.000Z', 60_000)!
+    const fresh = await conflicted(manager, retry)
+
+    expect(fresh.path).not.toBe(retained.path)
+    expect(fresh.baseSha).toBe(actualBaseSha)
+    expect(git(fresh.path, 'rev-parse', 'MERGE_HEAD')).toBe(actualBaseSha)
+    expect(readFileSync(join(fresh.path, 'file.txt'), 'utf8')).toContain('newest actual base')
+    expect(readFileSync(join(fresh.path, 'file.txt'), 'utf8')).not.toContain('stale unverified resolution')
+    expect(readFileSync(join(retained.path, 'file.txt'), 'utf8')).toBe('stale unverified resolution\n')
+  })
+
   it('uses the current base branch when the pull request base SHA is stale', async () => {
     const { currentBaseSha, remote, root, task } = fixture()
     const manager = createConflictWorktreeManager({
