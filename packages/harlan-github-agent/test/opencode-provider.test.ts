@@ -551,6 +551,7 @@ describe('context budget', () => {
     expect(await collect(provider.runTurn(request()))).toEqual([
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'CommandCompleted', command: 'pnpm test', output: 'ok\n', exitCode: 0 },
+      { _tag: 'Usage', scope: 'Turn', usage: { _tag: 'Available', input: 424, cachedInput: 400, cacheWrite: 0, output: 6, reasoning: 0 } },
       { _tag: 'ContextBudgetExhausted', cachedTokensRead: 400 },
     ])
   })
@@ -612,6 +613,7 @@ describe('context budget warning', () => {
     expect(events).toEqual([
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'ContextBudgetWarned', cachedTokensRead: 350, delivery: { _tag: 'Sent' } },
+      { _tag: 'Usage', scope: 'Turn', usage: { _tag: 'Available', input: 470, cachedInput: 470, cacheWrite: 0, output: 0, reasoning: 0 } },
       { _tag: 'ContextBudgetExhausted', cachedTokensRead: 470 },
     ])
   })
