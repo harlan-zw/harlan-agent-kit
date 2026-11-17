@@ -84,6 +84,28 @@ for hook_file in "${opencode_hooks[@]}"; do
   fi
 done
 cmp "$repo_root/harlan-agent-kit/plugins/opencode/harlan-hooks.ts" "$test_home/.config/opencode/plugins/harlan-hooks.ts"
+# Codex runs the guards as user hooks, so each command must be an installed, executable script.
+codex_hooks="$test_home/.codex/hooks.json"
+mapfile -t codex_commands < <(jq -r '.hooks[][].hooks[].command' "$codex_hooks")
+if [ "${#codex_commands[@]}" -lt 7 ]; then
+  printf '%s\n' 'The Codex hook file lists fewer than 7 guards.' >&2
+  exit 1
+fi
+for command in "${codex_commands[@]}"; do
+  if [[ "$command" != "$test_home/.local/share/harlan-agent-kit/hooks/"* || ! -x "$command" ]]; then
+    printf '%s\n' "The Codex hook is not an installed script: $command" >&2
+    exit 1
+  fi
+done
+# A Codex hook file someone else wrote stays untouched, and the sync stops.
+foreign_home="$test_root/foreign-home"
+mkdir -p "$foreign_home/.codex"
+printf '%s\n' '{"hooks":{}}' > "$foreign_home/.codex/hooks.json"
+if HARLAN_AGENT_CONTEXT_HOME="$foreign_home" HARLAN_AGENT_CONTEXT_SKIP_MEMORY=1 bash "$script_dir/sync-agent-context.sh" local >/dev/null 2>&1; then
+  printf '%s\n' 'The sync replaced a Codex hook file it does not own.' >&2
+  exit 1
+fi
+test "$(cat "$foreign_home/.codex/hooks.json")" = '{"hooks":{}}'
 # The opencode plugin reads its hook list from the installed manifest.
 cmp "$repo_root/harlan-agent-kit/.claude-plugin/plugin.json" \
   "$test_home/.local/share/harlan-agent-kit/.claude-plugin/plugin.json"
@@ -121,6 +143,9 @@ export HARLAN_AGENT_CONTEXT_TEST_CALLS="$calls"
 export HARLAN_AGENT_CONTEXT_TEST_CLAUDE_HASH="$claude_hash"
 export HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH="$codex_hash"
 export HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH="$hook_hash"
+# Hogwild gets the Codex hook file rendered for its own home.
+agent_context_render_codex_hooks "$repo_root/harlan-agent-kit/hooks/codex.json" /home/harlan/.local/share/harlan-agent-kit/hooks "$test_root/hogwild-hooks.json"
+export HARLAN_AGENT_CONTEXT_TEST_CODEX_HOOKS_HASH="$(/usr/bin/sha256sum "$test_root/hogwild-hooks.json" | cut -d' ' -f1)"
 export HARLAN_AGENT_CONTEXT_TEST_SITES_HASH="$(/usr/bin/sha256sum "$sites_fixture" | cut -d' ' -f1)"
 
 cat > "$test_root/bin/ssh" <<'FAKE_SSH'
@@ -134,6 +159,7 @@ if [[ "$1" != '-n' && ( "$*" == *"tar -C"* || "$*" == *"/memory'"* ) ]]; then ca
 if [[ "$*" == *CLAUDE.md.next*sha256sum* || "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '%s  CLAUDE.md.next\n' "$HARLAN_AGENT_CONTEXT_TEST_CLAUDE_HASH"; fi
 if [[ "$*" == *AGENTS.md.next*sha256sum* || "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '%s  AGENTS.md.next\n' "$HARLAN_AGENT_CONTEXT_TEST_CODEX_HASH"; fi
 if [[ "$*" == *commit-msg.next*sha256sum* || "$*" == *sha256sum*commit-msg.next* ]]; then printf '%s  commit-msg.next\n' "$HARLAN_AGENT_CONTEXT_TEST_HOOK_HASH"; fi
+if [[ "$*" == *sha256sum*hooks.json.next* ]]; then printf '%s  hooks.json.next\n' "${HARLAN_AGENT_CONTEXT_TEST_CODEX_HOOKS_HASH:-different}"; fi
 if [[ "$*" == *sha256sum*SITES.md.next* ]]; then printf '%s  SITES.md.next\n' "${HARLAN_AGENT_CONTEXT_TEST_SITES_HASH:-different}"; fi
 # The opencode files are verified in one batched sha256sum, so answer per path.
 if [[ "$*" == *"sha256sum "* && "$*" == *harlan-hooks.ts.next* ]]; then
@@ -174,6 +200,8 @@ grep -E 'hogwild:/home/harlan/sites/SITES.md.next\.[0-9.]+' "$calls" >/dev/null
 grep -E "mv '/home/harlan/sites/SITES.md.next\.[0-9.]+' '/home/harlan/sites/SITES.md'" "$calls" >/dev/null
 grep -E "mv '/home/harlan/.config/git/hooks/commit-msg.next\.[0-9.]+' '/home/harlan/.config/git/hooks/commit-msg'" "$calls" >/dev/null
 grep -F "core.hooksPath '/home/harlan/.config/git/hooks'" "$calls" >/dev/null
+grep -E 'hogwild:/home/harlan/.codex/hooks.json.next\.[0-9.]+' "$calls" >/dev/null
+grep -E "mv '/home/harlan/.codex/hooks.json.next\.[0-9.]+' '/home/harlan/.codex/hooks.json'" "$calls" >/dev/null
 for hook_file in "${opencode_hooks[@]}"; do
   grep -F "hogwild:/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file.next" "$calls" >/dev/null
   grep -E "mv '/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file.next\.[0-9.]+' '/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file'" "$calls" >/dev/null
@@ -228,7 +256,7 @@ cp "$repo_root/scripts/agent-cli.ts" "$repo_root/scripts/agent-cli-plan.ts" "$fi
 mkdir -p "$fixture/harlan-agent-kit/skills/hogwild/scripts"
 cp "$repo_root/harlan-agent-kit/skills/hogwild/scripts/"*.ts "$fixture/harlan-agent-kit/skills/hogwild/scripts/"
 cp -r "$repo_root/agent-context" "$fixture/agent-context"
-cp "$repo_root/harlan-agent-kit/hooks/"*.sh "$fixture/harlan-agent-kit/hooks/"
+cp "$repo_root/harlan-agent-kit/hooks/"*.sh "$repo_root/harlan-agent-kit/hooks/codex.json" "$fixture/harlan-agent-kit/hooks/"
 cp "$repo_root/harlan-agent-kit/plugins/opencode/harlan-hooks.ts" "$fixture/harlan-agent-kit/plugins/opencode/"
 printf '%s\n' '#!/usr/bin/env bash' 'source "$(dirname "$0")/check-config.sh"' 'exit 0' \
   > "$fixture/harlan-agent-kit/hooks/proof-hook.sh"

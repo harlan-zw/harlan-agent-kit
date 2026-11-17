@@ -109,6 +109,11 @@ if [ ! -f "$INSTALLED_PLUGIN" ]; then
 else
   cmp -s "$SOURCE_PLUGIN" "$INSTALLED_PLUGIN" || bad "The opencode plugin differs. Run pnpm sync:context."
 fi
+# Codex runs the guards from ~/.codex/hooks.json, rendered for this home.
+agent_context_render_codex_hooks "$REPO_ROOT/harlan-agent-kit/hooks/codex.json" \
+  "$TARGET_HOME/.local/share/harlan-agent-kit/hooks" "$EXPECTED_HOME/codex-hooks.json"
+cmp -s "$EXPECTED_HOME/codex-hooks.json" "$TARGET_HOME/.codex/hooks.json" \
+  || bad "The Codex hooks differ. Run pnpm sync:context."
 
 # The Claude Code and Codex plugins live in the real home, so a sandbox run skips them.
 if [ "$TARGET_HOME" = "$HOME" ]; then

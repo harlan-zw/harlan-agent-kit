@@ -66,8 +66,9 @@ codex plugin marketplace add "$PWD"
 codex plugin add harlan-agent-kit@harlan-agent-kit
 ```
 
-Codex copies the plugin into its cache. After a pull, run `codex plugin add harlan-agent-kit@harlan-agent-kit` again, then start a new Codex thread.
-Codex skips a new or changed hook until you trust it in `/hooks`, or in **Settings > Hooks** in the desktop app.
+The plugin carries the Skills. Codex copies it into its cache, and `pnpm sync:context` refreshes that copy.
+The guards run as user hooks from `~/.codex/hooks.json`, which `pnpm sync:context` writes. Trust them once in `/hooks`, or in **Settings > Hooks** in the desktop app.
+Codex trusts a plugin hook against the whole plugin, so a plugin hook would need review after every kit change. A user hook keeps its trust until its definition changes.
 
 ## Skills
 
@@ -142,8 +143,8 @@ The personal kit does not bundle this Skill in its marketplace package. Run `pnp
 Claude Code reads the hooks from [`.claude-plugin/plugin.json`](./harlan-agent-kit/.claude-plugin/plugin.json).
 That manifest is the only place a hook is registered. The install script, the drift
 check, and the opencode plugin all derive their lists from it.
-Codex reads [`hooks/codex.json`](./harlan-agent-kit/hooks/codex.json) through
-[`.codex-plugin/plugin.json`](./harlan-agent-kit/.codex-plugin/plugin.json).
+Codex reads `~/.codex/hooks.json`, which `pnpm sync:context` renders from
+[`hooks/codex.json`](./harlan-agent-kit/hooks/codex.json).
 `pnpm test:codex-hooks` fails when its Bash guards differ from the Claude manifest.
 
 | Event | Hook | Description |

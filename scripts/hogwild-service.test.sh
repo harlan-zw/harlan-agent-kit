@@ -69,6 +69,10 @@ expected_env_manifest_hash=$(/usr/bin/sha256sum "$HARLAN_REPOSITORY_ENV_MANIFEST
 expected_sites_hash=$(/usr/bin/sha256sum "$HARLAN_AGENT_CONTEXT_SITES_FILE" | cut -d' ' -f1)
 export HOGWILD_SERVICE_TEST_CLAUDE_HASH="$expected_claude_hash"
 export HOGWILD_SERVICE_TEST_CODEX_HASH="$expected_codex_hash"
+# Hogwild gets the Codex hook file rendered for its own home.
+source "$script_dir/agent-context-hooks.sh"
+agent_context_render_codex_hooks "$script_dir/../harlan-agent-kit/hooks/codex.json" /home/harlan/.local/share/harlan-agent-kit/hooks "$test_root/hogwild-hooks.json"
+export HOGWILD_SERVICE_TEST_CODEX_HOOKS_HASH="$(/usr/bin/sha256sum "$test_root/hogwild-hooks.json" | cut -d' ' -f1)"
 export HOGWILD_SERVICE_TEST_OVERRIDE_HASH="$expected_override_hash"
 export HOGWILD_SERVICE_TEST_WORKTRUNK_HASH="$expected_worktrunk_hash"
 export HOGWILD_SERVICE_TEST_ENV_TOOL_HASH="$expected_env_tool_hash"
@@ -81,7 +85,7 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf '\''ssh %s\n'\'' "$*" >> "$HOGWILD_SERVICE_TEST_CALLS"' \
   'if [[ "$*" == *mktemp*-d* ]]; then printf '\''%s\n'\'' "$HOGWILD_SERVICE_TEST_ENV_STAGE"; exit; fi' \
-  'if [[ "$*" == *sha256sum*hogwild.conf.next* ]]; then printf '\''%s  hogwild.conf.next\n'\'' "$HOGWILD_SERVICE_TEST_OVERRIDE_HASH"; elif [[ "$*" == *sha256sum*harlan-repository-env.next* ]]; then printf '\''%s  harlan-repository-env.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_TOOL_HASH"; elif [[ "$*" == *sha256sum*repository-env-files.next* ]]; then printf '\''%s  repository-env-files.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH"; elif [[ "$*" == *sha256sum*worktrunk/config.toml.next* ]]; then printf '\''%s  config.toml.next\n'\'' "$HOGWILD_SERVICE_TEST_WORKTRUNK_HASH"; elif [[ "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '\''%s  CLAUDE.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CLAUDE_HASH"; elif [[ "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '\''%s  AGENTS.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CODEX_HASH"; elif [[ "$*" == *sha256sum*SITES.md.next* ]]; then printf '\''%s  SITES.md.next\n'\'' "$HOGWILD_SERVICE_TEST_SITES_HASH"; fi' \
+  'if [[ "$*" == *sha256sum*hogwild.conf.next* ]]; then printf '\''%s  hogwild.conf.next\n'\'' "$HOGWILD_SERVICE_TEST_OVERRIDE_HASH"; elif [[ "$*" == *sha256sum*harlan-repository-env.next* ]]; then printf '\''%s  harlan-repository-env.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_TOOL_HASH"; elif [[ "$*" == *sha256sum*repository-env-files.next* ]]; then printf '\''%s  repository-env-files.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH"; elif [[ "$*" == *sha256sum*worktrunk/config.toml.next* ]]; then printf '\''%s  config.toml.next\n'\'' "$HOGWILD_SERVICE_TEST_WORKTRUNK_HASH"; elif [[ "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '\''%s  CLAUDE.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CLAUDE_HASH"; elif [[ "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '\''%s  AGENTS.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CODEX_HASH"; elif [[ "$*" == *sha256sum*SITES.md.next* ]]; then printf '\''%s  SITES.md.next\n'\'' "$HOGWILD_SERVICE_TEST_SITES_HASH"; elif [[ "$*" == *sha256sum*hooks.json.next* ]]; then printf '\''%s  hooks.json.next\n'\'' "$HOGWILD_SERVICE_TEST_CODEX_HOOKS_HASH"; fi' \
   > "$test_root/bin/ssh"
 cat >> "$test_root/bin/ssh" <<'FAKE_SSH'
 # Hogwild reports the commit it landed on, so the desktop can be pinned to it.
