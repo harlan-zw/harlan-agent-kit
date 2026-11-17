@@ -1,6 +1,6 @@
 import type { JournalStore } from './store.ts'
-import type { ReviewGateName, TrialIssueRoute, TrialRange, TrialReviewedHead, TrialRoutineRun } from './trial-store.ts'
-import type { Trial, TrialMeasure } from './trials.ts'
+import type { ReviewGateName, TrialIssueRoute, TrialMergedReadyHead, TrialRange, TrialRetroCandidate, TrialReviewedHead, TrialRoutineRun } from './trial-store.ts'
+import type { Trial, TrialMeasure, TrialMiss } from './trials.ts'
 import type { Routine } from './types.ts'
 import { TRIALS } from './trials.ts'
 
@@ -29,7 +29,8 @@ export type RuleReading
 
 /** A trial verdict recommends; Harlan decides. It is separate from a Payback verdict. */
 export interface TrialSuggestion {
-  verdict: 'Keep' | 'Kill' | 'Continue'
+  /** `Revise` ends a measurement trial that missed its keep rule. Such a trial is never killed. */
+  verdict: 'Keep' | 'Kill' | 'Continue' | 'Revise'
   reason: string
 }
 
@@ -95,6 +96,38 @@ export interface BlockedFlaggedHead {
   failedGates: ReviewGateName[]
 }
 
+export interface ReadyToMergeWindow {
+  window: TrialWindow
+  /** Heads merged in the window after a READY Review. */
+  mergedHeads: number
+  medianDays: number | null
+  /** Merged heads that waited a day or more after READY. */
+  waitedDayOrMore: number
+}
+
+export interface RetroWeek {
+  week: number
+  window: TrialWindow
+  candidates: number
+  /** Candidates the controller filed an issue for. */
+  issues: number
+  /** Candidates whose pull request merged within the allowed days. */
+  mergedInTime: number
+  /** Unmerged Candidates whose allowed days have not passed. */
+  open: number
+}
+
+export interface RetroToDate {
+  window: TrialWindow
+  candidates: number
+  issues: number
+  mergedInTime: number
+  /** Candidates that merged in time or whose allowed days have passed. */
+  judged: number
+  mergedShare: number | null
+  open: number
+}
+
 export type TrialMetrics
   = | {
     _tag: 'CheckinWhenChanged'
@@ -121,6 +154,17 @@ export type TrialMetrics
     blockedHeads: BlockedFlaggedHead[]
     omittedHeads: number
   }
+  | {
+    _tag: 'ReadyToMerge'
+    lastSevenDays: ReadyToMergeWindow
+    toDate: ReadyToMergeWindow
+    beforeTrial: ReadyToMergeWindow
+  }
+  | {
+    _tag: 'RetroFollowThrough'
+    weeks: RetroWeek[]
+    toDate: RetroToDate
+  }
 
 export type TrialReading
   = | { _tag: 'Parked', id: string, title: string, reason: string, markdown: string }
@@ -146,7 +190,7 @@ export interface TrialReportEvidence {
   trials: TrialReading[]
 }
 
-export type TrialReportSource = Pick<JournalStore, 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt'>
+export type TrialReportSource = Pick<JournalStore, 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt' | 'listTrialMergedReadyHeads' | 'listTrialRetroCandidates'>
 
 function iso(milliseconds: number): string {
   return new Date(milliseconds).toISOString()
@@ -174,6 +218,24 @@ function percent(value: number | null): string {
 
 function plural(count: number, singular: string, many = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : many}`
+}
+
+/** A wait written for a person: minutes, hours, or days. */
+function duration(days: number | null): string {
+  if (days === null)
+    return 'n/a'
+  const hours = days * 24
+  if (hours < 1)
+    return plural(Math.round(hours * 60), 'minute')
+  return hours < 48 ? `${number(hours)} hours` : `${number(days)} days`
+}
+
+function median(values: readonly number[]): number | null {
+  if (values.length === 0)
+    return null
+  const sorted = [...values].sort((left, right) => left - right)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2
 }
 
 function localDate(instant: string): string {
@@ -430,8 +492,91 @@ export function readPathRuleTrial(input: {
   }
 }
 
-/** Keep, kill, or continue, from the state and the rule readings. Pure. */
-export function suggestVerdict(state: TrialState, keep: readonly RuleReading[], kill: readonly RuleReading[]): TrialSuggestion {
+function readyToMergeWindow(heads: readonly TrialMergedReadyHead[], span: TrialWindow): ReadyToMergeWindow {
+  const waits = heads
+    .filter(head => Date.parse(head.mergedAt) >= Date.parse(span.from) && Date.parse(head.mergedAt) < Date.parse(span.to))
+    .map(head => (Date.parse(head.mergedAt) - Date.parse(head.readyAt)) / dayMilliseconds)
+  return { window: span, mergedHeads: waits.length, medianDays: median(waits), waitedDayOrMore: waits.filter(wait => wait >= 1).length }
+}
+
+/** Reads the `ready-digest` trial from the heads that merged after a READY Review. Pure. */
+export function readReadyToMergeTrial(input: {
+  measure: Extract<TrialMeasure, { _tag: 'ReadyToMerge' }>
+  heads: readonly TrialMergedReadyHead[]
+  /** The trial week this reading falls in. */
+  week: number
+  windows: { lastSevenDays: TrialWindow, toDate: TrialWindow, beforeTrial: TrialWindow }
+}): { metrics: Extract<TrialMetrics, { _tag: 'ReadyToMerge' }>, keep: RuleReading[], kill: RuleReading[] } {
+  const { measure } = input
+  const toDate = readyToMergeWindow(input.heads, input.windows.toDate)
+  const beforeTrial = readyToMergeWindow(input.heads, input.windows.beforeTrial)
+  const baseline = beforeTrial.medianDays
+  const current = toDate.medianDays
+  const keep: RuleReading[] = [baseline === null || baseline === 0
+    ? { _tag: 'NotYetMeasurable', detail: `No wait from READY to merge was recorded in the ${measure.priorDays} days before the trial, so no fall can be measured.` }
+    : current === null
+      ? { _tag: 'NotYetMeasurable', detail: 'No head has merged after a READY Review since the trial started.' }
+      : {
+          _tag: 1 - current / baseline >= measure.minimumDrop ? 'Met' : 'NotMet',
+          detail: `Median ${duration(current)} from READY to merge, against ${duration(baseline)} in the ${measure.priorDays} days before: ${current <= baseline ? `${percent(1 - current / baseline)} lower` : `${percent(current / baseline - 1)} higher`}. Keep needs ${percent(measure.minimumDrop)} lower.`,
+        }]
+  const kill: RuleReading[] = [input.week < measure.readCheckWeek
+    ? { _tag: 'NotYetMeasurable', detail: `From week ${measure.readCheckWeek}, Harlan says whether he still reads the Monday list.` }
+    : { _tag: 'OwnerCheck', detail: `Do you still read the Monday \`ready-digest\` list? If you stopped by week ${measure.readCheckWeek}, the trial ends.` }]
+  return {
+    metrics: { _tag: 'ReadyToMerge', lastSevenDays: readyToMergeWindow(input.heads, input.windows.lastSevenDays), toDate, beforeTrial },
+    keep,
+    kill,
+  }
+}
+
+/** Reads the `agent-retro` follow-through trial from its Candidates. Pure. */
+export function readRetroTrial(input: {
+  measure: Extract<TrialMeasure, { _tag: 'RetroFollowThrough' }>
+  candidates: readonly TrialRetroCandidate[]
+  now: Date
+  toDate: TrialWindow
+}): { metrics: Extract<TrialMetrics, { _tag: 'RetroFollowThrough' }>, keep: RuleReading[], kill: RuleReading[] } {
+  const { measure } = input
+  const allowed = measure.mergeDays * dayMilliseconds
+  const now = input.now.getTime()
+  const read = input.candidates.map((candidate) => {
+    const created = Date.parse(candidate.createdAt)
+    const merged = candidate.mergedAt === null ? null : Date.parse(candidate.mergedAt)
+    const mergedInTime = merged !== null && merged <= now && merged - created <= allowed
+    return { created, issue: candidate.issueNumber !== null, mergedInTime, judged: mergedInTime || created + allowed <= now }
+  })
+  const count = (from: number, to: number) => {
+    const inside = read.filter(candidate => candidate.created >= from && candidate.created < to)
+    return {
+      candidates: inside.length,
+      issues: inside.filter(candidate => candidate.issue).length,
+      mergedInTime: inside.filter(candidate => candidate.mergedInTime).length,
+      judged: inside.filter(candidate => candidate.judged).length,
+      open: inside.filter(candidate => !candidate.judged).length,
+    }
+  }
+  const start = Date.parse(input.toDate.from)
+  const end = Date.parse(input.toDate.to)
+  const weeks: RetroWeek[] = Array.from({ length: Math.ceil((end - start) / weekMilliseconds) }, (_, index) => {
+    const span = window(start + index * weekMilliseconds, Math.min(end, start + (index + 1) * weekMilliseconds))
+    const counts = count(Date.parse(span.from), Date.parse(span.to))
+    return { week: index + 1, window: span, candidates: counts.candidates, issues: counts.issues, mergedInTime: counts.mergedInTime, open: counts.open }
+  })
+  const totals = count(start, end)
+  const toDate: RetroToDate = { window: input.toDate, ...totals, mergedShare: share(totals.mergedInTime, totals.judged) }
+  const judged = `${totals.mergedInTime} of ${plural(totals.judged, 'judged Candidate')} merged a pull request within ${measure.mergeDays} days.`
+  const keep: RuleReading[] = [toDate.mergedShare === null
+    ? { _tag: 'NotYetMeasurable', detail: totals.candidates === 0 ? 'No `agent-retro` Candidate since the trial started.' : `No Candidate has had ${measure.mergeDays} days yet.` }
+    : toDate.mergedShare >= measure.minimumMergedShare
+      ? { _tag: 'Met', detail: judged }
+      : { _tag: 'NotMet', detail: `${judged} Keep needs ${percent(measure.minimumMergedShare)}, so the retro prompt needs work.` }]
+  // Measurement only: nothing about this trial can end it.
+  return { metrics: { _tag: 'RetroFollowThrough', weeks, toDate }, keep, kill: [] }
+}
+
+/** Keep, kill, revise, or continue, from the state and the rule readings. Pure. */
+export function suggestVerdict(state: TrialState, keep: readonly RuleReading[], kill: readonly RuleReading[], onMiss: TrialMiss): TrialSuggestion {
   if (state._tag === 'NotStarted')
     return { verdict: 'Continue', reason: 'The trial has not started.' }
   const killed = kill.find(rule => rule._tag === 'Met')
@@ -440,8 +585,11 @@ export function suggestVerdict(state: TrialState, keep: readonly RuleReading[], 
   if (state._tag === 'Running')
     return { verdict: 'Continue', reason: `Week ${state.week} of ${state.weeks}. The trial ends ${localDate(state.endsAt)}.` }
   const missed = keep.find(rule => rule._tag === 'NotMet')
-  if (missed !== undefined)
-    return { verdict: 'Kill', reason: `The trial ended and the keep rule is not met. ${missed.detail}` }
+  if (missed !== undefined) {
+    return onMiss._tag === 'Kill'
+      ? { verdict: 'Kill', reason: `The trial ended and the keep rule is not met. ${missed.detail}` }
+      : { verdict: 'Revise', reason: `The trial ended and the keep rule is not met. ${onMiss.what} needs work. ${missed.detail}` }
+  }
   const unread = keep.filter(rule => rule._tag !== 'Met')
   if (unread.length > 0)
     return { verdict: 'Continue', reason: `The trial ended. Decide after this: ${unread.map(rule => rule.detail).join(' ')}` }
@@ -528,6 +676,27 @@ function metricLines(metrics: TrialMetrics): string[] {
         ...metrics.omittedHeads === 0 ? [] : [`${plural(metrics.omittedHeads, 'more head')} not listed.`],
       ]
     }
+    case 'ReadyToMerge': {
+      const row = (label: string, read: (window: ReadyToMergeWindow) => string) =>
+        `| ${label} | ${[metrics.lastSevenDays, metrics.toDate, metrics.beforeTrial].map(read).join(' | ')} |`
+      return [
+        `| READY to merge | Last 7 days | Trial to date | ${number(metrics.beforeTrial.window.days)} days before |`,
+        '| --- | ---: | ---: | ---: |',
+        row('Merged heads', window => String(window.mergedHeads)),
+        row('Median wait', window => duration(window.medianDays)),
+        row('Waited a day or more', window => String(window.waitedDayOrMore)),
+      ]
+    }
+    case 'RetroFollowThrough': {
+      const total = metrics.toDate
+      return [
+        '| Week | Candidates | Issues | Merged within 14 days | Still waiting |',
+        '| --- | ---: | ---: | ---: | ---: |',
+        ...metrics.weeks.map(week => `| Week ${week.week} | ${week.candidates} | ${week.issues} | ${week.mergedInTime} | ${week.open} |`),
+        '',
+        `Trial to date: ${total.mergedInTime} of ${plural(total.judged, 'judged Candidate')} merged within 14 days (${percent(total.mergedShare)}). ${plural(total.open, 'Candidate')} still ${total.open === 1 ? 'has' : 'have'} time.`,
+      ]
+    }
   }
 }
 
@@ -568,7 +737,7 @@ function readMeasuredTrial(store: TrialReportSource, trial: MeasuredTrial, now: 
   const base = { _tag: 'Measured' as const, id: trial.id, title: trial.title, metric: trial.metric, keepRule: trial.keepRule, killRule: trial.killRule, before: trial.before, state }
 
   const finish = (metrics: TrialMetrics | null, keep: RuleReading[], kill: RuleReading[]): TrialReading => {
-    const reading = { ...base, metrics, keep, kill, suggestion: suggestVerdict(state, keep, kill) }
+    const reading = { ...base, metrics, keep, kill, suggestion: suggestVerdict(state, keep, kill, trial.onMiss) }
     return { ...reading, markdown: renderTrialReading(reading) }
   }
   if (state._tag === 'NotStarted' || startedAt === null)
@@ -601,6 +770,20 @@ function readMeasuredTrial(store: TrialReportSource, trial: MeasuredTrial, now: 
         lastSevenDays: { window: lastSevenDays, heads: store.listTrialReviewedHeads(lastSevenDays) },
         toDate: { window: toDate, heads: store.listTrialReviewedHeads(toDate) },
       })
+      return finish(read.metrics, read.keep, read.kill)
+    }
+    case 'ReadyToMerge': {
+      const beforeTrial = window(start - measure.priorDays * dayMilliseconds, start)
+      const read = readReadyToMergeTrial({
+        measure,
+        heads: store.listTrialMergedReadyHeads({ from: beforeTrial.from, to: toDate.to }),
+        week: state._tag === 'Running' ? state.week : trial.weeks,
+        windows: { lastSevenDays, toDate, beforeTrial },
+      })
+      return finish(read.metrics, read.keep, read.kill)
+    }
+    case 'RetroFollowThrough': {
+      const read = readRetroTrial({ measure, candidates: store.listTrialRetroCandidates(toDate), now, toDate })
       return finish(read.metrics, read.keep, read.kill)
     }
   }

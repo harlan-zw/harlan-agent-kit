@@ -6,6 +6,7 @@ import { dailyCheckin } from './daily-checkin.ts'
 import { dependencyUpdates } from './dependency-updates.ts'
 import { perfReview } from './perf-review.ts'
 import { prTriage } from './pr-triage.ts'
+import { readyDigest } from './ready-digest.ts'
 import { sentryCheckin } from './sentry-checkin.ts'
 import { seoReview } from './seo-review.ts'
 import { trialReport } from './trial-report.ts'
@@ -25,6 +26,7 @@ const routines = {
   'seo-review': seoReview,
   'vitals-review': vitalsReview,
   'trial-report': trialReport,
+  'ready-digest': readyDigest,
 }
 
 export type RoutineName = keyof typeof routines

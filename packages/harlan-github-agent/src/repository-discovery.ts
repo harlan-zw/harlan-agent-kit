@@ -16,6 +16,8 @@ export interface InstalledRepository {
   defaultBranch: string
   archived: boolean
   fork: boolean
+  /** True unless GitHub reports the repository as public. */
+  private: boolean
   topics: string[]
   /** How the controller reached this repository: the App, or Harlan's own token. */
   authentication: RepositoryAuthentication
@@ -97,6 +99,7 @@ export async function discoverGitHubAppRepositories(options: GitHubAppRepository
       defaultBranch: repository.default_branch,
       archived: repository.archived,
       fork: false,
+      private: repository.private,
       topics: repository.topics ?? [],
       authentication: 'app',
       owner: { login: repository.owner.login, type: ownerType },

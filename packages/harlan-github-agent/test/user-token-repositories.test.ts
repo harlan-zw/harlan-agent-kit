@@ -10,6 +10,7 @@ const installed: InstalledRepository = {
   defaultBranch: 'main',
   archived: false,
   fork: false,
+  private: false,
   topics: [],
   authentication: 'app',
   owner: { login: 'harlan-zw', type: 'User' },
@@ -21,6 +22,7 @@ function organizationRepository(github: string, archived = false, fork = false) 
     defaultBranch: 'main',
     archived,
     fork,
+    private: false,
     topics: [],
     owner: { login: github.split('/')[0] as string, type: 'Organization' as const },
   }
@@ -229,6 +231,7 @@ describe('createGitHubUserAccess', () => {
           defaultBranch: 'main',
           archived: false,
           fork: false,
+          private: false,
           topics: [],
           owner: { login: 'nuxt-modules', type: 'Organization' },
         }))
@@ -239,7 +242,23 @@ describe('createGitHubUserAccess', () => {
       github: 'nuxt-modules/sitemap',
       defaultBranch: 'main',
       fork: false,
+      private: false,
     }))
+  })
+
+  it('counts a repository as private when GitHub does not say it is public', async () => {
+    const access = createGitHubUserAccess({
+      run: () => Promise.resolve(JSON.stringify({
+        github: 'nuxt-modules/sitemap',
+        defaultBranch: 'main',
+        archived: false,
+        fork: false,
+        topics: [],
+        owner: { login: 'nuxt-modules', type: 'Organization' },
+      })),
+    })
+
+    expect(await access.readRepository('nuxt-modules/sitemap')).toEqual(expect.objectContaining({ private: true }))
   })
 
   it('leaves an inaccessible repository untracked', async () => {

@@ -626,12 +626,24 @@ The controller counts the numbers from Routine runs, Review runs, and shadow wor
 The Agent receives those numbers as Service evidence. It never reads the live database.
 Each trial reports the last 7 days and the trial to date. The `daily-checkin` trial also reports the days before it started.
 Each rule reads met, not met, needs Harlan, or not measurable yet. A rule that needs a person's judgement stays with Harlan.
-The suggested verdict is Keep, Kill, or Continue. It recommends; Harlan decides.
+The suggested verdict is Keep, Kill, Continue, or Revise. It recommends; Harlan decides.
+A measurement trial is never killed. If it ends under its keep rule, it reads Revise and names what needs work.
 A trial that waits for its first shadow event reports that it has not started, never a zero share.
 Discussion route issues appear as links without titles, because a mapped repository can be private and the run log is public.
 
 The Routine proposes no change and requests no issue. It discards any Candidate the Agent returns.
 Enable it with `mode: report` only after Hogwild runs a controller that defines it. An older controller rejects the unknown name.
+
+## Weekly ready-digest
+
+The `ready-digest` Routine comments every Monday on its run log issue.
+It lists each open pull request whose current head has a READY Review and passing CI, oldest READY first.
+Each line gives the repository, number, title, and days since READY.
+The controller reads its own Review records. It starts no Agent turn and reads nothing from GitHub.
+A repository that GitHub does not report as public shows no title, because the run log is public.
+References and titles sit in code spans, so the list adds no timeline event to a pull request and notifies nobody.
+
+Only `harlan-zw/harlan-agent-kit` may enable it. Enable it with `mode: report` only after Hogwild runs a controller that defines it.
 
 ## Weekly performance review
 
