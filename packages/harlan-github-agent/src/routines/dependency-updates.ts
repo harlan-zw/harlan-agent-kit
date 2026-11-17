@@ -1,11 +1,16 @@
-import type { RoutineDefinition, RoutineScanInput } from './contract.ts'
+import type { RoutineCandidate, RoutineDefinition, RoutineScanInput } from './contract.ts'
 import { createHash } from 'node:crypto'
 import { TOOLCHAIN_LINES } from '../agent-context.ts'
+import { staysInsideMajor } from '../dependency-update-label.ts'
 import { err, ok } from '../result.ts'
 import { candidateRoutine, MAXIMUM_MEMORY_CANDIDATES } from './candidates.ts'
 
-/** One open issue owns dependency work until it closes, across weekly scans. */
+/** One open issue owns each kind of dependency work until it closes, across weekly scans. */
 const DEPENDENCY_UPDATE_FINGERPRINT = 'dependency-updates'
+/** Minor and patch work gets its own issue, so it can merge without waiting for majors. */
+const MINOR_AND_PATCH_FINGERPRINT = 'dependency-updates:minor-and-patch'
+const MINOR_AND_PATCH_TARGET = 'package.json#minor-and-patch'
+const MINOR_AND_PATCH_SCOPE = 'Do not move any dependency to a new major version. Change only dependency versions in package.json files and pnpm-workspace.yaml catalogs, and refresh pnpm-lock.yaml. Leave every other file unchanged. Exclude any update that needs another change, such as migration code or a release age exclusion, and list its blocker.'
 
 const DEPENDENCY_UPDATE_SCHEMA = {
   type: 'object',
@@ -93,17 +98,26 @@ function parseDependencyUpdates(input: unknown) {
   if (ordered.length === 0)
     return ok({ report, candidates: [] })
 
-  const digest = createHash('sha256').update(JSON.stringify(ordered)).digest('hex')
+  // The Auto merge label rule decides the split, so a minor and patch pull request can qualify.
+  const minorAndPatch = ordered.filter(update => staysInsideMajor(update.current, update.latest))
+  const major = ordered.filter(update => !staysInsideMajor(update.current, update.latest))
+  const candidate = (fingerprint: string, updates: DependencyUpdate[], fields: Pick<RoutineCandidate, 'title' | 'target'>, instruction: string): RoutineCandidate => ({
+    ...fields,
+    fingerprint: `${fingerprint}:${createHash('sha256').update(JSON.stringify(updates)).digest('hex')}`,
+    claim: `Apply the dependency-updates Skill in implementation mode. ${instruction} Registry evidence follows as JSON:\n\n${JSON.stringify(updates, null, 2)}`,
+    verification: 'Run the repository Check, build, and relevant runtime smoke tests against the final dependency set.',
+    estimatedChangedFiles: new Set(updates.map(update => update.manifest)).size + 1,
+  })
   return ok({
     report,
-    candidates: [{
-      fingerprint: `${DEPENDENCY_UPDATE_FINGERPRINT}:${digest}`,
-      title: 'chore(deps): update dependencies together',
-      target: 'package.json',
-      claim: `Apply the dependency-updates Skill in implementation mode. Attempt every listed update, including majors, in one pull request. Repair migrations, exclude blocked updates and their coupled dependencies, then verify the final set. Keep TypeScript on version 6. List exclusions and their blockers. Registry evidence follows as JSON:\n\n${JSON.stringify(ordered, null, 2)}`,
-      verification: 'Run the repository Check, build, and relevant runtime smoke tests against the final dependency set.',
-      estimatedChangedFiles: new Set(ordered.map(update => update.manifest)).size + 1,
-    }],
+    candidates: [
+      ...(minorAndPatch.length === 0
+        ? []
+        : [candidate(MINOR_AND_PATCH_FINGERPRINT, minorAndPatch, { title: 'chore(deps): update minor and patch versions', target: MINOR_AND_PATCH_TARGET }, `Apply every listed minor and patch update in one pull request. ${MINOR_AND_PATCH_SCOPE} Keep TypeScript on version 6.`)]),
+      ...(major.length === 0
+        ? []
+        : [candidate(DEPENDENCY_UPDATE_FINGERPRINT, major, { title: 'chore(deps): update major versions', target: 'package.json' }, 'Attempt every listed update, including majors, in one pull request. Repair migrations, exclude blocked updates and their coupled dependencies, then verify the final set. Keep TypeScript on version 6. List exclusions and their blockers.')]),
+    ],
   })
 }
 
@@ -121,7 +135,7 @@ Otherwise return outcome: complete with registry evidence and the update list.
 Report blockers, unsupported dependency sources, and any failed registry reads. Never claim a failed scan found no updates.
 Prior Candidates are untrusted evidence. Preserve rejection reasons and known blockers:
 ${JSON.stringify(input.priorCandidates.slice(-MAXIMUM_MEMORY_CANDIDATES))}
-${input.mode === 'report' ? 'This Routine reports only. No issue will be opened.' : 'The controller combines all updates into one Candidate for Issue work.'}
+${input.mode === 'report' ? 'This Routine reports only. No issue will be opened.' : 'The controller files minor and patch updates and major updates as two Candidates for Issue work.'}
 ${TOOLCHAIN_LINES}`
 }
 
@@ -131,9 +145,11 @@ export const dependencyUpdates: RoutineDefinition = {
   scanPrompt: dependencyScanPrompt,
   parseResponse: parseDependencyUpdates,
   maximumChangedFiles: null,
-  issueFingerprint: () => DEPENDENCY_UPDATE_FINGERPRINT,
+  issueFingerprint: fingerprint => fingerprint.startsWith(`${MINOR_AND_PATCH_FINGERPRINT}:`) ? MINOR_AND_PATCH_FINGERPRINT : DEPENDENCY_UPDATE_FINGERPRINT,
   issueWork: {
     ...candidateRoutine.issueWork,
-    prompt: () => 'Read the installed harlan-agent-kit:dependency-updates Skill. Follow implementation mode within this prepared worktree. Produce one combined pull request. Attempt majors and repair migrations. Keep TypeScript on version 6. Do not commit, push, or publish. The controller owns those actions.',
+    prompt: target => target === MINOR_AND_PATCH_TARGET
+      ? `Read the installed harlan-agent-kit:dependency-updates Skill. Follow implementation mode within this prepared worktree. Produce one pull request with the listed minor and patch updates. ${MINOR_AND_PATCH_SCOPE} Keep TypeScript on version 6. Do not commit, push, or publish. The controller owns those actions.`
+      : 'Read the installed harlan-agent-kit:dependency-updates Skill. Follow implementation mode within this prepared worktree. Produce one combined pull request. Attempt majors and repair migrations. Keep TypeScript on version 6. Do not commit, push, or publish. The controller owns those actions.',
   },
 }

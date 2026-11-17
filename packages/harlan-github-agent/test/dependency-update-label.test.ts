@@ -10,6 +10,11 @@ function workspace(catalog: Record<string, string>, extra = ''): string {
   return `packages:\n  - packages/*\n${extra}catalog:\n${Object.entries(catalog).map(([name, version]) => `  '${name}': ${version}`).join('\n')}\n`
 }
 
+/** A pnpm 9 lockfile with one root importer. A version may carry pnpm's peer suffix. */
+function lockfile(dependencies: Record<string, string>): string {
+  return `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n${Object.entries(dependencies).map(([name, version]) => `      '${name}':\n        specifier: ^${version.replace(/\(.*$/, '')}\n        version: ${version}`).join('\n')}\npackages: {}\n`
+}
+
 /** A clean root update: one manifest, the workspace catalog, and the lockfile. */
 function input(overrides: Partial<DependencyUpdateLabelInput> = {}): DependencyUpdateLabelInput {
   return {
@@ -20,8 +25,9 @@ function input(overrides: Partial<DependencyUpdateLabelInput> = {}): DependencyU
       { status: 'M', path: 'pnpm-lock.yaml' },
       { status: 'M', path: 'pnpm-workspace.yaml' },
     ],
-    manifests: new Map([
+    contents: new Map([
       ['package.json', { before: manifest({ 'h3': '^2.1.0', 'pinned': '1.4.2', '@nuxt/kit': 'catalog:' }), after: manifest({ 'h3': '^2.3.0', 'pinned': '1.4.3', '@nuxt/kit': 'catalog:' }) }],
+      ['pnpm-lock.yaml', { before: lockfile({ 'h3': '2.1.0', '@nuxt/kit': '4.6.1(magicast@0.5.1)' }), after: lockfile({ 'h3': '2.3.0', '@nuxt/kit': '4.6.2(magicast@0.5.2)' }) }],
       ['pnpm-workspace.yaml', { before: workspace({ '@nuxt/kit': '^4.6.1', 'obuild': '^0.4.44' }), after: workspace({ '@nuxt/kit': '^4.6.2', 'obuild': '^0.4.45' }) }],
     ]),
     ...overrides,
@@ -30,12 +36,18 @@ function input(overrides: Partial<DependencyUpdateLabelInput> = {}): DependencyU
 
 function withManifest(path: string, before: string, after: string): DependencyUpdateLabelInput {
   const base = input()
-  return { ...base, manifests: new Map([...base.manifests, [path, { before, after }]]) }
+  return { ...base, contents: new Map([...base.contents, [path, { before, after }]]) }
 }
 
 describe('dependency update Auto merge label', () => {
   it('labels minor and patch updates across manifests, catalogs, and the lockfile', () => {
     expect(dependencyUpdateLabel(input())._tag).toBe('Label')
+  })
+
+  it('labels a lockfile refresh that keeps each direct dependency inside its major', () => {
+    const refresh = input({ paths: [{ status: 'M', path: 'pnpm-lock.yaml' }] })
+
+    expect(dependencyUpdateLabel(refresh)._tag).toBe('Label')
   })
 
   it.each([
@@ -51,6 +63,10 @@ describe('dependency update Auto merge label', () => {
     ['a peer range change', withManifest('package.json', manifest({}, { peerDependencies: { vue: '^3.5.0' } }), manifest({}, { peerDependencies: { vue: '^3.6.0' } })), 'package.json changes peerDependencies.'],
     ['a workspace setting change', withManifest('pnpm-workspace.yaml', workspace({ h3: '^2.1.0' }), workspace({ h3: '^2.1.0' }, 'minimumReleaseAgeExclude:\n  - h3@2.3.0\n')), 'pnpm-workspace.yaml changes minimumReleaseAgeExclude.'],
     ['an unparseable manifest', withManifest('package.json', manifest({ h3: '^2.1.0' }), '{'), 'package.json could not be parsed.'],
+    ['a version with a leading zero', withManifest('package.json', manifest({ h3: '^2.1.0' }), manifest({ h3: '^2.01.0' })), 'Only a plain x.y.z version can be compared.'],
+    ['a lockfile major', withManifest('pnpm-lock.yaml', lockfile({ h3: '2.1.0' }), lockfile({ h3: '3.0.0' })), 'pnpm-lock.yaml importer .: h3 moves from 2.1.0 to 3.0.0, a new major version.'],
+    ['a lockfile prerelease', withManifest('pnpm-lock.yaml', lockfile({ h3: '2.1.0' }), lockfile({ h3: '2.2.0-beta.1' })), 'Only a plain x.y.z version can be compared.'],
+    ['a lockfile without importers', withManifest('pnpm-lock.yaml', 'lockfileVersion: \'9.0\'\n', 'lockfileVersion: \'9.0\'\n'), 'pnpm-lock.yaml has no importers to compare.'],
   ])('leaves %s for a person', (_case, value, reason) => {
     const decision = dependencyUpdateLabel(value)
 
@@ -71,7 +87,7 @@ describe('dependency update Auto merge label', () => {
     ['an added manifest', input({ paths: [...input().paths, { status: 'A', path: 'packages/new/package.json' }] }), 'packages/new/package.json is added, deleted, or changes type.'],
     ['a maintained repository', input({ ownership: 'maintained' }), 'The repository is maintained. Auto merge covers owned repositories only.'],
     ['an issue another Routine filed', input({ routines: ['dependency-updates', 'seo-review'] }), 'did not file'],
-    ['a manifest the controller could not read', input({ manifests: new Map() }), 'package.json could not be read.'],
+    ['a manifest the controller could not read', input({ contents: new Map() }), 'package.json could not be read.'],
   ])('leaves a pull request with %s for a person', (_case, value, reason) => {
     const decision = dependencyUpdateLabel(value)
 

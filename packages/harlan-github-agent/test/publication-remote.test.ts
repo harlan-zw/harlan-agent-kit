@@ -179,6 +179,8 @@ describe('controller pull request Review handoff', () => {
 
 describe('dependency update Auto merge label on publication', () => {
   const manifest = (h3: string) => `${JSON.stringify({ name: 'example', dependencies: { h3 } }, null, 2)}\n`
+  // The padding takes a real lockfile past execFile's 1 MiB output limit.
+  const lockfile = (h3: string) => `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      h3:\n        specifier: ^${h3}\n        version: ${h3}\n# ${'x'.repeat(1_200_000)}\n`
 
   /** A controller repository holding one base commit and the published Issue work commit. */
   function published(files: Record<string, string>, combinedIssueNumbers: readonly number[]): { root: string, command: Extract<ClaimedPublicationCommand, { _tag: 'OpenPullRequest' }> } {
@@ -189,7 +191,7 @@ describe('dependency update Auto merge label on publication', () => {
     git(checkout, 'config', 'user.name', 'Test Agent')
     git(checkout, 'config', 'user.email', 'agent@example.com')
     writeFileSync(join(checkout, 'package.json'), manifest('^2.1.0'))
-    writeFileSync(join(checkout, 'pnpm-lock.yaml'), 'lockfileVersion: \'9.0\'\n')
+    writeFileSync(join(checkout, 'pnpm-lock.yaml'), lockfile('2.1.0'))
     git(checkout, 'add', '-A')
     git(checkout, 'commit', '-m', 'base')
     const baseSha = git(checkout, 'rev-parse', 'HEAD')
@@ -233,9 +235,10 @@ describe('dependency update Auto merge label on publication', () => {
   }
 
   it.each([
-    ['a clean update', ['dependency-updates'], { 'package.json': manifest('^2.3.0'), 'pnpm-lock.yaml': 'lockfileVersion: \'9.0\'\n# refreshed\n' }, true, ' Auto merge label added. Every changed file is a package manifest or lockfile, and every version stays inside its major.'],
+    ['a clean update', ['dependency-updates'], { 'package.json': manifest('^2.3.0'), 'pnpm-lock.yaml': lockfile('2.3.0') }, true, ' Auto merge label added. Every changed file is a package manifest or lockfile, and every version stays inside its major.'],
     ['a migration', ['dependency-updates'], { 'package.json': manifest('^2.3.0'), 'src/module.ts': 'export {}\n' }, false, ' Auto merge label not added. src/module.ts is not a package manifest or lockfile.'],
     ['a major update', ['dependency-updates'], { 'package.json': manifest('^3.0.0') }, false, ' Auto merge label not added. package.json: h3 moves from ^2.1.0 to ^3.0.0, a new major version.'],
+    ['a lockfile major', ['dependency-updates'], { 'pnpm-lock.yaml': lockfile('3.0.0') }, false, ' Auto merge label not added. pnpm-lock.yaml importer .: h3 moves from 2.1.0 to 3.0.0, a new major version.'],
     ['another Routine', ['seo-review'], { 'package.json': manifest('^2.3.0') }, false, ''],
     ['a Batch with another Routine\'s issue', ['dependency-updates', 'seo-review'], { 'package.json': manifest('^2.3.0') }, false, ' Auto merge label not added. The pull request closes an issue the dependency-updates Routine did not file.'],
   ] as const)('decides the label for %s from the published commit', async (_case, routines, files, labelled, evidence) => {

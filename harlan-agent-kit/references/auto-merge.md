@@ -26,6 +26,8 @@ Remove the label when a pull request grows past the change it was added for.
 
 ## Dependency updates
 
+The dependency-updates Routine files up to two issues for each repository: one for minor and patch updates, and one for major updates. A `0.x` minor, a `0.0.x` patch, and a prerelease count as major. Only the minor and patch pull request can qualify for the label.
+
 The controller adds the label itself to a pull request from the dependency-updates Routine. It reads the published commit, never the Agent's description. It adds the label only when all of these hold:
 
 - Every issue the pull request closes came from the dependency-updates Routine.
@@ -33,6 +35,7 @@ The controller adds the label itself to a pull request from the dependency-updat
 - Every changed file is a modified `package.json`, `pnpm-lock.yaml`, or `pnpm-workspace.yaml`.
 - A `package.json` changes only versions in `dependencies`, `devDependencies`, or `optionalDependencies`. A `pnpm-workspace.yaml` changes only versions in `catalog` or `catalogs`.
 - Each changed version is a plain `x.y.z`, with the same `^`, `~`, or no prefix, and moves forward inside its major. A `0.x` minor and a `0.0.x` patch count as major.
+- In `pnpm-lock.yaml`, the resolved version of each importer's direct dependency follows the same rule. A lockfile refresh alone is checked the same way.
 
 Otherwise the pull request publishes without the label. The Task evidence says why in one sentence. The Review still runs, and the bar for a labelled pull request still applies at merge time.
 

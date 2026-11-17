@@ -23,13 +23,13 @@ export interface DependencyUpdateLabelInput {
   routines: readonly (RoutineName | null)[]
   ownership: RepositoryOwnership
   paths: readonly PublishedPath[]
-  /** Both sides of each modified manifest, keyed by path. */
-  manifests: ReadonlyMap<string, { before: string, after: string }>
+  /** Both sides of each modified manifest and lockfile, keyed by path. */
+  contents: ReadonlyMap<string, { before: string, after: string }>
 }
 
 const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies']
 const CATALOG_FIELDS = ['catalog', 'catalogs']
-const PLAIN_RANGE = /^([~^]?)(\d+)\.(\d+)\.(\d+)$/
+const PLAIN_RANGE = /^([~^]?)(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -39,10 +39,10 @@ function fileName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1)
 }
 
-/** A file whose content decides the label, so the caller reads both sides of it. */
-export function isDependencyManifest(path: string): boolean {
+/** A manifest or lockfile. Its content decides the label, so the caller reads both sides of it. */
+export function isDependencyFile(path: string): boolean {
   const name = fileName(path)
-  return name === 'package.json' || name === 'pnpm-workspace.yaml'
+  return name === 'package.json' || name === 'pnpm-workspace.yaml' || name === 'pnpm-lock.yaml'
 }
 
 /** Why one version change needs a person, or null when it stays inside its major. */
@@ -65,6 +65,11 @@ function versionChange(name: string, before: unknown, after: unknown): string | 
   return changed <= (nonzero === -1 ? 2 : nonzero)
     ? `${name} moves from ${before} to ${after}, a new major version.`
     : null
+}
+
+/** Whether a version move needs no person: forward, the same prefix, and inside its major. */
+export function staysInsideMajor(before: string, after: string): boolean {
+  return versionChange('', before, after) === null
 }
 
 function dependencyMapChange(path: string, field: string, before: unknown, after: unknown): string | null {
@@ -115,11 +120,41 @@ function parseManifest(path: string, text: string): Record<string, unknown> | nu
   }
 }
 
-function manifestChange(path: string, before: string, after: string): string | null {
+/** pnpm writes peers after the version in parentheses, so a peer change alone is not a version move. */
+function resolvedVersions(dependencies: unknown): unknown {
+  if (!isRecord(dependencies))
+    return dependencies
+  return Object.fromEntries(Object.entries(dependencies).map(([name, entry]) =>
+    [name, isRecord(entry) && typeof entry.version === 'string' ? entry.version.replace(/\(.*$/, '') : entry]))
+}
+
+/** A refresh can move a direct dependency without a manifest change, so each importer's resolved versions count. */
+function lockfileChange(path: string, before: Record<string, unknown>, after: Record<string, unknown>): string | null {
+  if (!isRecord(before.importers) || !isRecord(after.importers))
+    return `${path} has no importers to compare.`
+  const old = before.importers
+  const next = after.importers
+  for (const importer of [...new Set([...Object.keys(old), ...Object.keys(next)])].sort()) {
+    const from = old[importer]
+    const to = next[importer]
+    if (!isRecord(from) || !isRecord(to))
+      return `${path} adds or removes the ${importer} importer.`
+    for (const field of DEPENDENCY_FIELDS) {
+      const reason = dependencyMapChange(`${path} importer ${importer}`, field, resolvedVersions(from[field]), resolvedVersions(to[field]))
+      if (reason !== null)
+        return reason
+    }
+  }
+  return null
+}
+
+function dependencyFileChange(path: string, before: string, after: string): string | null {
   const old = parseManifest(path, before)
   const next = parseManifest(path, after)
   if (old === null || next === null)
     return `${path} could not be parsed.`
+  if (fileName(path) === 'pnpm-lock.yaml')
+    return lockfileChange(path, old, next)
   if (fileName(path) === 'package.json') {
     for (const field of DEPENDENCY_FIELDS) {
       const reason = dependencyMapChange(path, field, old[field], next[field])
@@ -137,7 +172,7 @@ function manifestChange(path: string, before: string, after: string): string | n
  * Labels a dependency update only when it holds no judgement.
  *
  * Every issue came from the dependency-updates Routine, the repository is
- * owned, and the diff only moves versions inside their current major.
+ * owned, and the diff only moves declared and resolved versions inside their major.
  */
 export function dependencyUpdateLabel(input: DependencyUpdateLabelInput): DependencyUpdateLabel {
   if (input.routines.length === 0 || input.routines.some(routine => routine !== 'dependency-updates'))
@@ -147,14 +182,12 @@ export function dependencyUpdateLabel(input: DependencyUpdateLabelInput): Depend
   if (input.paths.length === 0)
     return { _tag: 'NoLabel', reason: 'The pull request changes no file.' }
   for (const { path, status } of input.paths) {
-    if (!isDependencyManifest(path) && fileName(path) !== 'pnpm-lock.yaml')
+    if (!isDependencyFile(path))
       return { _tag: 'NoLabel', reason: `${path} is not a package manifest or lockfile.` }
     if (status !== 'M')
       return { _tag: 'NoLabel', reason: `${path} is added, deleted, or changes type.` }
-    if (!isDependencyManifest(path))
-      continue
-    const manifest = input.manifests.get(path)
-    const reason = manifest === undefined ? `${path} could not be read.` : manifestChange(path, manifest.before, manifest.after)
+    const content = input.contents.get(path)
+    const reason = content === undefined ? `${path} could not be read.` : dependencyFileChange(path, content.before, content.after)
     if (reason !== null)
       return { _tag: 'NoLabel', reason }
   }

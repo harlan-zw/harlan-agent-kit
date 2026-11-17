@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { AUTO_MERGE_LABEL_SPEC } from './auto-merge.ts'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
-import { dependencyUpdateLabel, isDependencyManifest } from './dependency-update-label.ts'
+import { dependencyUpdateLabel, isDependencyFile } from './dependency-update-label.ts'
 import { canPushBranch, canRepairBaseline, canResolveConflictPullRequestHead, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
@@ -1611,19 +1611,20 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
     const paths: PublishedPath[] = []
     for (let index = 0; index + 1 < fields.length; index += 2)
       paths.push({ status: fields[index]!, path: fields[index + 1]! })
-    const manifests = new Map<string, { before: string, after: string }>()
-    for (const { path } of paths.filter(file => file.status === 'M' && isDependencyManifest(file.path))) {
-      const before = await runGit(repository, ['cat-file', 'blob', `${command.expectedHeadSha}:${path}`], signal)
-      const after = await runGit(repository, ['cat-file', 'blob', `${command.commitSha}:${path}`], signal)
+    const contents = new Map<string, { before: string, after: string }>()
+    for (const { path } of paths.filter(file => file.status === 'M' && isDependencyFile(file.path))) {
+      // A lockfile passes execFile's 1 MiB output limit, so stream every blob.
+      const before = await runGitPathOutput(repository, ['cat-file', 'blob', `${command.expectedHeadSha}:${path}`], signal)
+      const after = await runGitPathOutput(repository, ['cat-file', 'blob', `${command.commitSha}:${path}`], signal)
       if (before.exitCode !== 0 || after.exitCode !== 0)
         return { _tag: 'NoLabel', reason: `${path} could not be read: ${before.stderr || after.stderr}` }
-      manifests.set(path, { before: before.stdout, after: after.stdout })
+      contents.set(path, { before: before.stdout, after: after.stdout })
     }
     return dependencyUpdateLabel({
       routines: [command.issueNumber, ...command.combinedIssueNumbers ?? []].map(issue => source(command.repository, issue)?.routineName ?? null),
       ownership: command.repositoryMapping.ownership,
       paths,
-      manifests,
+      contents,
     })
   }
 

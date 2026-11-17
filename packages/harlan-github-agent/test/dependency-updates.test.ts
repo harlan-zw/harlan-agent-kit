@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { getRoutine } from '../src/routines/index.ts'
 
-const parseDependencyUpdates = getRoutine('dependency-updates').parseResponse
+const routine = getRoutine('dependency-updates')
+const parseDependencyUpdates = routine.parseResponse
 
 const update = { manifest: 'pnpm-workspace.yaml', name: 'nuxt', current: '4.0.0', latest: '5.0.0' }
 const answer = (updates: unknown[]) => ({ outcome: 'complete', report: 'Registry scan completed.', updates })
@@ -28,16 +29,34 @@ describe('dependency update proposals', () => {
       .toEqual({ _tag: 'Err', error: 'Dependency scan blocked: Registry authentication failed.' })
   })
 
-  it('combines majors and other updates into one reproducible proposal', () => {
-    const updates = [update, { ...update, name: 'vue', current: '3.5.0', latest: '3.6.0' }]
+  it('splits minor and patch updates from majors into two reproducible proposals with their own issues', () => {
+    const updates = [
+      update,
+      { ...update, name: 'vue', current: '3.5.0', latest: '3.6.0' },
+      { ...update, name: 'obuild', current: '0.4.44', latest: '0.5.0' },
+      { ...update, name: '@nuxt/devtools', current: '4.0.0-beta.4', latest: '4.0.0-beta.5' },
+    ]
     const first = parseDependencyUpdates(answer(updates))
     const reordered = parseDependencyUpdates(answer([...updates].reverse()))
-    expect(first._tag).toBe('Ok')
     if (first._tag !== 'Ok' || reordered._tag !== 'Ok')
-      throw new Error('Expected a dependency proposal.')
-    expect(first.value.candidates).toHaveLength(1)
-    expect(first.value.candidates[0]?.claim).toContain('5.0.0')
-    expect(first.value.candidates[0]?.fingerprint).toBe(reordered.value.candidates[0]?.fingerprint)
+      throw new Error('Expected dependency proposals.')
+    const [minorAndPatch, major] = first.value.candidates
+
+    expect(first.value.candidates).toHaveLength(2)
+    expect(minorAndPatch?.claim).toContain('3.6.0')
+    expect(minorAndPatch?.claim).not.toMatch(/5\.0\.0|0\.5\.0|beta\.5/)
+    for (const latest of ['5.0.0', '0.5.0', '4.0.0-beta.5'])
+      expect(major?.claim).toContain(latest)
+    expect(major?.claim).not.toContain('3.6.0')
+    expect(reordered.value.candidates.map(candidate => candidate.fingerprint)).toEqual(first.value.candidates.map(candidate => candidate.fingerprint))
+    expect(routine.issueFingerprint(minorAndPatch!.fingerprint)).not.toBe(routine.issueFingerprint(major!.fingerprint))
+  })
+
+  it.each([
+    ['only minor and patch updates', { ...update, current: '4.0.0', latest: '4.1.0' }, 'package.json#minor-and-patch'],
+    ['only majors', update, 'package.json'],
+  ])('files one proposal for %s', (_case, value, target) => {
+    expect(parseDependencyUpdates(answer([value]))).toMatchObject({ _tag: 'Ok', value: { candidates: [{ target }] } })
   })
 
   it('changes the proposal identity when a new version arrives', () => {
