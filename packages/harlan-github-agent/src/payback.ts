@@ -1,5 +1,6 @@
 import type { AgentTokenUsage } from './agent-provider.ts'
 import type { AgentTurnRecord } from './agent-turn-store.ts'
+import type { ImplicitSignalKind, OpeningWork } from './implicit-signal-store.ts'
 import type { RoutineName } from './routines/index.ts'
 import type { AgentRole, RoutineMode, RoutineRunState } from './types.ts'
 
@@ -148,6 +149,42 @@ export function paybackRoutineRunOutcome(fact: PaybackRoutineRunFact): PaybackOu
   }
 }
 
+/** One Implicit signal recorded in the range. Never Agent feedback. */
+export interface PaybackSignalFact {
+  kind: ImplicitSignalKind
+  /** The work whose publication opened the pull request, or null when the service only reviewed it. */
+  openedBy: OpeningWork | null
+  /** True when the signal names the Review run it relates to. */
+  reviewed: boolean
+}
+
+/** Implicit signals per kind. They inform a reader and never change a verdict. */
+export interface PaybackSignals {
+  humanCommit: number
+  closedUnmerged: number
+  mergedUntouched: number
+  loggedFindingPickedUp: number
+}
+
+const SIGNAL_FIELD: Record<ImplicitSignalKind, keyof PaybackSignals> = {
+  HumanCommit: 'humanCommit',
+  ClosedUnmerged: 'closedUnmerged',
+  MergedUntouched: 'mergedUntouched',
+  LoggedFindingPickedUp: 'loggedFindingPickedUp',
+}
+
+/** A signal counts for the work that opened its pull request, and for Review when it names a Review run. */
+function signalsFor(work: PaybackWork, facts: readonly PaybackSignalFact[]): PaybackSignals {
+  const counts: PaybackSignals = { humanCommit: 0, closedUnmerged: 0, mergedUntouched: 0, loggedFindingPickedUp: 0 }
+  if (work._tag !== 'Role')
+    return counts
+  for (const fact of facts) {
+    if (fact.openedBy === work.role || (fact.reviewed && work.role === 'adversarial_review'))
+      counts[SIGNAL_FIELD[fact.kind]] += 1
+  }
+  return counts
+}
+
 export type PaybackCost
   = | { _tag: 'Priced', usd: number, unpricedTurns: number }
     | { _tag: 'Unpriced', models: string[] }
@@ -183,6 +220,8 @@ export interface PaybackKind {
   /** Minutes of Harlan's time each useful outcome must save to pay for itself. */
   breakEvenMinutes: number | null
   verdict: PaybackVerdict
+  /** Implicit signals recorded in the range. Routine rows are always zero. */
+  signals: PaybackSignals
 }
 
 export interface PaybackReport {
@@ -252,7 +291,7 @@ function routineVerdict(outcomes: PaybackKind['outcomes'], wastedShare: number |
  * Every number is measured except dollars, which come from dated rates, and
  * break-even minutes, which also need Harlan's hourly value.
  */
-export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: readonly PaybackTaskFact[], routineRuns: readonly PaybackRoutineRunFact[], pricing: PaybackPricing }): PaybackReport {
+export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: readonly PaybackTaskFact[], routineRuns: readonly PaybackRoutineRunFact[], signals: readonly PaybackSignalFact[], pricing: PaybackPricing }): PaybackReport {
   const outcomeByTask = new Map(input.tasks.map(fact => [fact.taskId, paybackOutcome(fact)]))
   const routineRunById = new Map(input.routineRuns.map(fact => [fact.runId, { work: fact.work, outcome: paybackRoutineRunOutcome(fact) }]))
   // The Task facts also list Routine run ids, with no state, so a Routine turn reads only its run.
@@ -341,6 +380,7 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
       wastedShare,
       breakEvenMinutes,
       verdict: verdict(work, outcomes, unrecordedShare, wastedShare, worthCutting(spent, spendMinutes)),
+      signals: signalsFor(work, input.signals),
     }
   })
   return { ratesCheckedOn: input.pricing.ratesCheckedOn, hourlyValue: input.pricing.hourlyValue, kinds }

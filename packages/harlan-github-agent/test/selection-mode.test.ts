@@ -220,6 +220,7 @@ describe('selection mode route', () => {
         listAgentTurns: () => [],
         listPaybackTasks: () => [],
         listPaybackRoutineRuns: () => [],
+        listPaybackSignals: () => [],
         pauseAgents: (at: string) => ({ _tag: 'Paused' as const, pausedAt: at }),
         recordAgentFeedback: () => ({ _tag: 'Rejected', reason: { _tag: 'ReviewRunNotFound' } }),
         requestRestart: input => ({ _tag: 'Requested', id: input.id, source: input.source, operation: input.operation, requestedAt: input.at }),

@@ -48,6 +48,7 @@ describe('buildPayback', () => {
       turns: [turn({ taskId: 'a', role: 'issue_work' }), turn({ taskId: 'b', role: 'issue_work' })],
       tasks: [task('a'), task('b', { pullRequest: 'Open' })],
       routineRuns: [],
+      signals: [],
       pricing,
     })
 
@@ -70,6 +71,7 @@ describe('buildPayback', () => {
       ],
       tasks: ['closed-1', 'closed-2', 'closed-3'].map(taskId => task(taskId, { pullRequest: 'Closed' })),
       routineRuns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4'].map(runId => routineRun(runId)),
+      signals: [],
       pricing,
     })
 
@@ -87,6 +89,7 @@ describe('buildPayback', () => {
       ],
       tasks: [task('merged-1'), task('merged-2'), ...['loop-1', 'loop-2', 'loop-3'].map(taskId => task(taskId, { state: 'Superseded', published: false, pullRequest: 'Open' }))],
       routineRuns: [],
+      signals: [],
       pricing,
     })
 
@@ -105,6 +108,7 @@ describe('buildPayback', () => {
       ],
       tasks: [...['merged-1', 'merged-2', 'merged-3', 'merged-4'].map(taskId => task(taskId)), task('blocked', { state: 'ActionRequired', published: false, pullRequest: 'Open' })],
       routineRuns: [],
+      signals: [],
       pricing,
     })
 
@@ -125,6 +129,7 @@ describe('buildPayback', () => {
         routineRun('run-2', { mode: 'report' }),
         routineRun('run-3', { candidates: { merged: 1, open: 0, closed: 0 } }),
       ],
+      signals: [],
       pricing,
     })
 
@@ -149,6 +154,7 @@ describe('buildPayback', () => {
         routineRun('ci-quiet'),
         routineRun('seo-1', { work: { _tag: 'Routine', name: 'seo-review' }, candidates: { merged: 0, open: 0, closed: 2 } }),
       ],
+      signals: [],
       pricing,
     })
 
@@ -169,6 +175,7 @@ describe('buildPayback', () => {
         ...merged.map(runId => routineRun(runId, { work: { _tag: 'Routine', name: 'agent-retro' }, candidates: { merged: 1, open: 0, closed: 0 } })),
         ...quiet.map(runId => routineRun(runId, { work: { _tag: 'Routine', name: 'agent-retro' } })),
       ],
+      signals: [],
       pricing,
     })
 
@@ -187,6 +194,7 @@ describe('buildPayback', () => {
       turns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4', 'failed'].map(taskId => turn({ taskId, role: 'routine_scan', usage: costly })),
       tasks: [],
       routineRuns: [...['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4'].map(runId => routineRun(runId)), routineRun('failed', { state: 'Failed' })],
+      signals: [],
       pricing,
     })
 
@@ -199,6 +207,7 @@ describe('buildPayback', () => {
       turns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4', 'quiet-5'].map(taskId => turn({ taskId, role: 'routine_scan' })),
       tasks: [],
       routineRuns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4', 'quiet-5'].map(runId => routineRun(runId)),
+      signals: [],
       pricing,
     })
 
@@ -210,6 +219,7 @@ describe('buildPayback', () => {
       turns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4', 'quiet-5'].map(taskId => turn({ taskId, role: 'routine_scan' })),
       tasks: [],
       routineRuns: ['quiet-1', 'quiet-2', 'quiet-3', 'quiet-4', 'quiet-5'].map(runId => routineRun(runId)),
+      signals: [],
       pricing: { ...pricing, hourlyValue: null },
     })
 
@@ -227,6 +237,7 @@ describe('buildPayback', () => {
         routineRun('quiet-1'),
         routineRun('quiet-2'),
       ],
+      signals: [],
       pricing,
     })
 
@@ -241,6 +252,7 @@ describe('buildPayback', () => {
       turns: ['closed-1', 'closed-2', 'closed-3', 'closed-4', 'closed-5'].map(taskId => turn({ taskId, role: 'baseline_repair', usage: costly })),
       tasks: ['closed-1', 'closed-2', 'closed-3', 'closed-4', 'closed-5'].map(taskId => task(taskId, { pullRequest: 'Closed' })),
       routineRuns: [],
+      signals: [],
       pricing,
     })
 
@@ -252,6 +264,7 @@ describe('buildPayback', () => {
       turns: [turn({ taskId: 'review-1', role: 'adversarial_review' }), turn({ taskId: 'run-1', role: 'routine_scan' })],
       tasks: [task('review-1', { state: null }), task('run-1', { state: null })],
       routineRuns: [],
+      signals: [],
       pricing,
     })
 
@@ -266,6 +279,7 @@ describe('buildPayback', () => {
       turns: [turn({ taskId: 'a', role: 'issue_work', provider: 'opencode', model: 'zai-coding-plan/glm-5.3' })],
       tasks: [task('a')],
       routineRuns: [],
+      signals: [],
       pricing: { rates: {}, ratesCheckedOn: null, hourlyValue: null },
     })
 
@@ -281,6 +295,7 @@ describe('buildPayback', () => {
       turns: [turn({ taskId: 'a', role: 'review_fix', usage: { _tag: 'Unavailable' }, outcome: 'Failed' })],
       tasks: [task('a', { state: 'Failed', published: false, pullRequest: 'None' })],
       routineRuns: [],
+      signals: [],
       pricing,
     })
 
@@ -289,6 +304,33 @@ describe('buildPayback', () => {
       turnsWithoutUsage: 1,
       cost: { _tag: 'Unpriced', models: [] },
     }))
+  })
+})
+
+describe('payback implicit signals', () => {
+  it('counts each signal on the work that opened or reviewed the pull request, and keeps the verdict', () => {
+    const turns = [turn({ taskId: 'a', role: 'issue_work' }), turn({ taskId: 'r', role: 'adversarial_review' }), turn({ taskId: 'c', role: 'conflict_resolution' })]
+    const tasks = [task('a'), task('c')]
+    const without = buildPayback({ turns, tasks, routineRuns: [], signals: [], pricing })
+    const report = buildPayback({
+      turns,
+      tasks,
+      routineRuns: [],
+      signals: [
+        { kind: 'MergedUntouched', openedBy: 'issue_work', reviewed: true },
+        { kind: 'HumanCommit', openedBy: 'issue_work', reviewed: true },
+        { kind: 'ClosedUnmerged', openedBy: null, reviewed: true },
+        { kind: 'LoggedFindingPickedUp', openedBy: null, reviewed: true },
+        { kind: 'MergedUntouched', openedBy: 'baseline_repair', reviewed: false },
+      ],
+      pricing,
+    })
+
+    const signals = (role: string) => report.kinds.find(kind => kind.work._tag === 'Role' && kind.work.role === role)?.signals
+    expect(signals('issue_work')).toEqual({ humanCommit: 1, closedUnmerged: 0, mergedUntouched: 1, loggedFindingPickedUp: 0 })
+    expect(signals('adversarial_review')).toEqual({ humanCommit: 1, closedUnmerged: 1, mergedUntouched: 1, loggedFindingPickedUp: 1 })
+    expect(signals('conflict_resolution')).toEqual({ humanCommit: 0, closedUnmerged: 0, mergedUntouched: 0, loggedFindingPickedUp: 0 })
+    expect(report.kinds.map(kind => kind.verdict)).toEqual(without.kinds.map(kind => kind.verdict))
   })
 })
 

@@ -61,7 +61,7 @@ describe('agent retro evidence', () => {
   })
 
   it('refuses scans on another repository', () => {
-    expect(getRoutine('agent-retro').prepare('harlan-zw/example', { listAgentFeedback: () => [] })._tag).toBe('Err')
+    expect(getRoutine('agent-retro').prepare('harlan-zw/example', { listAgentFeedback: () => [], listImplicitSignals: () => [] })._tag).toBe('Err')
   })
 
   it('requires a bounded report and verdict even with no proposed fix', () => {
