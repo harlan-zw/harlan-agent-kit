@@ -100,6 +100,7 @@ function controller(input: {
       },
     },
     now: () => new Date('2026-09-18T01:00:00.000Z'),
+    pathRuleShadow: false,
     reportCheckRun: (_repository, outcome) => reports.push(outcome),
     store: {
       getLatestPullRequestTriageRun: () => storedRow(),
@@ -504,6 +505,7 @@ describe('pull request triage controller', () => {
         upsertReviewStatus: () => Promise.resolve(err('GitHub refused the comment.')),
       },
       now: () => new Date('2026-09-18T01:00:00.000Z'),
+      pathRuleShadow: false,
       reportCheckRun: () => { throw new Error('A failed comment must not reach the check run.') },
       store: {
         getLatestPullRequestTriageRun: () => null,

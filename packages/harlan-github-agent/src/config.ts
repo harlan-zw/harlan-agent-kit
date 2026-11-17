@@ -949,6 +949,10 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   const issueBatches = typeof issueBatchesValue === 'boolean' ? issueBatchesValue : undefined
   if (issueBatches === undefined)
     issues.push({ path: '$.issue_batches', message: 'Expected a boolean.' })
+  const pathRuleShadowValue = document.value.path_rule_shadow ?? false
+  const pathRuleShadow = typeof pathRuleShadowValue === 'boolean' ? pathRuleShadowValue : undefined
+  if (pathRuleShadow === undefined)
+    issues.push({ path: '$.path_rule_shadow', message: 'Expected a boolean.' })
   const serviceUpdate = serviceUpdateSchedule(document.value, issues)
 
   const externalRepositoriesValue = document.value.external_repositories
@@ -1051,6 +1055,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     || maxOpenPullRequests === undefined
     || issueCutoff === undefined
     || issueBatches === undefined
+    || pathRuleShadow === undefined
     || serviceUpdate === undefined
     || externalRepositories === undefined
     || repositories === undefined
@@ -1072,6 +1077,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     payback,
     maxOpenPullRequests,
     issueBatches,
+    pathRuleShadow,
     ...(serviceUpdate === null ? {} : { serviceUpdate }),
     pollIntervalSeconds,
     issueCutoff,

@@ -2,8 +2,7 @@ import type { ApprovalController } from './approval-controller.ts'
 import type { AutoMergeController } from './auto-merge-controller.ts'
 import type { GitHubSource } from './github.ts'
 import type { IssueClassificationController, IssueClassificationDecision, IssueRouteSettlement } from './issue-classification.ts'
-import type { PullRequestFile } from './merge-risk.ts'
-import type { PullRequestTriageController, PullRequestTriageDecision } from './pull-request-triage.ts'
+import type { PullRequestTriageController, PullRequestTriageVerdict } from './pull-request-triage.ts'
 import type { Result } from './result.ts'
 import type { JournalStore, RecordObservationResult } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
@@ -117,7 +116,7 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   // planner never queues a Review Task it would skip. Only an open, writable,
   // review-enabled repository is worth a decision.
   const triageSignal = dependencies.signal ?? AbortSignal.timeout(30_000)
-  const triageVerdicts = new Map<number, { decision: PullRequestTriageDecision, files: PullRequestFile[] | null }>()
+  const triageVerdicts = new Map<number, PullRequestTriageVerdict>()
   if (writesEnabled && dependencies.pullRequestTriage !== undefined) {
     const verdicts = await Promise.all(eligibleItems.map(async (subject) => {
       if (subject.kind !== 'pull_request' || subject.state !== 'open' || !repository.pullRequestReview || !repository.enabled)
@@ -201,6 +200,7 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
         : {
             pullRequestTriage: verdict.decision,
             ...(verdict.files === null ? {} : { pullRequestFiles: verdict.files }),
+            ...(verdict.pathRuleShadow === undefined ? {} : { pathRuleShadow: verdict.pathRuleShadow }),
           }),
       ...(issueDecision === undefined ? {} : { issueTriage: issueDecision }),
     })
