@@ -1,11 +1,12 @@
 import type { AgentEvent, AgentTurnRequest } from '../src/agent-provider.ts'
+import type { GitHubSource } from '../src/github.ts'
 import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { candidateIssueCommands } from '../src/candidate-issue-controller.ts'
-import { ok } from '../src/result.ts'
+import { err, ok } from '../src/result.ts'
 import { createRoutineScanWorker } from '../src/routine-worker.ts'
 import { openJournalStore } from '../src/store.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { issueItem, repositoryMapping } from './fixtures.ts'
 
 const routineId = 'harlan-zw/example:dependency-updates'
 const at = (day: number) => `2026-08-${String(day).padStart(2, '0')}T07:00:00.000Z`
@@ -28,7 +29,7 @@ function dependencyStore(): Store {
 }
 
 /** One weekly scan whose Agent answers with these registry updates. Returns the prompt it read. */
-async function scan(store: Store, day: number, updates: unknown[]): Promise<string> {
+async function scan(store: Store, day: number, updates: unknown[], getIssue: GitHubSource['getIssue'] = async (_repository, number) => ok(issueItem({ number }))): Promise<string> {
   store.openRoutineRun({ routineId, scheduledFor: at(day), specSha: 'abc123', at: at(day) })
   const task = store.claimNextRoutineRun('worker-1', at(day), 60 * 60_000)
   if (task === null)
@@ -46,6 +47,7 @@ async function scan(store: Store, day: number, updates: unknown[]): Promise<stri
     },
   }
   const result = await createRoutineScanWorker({
+    github: { getIssue },
     githubEvidence: { collect: async () => ({ observedAt: at(day), issues: { _tag: 'Available', entries: [], truncated: false }, pullRequests: { _tag: 'Available', entries: [], truncated: false }, workflowRuns: { _tag: 'Unavailable', reason: 'Not read.' }, deployments: { _tag: 'Available', entries: [], truncated: false }, deploymentStatuses: [], jobLogs: { _tag: 'NotRequested' }, ownership: { _tag: 'NotRequested' } }) },
     logger: { error: () => undefined, info: () => undefined },
     now: () => new Date(at(day)),
@@ -71,6 +73,50 @@ function fileIssues(store: Store, day: number): string[] {
 }
 
 describe('dependency work open by kind', () => {
+  it('refreshes closed proposals before the next scan without GitHub polling', async () => {
+    const store = dependencyStore()
+    try {
+      await scan(store, 3, [minor, major])
+      expect(fileIssues(store, 3)).toHaveLength(2)
+      const read: number[] = []
+      const prompt = await scan(store, 10, [minor, major].map(update => ({ ...update, latest: update.latest.replace(/\.0$/, '.1') })), async (_repository, number) => {
+        read.push(number)
+        return ok(issueItem({ number, state: 'closed', closureReason: 'completed' }))
+      })
+
+      expect(prompt).not.toContain('Stop before registry reads.')
+      expect(store.listCandidates(routineId).slice(0, 2).map(candidate => candidate.result._tag)).toEqual(['Superseded', 'Superseded'])
+      expect(fileIssues(store, 10).sort()).toEqual([
+        expect.stringMatching(/^dependency-updates:major:/),
+        expect.stringMatching(/^dependency-updates:minor-and-patch:/),
+      ])
+      expect(read).toEqual([7, 8])
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it.each([403, 404])('keeps held kinds when an exact issue read fails with %s', async (status) => {
+    const store = dependencyStore()
+    try {
+      await scan(store, 3, [minor, major])
+      expect(fileIssues(store, 3)).toHaveLength(2)
+
+      await expect(scan(store, 10, [minor, major], async () => err({
+        repository: 'harlan-zw/example',
+        message: 'Issue unavailable.',
+        status,
+      }))).rejects.toThrow('Issue unavailable.')
+
+      expect(store.listOpenCandidateIssues(routineId).map(issue => issue.issueNumber)).toEqual([7, 8])
+      expect(fileIssues(store, 10)).toEqual([])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it.each([
     ['major', major, minor, 'dependency-updates:minor-and-patch:'],
     ['minor and patch', minor, major, 'dependency-updates:major:'],

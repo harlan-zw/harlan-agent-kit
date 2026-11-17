@@ -16,7 +16,7 @@ import { getRoutine } from '../src/routines/index.ts'
 import { openJournalStore } from '../src/store.ts'
 import { collectRoutineGitHubEvidence } from '../src/worker-github-evidence.ts'
 import { createWorkerTaskScheduler } from '../src/worker-task-scheduler.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { issueItem, repositoryMapping } from './fixtures.ts'
 
 const routineScanPrompt = (input: RoutineScanInput) => getRoutine(input.name).scanPrompt(input)
 
@@ -70,6 +70,7 @@ function workerFor(
   runtime?: AgentRuntimeSource,
 ) {
   return createRoutineScanWorker({
+    github: { getIssue: async (_repository, number) => ok(issueItem({ number })) },
     serviceEvidence: store,
     writeCheckinEvidence: async (input) => { writtenEvidence?.push(input) },
     githubEvidence: { collect: async () => ({ observedAt: now().toISOString(), issues: { _tag: 'Available', entries: [{ number: 7, title: 'Private controller issue' }], truncated: false }, pullRequests: { _tag: 'Available', entries: [], truncated: false }, workflowRuns: { _tag: 'Unavailable', reason: 'Controller cannot read Actions' }, deployments: { _tag: 'Available', entries: [], truncated: false }, deploymentStatuses: [], jobLogs: { _tag: 'NotRequested' }, ownership: { _tag: 'NotRequested' } }) },
@@ -118,6 +119,7 @@ describe('building the scan prompt', () => {
       const scopes: Array<string | undefined> = []
       const provider = scanning(name === 'vitals-review' ? { report: 'No findings.', fieldFindings: [], labFindings: [] } : { report: 'No findings.', candidates: [] }, capture)
       const worker = createRoutineScanWorker({
+        github: { getIssue: async (_repository, number) => ok(issueItem({ number })) },
         now,
         store,
         logger: { error: () => undefined, info: () => undefined },
@@ -1263,6 +1265,7 @@ describe('running a daily check-in only when the site changed', () => {
 
   function checkinWorker(store: ReturnType<typeof openJournalStore>, collect: RoutineGitHubEvidenceSource['collect'], capture: { prompts: string[], requests: AgentTurnRequest[], prepared: number }) {
     return createRoutineScanWorker({
+      github: { getIssue: async (_repository, number) => ok(issueItem({ number })) },
       writeCheckinEvidence: async () => undefined,
       githubEvidence: { collect },
       logger: { error: () => undefined, info: () => undefined },

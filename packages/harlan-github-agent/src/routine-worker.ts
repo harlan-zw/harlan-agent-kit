@@ -2,6 +2,7 @@ import type { AgentActivityLog } from './agent-activity.ts'
 import type { AgentRuntimeSource } from './agent-profile.ts'
 import type { AgentPhase } from './agent-progress.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
+import type { GitHubSource } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedRoutineRun, ServiceUpdateStatus } from './types.ts'
@@ -20,6 +21,7 @@ import { getRoutine } from './routines/index.ts'
 import { collectTrialReportEvidence } from './trial-report.ts'
 
 export interface RoutineScanWorkerOptions {
+  github: Pick<GitHubSource, 'getIssue'>
   serviceEvidence?: Pick<JournalStore, 'groupWorkflowFailures' | 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents' | 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt'>
   serviceUpdate?: () => ServiceUpdateStatus
   activityLog?: Pick<AgentActivityLog, 'record'>
@@ -29,7 +31,7 @@ export interface RoutineScanWorkerOptions {
   maximumChangedFiles?: number
   now: () => Date
   runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'agentSessionTotal' | 'listAgentFeedback' | 'listCandidates' | 'listOpenCandidateIssues' | 'listRoutineRuns' | 'listRoutines' | 'recordAgentTurn' | 'recordCandidates' | 'stageCandidateIssues' | 'stageRoutineReport' | 'updateRoutineRunProgress'>
+  store: Pick<JournalStore, 'agentSessionTotal' | 'listAgentFeedback' | 'listCandidates' | 'listOpenCandidateIssues' | 'listRoutineRuns' | 'listRoutines' | 'recordAgentTurn' | 'recordCandidates' | 'recordPollObservation' | 'reconcileRoutineCandidates' | 'stageCandidateIssues' | 'stageRoutineReport' | 'updateRoutineRunProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareRoutine'>
 }
 
@@ -155,6 +157,16 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           : task.name === 'trial-report'
             ? collectTrialReportEvidence(options.serviceEvidence, options.now())
             : collectAgentRetroEvidence(options.serviceEvidence, options.now())
+      // Routine-only services have no repository poller to observe issue closure.
+      // Read exact issues: absence from bounded metadata cannot prove closure.
+      const publishedIssues = options.store.listOpenCandidateIssues(task.routineId)
+      for (const number of new Set(publishedIssues.map(issue => issue.issueNumber))) {
+        const issue = await options.github.getIssue(task.repositoryMapping, number, signal)
+        if (issue._tag === 'Err')
+          return err(issue.error.message)
+        options.store.recordPollObservation({ subject: issue.value, observedAt: options.now().toISOString() })
+      }
+      options.store.reconcileRoutineCandidates(options.now().toISOString(), task.repository)
       const openIssues = options.store.listOpenCandidateIssues(task.routineId)
       const turn = await runAgentTurn(
         {
