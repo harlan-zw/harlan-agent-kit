@@ -14,7 +14,9 @@ command=$(echo "$input" | jq -r '.tool_input.command // empty')
 [ -z "$tool_output" ] && exit 0
 
 # Session tracking — only suggest each command once
-SESSION_FILE="/tmp/claude-cmd-notfound-${CLAUDE_SESSION_ID:-$$}"
+# Claude Code sends session_id on stdin. The opencode plugin sets CLAUDE_SESSION_ID.
+session=$(echo "$input" | jq -r '.session_id // empty')
+SESSION_FILE="/tmp/claude-cmd-notfound-${session:-${CLAUDE_SESSION_ID:-$$}}"
 
 already_suggested() {
   [ -f "$SESSION_FILE" ] && grep -qF "$1" "$SESSION_FILE"

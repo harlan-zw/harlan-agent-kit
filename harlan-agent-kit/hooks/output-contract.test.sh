@@ -43,6 +43,14 @@ expect 'opencode input' '^PostToolUse .*`jqx` is not installed' "$got"
 got=$(context command-not-found.sh "$(jq -nc '{hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"echo hi"},tool_response:{stdout:"hi",stderr:""}}')")
 expect 'clean output' '^none$' "$got"
 
+# Claude Code sends the session on stdin and sets no CLAUDE_SESSION_ID, so the second hint in one session stays silent.
+session="test-$RANDOM-$RANDOM"
+repeat=$(jq -nc --arg s "$session" '{session_id:$s,hook_event_name:"PostToolUseFailure",tool_name:"Bash",tool_input:{command:"rgx"},error:"bash: rgx: command not found"}')
+printf '%s' "$repeat" | env -u CLAUDE_SESSION_ID bash "$dir/command-not-found.sh" >/dev/null
+got=$(printf '%s' "$repeat" | env -u CLAUDE_SESSION_ID bash "$dir/command-not-found.sh")
+expect 'once per session' '^$' "$got"
+rm -f "/tmp/claude-cmd-notfound-$session"
+
 got=$(context pre-commit-push.sh "$(jq -nc '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:"git commit -m \"fix: x\""}}')")
 expect 'commit format' '^PreToolUse Commit format: type\(scope\)' "$got"
 
