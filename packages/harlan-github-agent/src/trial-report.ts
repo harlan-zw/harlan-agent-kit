@@ -442,10 +442,17 @@ export function suggestVerdict(state: TrialState, keep: readonly RuleReading[], 
   const missed = keep.find(rule => rule._tag === 'NotMet')
   if (missed !== undefined)
     return { verdict: 'Kill', reason: `The trial ended and the keep rule is not met. ${missed.detail}` }
-  const open = [...keep, ...kill].filter(rule => rule._tag === 'NeedsHuman' || rule._tag === 'NotYetMeasurable')
-  if (open.length === 0)
-    return { verdict: 'Keep', reason: 'The trial ended, the keep rule is met, and nothing triggered the kill rule.' }
-  return { verdict: 'Continue', reason: `The trial ended. Decide after this: ${open.map(rule => rule.detail).join(' ')}` }
+  const unread = keep.filter(rule => rule._tag !== 'Met')
+  if (unread.length > 0)
+    return { verdict: 'Continue', reason: `The trial ended. Decide after this: ${unread.map(rule => rule.detail).join(' ')}` }
+  // The end date decides on the keep rule. A kill check that needs Harlan stays named, never assumed clear.
+  const open = kill.filter(rule => rule._tag !== 'NotMet')
+  return {
+    verdict: 'Keep',
+    reason: open.length === 0
+      ? 'The trial ended, the keep rule is met, and nothing triggered the kill rule.'
+      : `The trial ended and the keep rule is met. Keep unless this finds a problem: ${open.map(rule => rule.detail).join(' ')}`,
+  }
 }
 
 const RULE_LABEL: Record<RuleReading['_tag'], string> = {

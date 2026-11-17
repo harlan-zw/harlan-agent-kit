@@ -2,7 +2,7 @@ import type { Trial } from '../src/trials.ts'
 import type { ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openJournalStore } from '../src/store.ts'
-import { collectTrialReportEvidence } from '../src/trial-report.ts'
+import { collectTrialReportEvidence, suggestVerdict } from '../src/trial-report.ts'
 import { TRIALS } from '../src/trials.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -311,5 +311,29 @@ describe('trial report evidence', () => {
       ]))
     const parked = evidence.trials.find(trial => trial._tag === 'Parked')
     expect(parked?.markdown).toContain('Parked.')
+  })
+})
+
+describe('suggested trial verdict', () => {
+  const ended = { _tag: 'Ended' as const, startedAt: start, endedAt: '2026-12-16T00:00:00.000Z' }
+  const running = { _tag: 'Running' as const, startedAt: start, endsAt: '2026-12-16T00:00:00.000Z', week: 2, weeks: 4 }
+  const met = { _tag: 'Met' as const, detail: 'Met in the fixture.' }
+  const notMet = { _tag: 'NotMet' as const, detail: 'Missed in the fixture.' }
+  const needsHarlan = { _tag: 'NeedsHuman' as const, detail: 'Check the fixture runs.' }
+
+  it('keeps an ended trial whose keep rule is met, and names the checks left for Harlan', () => {
+    expect(suggestVerdict(ended, [met, met], [needsHarlan])).toEqual({ verdict: 'Keep', reason: expect.stringContaining('Check the fixture runs.') })
+  })
+
+  it('kills an ended trial whose keep rule is not met', () => {
+    expect(suggestVerdict(ended, [met, notMet], [needsHarlan])).toEqual({ verdict: 'Kill', reason: expect.stringContaining('Missed in the fixture.') })
+  })
+
+  it('waits for Harlan when a keep rule needs his judgement', () => {
+    expect(suggestVerdict(ended, [needsHarlan, met], [])).toEqual({ verdict: 'Continue', reason: expect.stringContaining('Check the fixture runs.') })
+  })
+
+  it('kills a running trial once its kill rule is met', () => {
+    expect(suggestVerdict(running, [met, met], [met])).toEqual({ verdict: 'Kill', reason: expect.stringContaining('Met in the fixture.') })
   })
 })
