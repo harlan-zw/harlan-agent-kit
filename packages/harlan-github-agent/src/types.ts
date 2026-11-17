@@ -1043,6 +1043,12 @@ export type RoutineReportCommandState = 'Pending' | 'Running' | 'Published' | 'F
  * propose it again. A Routine that repeats a rejected change every day costs
  * more trust than a wrong fix.
  */
+/** A Candidate whose filed issue is still Proposed, so a Routine knows the work it already owns. */
+export interface OpenCandidateIssue {
+  fingerprint: string
+  issueNumber: number
+}
+
 export type CandidateResult
   = | { _tag: 'Proposed', pullRequest: number | null }
     | { _tag: 'Merged', pullRequest: number }

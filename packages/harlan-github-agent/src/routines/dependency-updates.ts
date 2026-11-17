@@ -1,3 +1,4 @@
+import type { OpenCandidateIssue } from '../types.ts'
 import type { RoutineCandidate, RoutineDefinition, RoutineScanInput } from './contract.ts'
 import { createHash } from 'node:crypto'
 import { TOOLCHAIN_LINES } from '../agent-context.ts'
@@ -9,8 +10,39 @@ import { candidateRoutine, MAXIMUM_MEMORY_CANDIDATES } from './candidates.ts'
 const DEPENDENCY_UPDATE_FINGERPRINT = 'dependency-updates'
 /** Minor and patch work gets its own issue, so it can merge without waiting for majors. */
 const MINOR_AND_PATCH_FINGERPRINT = 'dependency-updates:minor-and-patch'
+/** Major work keeps the original issue marker. Its own prefix tells it apart from a combined issue. */
+const MAJOR_FINGERPRINT = 'dependency-updates:major'
 const MINOR_AND_PATCH_TARGET = 'package.json#minor-and-patch'
 const MINOR_AND_PATCH_SCOPE = 'Do not move any dependency to a new major version. Keep each range prefix as it is. Change only dependency versions in package.json files and pnpm-workspace.yaml catalogs, and refresh pnpm-lock.yaml. Leave every other file unchanged. Exclude any update that needs another change, such as migration code or a release age exclusion, and list its blocker.'
+
+type DependencyWorkKind = 'MinorAndPatch' | 'Major'
+
+/** The kinds of work one Candidate holds. A combined Candidate from before the split holds both. */
+function heldKinds(fingerprint: string): DependencyWorkKind[] {
+  if (fingerprint.startsWith(`${MINOR_AND_PATCH_FINGERPRINT}:`))
+    return ['MinorAndPatch']
+  if (fingerprint.startsWith(`${MAJOR_FINGERPRINT}:`))
+    return ['Major']
+  return ['MinorAndPatch', 'Major']
+}
+
+/** An open issue holds its kinds of work, so only a Candidate of another kind files. */
+function selectUnheldCandidates(candidates: readonly RoutineCandidate[], openIssues: readonly OpenCandidateIssue[] = []): RoutineCandidate[] {
+  const held = new Set(openIssues.flatMap(issue => heldKinds(issue.fingerprint)))
+  return candidates.filter(candidate => !heldKinds(candidate.fingerprint).some(kind => held.has(kind)))
+}
+
+function openWorkLine(openIssues: readonly OpenCandidateIssue[]): string {
+  if (openIssues.length === 0)
+    return 'This Routine has no open issue.'
+  const describe = (issue: OpenCandidateIssue): string => {
+    const kinds = heldKinds(issue.fingerprint)
+    const work = kinds.length === 2 ? 'minor and patch work and major work, from before the split' : kinds[0] === 'Major' ? 'major work' : 'minor and patch work'
+    return `#${issue.issueNumber} holds ${work}`
+  }
+  const issues = [...new Map(openIssues.map(issue => [issue.issueNumber, issue])).values()]
+  return `Open issues this Routine filed: ${issues.map(describe).join('; ')}.`
+}
 
 const DEPENDENCY_UPDATE_SCHEMA = {
   type: 'object',
@@ -116,7 +148,7 @@ function parseDependencyUpdates(input: unknown) {
         : [candidate(MINOR_AND_PATCH_FINGERPRINT, minorAndPatch, { title: 'chore(deps): update minor and patch versions', target: MINOR_AND_PATCH_TARGET }, `Apply every listed minor and patch update in one pull request. ${MINOR_AND_PATCH_SCOPE} Keep TypeScript on version 6.`)]),
       ...(major.length === 0
         ? []
-        : [candidate(DEPENDENCY_UPDATE_FINGERPRINT, major, { title: 'chore(deps): update major versions', target: 'package.json' }, 'Attempt every listed update, including majors, in one pull request. Repair migrations, exclude blocked updates and their coupled dependencies, then verify the final set. Keep TypeScript on version 6. List exclusions and their blockers.')]),
+        : [candidate(MAJOR_FINGERPRINT, major, { title: 'chore(deps): update major versions', target: 'package.json' }, 'Attempt every listed update, including majors, in one pull request. Repair migrations, exclude blocked updates and their coupled dependencies, then verify the final set. Keep TypeScript on version 6. List exclusions and their blockers.')]),
     ],
   })
 }
@@ -128,7 +160,10 @@ Keep the repository and GitHub read only. Return report and updates using the su
 Inspect all root, workspace, and catalog dependencies. Include eligible major versions.
 Keep TypeScript on version 6. Find the latest eligible version 6 update separately from version 7.
 Read open and closed dependency issues, plus open pull requests.
-If dependency work is open, stop before registry reads. Return outcome: existing_work, an empty update list, and its link.
+Issues this Routine filed, labelled routine:dependency-updates, and their pull requests never stop this scan.
+${openWorkLine(input.openIssues ?? [])}
+The controller files no new Candidate for a kind of work an open issue already holds. Still report every eligible update.
+If other dependency work is open, such as a manually opened update pull request, stop before registry reads. Return outcome: existing_work, an empty update list, and its link.
 Report the existing work's blocker and next actor. This outcome does not establish registry coverage.
 If registry or authentication reads fail, return outcome: blocked, the error, and an empty update list.
 Otherwise return outcome: complete with registry evidence and the update list.
@@ -145,6 +180,7 @@ export const dependencyUpdates: RoutineDefinition = {
   scanPrompt: dependencyScanPrompt,
   parseResponse: parseDependencyUpdates,
   maximumChangedFiles: null,
+  selectCandidates: selectUnheldCandidates,
   issueFingerprint: fingerprint => fingerprint.startsWith(`${MINOR_AND_PATCH_FINGERPRINT}:`) ? MINOR_AND_PATCH_FINGERPRINT : DEPENDENCY_UPDATE_FINGERPRINT,
   issueWork: {
     ...candidateRoutine.issueWork,

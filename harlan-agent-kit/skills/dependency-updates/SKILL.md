@@ -17,7 +17,8 @@ Read repository Agent instructions and its package manager configuration first.
 Keep repository files and GitHub read only. Use the controller's prepared worktree.
 
 1. Read open issues and pull requests. Find existing dependency work, including manually opened updates.
-2. If dependency work is open, stop before registry reads. Return `outcome: existing_work` with an empty update list.
+2. If dependency work this Routine did not file is open, stop before registry reads. Return `outcome: existing_work` with an empty update list.
+   Issues labelled `routine:dependency-updates` and their pull requests never stop the scan. The controller files only the kind of work they do not hold.
    Report its link, current blocker, and next actor. Do not claim registry coverage or that dependencies are current.
 3. Read root and workspace manifests, catalogs, lockfiles, patches, overrides, and package manager version.
 4. Use that package manager's registry commands to find exact current and target versions.
@@ -77,7 +78,7 @@ If required, include them in this same pull request and require human review.
 
 If another dependency pull request already owns the work, report its link.
 A minor and patch issue and a major issue may be open together. The other kind's pull request is not existing work for this issue.
-In scan mode, return `outcome: existing_work` with an empty update list.
+In scan mode, return `outcome: existing_work` with an empty update list only for work this Routine did not file.
 In implementation mode, return blocked.
 Do not create a second pull request or push to a branch this Task does not own.
 The existing Review and Repair continue work on the published pull request.
