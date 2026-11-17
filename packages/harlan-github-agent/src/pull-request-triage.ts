@@ -295,11 +295,9 @@ export function createPullRequestTriageController(options: PullRequestTriageCont
 
     async settle(repository, subject, decision, signal) {
       if (decision._tag === 'RequiredOverride') {
-        const stamped = await options.github.stampAgentLabel(repository, subject.number, 'ADVERSARIAL_REVIEW_REQUIRED', signal)
-        if (stamped._tag === 'Err')
-          return stamped
         // The review label approves one head only, so consume it here: a later
-        // head must not inherit it.
+        // head must not inherit it. No route label replaces it: the Review
+        // that follows says it runs in the canonical comment.
         return options.github.consumeApprovalLabel(repository, 'pull_request', subject.number, APPROVAL_LABELS.review, signal)
       }
       if (decision._tag !== 'Skipped')

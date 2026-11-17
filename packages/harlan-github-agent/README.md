@@ -100,7 +100,7 @@ server:
 
 Open `/sessions` at the public address, or select Sessions from the Board.
 Public terminals use the public browser session and run on Hogwild.
-The proxy must forward terminal HTTP and WebSocket paths with the trusted ingress headers.
+The proxy must forward terminal HTTP and [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) paths with the trusted ingress headers.
 Desktop session routes and pull request diffs remain private.
 Terminal diffs show only the authenticated Agent session's Worktree.
 
@@ -155,8 +155,10 @@ Only owned repositories and writable head branches accept change requests.
 Pause, Dismissal, Stop Review, and write controls still apply.
 The canonical comment of a finished Review ends with the commands that pull request accepts.
 
-Pull request triage uses `harlan-agent-review-required` or `harlan-agent-review-skipped`.
-The final Review replaces that route with one outcome label: `ready`, `pending`, or `blocked`.
+A skipped pull request carries `harlan-agent-review-skipped`.
+A fresh Review removes the verdict label of earlier heads. When it finishes, it stamps `ready` or `blocked`.
+A Review that waits on CI writes no label. `pending` marks only a Review that waits on a Baseline repair.
+Review and Repair write no `harlan-agent-running` label. The canonical comment says that they run.
 The canonical comment lists every Review gate and the next action.
 After GitHub merges or closes the pull request, the comment records that state and Agent labels clear.
 

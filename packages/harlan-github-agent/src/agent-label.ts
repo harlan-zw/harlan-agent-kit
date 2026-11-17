@@ -11,8 +11,14 @@ import { APPROVAL_LABELS } from './approval-labels.ts'
  * commit. They share one set because they are mutually exclusive: an Item an
  * Agent is working on has no settled verdict, and a settled verdict means no
  * Agent is working.
+ *
+ * `NO_VERDICT` writes no label. It takes the verdict and route labels off a
+ * pull request whose head has no settled verdict: a Review that just started,
+ * or one waiting on CI.
  */
-export type AgentLabelState = IssueTriageState | 'DISCUSSION' | PullRequestTriageState | ReviewOutcomeName | 'RUNNING'
+export type AgentLabelState = LabelledAgentState | 'NO_VERDICT'
+
+type LabelledAgentState = IssueTriageState | 'DISCUSSION' | PullRequestTriageState | ReviewOutcomeName | 'RUNNING'
 
 export interface AgentLabelDefinition {
   name: string
@@ -84,7 +90,24 @@ export const AGENT_LABELS = {
     color: 'c5def5',
     description: 'Issue triage found a discussion with no change to make yet.',
   },
-} as const satisfies Record<AgentLabelState, AgentLabelDefinition>
+} as const satisfies Record<LabelledAgentState, AgentLabelDefinition>
+
+/**
+ * The label one Review outcome leaves on its pull request.
+ *
+ * A PENDING verdict waits on CI and usually settles within minutes, so it
+ * writes no label: a label added and removed that fast only fills the
+ * Activity log. WAITING can hold for hours on a Baseline repair, so it keeps
+ * the PENDING label a person can filter on.
+ */
+export function reviewVerdictLabel(outcome: ReviewOutcomeName | 'WAITING'): AgentLabelState {
+  return outcome === 'PENDING' ? 'NO_VERDICT' : outcome === 'WAITING' ? 'PENDING' : outcome
+}
+
+/** The label name one state writes, or a plain description for `NO_VERDICT`. */
+export function agentLabelStateName(state: AgentLabelState): string {
+  return state === 'NO_VERDICT' ? 'no verdict' : AGENT_LABELS[state].name
+}
 
 /**
  * The label writes one Agent label state needs.
@@ -114,7 +137,13 @@ function mutuallyExclusiveLabels(state: AgentLabelState): Set<string> {
   return new Set(states.map(value => AGENT_LABELS[value].name.toLowerCase()))
 }
 
+const noVerdictLabels = new Set((['READY', 'PENDING', 'BLOCKED', ...pullRequestTriageStates] as const).map(value => AGENT_LABELS[value].name.toLowerCase()))
+
 export function planAgentLabels(state: AgentLabelState, current: string[]): AgentLabelPlan {
+  // The Running label answers whether an Agent works here, not the verdict, so
+  // it stays with whichever Task stamped it.
+  if (state === 'NO_VERDICT')
+    return { add: null, remove: current.filter(label => noVerdictLabels.has(label.toLowerCase())) }
   const wanted = AGENT_LABELS[state]
   const present = current.map(label => label.toLowerCase())
   const exclusive = mutuallyExclusiveLabels(state)
@@ -146,14 +175,26 @@ export function staleAgentLabels(current: string[]): string[] {
 }
 
 /**
- * The Item one claimed Task belongs to, or nothing when it has no Item.
+ * Task kinds whose canonical comment already says that an Agent works.
+ *
+ * A Review or Repair rewrites the canonical comment and its check run when it
+ * starts. A Running label on top added two Activity entries per run and said
+ * nothing new (harlan-zw/harlan-agent-kit#700 carried 14).
+ */
+const commentedTaskKinds = new Set(['adversarial_review', 'review_fix'])
+
+/**
+ * The Item one claimed Task writes the Running label on, or nothing.
  *
  * Read once here, at the scheduler boundary, so the Running label is written
  * from one place instead of six workers each remembering to. A Routine run
  * answers a clock and has no Item, so it returns nothing and writes no label.
+ * Neither does a Review or Repair, which the canonical comment reports.
  */
 export function agentLabelItem(task: object): { repositoryMapping: RepositoryMapping, itemNumber: number } | undefined {
-  const candidate = task as { repositoryMapping?: RepositoryMapping, pullRequestNumber?: number, issueNumber?: number }
+  const candidate = task as { kind?: string, repositoryMapping?: RepositoryMapping, pullRequestNumber?: number, issueNumber?: number }
+  if (candidate.kind !== undefined && commentedTaskKinds.has(candidate.kind))
+    return undefined
   const itemNumber = candidate.pullRequestNumber ?? candidate.issueNumber
   return candidate.repositoryMapping === undefined || itemNumber === undefined
     ? undefined

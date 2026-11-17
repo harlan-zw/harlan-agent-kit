@@ -198,7 +198,7 @@ Build `payload.json` from the final body with `jq`; do not interpolate JSON manu
 
 ## Review outcome labels
 
-A terminal status needs both its confirmed comment and one matching Review outcome label.
+A terminal status needs its confirmed comment and the matching Review outcome label, when the table lists one.
 Apply this contract during standalone reviews and when reusing a trusted terminal comment.
 For controller-dispatched Review, the controller owns publication. Its Agents must never write GitHub comments or labels.
 The controller requires stored Review evidence for the current Revision before publishing. A trusted comment alone cannot replace that evidence.
@@ -206,7 +206,8 @@ The controller requires stored Review evidence for the current Revision before p
 | Outcome | Label | Color |
 | --- | --- | --- |
 | `READY` | `harlan-agent-ready` | `0e8a16` |
-| `PENDING` | `harlan-agent-pending` | `fbca04` |
+| `PENDING` | none, so only remove the labels in step 5 | none |
+| `WAITING` on a Baseline repair | `harlan-agent-pending` | `fbca04` |
 | `BLOCKED` | `harlan-agent-blocked` | `d73a4a` |
 
 1. Establish mutation authority before writing labels. If authority is missing, report incomplete publication.

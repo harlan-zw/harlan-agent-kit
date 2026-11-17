@@ -65,7 +65,7 @@ did not cover it.
 | Agent blocker | `baseline_repair_blockers` | Scheduler | One per pull request head commit and failure | blocker |
 | Review gate | `review_runs.gates` | Controller | Three per Review run | gate |
 | Review outcome | `review_runs.outcome_tag` | Controller | One per Review run | READY, PENDING, or BLOCKED |
-| Running label | `harlan-agent-running` label | GitHub | One per Item with a Running Task | none |
+| Running label | `harlan-agent-running` label | GitHub | One per Item with a Running Task other than Review or Repair | none |
 | Review finding | `review_runs.findings` | Adversarial review | N per Review run | issue |
 | Auto merge | `harlan-agent-auto-merge` label | GitHub | One per pull request | auto-merge |
 | Publication | `review_publications` | Journal | N to 1 Review run | automated review |
@@ -511,7 +511,7 @@ The path rule decides first. One changed path outside the prose set requires Rev
 
 A prose-only pull request reuses the stored decision for the same head commit. Otherwise it asks the Classification service, which answers from the title and changed paths with a confidence. A skip needs confidence at or above its floor; any uncertainty or failure requires Review.
 
-`harlan-agent-review-required` records the automatic route to Review. `harlan-agent-review-skipped` records a skipped Review.
+`harlan-agent-review-skipped` records a skipped Review. A route to Review writes no label, because the canonical comment says that Review runs. `harlan-agent-review-required` stays defined only so the controller removes it from older pull requests.
 
 `path_rule_shadow: true` turns on path rule shadow mode. If every changed file of a head is in the prose set and Review still runs, the controller records one `review_run` workflow event, `path_rule_shadow`, for that head. Review is unchanged. The event counts what the path rule alone would skip.
 
@@ -525,7 +525,7 @@ Every caller keeps its deterministic floor, and a Classification failure takes t
 
 `harlan-agent-review` is the manual override. The service consumes it after it records Approval.
 
-The final Review outcome replaces the route label. The canonical comment records every Review gate and the next action.
+The final Review outcome replaces the skip label. The canonical comment records every Review gate and the next action.
 
 ### Take Ownership
 
@@ -635,7 +635,7 @@ Use `READY`, `PENDING`, or `BLOCKED`. Only `READY` shows confidence.
 
 One GitHub label, `harlan-agent-running`, that says an Agent holds a Running Task on this issue or pull request now.
 
-A scheduler adds it when it takes the lease and removes it when it gives the lease up. It shares one mutually exclusive set with the Review outcome labels, so a settled verdict removes it and a new Agent removes a stale verdict.
+A scheduler adds it when it takes the lease and removes it when it gives the lease up. Review and Repair Tasks never stamp it, because their canonical comment already says that they run. A settled verdict removes it. A fresh Review removes the verdict of an earlier head itself.
 
 An Item with no Running Task carries no Running label, whatever GitHub still shows. A process that died mid-Task leaves the label behind, and a startup sweep answers that from the Journal.
 

@@ -35,6 +35,7 @@ import type { RoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { findRepositoryMemory, GITHUB_MEDIA_LINES, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
+import { reviewVerdictLabel } from './agent-label.ts'
 import { agentProfile } from './agent-profile.ts'
 import { agentPhase } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
@@ -1446,7 +1447,7 @@ async function projectReviewRun(
     return ok({ evidence: mergedEvidence, resolution: { _tag: 'Reviewed', reviewRunId: run.id } })
 
   if (!gatesChanged && run.gatePublication._tag === 'Published') {
-    await stampAgentLabel(options, task, storedOutcomeName(run), signal)
+    await stampAgentLabel(options, task, reviewVerdictLabel(storedOutcomeName(run)), signal)
     return ok({ evidence: run.id, resolution: { _tag: 'Reviewed', reviewRunId: run.id } })
   }
 
@@ -1461,7 +1462,7 @@ async function projectReviewRun(
   if (staged._tag === 'Err')
     return staged
   if (!durablePublication)
-    await stampAgentLabel(options, task, outcome, signal)
+    await stampAgentLabel(options, task, reviewVerdictLabel(outcome), signal)
 
   return ok({ evidence: run.id, resolution: { _tag: 'Reviewed', reviewRunId: run.id } })
 }
@@ -1511,26 +1512,27 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         )
       }
 
+      // A fresh Review answers a head no verdict covers yet, so the verdict of
+      // an earlier head comes off now. The Running label used to do this, and a
+      // Review no longer stamps one.
       let freshReviewSession = false
       if (manualReview) {
-        const routed = await options.github.stampAgentLabel(task.repositoryMapping, task.pullRequestNumber, 'ADVERSARIAL_REVIEW_REQUIRED', signal)
-        if (routed._tag === 'Ok') {
-          const consumed = await options.github.consumeApprovalLabel(
-            task.repositoryMapping,
-            'pull_request',
-            task.pullRequestNumber,
-            APPROVAL_LABELS.review,
-            signal,
-          )
-          if (consumed._tag === 'Err')
-            options.onProgressPublishFailure?.(task, consumed.error)
-        }
+        await stampAgentLabel(options, task, 'NO_VERDICT', signal)
+        const consumed = await options.github.consumeApprovalLabel(
+          task.repositoryMapping,
+          'pull_request',
+          task.pullRequestNumber,
+          APPROVAL_LABELS.review,
+          signal,
+        )
+        if (consumed._tag === 'Err')
+          options.onProgressPublishFailure?.(task, consumed.error)
         freshReviewSession = true
       }
       else if (task.rerun._tag === 'NotRequested') {
         // No Pull request triage decision reached the planner for this Task,
         // so the safe direction runs: a full Review.
-        await stampAgentLabel(options, task, 'ADVERSARIAL_REVIEW_REQUIRED', signal)
+        await stampAgentLabel(options, task, 'NO_VERDICT', signal)
         freshReviewSession = true
       }
       const markedBaselineRepair = snapshot.value.pullRequest.purpose._tag === 'BaselineRepair'
@@ -1559,7 +1561,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
             : options.status.stageTerminal(task, waitingBody, 'WAITING')
           if (waiting._tag === 'Err')
             return waiting
-          await stampAgentLabel(options, task, 'PENDING', signal)
+          await stampAgentLabel(options, task, reviewVerdictLabel('WAITING'), signal)
           return ok({
             evidence: `Waiting for Baseline repair ${baseline.taskId}.`,
             resolution: { _tag: 'WaitingForBaselineRepair', taskId: baseline.taskId },

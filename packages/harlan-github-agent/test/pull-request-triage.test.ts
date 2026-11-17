@@ -439,11 +439,11 @@ describe('pull request triage controller', () => {
     expect(harness.reports).toEqual([{ _tag: 'Refused', permission: 'checks: write', message: 'The permissions requested are not granted to this installation.' }])
   })
 
-  it('stamps and consumes the override label for a settled override', async () => {
+  it('consumes the override label without a route label for a settled override', async () => {
     const harness = controller({})
 
     await expect(harness.settle({ _tag: 'RequiredOverride' })).resolves.toEqual(ok(undefined))
-    expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_REQUIRED'])
+    expect(harness.stamped).toEqual([])
     expect(harness.consumedApprovalLabels).toEqual(['harlan-agent-review'])
     expect(harness.comments).toEqual([])
   })

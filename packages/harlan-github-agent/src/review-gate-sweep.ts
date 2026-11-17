@@ -4,6 +4,7 @@ import type { Result } from './result.ts'
 import type { BaselineRepairQueueResult, JournalStore, ReviewGateRefresh } from './store.ts'
 import type { RepositoryMapping, ReviewGates, ReviewOutcomeName } from './types.ts'
 import { createHash } from 'node:crypto'
+import { reviewVerdictLabel } from './agent-label.ts'
 import { ciGatePendingMessage, readCiGate } from './ci-gate-pending.ts'
 import { hasHeadCiFinding, headCiFinding } from './head-ci-finding.ts'
 import { refreshControllerGates, repairPreflight, reviewOutcome, terminalComment } from './item-agent.ts'
@@ -170,7 +171,7 @@ export async function refreshReviewGates(
       }
       if (!hasCurrentRefreshAuthority(options, review))
         return err(`${review.repository}#${review.pullRequestNumber}: The Review authority changed before its label write.`)
-      const stamped = await options.github.stampAgentLabel(mapping, review.pullRequestNumber, outcome, signal, () =>
+      const stamped = await options.github.stampAgentLabel(mapping, review.pullRequestNumber, reviewVerdictLabel(outcome), signal, () =>
         hasCurrentRefreshAuthority(options, review)
           ? ok(undefined)
           : err('The Review authority changed before its label write.'))

@@ -255,7 +255,7 @@ describe.each(['current', 'retained'] as const)('%s terminal Review authority', 
     await harness.scheduler.runNow()
     harness.advance()
     await harness.scheduler.runNow()
-    expect(harness.writes).toEqual(['comment', outcome])
+    expect(harness.writes).toEqual(['comment', outcome === 'PENDING' ? 'NO_VERDICT' : outcome])
     expect(harness.published).toEqual([test.pullRequest.number])
     expect(harness.failures).toEqual([])
   })

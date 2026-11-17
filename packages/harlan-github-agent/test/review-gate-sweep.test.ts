@@ -667,7 +667,8 @@ describe('refreshReviewGates', () => {
       body: '### 🤖 PENDING',
     })
     expect(recorded.staged).toEqual([])
-    expect(recorded.stamped).toEqual(['PENDING'])
+    // CI still running writes no label. It only takes off a stale verdict.
+    expect(recorded.stamped).toEqual(['NO_VERDICT'])
   })
 
   it('queues Repair for a Review that already published BLOCKED for the same red head', async () => {
