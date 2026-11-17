@@ -44,12 +44,12 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/merged-branch-guard.sh",
-            "timeout": 10000
+            "timeout": 10
           },
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-commit-push.sh",
-            "timeout": 120000
+            "timeout": 120
           }
         ]
       }
@@ -61,7 +61,7 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/eslint.sh",
-            "timeout": 30000
+            "timeout": 30
           }
         ]
       },
@@ -71,7 +71,7 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/command-not-found.sh",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -83,7 +83,7 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/command-not-found.sh",
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }

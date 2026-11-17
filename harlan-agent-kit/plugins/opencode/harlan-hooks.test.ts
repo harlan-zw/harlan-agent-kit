@@ -176,6 +176,24 @@ describe('tool.execute.before', () => {
     stderr.mockRestore()
   })
 
+  // Claude Code reads a hook timeout in seconds. Read as milliseconds, this hook would time out and allow the call.
+  it('reads a manifest timeout in seconds, as Claude Code does', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'harlan-hooks-timeout-'))
+    mkdirSync(join(root, 'hooks'))
+    mkdirSync(join(root, '.claude-plugin'))
+    const hook = join(root, 'hooks', 'slow-deny.sh')
+    writeFileSync(hook, `#!/usr/bin/env bash\nsleep 1\nprintf '%s' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"slow guard"}}'\n`)
+    chmodSync(hook, 0o755)
+
+    writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({
+      // eslint-disable-next-line no-template-curly-in-string -- the manifest stores this placeholder literally
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '${CLAUDE_PLUGIN_ROOT}/hooks/slow-deny.sh', timeout: 5 }] }] },
+    }))
+    const plugin = await loadPlugin(workingDirectory, join(root, 'hooks'))
+    await expect(plugin['tool.execute.before']({ tool: 'bash' }, { args: { command: 'ls' } })).rejects.toThrow(/slow guard/)
+    rmSync(root, { recursive: true, force: true })
+  })
+
   it('allows the command and reports when the manifest is missing', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     const plugin = await loadPlugin(workingDirectory, join(workingDirectory, 'absent'))
