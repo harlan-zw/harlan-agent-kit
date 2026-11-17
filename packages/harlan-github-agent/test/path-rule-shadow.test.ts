@@ -1,5 +1,9 @@
 import type { Questions, SystemOneResult } from 'advocaat'
 import type { ClassificationSource } from '../src/classification.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { createPullRequestTriageController } from '../src/pull-request-triage.ts'
 import { reconcileRepository } from '../src/reconcile.ts'
@@ -129,5 +133,37 @@ describe('path rule shadow', () => {
 
     expect(events).toEqual([])
     expect(review).toBeNull()
+  })
+})
+
+describe('shadow trial events', () => {
+  it('never counts a shadow reading as a workflow failure', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'harlan-shadow-events-'))
+    const path = join(directory, 'state.sqlite')
+    openJournalStore(path).close()
+    const database = new DatabaseSync(path)
+    const insert = database.prepare(`
+      INSERT INTO workflow_events (stream, event, entity_id, repository, item_number, to_state, reason, attempt, fence, occurred_at)
+      VALUES (?, ?, ?, 'harlan-zw/example', 7, ?, ?, 0, 0, '2026-11-17T01:00:00.000Z')
+    `)
+    insert.run('issue_triage_status', 'discussion_shadow', 'issue-route:1:revision', 'DISCUSSION', '{"confidence":0.95,"needsCodebaseReview":0.1,"band":0.9,"skipsTriage":true}')
+    insert.run('review_run', 'path_rule_shadow', `path-rule-shadow:2:${headSha}`, 'ProseOnly', '{"verdict":"ProseOnly","fileCount":2}')
+    insert.run('task', 'Failed', 'task-1', 'Failed', 'provider returned 500 Internal Server Error')
+    database.close()
+    const store = openJournalStore(path)
+    const since = '2026-11-17T00:00:00.000Z'
+    try {
+      expect(store.groupWorkflowFailures({ since }).map(group => group.event)).toEqual(['Failed'])
+      expect(store.listWorkflowEvents({ since, failures: true }).map(event => event.event)).toEqual(['Failed'])
+      expect(store.summarizeWorkflowEvents({ since }).map(row => [row.event, row.count, row.failed]).sort()).toEqual([
+        ['Failed', 1, 1],
+        ['discussion_shadow', 1, 0],
+        ['path_rule_shadow', 1, 0],
+      ])
+    }
+    finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })

@@ -3505,6 +3505,13 @@ function telemetryReason(reason: string | null | undefined): string | null {
   return truncateOutput(redactSecrets(reason)).replace(/\s+/g, ' ').trim()
 }
 
+/**
+ * A shadow trial event stores its reading as JSON in `reason`. It is a
+ * measurement, never a failure, so the failure queries leave it out.
+ */
+const shadowTrialEvent = 'event GLOB \'*_shadow\''
+const workflowFailureCondition = `((reason IS NOT NULL OR attempt > 1) AND NOT ${shadowTrialEvent})`
+
 function recordWorkflowEvent(database: DatabaseSync, input: WorkflowEventInput): void {
   const previous = database.prepare(`
     SELECT occurred_at FROM workflow_events
@@ -14024,8 +14031,6 @@ export function openJournalStore(
     return isSafeToRestart(at)
   }
 
-  const workflowFailureCondition = '(reason IS NOT NULL OR attempt > 1)'
-
   const listWorkflowEvents: JournalStore['listWorkflowEvents'] = (input = {}) => {
     const limit = Math.max(1, Math.min(1_000, input.limit ?? 200))
     const conditions: string[] = []
@@ -17348,7 +17353,7 @@ export function openJournalStore(
     groupWorkflowFailures,
     summarizeWorkflowEvents: ({ since }) => (database.prepare(`
       SELECT stream, event, to_state AS "to", COUNT(*) AS count,
-        SUM(CASE WHEN reason IS NOT NULL THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN reason IS NOT NULL AND NOT ${shadowTrialEvent} THEN 1 ELSE 0 END) AS failed,
         SUM(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) AS retried
       FROM workflow_events WHERE occurred_at >= ?
       GROUP BY stream, event, to_state ORDER BY count DESC
