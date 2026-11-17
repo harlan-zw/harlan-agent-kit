@@ -13477,12 +13477,22 @@ export function openJournalStore(
       if (row.task_kind === 'issue_work' || row.task_kind === 'baseline_repair' || (row.task_kind === 'review_fix' && row.pull_request_title !== null)) {
         if (row.pull_request_title === null || row.pull_request_body === null)
           throw new Error(`Pull request Publication ${row.id} has no pull request content.`)
+        // The publisher decides the Auto merge label from every issue the pull request closes.
+        const combinedIssueNumbers = row.task_kind === 'issue_work'
+          ? (database.prepare(`
+              SELECT subjects.github_number FROM combined_issue_publications
+              JOIN tasks ON tasks.id = combined_issue_publications.task_id
+              JOIN subjects ON subjects.id = tasks.subject_id
+              WHERE combined_issue_publications.command_id = ? ORDER BY subjects.github_number
+            `).all(row.id) as Array<{ github_number: number }>).map(combined => combined.github_number)
+          : []
         return row.task_kind === 'issue_work'
           ? {
               ...common,
               _tag: 'OpenPullRequest',
               taskKind: row.task_kind,
               issueNumber: row.github_number,
+              ...(combinedIssueNumbers.length === 0 ? {} : { combinedIssueNumbers }),
               pullRequestTitle: row.pull_request_title,
               pullRequestBody: row.pull_request_body,
               diagram: row.diagram_json === null ? null : JSON.parse(row.diagram_json) as PullRequestDiagram,

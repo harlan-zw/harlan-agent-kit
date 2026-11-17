@@ -24,6 +24,18 @@ When unsure, leave it off. A missing label costs one human merge. A wrong label 
 
 Remove the label when a pull request grows past the change it was added for.
 
+## Dependency updates
+
+The controller adds the label itself to a pull request from the dependency-updates Routine. It reads the published commit, never the Agent's description. It adds the label only when all of these hold:
+
+- Every issue the pull request closes came from the dependency-updates Routine.
+- The repository is `owned`.
+- Every changed file is a modified `package.json`, `pnpm-lock.yaml`, or `pnpm-workspace.yaml`.
+- A `package.json` changes only versions in `dependencies`, `devDependencies`, or `optionalDependencies`. A `pnpm-workspace.yaml` changes only versions in `catalog` or `catalogs`.
+- Each changed version is a plain `x.y.z`, with the same `^`, `~`, or no prefix, and moves forward inside its major. A `0.x` minor and a `0.0.x` patch count as major.
+
+Otherwise the pull request publishes without the label. The Task evidence says why in one sentence. The Review still runs, and the bar for a labelled pull request still applies at merge time.
+
 ## Merge risk
 
 A repository on `auto_merge.pull_requests: contained` does not need the label for a low risk code change. Every Review returns a Merge risk, and a `Contained` verdict merges on its own.
@@ -38,7 +50,7 @@ Two independent answers produce it and the more dangerous wins, so `Contained` n
 
 A file an agent reads as instructions is always `Sensitive`, and a repository cannot widen its own path list to cover one.
 
-This changes what the label is for, on those repositories. The label used to be the only way a pull request merged itself. It is now an override a person applies when they have read the change and disagree with the verdict. Set `merge_risk.label_overrides_risk: false` to stop even that beating a `Sensitive` verdict.
+This changes what the label is for, on those repositories. The label used to be the only way a pull request merged itself. It is now an override a person applies when they have read the change and disagree with the verdict. The controller also applies it to a clean dependency update, as [Dependency updates](#dependency-updates) describes. Set `merge_risk.label_overrides_risk: false` to stop even that beating a `Sensitive` verdict.
 
 Merge risk routes the merge and never the Review. Every tracked pull request is still reviewed.
 
