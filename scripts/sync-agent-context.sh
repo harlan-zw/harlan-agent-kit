@@ -27,6 +27,11 @@ github_install_suffix='.local/share/harlan-agent-kit/github-bin/gh'
 github_cli_suffix='.local/bin/agent-gh'
 tools_sync="$script_dir/agent-tools.ts"
 tools_sync_suffix='.local/share/harlan-agent-kit/agent-tools.ts'
+plugins_sync="$script_dir/agent-plugins.ts"
+plugins_sync_suffix='.local/share/harlan-agent-kit/agent-plugins.ts'
+# Plugins read one fixed checkout on every host. A run from a worktree or the service clone
+# must not move them, because wt removes worktrees and the service clone moves on deploy.
+plugin_checkout="${HARLAN_AGENT_PLUGIN_CHECKOUT:-$HOME/pkg/harlan-agent-kit}"
 check_runner="$script_dir/agent-check.ts"
 check_install_suffix='.local/share/harlan-agent-kit/github-bin/agent-check.ts'
 check_cli_suffix='.local/bin/agent-check.ts'
@@ -43,6 +48,7 @@ sites_install_suffix='sites/SITES.md'
 target_home="${HARLAN_AGENT_CONTEXT_HOME:-$HOME}"
 hogwild_host="${HARLAN_AGENT_CONTEXT_HOGWILD_HOST:-hogwild}"
 hogwild_home="${HARLAN_AGENT_CONTEXT_HOGWILD_HOME:-/home/harlan}"
+hogwild_checkout="${HARLAN_AGENT_CONTEXT_HOGWILD_CHECKOUT:-$hogwild_home/pkg/harlan-agent-kit}"
 # Every file reaches Hogwild the same way: stage it, check its digest, then move
 # it into place, so nothing unchecked is ever installed. That only holds while
 # no other run can touch the staged file. The service updates itself on merge
@@ -82,6 +88,7 @@ require_sources() {
   [ -f "$commit_hook" ] || fail "The commit-msg hook is missing: $commit_hook"
   [ -f "$github_wrapper" ] || fail "The public GitHub CLI is missing: $github_wrapper"
   [ -f "$tools_sync" ] || fail "The Agent tool sync is missing: $tools_sync"
+  [ -f "$plugins_sync" ] || fail "The plugin sync is missing: $plugins_sync"
   [ -f "$check_runner" ] || fail "The check command is missing: $check_runner"
   [ -f "$shared_check" ] || fail "Check is missing: $shared_check"
   for source in "$agent_cli" "$agent_cli_plan" "$hogwild_scripts/hw.ts" "$hogwild_scripts/plan.ts"; do
@@ -161,6 +168,7 @@ sync_local() {
   install -m 755 "$github_wrapper" "$target_home/$github_install_suffix"
   install -m 755 "$github_wrapper" "$target_home/$github_cli_suffix"
   install -m 644 "$tools_sync" "$target_home/$tools_sync_suffix"
+  install -m 644 "$plugins_sync" "$target_home/$plugins_sync_suffix"
   install -m 755 "$check_runner" "$target_home/$check_install_suffix"
   install -m 755 "$check_runner" "$target_home/$check_cli_suffix"
   install -m 755 "$shared_check" "$target_home/$shared_check_install_suffix"
@@ -187,6 +195,10 @@ sync_local() {
     && [ "${HARLAN_AGENT_TOOLS_UPDATE:-1}" = 1 ]; then
     (umask 077; flock -w 180 "$target_home/.local/share/harlan-agent-kit/tools.lock" node --experimental-strip-types "$target_home/$tools_sync_suffix")
   fi
+  # A temporary HOME must never change the real host's Claude Code or Codex plugins.
+  if [ "$target_home" = "$HOME" ] && [ "${HARLAN_AGENT_PLUGINS_UPDATE:-1}" = 1 ] && [ -d "$plugin_checkout/.git" ]; then
+    node --experimental-strip-types "$target_home/$plugins_sync_suffix" --checkout "$plugin_checkout" --update-checkout
+  fi
   printf '%s\n' 'Synced local Agent instructions.'
 }
 
@@ -201,6 +213,7 @@ opencode_remote_targets() {
   printf '%s\n' "$hogwild_home/$github_install_suffix"
   printf '%s\n' "$hogwild_home/$github_cli_suffix"
   printf '%s\n' "$hogwild_home/$tools_sync_suffix"
+  printf '%s\n' "$hogwild_home/$plugins_sync_suffix"
   printf '%s\n' "$hogwild_home/$check_install_suffix"
   printf '%s\n' "$hogwild_home/$check_cli_suffix"
   printf '%s\n' "$hogwild_home/$shared_check_install_suffix"
@@ -220,6 +233,7 @@ opencode_local_sources() {
   printf '%s\n' "$github_wrapper"
   printf '%s\n' "$github_wrapper"
   printf '%s\n' "$tools_sync"
+  printf '%s\n' "$plugins_sync"
   printf '%s\n' "$check_runner"
   printf '%s\n' "$check_runner"
   printf '%s\n' "$shared_check"
@@ -260,7 +274,7 @@ sync_hogwild() {
       fail "Hogwild did not receive $(basename "$source")."
     fi
     case "$target" in
-      "$hogwild_home/$manifest_install_suffix" | "$hogwild_home/$plugin_install_suffix" | "$hogwild_home/.local/bin/agent-cli-plan.ts" | "$hogwild_home/.local/share/harlan-agent-kit/hogwild/scripts/"*) mode=644 ;;
+      "$hogwild_home/$manifest_install_suffix" | "$hogwild_home/$plugin_install_suffix" | "$hogwild_home/$plugins_sync_suffix" | "$hogwild_home/.local/bin/agent-cli-plan.ts" | "$hogwild_home/.local/share/harlan-agent-kit/hogwild/scripts/"*) mode=644 ;;
       *) mode=755 ;;
     esac
     staged_list="$staged_list '$target.$stage_token'"
@@ -293,6 +307,10 @@ sync_hogwild() {
   staged_remote=''
   if [ "${HARLAN_AGENT_TOOLS_UPDATE:-1}" = 1 ]; then
     ssh -o BatchMode=yes "$hogwild_host" "if [ -f '$hogwild_home/.config/harlan-github-agent/worker.json' ]; then export PATH='$hogwild_home/.local/bin':\$PATH; umask 077; flock -w 180 '$hogwild_home/.local/share/harlan-agent-kit/tools.lock' node --experimental-strip-types '$hogwild_home/$tools_sync_suffix'; fi"
+  fi
+  # Claude Code reads the Hogwild checkout in place, so it moves to origin/main first when it is clean.
+  if [ "${HARLAN_AGENT_PLUGINS_UPDATE:-1}" = 1 ]; then
+    ssh -o BatchMode=yes "$hogwild_host" "export PATH='$hogwild_home/.local/bin':\$PATH; node --experimental-strip-types '$hogwild_home/$plugins_sync_suffix' --checkout '$hogwild_checkout' --update-checkout"
   fi
   printf '%s\n' 'Synced Hogwild Agent instructions.'
 }
