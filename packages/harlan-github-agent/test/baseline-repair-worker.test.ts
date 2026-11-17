@@ -97,6 +97,8 @@ function runWorker(input: WorkerInput = {}) {
       saveWorkerSession: () => undefined,
       ...agentTurnLedger,
       updateAgentProgress: () => true,
+      recordBaselineRepairBlocker: () => true,
+      findBaselineRepairBlocker: () => null,
     },
     validateMapping: value => Promise.resolve(ok(value)),
     worktrees: {
@@ -315,7 +317,7 @@ describe('baseline repair worker', () => {
       },
       inspectWorkspace: () => Promise.resolve({ hasAgentsFile: false, nodeOptions: null }),
       now: () => new Date('2026-08-13T01:00:00.000Z'),
-      store: { getWorkerSession: () => null, saveWorkerSession: () => undefined, ...agentTurnLedger, updateAgentProgress: () => true },
+      store: { getWorkerSession: () => null, saveWorkerSession: () => undefined, ...agentTurnLedger, updateAgentProgress: () => true, recordBaselineRepairBlocker: () => true, findBaselineRepairBlocker: () => null },
       validateMapping: value => Promise.resolve(ok(value)),
       worktrees: {
         prepare: () => Promise.resolve(ok({ path: '/tmp/baseline-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.baseSha })),
