@@ -94,6 +94,8 @@ export interface PaybackRoutineRunFact {
 export type PaybackOutcome
   = | { _tag: 'Useful' }
     | { _tag: 'Wasted', reason: 'ClosedUnmerged' | 'NothingPublished' | 'NothingProposed' }
+    /** A Routine run that completed and filed no Candidate. Its spend counts, but it is neither useful nor wasted. */
+    | { _tag: 'Quiet' }
     | { _tag: 'Open' }
     /** Stopped on a blocker only a person can clear. It spent turns and has nothing to show yet. */
     | { _tag: 'ActionRequired' }
@@ -118,9 +120,9 @@ export function paybackOutcome(fact: PaybackTaskFact): PaybackOutcome {
 }
 
 /**
- * A Routine run is useful when one of its Candidates merged. A settled run
- * that filed none is Wasted, as a Task that published nothing is. A report
- * run files no issue, so the Journal cannot see what it produced.
+ * A Routine run is useful when one of its Candidates merged. A completed run
+ * that filed none is Quiet: a monitor on a healthy site. A failed scan is
+ * Wasted. A report run files no issue, so its outcome is not recorded.
  */
 export function paybackRoutineRunOutcome(fact: PaybackRoutineRunFact): PaybackOutcome {
   if (fact.mode === 'report')
@@ -133,6 +135,7 @@ export function paybackRoutineRunOutcome(fact: PaybackRoutineRunFact): PaybackOu
     return { _tag: 'Wasted', reason: 'ClosedUnmerged' }
   switch (fact.state) {
     case 'Completed':
+      return { _tag: 'Quiet' }
     case 'Failed':
     case 'Skipped':
     case 'Superseded':
@@ -171,10 +174,11 @@ export interface PaybackKind {
   turnsWithoutUsage: number
   tokens: PaybackTokens
   cost: PaybackCost
-  outcomes: { useful: number, wasted: number, actionRequired: number, open: number, unrecorded: number }
+  /** `quiet` counts Quiet Routine runs. It is always zero for other work. */
+  outcomes: { useful: number, wasted: number, actionRequired: number, open: number, quiet: number, unrecorded: number }
   /** Dollars per useful outcome, or null when nothing was useful or the cost is unpriced. */
   costPerUseful: number | null
-  /** Share of Agent turns on settled or blocked work that went to work with nothing to show. */
+  /** Share of Agent turns on settled or blocked work that went to work with nothing to show. Quiet runs are left out. */
   wastedShare: number | null
   /** Minutes of Harlan's time each useful outcome must save to pay for itself. */
   breakEvenMinutes: number | null
@@ -204,15 +208,27 @@ function turnUsd(usage: Extract<AgentTokenUsage, { _tag: 'Available' }>, rate: P
   return (fresh * rate.input + usage.cachedInput * rate.cachedInput + usage.cacheWrite * rate.cacheWrite + usage.output * rate.output) / 1_000_000
 }
 
-function verdict(outcomes: PaybackKind['outcomes'], unrecordedShare: number, wastedShare: number | null, spent: boolean): PaybackVerdict {
+function verdict(work: PaybackWork, outcomes: PaybackKind['outcomes'], unrecordedShare: number, wastedShare: number | null, spent: boolean): PaybackVerdict {
   if (unrecordedShare > MEASURE_FIRST_UNRECORDED_SHARE)
     return { _tag: 'MeasureFirst', reason: 'No useful outcome is recorded for most of this work yet.' }
-  if (outcomes.useful + outcomes.wasted + outcomes.actionRequired === 0)
+  if (outcomes.useful + outcomes.wasted + outcomes.actionRequired + outcomes.quiet === 0)
     return { _tag: 'MeasureFirst', reason: 'No work settled in this range.' }
+  if (work._tag !== 'Role')
+    return routineVerdict(outcomes, wastedShare, spent)
   if (outcomes.useful === 0 && outcomes.wasted > 0 && spent)
     return { _tag: 'Cut', reason: `${outcomes.wasted} settled, none useful.` }
   if (wastedShare !== null && wastedShare > TUNE_WASTED_SHARE)
     return { _tag: 'Tune', reason: `${Math.round(wastedShare * 100)}% of Agent turns went to work that produced nothing or needs Action required.` }
+  return { _tag: 'Keep' }
+}
+
+/** A Routine pays for its Quiet runs, but only closed proposals, failed scans, and blockers count as wasted. */
+function routineVerdict(outcomes: PaybackKind['outcomes'], wastedShare: number | null, spent: boolean): PaybackVerdict {
+  const runs = outcomes.quiet + outcomes.wasted
+  if (outcomes.useful === 0 && runs > 0 && spent)
+    return { _tag: 'Cut', reason: `${runs} ${runs === 1 ? 'run' : 'runs'}, no merged proposal.` }
+  if (wastedShare !== null && wastedShare > TUNE_WASTED_SHARE)
+    return { _tag: 'Tune', reason: `${Math.round(wastedShare * 100)}% of settled Agent turns went to closed proposals, failed scans, or Action required.` }
   return { _tag: 'Keep' }
 }
 
@@ -271,7 +287,7 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
       : { _tag: 'Unpriced', models: [...unpricedModels].sort() }
 
     const turnByTask = new Map(turns.map(turn => [turn.taskId, turn]))
-    const outcomes = { useful: 0, wasted: 0, actionRequired: 0, open: 0, unrecorded: 0 }
+    const outcomes = { useful: 0, wasted: 0, actionRequired: 0, open: 0, quiet: 0, unrecorded: 0 }
     for (const turn of turnByTask.values()) {
       const outcome = outcomeOf(turn)
       if (outcome === 'Useful')
@@ -282,6 +298,8 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
         outcomes.actionRequired += 1
       else if (outcome === 'Open')
         outcomes.open += 1
+      else if (outcome === 'Quiet')
+        outcomes.quiet += 1
       else
         outcomes.unrecorded += 1
     }
@@ -305,7 +323,7 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
       costPerUseful,
       wastedShare,
       breakEvenMinutes,
-      verdict: verdict(outcomes, unrecordedShare, wastedShare, spent),
+      verdict: verdict(work, outcomes, unrecordedShare, wastedShare, spent),
     }
   })
   return { ratesCheckedOn: input.pricing.ratesCheckedOn, hourlyValue: input.pricing.hourlyValue, kinds }

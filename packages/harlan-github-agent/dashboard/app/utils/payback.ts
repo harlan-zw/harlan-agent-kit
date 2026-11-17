@@ -43,11 +43,12 @@ function costText(kind: PaybackKind): string {
     : dollars.format(kind.cost.usd)
 }
 
+/** A Routine counts its Quiet runs too, so the cell reads merged runs out of every finished run. */
 function usefulText(kind: PaybackKind): string {
-  const settled = kind.outcomes.useful + kind.outcomes.wasted + kind.outcomes.actionRequired
+  const settled = kind.outcomes.useful + kind.outcomes.wasted + kind.outcomes.actionRequired + kind.outcomes.quiet
   if (settled === 0)
     return kind.outcomes.open > 0 ? `${kind.outcomes.open} open` : 'Not recorded'
-  return `${kind.outcomes.useful} of ${settled}`
+  return kind.work._tag === 'Role' ? `${kind.outcomes.useful} of ${settled}` : `${kind.outcomes.useful} of ${settled} runs`
 }
 
 function perUsefulText(kind: PaybackKind): string {

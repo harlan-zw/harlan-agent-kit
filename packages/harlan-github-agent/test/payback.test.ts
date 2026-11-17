@@ -53,7 +53,7 @@ describe('buildPayback', () => {
       work: { _tag: 'Role', role: 'issue_work' },
       agentTurns: 2,
       cost: { _tag: 'Priced', usd: expect.closeTo(0.78, 6), unpricedTurns: 0 },
-      outcomes: { useful: 1, wasted: 0, actionRequired: 0, open: 1, unrecorded: 0 },
+      outcomes: { useful: 1, wasted: 0, actionRequired: 0, open: 1, quiet: 0, unrecorded: 0 },
       costPerUseful: expect.closeTo(0.78, 6),
       breakEvenMinutes: expect.closeTo(0.312, 6),
       verdict: { _tag: 'Keep' },
@@ -72,7 +72,7 @@ describe('buildPayback', () => {
     })
 
     expect(report.kinds[0]).toEqual(expect.objectContaining({
-      outcomes: { useful: 1, wasted: 1, actionRequired: 0, open: 0, unrecorded: 0 },
+      outcomes: { useful: 1, wasted: 1, actionRequired: 0, open: 0, quiet: 0, unrecorded: 0 },
       wastedShare: 0.8,
       verdict: { _tag: 'Tune', reason: '80% of Agent turns went to work that produced nothing or needs Action required.' },
     }))
@@ -90,7 +90,7 @@ describe('buildPayback', () => {
     })
 
     expect(report.kinds[0]).toEqual(expect.objectContaining({
-      outcomes: { useful: 1, wasted: 0, actionRequired: 1, open: 0, unrecorded: 0 },
+      outcomes: { useful: 1, wasted: 0, actionRequired: 1, open: 0, quiet: 0, unrecorded: 0 },
       wastedShare: 5 / 6,
       verdict: expect.objectContaining({ _tag: 'Tune' }),
     }))
@@ -110,7 +110,7 @@ describe('buildPayback', () => {
     })
 
     expect(report.kinds[0]).toEqual(expect.objectContaining({
-      outcomes: { useful: 1, wasted: 0, actionRequired: 0, open: 0, unrecorded: 3 },
+      outcomes: { useful: 1, wasted: 0, actionRequired: 0, open: 0, quiet: 0, unrecorded: 3 },
       verdict: { _tag: 'MeasureFirst', reason: 'No useful outcome is recorded for most of this work yet.' },
     }))
   })
@@ -134,24 +134,62 @@ describe('buildPayback', () => {
     })
 
     expect(report.kinds.map(kind => [kind.work, kind.outcomes, kind.verdict._tag])).toEqual([
-      [{ _tag: 'Role', role: 'issue_work' }, { useful: 1, wasted: 0, actionRequired: 0, open: 0, unrecorded: 0 }, 'Keep'],
-      [{ _tag: 'Routine', name: 'ci-review' }, { useful: 1, wasted: 1, actionRequired: 0, open: 0, unrecorded: 0 }, 'Keep'],
-      [{ _tag: 'Routine', name: 'seo-review' }, { useful: 0, wasted: 1, actionRequired: 0, open: 0, unrecorded: 0 }, 'Cut'],
+      [{ _tag: 'Role', role: 'issue_work' }, { useful: 1, wasted: 0, actionRequired: 0, open: 0, quiet: 0, unrecorded: 0 }, 'Keep'],
+      [{ _tag: 'Routine', name: 'ci-review' }, { useful: 1, wasted: 0, actionRequired: 0, open: 0, quiet: 1, unrecorded: 0 }, 'Keep'],
+      [{ _tag: 'Routine', name: 'seo-review' }, { useful: 0, wasted: 1, actionRequired: 0, open: 0, quiet: 0, unrecorded: 0 }, 'Cut'],
     ])
   })
 
-  it('asks for tuning when most scans of a Routine proposed nothing', () => {
+  it('keeps a monitor whose quiet runs outnumber its merges, and charges their spend to each merge', () => {
+    const quiet = Array.from({ length: 25 }, (_, index) => `quiet-${index}`)
+    const merged = Array.from({ length: 6 }, (_, index) => `merged-${index}`)
     const report = buildPayback({
-      turns: ['found', 'quiet-1', 'quiet-2'].map(taskId => turn({ taskId, role: 'routine_scan' })),
+      turns: [...merged, ...quiet].map(taskId => turn({ taskId, role: 'routine_scan' })),
       tasks: [],
-      routineRuns: [routineRun('found', { candidates: { merged: 1, open: 0, closed: 0 } }), routineRun('quiet-1'), routineRun('quiet-2', { state: 'Failed' })],
+      routineRuns: [
+        ...merged.map(runId => routineRun(runId, { work: { _tag: 'Routine', name: 'agent-retro' }, candidates: { merged: 1, open: 0, closed: 0 } })),
+        ...quiet.map(runId => routineRun(runId, { work: { _tag: 'Routine', name: 'agent-retro' } })),
+      ],
+      pricing,
+    })
+
+    // 31 turns at $0.39 each, over 6 useful runs.
+    expect(report.kinds[0]).toEqual(expect.objectContaining({
+      work: { _tag: 'Routine', name: 'agent-retro' },
+      outcomes: { useful: 6, wasted: 0, actionRequired: 0, open: 0, quiet: 25, unrecorded: 0 },
+      wastedShare: 0,
+      costPerUseful: expect.closeTo(31 * 0.39 / 6, 6),
+      verdict: { _tag: 'Keep' },
+    }))
+  })
+
+  it('cuts a Routine that spent turns and merged no proposal', () => {
+    const report = buildPayback({
+      turns: ['quiet-1', 'quiet-2', 'failed'].map(taskId => turn({ taskId, role: 'routine_scan' })),
+      tasks: [],
+      routineRuns: [routineRun('quiet-1'), routineRun('quiet-2'), routineRun('failed', { state: 'Failed' })],
+      pricing,
+    })
+
+    expect(report.kinds[0]?.verdict).toEqual({ _tag: 'Cut', reason: '3 runs, no merged proposal.' })
+  })
+
+  it('asks for tuning when most settled turns of a Routine went to closed proposals', () => {
+    const report = buildPayback({
+      turns: ['merged', 'closed-1', 'closed-2', 'quiet'].map(taskId => turn({ taskId, role: 'routine_scan' })),
+      tasks: [],
+      routineRuns: [
+        routineRun('merged', { candidates: { merged: 1, open: 0, closed: 0 } }),
+        routineRun('closed-1', { candidates: { merged: 0, open: 0, closed: 1 } }),
+        routineRun('closed-2', { candidates: { merged: 0, open: 0, closed: 3 } }),
+        routineRun('quiet'),
+      ],
       pricing,
     })
 
     expect(report.kinds[0]).toEqual(expect.objectContaining({
-      work: { _tag: 'Routine', name: 'ci-review' },
-      outcomes: { useful: 1, wasted: 2, actionRequired: 0, open: 0, unrecorded: 0 },
-      verdict: { _tag: 'Tune', reason: '67% of Agent turns went to work that produced nothing or needs Action required.' },
+      outcomes: { useful: 1, wasted: 2, actionRequired: 0, open: 0, quiet: 1, unrecorded: 0 },
+      verdict: { _tag: 'Tune', reason: '67% of settled Agent turns went to closed proposals, failed scans, or Action required.' },
     }))
   })
 
@@ -216,7 +254,8 @@ describe('paybackRoutineRunOutcome', () => {
     ['one merged Candidate makes the run useful beside open ones', routineRun('a', { candidates: { merged: 1, open: 3, closed: 2 } }), { _tag: 'Useful' }],
     ['a pending Candidate keeps the run open', routineRun('a', { candidates: { merged: 0, open: 1, closed: 2 } }), { _tag: 'Open' }],
     ['Candidates that all closed unmerged waste the run', routineRun('a', { candidates: { merged: 0, open: 0, closed: 2 } }), { _tag: 'Wasted', reason: 'ClosedUnmerged' }],
-    ['a settled scan that proposed nothing wastes its turn', routineRun('a', { state: 'Failed' }), { _tag: 'Wasted', reason: 'NothingProposed' }],
+    ['a completed scan that proposed nothing is quiet', routineRun('a'), { _tag: 'Quiet' }],
+    ['a failed scan that proposed nothing wastes its turn', routineRun('a', { state: 'Failed' }), { _tag: 'Wasted', reason: 'NothingProposed' }],
     ['a run waiting on a person counts as blocked', routineRun('a', { state: 'ActionRequired' }), { _tag: 'ActionRequired' }],
     ['a run still scanning is open', routineRun('a', { state: 'Running' }), { _tag: 'Open' }],
     ['a report run files no issue, so nothing is recorded', routineRun('a', { mode: 'report' }), { _tag: 'Unrecorded' }],
