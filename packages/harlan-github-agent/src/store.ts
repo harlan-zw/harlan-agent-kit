@@ -21,6 +21,7 @@ import type { ReviewApproval } from './review-approval.ts'
 import type { ReviewProofStore } from './review-proof-store.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type { TakeOwnershipStore } from './take-ownership-store.ts'
+import type { TrialStore } from './trial-store.ts'
 import type {
   AdversarialReviewTask,
   AgentFeedback,
@@ -155,6 +156,7 @@ import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-
 import { buildStats } from './stats.ts'
 import { createTakeOwnershipStore } from './take-ownership-store.ts'
 import { cleanLine } from './text.ts'
+import { createTrialStore } from './trial-store.ts'
 import { parseConflictCleanMergeEvidence } from './worktree.ts'
 
 export interface RecordIncidentInput {
@@ -823,7 +825,7 @@ export type StoredIssueTriageRun
     }
     | { _tag: 'Discussion', confidence: number, decidedAt: string }
 
-export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore, TrialStore {
   getTask: (taskId: string) => DashboardTask | null
   listTasks: () => DashboardTask[]
   getOpenPullRequest: (repository: string, number: number) => GitHubPullRequestItem | null
@@ -7717,6 +7719,7 @@ export function openJournalStore(
   const findingThreadSyncStore = createFindingThreadSyncStore(database, repositoryWriteAuthoritySql)
   const agentTurnStore = createAgentTurnStore(database)
   const paybackStore = createPaybackStore(database)
+  const trialStore = createTrialStore(database)
   const loggedFindingStore = createLoggedFindingStore(database, {
     writeAuthoritySql: repositoryWriteAuthoritySql,
     digest,
@@ -17279,6 +17282,7 @@ export function openJournalStore(
     ...findingThreadSyncStore,
     ...agentTurnStore,
     ...paybackStore,
+    ...trialStore,
     ...reviewProofStore,
     ...loggedFindingStore,
     approveIssue,

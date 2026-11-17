@@ -1175,6 +1175,45 @@ describe('agent retro scan publication', () => {
   })
 })
 
+describe('trial report scan', () => {
+  const repository = 'harlan-zw/harlan-agent-kit'
+
+  it('hands the Agent every trial reading, files no issue, and logs the report', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      store.syncRepositories([repositoryMapping({ github: repository })], now().toISOString())
+      store.setRepositoryWritesEnabled(repository, true)
+      store.syncRoutines({ repository, specSha: 'abc123', entries: [{ name: 'trial-report', crons: ['0 6 * * 1'], timeZone: 'Australia/Melbourne', mode: 'report', enabled: true }], at: now().toISOString() })
+      store.openRoutineRun({ routineId: `${repository}:trial-report`, scheduledFor: now().toISOString(), specSha: 'abc123', at: now().toISOString() })
+      const capture = { prompts: [] as string[] }
+      const report = '### 2. Stop repeating an unchanged Action required Task\n\nParked.'
+      const task = claimStoredRun(store)
+      const result = await workerFor(store, scanning({ report, verdict: null, candidates: [candidate] }, capture))
+        .run(task, new AbortController().signal)
+
+      expect(result).toMatchObject({ _tag: 'Ok', value: { evidence: expect.stringContaining('0 issues requested') } })
+      store.completeRoutineRun({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: now().toISOString(), evidence: result._tag === 'Ok' ? result.value.evidence : '' })
+      expect(capture.prompts[0]).toContain('"id":"daily-checkin-when-changed"')
+      expect(capture.prompts[0]).toContain('"id":"path-rule-shadow"')
+      expect(capture.prompts[0]).not.toContain('Private controller issue')
+      expect(store.listCandidates(`${repository}:trial-report`)).toEqual([])
+      expect(store.claimNextCandidateIssue('publisher', now().toISOString(), 60_000)).toBeNull()
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)?.body).toContain(report)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('refuses a scan outside the kit before reading any evidence', () => {
+    expect(getRoutine('trial-report').prepare('harlan-zw/example', { listAgentFeedback: () => [] })._tag).toBe('Err')
+  })
+
+  it('refuses an answer without a report', () => {
+    expect(getRoutine('trial-report').parseResponse({ report: '', verdict: null, candidates: [] })._tag).toBe('Err')
+  })
+})
+
 describe('running a daily check-in only when the site changed', () => {
   const routineId = 'harlan-zw/example:daily-checkin'
   const yesterday = '2026-08-26T07:00:00.000Z'

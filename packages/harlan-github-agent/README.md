@@ -615,6 +615,23 @@ After merging supporting code, use the existing Service update control before th
 Start a smoke run with `control routine-run --routine harlan-zw/harlan-agent-kit:agent-retro`.
 Verify the Routine run and its published GitHub report before relying on the schedule.
 
+## Weekly trial report
+
+The `trial-report` Routine reads each workflow trial once a week and comments on its run log issue.
+Only `harlan-zw/harlan-agent-kit` may enable it, because its evidence covers every mapped repository.
+`src/trials.ts` defines each trial: its start, length, metric, keep rule, and kill rule. Add a trial there.
+
+The controller counts the numbers from Routine runs, Review runs, and shadow workflow events.
+The Agent receives those numbers as Service evidence. It never reads the live database.
+Each trial reports the last 7 days and the trial to date. The `daily-checkin` trial also reports the days before it started.
+Each rule reads met, not met, needs Harlan, or not measurable yet. A rule that needs a person's judgement stays with Harlan.
+The suggested verdict is Keep, Kill, or Continue. It recommends; Harlan decides.
+A trial that waits for its first shadow event reports that it has not started, never a zero share.
+Discussion route issues appear as links without titles, because a mapped repository can be private and the run log is public.
+
+The Routine proposes no change and requests no issue. It discards any Candidate the Agent returns.
+Enable it with `mode: report` only after Hogwild runs a controller that defines it. An older controller rejects the unknown name.
+
 ## Weekly performance review
 
 The `perf-review` Routine reads a repository's stored Measurements and files one issue per confirmed Regression.
