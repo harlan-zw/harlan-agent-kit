@@ -3,6 +3,7 @@ import type { BrowserAuth } from './browser-auth.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
 import type { EmergencyProxy } from './emergency-isolation.ts'
 import type { AgentHost, AgentSlotLimits, HostAgentPool, HostCapacity } from './host-capacity.ts'
+import type { PaybackPricing } from './payback.ts'
 import type { createPullRequestDiffSource } from './pull-request-diff.ts'
 import type { PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
 import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
@@ -25,6 +26,7 @@ import { registerEmergencyRoutes } from './emergency-routes.ts'
 import { parseAgentSlots } from './host-capacity.ts'
 import { parseIncidentResolutionRequest } from './incident-resolution.ts'
 import { latestDelivery } from './latest-delivery.ts'
+import { buildPayback } from './payback.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { parseRepairRecoveryRequest } from './repair-recovery.ts'
 import { registerSessionRoutes } from './session-routes.ts'
@@ -47,7 +49,9 @@ export interface AgentAppOptions {
   agentSlots?: AgentSlotLimits
   setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity | Promise<HostCapacity>
   hostSlotPolicy?: () => { hogwild: number, desktop: number }
-  store: Pick<JournalStore, 'getTask' | 'listTasks' | 'listCompletionTasks' | 'listIncidents' | 'getOpenPullRequest' | 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'finishUpdatePreparation' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
+  /** Dated rates and an hourly value for Payback. Absent leaves every cost unpriced. */
+  paybackPricing?: PaybackPricing
+  store: Pick<JournalStore, 'getTask' | 'listTasks' | 'listCompletionTasks' | 'listIncidents' | 'getOpenPullRequest' | 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listAgentTurns' | 'listPaybackTasks' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'finishUpdatePreparation' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
   allowedOrigin: string
   /**
    * The service's own listen address, such as `http://127.0.0.1:3210`. The
@@ -760,6 +764,22 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     if (range._tag === 'Err')
       throw createError({ status: 400, statusText: 'Bad Request', message: statsRangeMessage(range.error) })
     return options.store.getStats(range.value, options.now().toISOString())
+  })
+
+  app.get('/api/stats/payback', (event) => {
+    const query = new URL(event.req.url).searchParams
+    const range = parseStatsRange({
+      from: query.get('from') ?? undefined,
+      to: query.get('to') ?? undefined,
+      timeZone: query.get('time_zone') ?? undefined,
+    })
+    if (range._tag === 'Err')
+      throw createError({ status: 400, statusText: 'Bad Request', message: statsRangeMessage(range.error) })
+    return buildPayback({
+      turns: options.store.listAgentTurns(range.value),
+      tasks: options.store.listPaybackTasks(range.value),
+      pricing: options.paybackPricing ?? { rates: {}, ratesCheckedOn: null, hourlyValue: null },
+    })
   })
 
   app.get('/api/workflow-events', (event) => {

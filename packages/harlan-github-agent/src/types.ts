@@ -6,6 +6,7 @@ import type { GitHubRateLimitHold } from './github-rate-limit.ts'
 import type { AgentSlotLimits, HostCapacity } from './host-capacity.ts'
 import type { MergeRisk, MergeRiskPolicy } from './merge-risk.ts'
 import type { PackageReleaseConfig, PackageReleaseDefaults } from './package-release.ts'
+import type { PaybackPricing } from './payback.ts'
 import type { RepairRecoveryCandidate } from './repair-recovery.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
 import type { RoutineName } from './routines/index.ts'
@@ -203,6 +204,8 @@ export interface AgentConfig {
   trustedCheckoutRoots: string[]
   mutationsEnabled: boolean
   autoMerge: AutoMergePolicy
+  /** Dated model rates and Harlan's hourly value, for Payback. */
+  payback: PaybackPricing
   /** New issue work stops when open pull requests reach this limit. */
   maxOpenPullRequests: number
   /** Whether Ready Routine-filed issues are planned as Batches before Issue work starts. */

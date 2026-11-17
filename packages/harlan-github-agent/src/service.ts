@@ -1698,6 +1698,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     return { ...current, agentStart: resolveAgentStartState(current) }
   }
   const app = createAgentApp({
+    paybackPricing: config.payback,
     ...(browserAuth ? { browserAuth } : {}),
     ...(browserAuth?.public?.bootstrapKind === 'passkey' ? { emergencyIsolation: emergencyIsolationRequest } : {}),
     pullRequestDiff: createGitHubPullRequestDiff({ tokens: routedTokens, now: () => now().getTime(), log: message => options.logger.error(message) }),
@@ -1761,6 +1762,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       openRoutineRun: store.openRoutineRun,
       getDashboardSnapshot,
       getStats: store.getStats,
+      listAgentTurns: store.listAgentTurns,
+      listPaybackTasks: store.listPaybackTasks,
       getOpenPullRequestStatus: store.getOpenPullRequestStatus,
       getOpenPullRequest: store.getOpenPullRequest,
       getTask: store.getTask,

@@ -687,3 +687,37 @@ agent:
     expect(normalizeGitHubRemote(remote)).toBe('harlan-zw/example')
   })
 })
+
+describe('payback pricing', () => {
+  it('leaves every cost unpriced when the configuration names no rates', () => {
+    const parsed = parseConfigText(configText)
+
+    expect(parsed._tag === 'Ok' && parsed.value.payback).toEqual({ rates: {}, ratesCheckedOn: null, hourlyValue: null })
+  })
+
+  it('reads dated rates per model and prices cache writes at the input rate unless named', () => {
+    const parsed = parseConfigText(`${configText}
+payback:
+  rates_checked_on: "2026-11-17"
+  hourly_value: 150
+  rates:
+    gpt-6.1-sol: { input: 2, cached_input: 0.1, output: 10 }
+`)
+
+    expect(parsed._tag === 'Ok' && parsed.value.payback).toEqual({
+      rates: { 'gpt-6.1-sol': { input: 2, cachedInput: 0.1, cacheWrite: 2, output: 10 } },
+      ratesCheckedOn: '2026-11-17',
+      hourlyValue: 150,
+    })
+  })
+
+  it('refuses rates that nobody dated', () => {
+    const parsed = parseConfigText(`${configText}
+payback:
+  rates:
+    gpt-6.1-sol: { input: 2, cached_input: 0.1, output: 10 }
+`)
+
+    expect(parsed).toEqual({ _tag: 'Err', error: [{ path: '$.payback.rates_checked_on', message: 'Rates need the date someone checked them.' }] })
+  })
+})

@@ -1,5 +1,6 @@
 import type { AgentProviderName } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
+import type { PaybackPricing, PaybackRate } from './payback.ts'
 import type { Result } from './result.ts'
 import type { AgentConfig, AgentRole, AgentSessionsCodexMode, ClassificationConfig, CodexReasoningEffort, ExternalRepositoryWatch, GitHubAccount, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, ServiceUpdateSchedule, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
 import { execFile } from 'node:child_process'
@@ -114,6 +115,52 @@ function autoMergePolicy(source: UnknownRecord, issues: ConfigIssue[]): AutoMerg
   if (enabled === undefined || minimumConfidence === undefined || method === undefined)
     return undefined
   return enabled ? { _tag: 'Enabled', minimumConfidence, method } : { _tag: 'Disabled' }
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+/** Payback prices Agent turns from dated rates. Absent leaves every cost unpriced. */
+function paybackPricing(source: UnknownRecord, issues: ConfigIssue[]): PaybackPricing | undefined {
+  const value = source.payback
+  if (value === undefined)
+    return { rates: {}, ratesCheckedOn: null, hourlyValue: null }
+  if (!isRecord(value)) {
+    issues.push({ path: '$.payback', message: 'Expected an object.' })
+    return undefined
+  }
+  const before = issues.length
+  const hourlyValue = value.hourly_value === undefined ? null : nonNegativeNumber(value.hourly_value) ?? undefined
+  if (hourlyValue === undefined)
+    issues.push({ path: '$.payback.hourly_value', message: 'Expected a number of US dollars, zero or more.' })
+  const checked = value.rates_checked_on
+  const ratesCheckedOn = checked === undefined ? null : typeof checked === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(checked) ? checked : undefined
+  if (ratesCheckedOn === undefined)
+    issues.push({ path: '$.payback.rates_checked_on', message: 'Expected a date such as 2026-11-17.' })
+  const rateSource = value.rates ?? {}
+  const rates: Record<string, PaybackRate> = {}
+  if (!isRecord(rateSource)) {
+    issues.push({ path: '$.payback.rates', message: 'Expected an object of models.' })
+  }
+  else {
+    for (const [model, rate] of Object.entries(rateSource)) {
+      const path = `$.payback.rates.${model}`
+      const input = isRecord(rate) ? nonNegativeNumber(rate.input) : undefined
+      const cachedInput = isRecord(rate) ? nonNegativeNumber(rate.cached_input) : undefined
+      const cacheWrite = isRecord(rate) ? nonNegativeNumber(rate.cache_write ?? rate.input) : undefined
+      const output = isRecord(rate) ? nonNegativeNumber(rate.output) : undefined
+      if (input === undefined || cachedInput === undefined || cacheWrite === undefined || output === undefined)
+        issues.push({ path, message: 'Expected input, cached_input, and output in US dollars per million tokens. cache_write is optional.' })
+      else
+        rates[model] = { input, cachedInput, cacheWrite, output }
+    }
+    if (Object.keys(rateSource).length > 0 && ratesCheckedOn === null)
+      issues.push({ path: '$.payback.rates_checked_on', message: 'Rates need the date someone checked them.' })
+  }
+  if (issues.length > before || hourlyValue === undefined || ratesCheckedOn === undefined)
+    return undefined
+  return { rates, ratesCheckedOn, hourlyValue }
 }
 
 const TIME_ZONES = new Set(Intl.supportedValuesOf('timeZone'))
@@ -861,6 +908,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   if (mutationsEnabled === undefined)
     issues.push({ path: '$.mutations_enabled', message: 'Expected a boolean.' })
   const autoMerge = autoMergePolicy(document.value, issues)
+  const payback = paybackPricing(document.value, issues)
   const openPullRequestsValue = document.value.max_open_pull_requests ?? 8
   const maxOpenPullRequests = typeof openPullRequestsValue === 'number' && Number.isInteger(openPullRequestsValue) && openPullRequestsValue >= 1 && openPullRequestsValue <= 100
     ? openPullRequestsValue
@@ -970,6 +1018,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     || pollIntervalSeconds === undefined
     || mutationsEnabled === undefined
     || autoMerge === undefined
+    || payback === undefined
     || maxOpenPullRequests === undefined
     || issueCutoff === undefined
     || issueBatches === undefined
@@ -991,6 +1040,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     trustedCheckoutRoots,
     mutationsEnabled,
     autoMerge,
+    payback,
     maxOpenPullRequests,
     issueBatches,
     ...(serviceUpdate === null ? {} : { serviceUpdate }),
