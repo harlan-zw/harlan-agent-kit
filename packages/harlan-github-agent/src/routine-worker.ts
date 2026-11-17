@@ -5,7 +5,7 @@ import type { AgentTokenUsage } from './agent-provider.ts'
 import type { GitHubSource } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
-import type { ClaimedRoutineRun, ServiceUpdateStatus } from './types.ts'
+import type { ClaimedRoutineRun, OpenCandidateIssue, ServiceUpdateStatus } from './types.ts'
 import type { RoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
 import type { AgentWorkspaceManager } from './worktree.ts'
 import { agentPhase } from './agent-progress.ts'
@@ -157,17 +157,19 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           : task.name === 'trial-report'
             ? collectTrialReportEvidence(options.serviceEvidence, options.now())
             : collectAgentRetroEvidence(options.serviceEvidence, options.now())
-      // Routine-only services have no repository poller to observe issue closure.
-      // Read exact issues: absence from bounded metadata cannot prove closure.
-      const publishedIssues = options.store.listOpenCandidateIssues(task.routineId)
-      for (const number of new Set(publishedIssues.map(issue => issue.issueNumber))) {
-        const issue = await options.github.getIssue(task.repositoryMapping, number, signal)
-        if (issue._tag === 'Err')
-          return err(issue.error.message)
-        options.store.recordPollObservation({ subject: issue.value, observedAt: options.now().toISOString() })
+      // Only dependency-updates reads its open issues, so no other Routine pays for these reads.
+      // Routine-only services have no poller to observe closure, so read each issue exactly.
+      let openIssues: OpenCandidateIssue[] = []
+      if (task.name === 'dependency-updates') {
+        for (const number of new Set(options.store.listOpenCandidateIssues(task.routineId).map(issue => issue.issueNumber))) {
+          const issue = await options.github.getIssue(task.repositoryMapping, number, signal)
+          if (issue._tag === 'Err')
+            return err(issue.error.message)
+          options.store.recordPollObservation({ subject: issue.value, observedAt: options.now().toISOString() })
+        }
+        options.store.reconcileRoutineCandidates(options.now().toISOString(), task.repository)
+        openIssues = options.store.listOpenCandidateIssues(task.routineId)
       }
-      options.store.reconcileRoutineCandidates(options.now().toISOString(), task.repository)
-      const openIssues = options.store.listOpenCandidateIssues(task.routineId)
       const turn = await runAgentTurn(
         {
           ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),

@@ -22,15 +22,18 @@ function dependencyStore(): Store {
   store.syncRoutines({
     repository: 'harlan-zw/example',
     specSha: 'abc123',
-    entries: [{ name: 'dependency-updates', crons: ['0 7 * * 1'], timeZone: 'UTC', mode: 'propose', enabled: true }],
+    entries: [
+      { name: 'dependency-updates', crons: ['0 7 * * 1'], timeZone: 'UTC', mode: 'propose', enabled: true },
+      { name: 'ci-review', crons: ['0 7 * * 1'], timeZone: 'UTC', mode: 'propose', enabled: true },
+    ],
     at: at(1),
   })
   return store
 }
 
-/** One weekly scan whose Agent answers with these registry updates. Returns the prompt it read. */
-async function scan(store: Store, day: number, updates: unknown[], getIssue: GitHubSource['getIssue'] = async (_repository, number) => ok(issueItem({ number }))): Promise<string> {
-  store.openRoutineRun({ routineId, scheduledFor: at(day), specSha: 'abc123', at: at(day) })
+/** One weekly scan whose Agent answers with these registry updates, or these Candidates for ci-review. Returns the prompt it read. */
+async function scan(store: Store, day: number, updates: unknown[], getIssue: GitHubSource['getIssue'] = async (_repository, number) => ok(issueItem({ number })), name: 'dependency-updates' | 'ci-review' = 'dependency-updates'): Promise<string> {
+  store.openRoutineRun({ routineId: `harlan-zw/example:${name}`, scheduledFor: at(day), specSha: 'abc123', at: at(day) })
   const task = store.claimNextRoutineRun('worker-1', at(day), 60 * 60_000)
   if (task === null)
     throw new Error('Expected a queued Routine run.')
@@ -41,7 +44,7 @@ async function scan(store: Store, day: number, updates: unknown[], getIssue: Git
       prompts.push(request.prompt)
       return (async function* (): AsyncIterable<AgentEvent> {
         yield { _tag: 'SessionStarted', sessionId: 'session-1' }
-        yield { _tag: 'Message', text: JSON.stringify({ outcome: 'complete', report: 'Registry scan completed.', updates }) }
+        yield { _tag: 'Message', text: JSON.stringify(name === 'dependency-updates' ? { outcome: 'complete', report: 'Registry scan completed.', updates } : { report: 'CI scan completed.', candidates: updates }) }
         yield { _tag: 'TurnCompleted' }
       })()
     },
@@ -73,6 +76,26 @@ function fileIssues(store: Store, day: number): string[] {
 }
 
 describe('dependency work open by kind', () => {
+  it('reads no issue for a Routine that ignores open issues', async () => {
+    const store = dependencyStore()
+    try {
+      const finding = { urgency: 'maintenance', fingerprint: '.github/workflows/ci.yml', title: 'Pin the setup action', target: '.github/workflows/ci.yml', claim: 'The setup action floats.', verification: 'pnpm check', estimatedChangedFiles: 1 }
+      await scan(store, 3, [finding], undefined, 'ci-review')
+      expect(fileIssues(store, 3)).toHaveLength(1)
+      const read: number[] = []
+
+      await scan(store, 10, [], async (_repository, number) => {
+        read.push(number)
+        return err({ repository: 'harlan-zw/example', message: 'GitHub is down.', status: 502 })
+      }, 'ci-review')
+
+      expect(read).toEqual([])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('refreshes closed proposals before the next scan without GitHub polling', async () => {
     const store = dependencyStore()
     try {
