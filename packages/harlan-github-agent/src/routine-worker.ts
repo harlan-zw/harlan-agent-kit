@@ -18,7 +18,7 @@ import { routineReportCommand } from './routine-report-controller.ts'
 import { getRoutine } from './routines/index.ts'
 
 export interface RoutineScanWorkerOptions {
-  serviceEvidence?: Pick<JournalStore, 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents'>
+  serviceEvidence?: Pick<JournalStore, 'groupWorkflowFailures' | 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents'>
   serviceUpdate?: () => ServiceUpdateStatus
   activityLog?: Pick<AgentActivityLog, 'record'>
   githubEvidence?: Pick<RoutineGitHubEvidenceSource, 'collect'>

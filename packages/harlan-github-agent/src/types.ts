@@ -1145,6 +1145,21 @@ export interface WorkflowEventSummary {
   retried: number
 }
 
+/** Failed or retried workflow events in one window that share a stream, event, state, and reason prefix. */
+export interface WorkflowFailureGroup {
+  stream: WorkflowEventStream
+  event: string
+  to: string
+  /** First 80 characters of the stored reason. Null for a retry without a reason. */
+  reason: string | null
+  count: number
+  /** Events past their first attempt. */
+  retried: number
+  newestOccurredAt: string
+  /** Up to three of the newest events, newest first. */
+  examples: Array<Pick<WorkflowEvent, 'id' | 'entityId' | 'repository' | 'itemNumber' | 'occurredAt'>>
+}
+
 export type ProviderFailureClass
   = | 'usage_limit'
     | 'network'
