@@ -3795,6 +3795,8 @@ function recordTransition(database: DatabaseSync, input: {
   fence: number
   usage?: AgentTokenUsage | null
   at: string
+  /** Names the workflow event when the state change alone does not say what happened. */
+  event?: string
 }): void {
   database.prepare(`
     INSERT INTO task_transitions (task_id, from_tag, to_tag, reason, fence, created_at)
@@ -3803,7 +3805,7 @@ function recordTransition(database: DatabaseSync, input: {
   const scope = taskWorkflowScope(database, 'tasks', input.taskId)
   recordWorkflowEvent(database, {
     stream: 'task',
-    event: workflowTransitionEvent(input.from, input.to),
+    event: input.event ?? workflowTransitionEvent(input.from, input.to),
     entityId: input.taskId,
     repository: scope.repository,
     itemNumber: scope.item_number,
@@ -4021,6 +4023,111 @@ function conflictTaskWaitsForAuthority(database: DatabaseSync, taskId: string): 
   return source === null || source === 'Queued'
 }
 
+/** What the last Agent turn of a Task stopped on, and when. */
+interface TurnBlocker { reason: string, at: string }
+
+const REPEAT_HELD_EVENT = 'RepeatHeld'
+
+/**
+ * The blocker the last Agent turn of this Task stopped on, while the pull
+ * request state is still the one that turn read. Trial `action_required_once`.
+ *
+ * Agents word one blocker differently on every turn, so the stored reason is
+ * reused and never compared. A turn that later ended another way, or a newer
+ * pull request state, leaves no blocker.
+ */
+function unchangedTurnBlocker(database: DatabaseSync, taskId: string, revisionId: string): TurnBlocker | null {
+  const row = database.prepare(`
+    SELECT transition.to_tag, transition.reason, transition.created_at,
+      (
+        SELECT event.revision_id FROM workflow_events AS event
+        WHERE event.stream = 'task' AND event.entity_id = transition.task_id
+          AND event.from_state = 'Running' AND event.to_state = 'ActionRequired'
+          AND event.occurred_at = transition.created_at
+        ORDER BY event.id DESC LIMIT 1
+      ) AS revision_id
+    FROM task_transitions AS transition
+    WHERE transition.task_id = ? AND transition.from_tag = 'Running'
+    ORDER BY transition.id DESC LIMIT 1
+  `).get(taskId) as { to_tag: TaskRow['state_tag'], reason: string | null, created_at: string, revision_id: string | null } | undefined
+  return row?.to_tag === 'ActionRequired' && row.reason !== null && row.revision_id === revisionId
+    ? { reason: row.reason, at: row.created_at }
+    : null
+}
+
+/**
+ * Whether a later Review repeats the open findings of the newest Review before `at`.
+ *
+ * The head CI finding is appended to a stored run, so the run a turn read can
+ * change in place. Only a different, later run counts as the same input. A
+ * Repair dispute asks its fresh Review to judge the finding again, so that
+ * answer is new input.
+ */
+function reviewFindingsUnchangedSince(database: DatabaseSync, subjectId: number, revisionId: string, at: string): boolean {
+  const disputed = database.prepare(`
+    SELECT 1 FROM review_rerun_requests
+    JOIN worker_tasks ON worker_tasks.id = review_rerun_requests.task_id
+    WHERE worker_tasks.subject_id = ? AND review_rerun_requests.source = 'repair_dispute'
+      AND review_rerun_requests.requested_at >= ?
+  `).get(subjectId, at) !== undefined
+  if (disputed)
+    return false
+  const latest = (before: string | null) => database.prepare(`
+    SELECT id, findings FROM review_runs
+    WHERE subject_id = ? AND revision_id = ? AND (? IS NULL OR completed_at <= ?)
+    ORDER BY completed_at DESC, id DESC
+    LIMIT 1
+  `).get(subjectId, revisionId, before, before) as { id: string, findings: string } | undefined
+  const identities = (row: { findings: string }) => JSON.stringify((JSON.parse(row.findings) as ReviewFinding[])
+    .filter(finding => finding._tag === 'Open')
+    .map(finding => finding.details?.fingerprint ?? finding.summary)
+    .sort())
+  const then = latest(at)
+  const now = latest(null)
+  return then !== undefined && now !== undefined && then.id !== now.id && identities(then) === identities(now)
+}
+
+/**
+ * Keeps a blocked Task at Action required instead of starting its Agent again.
+ *
+ * Records one RepeatHeld event per hold, so the trial counts avoided Agent
+ * turns and not observations.
+ */
+function holdRepeat(database: DatabaseSync, task: { id: string, state_tag: TaskRow['state_tag'], fence: number }, blocker: TurnBlocker, at: string): void {
+  if (task.state_tag === 'Superseded') {
+    const restored = database.prepare(`
+      UPDATE tasks SET state_tag = 'ActionRequired', reason = ?, updated_at = ?
+      WHERE id = ? AND state_tag = 'Superseded'
+    `).run(blocker.reason, at, task.id)
+    if (restored.changes === 1)
+      recordTransition(database, { taskId: task.id, from: 'Superseded', to: 'ActionRequired', reason: blocker.reason, fence: task.fence, at, event: REPEAT_HELD_EVENT })
+    return
+  }
+  const last = database.prepare(`
+    SELECT event FROM workflow_events
+    WHERE stream = 'task' AND entity_id = ?
+    ORDER BY occurred_at DESC, id DESC LIMIT 1
+  `).get(task.id) as { event: string } | undefined
+  if (last?.event === REPEAT_HELD_EVENT)
+    return
+  const scope = taskWorkflowScope(database, 'tasks', task.id)
+  recordWorkflowEvent(database, {
+    stream: 'task',
+    event: REPEAT_HELD_EVENT,
+    entityId: task.id,
+    repository: scope.repository,
+    itemNumber: scope.item_number,
+    revisionId: scope.revision_id,
+    taskId: task.id,
+    from: task.state_tag,
+    to: task.state_tag,
+    reason: blocker.reason,
+    attempt: scope.attempts,
+    fence: task.fence,
+    at,
+  })
+}
+
 /** Wait for quiet base inputs, but never delay a burst beyond five minutes. */
 const CONFLICT_BASE_QUIET_MS = 120_000
 const CONFLICT_BASE_MAX_WAIT_MS = 300_000
@@ -4057,6 +4164,7 @@ function planConflictResolution(
   observedAt: string,
   mapping: RepositoryMapping,
   reviewApproved: boolean,
+  actionRequiredOnce = false,
 ): void {
   const open = subject.kind === 'pull_request'
     && subject.state === 'open'
@@ -4118,6 +4226,14 @@ function planConflictResolution(
       WHERE id = ? AND state_tag = 'Superseded'
     `).run(reason, observedAt, existing.id)
     recordTransition(database, { taskId: existing.id, from: 'Superseded', to: 'ActionRequired', reason, fence: existing.fence, at: observedAt })
+    return
+  }
+  // A draft round trip restores the pull request state an Agent already blocked on.
+  const heldBlocker = actionRequiredOnce && ready && existing?.state_tag === 'Superseded' && existing.cancelled === 0
+    ? unchangedTurnBlocker(database, existing.id, revisionId)
+    : null
+  if (existing !== undefined && heldBlocker !== null) {
+    holdRepeat(database, existing, heldBlocker, observedAt)
     return
   }
   if (ready && ((existing?.state_tag === 'Superseded' && existing.cancelled === 0) || recoverableFailure)) {
@@ -4319,6 +4435,7 @@ function planReviewFix(
   revisionId: string,
   observedAt: string,
   mapping: RepositoryMapping,
+  actionRequiredOnce = false,
 ): ReviewFixPlan {
   // An owner request has its own scope. Review must not reuse its Task.
   if (database.prepare(`SELECT 1 FROM tasks JOIN pull_request_change_requests ON task_id = tasks.id
@@ -4389,6 +4506,14 @@ function planReviewFix(
     return { _tag: 'Refused', reason: REVIEW_REPAIR_REFUSALS.cancelled }
   if (existing.state_tag === 'Queued')
     return { _tag: 'Planned', taskId: existing.id, rounds }
+  // The same findings on the same pull request state get the same blocker.
+  const heldBlocker = actionRequiredOnce && (existing.state_tag === 'Superseded' || existing.state_tag === 'ActionRequired')
+    ? unchangedTurnBlocker(database, existing.id, revisionId)
+    : null
+  if (heldBlocker !== null && reviewFindingsUnchangedSince(database, subjectId, revisionId, heldBlocker.at)) {
+    holdRepeat(database, existing, heldBlocker, observedAt)
+    return { _tag: 'Refused', reason: heldBlocker.reason }
+  }
   // A newer Review recorded exact findings for this same head commit.
   if (existing.state_tag === 'Superseded')
     return requeueReviewFix(database, existing, 'The exact pull request head commit is active again.', observedAt, rounds)
@@ -7568,6 +7693,8 @@ export function openJournalStore(
   serviceUpdate: () => ServiceUpdateStatus = () => ({ _tag: 'Checking', deployedCommit: '' }),
   /** Reasoning effort overrides the configuration names, per Agent provider and role. */
   roleReasoningEfforts: RoleReasoningEfforts = {},
+  /** Trial: hold a blocked Task until its pull request state or Review findings change. */
+  actionRequiredOnce = false,
 ): JournalStore {
   const database = openDatabase(path)
   const packageReleaseStore = createPackageReleaseStore(database)
@@ -8296,7 +8423,7 @@ export function openJournalStore(
               followHeadCommit(database, subject.id, revisionId, input.subject.headSha)
               // Review may finish its report just before this merge observation.
               if (running !== undefined && openReviewFindings(database, subject.id, revisionId).length > 0)
-                planReviewFix(database, input.subject, subject.id, revisionId, input.observedAt, mapping)
+                planReviewFix(database, input.subject, subject.id, revisionId, input.observedAt, mapping, actionRequiredOnce)
             }
           }
           if (merged) {
@@ -8368,7 +8495,7 @@ export function openJournalStore(
           SELECT 1 FROM pull_request_approvals
           WHERE subject_id = ? AND revision_id = ? AND kind = 'review'
         `).get(subject.id, revisionId) !== undefined
-        planConflictResolution(database, input.subject, subject.id, revisionId, input.observedAt, mapping, reviewApproved)
+        planConflictResolution(database, input.subject, subject.id, revisionId, input.observedAt, mapping, reviewApproved, actionRequiredOnce)
         if (input.subject.kind === 'pull_request' && input.pullRequestFiles !== undefined)
           insertRevisionFiles(database, subject.id, revisionId, input.subject.headSha, input.pullRequestFiles, input.observedAt)
         planAdversarialReview(
@@ -10421,7 +10548,7 @@ export function openJournalStore(
       if (subject.kind !== 'pull_request')
         throw new Error(`Review Task ${input.taskId} does not reference a pull request.`)
       const mapping = JSON.parse(row.policy_json) as RepositoryMapping
-      const plan = planReviewFix(database, subject, row.subject_id, row.revision_id, input.at, mapping)
+      const plan = planReviewFix(database, subject, row.subject_id, row.revision_id, input.at, mapping, actionRequiredOnce)
       database.exec('COMMIT')
       return plan._tag === 'Planned'
         ? { _tag: 'Queued', taskId: plan.taskId, rounds: plan.rounds }
@@ -10482,7 +10609,7 @@ export function openJournalStore(
       }
       const subject = JSON.parse(row.payload) as GitHubPullRequestItem
       const mapping = JSON.parse(row.policy_json) as RepositoryMapping
-      const plan = planReviewFix(database, subject, row.subject_id, input.revisionId, input.at, mapping)
+      const plan = planReviewFix(database, subject, row.subject_id, input.revisionId, input.at, mapping, actionRequiredOnce)
       database.exec('COMMIT')
       return plan._tag === 'Planned'
         ? { _tag: 'Queued', taskId: plan.taskId, rounds: plan.rounds }

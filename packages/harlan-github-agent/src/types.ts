@@ -210,6 +210,12 @@ export interface AgentConfig {
   maxOpenPullRequests: number
   /** Whether Ready Routine-filed issues are planned as Batches before Issue work starts. */
   issueBatches: boolean
+  /**
+   * Trial: a conflict resolution or Repair whose Agent stopped on Action
+   * required does not start again until its pull request state or Review
+   * findings change.
+   */
+  actionRequiredOnce: boolean
   /** When the service installs an available update by itself. Absent waits for a person. */
   serviceUpdate?: ServiceUpdateSchedule
   pollIntervalSeconds: number

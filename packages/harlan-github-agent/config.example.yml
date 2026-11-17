@@ -100,6 +100,11 @@ max_open_pull_requests: 8
 # issues, and its units run as sub agents under one Agent permit. Set false to
 # run every issue alone.
 issue_batches: true
+# Trial: when a conflict resolution or Repair Agent stops on Action required,
+# do not start it again on the same pull request state. This hold ends when
+# the pull request or its Review findings change. Each held restart records a
+# RepeatHeld task event. Off keeps every restart.
+action_required_once: false
 # Install an available update once a day, in the hour after this local time.
 # The update waits for active work, like Update in the dashboard. It moves only
 # this checkout. If an update fails, the next try is the following day. Omit
