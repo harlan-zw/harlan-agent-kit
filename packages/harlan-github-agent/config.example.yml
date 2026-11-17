@@ -74,6 +74,14 @@ storage:
 #   # turn, from 0.5 to 0.99. Leave it out and the Agent turn keeps every
 #   # route. Run evaluate-issue-triage first and set what it measures.
 #   issue_triage_band: 0.9
+#   # The Discussion route, independent of issue_triage_band. A band turns it
+#   # on in shadow mode: every new issue state is classified, its route is
+#   # recorded as an issue_triage_status workflow event, and Agent triage
+#   # still runs. In live mode, a discussion at or above the band that needs
+#   # no code read skips Agent triage and gets the harlan-agent-discussion
+#   # label. Leave both out to keep every issue with Agent triage.
+#   issue_discussion_band: 0.9
+#   issue_discussion_mode: shadow
 # What may start work on this machine. Defaults to every trigger.
 # An always-on second machine runs [routine] while the desktop keeps [github].
 # The two sets never overlap, so neither machine can claim the other's task and

@@ -110,7 +110,20 @@ export type ClassificationConfig
       model: string
       /** The confidence an Issue triage route needs before it bypasses the Agent turn. Null never bypasses. */
       issueTriageBand: number | null
+      issueDiscussion: IssueDiscussionRoute
     }
+
+/**
+ * The Discussion route trial, independent of the Issue triage band.
+ *
+ * `Shadow` asks the classification for every issue state and records what it
+ * answered, while Agent triage still runs. `Live` also skips Agent triage for
+ * a discussion at or above the band that needs no code read.
+ */
+export type IssueDiscussionRoute
+  = | { _tag: 'Off' }
+    | { _tag: 'Shadow', band: number }
+    | { _tag: 'Live', band: number }
 
 /**
  * What may start work on this machine.

@@ -1,4 +1,5 @@
 import type { ClassificationSource } from './classification.ts'
+import type { IssueRoute } from './issue-classification.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { issueRouteQuestions } from './issue-classification.ts'
@@ -235,7 +236,7 @@ export async function replayStoredTriage(input: {
 export interface IssueTriageReplay {
   stored: 'READY_TO_IMPLEMENT' | 'READY_TO_SPEC' | 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT'
   /** The route the classification would answer, null when the call failed. */
-  route: 'NEEDS_INFO' | 'WAIT_TO_IMPLEMENT' | 'AGENT_TRIAGE' | null
+  route: IssueRoute | null
   confidence: number | null
 }
 

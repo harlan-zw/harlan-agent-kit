@@ -12,7 +12,7 @@ import { APPROVAL_LABELS } from './approval-labels.ts'
  * Agent is working on has no settled verdict, and a settled verdict means no
  * Agent is working.
  */
-export type AgentLabelState = IssueTriageState | PullRequestTriageState | ReviewOutcomeName | 'RUNNING'
+export type AgentLabelState = IssueTriageState | 'DISCUSSION' | PullRequestTriageState | ReviewOutcomeName | 'RUNNING'
 
 export interface AgentLabelDefinition {
   name: string
@@ -79,6 +79,11 @@ export const AGENT_LABELS = {
     color: '6e7781',
     description: 'Issue triage found work that should wait before implementation.',
   },
+  DISCUSSION: {
+    name: 'harlan-agent-discussion',
+    color: 'c5def5',
+    description: 'Issue triage found a discussion with no change to make yet.',
+  },
 } as const satisfies Record<AgentLabelState, AgentLabelDefinition>
 
 /**
@@ -94,7 +99,7 @@ export interface AgentLabelPlan {
 }
 
 const reviewStates = ['RUNNING', 'READY', 'PENDING', 'BLOCKED'] as const satisfies readonly AgentLabelState[]
-const issueTriageStates = ['READY_TO_IMPLEMENT', 'READY_TO_SPEC', 'NEEDS_INFO', 'WAIT_TO_IMPLEMENT'] as const satisfies readonly AgentLabelState[]
+const issueTriageStates = ['READY_TO_IMPLEMENT', 'READY_TO_SPEC', 'NEEDS_INFO', 'WAIT_TO_IMPLEMENT', 'DISCUSSION'] as const satisfies readonly AgentLabelState[]
 const pullRequestTriageStates = ['ADVERSARIAL_REVIEW_REQUIRED', 'ADVERSARIAL_REVIEW_SKIPPED'] as const satisfies readonly AgentLabelState[]
 const ownedLabels = new Set(Object.values(AGENT_LABELS).map(label => label.name.toLowerCase()))
 

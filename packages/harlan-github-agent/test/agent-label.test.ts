@@ -94,6 +94,14 @@ describe('planAgentLabels', () => {
       'harlan-agent-review-skipped',
     ])).toEqual({ add: null, remove: ['harlan-agent-review-skipped'] })
   })
+
+  it('treats the Discussion label as one Issue triage route', () => {
+    expect(planAgentLabels('DISCUSSION', ['harlan-agent-needs-info', 'question'])).toEqual({
+      add: { name: 'harlan-agent-discussion', color: expect.any(String), description: expect.any(String) },
+      remove: ['harlan-agent-needs-info'],
+    })
+    expect(planAgentLabels('READY_TO_IMPLEMENT', ['harlan-agent-discussion']).remove).toEqual(['harlan-agent-discussion'])
+  })
 })
 
 describe('staleAgentLabels', () => {

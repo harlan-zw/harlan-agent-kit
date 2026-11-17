@@ -736,12 +736,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     reportCheckRun,
     store,
   })
-  // Issue triage classification runs only when the configuration sets a band:
-  // without one the Agent turn keeps every route, and evaluate-issue-triage
-  // names the band worth trying.
+  // Issue triage classification runs only when the configuration sets a band
+  // or the Discussion route: without either the Agent turn keeps every route,
+  // and evaluate-issue-triage names the band worth trying.
   const issueClassification = createIssueClassificationController({
     classification,
     band: config.classification._tag === 'Enabled' ? config.classification.issueTriageBand : null,
+    discussion: config.classification._tag === 'Enabled' ? config.classification.issueDiscussion : { _tag: 'Off' },
     github: workerGithub,
   })
   const mutationSchedulers = await (async () => {
