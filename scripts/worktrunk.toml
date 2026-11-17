@@ -46,7 +46,14 @@ fi
 [pre-start]
 pnpm = """
 if [ -f {{ primary_worktree_path }}/pnpm-lock.yaml ] && [ -f pnpm-lock.yaml ]; then
-  timeout --signal=TERM --kill-after=10s 180s pnpm install --frozen-lockfile --prefer-offline --ignore-scripts --ignore-pnpmfile --reporter=append-only
+  # --ignore-scripts also skips building a git-hosted dependency. A repository that
+  # allowlists one in allowBuilds gets a normal install, so pnpm builds it.
+  scripts=--ignore-scripts
+  if [ -f pnpm-workspace.yaml ] && sed -n '/^allowBuilds:/,/^[^ ]/p' pnpm-workspace.yaml | grep ': true' \
+    | grep -qF -e 'codeload.github.com' -e 'github:' -e 'git+'; then
+    scripts=
+  fi
+  timeout --signal=TERM --kill-after=10s 180s pnpm install --frozen-lockfile --prefer-offline $scripts --ignore-pnpmfile --reporter=append-only
 fi
 """
 env = """
