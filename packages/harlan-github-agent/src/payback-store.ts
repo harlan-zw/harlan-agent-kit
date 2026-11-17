@@ -38,8 +38,11 @@ export function createPaybackStore(database: DatabaseSync): PaybackStore {
       json_extract(pull_request_revisions.payload, '$.mergedAt') AS merged_at
     FROM spent
     LEFT JOIN tasks ON tasks.id = spent.task_id
+    -- The IN term matches one_live_publication_command_per_task, so SQLite reads one row per Task.
     LEFT JOIN publication_commands
-      ON publication_commands.task_id = tasks.id AND publication_commands.state_tag = 'Published'
+      ON publication_commands.task_id = tasks.id
+      AND publication_commands.state_tag IN ('Pending', 'Running', 'Published')
+      AND publication_commands.state_tag = 'Published'
     LEFT JOIN subjects AS items ON items.id = tasks.subject_id
     LEFT JOIN subjects AS pull_requests
       ON pull_requests.repository_id = items.repository_id

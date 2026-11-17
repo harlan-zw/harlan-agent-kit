@@ -46,6 +46,8 @@ export type PaybackOutcome
   = | { _tag: 'Useful' }
     | { _tag: 'Wasted', reason: 'ClosedUnmerged' | 'NothingPublished' }
     | { _tag: 'Open' }
+    /** Stopped on a blocker only a person can clear. It spent turns and has nothing to show yet. */
+    | { _tag: 'ActionRequired' }
     /** The Journal records no useful outcome for this kind of work yet. */
     | { _tag: 'Unrecorded' }
 
@@ -61,6 +63,8 @@ export function paybackOutcome(fact: PaybackTaskFact): PaybackOutcome {
   }
   if (fact.state === 'Completed' || fact.state === 'Failed' || fact.state === 'Superseded')
     return { _tag: 'Wasted', reason: 'NothingPublished' }
+  if (fact.state === 'ActionRequired')
+    return { _tag: 'ActionRequired' }
   return { _tag: 'Open' }
 }
 
@@ -90,10 +94,10 @@ export interface PaybackKind {
   turnsWithoutUsage: number
   tokens: PaybackTokens
   cost: PaybackCost
-  outcomes: { useful: number, wasted: number, open: number, unrecorded: number }
+  outcomes: { useful: number, wasted: number, actionRequired: number, open: number, unrecorded: number }
   /** Dollars per useful outcome, or null when nothing was useful or the cost is unpriced. */
   costPerUseful: number | null
-  /** Share of Agent turns on settled work that went to work with nothing to show. */
+  /** Share of Agent turns on settled or blocked work that went to work with nothing to show. */
   wastedShare: number | null
   /** Minutes of Harlan's time each useful outcome must save to pay for itself. */
   breakEvenMinutes: number | null
@@ -106,8 +110,11 @@ export interface PaybackReport {
   kinds: PaybackKind[]
 }
 
-/** Above this share of settled Agent turns producing nothing, the work needs tuning. */
+/** Above this share of settled or blocked Agent turns producing nothing, the work needs tuning. */
 const TUNE_WASTED_SHARE = 0.5
+
+/** Above this share of Agent turns with no recorded outcome, no verdict is honest. */
+const MEASURE_FIRST_UNRECORDED_SHARE = 0.5
 
 const emptyTokens = (): PaybackTokens => ({ input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 })
 
@@ -120,15 +127,15 @@ function turnUsd(usage: Extract<AgentTokenUsage, { _tag: 'Available' }>, rate: P
   return (fresh * rate.input + usage.cachedInput * rate.cachedInput + usage.cacheWrite * rate.cacheWrite + usage.output * rate.output) / 1_000_000
 }
 
-function verdict(outcomes: PaybackKind['outcomes'], wastedShare: number | null, spent: boolean): PaybackVerdict {
-  if (outcomes.unrecorded > 0 && outcomes.useful + outcomes.wasted + outcomes.open === 0)
-    return { _tag: 'MeasureFirst', reason: 'No useful outcome is recorded for this work yet.' }
-  if (outcomes.useful + outcomes.wasted === 0)
+function verdict(outcomes: PaybackKind['outcomes'], unrecordedShare: number, wastedShare: number | null, spent: boolean): PaybackVerdict {
+  if (unrecordedShare > MEASURE_FIRST_UNRECORDED_SHARE)
+    return { _tag: 'MeasureFirst', reason: 'No useful outcome is recorded for most of this work yet.' }
+  if (outcomes.useful + outcomes.wasted + outcomes.actionRequired === 0)
     return { _tag: 'MeasureFirst', reason: 'No work settled in this range.' }
-  if (outcomes.useful === 0 && spent)
+  if (outcomes.useful === 0 && outcomes.wasted > 0 && spent)
     return { _tag: 'Cut', reason: `${outcomes.wasted} settled, none useful.` }
   if (wastedShare !== null && wastedShare > TUNE_WASTED_SHARE)
-    return { _tag: 'Tune', reason: `${Math.round(wastedShare * 100)}% of settled Agent turns produced nothing.` }
+    return { _tag: 'Tune', reason: `${Math.round(wastedShare * 100)}% of Agent turns went to work that produced nothing or needs Action required.` }
   return { _tag: 'Keep' }
 }
 
@@ -173,21 +180,25 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
       : { _tag: 'Unpriced', models: [...unpricedModels].sort() }
 
     const taskIds = [...new Set(turns.map(turn => turn.taskId))]
-    const outcomes = { useful: 0, wasted: 0, open: 0, unrecorded: 0 }
+    const outcomes = { useful: 0, wasted: 0, actionRequired: 0, open: 0, unrecorded: 0 }
     for (const taskId of taskIds) {
       const outcome = outcomeByTask.get(taskId) ?? { _tag: 'Unrecorded' as const }
       if (outcome._tag === 'Useful')
         outcomes.useful += 1
       else if (outcome._tag === 'Wasted')
         outcomes.wasted += 1
+      else if (outcome._tag === 'ActionRequired')
+        outcomes.actionRequired += 1
       else if (outcome._tag === 'Open')
         outcomes.open += 1
       else
         outcomes.unrecorded += 1
     }
-    const settledTurns = turns.filter(turn => ['Useful', 'Wasted'].includes(outcomeByTask.get(turn.taskId)?._tag ?? ''))
-    const wastedTurns = settledTurns.filter(turn => outcomeByTask.get(turn.taskId)?._tag === 'Wasted')
+    const outcomeOf = (turn: AgentTurnRecord) => outcomeByTask.get(turn.taskId)?._tag ?? 'Unrecorded'
+    const settledTurns = turns.filter(turn => ['Useful', 'Wasted', 'ActionRequired'].includes(outcomeOf(turn)))
+    const wastedTurns = settledTurns.filter(turn => outcomeOf(turn) !== 'Useful')
     const wastedShare = settledTurns.length === 0 ? null : wastedTurns.length / settledTurns.length
+    const unrecordedShare = turns.filter(turn => outcomeOf(turn) === 'Unrecorded').length / turns.length
     const costPerUseful = cost._tag === 'Priced' && outcomes.useful > 0 ? cost.usd / outcomes.useful : null
     const breakEvenMinutes = costPerUseful !== null && input.pricing.hourlyValue !== null && input.pricing.hourlyValue > 0
       ? costPerUseful / input.pricing.hourlyValue * 60
@@ -204,7 +215,7 @@ export function buildPayback(input: { turns: readonly AgentTurnRecord[], tasks: 
       costPerUseful,
       wastedShare,
       breakEvenMinutes,
-      verdict: verdict(outcomes, wastedShare, spent),
+      verdict: verdict(outcomes, unrecordedShare, wastedShare, spent),
     }]
   })
   return { ratesCheckedOn: input.pricing.ratesCheckedOn, hourlyValue: input.pricing.hourlyValue, kinds }

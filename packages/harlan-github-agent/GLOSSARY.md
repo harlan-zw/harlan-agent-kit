@@ -571,7 +571,8 @@ If no earlier total is on record, Turn usage is `Unavailable`.
 
 What one kind of work cost in one date range, set against the useful outcomes it produced.
 
-A useful outcome is a merged pull request. Work whose outcome the Journal does not record reads Measure first.
+A useful outcome is a merged pull request. A Task in Action required counts against its work until it publishes.
+Work whose outcome the Journal does not record reads Measure first.
 Dollars come from the dated rates in `payback.rates`. Break-even minutes also need `payback.hourly_value`.
 Each kind gets one verdict: Keep, Tune, Cut, or Measure first. A verdict recommends a change; Harlan decides it.
 

@@ -41,7 +41,7 @@ describe('buildPayback', () => {
       work: 'issue_work',
       agentTurns: 2,
       cost: { _tag: 'Priced', usd: expect.closeTo(0.78, 6), unpricedTurns: 0 },
-      outcomes: { useful: 1, wasted: 0, open: 1, unrecorded: 0 },
+      outcomes: { useful: 1, wasted: 0, actionRequired: 0, open: 1, unrecorded: 0 },
       costPerUseful: expect.closeTo(0.78, 6),
       breakEvenMinutes: expect.closeTo(0.312, 6),
       verdict: { _tag: 'Keep' },
@@ -59,10 +59,40 @@ describe('buildPayback', () => {
     })
 
     expect(report.kinds[0]).toEqual(expect.objectContaining({
-      outcomes: { useful: 1, wasted: 1, open: 0, unrecorded: 0 },
+      outcomes: { useful: 1, wasted: 1, actionRequired: 0, open: 0, unrecorded: 0 },
       wastedShare: 0.8,
-      verdict: { _tag: 'Tune', reason: '80% of settled Agent turns produced nothing.' },
+      verdict: { _tag: 'Tune', reason: '80% of Agent turns went to work that produced nothing or needs Action required.' },
     }))
+  })
+
+  it('counts turns on a Task stuck in Action required against the work, not as open', () => {
+    const report = buildPayback({
+      turns: [
+        turn({ taskId: 'merged', role: 'conflict_resolution' }),
+        ...Array.from({ length: 5 }, () => turn({ taskId: 'blocked', role: 'conflict_resolution' })),
+      ],
+      tasks: [task('merged'), task('blocked', { state: 'ActionRequired', published: false, pullRequest: 'Open' })],
+      pricing,
+    })
+
+    expect(report.kinds[0]).toEqual(expect.objectContaining({
+      outcomes: { useful: 1, wasted: 0, actionRequired: 1, open: 0, unrecorded: 0 },
+      wastedShare: 5 / 6,
+      verdict: expect.objectContaining({ _tag: 'Tune' }),
+    }))
+  })
+
+  it('measures first when most turns have no recorded outcome, even beside a merge', () => {
+    const report = buildPayback({
+      turns: [
+        ...Array.from({ length: 3 }, (_, index) => turn({ taskId: `run-${index}`, role: 'routine_scan' })),
+        turn({ taskId: 'follow-up', role: 'routine_fix' }),
+      ],
+      tasks: [task('run-0', { state: null }), task('run-1', { state: null }), task('run-2', { state: null }), task('follow-up')],
+      pricing,
+    })
+
+    expect(report.kinds[0]?.verdict).toEqual({ _tag: 'MeasureFirst', reason: 'No useful outcome is recorded for most of this work yet.' })
   })
 
   it('names a kind with spend and no useful outcome for cutting', () => {
