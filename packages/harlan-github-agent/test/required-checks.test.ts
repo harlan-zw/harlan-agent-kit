@@ -6,7 +6,7 @@ import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { requiredCheckContexts } from '../src/github-agent-source.ts'
 import { createReviewWorker } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
-import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const cleanReview = {
   premise: { verdict: 'sound', reason: 'The change can remain intact.' },
@@ -91,6 +91,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
       retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,
+      ...agentTurnLedger,
       updateAgentProgress: () => true,
       recordReviewRun: (run) => {
         runs.push(run)

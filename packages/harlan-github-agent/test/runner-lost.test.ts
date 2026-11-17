@@ -7,7 +7,7 @@ import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { classifyFailedJob } from '../src/github-agent-source.ts'
 import { createReviewWorker, RUNNER_LOST_INCIDENT_MESSAGE } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
-import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const cleanReview = {
   premise: { verdict: 'sound', reason: 'The change can remain intact.' },
@@ -105,6 +105,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], baseChecks?: GitHubCheck
       },
       retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,
+      ...agentTurnLedger,
       updateAgentProgress: () => true,
       recordReviewRun: (run) => {
         runs.push(run)

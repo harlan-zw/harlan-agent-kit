@@ -99,7 +99,7 @@ export interface ItemAgentOptions {
   /** Called when a progress update succeeds, so Recovery can close an earlier failure. */
   onProgressPublishSuccess?: (task: ClaimedAgentTask) => void
   runtime: AgentRuntimeSource
-  store: Pick<JournalStore, 'getWorkerSession' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getWorkerSession' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'updateAgentProgress'>
   status: Pick<ReviewStatusController, 'publish' | 'stageTerminal'>
   triageStatus: IssueTriageCommentController
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue'>
@@ -107,7 +107,7 @@ export interface ItemAgentOptions {
 
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
-  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 

@@ -11,7 +11,7 @@ import { err, ok } from '../src/result.ts'
 import { refreshReviewGates } from '../src/review-gate-sweep.ts'
 import { createReviewStatusController } from '../src/review-status-controller.ts'
 import { openJournalStore } from '../src/store.ts'
-import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const soundPremise = { verdict: 'sound' as const, reason: 'The change can be repaired without replacing its intent.' }
 
@@ -141,6 +141,7 @@ function harness(input: {
       queueBaselineRepairForReview: () => { throw new Error('Unexpected Baseline repair.') },
       retireBaselineRepairForReview: () => 0,
       saveWorkerSession: () => undefined,
+      ...agentTurnLedger,
       updateAgentProgress: () => true,
       recordReviewRun: (attempt) => {
         attempts.push(attempt)

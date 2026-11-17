@@ -1,4 +1,5 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
+import type { AgentTurnStore } from './agent-turn-store.ts'
 import type { BatchStore } from './batch-store.ts'
 import type { TransientKind } from './failure.ts'
 import type { FindingThreadSyncStore } from './finding-thread-sync-store.ts'
@@ -130,6 +131,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
 import { RESULT_PHASE_RANK } from './agent-progress.ts'
+import { agentTurnSchema, createAgentTurnStore } from './agent-turn-store.ts'
 import { createBatchStore } from './batch-store.ts'
 import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
@@ -809,7 +811,7 @@ export type StoredIssueTriageRun
       decidedAt: string
     }
 
-export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore {
   getTask: (taskId: string) => DashboardTask | null
   listTasks: () => DashboardTask[]
   getOpenPullRequest: (repository: string, number: number) => GitHubPullRequestItem | null
@@ -7268,7 +7270,11 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 94;`)
     version = 94
   }
-  if (version === 94)
+  if (version === 94) {
+    applyMigration(database, `${agentTurnSchema} PRAGMA user_version = 95;`)
+    version = 95
+  }
+  if (version === 95)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7559,6 +7565,7 @@ export function openJournalStore(
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
   const findingThreadSyncStore = createFindingThreadSyncStore(database, repositoryWriteAuthoritySql)
+  const agentTurnStore = createAgentTurnStore(database)
   const loggedFindingStore = createLoggedFindingStore(database, {
     writeAuthoritySql: repositoryWriteAuthoritySql,
     digest,
@@ -17027,6 +17034,7 @@ export function openJournalStore(
   return {
     ...takeOwnershipStore,
     ...findingThreadSyncStore,
+    ...agentTurnStore,
     ...reviewProofStore,
     ...loggedFindingStore,
     approveIssue,

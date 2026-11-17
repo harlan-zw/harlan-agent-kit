@@ -4,7 +4,7 @@ import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { createReviewWorker, terminalComment } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
-import { agentRuntime, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 
@@ -143,6 +143,7 @@ describe('a fresh Review publishes its Merge risk verdict', () => {
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
         recordReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
@@ -236,6 +237,7 @@ describe('a fresh Review publishes its Merge risk verdict', () => {
         queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
         retireBaselineRepairForReview: () => 0,
         saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
         updateAgentProgress: () => true,
         recordReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),

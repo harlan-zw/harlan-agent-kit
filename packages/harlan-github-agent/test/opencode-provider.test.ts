@@ -191,7 +191,7 @@ describe('attached result recovery', () => {
       { _tag: 'SessionStarted', sessionId: identity.sessionID },
       { _tag: 'Reasoning', text: 'Recovered the completed OpenCode result after its attached stream ended.' },
       { _tag: 'Message', text: '{"outcome":"resolved"}' },
-      { _tag: 'Usage', usage: { _tag: 'Available', input: 5, cachedInput: 2, cacheWrite: 0, output: 3, reasoning: 1 } },
+      { _tag: 'Usage', scope: 'Turn', usage: { _tag: 'Available', input: 7, cachedInput: 2, cacheWrite: 0, output: 3, reasoning: 1 } },
       { _tag: 'TurnCompleted' },
     ])
     expect(server.closed()).toBe(true)
@@ -551,6 +551,7 @@ describe('context budget', () => {
     expect(await collect(provider.runTurn(request()))).toEqual([
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'CommandCompleted', command: 'pnpm test', output: 'ok\n', exitCode: 0 },
+      { _tag: 'Usage', scope: 'Turn', usage: { _tag: 'Available', input: 424, cachedInput: 400, cacheWrite: 0, output: 6, reasoning: 0 } },
       { _tag: 'ContextBudgetExhausted', cachedTokensRead: 400 },
     ])
   })
@@ -565,7 +566,7 @@ describe('context budget', () => {
     expect(await collect(provider.runTurn(request()))).toEqual([
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'Message', text: '{"outcome":"resolved"}' },
-      { _tag: 'Usage', usage: { _tag: 'Available', input: 24, cachedInput: 400, cacheWrite: 0, output: 6, reasoning: 0 } },
+      { _tag: 'Usage', scope: 'Turn', usage: { _tag: 'Available', input: 424, cachedInput: 400, cacheWrite: 0, output: 6, reasoning: 0 } },
       { _tag: 'TurnCompleted' },
     ])
   })
@@ -585,7 +586,7 @@ describe('a stopping step over budget', () => {
     expect(await collect(provider.runTurn(request()))).toEqual([
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'Message', text: '{"outcome":"resolved"}' },
-      { _tag: 'Usage', usage: { _tag: 'Available', input: 0, cachedInput: 500, cacheWrite: 0, output: 0, reasoning: 0 } },
+      { _tag: 'Usage', scope: 'Turn', usage: { _tag: 'Available', input: 500, cachedInput: 500, cacheWrite: 0, output: 0, reasoning: 0 } },
       { _tag: 'TurnCompleted' },
     ])
   })
@@ -612,6 +613,7 @@ describe('context budget warning', () => {
     expect(events).toEqual([
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'ContextBudgetWarned', cachedTokensRead: 350, delivery: { _tag: 'Sent' } },
+      { _tag: 'Usage', scope: 'Turn', usage: { _tag: 'Available', input: 470, cachedInput: 470, cacheWrite: 0, output: 0, reasoning: 0 } },
       { _tag: 'ContextBudgetExhausted', cachedTokensRead: 470 },
     ])
   })
@@ -628,7 +630,7 @@ describe('context budget warning', () => {
       { _tag: 'SessionStarted', sessionId: 'ses_abc12345' },
       { _tag: 'ContextBudgetWarned', cachedTokensRead: 350, delivery: { _tag: 'Failed', reason: 'The opencode server answered 500.' } },
       { _tag: 'Message', text: '{"outcome":"resolved"}' },
-      { _tag: 'Usage', usage: { _tag: 'Available', input: 0, cachedInput: 350, cacheWrite: 0, output: 0, reasoning: 0 } },
+      { _tag: 'Usage', scope: 'Turn', usage: { _tag: 'Available', input: 350, cachedInput: 350, cacheWrite: 0, output: 0, reasoning: 0 } },
       { _tag: 'TurnCompleted' },
     ])
   })

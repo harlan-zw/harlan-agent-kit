@@ -9,7 +9,7 @@ import {
 import { runAgentTurn, runRepairedAgentTurn } from '../src/agent-turn.ts'
 import { err, ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
-import { stubProvider, turnEvents } from './fixtures.ts'
+import { agentTurnLedger, stubProvider, turnEvents } from './fixtures.ts'
 
 const codexProvider: AgentProvider = {
   name: 'codex',
@@ -163,7 +163,7 @@ describe('agent runtime source', () => {
     const options = {
       now: () => new Date('2026-09-09T01:00:00.000Z'),
       runtime,
-      store: { getWorkerSession: () => null, saveWorkerSession: () => undefined },
+      store: { getWorkerSession: () => null, saveWorkerSession: () => undefined, ...agentTurnLedger },
     }
     const input = {
       number: 24,
@@ -231,7 +231,7 @@ describe('switching the Agent selection at runtime', () => {
         },
         selection: store.getAgentSelection,
       }),
-      store: { getWorkerSession: () => null, saveWorkerSession: () => undefined },
+      store: { getWorkerSession: () => null, saveWorkerSession: () => undefined, ...agentTurnLedger },
     }
     const input = {
       number: 24,

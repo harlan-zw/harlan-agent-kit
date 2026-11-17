@@ -92,7 +92,7 @@ export interface IssueWorkWorkerOptions {
   now: () => Date
   runtime: AgentRuntimeSource
   activityLog?: Pick<AgentActivityLog, 'record'>
-  store: Pick<JournalStore, 'getIssueTriageEvidence' | 'getWorkerSession' | 'listOpenAgentPullRequests' | 'saveWorkerSession' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getIssueTriageEvidence' | 'getWorkerSession' | 'listOpenAgentPullRequests' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'updateAgentProgress'>
     & Partial<Pick<JournalStore, 'getRoutineIssueSource'>>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
   worktrees: IssueWorktreeManager

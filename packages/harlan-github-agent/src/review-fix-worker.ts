@@ -55,7 +55,7 @@ export interface ReviewFixWorkerOptions {
   onProgressPublishFailure?: (task: ClaimedReviewFixTask, reason: string) => void
   runtime: AgentRuntimeSource
   status: Pick<ReviewStatusController, 'publishRepair'>
-  store: Pick<JournalStore, 'getReviewFixFindings' | 'getWorkerSession' | 'recordRepairReport' | 'requestReviewRerun' | 'saveWorkerSession' | 'updateAgentProgress'>
+  store: Pick<JournalStore, 'getReviewFixFindings' | 'getWorkerSession' | 'recordRepairReport' | 'requestReviewRerun' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'updateAgentProgress'>
   validateMapping: (mapping: RepositoryMapping) => Promise<Result<RepositoryMapping, string>>
   worktrees: ReviewFixWorktreeManager
 }

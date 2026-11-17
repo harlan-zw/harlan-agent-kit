@@ -14,6 +14,11 @@ describe('desktop boundaries', () => {
     expect(parseDesktopEvents([event])).toEqual([event])
     expect(() => parseDesktopEvents([{ ...event, cause: 'unknown' }])).toThrow('failure cause is invalid')
   })
+  it('keeps whether usage counts one turn or the whole session across hosts', () => {
+    const event = { _tag: 'Usage', scope: 'Session', usage: { _tag: 'Available', input: 46_000, cachedInput: 35_700, cacheWrite: 0, output: 10, reasoning: 0 } }
+    expect(parseDesktopEvents([event])).toEqual([event])
+    expect(() => parseDesktopEvents([{ _tag: 'Usage', usage: event.usage }])).toThrow('unsupported')
+  })
   it('reads a desktop that names no protocol as the revision before the field', () => {
     expect(parseDesktopReport({ memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 }).protocol).toBe(1)
     expect(parseDesktopReport({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 }).protocol).toBe(DESKTOP_PROTOCOL)

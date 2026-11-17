@@ -93,7 +93,7 @@ async function* providerEvents(events: AsyncIterable<ThreadEvent>, memoryExceede
   for await (const event of events) {
     const usage = codexAgentUsage(event)
     if (usage !== undefined)
-      yield { _tag: 'Usage', usage }
+      yield { _tag: 'Usage', usage, scope: 'Session' }
     const mapped = codexAgentEvent(event)
     if (mapped !== undefined)
       yield mapped._tag === 'Failed' && await memoryExceeded?.() ? { _tag: 'Failed', reason: 'The Agent Task exceeded its memory budget.', cause: 'resource-limit' } : mapped

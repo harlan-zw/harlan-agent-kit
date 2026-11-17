@@ -167,3 +167,9 @@ export function turnEvents(response: unknown, command = 'pnpm test'): AgentEvent
     { _tag: 'TurnCompleted' },
   ]
 }
+
+/** A turn ledger that keeps nothing, for tests about other behavior. */
+export const agentTurnLedger = {
+  recordAgentTurn: () => undefined,
+  agentSessionTotal: () => null,
+}
