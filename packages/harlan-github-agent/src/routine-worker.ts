@@ -21,7 +21,7 @@ import { getRoutine } from './routines/index.ts'
 import { collectTrialReportEvidence } from './trial-report.ts'
 
 export interface RoutineScanWorkerOptions {
-  serviceEvidence?: Pick<JournalStore, 'groupWorkflowFailures' | 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents' | 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt' | 'listTrialMergedReadyHeads' | 'listTrialRetroCandidates' | 'listReadyPullRequests'>
+  serviceEvidence?: Pick<JournalStore, 'groupWorkflowFailures' | 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents' | 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt' | 'listTrialRetroCandidates' | 'listReadyPullRequests'>
   /** Repositories GitHub reports as public. The `ready-digest` list shows titles only for these. */
   publicRepositories?: ReadonlySet<string>
   serviceUpdate?: () => ServiceUpdateStatus

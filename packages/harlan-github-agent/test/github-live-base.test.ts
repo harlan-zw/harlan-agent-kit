@@ -109,33 +109,6 @@ describe('live pull request base', () => {
     })))
   })
 
-  it('records who merged a pull request, and keeps an open one free of the record', async () => {
-    const merged = {
-      ...pullRequest(),
-      state: 'closed',
-      merged_at: '2026-08-13T11:00:00.000Z',
-      merged_by: { login: 'harlan-github-agent[bot]' },
-      labels: [{ name: 'harlan-agent-auto-merge' }],
-    }
-    const source = (data: unknown) => createGitHubSource({
-      actorLogin: () => 'harlan-github-agent[bot]',
-      createClient: () => ({
-        rest: {
-          pulls: { get: () => Promise.resolve({ data }) },
-          repos: { getBranch: () => Promise.resolve({ data: { commit: { sha: liveBaseSha } } }) },
-        },
-      }) as unknown as Octokit,
-      issueCutoff: '2026-07-01',
-      tokens: tokens(),
-    })
-
-    expect(await source(merged).getPullRequest(repositoryMapping(), 24)).toEqual(ok(expect.objectContaining({
-      mergeRecord: { mergedBy: 'harlan-github-agent[bot]', autoMergeLabel: true },
-    })))
-    const open = await source({ ...pullRequest(), merged_by: null }).getPullRequest(repositoryMapping(), 24)
-    expect(open._tag === 'Ok' && 'mergeRecord' in open.value).toBe(false)
-  })
-
   it('reads base checks from the current base branch commit', async () => {
     const checkedRefs: string[] = []
     const client = {

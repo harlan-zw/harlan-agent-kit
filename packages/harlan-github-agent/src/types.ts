@@ -288,13 +288,6 @@ export interface GitHubPullRequestItem extends GitHubItemBase {
   mergedAt: string | null
   /** Available after merge. Older journal entries may omit it. */
   mergeCommitSha?: string | null
-  /**
-   * Who merged, and whether the Auto merge label was on the pull request then.
-   *
-   * Present only once merged, so an open pull request keeps its Revision
-   * identity. Revisions observed before the controller recorded it omit it.
-   */
-  mergeRecord?: { mergedBy: string, autoMergeLabel: boolean }
   draft: boolean
   baseSha: string
   /**

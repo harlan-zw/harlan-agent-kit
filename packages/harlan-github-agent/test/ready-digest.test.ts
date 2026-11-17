@@ -47,8 +47,6 @@ interface PullRequestSeed {
   headSha?: string
   closedAt?: string
   mergedAt?: string
-  /** Who GitHub says merged it. Absent leaves the merge unrecorded, as on older Revisions. */
-  mergeRecord?: { mergedBy: string, autoMergeLabel: boolean }
 }
 
 /** Records a pull request, its Review runs through the real store, and how it ended. */
@@ -106,7 +104,6 @@ function seedPullRequest(store: Store, seed: PullRequestSeed): void {
       subject: {
         ...subject(finalHead, at),
         ...(endedAt === undefined ? {} : { state: 'closed' as const, mergedAt: seed.mergedAt ?? null }),
-        ...(seed.mergeRecord === undefined ? {} : { mergeRecord: seed.mergeRecord }),
       },
     })
   }
@@ -234,64 +231,54 @@ describe('ready-digest trial', () => {
     before: 'Fixture before.',
     onMiss: { _tag: 'Kill' },
     measure: {
-      _tag: 'ReadyToMerge',
-      baseline: { from: '2026-10-21T00:00:00.000Z', to: start, mergedHeads: 3, medianDays: 4, waitedDayOrMore: 3, autoMerged: 1 },
-      minimumDrop: 0.3,
+      _tag: 'ReadyWait',
+      overdueDays: 3,
+      baseline: { measuredAt: start, ready: 4, overdue: 2, oldestDays: 50 },
+      minimumDrop: 0.5,
       readCheckWeek: 2,
     },
   }
-  const person = { mergedBy: 'harlan-zw', autoMergeLabel: false }
+  const now = new Date('2026-11-24T00:00:00.000Z')
 
   function seed(): Store {
     const store = createStore(['harlan-zw/example'])
-    store.syncRepositories([
-      repositoryMapping({ github: 'harlan-zw/example' }),
-      repositoryMapping({ github: 'harlan-zw/demo', autoMerge: { _tag: 'Every', minimumConfidence: 80 } }),
-    ], '2026-11-01T00:00:00.000Z')
-    const merged = (number: number, readyAt: string, mergedAt: string, mergeRecord?: PullRequestSeed['mergeRecord'], repository = 'harlan-zw/example') =>
-      seedPullRequest(store, { repository, number, reviews: [{ at: readyAt }], mergedAt, ...(mergeRecord === undefined ? {} : { mergeRecord }) })
-    // Before the trial: the fixed baseline covers it, so the Journal is not read.
-    merged(1, '2026-10-25T00:00:00.000Z', '2026-11-05T00:00:00.000Z', person)
-    // A head merged without a READY Review never counts.
-    seedPullRequest(store, { repository: 'harlan-zw/example', number: 5, reviews: [{ at: '2026-11-19T00:00:00.000Z', failed: 'review' }], mergedAt: '2026-11-20T00:00:00.000Z', mergeRecord: person })
-    // The trial: a person merged after 1 day and 2 days.
-    merged(6, '2026-11-19T00:00:00.000Z', '2026-11-20T00:00:00.000Z', person)
-    merged(7, '2026-11-20T00:00:00.000Z', '2026-11-22T00:00:00.000Z', person)
+    const ready = (number: number, at: string, ended?: { mergedAt?: string, closedAt?: string }) =>
+      seedPullRequest(store, { repository: 'harlan-zw/example', number, reviews: [{ at }], ...ended })
+    // READY 4 days before the reading: overdue.
+    ready(1, '2026-11-20T00:00:00.000Z')
+    // READY 2 days before the reading: not yet.
+    ready(2, '2026-11-22T00:00:00.000Z')
+    // READY long ago, then merged or closed: never part of it.
+    ready(3, '2026-11-01T00:00:00.000Z', { mergedAt: '2026-11-21T00:00:00.000Z' })
+    ready(4, '2026-11-01T00:00:00.000Z', { closedAt: '2026-11-21T00:00:00.000Z' })
     return store
   }
 
-  it('compares the median wait from READY to a person\'s merge with the fixed baseline', () => {
-    const [reading] = collectTrialReportEvidence(seed(), new Date('2026-11-24T00:00:00.000Z'), [readyTrial]).trials
-    if (reading?._tag !== 'Measured' || reading.metrics?._tag !== 'ReadyToMerge')
+  it('counts open pull requests READY with passing CI for over 3 days, and the oldest one\'s age', () => {
+    const [reading] = collectTrialReportEvidence(seed(), now, [readyTrial]).trials
+    if (reading?._tag !== 'Measured' || reading.metrics?._tag !== 'ReadyWait')
       throw new Error('Expected a measured ready-digest trial.')
 
-    expect(reading.metrics.baseline).toMatchObject({ mergedHeads: 3, medianDays: 4, waitedDayOrMore: 3, autoMerged: 1 })
-    expect(reading.metrics.toDate).toMatchObject({ mergedHeads: 2, medianDays: 1.5, waitedDayOrMore: 2, autoMerged: 0, unrecorded: 0 })
-    expect(reading.keep).toEqual([{ _tag: 'Met', detail: expect.stringContaining('63% lower') }])
+    expect(reading.metrics.current).toEqual({ ready: 2, overdue: 1, oldestDays: 4 })
+    expect(reading.metrics.baseline).toEqual({ measuredAt: start, ready: 4, overdue: 2, oldestDays: 50 })
+    expect(reading.keep).toEqual([{ _tag: 'Met', detail: expect.stringContaining('50% fewer') }])
     expect(reading.kill).toEqual([{ _tag: 'NotYetMeasurable', detail: expect.stringContaining('week 2') }])
-    expect(reading.markdown).toContain('| Median wait | 36 hours | 36 hours | 4 days |')
+    expect(reading.markdown).toContain('| READY with passing CI for over 3 days | 1 | 2 |')
+    expect(reading.markdown).toContain('| Oldest of those, days since READY | 4 | 50 |')
   })
 
-  it('leaves out heads merged by the App, by the Auto merge label, under an every-pull-request scope, or with no recorded merger', () => {
-    const store = seed()
-    const merged = (number: number, mergeRecord?: PullRequestSeed['mergeRecord'], repository = 'harlan-zw/example') =>
-      seedPullRequest(store, { repository, number, reviews: [{ at: '2026-11-19T00:00:00.000Z' }], mergedAt: '2026-11-19T00:10:00.000Z', ...(mergeRecord === undefined ? {} : { mergeRecord }) })
-    merged(8, { mergedBy: 'harlan-github-agent[bot]', autoMergeLabel: false })
-    merged(9, { mergedBy: 'harlan-zw', autoMergeLabel: true })
-    merged(10, person, 'harlan-zw/demo')
-    merged(11)
+  it('reads nothing overdue when every READY head is younger than 3 days', () => {
+    const store = createStore(['harlan-zw/example'])
+    seedPullRequest(store, { repository: 'harlan-zw/example', number: 2, reviews: [{ at: '2026-11-22T00:00:00.000Z' }] })
 
-    const [reading] = collectTrialReportEvidence(store, new Date('2026-11-24T00:00:00.000Z'), [readyTrial]).trials
-    if (reading?._tag !== 'Measured' || reading.metrics?._tag !== 'ReadyToMerge')
+    const [reading] = collectTrialReportEvidence(store, now, [readyTrial]).trials
+    if (reading?._tag !== 'Measured' || reading.metrics?._tag !== 'ReadyWait')
       throw new Error('Expected a measured ready-digest trial.')
-
-    // Ten-minute Auto merges would halve the median if they counted.
-    expect(reading.metrics.toDate).toMatchObject({ mergedHeads: 2, medianDays: 1.5, autoMerged: 3, unrecorded: 1 })
-    expect(reading.markdown).toContain('| Left out: Auto merge or the App | 3 | 3 | 1 |')
-    expect(reading.markdown).toContain('| Left out: no merger recorded | 1 | 1 | 0 |')
+    expect(reading.metrics.current).toEqual({ ready: 1, overdue: 0, oldestDays: null })
+    expect(reading.markdown).toContain('| Oldest of those, days since READY | n/a | 50 |')
   })
 
-  it('asks Harlan from week 2 whether he still reads it', () => {
+  it('kills nothing by itself, and asks Harlan from week 2 whether he still reads it', () => {
     const [reading] = collectTrialReportEvidence(seed(), new Date('2026-11-26T00:00:00.000Z'), [readyTrial]).trials
     if (reading?._tag !== 'Measured')
       throw new Error('Expected a measured ready-digest trial.')
@@ -300,15 +287,15 @@ describe('ready-digest trial', () => {
     expect(reading.suggestion.verdict).toBe('Continue')
   })
 
-  it('cannot judge a fall before a person merges a READY head', () => {
-    const store = createStore(['harlan-zw/example'])
-    seedPullRequest(store, { repository: 'harlan-zw/example', number: 6, reviews: [{ at: '2026-11-19T00:00:00.000Z' }], mergedAt: '2026-11-20T00:00:00.000Z' })
+  it('kills an ended trial whose overdue count did not fall by half', () => {
+    const store = seed()
+    seedPullRequest(store, { repository: 'harlan-zw/example', number: 5, reviews: [{ at: '2026-11-25T00:00:00.000Z' }] })
 
     const [reading] = collectTrialReportEvidence(store, new Date('2026-12-20T00:00:00.000Z'), [readyTrial]).trials
     if (reading?._tag !== 'Measured')
       throw new Error('Expected a measured ready-digest trial.')
     expect(reading.state._tag).toBe('Ended')
-    expect(reading.keep).toEqual([{ _tag: 'NotYetMeasurable', detail: expect.stringContaining('merged by a person') }])
-    expect(reading.suggestion.verdict).toBe('Continue')
+    expect(reading.keep).toEqual([{ _tag: 'NotMet', detail: expect.stringContaining('3 pull requests') }])
+    expect(reading.suggestion.verdict).toBe('Kill')
   })
 })

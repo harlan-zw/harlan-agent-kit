@@ -645,8 +645,8 @@ References and titles sit in code spans, so the ready digest adds no timeline ev
 
 Only `harlan-zw/harlan-agent-kit` may enable it. Enable it with `mode: report` only after Hogwild runs a controller that defines it.
 
-The `ready-digest` trial counts only heads a person merged. It leaves out merges by the App, pull requests with the Auto merge label, and repositories where Auto merge takes every pull request.
-The controller records who merged a pull request from this change on. Its baseline was measured once from GitHub, because older Revisions name no merger.
+The `ready-digest` trial reads the same records at each weekly run. It counts open pull requests READY with passing CI for more than 3 days, and the age of the oldest.
+Its keep rule compares that count with the first run, recorded in `src/trials.ts`.
 
 ## Weekly performance review
 

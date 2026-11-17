@@ -52,23 +52,6 @@ export interface ReadyPullRequest {
   readyAt: string
 }
 
-/** Who merged one pull request, as far as its stored Revision says. */
-export type TrialMerger
-  = | { _tag: 'Person', login: string }
-    /** The App merged it, it carried the Auto merge label, or its repository lets Auto merge take every pull request. */
-    | { _tag: 'AutoMerge', reason: 'App' | 'Label' | 'EveryPullRequest' }
-    /** Observed before the controller recorded who merged. */
-    | { _tag: 'Unrecorded' }
-
-/** One pull request merged at a head that a Review read READY first. */
-export interface TrialMergedReadyHead {
-  repository: string
-  pullRequestNumber: number
-  readyAt: string
-  mergedAt: string
-  merger: TrialMerger
-}
-
 /** One `agent-retro` Candidate, and what it became. */
 export interface TrialRetroCandidate {
   repository: string
@@ -90,8 +73,6 @@ export interface TrialStore {
   firstTrialEventAt: (input: { stream: 'review_run' | 'issue_triage_status', event: string }) => string | null
   /** Open pull requests in enabled repositories whose current head is READY with passing CI, oldest READY first. */
   listReadyPullRequests: () => ReadyPullRequest[]
-  /** Pull requests merged in the range at a head a Review read READY before the merge. */
-  listTrialMergedReadyHeads: (range: TrialRange) => TrialMergedReadyHead[]
   /** `agent-retro` Candidates recorded in the range. */
   listTrialRetroCandidates: (range: TrialRange) => TrialRetroCandidate[]
 }
@@ -183,27 +164,6 @@ interface ReadyPullRequestRow {
   ready_at: string
 }
 
-interface MergedReadyHeadRow {
-  repository: string
-  pull_request_number: number
-  ready_at: string
-  merged_at: string
-  merged_by: string | null
-  auto_merge_label: number | null
-  auto_merge_scope: string | null
-}
-
-function trialMerger(row: MergedReadyHeadRow): TrialMerger {
-  if (row.auto_merge_scope === 'Every')
-    return { _tag: 'AutoMerge', reason: 'EveryPullRequest' }
-  if (row.merged_by === null)
-    return { _tag: 'Unrecorded' }
-  if (row.auto_merge_label === 1)
-    return { _tag: 'AutoMerge', reason: 'Label' }
-  // GitHub names an App by its bot login, such as harlan-github-agent[bot].
-  return row.merged_by.endsWith('[bot]') ? { _tag: 'AutoMerge', reason: 'App' } : { _tag: 'Person', login: row.merged_by }
-}
-
 interface RetroCandidateRow {
   repository: string
   created_at: string
@@ -287,26 +247,6 @@ export function createTrialStore(database: DatabaseSync): TrialStore {
       AND latest.outcome_tag = 'Ready' AND latest.ci_tag = 'Passed'
     ORDER BY first_ready.ready_at, repositories.github, subjects.github_number
   `)
-  // GitHub writes mergedAt without milliseconds, so instants compare as Julian days, not text.
-  const mergedReadyHeads = database.prepare(`
-    WITH ${firstReadySql}
-    SELECT repositories.github AS repository, subjects.github_number AS pull_request_number,
-      first_ready.ready_at, json_extract(revisions.payload, '$.mergedAt') AS merged_at,
-      json_extract(revisions.payload, '$.mergeRecord.mergedBy') AS merged_by,
-      json_extract(revisions.payload, '$.mergeRecord.autoMergeLabel') AS auto_merge_label,
-      json_extract(repositories.policy_json, '$.autoMerge._tag') AS auto_merge_scope
-    FROM subjects
-    JOIN repositories ON repositories.id = subjects.repository_id
-    JOIN revisions ON revisions.id = subjects.current_revision_id
-    JOIN first_ready ON first_ready.subject_id = subjects.id
-      AND first_ready.head_sha = json_extract(revisions.payload, '$.headSha')
-      AND first_ready.base_ref IS json_extract(revisions.payload, '$.baseRef')
-    WHERE subjects.kind = 'pull_request'
-      AND julianday(json_extract(revisions.payload, '$.mergedAt')) >= julianday(?)
-      AND julianday(json_extract(revisions.payload, '$.mergedAt')) < julianday(?)
-      AND julianday(first_ready.ready_at) <= julianday(json_extract(revisions.payload, '$.mergedAt'))
-    ORDER BY julianday(merged_at), repositories.github, subjects.github_number
-  `)
   // Reconciliation marks a Candidate Merged with its pull request; the merge instant lives on that pull request.
   const retroCandidates = database.prepare(`
     SELECT routines.repository, candidates.created_at, commands.github_issue_number AS issue_number,
@@ -365,8 +305,6 @@ export function createTrialStore(database: DatabaseSync): TrialStore {
     firstTrialEventAt: ({ stream, event }) => (firstEvent.get(stream, event) as { at: string | null } | undefined)?.at ?? null,
     listReadyPullRequests: () => (readyPullRequests.all() as unknown as ReadyPullRequestRow[])
       .map(row => ({ repository: row.repository, pullRequestNumber: row.pull_request_number, title: row.title, readyAt: row.ready_at })),
-    listTrialMergedReadyHeads: range => (mergedReadyHeads.all(range.from, range.to) as unknown as MergedReadyHeadRow[])
-      .map(row => ({ repository: row.repository, pullRequestNumber: row.pull_request_number, readyAt: row.ready_at, mergedAt: row.merged_at, merger: trialMerger(row) })),
     listTrialRetroCandidates: range => (retroCandidates.all(range.from, range.to) as unknown as RetroCandidateRow[])
       .map(row => ({ repository: row.repository, createdAt: row.created_at, issueNumber: row.issue_number, mergedAt: row.merged_at })),
   }

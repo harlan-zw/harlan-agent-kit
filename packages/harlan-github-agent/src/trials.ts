@@ -40,15 +40,12 @@ export type TrialMeasure
     listLimit: number
   }
   | {
-    _tag: 'ReadyToMerge'
-    /**
-     * The wait before the trial, for pull requests a person merged.
-     *
-     * Measured once from GitHub, because Revisions stored before the trial name
-     * no merger, so the Journal cannot leave Auto merge out of them.
-     */
-    baseline: ReadyToMergeBaseline
-    /** How far the median wait from READY to merge must fall, as a share of the baseline. */
+    _tag: 'ReadyWait'
+    /** A pull request READY with passing CI for longer than this counts as overdue. */
+    overdueDays: number
+    /** The reading at the first run. Each weekly reading compares against it. */
+    baseline: ReadyWait & { measuredAt: string }
+    /** How far the overdue count must fall by the end, as a share of the baseline. */
     minimumDrop: number
     /** From this trial week on, Harlan says whether he still reads the ready digest. */
     readCheckWeek: number
@@ -61,15 +58,13 @@ export type TrialMeasure
     minimumMergedShare: number
   }
 
-export interface ReadyToMergeBaseline {
-  from: string
-  to: string
-  /** Heads a person merged after a READY Review. */
-  mergedHeads: number
-  medianDays: number
-  waitedDayOrMore: number
-  /** Heads left out because Auto merge or the App merged them. */
-  autoMerged: number
+/** Open pull requests whose current head is READY with passing CI, at one instant. */
+export interface ReadyWait {
+  ready: number
+  /** Those READY for longer than the trial's overdue days. */
+  overdue: number
+  /** Whole days since READY of the oldest overdue one, or null when none is overdue. */
+  oldestDays: number | null
 }
 
 /** What an ended trial that misses its keep rule leads to. */
@@ -152,15 +147,16 @@ export const TRIALS: readonly Trial[] = [
     title: '6. Weekly `ready-digest` of pull requests ready for Harlan',
     start: { _tag: 'On', at: '2026-11-18T00:00:00+11:00' },
     weeks: 4,
-    metric: 'The median wait from a head\'s first READY Review to its merge by a person, against the 28 days before the trial. Merges by the App, by the Auto merge label, or in a repository where Auto merge takes every pull request are left out.',
-    keepRule: 'The median wait falls by at least 30%.',
+    metric: 'Open pull requests whose current head has been READY with passing CI for more than 3 days, and the age of the oldest, read at each weekly run.',
+    keepRule: 'By the end of week 4, that count falls by at least 50% from the first run.',
     killRule: 'Harlan stops reading the ready digest by week 2.',
-    before: 'In the 28 days to 17 November, GitHub names a person as the merger of 739 of 762 heads merged after a READY Review. Their median wait was 10 minutes, and 62 waited a day or more. The App merged 3, and 20 carried the Auto merge label.',
+    before: 'On 18 November, when the trial started, 9 of 33 READY pull requests had waited more than 3 days. The oldest had waited 50 days.',
     onMiss: { _tag: 'Kill' },
     measure: {
-      _tag: 'ReadyToMerge',
-      baseline: { from: '2026-10-20T13:00:00.000Z', to: '2026-11-17T13:00:00.000Z', mergedHeads: 739, medianDays: 0.00713, waitedDayOrMore: 62, autoMerged: 23 },
-      minimumDrop: 0.3,
+      _tag: 'ReadyWait',
+      overdueDays: 3,
+      baseline: { measuredAt: '2026-11-17T21:34:50.000Z', ready: 33, overdue: 9, oldestDays: 50 },
+      minimumDrop: 0.5,
       readCheckWeek: 2,
     },
   },
