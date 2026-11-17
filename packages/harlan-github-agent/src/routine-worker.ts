@@ -17,9 +17,10 @@ import { githubAccountInstructions } from './github-account.ts'
 import { err, ok } from './result.ts'
 import { routineReportCommand } from './routine-report-controller.ts'
 import { getRoutine } from './routines/index.ts'
+import { collectTrialReportEvidence } from './trial-report.ts'
 
 export interface RoutineScanWorkerOptions {
-  serviceEvidence?: Pick<JournalStore, 'groupWorkflowFailures' | 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents'>
+  serviceEvidence?: Pick<JournalStore, 'groupWorkflowFailures' | 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents' | 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt'>
   serviceUpdate?: () => ServiceUpdateStatus
   activityLog?: Pick<AgentActivityLog, 'record'>
   githubEvidence?: Pick<RoutineGitHubEvidenceSource, 'collect'>
@@ -60,8 +61,9 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
   return {
     run: async (task, signal) => {
       const definition = getRoutine(task.name)
-      if (task.name === 'agent-retro' && options.serviceEvidence === undefined)
-        return err('The controller has no Service evidence source for Agent retro.')
+      const readsServiceEvidence = task.name === 'agent-retro' || task.name === 'trial-report'
+      if (readsServiceEvidence && options.serviceEvidence === undefined)
+        return err(`The controller has no Service evidence source for ${task.name}.`)
       const maximumChangedFiles = definition.maximumChangedFiles === null
         ? null
         : options.maximumChangedFiles ?? definition.maximumChangedFiles
@@ -91,7 +93,8 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         return ok({ evidence, usage: { _tag: 'Unavailable' } })
       }
 
-      const githubEvidence = task.name === 'agent-feedback'
+      // Feedback and trial evidence come from the Journal, so they spend no GitHub read.
+      const githubEvidence = task.name === 'agent-feedback' || task.name === 'trial-report'
         ? null
         : options.githubEvidence === undefined
           ? { _tag: 'Unavailable' as const, reason: 'The controller has no GitHub metadata source.' }
@@ -145,11 +148,13 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           evidence: githubEvidence!,
         })
       }
-      const serviceEvidence = task.name === 'agent-retro'
-        ? options.serviceEvidence === undefined
+      const serviceEvidence = !readsServiceEvidence
+        ? null
+        : options.serviceEvidence === undefined
           ? { _tag: 'Unavailable', reason: 'The controller has no Service evidence source.' }
-          : collectAgentRetroEvidence(options.serviceEvidence, options.now())
-        : null
+          : task.name === 'trial-report'
+            ? collectTrialReportEvidence(options.serviceEvidence, options.now())
+            : collectAgentRetroEvidence(options.serviceEvidence, options.now())
       const turn = await runAgentTurn(
         {
           ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),
