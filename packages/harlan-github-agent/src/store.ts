@@ -7424,7 +7424,18 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 98;`)
     version = 98
   }
-  if (version === 98)
+  if (version === 98) {
+    applyMigration(database, `
+      CREATE TABLE IF NOT EXISTS conflict_retry_requests (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id),
+        requested_by TEXT NOT NULL,
+        requested_at TEXT NOT NULL
+      );
+      PRAGMA user_version = 99;`)
+    version = 99
+  }
+  if (version === 99)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -8227,7 +8238,8 @@ export function openJournalStore(
     try {
       const duplicate = database.prepare(`
         SELECT task_id FROM review_rerun_requests WHERE id = ?
-      `).get(input.requestId) as { task_id: string } | undefined
+        UNION ALL SELECT task_id FROM conflict_retry_requests WHERE id = ?
+      `).get(input.requestId, input.requestId) as { task_id: string } | undefined
       if (duplicate !== undefined) {
         database.exec('COMMIT')
         return { _tag: 'Duplicate', taskId: duplicate.task_id }
@@ -8239,6 +8251,8 @@ export function openJournalStore(
           subjects.current_revision_id,
           revisions.payload,
           repositories.policy_json,
+          repositories.paused,
+          repositories.writes_enabled,
           worker_tasks.id AS task_id,
           worker_tasks.state_tag,
           worker_tasks.fence
@@ -8255,6 +8269,8 @@ export function openJournalStore(
         current_revision_id: string
         payload: string
         policy_json: string
+        paused: number
+        writes_enabled: number
         task_id: string | null
         state_tag: Exclude<TaskRow['state_tag'], 'Publishing'> | null
         fence: number | null
@@ -8304,6 +8320,52 @@ export function openJournalStore(
           SELECT 1 FROM pull_request_approvals
           WHERE subject_id = ? AND revision_id = ? AND kind = 'review'
         `).get(row.subject_id, revisionId) !== undefined
+      if (pullRequest.mergeState === 'conflicting' && input.source === 'dashboard') {
+        // A base move may preserve Review authority, but retrying a blocked
+        // conflict requires the exact current Revision selected by Control.
+        if (row.current_revision_id !== input.revisionId) {
+          database.exec('COMMIT')
+          return { _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }
+        }
+        const task = database.prepare(`
+          SELECT id, state_tag, fence, recovery_attempts FROM tasks
+          WHERE subject_id = ? AND revision_id = ? AND kind = 'resolve_conflict'
+        `).get(row.subject_id, revisionId) as Pick<TaskRow, 'id' | 'state_tag' | 'fence' | 'recovery_attempts'> | undefined
+        const unavailable = !mutationsEnabled || row.writes_enabled !== 1 || row.paused === 1
+          || !mapping.pullRequestReview || !canResolveConflictPullRequestHead(mapping, pullRequest)
+          || !reviewApproved || pullRequest.state !== 'open' || pullRequest.draft
+          || database.prepare('SELECT 1 FROM item_dismissals WHERE subject_id = ?').get(row.subject_id) !== undefined
+          || database.prepare('SELECT 1 FROM review_cancel_requests WHERE subject_id = ? AND head_sha = ?').get(row.subject_id, pullRequest.headSha) !== undefined
+          || task === undefined
+          || database.prepare('SELECT 1 FROM task_cancellations WHERE task_id = ?').get(task?.id ?? '') !== undefined
+          || database.prepare(`
+            SELECT 1 FROM tasks WHERE subject_id = ? AND id != ? AND state_tag IN ('Queued', 'Running', 'Publishing')
+            UNION ALL SELECT 1 FROM worker_tasks WHERE subject_id = ? AND state_tag IN ('Queued', 'Running')
+          `).get(row.subject_id, task?.id ?? '', row.subject_id) !== undefined
+        if (unavailable || task === undefined || !['ActionRequired', 'Queued', 'Running'].includes(task.state_tag)
+          || (task.state_tag === 'ActionRequired' && (actionRequiredSource(database, task.id) !== 'Running'
+            || task.recovery_attempts >= MAXIMUM_RECOVERY_ATTEMPTS))) {
+          database.exec('COMMIT')
+          return { _tag: 'Rejected', reason: { _tag: 'ReviewNotReady' } }
+        }
+        if (task.state_tag === 'ActionRequired') {
+          // Never publish retained work. The next claim increments the fence,
+          // which prepares a fresh worktree against the actual current base.
+          database.prepare(`
+            UPDATE tasks SET state_tag = 'Queued', reason = NULL, evidence = NULL,
+              attempts = 0, worker_id = NULL, command_id = NULL, lease_expires_at = NULL,
+              recovery_attempts = recovery_attempts + 1, updated_at = ?
+            WHERE id = ? AND state_tag = 'ActionRequired'
+          `).run(input.at, task.id)
+          recordTransition(database, { taskId: task.id, from: 'ActionRequired', to: 'Queued', reason: 'Fresh conflict verification requested from the dashboard.', fence: task.fence, at: input.at })
+          resolveTaskIncidents(database, task.id, input.at)
+        }
+        database.prepare(`
+          INSERT INTO conflict_retry_requests (id, task_id, requested_by, requested_at) VALUES (?, ?, ?, ?)
+        `).run(input.requestId, task.id, input.requestedBy, input.at)
+        database.exec('COMMIT')
+        return { _tag: task.state_tag === 'ActionRequired' ? 'Queued' : 'AlreadyQueued', taskId: task.id }
+      }
       if (
         pullRequest.state !== 'open'
         || pullRequest.draft
