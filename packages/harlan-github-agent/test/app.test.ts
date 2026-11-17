@@ -1144,7 +1144,7 @@ describe('dashboard HTTP app', () => {
       kinds: [expect.objectContaining({
         work: 'issue_work',
         cost: { _tag: 'Priced', usd: 0.1, unpricedTurns: 0 },
-        outcomes: { useful: 1, wasted: 0, open: 0, unrecorded: 0 },
+        outcomes: { useful: 1, wasted: 0, actionRequired: 0, open: 0, unrecorded: 0 },
         verdict: { _tag: 'Keep' },
       })],
     })

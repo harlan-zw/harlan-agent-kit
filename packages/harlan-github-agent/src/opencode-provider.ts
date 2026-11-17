@@ -553,6 +553,9 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
         }
       }
       const exit = await exited
+      // A turn that stops early still spent its tokens, so report them before the reason.
+      if (usageAvailable)
+        yield { _tag: 'Usage', usage, scope: 'Turn' }
       if (await server.memoryExceeded?.()) {
         yield { _tag: 'Failed', reason: 'The Agent Task exceeded its memory budget.', cause: 'resource-limit' }
         return
@@ -578,8 +581,6 @@ export function createOpencodeProvider(options: OpencodeProviderOptions = {}): A
         return
       }
       if (completed && exit.code === 0) {
-        if (usageAvailable)
-          yield { _tag: 'Usage', usage, scope: 'Turn' }
         yield { _tag: 'TurnCompleted' }
       }
       else if (exit.code !== 0 && !failed) {
