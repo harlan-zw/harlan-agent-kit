@@ -48,7 +48,7 @@ session="test-$RANDOM-$RANDOM"
 repeat=$(jq -nc --arg s "$session" '{session_id:$s,hook_event_name:"PostToolUseFailure",tool_name:"Bash",tool_input:{command:"rgx"},error:"bash: rgx: command not found"}')
 printf '%s' "$repeat" | env -u CLAUDE_SESSION_ID bash "$dir/command-not-found.sh" >/dev/null
 got=$(printf '%s' "$repeat" | env -u CLAUDE_SESSION_ID bash "$dir/command-not-found.sh")
-expect 'once per session' '^$' "$got"
+expect 'once per session' '^none$' "${got:-none}"
 rm -f "/tmp/claude-cmd-notfound-$session"
 
 got=$(context pre-commit-push.sh "$(jq -nc '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:"git commit -m \"fix: x\""}}')")
