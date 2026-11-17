@@ -59,52 +59,15 @@ Install a local checkout instead when you are changing the plugin:
 
 ### Codex
 
-Codex installs the nested plugin directory, [`harlan-agent-kit/`](./harlan-agent-kit).
+Codex installs the nested plugin directory, [`harlan-agent-kit/`](./harlan-agent-kit), from this checkout's marketplace.
 
 ```bash
-mkdir -p ~/.agents/plugins ~/plugins
-ln -sfnT "$PWD/harlan-agent-kit" ~/plugins/harlan-agent-kit
-codex plugin add harlan-agent-kit@personal
+codex plugin marketplace add "$PWD"
+codex plugin add harlan-agent-kit@harlan-agent-kit
 ```
 
-<details>
-<summary><b>Personal marketplace config</b></summary>
-
-Create `~/.agents/plugins/marketplace.json` if it does not exist:
-
-```json
-{
-  "name": "personal",
-  "interface": {
-    "displayName": "Personal"
-  },
-  "plugins": [
-    {
-      "name": "harlan-agent-kit",
-      "source": {
-        "source": "local",
-        "path": "./plugins/harlan-agent-kit"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
-    }
-  ]
-}
-```
-
-Validate before you reinstall:
-
-```bash
-claude plugin validate ~/plugins/harlan-agent-kit
-jq empty ~/plugins/harlan-agent-kit/hooks/codex.json
-codex plugin add harlan-agent-kit@personal
-```
-
-Start a new Codex thread after a reinstall, otherwise the new Skills stay unloaded.
-</details>
+Codex copies the plugin into its cache. After a pull, run `codex plugin add harlan-agent-kit@harlan-agent-kit` again, then start a new Codex thread.
+Codex skips a new or changed hook until you trust it in `/hooks`, or in **Settings > Hooks** in the desktop app.
 
 ## Skills
 
@@ -181,6 +144,7 @@ That manifest is the only place a hook is registered. The install script, the dr
 check, and the opencode plugin all derive their lists from it.
 Codex reads [`hooks/codex.json`](./harlan-agent-kit/hooks/codex.json) through
 [`.codex-plugin/plugin.json`](./harlan-agent-kit/.codex-plugin/plugin.json).
+`pnpm test:codex-hooks` fails when its Bash guards differ from the Claude manifest.
 
 | Event | Hook | Description |
 |-------|------|-------------|
