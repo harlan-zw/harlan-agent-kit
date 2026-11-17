@@ -28,3 +28,10 @@ routines:
     timezone: Australia/Melbourne
     mode: propose
     enabled: true
+  - name: trial-report
+    on:
+      schedule:
+        - cron: '0 6 * * 1'
+    timezone: Australia/Melbourne
+    mode: report
+    enabled: true
