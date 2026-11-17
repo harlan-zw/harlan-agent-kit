@@ -31,6 +31,7 @@ command -v wt >/dev/null 2>&1 || fail "Worktrunk is not installed."
 wt -C "$script_dir/.." --config "$config_source" config show >/dev/null
 
 install_asset "$helper_source" "$HOME/.local/bin/harlan-repository-env" 755
+install_asset "$script_dir/worktrunk-install.ts" "$HOME/.local/bin/harlan-worktrunk-install.ts" 644
 install_asset "$manifest_source" "$HOME/.config/harlan-agent-kit/repository-env-files" 644
 install_asset "$config_source" "$HOME/.config/worktrunk/config.toml" 644
 

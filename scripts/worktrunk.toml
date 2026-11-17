@@ -45,16 +45,10 @@ fi
 
 [pre-start]
 pnpm = """
-if [ -f {{ primary_worktree_path }}/pnpm-lock.yaml ] && [ -f pnpm-lock.yaml ]; then
-  # --ignore-scripts also skips building a git-hosted dependency. A repository that
-  # allowlists one in allowBuilds gets a normal install, so pnpm builds it. The allowlist
-  # comes from the primary checkout, so a branch cannot turn scripts on for itself.
-  scripts=--ignore-scripts
-  if [ -f {{ primary_worktree_path }}/pnpm-workspace.yaml ] && sed -n '/^allowBuilds:/,/^[^ ]/p' {{ primary_worktree_path }}/pnpm-workspace.yaml | grep ': true' \
-    | grep -qF -e 'codeload.github.com' -e 'github:' -e 'git+'; then
-    scripts=
-  fi
-  timeout --signal=TERM --kill-after=10s 180s pnpm install --frozen-lockfile --prefer-offline $scripts --ignore-pnpmfile --reporter=append-only
+if [ -f "{{ primary_worktree_path }}/pnpm-lock.yaml" ] && [ -f pnpm-lock.yaml ]; then
+  # The installed helper prepares immutable primary approvals outside the branch.
+  # The branch install always disables lifecycle scripts and pnpmfiles.
+  timeout --signal=TERM --kill-after=10s 180s node --experimental-strip-types "$HOME/.local/bin/harlan-worktrunk-install.ts" "{{ primary_worktree_path }}"
 fi
 """
 env = """

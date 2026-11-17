@@ -362,6 +362,7 @@ sync_service_override() {
 }
 
 sync_worktrunk() {
+  sync_verified_file "$SCRIPT_DIR/worktrunk-install.ts" "$REMOTE_HOME/.local/bin/harlan-worktrunk-install.ts" 644 'Worktrunk install helper'
   sync_verified_file "$REPOSITORY_ENV_TOOL_FILE" "$REMOTE_REPOSITORY_ENV_TOOL" 755 'repository environment helper'
   sync_verified_file "$REPOSITORY_ENV_MANIFEST_FILE" "$REMOTE_REPOSITORY_ENV_MANIFEST" 644 'repository environment manifest'
   sync_verified_file "$WORKTRUNK_CONFIG_FILE" "$REMOTE_WORKTRUNK_CONFIG" 644 'Worktrunk configuration'

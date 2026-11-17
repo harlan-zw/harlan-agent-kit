@@ -72,6 +72,7 @@ export HOGWILD_SERVICE_TEST_CODEX_HASH="$expected_codex_hash"
 export HOGWILD_SERVICE_TEST_OVERRIDE_HASH="$expected_override_hash"
 export HOGWILD_SERVICE_TEST_WORKTRUNK_HASH="$expected_worktrunk_hash"
 export HOGWILD_SERVICE_TEST_ENV_TOOL_HASH="$expected_env_tool_hash"
+export HOGWILD_SERVICE_TEST_INSTALL_TOOL_HASH=$(/usr/bin/sha256sum "$script_dir/worktrunk-install.ts" | cut -d' ' -f1)
 export HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH="$expected_env_manifest_hash"
 export HOGWILD_SERVICE_TEST_SITES_HASH="$expected_sites_hash"
 printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
@@ -84,6 +85,10 @@ printf '%s\n' \
   'if [[ "$*" == *sha256sum*hogwild.conf.next* ]]; then printf '\''%s  hogwild.conf.next\n'\'' "$HOGWILD_SERVICE_TEST_OVERRIDE_HASH"; elif [[ "$*" == *sha256sum*harlan-repository-env.next* ]]; then printf '\''%s  harlan-repository-env.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_TOOL_HASH"; elif [[ "$*" == *sha256sum*repository-env-files.next* ]]; then printf '\''%s  repository-env-files.next\n'\'' "$HOGWILD_SERVICE_TEST_ENV_MANIFEST_HASH"; elif [[ "$*" == *sha256sum*worktrunk/config.toml.next* ]]; then printf '\''%s  config.toml.next\n'\'' "$HOGWILD_SERVICE_TEST_WORKTRUNK_HASH"; elif [[ "$*" == *sha256sum*CLAUDE.md.next* ]]; then printf '\''%s  CLAUDE.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CLAUDE_HASH"; elif [[ "$*" == *sha256sum*AGENTS.md.next* ]]; then printf '\''%s  AGENTS.md.next\n'\'' "$HOGWILD_SERVICE_TEST_CODEX_HASH"; elif [[ "$*" == *sha256sum*SITES.md.next* ]]; then printf '\''%s  SITES.md.next\n'\'' "$HOGWILD_SERVICE_TEST_SITES_HASH"; fi' \
   > "$test_root/bin/ssh"
 cat >> "$test_root/bin/ssh" <<'FAKE_SSH'
+if [[ "$*" == *sha256sum*harlan-worktrunk-install.ts.next* ]]; then
+  printf '%s  harlan-worktrunk-install.ts\n' "$HOGWILD_SERVICE_TEST_INSTALL_TOOL_HASH"
+  exit
+fi
 # Hogwild reports the commit it landed on, so the desktop can be pinned to it.
 if [[ "$*" == *"-- 'revision'"* || "$*" == *"-- 'resolve-update'"* ]]; then
   printf '%s\n' "$HOGWILD_SERVICE_TEST_DEPLOYED_SHA"
