@@ -1,4 +1,4 @@
-import type { ImplicitSignal, ImplicitSignalKind } from '../implicit-signal-store.ts'
+import type { ImplicitSignal, ImplicitSignalQuery } from '../implicit-signal-store.ts'
 import type { Result } from '../result.ts'
 import type { AgentFeedbackSignal, Candidate, RoutineMode, RoutineName } from '../types.ts'
 
@@ -44,7 +44,7 @@ export type RoutinePreparation
 /** Journal reads a Routine may make before its Agent turn. */
 export interface RoutineEvidence {
   listAgentFeedback: (limit: number) => AgentFeedbackSignal[]
-  listImplicitSignals: (input: { kinds: readonly ImplicitSignalKind[], limitPerKind: number }) => ImplicitSignal[]
+  listImplicitSignals: (input: ImplicitSignalQuery) => ImplicitSignal[]
 }
 
 /** Built-in policy only. Repository YAML cannot supply implementations. */

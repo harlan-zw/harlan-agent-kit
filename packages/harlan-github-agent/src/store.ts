@@ -142,7 +142,7 @@ import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS,
 import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
 import { gitHubRateLimitRetryAt } from './github-rate-limit.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
-import { createImplicitSignalStore, implicitSignalSchema, recordClosureSignal, recordHeadChangeSignal } from './implicit-signal-store.ts'
+import { createImplicitSignalStore, implicitSignalSchema, isAgentPullRequest, recordClosureSignal, recordHeadChangeSignal } from './implicit-signal-store.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { createLoggedFindingStore, loggedFindingSchema } from './logged-finding-store.ts'
@@ -8478,8 +8478,10 @@ export function openJournalStore(
         database.prepare('SELECT 1 FROM item_dismissals WHERE subject_id = ?').get(subject.id) !== undefined
       const recordHeadSignal = (): void => {
         const prior = subject.current_payload === null ? null : JSON.parse(subject.current_payload) as GitHubItem
-        if (input.subject.kind === 'pull_request' && prior?.kind === 'pull_request' && prior.headSha !== input.subject.headSha)
+        if (input.subject.kind === 'pull_request' && prior?.kind === 'pull_request' && prior.headSha !== input.subject.headSha
+          && isAgentPullRequest(input.subject, mapping.writablePullRequestAuthors)) {
           recordHeadChangeSignal(database, { subjectId: subject.id, headSha: input.subject.headSha, occurredAt: input.subject.updatedAt, at: input.observedAt })
+        }
       }
       const planCurrentWork = (): void => {
         updateConflictDispatchWindow(database, subject.id, subject.current_payload === null ? null : JSON.parse(subject.current_payload) as GitHubItem, input.subject, input.observedAt)
@@ -15879,7 +15881,7 @@ export function openJournalStore(
 
   const recordVerifiedPullRequestClosure: JournalStore['recordVerifiedPullRequestClosure'] = (input) => {
     const row = database.prepare(`
-      SELECT subjects.id AS subject_id, revisions.payload
+      SELECT subjects.id AS subject_id, revisions.payload, repositories.policy_json
       FROM subjects
       JOIN repositories ON repositories.id = subjects.repository_id
       JOIN revisions ON revisions.id = subjects.current_revision_id
@@ -15888,6 +15890,7 @@ export function openJournalStore(
     `).get(input.repository, input.pullRequestNumber, input.revisionId) as {
       subject_id: number
       payload: string
+      policy_json: string
     } | undefined
     const pullRequest = row === undefined ? undefined : JSON.parse(row.payload) as GitHubItem
     if (
@@ -15916,7 +15919,8 @@ export function openJournalStore(
         input.disposition._tag,
         input.at,
       )
-      recordClosureSignal(database, { subjectId: row.subject_id, pullRequest, at: input.at })
+      if (isAgentPullRequest(pullRequest, (JSON.parse(row.policy_json) as RepositoryMapping).writablePullRequestAuthors))
+        recordClosureSignal(database, { subjectId: row.subject_id, pullRequest, at: input.at })
       database.exec('COMMIT')
     }
     catch (error) {

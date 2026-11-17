@@ -33,7 +33,11 @@ describe('built-in Routine contracts', () => {
       },
     })
     expect(result).toMatchObject({ _tag: 'Ok', value: { _tag: 'Skip', evidence: expect.stringContaining('0 signals') } })
-    expect(reads).toEqual([10, { kinds: ['HumanCommit', 'ClosedUnmerged', 'LoggedFindingPickedUp'], limitPerKind: 5 }])
+    expect(reads).toEqual([
+      10,
+      { kinds: ['HumanCommit', 'ClosedUnmerged'], limitPerKind: 5, origin: 'ServiceOpened' },
+      { kinds: ['LoggedFindingPickedUp'], limitPerKind: 5, origin: 'Any' },
+    ])
   })
 
   it('runs on Implicit signals alone and keeps them apart from Agent feedback', () => {
@@ -48,7 +52,7 @@ describe('built-in Routine contracts', () => {
       reviewRun: null,
     }
     const definition = getRoutine('agent-feedback')
-    const result = definition.prepare('harlan-zw/harlan-agent-kit', { listAgentFeedback: () => [], listImplicitSignals: () => [signal] })
+    const result = definition.prepare('harlan-zw/harlan-agent-kit', { listAgentFeedback: () => [], listImplicitSignals: input => input.origin === 'ServiceOpened' ? [signal] : [] })
     expect(result).toEqual({ _tag: 'Ok', value: { _tag: 'Run', feedback: [], signals: [signal] } })
 
     const prompt = definition.scanPrompt({ name: 'agent-feedback', repository: 'harlan-zw/harlan-agent-kit', mode: 'propose', priorCandidates: [], feedback: [], signals: [signal] })

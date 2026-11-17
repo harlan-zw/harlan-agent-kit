@@ -629,9 +629,11 @@ The service records each one once. There are four kinds:
 - Merged untouched: the pull request merged, and the service published every head after the first.
 - Logged finding pickup: a person asked an agent to fix one Logged Review finding.
 
-Only pull requests the service opened or reviewed get one. Only a close or merge that GitHub confirmed counts.
+Only pull requests the service opened or reviewed get one. A contributor's pull request gets none.
+Only a close or merge that GitHub confirmed counts.
 The service never reads the commit author. Sessions on the service host commit as the GitHub App.
-So a head with no Publication command counts as a human commit.
+So a head with no Publication command counts as a human commit. A person's rebase or base branch merge counts too.
+On a pull request Harlan opened, a human commit is often planned work. The agent-feedback Routine reads human commits and closes only on pull requests the service opened.
 
 An Implicit signal records an action, not a judgment. It is never Agent feedback, and it never changes a Payback verdict.
 

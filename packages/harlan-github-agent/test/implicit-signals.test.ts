@@ -1,4 +1,8 @@
 import type { GitHubPullRequestItem, ReviewGates } from '../src/types.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { terminalComment } from '../src/item-agent.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -7,11 +11,13 @@ import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
 type Store = ReturnType<typeof openJournalStore>
 
 const stores: Store[] = []
+const directories: string[] = []
 afterEach(() => {
   stores.splice(0).forEach(store => store.close())
+  directories.splice(0).forEach(directory => rmSync(directory, { recursive: true, force: true }))
 })
 
-const ALL = { kinds: ['HumanCommit', 'ClosedUnmerged', 'MergedUntouched', 'LoggedFindingPickedUp'] as const, limitPerKind: 10 }
+const ALL = { kinds: ['HumanCommit', 'ClosedUnmerged', 'MergedUntouched', 'LoggedFindingPickedUp'] as const, limitPerKind: 10, origin: 'Any' } as const
 const passed: ReviewGates = { merge: { _tag: 'Passed', evidence: [] }, review: { _tag: 'Passed', evidence: [] }, ci: { _tag: 'Passed', evidence: [] } }
 const blocked: ReviewGates = { ...passed, review: { _tag: 'Failed', reason: 'An Open Review finding.', evidence: [] } }
 
@@ -19,8 +25,8 @@ function at(minute: number): string {
   return new Date(Date.parse('2026-08-13T01:00:00.000Z') + minute * 60_000).toISOString()
 }
 
-function setup(): Store {
-  const store = openJournalStore(':memory:')
+function setup(path = ':memory:'): Store {
+  const store = openJournalStore(path)
   stores.push(store)
   store.syncRepositories([repositoryMapping()], at(0))
   return store
@@ -35,7 +41,7 @@ function observe(store: Store, minute: number, overrides: Partial<GitHubPullRequ
 }
 
 function review(store: Store, id: string, minute: number, observed: { revisionId: string, subject: GitHubPullRequestItem }, gates = passed): void {
-  store.recordReviewRun({
+  const recorded = store.recordReviewRun({
     id,
     repository: observed.subject.repository,
     pullRequestNumber: observed.subject.number,
@@ -51,6 +57,8 @@ function review(store: Store, id: string, minute: number, observed: { revisionId
     gates,
     findings: [],
   })
+  if (recorded._tag !== 'Inserted')
+    throw new Error(`Expected a recorded Review run: ${JSON.stringify(recorded)}`)
 }
 
 function close(store: Store, minute: number, overrides: Partial<GitHubPullRequestItem>): boolean {
@@ -82,6 +90,24 @@ describe('human commit after READY', () => {
       occurredAt: at(3),
       openedBy: null,
       reviewRun: { id: 'review-a', headSha: 'head-a', outcome: expect.objectContaining({ _tag: 'Ready' }) },
+    })])
+  })
+
+  it('reads READY from the gate projection, which CI can settle after the Review run', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'implicit-signals-'))
+    directories.push(directory)
+    const path = join(directory, 'state.sqlite')
+    const store = setup(path)
+    review(store, 'review-a', 2, observe(store, 1, { headSha: 'head-a' }), { ...passed, ci: { _tag: 'Pending', reason: 'CI is running.', evidence: [] } })
+    const database = new DatabaseSync(path)
+    database.prepare('UPDATE review_gate_projections SET gates = ?, outcome_tag = \'Ready\' WHERE review_run_id = ?').run(JSON.stringify(passed), 'review-a')
+    database.close()
+
+    observe(store, 3, { headSha: 'head-b' })
+
+    expect(store.listImplicitSignals(ALL)).toEqual([expect.objectContaining({
+      _tag: 'HumanCommit',
+      reviewRun: expect.objectContaining({ id: 'review-a', outcome: expect.objectContaining({ _tag: 'Ready' }) }),
     })])
   })
 
@@ -153,6 +179,18 @@ describe('closed without merge', () => {
     expect(store.listImplicitSignals(ALL)).toEqual([])
   })
 
+  it('records nothing on a contributor pull request, even after READY', () => {
+    const store = setup()
+    const opened = observe(store, 1, { headSha: 'head-a', author: 'contributor' })
+    expect(store.approvePullRequest({ repository: 'harlan-zw/example', pullRequestNumber: 24, revisionId: opened.revisionId, kind: 'review', at: at(1) })._tag).toBe('Approved')
+    review(store, 'review-a', 2, opened)
+    observe(store, 3, { headSha: 'head-b', author: 'contributor' })
+
+    expect(close(store, 4, { headSha: 'head-b', author: 'contributor' })).toBe(true)
+
+    expect(store.listImplicitSignals(ALL)).toEqual([])
+  })
+
   it('records nothing on a pull request the service neither opened nor reviewed', () => {
     const store = setup()
     observe(store, 1, { headSha: 'head-a' })
@@ -208,6 +246,7 @@ describe('merged untouched', () => {
       openedBy: 'issue_work',
       reviewRun: null,
     })])
+    expect(store.listImplicitSignals({ kinds: ['MergedUntouched'], limitPerKind: 5, origin: 'ServiceOpened' })).toHaveLength(1)
     expect(store.listPaybackSignals({ from: at(0), to: at(60) })).toEqual([{ kind: 'MergedUntouched', openedBy: 'issue_work', reviewed: false }])
     expect(store.listPaybackSignals({ from: at(10), to: at(60) })).toEqual([])
   })
@@ -272,7 +311,8 @@ describe('listImplicitSignals', () => {
     }
     expect(close(store, 40, { number: 26, headSha: 'next-26' })).toBe(true)
 
-    expect(store.listImplicitSignals({ kinds: ['HumanCommit'], limitPerKind: 2 }).map(signal => signal.pullRequestNumber)).toEqual([26, 25])
-    expect(store.listImplicitSignals({ kinds: ['HumanCommit', 'ClosedUnmerged'], limitPerKind: 1 }).map(signal => signal._tag)).toEqual(['ClosedUnmerged', 'HumanCommit'])
+    expect(store.listImplicitSignals({ kinds: ['HumanCommit'], limitPerKind: 2, origin: 'Any' }).map(signal => signal.pullRequestNumber)).toEqual([26, 25])
+    expect(store.listImplicitSignals({ kinds: ['HumanCommit', 'ClosedUnmerged'], limitPerKind: 1, origin: 'Any' }).map(signal => signal._tag)).toEqual(['ClosedUnmerged', 'HumanCommit'])
+    expect(store.listImplicitSignals({ kinds: ['HumanCommit', 'ClosedUnmerged'], limitPerKind: 5, origin: 'ServiceOpened' })).toEqual([])
   })
 })

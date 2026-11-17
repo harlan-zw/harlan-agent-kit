@@ -35,9 +35,16 @@ export type ImplicitSignal
     | ImplicitSignalBase & { _tag: 'ClosedUnmerged' | 'MergedUntouched', reviewRun: ImplicitSignalReview | null }
     | ImplicitSignalBase & { _tag: 'LoggedFindingPickedUp', reviewRun: ImplicitSignalReview | null, finding: LoggedReviewFinding }
 
+/** `ServiceOpened` keeps only pull requests a service publication opened. */
+export interface ImplicitSignalQuery {
+  kinds: readonly ImplicitSignalKind[]
+  limitPerKind: number
+  origin: 'ServiceOpened' | 'Any'
+}
+
 export interface ImplicitSignalStore {
   /** The newest signals of each requested kind, newest first. */
-  listImplicitSignals: (input: { kinds: readonly ImplicitSignalKind[], limitPerKind: number }) => ImplicitSignal[]
+  listImplicitSignals: (input: ImplicitSignalQuery) => ImplicitSignal[]
 }
 
 export const implicitSignalSchema = `
@@ -85,6 +92,11 @@ function insertSignal(database: DatabaseSync, row: SignalRow): void {
   `).run(row.id, row.subjectId, row.kind, row.headSha, row.fingerprint, row.reviewRunId, row.openedBy, row.occurredAt, row.recordedAt)
 }
 
+/** Agent work is a pull request the service opened, or one a trusted author such as Harlan opened. */
+export function isAgentPullRequest(pullRequest: Pick<GitHubPullRequestItem, 'author' | 'controllerOwned'>, trustedAuthors: readonly string[]): boolean {
+  return pullRequest.controllerOwned === true || trustedAuthors.some(author => author.toLowerCase() === pullRequest.author.toLowerCase())
+}
+
 function servicePublished(database: DatabaseSync, commitSha: string): boolean {
   return database.prepare('SELECT 1 FROM publication_commands WHERE commit_sha = ? LIMIT 1').get(commitSha) !== undefined
 }
@@ -98,6 +110,7 @@ export function openingWork(database: DatabaseSync, subjectId: number): OpeningW
       AND publication_commands.state_tag = 'Published'
     JOIN tasks ON tasks.id = publication_commands.task_id
     JOIN subjects AS items ON items.id = tasks.subject_id AND items.repository_id = pull_requests.repository_id
+      AND items.id != pull_requests.id
     WHERE pull_requests.id = ?
     ORDER BY publication_commands.published_at
     LIMIT 1
@@ -119,10 +132,13 @@ export function openingWork(database: DatabaseSync, subjectId: number): OpeningW
  * Every service push has one. Sessions on the service host commit as the GitHub App, so the author cannot tell.
  */
 export function recordHeadChangeSignal(database: DatabaseSync, input: { subjectId: number, headSha: string, occurredAt: string, at: string }): void {
+  // CI can settle after the Review run, so the gate projection holds the READY GitHub shows.
   const latest = database.prepare(`
-    SELECT id, outcome_tag FROM review_runs
-    WHERE subject_id = ? AND head_sha != ?
-    ORDER BY completed_at DESC, id DESC
+    SELECT review_runs.id, COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag
+    FROM review_runs
+    LEFT JOIN review_gate_projections ON review_gate_projections.review_run_id = review_runs.id
+    WHERE review_runs.subject_id = ? AND review_runs.head_sha != ?
+    ORDER BY review_runs.completed_at DESC, review_runs.id DESC
     LIMIT 1
   `).get(input.subjectId, input.headSha) as { id: string, outcome_tag: ReviewOutcome['_tag'] } | undefined
   if (latest?.outcome_tag !== 'Ready' || servicePublished(database, input.headSha))
@@ -255,26 +271,28 @@ export function createImplicitSignalStore(database: DatabaseSync): ImplicitSigna
       json_extract(revisions.payload, '$.title') AS title,
       implicit_signals.head_sha, implicit_signals.occurred_at, implicit_signals.opened_by,
       review_runs.id AS review_run_id, review_runs.head_sha AS review_head_sha,
-      review_runs.outcome_tag, review_runs.confidence,
+      COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
+      COALESCE(review_gate_projections.confidence, review_runs.confidence) AS confidence,
       logged_finding_requests.finding_json
     FROM implicit_signals
     JOIN subjects ON subjects.id = implicit_signals.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
     LEFT JOIN revisions ON revisions.id = subjects.current_revision_id
     LEFT JOIN review_runs ON review_runs.id = implicit_signals.review_run_id
+    LEFT JOIN review_gate_projections ON review_gate_projections.review_run_id = review_runs.id
     LEFT JOIN logged_finding_requests
       ON logged_finding_requests.subject_id = implicit_signals.subject_id
       AND logged_finding_requests.head_sha = implicit_signals.head_sha
       AND logged_finding_requests.fingerprint = implicit_signals.fingerprint
-    WHERE implicit_signals.kind = ?
+    WHERE implicit_signals.kind = ? AND (? = 'Any' OR implicit_signals.opened_by IS NOT NULL)
     ORDER BY implicit_signals.occurred_at DESC, implicit_signals.id
     LIMIT ?
   `)
   return {
-    listImplicitSignals: ({ kinds, limitPerKind }) => {
+    listImplicitSignals: ({ kinds, limitPerKind, origin }) => {
       const limit = Math.max(0, Math.min(100, Math.trunc(limitPerKind)))
       return [...new Set(kinds)]
-        .flatMap(kind => (latest.all(kind, limit) as unknown as ImplicitSignalListRow[]).flatMap(row => signalOf(row) ?? []))
+        .flatMap(kind => (latest.all(kind, origin, limit) as unknown as ImplicitSignalListRow[]).flatMap(row => signalOf(row) ?? []))
         .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
     },
   }
