@@ -109,7 +109,9 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
     ? scope.minimumConfidence
     : scope._tag === 'Contained' && qualifiedByRisk
       ? scope.minimumConfidence
-      : policy.minimumConfidence
+      : scope._tag === 'Labelled' && scope.minimumConfidence !== null
+        ? scope.minimumConfidence
+        : policy.minimumConfidence
   const confidence = attempt.outcome.confidence
   if (confidence === undefined || confidence < minimumConfidence)
     return { _tag: 'Hold', reason: `Review confidence is below ${minimumConfidence}.` }

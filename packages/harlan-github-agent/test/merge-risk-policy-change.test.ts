@@ -137,7 +137,7 @@ function preUpgradeDigest(mapping: ReturnType<typeof repositoryMapping>): string
 
 describe('reviewPolicyDigest', () => {
   it('keeps the pre-upgrade digest for a repository that never opted in', () => {
-    expect(reviewPolicyDigest(repositoryMapping({ autoMerge: { _tag: 'Labelled' } }))).toBe(preUpgradeDigest(repositoryMapping({ autoMerge: { _tag: 'Labelled' } })))
+    expect(reviewPolicyDigest(repositoryMapping({ autoMerge: { _tag: 'Labelled', minimumConfidence: null } }))).toBe(preUpgradeDigest(repositoryMapping({ autoMerge: { _tag: 'Labelled', minimumConfidence: null } })))
     expect(reviewPolicyDigest(repositoryMapping({ autoMerge: { _tag: 'Every', minimumConfidence: 80 } }))).toBe(preUpgradeDigest(repositoryMapping({ autoMerge: { _tag: 'Every', minimumConfidence: 80 } })))
   })
 

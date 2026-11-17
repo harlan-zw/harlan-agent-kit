@@ -30,14 +30,14 @@ export type RepositoryAuthentication = 'app' | 'user'
  * Which pull requests Auto merge may take in one repository.
  *
  * `Labelled` is the default: only a pull request carrying the
- * `harlan-agent-auto-merge` label, at or above the service-wide minimum
- * confidence. `Every` takes every trusted-author pull request at or above the
+ * `harlan-agent-auto-merge` label, at or above the repository's own minimum
+ * confidence, or the service-wide one when the repository names none. `Every` takes every trusted-author pull request at or above the
  * repository's own minimum confidence. It suits a repository where a wrong
  * merge costs little, such as a demo site, and never a repository Harlan would
  * want to read first.
  */
 export type RepositoryAutoMergeScope
-  = | { _tag: 'Labelled' }
+  = | { _tag: 'Labelled', minimumConfidence: number | null }
     | { _tag: 'Every', minimumConfidence: number }
     /**
      * Auto merge covers a pull request the Merge risk calls Contained.

@@ -213,7 +213,7 @@ describe.each(['enable', 'fallback', 'retarget'] as const)('current Auto merge a
 
   it('refuses when the current repository policy requires a missing label', async () => {
     const test = harness(boundary, true)
-    await test.run(() => test.policy({ autoMerge: { _tag: 'Labelled' } }))
+    await test.run(() => test.policy({ autoMerge: { _tag: 'Labelled', minimumConfidence: null } }))
     expect(test.mutations).toEqual(boundary === 'fallback' ? ['enable'] : [])
   })
 
