@@ -378,13 +378,31 @@ agent:
 
   it('scopes auto merge to labelled pull requests unless a repository widens it', () => {
     const labelled = parseConfigText(configText)
-    expect(labelled._tag === 'Ok' && labelled.value.repositories[0]?.autoMerge).toEqual({ _tag: 'Labelled' })
+    expect(labelled._tag === 'Ok' && labelled.value.repositories[0]?.autoMerge).toEqual({ _tag: 'Labelled', minimumConfidence: null })
 
     const every = parseConfigText(configText.replace(
       'issue_work: true',
       'issue_work: true\n    auto_merge:\n      pull_requests: every\n      minimum_confidence: 80',
     ))
     expect(every._tag === 'Ok' && every.value.repositories[0]?.autoMerge).toEqual({ _tag: 'Every', minimumConfidence: 80 })
+
+    const strict = parseConfigText(configText.replace(
+      'issue_work: true',
+      'issue_work: true
+    auto_merge:
+      pull_requests: labelled
+      minimum_confidence: 100',
+    ))
+    expect(strict._tag === 'Ok' && strict.value.repositories[0]?.autoMerge).toEqual({ _tag: 'Labelled', minimumConfidence: 100 })
+
+    const invalid = parseConfigText(configText.replace(
+      'issue_work: true',
+      'issue_work: true
+    auto_merge:
+      pull_requests: labelled
+      minimum_confidence: 101',
+    ))
+    expect(invalid._tag === 'Err' && invalid.error).toContainEqual({ path: '$.repositories[0].auto_merge.minimum_confidence', message: 'Expected an integer from 0 to 100.' })
   })
 
   it('reads a contained pull request scope with its Merge risk policy', () => {

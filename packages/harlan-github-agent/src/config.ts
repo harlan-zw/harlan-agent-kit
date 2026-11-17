@@ -265,7 +265,7 @@ function containedAutoMergeScope(value: UnknownRecord, scopePath: string, reposi
 function repositoryAutoMergeScope(source: UnknownRecord, path: string, repositoryOwnership: RepositoryOwnership | undefined, pullRequestReview: boolean | undefined, issues: ConfigIssue[]): RepositoryAutoMergeScope | undefined {
   const value = source.auto_merge
   if (value === undefined)
-    return { _tag: 'Labelled' }
+    return { _tag: 'Labelled', minimumConfidence: null }
   const scopePath = `${path}.auto_merge`
   if (!isRecord(value)) {
     issues.push({ path: scopePath, message: 'Expected an object.' })
@@ -276,9 +276,12 @@ function repositoryAutoMergeScope(source: UnknownRecord, path: string, repositor
   if (pullRequests === undefined)
     return undefined
   if (pullRequests === 'labelled') {
-    if (value.minimum_confidence === undefined)
-      return { _tag: 'Labelled' }
-    issues.push({ path: `${scopePath}.minimum_confidence`, message: 'Labelled pull requests use $.auto_merge.minimum_confidence.' })
+    const labelledValue = value.minimum_confidence
+    if (labelledValue === undefined)
+      return { _tag: 'Labelled', minimumConfidence: null }
+    if (typeof labelledValue === 'number' && Number.isInteger(labelledValue) && labelledValue >= 0 && labelledValue <= 100)
+      return { _tag: 'Labelled', minimumConfidence: labelledValue }
+    issues.push({ path: `${scopePath}.minimum_confidence`, message: 'Expected an integer from 0 to 100.' })
     return undefined
   }
   if (pullRequests === 'contained')

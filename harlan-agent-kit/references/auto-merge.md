@@ -44,6 +44,17 @@ Merge risk routes the merge and never the Review. Every tracked pull request is 
 
 ## Repository scope
 
+A repository can set its own bar for labelled pull requests:
+
+```yaml
+- github: nuxt-modules/sitemap
+  auto_merge:
+    pull_requests: labelled
+    minimum_confidence: 100
+```
+
+Without `minimum_confidence`, a labelled pull request clears the service-wide bar. Set a higher bar on a repository other people depend on, and a lower one on a site where a revert is cheap.
+
 A repository can widen Auto merge from labelled pull requests to every pull request:
 
 ```yaml

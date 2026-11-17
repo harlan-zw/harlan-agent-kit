@@ -145,8 +145,15 @@ describe('merge risk at the Auto merge gate', () => {
       expect(decision.reason).toContain('below 100')
   })
 
+  it('holds a labelled pull request to the repository bar when the repository names one', () => {
+    const strict = decide({ autoMerge: { _tag: 'Labelled', minimumConfidence: 100 }, confidence: 95, labelled: true, mergeRisk: null })
+    expect(strict._tag === 'Hold' && strict.reason).toBe('Review confidence is below 100.')
+    expect(decide({ autoMerge: { _tag: 'Labelled', minimumConfidence: 80 }, confidence: 85, labelled: true, mergeRisk: null })._tag).toBe('Merge')
+    expect(decide({ autoMerge: { _tag: 'Labelled', minimumConfidence: 80 }, confidence: 85, mergeRisk: null })._tag).toBe('Hold')
+  })
+
   it('changes nothing for a repository that never opted in', () => {
-    expect(decide({ autoMerge: { _tag: 'Labelled' }, mergeRisk: null })._tag).toBe('Hold')
-    expect(decide({ autoMerge: { _tag: 'Labelled' }, labelled: true, mergeRisk: null })._tag).toBe('Merge')
+    expect(decide({ autoMerge: { _tag: 'Labelled', minimumConfidence: null }, mergeRisk: null })._tag).toBe('Hold')
+    expect(decide({ autoMerge: { _tag: 'Labelled', minimumConfidence: null }, labelled: true, mergeRisk: null })._tag).toBe('Merge')
   })
 })

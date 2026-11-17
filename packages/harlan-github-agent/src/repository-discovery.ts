@@ -157,7 +157,7 @@ function defaultMapping(repository: InstalledRepository, checkout: string, relea
     pullRequestReview: true,
     conflictResolution: ownership === 'owned',
     takeOwnership: { _tag: 'Disabled' },
-    autoMerge: { _tag: 'Labelled' },
+    autoMerge: { _tag: 'Labelled', minimumConfidence: null },
   }
 }
 
