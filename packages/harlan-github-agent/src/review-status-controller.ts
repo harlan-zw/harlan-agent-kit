@@ -1,23 +1,20 @@
-import type { AgentPhase, AgentPhaseTag } from './agent-progress.ts'
 import type { ExistingReviewLabelFailure, ExistingReviewLabelSource, GitHubAgentSource, PublishedReviewStatus, ReviewPublicationSource, ReviewStatusIdentitySource } from './github-agent-source.ts'
 import type { NativeReviewMirror } from './native-review.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunMirror } from './review-check-run.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedAdversarialReviewTask, ClaimedReviewFixTask, ClaimedReviewStatusCommand, ReviewDesiredOutcome, ReviewGates, ReviewStatusTaskPhase } from './types.ts'
-import { formatPhaseDuration } from './agent-progress.ts'
 import { nativeReviewBody } from './native-review.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
 import { REVIEW_CANCEL_CONTROL } from './review-cancel.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
-import { updatedAtLabel } from './text.ts'
 
 export interface ReviewStatusController {
   publish: (task: ClaimedAdversarialReviewTask, phase: 'snapshot' | 'review' | 'terminal', body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
   stageTerminal?: (task: ClaimedAdversarialReviewTask, body: string, desiredOutcome: ReviewDesiredOutcome, reviewRunId?: string, gates?: ReviewGates) => Result<{ commandId: string }, string>
-  publishRepair: (task: ClaimedReviewFixTask, phase: AgentPhase, signal: AbortSignal) => Promise<Result<void, string>>
+  publishRepair: (task: ClaimedReviewFixTask, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
 export interface ReviewStatusControllerOptions {
@@ -324,34 +321,24 @@ export async function publishClaimedReviewStatus(
 }
 
 /**
- * What the Repair does after each phase.
+ * The canonical comment while a Repair runs.
  *
- * Declarative, and about the Repair rather than the reader. These lines read
- * as instructions to whoever opened the pull request when they are imperative,
- * and every other automated comment states what the work does next. Keyed on
- * the phase, never on its percentage.
+ * It holds still for the whole round, like the Review comment. Declarative,
+ * and about the Repair rather than the reader: an imperative line reads as an
+ * instruction to whoever opened the pull request. Live progress belongs to the
+ * Dashboard.
  */
-const repairNextAction: Record<AgentPhaseTag, string> = {
-  Loaded: 'Repair creates its Git worktree.',
-  WorktreeReady: 'Repair fixes the Review findings.',
-  ReadingDiff: 'Repair fixes the Review findings.',
-  CheckingDocs: 'Repair finishes its fix.',
-  Editing: 'Repair finishes its fix.',
-  Verifying: 'Repair verifies its fix.',
-  Reported: 'Repair finishes its fix.',
-  Reporting: 'Repair verifies its fix.',
-  Checked: 'Repair pushes its commit, then a new Review reads the new head.',
-  Committed: 'Repair pushes its commit, then a new Review reads the new head.',
-}
-
-function repairProgressComment(task: ClaimedReviewFixTask, phase: AgentPhase, at: string): string {
-  return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${task.pullRequest.headSha} -->
-### 🤖 REPAIR · ${repairRoundLabel(task.rounds)} · ${phase.percent}% · ${phase.label}${formatPhaseDuration(phase.since, at)}
-
-${automatedDisclosure({ kind: 'repair update', updatedAt: updatedAtLabel(at) })}
-
-Next: ${repairNextAction[phase._tag]}`
+export function repairProgressComment(task: Pick<ClaimedReviewFixTask, 'pullRequest' | 'rounds'>): string {
+  return [
+    AUTOMATED_REVIEW_MARKER,
+    `<!-- reviewed-sha: ${task.pullRequest.headSha} -->`,
+    `### 🤖 REPAIR · ${repairRoundLabel(task.rounds)}`,
+    '',
+    automatedDisclosure({ kind: 'repair update' }),
+    '',
+    '> [!NOTE]',
+    `> Repair is fixing the Review findings on \`${task.pullRequest.headSha.slice(0, 12)}\`. If it pushes a commit, a new Review reads that commit.`,
+  ].join('\n')
 }
 
 export function createReviewStatusController(options: ReviewStatusControllerOptions): ReviewStatusController {
@@ -414,11 +401,11 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
       })
       return staged._tag === 'Rejected' ? err(staged.reason) : ok({ commandId: staged.commandId })
     },
-    async publishRepair(task, progress, signal) {
+    async publishRepair(task, signal) {
       const published = await publishStatus(
         task,
         { taskKind: 'review_fix', phase: 'repair' },
-        repairProgressComment(task, progress, options.now().toISOString()),
+        repairProgressComment(task),
         true,
         signal,
       )

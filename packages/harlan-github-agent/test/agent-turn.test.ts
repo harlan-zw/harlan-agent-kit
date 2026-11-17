@@ -327,7 +327,7 @@ describe('agent turn progress', () => {
     }
   }
 
-  it('restates one unchanged phase on a slow beat and keeps its start time', async () => {
+  it('restates one unchanged phase on a slow beat', async () => {
     const reported: AgentPhase[] = []
     const { provider, now } = scriptedTurn([
       { afterMilliseconds: 0, event: { _tag: 'SessionStarted', sessionId: 'session-1' } as AgentEvent },
@@ -341,10 +341,10 @@ describe('agent turn progress', () => {
 
     expect(result._tag).toBe('Ok')
     // The first edit advances the phase. The second is inside the beat, so it
-    // stays quiet. The third restates the same phase, from the same start.
+    // stays quiet. The third restates the same phase.
     expect(reported).toEqual([
-      { _tag: 'Editing', percent: 65, label: 'Editing files', since: '2026-08-16T00:00:01.000Z' },
-      { _tag: 'Editing', percent: 65, label: 'Editing files', since: '2026-08-16T00:00:01.000Z' },
+      { _tag: 'Editing', percent: 65, label: 'Editing files' },
+      { _tag: 'Editing', percent: 65, label: 'Editing files' },
     ])
   })
 
@@ -377,7 +377,7 @@ describe('agent turn progress', () => {
     await runAgentTurn({ ...options(provider), now }, reportingInput(reported), new AbortController().signal)
 
     expect(reported).toEqual([
-      { _tag: 'Reported', percent: 55, label: 'disproving the retry path', since: '2026-08-16T00:00:01.000Z' },
+      { _tag: 'Reported', percent: 55, label: 'disproving the retry path' },
     ])
   })
 

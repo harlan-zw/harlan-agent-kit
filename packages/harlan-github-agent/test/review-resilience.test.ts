@@ -143,6 +143,7 @@ function harness(input: {
       saveWorkerSession: () => undefined,
       ...agentTurnLedger,
       updateAgentProgress: () => true,
+      priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       recordReviewRun: (attempt) => {
         attempts.push(attempt)
         return { _tag: 'Inserted', reviewRunId: attempt.id }

@@ -139,6 +139,7 @@ describe('subject Workers', () => {
         saveWorkerSession: () => undefined,
         ...agentTurnLedger,
         updateAgentProgress: () => true,
+        priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         recordReviewRun: (input) => {
           attempt = input
           return { _tag: 'Inserted', reviewRunId: input.id }
@@ -176,9 +177,9 @@ describe('subject Workers', () => {
     // Five, not six. The phase before the verdict is saved and never published,
     // because the terminal comment replaces it within seconds.
     expect(comments).toHaveLength(5)
-    expect(comments[0]).toContain('REVIEWING · 10% · Pull request loaded')
-    expect(comments[2]).toContain('REVIEWING · 75% · Running tests and checks')
-    expect(comments[3]).toContain('REVIEWING · 85% · Preparing the review comment')
+    // Every phase publishes one body, so GitHub records one edit for the whole Review.
+    expect(new Set(comments.slice(0, 4)).size).toBe(1)
+    expect(comments[0]).toContain('### 🤖 REVIEWING\n')
     expect(comments[4]).toContain('READY · 96/100')
     expect(comments.join('\n')).not.toContain('Head commit and CI checked')
     expect(stamped).toEqual(['READY'])
@@ -249,6 +250,7 @@ describe('subject Workers', () => {
         saveWorkerSession: () => undefined,
         ...agentTurnLedger,
         updateAgentProgress: () => true,
+        priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         recordReviewRun: () => { throw new Error('A second review must not be recorded.') },
         recordReviewPublication: () => { throw new Error('A second comment must not be recorded.') },
       },
@@ -367,6 +369,7 @@ describe('subject Workers', () => {
         saveWorkerSession: () => undefined,
         ...agentTurnLedger,
         updateAgentProgress: () => true,
+        priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       },
       status: {
         publish: (_task, phase, body) => {
@@ -502,6 +505,7 @@ describe('subject Workers', () => {
         saveWorkerSession: () => undefined,
         ...agentTurnLedger,
         updateAgentProgress: () => true,
+        priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       },
       status: {
         publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -613,6 +617,7 @@ describe('subject Workers', () => {
         saveWorkerSession: () => undefined,
         ...agentTurnLedger,
         updateAgentProgress: () => true,
+        priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       },
       status: {
         publish: (_task, _phase, body) => {
@@ -737,6 +742,7 @@ describe('subject Workers', () => {
         saveWorkerSession: () => undefined,
         ...agentTurnLedger,
         updateAgentProgress: () => true,
+        priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       },
       status: {
         publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -826,6 +832,7 @@ describe('subject Workers', () => {
         saveWorkerSession: () => undefined,
         ...agentTurnLedger,
         updateAgentProgress: () => true,
+        priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       },
       status: {
         publish: (_task, phase, body) => {
@@ -925,6 +932,7 @@ describe('subject Workers', () => {
         saveWorkerSession: () => undefined,
         ...agentTurnLedger,
         updateAgentProgress: () => true,
+        priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       },
       status: {
         publish: (_task, phase, body) => {
@@ -1018,6 +1026,7 @@ describe('subject Workers', () => {
         saveWorkerSession: () => undefined,
         ...agentTurnLedger,
         updateAgentProgress: () => true,
+        priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       },
       status: {
         publish: (_task, phase, body) => {
@@ -1110,6 +1119,7 @@ describe('subject Workers', () => {
         saveWorkerSession: () => undefined,
         ...agentTurnLedger,
         updateAgentProgress: () => true,
+        priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       },
       status: {
         publish: (_task, phase, body) => {

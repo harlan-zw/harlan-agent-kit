@@ -72,6 +72,7 @@ async function reviewWith(files: PullRequestFile[], profile: AgentProfile = CODE
       saveWorkerSession: () => undefined,
       ...agentTurnLedger,
       updateAgentProgress: () => true,
+      priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       recordReviewRun: (input) => {
         recorded.push(input.reasoningEffort)
         return { _tag: 'Inserted', reviewRunId: input.id }

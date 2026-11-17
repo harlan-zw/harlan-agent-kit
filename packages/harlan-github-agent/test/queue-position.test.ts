@@ -1,5 +1,6 @@
 import type { ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
+import { progressComment } from '../src/item-agent.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -200,6 +201,13 @@ describe('listQueuedReviewStatuses', () => {
         },
       }),
     ])
+    // The running Review reads the same history, so its comment names the Repair too.
+    expect(store.priorReviewHistory(repaired.revisionId)).toEqual({
+      _tag: 'AfterRepair',
+      priorHeadSha: 'head30',
+      priorOutcome: 'Blocked',
+      findings: 1,
+    })
   })
 
   it('agrees with the claim, so position 1 is the Task the next agent takes', () => {
@@ -717,5 +725,185 @@ describe('a Review whose attempt failed', () => {
     queuedRepair(store, 43, '2026-08-13T01:00:00.000Z')
 
     expect(store.listQueuedReviewStatuses()).toEqual([expect.objectContaining({ attempt: { _tag: 'FirstAttempt' } })])
+  })
+})
+
+describe('priorReviewHistory', () => {
+  function observe(store: ReturnType<typeof openJournalStore>, number: number, headSha: string, baseSha: string, at: string): string {
+    const observed = store.recordObservation({
+      externalId: `prior-review-${number}-${headSha}-${baseSha}`,
+      observedAt: at,
+      source: 'poll',
+      subject: pullRequestItem({
+        number,
+        headRef: `fix/thing-${number}`,
+        headSha,
+        baseSha,
+        mergeState: 'clean',
+        url: `https://github.com/harlan-zw/example/pull/${number}`,
+        updatedAt: at,
+      }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    return observed.revisionId
+  }
+
+  it('names the last verdict of an earlier head after a person pushes', () => {
+    const store = createStore()
+    queuedRepair(store, 40, '2026-08-13T01:00:00.000Z')
+    const revisionId = observe(store, 40, 'e'.repeat(40), 'base123', '2026-08-13T01:05:00.000Z')
+
+    expect(store.priorReviewHistory(revisionId)).toEqual({
+      _tag: 'AfterPush',
+      priorHeadSha: 'head40',
+      priorOutcome: 'Blocked',
+      findings: 1,
+    })
+  })
+
+  it('reads no earlier verdict when only the base branch moved', () => {
+    const store = createStore()
+    queuedRepair(store, 41, '2026-08-13T01:00:00.000Z')
+    const revisionId = observe(store, 41, 'head41', 'base456', '2026-08-13T01:05:00.000Z')
+
+    expect(store.priorReviewHistory(revisionId)).toEqual({ _tag: 'FirstReview' })
+  })
+
+  const readyGates: ReviewGates = {
+    merge: { _tag: 'Passed', evidence: [{ label: 'mergeability', sha256: 'b'.repeat(64) }] },
+    review: { _tag: 'Passed', evidence: [] },
+    ci: { _tag: 'Passed', evidence: [{ label: 'required-ci', sha256: 'e'.repeat(64) }] },
+  }
+
+  function reviewed(
+    store: ReturnType<typeof openJournalStore>,
+    number: number,
+    headSha: string,
+    baseSha: string,
+    at: string,
+    gates: ReviewGates = passedReviewGates(),
+    findings: Parameters<typeof store.recordReviewRun>[0]['findings'] = [],
+  ): string {
+    const revisionId = observe(store, number, headSha, baseSha, at)
+    const review = store.claimNextAdversarialReviewTask(`review-agent-${headSha}`, at, 600_000)
+    if (review === null || review.revisionId !== revisionId)
+      throw new Error('Expected the Review Task for this head.')
+    store.recordReviewRun({
+      id: `review-run-${headSha}-${baseSha}`,
+      repository: 'harlan-zw/example',
+      pullRequestNumber: number,
+      revisionId,
+      headSha,
+      provider: 'codex',
+      sessionId: `prior-review-session-${headSha}-${baseSha}`,
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: at,
+      completedAt: at,
+      gates,
+      findings,
+    })
+    store.completeWorkerTask({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at, evidence: `review-run-${headSha}` })
+    return revisionId
+  }
+
+  it('names the verdict a gate refresh settled, which is the one a person read', () => {
+    const store = createStore()
+    const ciPending: ReviewGates = { ...readyGates, ci: { _tag: 'Pending', reason: 'typecheck is still running.', evidence: [] } }
+    const priorRevision = reviewed(store, 43, 'heada', 'base123', '2026-08-13T01:00:00.000Z', ciPending)
+    const refreshed = store.stageReviewGateStatus({
+      reviewRunId: 'review-run-heada-base123',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 43,
+      revisionId: priorRevision,
+      expectedHeadSha: 'heada',
+      gates: readyGates,
+      body: '### 🤖 READY · 90/100',
+      desiredOutcome: 'READY',
+      at: '2026-08-13T01:10:00.000Z',
+    })
+    expect(refreshed._tag).toBe('Staged')
+    const revisionId = observe(store, 43, 'headb', 'base123', '2026-08-13T02:00:00.000Z')
+
+    expect(store.priorReviewHistory(revisionId)).toEqual({ _tag: 'AfterPush', priorHeadSha: 'heada', priorOutcome: 'Ready', findings: 0 })
+  })
+
+  it('counts only Open findings as defects', () => {
+    const store = createStore()
+    const details = { fingerprint: 'f'.repeat(64), identity: 'fallback', location: { path: 'src/config.ts', line: 1 }, proof: 'The fallback needs more context.' }
+    reviewed(store, 44, 'heada', 'base123', '2026-08-13T01:00:00.000Z', passedReviewGates(), [
+      { _tag: 'Open', summary: 'Unsafe parser input.', nextAction: 'Parse input before use.', resolution: 'Repair', details: { ...details, identity: 'parser', regressionTest: 'Pass malformed input.' } },
+      { _tag: 'Logged', impact: 40, summary: 'Improve fallback handling.', nextAction: 'Name the fallback.', details },
+    ])
+    const revisionId = observe(store, 44, 'headb', 'base123', '2026-08-13T02:00:00.000Z')
+
+    expect(store.priorReviewHistory(revisionId)).toEqual({ _tag: 'AfterPush', priorHeadSha: 'heada', priorOutcome: 'Blocked', findings: 1 })
+  })
+
+  it('reads no older head when the newest Review answered this same head', () => {
+    const store = createStore()
+    reviewed(store, 42, 'heada', 'base123', '2026-08-13T01:00:00.000Z')
+    reviewed(store, 42, 'headb', 'base123', '2026-08-13T02:00:00.000Z')
+    reviewed(store, 42, 'headc', 'base123', '2026-08-13T03:00:00.000Z')
+    const revisionId = observe(store, 42, 'headc', 'base456', '2026-08-13T04:00:00.000Z')
+
+    // The last Review answered headc. Naming headb would call a stale verdict the last one.
+    expect(store.priorReviewHistory(revisionId)).toEqual({ _tag: 'FirstReview' })
+  })
+})
+
+describe('steady running comment', () => {
+  const at = '2026-08-13T01:00:00.000Z'
+
+  function claimedProgress(store: ReturnType<typeof openJournalStore>) {
+    const observed = store.recordObservation({
+      externalId: 'steady-running-comment',
+      observedAt: at,
+      source: 'poll',
+      subject: pullRequestItem({ number: 50, headRef: 'fix/thing-50', headSha: 'head50', mergeState: 'clean', url: 'https://github.com/harlan-zw/example/pull/50' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    const review = store.claimNextAdversarialReviewTask('review-agent-50', at, 600_000)
+    if (review === null)
+      throw new Error('Expected the Review Task.')
+    const status = {
+      taskKind: 'adversarial_review' as const,
+      phase: 'review' as const,
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at,
+      revisionId: observed.revisionId,
+      expectedHeadSha: review.pullRequest.headSha,
+      body: progressComment(review.pullRequest.headSha, review.pullRequest.baseSha, { _tag: 'FirstReview' }),
+    }
+    const first = store.stageReviewStatus(status)
+    if (first._tag !== 'Staged')
+      throw new Error(`Expected a staged status, received ${first._tag}.`)
+    const command = store.claimReviewStatus(first.commandId, 'status-worker', at, 60_000)
+    if (command === null)
+      throw new Error('Expected the review status command.')
+    return { status, command }
+  }
+
+  it('publishes a repeated body once, so a later phase writes nothing new', () => {
+    const store = createStore()
+    const { status, command } = claimedProgress(store)
+    const url = 'https://github.com/harlan-zw/example/pull/50#issuecomment-150'
+    store.completeReviewStatus({ commandId: command.id, workerId: command.workerId, fence: command.fence, at, commentId: 150, url })
+
+    expect(store.stageReviewStatus({ ...status, at: '2026-08-13T01:05:00.000Z' })).toEqual({ _tag: 'Published', commandId: command.id, commentId: 150, url })
+  })
+
+  it('repeats why a superseded body never published, instead of reading as a stuck queue', () => {
+    const store = createStore()
+    const { status, command } = claimedProgress(store)
+    const reason = 'The pull request changed before the review comment was posted.'
+    expect(store.supersedeReviewStatus({ commandId: command.id, workerId: command.workerId, fence: command.fence, at, reason })).toBe(true)
+
+    expect(store.stageReviewStatus({ ...status, at: '2026-08-13T01:05:00.000Z' })).toEqual({ _tag: 'Rejected', reason })
   })
 })
