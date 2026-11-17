@@ -1,5 +1,6 @@
 import type { ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
+import { progressComment } from '../src/item-agent.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -767,5 +768,80 @@ describe('priorReviewHistory', () => {
     const revisionId = observe(store, 41, 'head41', 'base456', '2026-08-13T01:05:00.000Z')
 
     expect(store.priorReviewHistory(revisionId)).toEqual({ _tag: 'FirstReview' })
+  })
+
+  function reviewed(store: ReturnType<typeof openJournalStore>, number: number, headSha: string, baseSha: string, at: string): string {
+    const revisionId = observe(store, number, headSha, baseSha, at)
+    const review = store.claimNextAdversarialReviewTask(`review-agent-${headSha}`, at, 600_000)
+    if (review === null || review.revisionId !== revisionId)
+      throw new Error('Expected the Review Task for this head.')
+    store.recordReviewRun({
+      id: `review-run-${headSha}-${baseSha}`,
+      repository: 'harlan-zw/example',
+      pullRequestNumber: number,
+      revisionId,
+      headSha,
+      provider: 'codex',
+      sessionId: `prior-review-session-${headSha}-${baseSha}`,
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: at,
+      completedAt: at,
+      gates: passedReviewGates(),
+      findings: [],
+    })
+    store.completeWorkerTask({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at, evidence: `review-run-${headSha}` })
+    return revisionId
+  }
+
+  it('reads no older head when the newest Review answered this same head', () => {
+    const store = createStore()
+    reviewed(store, 42, 'heada', 'base123', '2026-08-13T01:00:00.000Z')
+    reviewed(store, 42, 'headb', 'base123', '2026-08-13T02:00:00.000Z')
+    reviewed(store, 42, 'headc', 'base123', '2026-08-13T03:00:00.000Z')
+    const revisionId = observe(store, 42, 'headc', 'base456', '2026-08-13T04:00:00.000Z')
+
+    // The last Review answered headc. Naming headb would call a stale verdict the last one.
+    expect(store.priorReviewHistory(revisionId)).toEqual({ _tag: 'FirstReview' })
+  })
+})
+
+describe('steady running comment', () => {
+  it('publishes a repeated body once, so a later phase writes nothing new', () => {
+    const store = createStore()
+    const at = '2026-08-13T01:00:00.000Z'
+    const observed = store.recordObservation({
+      externalId: 'steady-running-comment',
+      observedAt: at,
+      source: 'poll',
+      subject: pullRequestItem({ number: 50, headRef: 'fix/thing-50', headSha: 'head50', mergeState: 'clean', url: 'https://github.com/harlan-zw/example/pull/50' }),
+    })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected a new pull request revision.')
+    const review = store.claimNextAdversarialReviewTask('review-agent-50', at, 600_000)
+    if (review === null)
+      throw new Error('Expected the Review Task.')
+    const status = {
+      taskKind: 'adversarial_review' as const,
+      phase: 'review' as const,
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at,
+      revisionId: observed.revisionId,
+      expectedHeadSha: review.pullRequest.headSha,
+      body: progressComment(review.pullRequest.headSha, review.pullRequest.baseSha, { _tag: 'FirstReview' }),
+    }
+    const first = store.stageReviewStatus(status)
+    if (first._tag !== 'Staged')
+      throw new Error(`Expected a staged status, received ${first._tag}.`)
+    const command = store.claimReviewStatus(first.commandId, 'status-worker', at, 60_000)
+    if (command === null)
+      throw new Error('Expected the review status command.')
+    const url = 'https://github.com/harlan-zw/example/pull/50#issuecomment-150'
+    store.completeReviewStatus({ commandId: command.id, workerId: command.workerId, fence: command.fence, at, commentId: 150, url })
+
+    expect(store.stageReviewStatus({ ...status, at: '2026-08-13T01:05:00.000Z' })).toEqual({ _tag: 'Published', commandId: first.commandId, commentId: 150, url })
   })
 })

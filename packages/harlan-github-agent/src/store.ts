@@ -1146,10 +1146,12 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
    */
   listQueuedReviewStatuses: () => QueuedReviewStatus[]
   /**
-   * What the newest Review of an earlier head of this pull request answered.
+   * What the newest Review of this pull request answered, when it answered an
+   * earlier head.
    *
-   * The same reading as a queued Task's history, so a running Review and a
-   * queued one name the last verdict in the same words.
+   * A queued Task's history reads the same run, so a running Review and a
+   * queued one name the last verdict in the same words. A newest Review of
+   * this same head reads as FirstReview: it is no earlier verdict.
    */
   priorReviewHistory: (revisionId: string) => QueuedReviewHistory
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
@@ -15416,6 +15418,7 @@ export function openJournalStore(
   const priorReviewHistory: JournalStore['priorReviewHistory'] = (revisionId) => {
     const row = database.prepare(`
       SELECT
+        json_extract(revisions.payload, '$.headSha') AS head_sha,
         prior_run.head_sha AS prior_head_sha,
         prior_run.outcome_tag AS prior_outcome,
         json_array_length(prior_run.findings) AS prior_findings,
@@ -15428,17 +15431,14 @@ export function openJournalStore(
             AND publication_commands.commit_sha = json_extract(revisions.payload, '$.headSha')
         ) AS head_from_repair
       FROM revisions
-      JOIN review_runs AS prior_run
-        ON prior_run.subject_id = revisions.subject_id
-        AND prior_run.revision_id != revisions.id
-        -- A rerun or a base branch move keeps the head. A Review of that same
-        -- head answers this commit, so it is no earlier verdict.
-        AND prior_run.head_sha != json_extract(revisions.payload, '$.headSha')
+      JOIN review_runs AS prior_run ON prior_run.subject_id = revisions.subject_id
       WHERE revisions.id = ?
       ORDER BY prior_run.completed_at DESC, prior_run.id DESC
       LIMIT 1
-    `).get(revisionId) as { prior_head_sha: string, prior_outcome: string, prior_findings: number | null, head_from_repair: number } | undefined
-    return row === undefined
+    `).get(revisionId) as { head_sha: string, prior_head_sha: string, prior_outcome: string, prior_findings: number | null, head_from_repair: number } | undefined
+    // A rerun or a base branch move keeps the head. When the newest Review
+    // already answered this head, any older one is not the last verdict.
+    return row === undefined || row.prior_head_sha === row.head_sha
       ? { _tag: 'FirstReview' }
       : {
           _tag: row.head_from_repair === 1 ? 'AfterRepair' : 'AfterPush',
