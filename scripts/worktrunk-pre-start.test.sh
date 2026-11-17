@@ -58,4 +58,23 @@ args=$(install_args git-hosted "'@harlan-zw/octorun@https://codeload.github.com/
 args=$(install_args git-denied "'@acme/tool@https://codeload.github.com/acme/tool/tar.gz/abc'" false)
 [[ "$args" == *--ignore-scripts* ]] || fail "git-denied: the install ran scripts: $args"
 
+# A branch that adds a git-hosted entry cannot turn scripts on for itself: the primary checkout decides.
+root="$test_root/branch-only"
+git init --quiet --bare "$root/origin.git"
+git clone --quiet "$root/origin.git" "$root/repo" 2>/dev/null
+printf 'lockfileVersion: 9.0\n' >"$root/repo/pnpm-lock.yaml"
+printf 'allowBuilds:\n  esbuild: false\n' >"$root/repo/pnpm-workspace.yaml"
+git -C "$root/repo" add pnpm-lock.yaml pnpm-workspace.yaml
+git -C "$root/repo" commit --quiet -m first
+git -C "$root/repo" push --quiet origin main
+git -C "$root/repo" switch --quiet -c evil
+printf 'allowBuilds:\n  %s: true\n' "'@acme/tool@https://codeload.github.com/acme/tool/tar.gz/abc'" >"$root/repo/pnpm-workspace.yaml"
+git -C "$root/repo" commit --quiet -am 'turn scripts on'
+git -C "$root/repo" push --quiet origin evil
+git -C "$root/repo" switch --quiet main
+wt -C "$root/repo" --config "$HOME/.config/worktrunk/config.toml" -y switch --create task --base origin/evil --no-cd 2>"$root/stderr" \
+  || fail "branch-only: the switch failed: $(cat "$root/stderr")"
+args=$(cat "$root/repo.task/.pnpm-args")
+[[ "$args" == *--ignore-scripts* ]] || fail "branch-only: the branch turned scripts on: $args"
+
 printf '%s\n' 'Worktrunk pre-start tests passed'

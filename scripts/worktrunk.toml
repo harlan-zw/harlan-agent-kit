@@ -47,9 +47,10 @@ fi
 pnpm = """
 if [ -f {{ primary_worktree_path }}/pnpm-lock.yaml ] && [ -f pnpm-lock.yaml ]; then
   # --ignore-scripts also skips building a git-hosted dependency. A repository that
-  # allowlists one in allowBuilds gets a normal install, so pnpm builds it.
+  # allowlists one in allowBuilds gets a normal install, so pnpm builds it. The allowlist
+  # comes from the primary checkout, so a branch cannot turn scripts on for itself.
   scripts=--ignore-scripts
-  if [ -f pnpm-workspace.yaml ] && sed -n '/^allowBuilds:/,/^[^ ]/p' pnpm-workspace.yaml | grep ': true' \
+  if [ -f {{ primary_worktree_path }}/pnpm-workspace.yaml ] && sed -n '/^allowBuilds:/,/^[^ ]/p' {{ primary_worktree_path }}/pnpm-workspace.yaml | grep ': true' \
     | grep -qF -e 'codeload.github.com' -e 'github:' -e 'git+'; then
     scripts=
   fi
