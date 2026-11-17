@@ -3,6 +3,7 @@
 # Prevents accidental pushes/commits to already-merged branches
 
 source "$(dirname "$0")/check-config.sh"
+source "$(dirname "$0")/hit-log.sh"
 is_hook_disabled "merged-branch-guard" && exit 0
 
 input=$(cat)
@@ -17,6 +18,7 @@ fi
 
 deny() {
   jq -nc --arg reason "$1" '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":$reason}}'
+  log_hook_hit deny "$1" "$input"
   exit 0
 }
 

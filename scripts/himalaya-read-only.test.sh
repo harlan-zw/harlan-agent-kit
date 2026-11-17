@@ -2,6 +2,10 @@
 # Drives the himalaya-read-only hook over its real stdin and stdout contract.
 set -uo pipefail
 
+# Hook decisions append to the hit log. Keep test runs out of the real one.
+export XDG_STATE_HOME="$(mktemp -d)"
+trap 'rm -rf "$XDG_STATE_HOME"' EXIT
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 hook="$repo_root/harlan-agent-kit/hooks/himalaya-read-only.sh"
 

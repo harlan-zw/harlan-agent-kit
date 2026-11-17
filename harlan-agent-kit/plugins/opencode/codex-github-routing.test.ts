@@ -1,13 +1,18 @@
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const manifest = JSON.parse(readFileSync(resolve(root, 'hooks/codex.json'), 'utf8')) as {
   hooks: { PreToolUse: { matcher: string, hooks: { command: string }[] }[] }
 }
+
+// Hook decisions append to the hit log. Test runs write here, never to the real one.
+const stateDirectory = mkdtempSync(join(tmpdir(), 'codex-routing-state-'))
+afterAll(() => rmSync(stateDirectory, { recursive: true, force: true }))
 
 // Execute the registered Codex definitions with the documented Bash input.
 function decision(command: string, key = 'command'): string | undefined {
@@ -18,6 +23,7 @@ function decision(command: string, key = 'command'): string | undefined {
       const result = spawnSync('bash', [hook.command.replace(/\$\{CLAUDE_PLUGIN_ROOT\}/, root)], {
         input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { [key]: command } }),
         encoding: 'utf8',
+        env: { ...process.env, XDG_STATE_HOME: stateDirectory },
       })
       if (result.status !== 0)
         throw new Error(result.stderr)
