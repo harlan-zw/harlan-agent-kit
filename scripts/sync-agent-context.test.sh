@@ -102,6 +102,7 @@ printf '%s %s\n' plugin.json \
 printf '%s %s\n' gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' agent-gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' agent-tools.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-tools.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
+printf '%s %s\n' agent-plugins.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-plugins.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' agent-check.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-check.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' check "$(/usr/bin/sha256sum "$repo_root/bin/check" | cut -d' ' -f1)" >> "$opencode_hashes"
 for name in harlan-github-agent hw; do
@@ -178,6 +179,8 @@ for hook_file in "${opencode_hooks[@]}"; do
   grep -E "mv '/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file.next\.[0-9.]+' '/home/harlan/.local/share/harlan-agent-kit/hooks/$hook_file'" "$calls" >/dev/null
 done
 grep -E 'hogwild:/home/harlan/.config/opencode/plugins/harlan-hooks.ts.next\.[0-9.]+' "$calls" >/dev/null
+# Hogwild Claude Code reads its own checkout in place, so the plugin sync must target it.
+grep -F "agent-plugins.ts' --checkout '/home/harlan/pkg/harlan-agent-kit' --update-checkout" "$calls" >/dev/null
 
 # Memory reaches Hogwild for the primary checkout only, over the tar fallback
 # because the fake ssh reports no remote rsync.
@@ -220,7 +223,7 @@ mkdir -p "$fixture/scripts" "$fixture/harlan-agent-kit/hooks" \
   "$fixture/harlan-agent-kit/.claude-plugin" "$fixture/harlan-agent-kit/plugins/opencode"
 mkdir -p "$fixture/bin"
 cp "$repo_root/bin/check" "$fixture/bin/check"
-cp "$repo_root/scripts/sync-agent-context.sh" "$repo_root/scripts/agent-context-hooks.sh" "$repo_root/scripts/github-public.sh" "$repo_root/scripts/agent-check.ts" "$repo_root/scripts/agent-tools.ts" "$fixture/scripts/"
+cp "$repo_root/scripts/sync-agent-context.sh" "$repo_root/scripts/agent-context-hooks.sh" "$repo_root/scripts/github-public.sh" "$repo_root/scripts/agent-check.ts" "$repo_root/scripts/agent-tools.ts" "$repo_root/scripts/agent-plugins.ts" "$fixture/scripts/"
 cp "$repo_root/scripts/agent-cli.ts" "$repo_root/scripts/agent-cli-plan.ts" "$fixture/scripts/"
 mkdir -p "$fixture/harlan-agent-kit/skills/hogwild/scripts"
 cp "$repo_root/harlan-agent-kit/skills/hogwild/scripts/"*.ts "$fixture/harlan-agent-kit/skills/hogwild/scripts/"
@@ -265,6 +268,7 @@ printf '%s %s\n' harlan-hooks.ts \
 printf '%s %s\n' gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$fixture_hashes"
 printf '%s %s\n' agent-gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$fixture_hashes"
 printf '%s %s\n' agent-tools.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-tools.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
+printf '%s %s\n' agent-plugins.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-plugins.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
 printf '%s %s\n' agent-check.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-check.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
 printf '%s %s\n' check "$(/usr/bin/sha256sum "$repo_root/bin/check" | cut -d' ' -f1)" >> "$fixture_hashes"
 for name in harlan-github-agent hw; do

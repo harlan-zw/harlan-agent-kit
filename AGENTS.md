@@ -10,8 +10,8 @@ pnpm lint:fix      # ESLint autofix
 pnpm check:context # Verify installed Agent instructions match agent-context/
 pnpm sync:skills   # Sync declared portable Skills through skilld
 pnpm check:skills  # Check installed Skills against .skills/skilld.json
-pnpm sync:context # Install tracked Claude and Codex instructions, the commit-msg hook, and the opencode plugin
-pnpm sync:context:hogwild # Install tracked instructions on Hogwild
+pnpm sync:context # Install tracked Claude and Codex instructions, the commit-msg hook, the opencode plugin, and the kit plugin for Claude Code and Codex
+pnpm sync:context:hogwild # Install the same on Hogwild; fast-forward its clean ~/pkg checkout first, because Claude Code reads it in place
 pnpm test:opencode-hooks # Run the opencode plugin against the real hook scripts
 pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, marketplace.json, skill frontmatter)
 ```

@@ -108,6 +108,12 @@ else
   cmp -s "$SOURCE_PLUGIN" "$INSTALLED_PLUGIN" || bad "The opencode plugin differs. Run pnpm sync:context."
 fi
 
+# The Claude Code and Codex plugins live in the real home, so a sandbox run skips them.
+if [ "$TARGET_HOME" = "$HOME" ]; then
+  primary_checkout=$(dirname "$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir)")
+  node --experimental-strip-types "$REPO_ROOT/scripts/agent-plugins.ts" --checkout "$primary_checkout" --check || fail=1
+fi
+
 # Each principle is a bullet opening with a bold clause; compare the whole set.
 principles() { grep -E '^- \*\*(Make illegal|Errors as|No silent|Parse, don|Explicit dep|Pure core)' "$1" | sort; }
 
