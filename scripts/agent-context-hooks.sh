@@ -37,3 +37,26 @@ agent_context_installed_hooks() {
   agent_context_support_files "$hooks_dir" "$manifest"
   agent_context_manifest_hooks "$manifest"
 }
+
+# Marks a ~/.codex/hooks.json this sync owns. A file without it belongs to someone else.
+agent_context_codex_hooks_marker='Managed by Harlan Agent Kit sync.'
+
+# Renders the Codex hook file for one home.
+#
+# Codex trusts plugin hooks against a hash of the whole plugin, so every kit
+# change would switch them off until a person reviews them again. User hooks
+# are trusted against their definition only. This file points each definition
+# at the scripts sync installs, so a script update keeps its trust.
+agent_context_render_codex_hooks() {
+  local source=$1 hooks_dir=$2 output=$3
+  jq --arg dir "$hooks_dir" --arg marker "$agent_context_codex_hooks_marker" '
+    .description = "\($marker) Edit harlan-agent-kit/hooks/codex.json in Harlan Agent Kit instead."
+    | walk(if type == "object" and has("command") then .command |= (split("${CLAUDE_PLUGIN_ROOT}/hooks") | join($dir)) else . end)
+  ' "$source" > "$output"
+}
+
+# Succeeds when the path is absent or holds a Codex hook file this sync wrote.
+agent_context_codex_hooks_owned() {
+  local path=$1
+  [ ! -e "$path" ] || jq -e --arg marker "$agent_context_codex_hooks_marker" '(.description // "") | startswith($marker)' "$path" >/dev/null 2>&1
+}

@@ -11,6 +11,7 @@ commit_hook="$repo_root/agent-context/git-hooks/commit-msg"
 plugin_hooks_dir="$repo_root/harlan-agent-kit/hooks"
 plugin_manifest="$repo_root/harlan-agent-kit/.claude-plugin/plugin.json"
 opencode_plugin="$repo_root/harlan-agent-kit/plugins/opencode/harlan-hooks.ts"
+codex_hooks_source="$repo_root/harlan-agent-kit/hooks/codex.json"
 # The manifest registers every hook, so the list below is derived, never typed.
 if [ ! -f "$script_dir/agent-context-hooks.sh" ]; then
   printf '%s\n' "The hook list library is missing: $script_dir/agent-context-hooks.sh" >&2
@@ -88,6 +89,7 @@ require_sources() {
   [ -f "$commit_hook" ] || fail "The commit-msg hook is missing: $commit_hook"
   [ -f "$github_wrapper" ] || fail "The public GitHub CLI is missing: $github_wrapper"
   [ -f "$tools_sync" ] || fail "The Agent tool sync is missing: $tools_sync"
+  [ -f "$codex_hooks_source" ] || fail "The Codex hook file is missing: $codex_hooks_source"
   [ -f "$plugins_sync" ] || fail "The plugin sync is missing: $plugins_sync"
   [ -f "$check_runner" ] || fail "The check command is missing: $check_runner"
   [ -f "$shared_check" ] || fail "Check is missing: $shared_check"
@@ -164,6 +166,12 @@ sync_local() {
   done
   install -m 644 "$plugin_manifest" "$target_home/$manifest_install_suffix"
   install -m 644 "$opencode_plugin" "$target_home/$plugin_install_suffix"
+  # Codex runs the same installed scripts as user hooks, which keep their trust across kit updates.
+  agent_context_codex_hooks_owned "$target_home/.codex/hooks.json" \
+    || fail "$target_home/.codex/hooks.json holds hooks this sync does not manage. Move them into harlan-agent-kit/hooks/codex.json, then delete the file."
+  agent_context_render_codex_hooks "$codex_hooks_source" "$target_home/$hooks_install_suffix" "$target_home/.codex/hooks.json.next"
+  chmod 644 "$target_home/.codex/hooks.json.next"
+  mv "$target_home/.codex/hooks.json.next" "$target_home/.codex/hooks.json"
   mkdir -p "$target_home/$(dirname "$github_install_suffix")" "$target_home/.local/bin"
   install -m 755 "$github_wrapper" "$target_home/$github_install_suffix"
   install -m 755 "$github_wrapper" "$target_home/$github_cli_suffix"
@@ -243,6 +251,7 @@ opencode_local_sources() {
 
 sync_hogwild() {
   local claude_hash codex_hash hook_hash remote_claude_hash remote_codex_hash remote_hook_hash
+  local codex_hooks_hash remote_codex_hooks_hash
   local source target mode staged_list activation opencode_hashes remote_opencode_hashes
   validate_hogwild
   local_staging=$(mktemp -d "${TMPDIR:-/tmp}/agent-context.XXXXXX")
@@ -250,6 +259,8 @@ sync_hogwild() {
   claude_hash=$(sha256sum "$local_staging/CLAUDE.md" | cut -d' ' -f1)
   codex_hash=$(sha256sum "$local_staging/AGENTS.md" | cut -d' ' -f1)
   hook_hash=$(sha256sum "$commit_hook" | cut -d' ' -f1)
+  agent_context_render_codex_hooks "$codex_hooks_source" "$hogwild_home/$hooks_install_suffix" "$local_staging/hooks.json"
+  codex_hooks_hash=$(sha256sum "$local_staging/hooks.json" | cut -d' ' -f1)
 
   ssh -o BatchMode=yes "$hogwild_host" \
     "mkdir -p '$hogwild_home/.claude' '$hogwild_home/.codex' '$hogwild_home/.config/git/hooks' '$hogwild_home/$hooks_install_suffix' '$hogwild_home/$(dirname "$manifest_install_suffix")' '$hogwild_home/$(dirname "$plugin_install_suffix")' '$hogwild_home/$(dirname "$github_install_suffix")' '$hogwild_home/.local/bin' '$hogwild_home/.local/share/harlan-agent-kit/hogwild/scripts'"
@@ -264,6 +275,13 @@ sync_hogwild() {
   record_staged "$hogwild_home/.config/git/hooks/commit-msg.$stage_token"
   if ! scp "$commit_hook" "$hogwild_host:$hogwild_home/.config/git/hooks/commit-msg.$stage_token"; then
     fail 'Hogwild did not receive the commit-msg hook.'
+  fi
+  if ! ssh -o BatchMode=yes "$hogwild_host" "[ ! -e '$hogwild_home/.codex/hooks.json' ] || jq -e --arg marker '$agent_context_codex_hooks_marker' '(.description // \"\") | startswith(\$marker)' '$hogwild_home/.codex/hooks.json' >/dev/null"; then
+    fail "Hogwild $hogwild_home/.codex/hooks.json holds hooks this sync does not manage. Move them into harlan-agent-kit/hooks/codex.json, then delete the file."
+  fi
+  record_staged "$hogwild_home/.codex/hooks.json.$stage_token"
+  if ! scp "$local_staging/hooks.json" "$hogwild_host:$hogwild_home/.codex/hooks.json.$stage_token"; then
+    fail 'Hogwild did not receive the Codex hooks.'
   fi
 
   staged_list=''
@@ -292,8 +310,10 @@ sync_hogwild() {
     "sha256sum '$hogwild_home/.codex/AGENTS.md.$stage_token'" | cut -d' ' -f1)
   remote_hook_hash=$(ssh -o BatchMode=yes "$hogwild_host" \
     "sha256sum '$hogwild_home/.config/git/hooks/commit-msg.$stage_token'" | cut -d' ' -f1)
+  remote_codex_hooks_hash=$(ssh -o BatchMode=yes "$hogwild_host" \
+    "sha256sum '$hogwild_home/.codex/hooks.json.$stage_token'" | cut -d' ' -f1)
   if [ "$claude_hash" != "$remote_claude_hash" ] || [ "$codex_hash" != "$remote_codex_hash" ] \
-    || [ "$hook_hash" != "$remote_hook_hash" ]; then
+    || [ "$hook_hash" != "$remote_hook_hash" ] || [ "$codex_hooks_hash" != "$remote_codex_hooks_hash" ]; then
     fail 'Hogwild received different Agent instructions.'
   fi
   if [ "$opencode_hashes" != "$remote_opencode_hashes" ]; then
@@ -301,7 +321,7 @@ sync_hogwild() {
   fi
 
   ssh -o BatchMode=yes "$hogwild_host" \
-    "chmod 644 '$hogwild_home/.claude/CLAUDE.md.$stage_token' '$hogwild_home/.codex/AGENTS.md.$stage_token' && mv '$hogwild_home/.claude/CLAUDE.md.$stage_token' '$hogwild_home/.claude/CLAUDE.md' && mv '$hogwild_home/.codex/AGENTS.md.$stage_token' '$hogwild_home/.codex/AGENTS.md' && chmod 755 '$hogwild_home/.config/git/hooks/commit-msg.$stage_token' && mv '$hogwild_home/.config/git/hooks/commit-msg.$stage_token' '$hogwild_home/.config/git/hooks/commit-msg'$activation && git config --global core.hooksPath '$hogwild_home/.config/git/hooks'"
+    "chmod 644 '$hogwild_home/.claude/CLAUDE.md.$stage_token' '$hogwild_home/.codex/AGENTS.md.$stage_token' && mv '$hogwild_home/.claude/CLAUDE.md.$stage_token' '$hogwild_home/.claude/CLAUDE.md' && mv '$hogwild_home/.codex/AGENTS.md.$stage_token' '$hogwild_home/.codex/AGENTS.md' && chmod 644 '$hogwild_home/.codex/hooks.json.$stage_token' && mv '$hogwild_home/.codex/hooks.json.$stage_token' '$hogwild_home/.codex/hooks.json' && chmod 755 '$hogwild_home/.config/git/hooks/commit-msg.$stage_token' && mv '$hogwild_home/.config/git/hooks/commit-msg.$stage_token' '$hogwild_home/.config/git/hooks/commit-msg'$activation && git config --global core.hooksPath '$hogwild_home/.config/git/hooks'"
   # Activation moved every staged file to its final name, so there is nothing
   # left for the EXIT trap to reclaim.
   staged_remote=''
