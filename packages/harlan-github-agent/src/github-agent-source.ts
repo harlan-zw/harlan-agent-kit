@@ -376,7 +376,7 @@ export interface GitHubAgentSource {
   listRunningLabelledItems: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<number[], string>>
   getIssueTriageSnapshot: (repository: RepositoryMapping, issueNumber: number, signal: AbortSignal) => Promise<Result<IssueTriageSnapshot, string>>
   getPullRequestTemplate: (repository: RepositoryMapping, signal: AbortSignal) => Promise<Result<PullRequestTemplate, string>>
-  getPullRequestReviewSnapshot: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<PullRequestReviewSnapshot, string>>
+  getPullRequestReviewSnapshot: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal, representation?: 'markdown' | 'rendered') => Promise<Result<PullRequestReviewSnapshot, string>>
   /** Every file one open pull request changes, which decides whether new work stacks on it. */
   listPullRequestFiles: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<PullRequestFile[], string>>
   upsertIssueTriageComment: (repository: RepositoryMapping, issueNumber: number, commentId: number | null, body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
@@ -1154,15 +1154,17 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .catch((error: unknown) => ({ _tag: 'Unavailable' as const, reason: message(error) }))
     },
 
-    async getPullRequestReviewSnapshot(repository, pullRequestNumber, signal) {
+    async getPullRequestReviewSnapshot(repository, pullRequestNumber, signal, representation = 'markdown') {
       const octokit = await client(repository.github, 'read', signal)
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(repository.github)
-      const request = { owner, repo, pull_number: pullRequestNumber, request: { signal }, headers: { accept: 'application/vnd.github.full+json' } }
+      // Controller reads need fresh Markdown and checks. Only Agents need expiring image grants.
+      const headers = { accept: representation === 'rendered' ? 'application/vnd.github.full+json' : 'application/vnd.github+json' }
+      const request = { owner, repo, pull_number: pullRequestNumber, request: { signal }, headers }
       return Promise.all([
         octokit.value.rest.pulls.get(request),
-        octokit.value.paginate(octokit.value.rest.issues.listComments, { owner, repo, issue_number: pullRequestNumber, per_page: 100, request: { signal }, headers: { accept: 'application/vnd.github.full+json' } }),
+        octokit.value.paginate(octokit.value.rest.issues.listComments, { owner, repo, issue_number: pullRequestNumber, per_page: 100, request: { signal }, headers }),
         octokit.value.paginate(octokit.value.rest.pulls.listReviews, { ...request, per_page: 100 }),
         octokit.value.paginate(octokit.value.rest.pulls.listReviewComments, { ...request, per_page: 100 }),
       ]).then(async ([pull, issueComments, reviews, reviewComments]) => {
@@ -1180,10 +1182,12 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         return ok({
           baseChecks,
           body: pull.data.body ?? '',
-          imageReferences: [
-            ...renderedMediaReferences(pull.data.body ?? '', 'body_html' in pull.data && typeof pull.data.body_html === 'string' ? pull.data.body_html : undefined),
-            ...[...issueComments, ...reviewComments].flatMap(comment => typeof pull.data.user?.login === 'string' && comment.user?.login.toLowerCase() === pull.data.user.login.toLowerCase() && typeof comment.body === 'string' ? renderedMediaReferences(comment.body, comment.body_html) : []),
-          ],
+          imageReferences: representation === 'markdown'
+            ? []
+            : [
+                ...renderedMediaReferences(pull.data.body ?? '', 'body_html' in pull.data && typeof pull.data.body_html === 'string' ? pull.data.body_html : undefined),
+                ...[...issueComments, ...reviewComments].flatMap(comment => typeof pull.data.user?.login === 'string' && comment.user?.login.toLowerCase() === pull.data.user.login.toLowerCase() && typeof comment.body === 'string' ? renderedMediaReferences(comment.body, comment.body_html) : []),
+              ],
           authorComments: [...issueComments, ...reviewComments].flatMap(comment => typeof pull.data.user?.login === 'string' && comment.user?.login.toLowerCase() === pull.data.user.login.toLowerCase() && typeof comment.body === 'string' ? [comment.body] : []),
           checks,
           comments: chronologicalPullRequestComments([

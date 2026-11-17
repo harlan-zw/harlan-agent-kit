@@ -60,7 +60,7 @@ describe('review snapshot approval labels', () => {
       },
     })
 
-    const result = await source.getPullRequestReviewSnapshot(repositoryMapping(), 24, new AbortController().signal)
+    const result = await source.getPullRequestReviewSnapshot(repositoryMapping(), 24, new AbortController().signal, 'rendered')
 
     expect(result).toEqual(ok(expect.objectContaining({
       pullRequest: expect.objectContaining({ approvalLabels: ['review'] }),

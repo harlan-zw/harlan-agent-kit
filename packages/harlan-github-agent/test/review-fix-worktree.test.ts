@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { err, ok } from '../src/result.ts'
 import { agentWorktreeBranch, createAgentWorkspaceManager, createGitPublicationRemote, createRepairRecoveryWorktreeManager, createReviewFixWorktreeManager } from '../src/worktree.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -12,6 +12,7 @@ import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 const temporaryDirectories: string[] = []
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   temporaryDirectories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true }))
 })
 
@@ -78,6 +79,8 @@ function fixture(): { remote: string, root: string, task: ClaimedReviewFixTask }
 
 describe('review fix worktree', () => {
   it.each(['Reuse', 'Port', 'wrong-ref', 'merge', 'empty', 'conflict', 'checks-fail', 'patch-change', 'evidence-missing'])('checks a retained Repair on the current base: %s', async (mode) => {
+    // Recovery fixtures must not use the operator's signing key. Signing has its own SSH fixtures below.
+    vi.stubEnv('GIT_CONFIG_GLOBAL', '/dev/null')
     const { remote, root, task } = fixture()
     const checkout = task.repositoryMapping.checkout
     git(checkout, 'checkout', 'main')

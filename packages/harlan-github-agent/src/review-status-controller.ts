@@ -377,6 +377,8 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
     })
     if (staged._tag === 'Rejected')
       return err(staged.reason)
+    if (staged._tag === 'Published')
+      return ok({ commentId: staged.commentId, url: staged.url })
     const command = options.store.claimReviewStatus(staged.commandId, options.workerId, at, options.leaseMilliseconds)
     if (command === null)
       return err('The review comment could not be queued.')

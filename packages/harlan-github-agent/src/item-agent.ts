@@ -1458,7 +1458,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
     async run(task, signal) {
       if (!hasReviewMutationAuthority(task.repositoryMapping))
         return err('Repository policy does not authorize an automated review comment.')
-      const snapshot = await options.github.getPullRequestReviewSnapshot(task.repositoryMapping, task.pullRequestNumber, signal)
+      const snapshot = await options.github.getPullRequestReviewSnapshot(task.repositoryMapping, task.pullRequestNumber, signal, 'rendered')
       if (snapshot._tag === 'Err')
         return snapshot
       if (snapshot.value.pullRequest.headSha !== task.pullRequest.headSha || (snapshot.value.pullRequest.state !== 'open' && snapshot.value.pullRequest.mergedAt === null))

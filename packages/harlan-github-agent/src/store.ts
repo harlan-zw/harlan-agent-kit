@@ -1319,7 +1319,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   resolveStaleTaskIncidents: (at: string) => number
   saveWorkerSession: (repository: string, itemNumber: number, role: AgentRole, sessionId: string, at: string, scopeDigest?: string) => void
   updateAgentProgress: (input: { taskId: string, taskKind: AgentTask['kind'], workerId: string, fence: number, progress: AgentProgress, at: string }) => boolean
-  stageReviewStatus: (input: StageReviewStatusInput) => { _tag: 'Staged' | 'Duplicate', commandId: string } | { _tag: 'Rejected', reason: string }
+  stageReviewStatus: (input: StageReviewStatusInput) => { _tag: 'Staged' | 'Duplicate', commandId: string } | { _tag: 'Published', commandId: string, commentId: number, url: string } | { _tag: 'Rejected', reason: string }
   stageReviewGateStatus: (input: StageReviewGateStatusInput) => { _tag: 'Staged' | 'Duplicate', commandId: string } | { _tag: 'Rejected', reason: string }
   stageIssueTriageComment: (input: {
     taskId: string
@@ -11810,13 +11810,15 @@ export function openJournalStore(
       }
 
       const existing = database.prepare(`
-        SELECT id, body FROM review_status_commands WHERE id = ?
-      `).get(commandId) as { id: string, body: string } | undefined
+        SELECT id, body, state_tag, github_comment_id, github_url FROM review_status_commands WHERE id = ?
+      `).get(commandId) as { id: string, body: string, state_tag: string, github_comment_id: number | null, github_url: string | null } | undefined
       if (existing !== undefined) {
         database.exec('COMMIT')
-        return existing.body === input.body
-          ? { _tag: 'Duplicate', commandId }
-          : { _tag: 'Rejected', reason: 'The review status command identifier has different content.' }
+        if (existing.body !== input.body)
+          return { _tag: 'Rejected', reason: 'The review status command identifier has different content.' }
+        if (existing.state_tag === 'Published' && existing.github_comment_id !== null && existing.github_url !== null)
+          return { _tag: 'Published', commandId, commentId: existing.github_comment_id, url: existing.github_url }
+        return { _tag: 'Duplicate', commandId }
       }
       database.prepare(`
         INSERT INTO review_status_commands (
