@@ -1,7 +1,6 @@
 import type { MergeRisk } from './merge-risk.ts'
 import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
-import { reviewAutoMergeMinimumConfidence } from './auto-merge.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, isPullRequestCommandFooter } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedReviewHead } from './review-comment.ts'
 
 export const REVIEW_AUTO_MERGE_CONTROL = '- [ ] Enable auto-merge for this commit'
 
@@ -21,22 +20,9 @@ export function normalizeReviewAutoMergeControl(body: string): string {
   return body.replaceAll('\r\n', '\n').replace(/^- \[[xX]\] Enable auto-merge for this commit$/m, REVIEW_AUTO_MERGE_CONTROL)
 }
 
-export function withReviewAutoMergeControl(body: string, repository: RepositoryMapping, pullRequest: GitHubPullRequestItem, confidence: number | undefined, risk: MergeRisk | undefined): string {
-  if (confidence === undefined || confidence < reviewAutoMergeMinimumConfidence(repository)
-    || repository.ownership !== 'owned' || pullRequest.state !== 'open' || pullRequest.draft
-    || pullRequest.baseRef !== repository.defaultBranch
-    || pullRequest.headRepository?.toLowerCase() !== repository.github.toLowerCase()
-    || !repository.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.author.toLowerCase())) {
-    return body
-  }
-  if (repository.autoMerge._tag === 'Contained'
-    && (risk === undefined || (risk._tag === 'Sensitive' && !repository.autoMerge.labelOverridesRisk))) {
-    return body
-  }
-  const footer = body.split('\n').at(-1)!
-  return isPullRequestCommandFooter(footer)
-    ? `${body.slice(0, -footer.length)}${REVIEW_AUTO_MERGE_CONTROL}\n\n${footer}`
-    : `${body}\n\n${REVIEW_AUTO_MERGE_CONTROL}`
+export function withReviewAutoMergeControl(body: string, _repository: RepositoryMapping, _pullRequest: GitHubPullRequestItem, _confidence: number | undefined, _risk: MergeRisk | undefined): string {
+  // Keep the checkbox unavailable until GitHub can enforce the reviewed target at merge time.
+  return body
 }
 
 function object(value: unknown): Record<string, unknown> {

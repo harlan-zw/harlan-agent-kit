@@ -22,7 +22,7 @@ export interface AutoMergeControllerOptions {
   policy: AutoMergePolicy
   /** Every merge and every refusal is reported. A refusal never fails the poll. */
   report: (event: AutoMergeEvent) => void
-  store: Pick<JournalStore, 'confirmReviewAutoMerge' | 'getAutoMergeContext' | 'listReviewRuns' | 'pendingReviewAutoMerge'>
+  store: Pick<JournalStore, 'getAutoMergeContext' | 'listReviewRuns'>
 }
 
 export function createAutoMergeController(options: AutoMergeControllerOptions): AutoMergeController {
@@ -33,9 +33,8 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
       const baseRef = subject.baseRef
       if (baseRef === undefined)
         return
-      const requestedReview = () => options.store.pendingReviewAutoMerge(repository.github, subject.number, subject.headSha, baseRef) ?? undefined
-      const requestedReviewRunId = requestedReview()
-      if (!autoMergeCandidate(repository, subject) && requestedReviewRunId === undefined)
+      // Saved checkbox selections cannot authorize a merge without an atomic target precondition.
+      if (!autoMergeCandidate(repository, subject))
         return
       // Labels stay out of stored Revisions. The helper supplies its live GitHub label before each write.
       const currentContext = (autoMerge = subject.autoMerge) => {
@@ -80,16 +79,11 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
         policy: options.policy,
         pullRequest: context.pullRequest,
         repository: context.repository,
-        ...(requestedReviewRunId === undefined ? {} : { requestedReviewRunId }),
       })
       if (decision._tag === 'Hold')
         return
       const publication = attempts.find(attempt => attempt.id === decision.reviewRunId)?.gatePublication
       if (publication?._tag !== 'Published')
-        return
-      const checkboxAuthorized = requestedReviewRunId === decision.reviewRunId
-      const selectedPublication = attempts.find(attempt => attempt.id === decision.reviewRunId)?.publications.find(item => item.id === publication.publicationId)
-      if (checkboxAuthorized && selectedPublication?.result._tag !== 'Published')
         return
 
       const handoff = await options.merger.merge({
@@ -97,23 +91,16 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
         number: subject.number,
         expectedHeadSha: decision.headSha,
         method: decision.method,
-        ...(checkboxAuthorized && selectedPublication?.result._tag === 'Published'
-          ? { onlyReviewedCommit: { commentId: selectedPublication.result.githubCommentId, body: selectedPublication.body } }
-          : {}),
         authorize: (autoMerge) => {
           const current = currentContext(autoMerge)
           if (current === null)
             return err('Auto merge lost its current authority before the GitHub write.')
           const currentAttempts = options.store.listReviewRuns(repository.github, subject.number)
-          const currentRequest = requestedReview()
-          if ((currentRequest === decision.reviewRunId) !== checkboxAuthorized)
-            return err('Auto merge authority changed before the GitHub write.')
           const currentDecision = autoMergeDecision({
             attempts: currentAttempts,
             policy: options.policy,
             pullRequest: current.pullRequest,
             repository: current.repository,
-            ...(currentRequest === undefined ? {} : { requestedReviewRunId: currentRequest }),
           })
           const currentPublication = currentAttempts.find(attempt => attempt.id === decision.reviewRunId)?.gatePublication
           return currentDecision._tag === 'Merge' && currentDecision.headSha === decision.headSha
@@ -127,8 +114,6 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
         options.report({ _tag: 'Refused', repository: repository.github, pullRequestNumber: subject.number, reason: handoff.error.message })
         return
       }
-      if (requestedReviewRunId === decision.reviewRunId)
-        options.store.confirmReviewAutoMerge(decision.reviewRunId)
       options.report(handoff.value._tag === 'AutoMergeEnabled'
         ? { _tag: 'AutoMergeEnabled', repository: repository.github, pullRequestNumber: subject.number }
         : { _tag: 'Merged', repository: repository.github, pullRequestNumber: subject.number, sha: handoff.value.sha })

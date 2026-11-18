@@ -72,6 +72,37 @@ const input = {
 describe('gitHub auto-merge handoff', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it.each([401, 403])('does not replay a rejected label merge (%s) during credential refresh', async (status) => {
+    let puts = 0
+    let credentials = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const path = new URL(String(url)).pathname
+      if (init?.method === 'PUT' && path.endsWith('/merge')) {
+        puts++
+        return puts === 1
+          ? Response.json({ message: 'Bad credentials' }, { status })
+          : Response.json({ merged: true, sha: 'merged' })
+      }
+      if (path.endsWith('/graphql'))
+        return Response.json({ errors: [{ message: 'Pull request is in clean status' }] })
+      if (path.endsWith('/pulls/24'))
+        return Response.json(currentPullRequest())
+      throw new Error('Unexpected fixture request.')
+    })
+    const service = createGitHubPullRequestMerger({
+      tokens: {
+        invalidate() {},
+        async getToken() {
+          credentials++
+          return ok({ token: 'fixture-token', expiresAt: '2126-01-01T00:00:00.000Z' })
+        },
+      },
+    })
+    expect((await service.merge(input))._tag).toBe('Err')
+    expect(credentials).toBe(2)
+    expect(puts).toBe(1)
+  })
+
   it.each(['merged', 'open', 'other-base', 'changed-parent', 'outside-author'])('retargets only an integrated parent: %s', async (scenario) => {
     const updates: unknown[] = []
     const current = {

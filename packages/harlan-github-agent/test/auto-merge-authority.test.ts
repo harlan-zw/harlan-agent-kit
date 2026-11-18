@@ -28,7 +28,8 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, so
   const repository = repositoryMapping(every ? { autoMerge: { _tag: 'Every', minimumConfidence: 90 } } : {})
   const pullRequest = pullRequestItem({ autoMerge: !every && source === 'label', headSha: 'a'.repeat(40), mergeState: 'clean', baseRef: boundary === 'retarget' ? 'fix/parent' : 'main' })
   const confidence = source === 'comment' ? 81 : 95
-  const reviewBody = withReviewAutoMergeControl(`${AUTOMATED_REVIEW_MARKER}\n<!-- reviewed-sha: ${pullRequest.headSha} -->\n### 🤖 READY · ${confidence}/100`, repository, pullRequest, confidence, undefined)
+  // A previously published checkbox remains in GitHub after the feature is disabled.
+  const reviewBody = `${AUTOMATED_REVIEW_MARKER}\n<!-- reviewed-sha: ${pullRequest.headSha} -->\n### 🤖 READY · ${confidence}/100\n\n${REVIEW_AUTO_MERGE_CONTROL}`
   store.syncRepositories([repository], started)
   store.setRepositoryWritesEnabled(repository.github, true)
   const observation = store.recordObservation({ externalId: 'initial', observedAt: started, source: 'poll', subject: pullRequest })
@@ -163,112 +164,64 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, so
 }
 
 describe('auto merge requested from a READY Review', () => {
-  it.each([401, 403])('does not replay a rejected merge (%s) when consent is withdrawn during credential refresh', async (status) => {
+  it.each(['withdrawal', 'retarget'] as const)('refuses checkbox merging with a delayed %s after the last read', async (race) => {
     const test = harness('enable', false, 'comment')
     await ownerSelection(test, true, started)
-    let puts = 0
-    let credentials = 0
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
-      const path = new URL(String(url)).pathname
-      if (init?.method === 'PUT' && path.endsWith('/merge')) {
-        puts++
-        return puts === 1
-          ? Response.json({ message: 'Bad credentials' }, { status })
-          : Response.json({ merged: true, sha: 'merged' })
-      }
-      if (path.endsWith('/comments/42'))
-        return Response.json(test.comment)
-      if (path.endsWith(`/pulls/${test.pullRequest.number}`))
-        return Response.json(test.current)
-      throw new Error('Unexpected fixture request.')
-    })
-    test.options.merger = createGitHubPullRequestMerger({
-      tokens: {
-        invalidate() {},
-        async getToken() {
-          if (++credentials === 2) {
-            test.comment.body = test.reviewBody
-            await ownerSelection(test, false, changed)
-          }
-          return ok({ token: 'fixture-token', expiresAt: '2126-01-01T00:00:00.000Z' })
-        },
-      },
-    })
-    await test.run()
-    expect(credentials).toBe(2)
-    expect(puts).toBe(1)
-    expect(test.events.some(event => event._tag === 'Merged' || event._tag === 'AutoMergeEnabled')).toBe(false)
-  })
-
-  it('refuses a retarget during the consent read before the journal observes it', async () => {
-    const test = harness('enable', false, 'comment')
-    await ownerSelection(test, true, started)
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
-      const path = new URL(String(url)).pathname
-      if (init?.method === 'PUT') {
-        test.mutations.push('merge')
-        return Response.json({ merged: true, sha: 'merged' })
-      }
-      if (path.endsWith('/comments/42')) {
-        test.current.base.ref = 'release'
-        return Response.json(test.comment)
-      }
-      if (path.endsWith(`/pulls/${test.pullRequest.number}`))
-        return Response.json(test.current)
-      throw new Error('Unexpected fixture request.')
-    })
+    let reads = 0
+    const mergedTargets: string[] = []
     test.options.merger = createGitHubPullRequestMerger({
       tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2126-01-01T00:00:00.000Z' }), invalidate() {} },
+      createClient: () => ({
+        rest: {
+          issues: { getComment: async () => ({ data: structuredClone(test.comment) }) },
+          pulls: {
+            get: async () => {
+              const snapshot = structuredClone(test.current)
+              if (++reads === 2) {
+                if (race === 'withdrawal')
+                  test.comment.body = test.reviewBody
+                else
+                  test.current.base.ref = 'release'
+                // The signed delivery and journal observation have not arrived.
+                await Promise.resolve()
+              }
+              return { data: snapshot }
+            },
+            merge: async () => {
+              mergedTargets.push(test.current.base.ref!)
+              return { data: { merged: true, sha: 'merged' } }
+            },
+          },
+        },
+        graphql: async () => { throw new Error('Checkbox consent cannot enable deferred auto-merge.') },
+      }) as unknown as Octokit,
     })
+    const result = await test.options.merger.merge({
+      repository: test.repository,
+      number: test.pullRequest.number,
+      expectedHeadSha: test.pullRequest.headSha,
+      method: 'squash',
+      onlyReviewedCommit: { commentId: 42, body: test.reviewBody },
+      authorize: () => ok(undefined),
+    })
+    expect(mergedTargets).toEqual([])
+    expect(result._tag).toBe('Err')
+  })
+
+  it('leaves a saved owner checkbox request to the owner without a merge handoff', async () => {
+    const test = harness('enable', false, 'comment')
+    await ownerSelection(test, true, started)
+    const merge = vi.spyOn(test.options.merger, 'merge')
     await test.run()
+    expect(merge).not.toHaveBeenCalled()
     expect(test.mutations).toEqual([])
   })
 
-  it('hands off an authenticated owner click once at 81 confidence without a label', async () => {
-    const test = harness('enable', false, 'comment')
-    const secret = 'webhook-secret'
-    const app = createWebhookApp({
-      allowedOwners: ['harlan-zw'],
-      logger: { info() {} },
-      onHint() {},
-      reviewAutoMerge: {
-        allowedAuthor: 'harlan-zw',
-        actorLogin: () => 'harlan-github-agent[bot]',
-        apply: (request) => { test.store.requestReviewAutoMerge({ ...request, at: changed }, test.options.policy) },
-      },
-      secret,
-    })
-    const checked = test.reviewBody.replace(REVIEW_AUTO_MERGE_CONTROL, REVIEW_AUTO_MERGE_CONTROL.replace('[ ]', '[x]'))
-    const click = async (sender: string, before: string, commentId: number, delivery: string, at = started, selection: 'checked' | 'unchecked' = 'checked') => {
-      const after = selection === 'checked'
-        ? before.replace(REVIEW_AUTO_MERGE_CONTROL, REVIEW_AUTO_MERGE_CONTROL.replace('[ ]', '[x]'))
-        : test.reviewBody
-      const body = JSON.stringify({
-        action: 'edited',
-        repository: { full_name: test.repository.github },
-        issue: { number: test.pullRequest.number, pull_request: {} },
-        comment: { id: commentId, user: { login: 'harlan-github-agent[bot]' }, body: after, updated_at: at },
-        changes: { body: { from: before } },
-        sender: { login: sender },
-      })
-      await app.fetch(new Request('http://localhost/webhook', { method: 'POST', headers: { 'x-github-event': 'issue_comment', 'x-github-delivery': delivery, 'x-hub-signature-256': `sha256=${createHmac('sha256', secret).update(body).digest('hex')}` }, body }))
-    }
-
-    await click('contributor', test.reviewBody, 42, 'outside')
-    await click('harlan-zw', `${test.reviewBody}\nModified body`, 42, 'modified')
-    await click('harlan-zw', test.reviewBody, 41, 'old-comment')
-    await test.run()
-    expect(test.mutations).toEqual([])
-    await click('harlan-zw', test.reviewBody, 42, 'owner')
-    await click('harlan-zw', checked, 42, 'withdrawn', started, 'unchecked')
-    await click('harlan-zw', test.reviewBody, 42, 'late-replay')
-    await test.run()
-    expect(test.mutations).toEqual([])
-    await click('harlan-zw', test.reviewBody, 42, 'selected-again', changed)
-    await test.run()
-    await click('harlan-zw', test.reviewBody, 42, 'repeat', changed)
-    await test.run()
-    expect(test.mutations).toEqual(['merge'])
+  it('does not offer a checkbox without a server-enforced target precondition', () => {
+    const repository = repositoryMapping()
+    const pullRequest = pullRequestItem({ baseRef: repository.defaultBranch })
+    const body = `${AUTOMATED_REVIEW_MARKER}\nREADY`
+    expect(withReviewAutoMergeControl(body, repository, pullRequest, 100, undefined)).toBe(body)
   })
 })
 
@@ -330,26 +283,14 @@ it.each(['unchecked', 'removed', 'replaced'] as const)('blocks a live %s comment
   expect(test.mutations).toEqual([])
 })
 
-it('does not borrow new checkbox consent for an in-flight label handoff', async () => {
+it('does not replace removed label authority with saved checkbox consent', async () => {
   const test = harness('enable')
   await test.run(() => {
     test.current.labels = []
-    expect(test.store.requestReviewAutoMerge({
-      repository: test.repository.github,
-      pullRequestNumber: test.pullRequest.number,
-      headSha: test.pullRequest.headSha,
-      commentId: 42,
-      beforeBody: test.reviewBody,
-      requestedBy: 'harlan-zw',
-      commentAuthor: 'harlan-github-agent[bot]',
-      selection: 'Selected',
-      updatedAt: Date.parse(changed),
-      at: changed,
-    }, test.options.policy)).toBe(true)
   })
-  expect(test.mutations).toEqual([])
+  await ownerSelection(test, true, changed)
   await test.run()
-  expect(test.mutations).toEqual(['merge'])
+  expect(test.mutations).toEqual([])
 })
 
 const revocations: Array<[string, (test: Harness) => void]> = [
