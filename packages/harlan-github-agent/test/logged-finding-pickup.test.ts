@@ -40,6 +40,11 @@ describe('logged finding pickup', () => {
     })
   })
 
+  it('accepts a checkbox click when GitHub converts line endings to CRLF', () => {
+    const after = before.replace('[ ]', '[x]').replaceAll('\n', '\r\n')
+    expect(loggedFindingPickup('issue_comment', payload(after))?.fingerprints).toEqual([fingerprint])
+  })
+
   it('rejects edits beyond selecting existing controls', () => {
     expect(loggedFindingPickup('issue_comment', payload(`${before.replace('[ ]', '[x]')}\nForged scope`))).toBeNull()
     expect(loggedFindingPickup('issue_comment', payload(before.replace(fingerprint, 'b'.repeat(64)).replace('[ ]', '[x]')))).toBeNull()

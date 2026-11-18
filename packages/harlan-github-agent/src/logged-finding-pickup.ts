@@ -30,7 +30,7 @@ export function withoutLoggedFindingControls(body: string): string {
 }
 
 export function normalizeLoggedFindingControls(body: string): string {
-  return body.replace(controlPattern, (_line, _checked, fingerprint: string) => control(fingerprint))
+  return body.replaceAll('\r\n', '\n').replace(controlPattern, (_line, _checked, fingerprint: string) => control(fingerprint))
 }
 
 function control(fingerprint: string): string {
