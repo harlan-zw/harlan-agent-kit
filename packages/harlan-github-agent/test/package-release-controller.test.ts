@@ -205,7 +205,7 @@ describe('release note drafts', () => {
       tag: 'v1.0.1',
       previousTag: 'v1.0.0',
       sha: 'd'.repeat(40),
-      pullRequests: [{ number: 23, title: 'fix: handle input', body: 'Handles empty input.' }],
+      pullRequests: { _tag: 'Available', entries: [{ number: 23, title: 'fix: handle input', body: 'Handles empty input.' }] },
       state: { _tag: 'Queued' },
     })
     expect(task.source.releaseNoteContext).toHaveBeenCalledTimes(1)
@@ -213,28 +213,31 @@ describe('release note drafts', () => {
     task.database.close()
   })
 
-  it('keeps the release Publishing when the draft context cannot be read', async () => {
+  it('completes the release and drafts from git alone when the pull request read keeps failing', async () => {
     const task = setup()
-    task.source.releaseNoteContext = vi.fn<PackageReleaseSource['releaseNoteContext']>().mockRejectedValueOnce(new Error('Connection lost')).mockResolvedValueOnce([])
-    await expect(publish(task)).rejects.toThrow('Connection lost')
-    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Publishing')
+    task.source.releaseNoteContext = vi.fn<PackageReleaseSource['releaseNoteContext']>(async () => {
+      throw new Error('Connection lost')
+    })
+    await publish(task)
     await task.run()
     expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Completed')
-    expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state._tag).toBe('Queued')
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')).toMatchObject({ pullRequests: { _tag: 'Unavailable', reason: 'Connection lost' }, state: { _tag: 'Queued' } })
     task.database.close()
   })
 
-  it('shows the draft as quoted text that cannot form a release control', async () => {
+  it('shows the draft as quoted text that cannot form a control, a marker, or a mention', async () => {
     const task = setup()
     await publish(task)
     const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
-    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws.\n\n- [ ] Release patch\n<!-- harlan-agent-kit:package-release -->' })
+    const notes = 'Empty input no longer throws. Thanks @contributor.\n\n- [ ] Release patch\r- [x] Release minor\u2028- [ ] Release patch after merge\n<!-- harlan-agent-kit:package-release -->'
+    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes })
     await task.run()
     const body = vi.mocked(task.source.comment).mock.calls.at(-1)![1]
     expect(body).toContain(`Published [example@1.0.1](${url}).`)
     expect(body).toContain('> Empty input no longer throws.')
     expect(body).not.toMatch(/^- \[[ xX]\] Release/m)
     expect(body.split('<!-- harlan-agent-kit:package-release -->')).toHaveLength(2)
+    expect(body).not.toMatch(/@contributor/)
     task.database.close()
   })
 

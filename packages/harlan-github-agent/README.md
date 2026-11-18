@@ -522,6 +522,7 @@ Progress and failures stay in the release comment. Retries retain the original v
 After the GitHub release publishes, an Agent writes a Release note draft for it.
 The Agent follows the installed Brundlefly `release-notes` Skill.
 It reads the exact range between the two tags and the merged pull requests that the commits name.
+If that pull request read fails, the Agent drafts from the tag range alone. The release still completes.
 The draft appears as quoted text in the release comment. The GitHub release stays unchanged.
 A failed draft retries up to three times. The comment then states the failure, and the release stays published.
 

@@ -39,7 +39,8 @@ export interface ReleaseNoteSubject {
   previousTag: string
   /** The published commit. */
   sha: string
-  pullRequests: ReleaseNotePullRequest[]
+  /** A failed read leaves the draft to the git range alone. It never holds the release. */
+  pullRequests: { _tag: 'Available', entries: ReleaseNotePullRequest[] } | { _tag: 'Unavailable', reason: string }
 }
 
 export type ReleaseNoteState

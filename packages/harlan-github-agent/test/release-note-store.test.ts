@@ -11,7 +11,7 @@ const subject: ReleaseNoteSubject = {
   tag: 'v1.0.1',
   previousTag: 'v1.0.0',
   sha: 'd'.repeat(40),
-  pullRequests: [{ number: 23, title: 'fix: handle input', body: 'Handles empty input.' }],
+  pullRequests: { _tag: 'Available', entries: [{ number: 23, title: 'fix: handle input', body: 'Handles empty input.' }] },
 }
 const lease = 60_000
 

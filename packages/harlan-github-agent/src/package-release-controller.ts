@@ -18,11 +18,22 @@ export interface PackageReleaseSource {
 }
 
 /**
- * Shows an Agent's draft as quoted text. A quoted line cannot start a release
- * control, and removed comment delimiters cannot hide text or add a marker.
+ * Shows an Agent's draft as quoted text.
+ *
+ * A quoted line cannot start a release control. Every line terminator becomes
+ * a newline first, because a multiline pattern also breaks on `\r` and U+2028.
+ * An escaped comment opener cannot hide text or add a marker. The comment may
+ * use Harlan's token, so a copied `@name` must not notify anyone.
  */
 function quoteReleaseNote(text: string): string {
-  return text.replace(/<!--|-->/g, '').trim().split('\n').map(line => line.trim() === '' ? '>' : `> ${line}`).join('\n')
+  return text
+    .replace(/\r\n?|[\u0085\u2028\u2029]/g, '\n')
+    .replace(/<!--/g, '&lt;!--')
+    .replace(/@(?=[\w-])/g, '@\u200B')
+    .trim()
+    .split('\n')
+    .map(line => line.trim() === '' ? '>' : `> ${line}`)
+    .join('\n')
 }
 
 function releaseNoteStatus(note: ReleaseNote | null): string {
@@ -143,9 +154,16 @@ export async function reconcilePackageReleases(options: {
         const publishing = { ...record, plan: record.plan, state: record.state }
         const url = await source.publish(publishing)
         if (typeof url === 'string') {
-          // Read the draft evidence before completing. A failed read leaves the
-          // release Publishing, and the next pass verifies it and reads again.
-          const pullRequests = await source.releaseNoteContext(publishing)
+          // The draft is optional. A failed read leaves it to the git range and
+          // never holds a published release. Pause and shutdown still stop the pass.
+          const pullRequests = await source.releaseNoteContext(publishing).then(
+            entries => ({ _tag: 'Available' as const, entries }),
+            (error: unknown) => {
+              if (error === paused || signal.aborted)
+                throw error
+              return { _tag: 'Unavailable' as const, reason: cleanLine(error instanceof Error ? error.message : 'The pull request read failed.') }
+            },
+          )
           record = transition(record, { _tag: 'Completed', url })
           store.queueReleaseNote({ repository: record.repository, pullRequestNumber: record.pullRequestNumber, packageName: publishing.plan.packageName, version: publishing.plan.version, tag: publishing.state.tag, previousTag: publishing.plan.previousTag, sha: publishing.state.sha, pullRequests })
         }

@@ -1053,7 +1053,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }),
         workerId: randomUUID(),
       }),
-      // A Release note draft is optional and read only. It shares the Routine permits, so it never takes an Item slot.
+      // A Release note draft is optional. It shares the Routine permits, so it never takes an Item slot.
       releaseNotes: createWorkerTaskScheduler({
         canClaim,
         claim: store.claimNextReleaseNote,
