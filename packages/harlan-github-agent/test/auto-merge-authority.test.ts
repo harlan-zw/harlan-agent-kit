@@ -200,7 +200,7 @@ describe('auto merge requested from a READY Review', () => {
     await test.run()
     await click('harlan-zw', test.reviewBody, 42, 'repeat', changed)
     await test.run()
-    expect(test.mutations).toEqual(['enable'])
+    expect(test.mutations).toEqual(['merge'])
   })
 })
 

@@ -977,6 +977,8 @@ export interface GitHubPullRequestMerger {
     number: number
     expectedHeadSha: string
     method: AutoMergeMethod
+    /** Review comment consent expires when this commit changes. */
+    onlyReviewedCommit?: true
     /** Synchronous current authority, checked again before a fallback merge. */
     authorize: (autoMerge: boolean) => Result<void, string>
   }, signal?: AbortSignal) => Promise<Result<MergeHandoff, GitHubReadError>>
@@ -1116,10 +1118,7 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
       /**
        * Merges in this call, pinned to the reviewed head SHA.
        *
-       * Only reached when GitHub says auto-merge has nothing to wait for, which
-       * means the pull request already satisfies every requirement GitHub knows
-       * about. GitHub rejects the call when `sha` is not the current head, so a
-       * head that moved after the review can still never be merged here.
+       * GitHub applies its required checks and rejects a moved head.
        */
       const mergeNow = async (): Promise<Result<MergeHandoff, GitHubReadError>> => {
         const latest = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })
@@ -1147,6 +1146,9 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
           .catch(failure)
       }
 
+      if (input.onlyReviewedCommit === true)
+        return mergeNow()
+
       const pullRequest = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })
         .then(response => ok(response.data))
         .catch(failure)
@@ -1156,9 +1158,8 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
       if (refusal !== null)
         return err({ repository: input.repository.github, message: refusal })
 
-      // GitHub owns the merge decision from here. `expectedHeadOid` makes GitHub
-      // cancel its own auto-merge when a new commit lands, so a review can never
-      // merge a commit it did not read.
+      // GitHub owns the merge decision from here. expectedHeadOid binds the
+      // request to the current head at handoff.
       const autoMerge = hasAutoMergeLabel(labelNames(pullRequest.value.labels))
       const authorization = input.authorize(autoMerge)
       if (authorization._tag === 'Err')

@@ -93,6 +93,7 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
         number: subject.number,
         expectedHeadSha: decision.headSha,
         method: decision.method,
+        ...(requestedReviewRunId === decision.reviewRunId ? { onlyReviewedCommit: true as const } : {}),
         authorize: (autoMerge) => {
           const current = currentContext(autoMerge)
           if (current === null)

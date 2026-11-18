@@ -95,9 +95,8 @@ condition holds:
 5. Review confidence meets the configured minimum: the repository's own with `pull_requests: every`, else `auto_merge.minimum_confidence`.
 6. The pull request is open, is not a draft, and GitHub reports it mergeable.
 
-The handover pins the reviewed head commit as `expectedHeadOid`, so GitHub
-cancels its own auto-merge when a new commit lands. A review can never merge a
-commit it did not read.
+The handover sends the reviewed head commit as `expectedHeadOid`.
+GitHub checks that commit when it enables its auto-merge setting.
 
 GitHub refuses auto-merge on a pull request with nothing left to wait for, which
 is what a repository with no required checks looks like. The service then merges
@@ -113,9 +112,9 @@ The Review must reach 81/100 and meet any higher minimum set for that repository
 The repository needs signed comment webhooks and the GitHub App or a separate automation account.
 
 Only Harlan can select the checkbox. The request covers the published Review for the current commit and target branch.
-Clear the checkbox to withdraw the request before the service hands it to GitHub.
-After handover, use GitHub's **Disable auto-merge** control to cancel.
-The existing merge safeguards and GitHub branch rules still apply.
+Clear the checkbox to withdraw the request before the service starts the merge.
+The service sends the reviewed commit to GitHub in the merge request.
+GitHub still applies the repository's branch rules.
 
 ## Label
 
