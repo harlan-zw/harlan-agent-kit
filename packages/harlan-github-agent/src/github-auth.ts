@@ -339,6 +339,8 @@ export interface AuthenticatedClientOptions {
   signal?: AbortSignal | undefined
   /** Checks the caller's permission before each request, including authentication retries. */
   assertRequest?: () => void
+  /** Authority-sensitive writes must restart their operation instead of replaying a request. */
+  retryWrites?: boolean
   /** Injected for tests. Receives the same options the real client is built with. */
   createClient?: (options: { authStrategy: () => unknown, auth: unknown, userAgent: string, throttle: typeof failFastThrottle }) => Octokit
 }
@@ -375,6 +377,8 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
     auth: credential,
     userAgent: options.userAgent,
     throttle: failFastThrottle,
+    // Octokit's transport retry also bypasses the caller's authority checks.
+    retry: { enabled: options.retryWrites !== false },
   }
   const octokit = options.createClient === undefined
     ? new Octokit(clientOptions as never)
@@ -416,6 +420,8 @@ export function createAuthenticatedClient(options: AuthenticatedClientOptions): 
       if (refreshed._tag === 'Err')
         throw error
       credential.token = refreshed.value.token
+      if (options.retryWrites === false && requestOptions.method !== 'GET' && requestOptions.method !== 'HEAD')
+        throw error
       return await read()
     }
   })

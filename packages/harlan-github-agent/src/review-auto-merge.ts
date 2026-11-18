@@ -4,7 +4,6 @@ import { reviewAutoMergeMinimumConfidence } from './auto-merge.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, isPullRequestCommandFooter } from './review-comment.ts'
 
 export const REVIEW_AUTO_MERGE_CONTROL = '- [ ] Enable auto-merge for this commit'
-const checkedControl = REVIEW_AUTO_MERGE_CONTROL.replace('[ ]', '[x]')
 
 export interface ReviewAutoMergeRequest {
   repository: string
@@ -20,15 +19,6 @@ export interface ReviewAutoMergeRequest {
 
 export function normalizeReviewAutoMergeControl(body: string): string {
   return body.replaceAll('\r\n', '\n').replace(/^- \[[xX]\] Enable auto-merge for this commit$/m, REVIEW_AUTO_MERGE_CONTROL)
-}
-
-/** An in-place update to the same Review keeps the owner's selection. */
-export function preserveReviewAutoMergeSelection(current: string, next: string): string {
-  const head = automatedReviewHead(current)
-  const selected = /^- \[[xX]\] Enable auto-merge for this commit\r?$/m.test(current)
-  return selected && head !== undefined && head === automatedReviewHead(next)
-    ? next.split('\n').map(line => line === REVIEW_AUTO_MERGE_CONTROL ? checkedControl : line).join('\n')
-    : next
 }
 
 export function withReviewAutoMergeControl(body: string, repository: RepositoryMapping, pullRequest: GitHubPullRequestItem, confidence: number | undefined, risk: MergeRisk | undefined): string {

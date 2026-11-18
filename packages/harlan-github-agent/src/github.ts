@@ -979,7 +979,11 @@ export interface GitHubPullRequestMerger {
     number: number
     expectedHeadSha: string
     method: AutoMergeMethod
-    /** Review comment consent expires when this commit changes. */
+    /**
+     * Review comment consent expires when this commit changes.
+     * Consent and target are checked before sending the merge.
+     * GitHub enforces the head SHA only; subsequent retargets cannot be prevented atomically.
+     */
     onlyReviewedCommit?: { commentId: number, body: string }
     /** Synchronous current authority, checked again before a fallback merge. */
     authorize: (autoMerge: boolean) => Result<void, string>
@@ -1044,6 +1048,7 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
         return credential
       const octokit = options.createClient?.(credential.value.token) ?? createAuthenticatedClient({
         access: 'pull_request_merge',
+        retryWrites: false,
         repository: mapping.github,
         signal,
         token: credential.value.token,
@@ -1101,6 +1106,7 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
       const octokit = options.createClient?.(credential.value.token)
         ?? createAuthenticatedClient({
           access: 'pull_request_merge',
+          retryWrites: false,
           repository: input.repository.github,
           signal,
           token: credential.value.token,
@@ -1123,7 +1129,7 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
        * GitHub applies its required checks and rejects a moved head.
        */
       const mergeNow = async (): Promise<Result<MergeHandoff, GitHubReadError>> => {
-        const latest = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })
+        let latest = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })
           .then(response => ok(response.data))
           .catch(failure)
         if (latest._tag === 'Err')
@@ -1143,7 +1149,17 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
             !== withoutLoggedFindingControls(githubAccountBody(input.onlyReviewedCommit.body, input.repository.githubAccount))) {
             return err({ repository: input.repository.github, message: 'The Review comment no longer authorizes this merge.' })
           }
+          latest = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })
+            .then(response => ok(response.data))
+            .catch(failure)
+          if (latest._tag === 'Err')
+            return latest
+          const targetRefusal = autoMergePullRequestRefusal(input.repository, input.expectedHeadSha, input.repository.defaultBranch, latest.value)
+          if (targetRefusal !== null)
+            return err({ repository: input.repository.github, message: targetRefusal })
         }
+        // GitHub pins only the head SHA. A retarget after this final read remains
+        // possible: the merge API offers no atomic base-ref precondition.
         const authorization = input.authorize(hasAutoMergeLabel(labelNames(latest.value.labels)))
         if (authorization._tag === 'Err')
           return err({ repository: input.repository.github, message: authorization.error })

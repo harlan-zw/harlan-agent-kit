@@ -27,7 +27,7 @@ import { collectJobWorkflowContext } from './job-workflow-context.ts'
 import { withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
 import { err, ok } from './result.ts'
-import { normalizeReviewAutoMergeControl, preserveReviewAutoMergeSelection } from './review-auto-merge.ts'
+import { normalizeReviewAutoMergeControl } from './review-auto-merge.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
 import { AGENT_ACTOR_LOGIN, AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
@@ -1223,7 +1223,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async editReviewStatus(repository, pullRequestNumber, commentId, expectedBodyText, bodyText, signal, authorize) {
-      const body = githubAccountBody(bodyText, repository.githubAccount)
+      const body = normalizeReviewAutoMergeControl(githubAccountBody(bodyText, repository.githubAccount))
       const expectedBody = githubAccountBody(expectedBodyText, repository.githubAccount)
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
@@ -1265,7 +1265,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           const authority = authorize?.()
           if (authority?._tag === 'Err')
             return authority
-          const next = preserveReviewAutoMergeSelection(existing.data.body ?? '', body)
+          // GitHub has no atomic comment update. Never copy consent from a stale
+          // read. A changed Review requires the owner to select it again.
+          const next = body
           await writer.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body: next, ...requestOptions })
           // The compare and swap above is a client side read then write, so a
           // concurrent writer can land between the two. Reading back is the
@@ -1282,7 +1284,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async upsertReviewStatus(repository, pullRequestNumber, commentId, bodyText, replacePriorReview, signal, authorize) {
-      const body = githubAccountBody(bodyText, repository.githubAccount)
+      const body = normalizeReviewAutoMergeControl(githubAccountBody(bodyText, repository.githubAccount))
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit

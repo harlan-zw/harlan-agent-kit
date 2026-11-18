@@ -2,7 +2,7 @@ import type { Octokit } from 'octokit'
 import type { AutoMergeControllerOptions, AutoMergeEvent } from '../src/auto-merge-controller.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewGates } from '../src/types.ts'
 import { createHmac } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createGitHubPullRequestMerger } from '../src/github.ts'
 import { createAutoMergeController, openJournalStore } from '../src/index.ts'
 import { ok } from '../src/result.ts'
@@ -13,6 +13,7 @@ import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: ReturnType<typeof openJournalStore>[] = []
 afterEach(() => stores.splice(0).forEach(store => store.close()))
+afterEach(() => vi.restoreAllMocks())
 const started = '2026-08-13T01:00:00.000Z'
 const changed = '2026-08-13T01:01:00.000Z'
 const gates: ReviewGates = {
@@ -162,6 +163,67 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, so
 }
 
 describe('auto merge requested from a READY Review', () => {
+  it.each([401, 403])('does not replay a rejected merge (%s) when consent is withdrawn during credential refresh', async (status) => {
+    const test = harness('enable', false, 'comment')
+    await ownerSelection(test, true, started)
+    let puts = 0
+    let credentials = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const path = new URL(String(url)).pathname
+      if (init?.method === 'PUT' && path.endsWith('/merge')) {
+        puts++
+        return puts === 1
+          ? Response.json({ message: 'Bad credentials' }, { status })
+          : Response.json({ merged: true, sha: 'merged' })
+      }
+      if (path.endsWith('/comments/42'))
+        return Response.json(test.comment)
+      if (path.endsWith(`/pulls/${test.pullRequest.number}`))
+        return Response.json(test.current)
+      throw new Error('Unexpected fixture request.')
+    })
+    test.options.merger = createGitHubPullRequestMerger({
+      tokens: {
+        invalidate() {},
+        async getToken() {
+          if (++credentials === 2) {
+            test.comment.body = test.reviewBody
+            await ownerSelection(test, false, changed)
+          }
+          return ok({ token: 'fixture-token', expiresAt: '2126-01-01T00:00:00.000Z' })
+        },
+      },
+    })
+    await test.run()
+    expect(credentials).toBe(2)
+    expect(puts).toBe(1)
+    expect(test.events.some(event => event._tag === 'Merged' || event._tag === 'AutoMergeEnabled')).toBe(false)
+  })
+
+  it('refuses a retarget during the consent read before the journal observes it', async () => {
+    const test = harness('enable', false, 'comment')
+    await ownerSelection(test, true, started)
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const path = new URL(String(url)).pathname
+      if (init?.method === 'PUT') {
+        test.mutations.push('merge')
+        return Response.json({ merged: true, sha: 'merged' })
+      }
+      if (path.endsWith('/comments/42')) {
+        test.current.base.ref = 'release'
+        return Response.json(test.comment)
+      }
+      if (path.endsWith(`/pulls/${test.pullRequest.number}`))
+        return Response.json(test.current)
+      throw new Error('Unexpected fixture request.')
+    })
+    test.options.merger = createGitHubPullRequestMerger({
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2126-01-01T00:00:00.000Z' }), invalidate() {} },
+    })
+    await test.run()
+    expect(test.mutations).toEqual([])
+  })
+
   it('hands off an authenticated owner click once at 81 confidence without a label', async () => {
     const test = harness('enable', false, 'comment')
     const secret = 'webhook-secret'
