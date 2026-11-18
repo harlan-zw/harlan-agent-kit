@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
 import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseStore } from '../src/package-release-store.ts'
-import { planPackageReleaseBeforeMerge, renderPackageRelease } from '../src/package-release.ts'
+import { planPackageReleaseBeforeMerge, releaseNoteApproval, renderPackageRelease } from '../src/package-release.ts'
 import { createWebhookApp } from '../src/webhook.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -22,6 +22,7 @@ function setup(mayPublish = () => true) {
     merge: vi.fn(async () => null),
     publish: vi.fn(async () => null),
     releaseNoteContext: vi.fn<PackageReleaseSource['releaseNoteContext']>(async () => [{ number: 23, title: 'fix: handle input', body: 'Handles empty input.' }]),
+    applyReleaseNote: vi.fn<PackageReleaseSource['applyReleaseNote']>(async ({ tag }) => `https://github.com/harlan-zw/example/releases/tag/${tag}`),
   }
   const logger = { error: vi.fn<(message: string) => void>() }
   const run = (webhookReady = true) => reconcilePackageReleases({ logger, webhookReady, repository, mayPublish, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
@@ -237,7 +238,7 @@ describe('release note drafts', () => {
     expect(body).toContain(`Published [example@1.0.1](${url}).`)
     expect(body).not.toMatch(/^- \[[ xX]\] Release/m)
     expect(body.split('<!-- harlan-agent-kit:package-release -->')).toHaveLength(2)
-    const draft = body.slice(body.indexOf('> `````markdown')).trimEnd().split('\n')
+    const draft = body.slice(body.indexOf('> `````markdown'), body.indexOf('\n\n- [ ] Add this draft')).split('\n')
     // The draft's longest backtick run is four, so only a five-backtick line closes the block.
     expect(draft[0]).toBe('> `````markdown')
     expect(draft.at(-1)).toBe('> `````')
@@ -295,6 +296,81 @@ describe('release note drafts', () => {
     expect(task.source.comment).toHaveBeenCalledWith(30, expect.stringContaining('- [ ] Release patch'), undefined)
     expect(task.store.listPackageReleases(repository.github).map(record => record.pullRequestNumber)).toContain(30)
     expect(task.logger.error).toHaveBeenCalledWith(expect.stringContaining('no longer belongs to this Task'))
+    task.database.close()
+  })
+
+  async function drafted(task: ReturnType<typeof setup>): Promise<string> {
+    await publish(task)
+    const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
+    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws.' })
+    await task.run()
+    return vi.mocked(task.source.comment).mock.calls.at(-1)![1]
+  }
+  const approval = (before: string, requestId = 'apply') => ({ repository: repository.github, pullRequestNumber: 24, commentId: 99, before, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]', requestId })
+
+  it('offers one apply control below a drafted note', async () => {
+    const task = setup()
+    const body = await drafted(task)
+    expect(body.match(/^- \[ \] Add this draft to the GitHub release$/gm)).toHaveLength(1)
+    expect(releaseNoteApproval('issue_comment', { action: 'edited', repository: { full_name: repository.github }, issue: { number: 24, pull_request: {} }, sender: { login: 'harlan-zw' }, comment: { id: 99, user: { login: 'harlan-github-agent[bot]' }, body: body.replace('- [ ] Add this draft', '- [x] Add this draft') }, changes: { body: { from: body } } })).not.toBeNull()
+    task.database.close()
+  })
+
+  it('adds the approved draft to the GitHub release once', async () => {
+    const task = setup()
+    const body = await drafted(task)
+    expect(task.store.approveReleaseNote(approval(body))).toBe(true)
+    expect(task.store.approveReleaseNote(approval(body))).toBe(false)
+    await task.run()
+    expect(task.source.applyReleaseNote).toHaveBeenCalledWith({ tag: 'v1.0.1', text: 'Empty input no longer throws.' })
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state).toEqual({ _tag: 'Applied', text: 'Empty input no longer throws.', url })
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining(`Added this draft to the [GitHub release](${url}).`), 99)
+    expect(vi.mocked(task.source.comment).mock.calls.at(-1)![1]).not.toMatch(/^- \[[ xX]\] Add this draft/m)
+    await task.run()
+    expect(task.source.applyReleaseNote).toHaveBeenCalledTimes(1)
+    task.database.close()
+  })
+
+  it('refuses an approval of a comment that no longer shows this draft', async () => {
+    const task = setup()
+    const body = await drafted(task)
+    expect(task.store.approveReleaseNote(approval(body.replace('Empty input', 'Other input'), 'stale'))).toBe(false)
+    await task.run()
+    expect(task.source.applyReleaseNote).not.toHaveBeenCalled()
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state._tag).toBe('Drafted')
+    task.database.close()
+  })
+
+  it('retries a failed apply without stopping release offers', async () => {
+    const task = setup()
+    const body = await drafted(task)
+    task.store.approveReleaseNote(approval(body))
+    task.source.applyReleaseNote = vi.fn<PackageReleaseSource['applyReleaseNote']>().mockRejectedValueOnce(new Error('Resource not accessible by integration')).mockResolvedValueOnce(url)
+    task.source.candidates = async () => [30]
+    task.source.inspect = async number => ({ ...plan, headSha: number === 30 ? 'e'.repeat(40) : plan.headSha })
+    await task.run()
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state._tag).toBe('Approved')
+    expect(task.logger.error).toHaveBeenCalledWith(expect.stringContaining('Resource not accessible by integration'))
+    expect(task.store.listPackageReleases(repository.github).map(record => record.pullRequestNumber)).toContain(30)
+    await task.run()
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state._tag).toBe('Applied')
+    task.database.close()
+  })
+
+  it.each(['valid', 'other-sender', 'foreign-comment'])('authenticates an apply click: %s', async (mode) => {
+    const task = setup()
+    const before = await drafted(task)
+    const body = JSON.stringify({ action: 'edited', repository: { full_name: repository.github }, issue: { number: 24, pull_request: {} }, sender: { login: mode === 'other-sender' ? 'contributor' : 'harlan-zw' }, comment: { id: 99, user: { login: mode === 'foreign-comment' ? 'contributor' : 'harlan-github-agent[bot]' }, body: before.replace('- [ ] Add this draft', '- [x] Add this draft') }, changes: { body: { from: before } } })
+    const app = createWebhookApp({ secret: 'secret', allowedOwners: ['harlan-zw'], onHint: () => {}, logger: { info: () => {} }, packageRelease: { allowedAuthor: 'harlan-zw', actorLogin: () => 'harlan-github-agent[bot]', apply: () => {}, approveNote: (request) => {
+      task.store.approveReleaseNote(request)
+    } } })
+    const response = await app.fetch(new Request('http://localhost/webhook', { method: 'POST', body, headers: {
+      'x-github-event': 'issue_comment',
+      'x-github-delivery': 'apply-click',
+      'x-hub-signature-256': `sha256=${createHmac('sha256', 'secret').update(body).digest('hex')}`,
+    } }))
+    expect(response.status).toBe(204)
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state._tag).toBe(mode === 'valid' ? 'Approved' : 'Drafted')
     task.database.close()
   })
 })

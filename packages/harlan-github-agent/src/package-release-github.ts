@@ -8,7 +8,7 @@ import { Buffer } from 'node:buffer'
 import { parse } from 'yaml'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
-import { PACKAGE_RELEASE_MARKER, planPackageRelease, planPackageReleaseBeforeMerge, stableVersion } from './package-release.ts'
+import { PACKAGE_RELEASE_MARKER, planPackageRelease, planPackageReleaseBeforeMerge, RELEASE_NOTE_DISCLOSURE, RELEASE_NOTE_MARKER, stableVersion } from './package-release.ts'
 
 interface Manifest { name?: string, version: string, private?: boolean, [key: string]: unknown }
 
@@ -423,6 +423,17 @@ export function createPackageReleaseSource(options: {
       if (release.data.draft || release.data.prerelease)
         throw new Error('The GitHub release is not a published stable release.')
       return release.data.html_url
+    },
+    async applyReleaseNote({ tag, text }) {
+      const reader = await client('read')
+      const release = (await reader.rest.repos.getReleaseByTag({ ...scope, tag })).data
+      // The marker makes a retry after a lost response add nothing.
+      if (release.body?.includes(RELEASE_NOTE_MARKER))
+        return release.html_url
+      const writer = await client('contents_write')
+      const body = `${text}\n\n${RELEASE_NOTE_DISCLOSURE}\n${RELEASE_NOTE_MARKER}\n\n${release.body ?? ''}`.trimEnd()
+      await writer.rest.repos.updateRelease({ ...scope, release_id: release.id, body })
+      return release.html_url
     },
     async releaseNoteContext(record) {
       const api = await client('read')

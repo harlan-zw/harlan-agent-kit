@@ -256,3 +256,54 @@ export function packageReleaseCommand(event: string, payload: unknown): PackageR
   }
   return { repository, pullRequestNumber: issue.number, commentId: comment.id, requestedBy, bump: match[1]?.toLowerCase() as 'patch' | 'minor' | undefined ?? 'auto' }
 }
+
+/** The one control below a Release note draft. It never matches a release control. */
+export const RELEASE_NOTE_APPLY_LABEL = 'Add this draft to the GitHub release'
+/** Marks a GitHub release body that already holds an approved draft, so a retry adds nothing. */
+export const RELEASE_NOTE_MARKER = '<!-- harlan-agent-kit:release-note -->'
+export const RELEASE_NOTE_DISCLOSURE = '> Release notes prepared by [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit). [AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).'
+
+export interface ReleaseNoteApproval {
+  repository: string
+  pullRequestNumber: number
+  commentId: number
+  requestedBy: string
+  commentAuthor: string
+  before: string
+}
+
+/**
+ * Reads one tick of the apply control on a release comment.
+ *
+ * Authority comes from a verified webhook sender, never the comment's author.
+ * The edit must change only that checkbox, and only from clear to ticked.
+ * Every draft line is quoted, so a draft cannot add a control of its own.
+ */
+export function releaseNoteApproval(event: string, payload: unknown): ReleaseNoteApproval | null {
+  const input = record(payload)
+  if (event !== 'issue_comment' || input.action !== 'edited')
+    return null
+  const comment = record(input.comment)
+  const before = record(record(input.changes).body).from
+  const after = comment.body
+  if (typeof before !== 'string' || typeof after !== 'string' || !before.startsWith(PACKAGE_RELEASE_MARKER))
+    return null
+  const controls = [...before.matchAll(/^- \[([ xX])\] Add this draft to the GitHub release$/gm)]
+  const control = controls[0]
+  if (controls.length !== 1 || control === undefined || control[1] !== ' ')
+    return null
+  // Replace at the matched line. The quoted draft may repeat the same text earlier.
+  const ticked = (mark: string) => `${before.slice(0, control.index)}- [${mark}]${before.slice(control.index + '- [ ]'.length)}`
+  if (!['x', 'X'].some(mark => after === ticked(mark)))
+    return null
+  const repository = record(input.repository).full_name
+  const issue = record(input.issue)
+  const requestedBy = record(input.sender).login
+  const commentAuthor = record(comment.user).login
+  if (typeof repository !== 'string' || typeof issue.number !== 'number' || !Number.isSafeInteger(issue.number)
+    || issue.pull_request === undefined || typeof comment.id !== 'number' || !Number.isSafeInteger(comment.id)
+    || typeof requestedBy !== 'string' || typeof commentAuthor !== 'string') {
+    return null
+  }
+  return { repository, pullRequestNumber: issue.number, commentId: comment.id, requestedBy, commentAuthor, before }
+}

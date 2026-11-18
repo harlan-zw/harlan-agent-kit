@@ -489,7 +489,7 @@ Use Batch. Do not use group, bundle, orchestration, or wave. The Agent that plan
 
 ### Release note draft
 
-One Agent's proposed introduction for a published package release. The release comment shows it as a quoted code block for Harlan to review. It never changes the GitHub release.
+One Agent's proposed introduction for a published package release. The release comment shows it as a quoted code block for Harlan to review. Harlan's tick on that comment adds it to the GitHub release.
 
 The Agent follows Brundlefly `release-notes`. Use Release note draft. Do not use summary, changelog, or announcement for it.
 

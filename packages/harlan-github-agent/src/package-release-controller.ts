@@ -1,7 +1,7 @@
 import type { PackageReleaseRecord, PackageReleaseState, PackageReleaseStore, ReleaseNote, ReleaseNotePullRequest } from './package-release-store.ts'
 import type { PackageReleaseOffer, PackageReleasePlan } from './package-release.ts'
 import type { RepositoryMapping } from './types.ts'
-import { PACKAGE_RELEASE_MARKER, renderManualMajorRelease, renderPackageRelease } from './package-release.ts'
+import { PACKAGE_RELEASE_MARKER, RELEASE_NOTE_APPLY_LABEL, renderManualMajorRelease, renderPackageRelease } from './package-release.ts'
 import { canReleasePackages } from './repository-policy.ts'
 import { automatedDisclosure } from './review-comment.ts'
 import { cleanLine } from './text.ts'
@@ -15,6 +15,8 @@ export interface PackageReleaseSource {
   publish: (record: PackageReleaseRecord & { plan: Extract<PackageReleasePlan, { _tag: 'Available' }>, state: Extract<PackageReleaseState, { _tag: 'Publishing' }> }) => Promise<string | Extract<PackageReleaseState, { _tag: 'Blocked' }> | null>
   /** Merged pull requests in the published range, read before the release completes. */
   releaseNoteContext: (record: PackageReleaseRecord & { plan: Extract<PackageReleasePlan, { _tag: 'Available' }>, state: Extract<PackageReleaseState, { _tag: 'Publishing' }> }) => Promise<ReleaseNotePullRequest[]>
+  /** Adds an approved draft above the release body once, and returns the release URL. */
+  applyReleaseNote: (input: { tag: string, text: string }) => Promise<string>
 }
 
 /**
@@ -47,7 +49,11 @@ function releaseNoteStatus(note: ReleaseNote | null): string {
     case 'Running':
       return '\n\nDrafting a release note.'
     case 'Drafted':
-      return `\n\nRelease note draft for review. The GitHub release is unchanged.\n\n${quoteReleaseNote(note.state.text)}`
+      return `\n\nRelease note draft for review. The GitHub release is unchanged.\n\n${quoteReleaseNote(note.state.text)}\n\n- [ ] ${RELEASE_NOTE_APPLY_LABEL}`
+    case 'Approved':
+      return `\n\nRelease note draft approved. Adding it to the GitHub release.\n\n${quoteReleaseNote(note.state.text)}\n\n- [x] ${RELEASE_NOTE_APPLY_LABEL}`
+    case 'Applied':
+      return `\n\nAdded this draft to the [GitHub release](${note.state.url}).\n\n${quoteReleaseNote(note.state.text)}`
     case 'Failed':
       return `\n\nNo release note draft: ${cleanLine(note.state.reason)}`
   }
@@ -175,6 +181,22 @@ export async function reconcilePackageReleases(options: {
         else if (url !== null) {
           record = transition(record, url)
         }
+      }
+      const note = record.state._tag === 'Completed' ? store.getReleaseNote(record.repository, record.plan.version) : null
+      if (note?.state._tag === 'Approved') {
+        // Harlan ticked the draft on this exact comment. A failed edit logs and
+        // retries next pass, and never stops offers for this repository.
+        assertLease()
+        const approved = { repository: record.repository, version: record.plan.version, number: record.pullRequestNumber }
+        await source.applyReleaseNote({ tag: note.tag, text: note.state.text }).then((url) => {
+          assertLease()
+          if (!store.markReleaseNoteApplied({ repository: approved.repository, version: approved.version, url }, fence, now()))
+            throw new Error('The release note state changed.')
+        }, (error: unknown) => {
+          if (error === paused || signal.aborted)
+            throw error
+          options.logger.error(`${repository.github}#${approved.number}: the approved release note could not be added: ${error instanceof Error ? error.message : String(error)}`)
+        })
       }
       if (record.state._tag === 'Completed' && record.body.startsWith(packageReleaseStatus(record).trimEnd())) {
         // The comment already announces the release, so only its draft line can

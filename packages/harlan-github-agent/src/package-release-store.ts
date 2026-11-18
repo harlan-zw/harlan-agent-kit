@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { PackageReleaseCommand, PackageReleasePlan, PackageReleaseRequest } from './package-release.ts'
+import type { PackageReleaseCommand, PackageReleasePlan, PackageReleaseRequest, ReleaseNoteApproval } from './package-release.ts'
 import { createHash } from 'node:crypto'
 
 export type PackageReleaseState
@@ -47,6 +47,8 @@ export type ReleaseNoteState
   = | { _tag: 'Queued' }
     | { _tag: 'Running', fence: number, workerId: string, leaseExpiresAt: string }
     | { _tag: 'Drafted', text: string }
+    | { _tag: 'Approved', text: string, requestedBy: string }
+    | { _tag: 'Applied', text: string, url: string }
     | { _tag: 'Failed', reason: string }
 
 export interface ReleaseNote extends ReleaseNoteSubject {
@@ -249,6 +251,33 @@ export function createPackageReleaseStore(database: DatabaseSync) {
           return settleReleaseNote(input, { _tag: 'Queued' }) ? 'Retrying' : 'Rejected'
         return settleReleaseNote(input, { _tag: 'Failed', reason: input.reason }) ? 'Failed' : 'Rejected'
       })
+    },
+    /**
+     * Binds Harlan's tick to the exact comment that showed the draft.
+     * A stale comment, a replayed delivery, or a draft in any other state changes nothing.
+     */
+    approveReleaseNote(input: ReleaseNoteApproval & { requestId: string }): boolean {
+      return transaction(() => {
+        const fresh = database.prepare('INSERT OR IGNORE INTO package_release_requests VALUES (?, ?)')
+          .run(input.repository, input.requestId)
+          .changes === 1
+        return fresh && database.prepare(`UPDATE package_release_notes
+          SET state=json_object('_tag', 'Approved', 'text', json_extract(state, '$.text'), 'requestedBy', ?)
+          WHERE repository=? AND json_extract(state, '$._tag')='Drafted' AND json_extract(subject, '$.pullRequestNumber')=?
+          AND EXISTS (SELECT 1 FROM package_releases AS release WHERE release.repository=package_release_notes.repository
+            AND release.pull_request_number=? AND release.comment_id=? AND release.body=?
+            AND json_extract(release.plan, '$.version')=package_release_notes.version
+            AND json_extract(release.state, '$._tag')='Completed')
+        `).run(input.requestedBy, input.repository, input.pullRequestNumber, input.pullRequestNumber, input.commentId, input.before).changes === 1
+      })
+    },
+    /** Records the edited GitHub release while the controller holds the release lease. */
+    markReleaseNoteApplied(input: { repository: string, version: string, url: string }, fence: number, now: number): boolean {
+      return database.prepare(`UPDATE package_release_notes
+        SET state=json_object('_tag', 'Applied', 'text', json_extract(state, '$.text'), 'url', ?)
+        WHERE repository=? AND version=? AND json_extract(state, '$._tag')='Approved'
+        AND EXISTS (SELECT 1 FROM package_release_leases WHERE repository=? AND fence=? AND expires_at>?)
+      `).run(input.url, input.repository, input.version, input.repository, fence, now).changes === 1
     },
   }
 }

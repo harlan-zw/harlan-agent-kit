@@ -631,3 +631,36 @@ it('reads merged pull requests named in the published range for the release note
   expect(pullRequests[0]?.body).toHaveLength(4000)
   expect(pullRequests[1]).toEqual({ number: 21, title: 'perf: cache reads', body: '' })
 })
+
+it('adds an approved draft above the generated release notes once', async () => {
+  const tokens = { getToken: async () => ({ _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }
+  let body = '### Bug Fixes\n\n- handle input'
+  const writes: Array<{ path: string, body: unknown }> = []
+  const source = createPackageReleaseSource({
+    repository: mapping,
+    actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
+    template: async () => '',
+    assertLease: () => {},
+    review: () => ({ _tag: 'None' }),
+    signal: new AbortController().signal,
+    now: () => new Date(),
+    createClient: clientOptions => new Octokit({ ...clientOptions, retry: { enabled: false }, throttle: { enabled: false }, request: { fetch: async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const path = new URL(request.url).pathname
+      if (request.method === 'GET' && path.endsWith('/releases/tags/v1.0.1'))
+        return Response.json({ id: 7, body, html_url: 'https://github.com/harlan-zw/example/releases/tag/v1.0.1', draft: false, prerelease: false })
+      if (request.method === 'PATCH' && path.endsWith('/releases/7')) {
+        const update = await request.json() as { body: string }
+        writes.push({ path, body: update.body })
+        body = update.body
+        return Response.json({ id: 7 })
+      }
+      throw new Error(`Unexpected request ${request.method} ${path}`)
+    } } }),
+  })
+  expect(await source.applyReleaseNote({ tag: 'v1.0.1', text: 'Empty input no longer throws.' })).toBe('https://github.com/harlan-zw/example/releases/tag/v1.0.1')
+  expect(await source.applyReleaseNote({ tag: 'v1.0.1', text: 'Empty input no longer throws.' })).toBe('https://github.com/harlan-zw/example/releases/tag/v1.0.1')
+  expect(writes).toHaveLength(1)
+  expect(body.startsWith('Empty input no longer throws.\n\n> Release notes prepared by [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit).')).toBe(true)
+  expect(body.endsWith('### Bug Fixes\n\n- handle input')).toBe(true)
+})
