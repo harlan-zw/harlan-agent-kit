@@ -1,6 +1,7 @@
 import type { PackageReleaseRecord, PackageReleaseState, PackageReleaseStore, ReleaseNote, ReleaseNotePullRequest } from './package-release-store.ts'
 import type { PackageReleaseOffer, PackageReleasePlan } from './package-release.ts'
 import type { RepositoryMapping } from './types.ts'
+import { parseRateLimit } from './github-rate-limit.ts'
 import { PACKAGE_RELEASE_MARKER, RELEASE_NOTE_APPLY_LABEL, renderManualMajorRelease, renderPackageRelease } from './package-release.ts'
 import { canReleasePackages } from './repository-policy.ts'
 import { automatedDisclosure } from './review-comment.ts'
@@ -200,9 +201,10 @@ export async function reconcilePackageReleases(options: {
             throw error
           const reason = cleanLine(error instanceof Error ? error.message : String(error))
           options.logger.error(`${repository.github}#${approved.number}: the approved release note could not be added: ${reason}`)
-          // A 4xx other than a rate limit fails the same way on every retry.
+          // A refused edit fails the same way on every retry. GitHub sends rate
+          // limits as 403 or 429, and a 401 can clear after a token refresh.
           const status = typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number' ? error.status : null
-          if (status !== null && status >= 400 && status < 500 && status !== 429) {
+          if (status !== null && status >= 400 && status < 500 && status !== 401 && status !== 429 && parseRateLimit(error) === null) {
             assertLease()
             store.failReleaseNoteApply({ repository: approved.repository, version: approved.version, reason }, fence, now())
           }

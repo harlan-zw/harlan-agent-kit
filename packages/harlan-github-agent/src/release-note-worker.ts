@@ -7,6 +7,7 @@ import type { JournalStore } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import type { ItemAgent } from './worker-task-scheduler.ts'
 import type { AgentWorkspaceManager, PreparedWorkerWorkspace } from './worktree.ts'
+import { marked } from 'marked'
 import { runAgentTurn } from './agent-turn.ts'
 import { err, ok } from './result.ts'
 
@@ -36,22 +37,17 @@ export function parseReleaseNoteResponse(value: unknown): Result<string, string>
 /**
  * The release comment shows a draft escaped, but the GitHub release renders it.
  * Raw HTML there could hide the disclosure or fold the changelog, so a draft
- * may hold tags only in code. An autolink such as `<https://...>` stays allowed.
+ * may hold tags only in code. A GFM lexer decides what is code, because a
+ * hand-written scan disagreed with CommonMark on fences, escapes, and lists.
+ * An autolink such as `<https://...>` stays allowed.
  */
 function containsRawHtml(notes: string): boolean {
-  const prose: string[] = []
-  let fence: string | null = null
-  for (const line of notes.split('\n')) {
-    const opener = /^(?:`{3,}|~{3,})/.exec(line)?.[0]
-    if (fence === null && opener !== undefined)
-      fence = opener
-    // A closing fence repeats the opening character at least as many times, then ends.
-    else if (fence !== null && line.startsWith(fence) && /^[`~]*\s*$/.test(line.slice(fence.length)))
-      fence = null
-    else if (fence === null)
-      prose.push(line.replace(/``[^`]*``|`[^`\n]*`/g, ''))
-  }
-  return /<(?:!--|\/?[a-z][\w-]*(?:\s|\/?>))/i.test(prose.join('\n'))
+  let html = false
+  marked.walkTokens(marked.lexer(notes, { gfm: true }), (token) => {
+    if (token.type === 'html')
+      html = true
+  })
+  return html
 }
 
 export function releaseNotePrompt(task: ClaimedReleaseNote, workspace: PreparedWorkerWorkspace): string {
