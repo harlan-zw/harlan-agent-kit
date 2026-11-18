@@ -246,6 +246,7 @@ interface ReviewRerunRequest {
   repository: string
   pullRequestNumber: number
   revisionId: string
+  resumeStoppedHead?: string
 }
 
 function cancelTaskRequest(value: unknown): CancelTaskRequest | undefined {
@@ -265,7 +266,15 @@ function reviewRerunRequest(value: unknown): ReviewRerunRequest | undefined {
     return undefined
   if (typeof body.revisionId !== 'string' || !/^[a-f\d]{64}$/.test(body.revisionId))
     return undefined
-  return body as unknown as ReviewRerunRequest
+  const resumeStoppedHead = body.resumeStoppedHead
+  if (resumeStoppedHead !== undefined && (typeof resumeStoppedHead !== 'string' || !/^[a-f\d]{40}$/.test(resumeStoppedHead)))
+    return undefined
+  return {
+    repository: body.repository,
+    pullRequestNumber: body.pullRequestNumber as number,
+    revisionId: body.revisionId,
+    ...(resumeStoppedHead === undefined ? {} : { resumeStoppedHead }),
+  }
 }
 
 function stopReviewRequest(value: unknown): { repository: string, pullRequestNumber: number, headSha: string } | undefined {

@@ -1340,6 +1340,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     repository: string
     pullRequestNumber: number
     revisionId: string
+    resumeStoppedHead?: string
     requestId: string
     source: ReviewRerunSource
     requestedBy: string
@@ -8352,7 +8353,13 @@ export function openJournalStore(
       }
 
       const pullRequest = JSON.parse(row.payload) as GitHubPullRequestItem
-      if (database.prepare('SELECT 1 FROM review_stops WHERE subject_id = ? AND head_sha = ?').get(row.subject_id, pullRequest.headSha) !== undefined) {
+      const stopped = database.prepare('SELECT 1 FROM review_stops WHERE subject_id = ? AND head_sha = ?').get(row.subject_id, pullRequest.headSha) !== undefined
+      const resumeStopped = input.source === 'dashboard' && input.resumeStoppedHead !== undefined
+      if (resumeStopped && input.resumeStoppedHead !== pullRequest.headSha) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } }
+      }
+      if (stopped && !resumeStopped) {
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: { _tag: 'ReviewStopped' } }
       }
@@ -8369,6 +8376,15 @@ export function openJournalStore(
           SELECT 1 FROM pull_request_approvals
           WHERE subject_id = ? AND revision_id = ? AND kind = 'review'
         `).get(row.subject_id, revisionId) !== undefined
+      if (resumeStopped && (
+        !stopped || !mutationsEnabled || row.writes_enabled !== 1 || row.paused === 1
+        || pullRequest.mergeState !== 'clean'
+        || database.prepare('SELECT 1 FROM item_dismissals WHERE subject_id = ?').get(row.subject_id) !== undefined
+        || database.prepare('SELECT 1 FROM review_cancel_requests WHERE subject_id = ? AND head_sha = ?').get(row.subject_id, pullRequest.headSha) !== undefined
+      )) {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: { _tag: 'ReviewNotReady' } }
+      }
       if (pullRequest.mergeState === 'conflicting' && input.source === 'dashboard') {
         // A base move may preserve Review authority, but retrying a blocked
         // conflict requires the exact current Revision selected by Control.
@@ -8426,6 +8442,9 @@ export function openJournalStore(
         return { _tag: 'Rejected', reason: { _tag: 'ReviewNotReady' } }
       }
 
+      // Release the exact stop and queue its Review in the same transaction.
+      if (resumeStopped)
+        database.prepare('DELETE FROM review_stops WHERE subject_id = ? AND head_sha = ?').run(row.subject_id, pullRequest.headSha)
       const taskId = row.task_id ?? unusedWorkerTaskId(database, digest(`${mapping.github}:pull_request:${pullRequest.number}:${revisionId}:adversarial_review`), input.at)
       if (row.task_id === null) {
         database.prepare(`
