@@ -121,7 +121,20 @@ it('retries when the release worktree cannot be prepared', async () => {
   task.store.close()
 })
 
-it('keeps HTML that sits in code', () => {
-  const notes = 'Tags now render in `<head>` before `</body>`.\n\n```html\n<div>example</div>\n```\n\nSee <https://unhead.unjs.io>.'
+it.each([
+  ['code in prose and a fence', 'Tags now render in `<head>` before `</body>`.\n\n```html\n<div>example</div>\n```\n\nSee <https://unhead.unjs.io>.'],
+  ['an indented code block', 'Use this markup:\n\n    <div>example</div>'],
+  ['a fence inside a list item', '- Use this markup:\n\n  ```html\n  <div>example</div>\n  ```'],
+  ['a less-than sign in prose', 'Supports Node <v20 or newer, and a < b comparisons.'],
+])('keeps HTML that sits in code: %s', (_name, notes) => {
   expect(parseReleaseNoteResponse({ notes })).toEqual({ _tag: 'Ok', value: notes })
+})
+
+it.each([
+  ['a backtick in the fence info string', '```x`\n<!--'],
+  ['an indented closing fence', '```\ncode\n   ```\n<!--'],
+  ['an escaped backtick before a tag', 'Fixed \\`<details>` folding.'],
+  ['an unclosed details block in a list', '- Fixed folding.\n\n<details>'],
+])('refuses raw HTML that escapes a code span or fence: %s', (_name, notes) => {
+  expect(parseReleaseNoteResponse({ notes })._tag).toBe('Err')
 })
