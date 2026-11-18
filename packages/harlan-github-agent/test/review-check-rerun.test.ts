@@ -88,6 +88,15 @@ describe('queueing Review from a Re-run click', () => {
     expect(requestReviewCheckRerun(store, click)).toEqual([{ _tag: 'AlreadyQueued', taskId: expect.any(String) }])
   })
 
+  it('queues a fresh Review after the last one finished', () => {
+    const store = openStore()
+    const review = store.claimNextAdversarialReviewTask('reviewer', '2026-11-18T01:00:10.000Z', 60_000)
+    if (review === null)
+      throw new Error('Expected a Review Task.')
+    store.completeWorkerTask({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at: '2026-11-18T01:00:20.000Z', evidence: 'review-1' })
+    expect(requestReviewCheckRerun(store, click)).toEqual([{ _tag: 'Queued', taskId: review.id }])
+  })
+
   it('never applies one delivery twice', () => {
     const store = openStore()
     requestReviewCheckRerun(store, click)
