@@ -319,9 +319,6 @@ importers:
       image-size:
         specifier: 'catalog:'
         version: 2.0.4
-      marked:
-        specifier: 'catalog:'
-        version: 18.1.1
       node-pty:
         specifier: 'catalog:'
         version: 1.1.0
@@ -368,6 +365,9 @@ importers:
       '@vueuse/nuxt':
         specifier: 'catalog:'
         version: 15.0.0(747082ccf2649949e154b997a6b0f966)
+      marked:
+        specifier: 'catalog:'
+        version: 18.1.1
       node-gyp:
         specifier: 'catalog:'
         version: 13.1.0

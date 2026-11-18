@@ -7,7 +7,6 @@ import type { JournalStore } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import type { ItemAgent } from './worker-task-scheduler.ts'
 import type { AgentWorkspaceManager, PreparedWorkerWorkspace } from './worktree.ts'
-import { marked } from 'marked'
 import { runAgentTurn } from './agent-turn.ts'
 import { err, ok } from './result.ts'
 
@@ -34,20 +33,63 @@ export function parseReleaseNoteResponse(value: unknown): Result<string, string>
   return ok(notes)
 }
 
+/** CommonMark HTML block start names. These open a block without a closing bracket. */
+const HTML_BLOCK_TAG = /<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[\s/>]|$)/im
+/** A complete tag. A colon or `@` after the name makes it an autolink instead. */
+const HTML_TAG = /<\/?[a-z][a-z0-9-]*(?:[\s/][^>\n]*)?>/i
+/** Comments, declarations, CDATA, and processing instructions. */
+const HTML_DECLARATION = /<[!?]/
+
 /**
  * The release comment shows a draft escaped, but the GitHub release renders it.
- * Raw HTML there could hide the disclosure or fold the changelog, so a draft
- * may hold tags only in code. A GFM lexer decides what is code, because a
- * hand-written scan disagreed with CommonMark on fences, escapes, and lists.
- * An autolink such as `<https://...>` stays allowed.
+ * Raw HTML there could hide the disclosure or fold the changelog.
+ *
+ * Renderers disagree about fences, lists, tabs, and footnotes, so this check
+ * trusts only inline code spans on one line. It refuses any other text that a
+ * renderer could read as HTML, including HTML inside fenced code. The prompt
+ * asks for tags in inline code, so a refused draft is drafted again.
  */
 function containsRawHtml(notes: string): boolean {
-  let html = false
-  marked.walkTokens(marked.lexer(notes, { gfm: true }), (token) => {
-    if (token.type === 'html')
-      html = true
-  })
-  return html
+  const prose = notes.split(/\r\n?|\n/).map(withoutCodeSpans).join('\n')
+  return HTML_DECLARATION.test(prose) || HTML_BLOCK_TAG.test(prose) || HTML_TAG.test(prose)
+}
+
+/** Removes CommonMark code spans from one line. An escaped backtick never opens one. */
+function withoutCodeSpans(line: string): string {
+  let prose = ''
+  let index = 0
+  while (index < line.length) {
+    const character = line[index]!
+    if (character === '\\') {
+      prose += line.slice(index, index + 2)
+      index += 2
+      continue
+    }
+    if (character !== '`') {
+      prose += character
+      index++
+      continue
+    }
+    const opener = runLength(line, index)
+    let close = index + opener
+    while (close < line.length && !(line[close] === '`' && runLength(line, close) === opener))
+      close += line[close] === '`' ? runLength(line, close) : 1
+    if (close >= line.length) {
+      // No closing run of the same length, so these backticks are text.
+      prose += line.slice(index, index + opener)
+      index += opener
+      continue
+    }
+    index = close + opener
+  }
+  return prose
+}
+
+function runLength(line: string, start: number): number {
+  let end = start
+  while (line[end] === '`')
+    end++
+  return end - start
 }
 
 export function releaseNotePrompt(task: ClaimedReleaseNote, workspace: PreparedWorkerWorkspace): string {
@@ -72,7 +114,7 @@ Destination: the introduction above the generated changelog on the GitHub releas
 - Keep a measured number only with its baseline and a source link from the pull requests.
 - Leave out tests, refactors, internal names, and headings.
 - Do not add a disclosure line. The controller adds it.
-- Use Markdown only. Write any HTML tag inside inline code, such as \`<head>\`.
+- Use Markdown only. Write any HTML tag or generic type in inline code, such as \`<head>\` or \`Array<string>\`.
 - One idea per sentence, under 20 words, active voice. No em dashes.
 - At most 120 words. Shorter is better.
 

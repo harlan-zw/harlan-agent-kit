@@ -122,11 +122,10 @@ it('retries when the release worktree cannot be prepared', async () => {
 })
 
 it.each([
-  ['code in prose and a fence', 'Tags now render in `<head>` before `</body>`.\n\n```html\n<div>example</div>\n```\n\nSee <https://unhead.unjs.io>.'],
-  ['an indented code block', 'Use this markup:\n\n    <div>example</div>'],
-  ['a fence inside a list item', '- Use this markup:\n\n  ```html\n  <div>example</div>\n  ```'],
+  ['tags in inline code', 'Tags now render in `<head>` before `</body>`, and ``a `<b>` c`` stays code.'],
+  ['an autolink and an email autolink', 'See <https://unhead.unjs.io> or <team@example.com>.'],
   ['a less-than sign in prose', 'Supports Node <v20 or newer, and a < b comparisons.'],
-])('keeps HTML that sits in code: %s', (_name, notes) => {
+])('keeps a draft whose tags sit in inline code: %s', (_name, notes) => {
   expect(parseReleaseNoteResponse({ notes })).toEqual({ _tag: 'Ok', value: notes })
 })
 
@@ -134,7 +133,16 @@ it.each([
   ['a backtick in the fence info string', '```x`\n<!--'],
   ['an indented closing fence', '```\ncode\n   ```\n<!--'],
   ['an escaped backtick before a tag', 'Fixed \\`<details>` folding.'],
+  ['an escaped backslash before a real code span', 'Fixed \\\\`a` <b>` folding.'],
   ['an unclosed details block in a list', '- Fixed folding.\n\n<details>'],
-])('refuses raw HTML that escapes a code span or fence: %s', (_name, notes) => {
+  ['a setext underline after a comment opener', 'Thanks.\n<!--\n-'],
+  ['a fence that a list item closes', '- a\n  ```\n  b\ntext <details>'],
+  ['a tab after a quote marker', '> \t<!--'],
+  ['a footnote definition', 'Fixed folding.[^1]\n\n[^1]: <details>'],
+  ['a block tag without a closing bracket', 'Fixed folding.\n\n<details\nsummary'],
+  ['a generic type in prose', 'Array<string> now infers its item type.'],
+  ['a declaration', 'Fixed <!x> and <?php ?> handling.'],
+  ['HTML in fenced code, which a renderer may misread', '```html\n<div>example</div>\n```'],
+])('refuses a draft a renderer could read as HTML: %s', (_name, notes) => {
   expect(parseReleaseNoteResponse({ notes })._tag).toBe('Err')
 })
