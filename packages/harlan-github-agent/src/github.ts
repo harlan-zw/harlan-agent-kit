@@ -15,7 +15,9 @@ import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
+import { withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { err, ok } from './result.ts'
+import { normalizeReviewAutoMergeControl } from './review-auto-merge.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
 import { findingDiscussions, inlineReviewComment } from './review-finding-threads.ts'
 import { parsePullRequestCommand } from './review-rerun.ts'
@@ -978,7 +980,7 @@ export interface GitHubPullRequestMerger {
     expectedHeadSha: string
     method: AutoMergeMethod
     /** Review comment consent expires when this commit changes. */
-    onlyReviewedCommit?: true
+    onlyReviewedCommit?: { commentId: number, body: string }
     /** Synchronous current authority, checked again before a fallback merge. */
     authorize: (autoMerge: boolean) => Result<void, string>
   }, signal?: AbortSignal) => Promise<Result<MergeHandoff, GitHubReadError>>
@@ -1129,6 +1131,19 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
         const refusal = autoMergePullRequestRefusal(input.repository, input.expectedHeadSha, input.repository.defaultBranch, latest.value)
         if (refusal !== null)
           return err({ repository: input.repository.github, message: refusal })
+        if (input.onlyReviewedCommit !== undefined) {
+          const comment = await octokit.rest.issues.getComment({ owner, repo, comment_id: input.onlyReviewedCommit.commentId, ...request })
+            .then(response => ok(response.data.body ?? ''))
+            .catch(failure)
+          if (comment._tag === 'Err')
+            return comment
+          const body = comment.value.replaceAll('\r\n', '\n')
+          if (!/^- \[[xX]\] Enable auto-merge for this commit$/m.test(body)
+            || withoutLoggedFindingControls(normalizeReviewAutoMergeControl(body))
+            !== withoutLoggedFindingControls(githubAccountBody(input.onlyReviewedCommit.body, input.repository.githubAccount))) {
+            return err({ repository: input.repository.github, message: 'The Review comment no longer authorizes this merge.' })
+          }
+        }
         const authorization = input.authorize(hasAutoMergeLabel(labelNames(latest.value.labels)))
         if (authorization._tag === 'Err')
           return err({ repository: input.repository.github, message: authorization.error })
@@ -1146,7 +1161,7 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
           .catch(failure)
       }
 
-      if (input.onlyReviewedCommit === true)
+      if (input.onlyReviewedCommit !== undefined)
         return mergeNow()
 
       const pullRequest = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })

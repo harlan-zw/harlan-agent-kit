@@ -10215,6 +10215,32 @@ export function openJournalStore(
   }
 
   const requestReviewAutoMerge: JournalStore['requestReviewAutoMerge'] = (request, policy) => {
+    // A withdrawal revokes saved consent even while merge authority is paused or removed.
+    if (request.selection === 'Cleared') {
+      const saved = database.prepare(`
+        SELECT requests.review_run_id, publications.body, repositories.policy_json
+        FROM review_auto_merge_requests AS requests
+        JOIN review_publications AS publications ON publications.id = requests.publication_id
+        JOIN review_runs ON review_runs.id = requests.review_run_id
+        JOIN subjects ON subjects.id = review_runs.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+          AND review_runs.head_sha = ? AND publications.github_comment_id = ?
+          AND requests.handed_off = 0
+      `).all(request.repository, request.pullRequestNumber, request.headSha, request.commentId) as Array<{ review_run_id: string, body: string, policy_json: string }>
+      let cleared = false
+      for (const row of saved) {
+        const repository = JSON.parse(row.policy_json) as RepositoryMapping
+        if (withoutLoggedFindingControls(githubAccountBody(row.body, repository.githubAccount)) !== withoutLoggedFindingControls(request.beforeBody))
+          continue
+        const result = database.prepare(`
+          UPDATE review_auto_merge_requests SET selected = 0, edited_at = ?
+          WHERE review_run_id = ? AND handed_off = 0 AND edited_at <= ?
+        `).run(request.updatedAt, row.review_run_id, request.updatedAt)
+        cleared = result.changes === 1 || cleared
+      }
+      return cleared
+    }
     const context = getAutoMergeContext(request.repository, request.pullRequestNumber)
     if (!mutationsEnabled || context === null || context.pullRequest.headSha !== request.headSha)
       return false
