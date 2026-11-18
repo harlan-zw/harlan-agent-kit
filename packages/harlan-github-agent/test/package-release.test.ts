@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { packageReleaseCommand, planPackageRelease, releaseRequest, renderPackageRelease } from '../src/package-release.ts'
+import { packageReleaseCommand, planPackageRelease, releaseNoteApproval, releaseRequest, renderPackageRelease } from '../src/package-release.ts'
 
 const input = {
   title: 'fix: handle empty input',
@@ -117,4 +117,26 @@ it.each(['x', 'X'])('accepts clearing a pre-merge selection marked %s', (mark) =
   const payload = { action: 'edited', repository: { full_name: 'harlan-zw/example' }, issue: { number: 12, pull_request: {} }, sender: { login: 'harlan-zw' }, comment: { id: 99, user: { login: 'harlan-github-agent[bot]' }, body: before.replace(`[${mark}]`, '[ ]') }, changes: { body: { from: before } } }
   expect(releaseRequest('issue_comment', payload)).toMatchObject({ selected: false, before })
   expect(releaseRequest('issue_comment', { ...payload, comment: { ...payload.comment, body: `${payload.comment.body}changed` } })).toBeNull()
+})
+
+describe('release note approval', () => {
+  const marker = '<!-- harlan-agent-kit:package-release -->'
+  const before = `${marker}\nstatus\n\nPublished [example@1.0.1](https://example.com).\n\nRelease note draft for review.\n\n> \`\`\`markdown\n> - [ ] Add this draft to the GitHub release\n> \`\`\`\n\n- [ ] Add this draft to the GitHub release\n`
+  const edit = (from: string, to: string, sender = 'harlan-zw') => ({ action: 'edited', repository: { full_name: 'harlan-zw/example' }, issue: { number: 24, pull_request: {} }, sender: { login: sender }, comment: { id: 99, user: { login: 'harlan-github-agent[bot]' }, body: to }, changes: { body: { from } } })
+  const ticked = before.replace(/^- \[ \] Add this draft/m, '- [x] Add this draft')
+
+  it('reads one ticked apply control outside the quoted draft', () => {
+    expect(releaseNoteApproval('issue_comment', edit(before, ticked))).toEqual({ repository: 'harlan-zw/example', pullRequestNumber: 24, commentId: 99, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]', before })
+    expect(releaseNoteApproval('issue_comment', edit(before, before.replace(/^- \[ \] Add this draft/m, '- [X] Add this draft')))).not.toBeNull()
+  })
+
+  it.each([
+    ['a quoted control only', before.replace(/\n- \[ \] Add this draft to the GitHub release\n$/, '\n'), (body: string) => body.replace('> - [ ]', '> - [x]')],
+    ['two controls', `${before}- [ ] Add this draft to the GitHub release\n`, (body: string) => body.replace(/^- \[ \] Add/m, '- [x] Add')],
+    ['another edit beside the tick', before, (body: string) => `${body.replace(/^- \[ \] Add/m, '- [x] Add')}extra`],
+    ['an untick', ticked, (body: string) => body.replace(/^- \[x\] Add/m, '- [ ] Add')],
+    ['a comment without the marker', before.replace(marker, ''), (body: string) => body.replace(/^- \[ \] Add/m, '- [x] Add')],
+  ])('ignores %s', (_name, from, change) => {
+    expect(releaseNoteApproval('issue_comment', edit(from, change(from)))).toBeNull()
+  })
 })

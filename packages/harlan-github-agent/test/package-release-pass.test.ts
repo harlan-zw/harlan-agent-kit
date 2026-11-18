@@ -43,6 +43,7 @@ it('records no Incident when Pause stops an in-flight release request', async ()
             merge: async () => null,
             publish: async () => null,
             releaseNoteContext: async () => [],
+            applyReleaseNote: async () => '',
           }),
         })
       },

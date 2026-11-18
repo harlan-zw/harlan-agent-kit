@@ -1912,6 +1912,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             },
             apply: (request) => { store.requestPackageRelease(request) },
             command: command => store.queuePackageReleaseCommand(command),
+            approveNote: (request) => { store.approveReleaseNote(request) },
           },
           loggedFindingPickup: {
             allowedAuthor: userLogin,

@@ -1,5 +1,5 @@
 import type { LoggedFindingPickup } from './logged-finding-pickup.ts'
-import type { PackageReleaseCommand, PackageReleaseRequest } from './package-release.ts'
+import type { PackageReleaseCommand, PackageReleaseRequest, ReleaseNoteApproval } from './package-release.ts'
 import type { Result } from './result.ts'
 import type { ReviewApproval } from './review-approval.ts'
 import type { ReviewCancellation } from './review-cancel.ts'
@@ -8,7 +8,7 @@ import { Buffer } from 'node:buffer'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { H3 } from 'h3'
 import { loggedFindingPickup } from './logged-finding-pickup.ts'
-import { packageReleaseCommand, releaseRequest } from './package-release.ts'
+import { packageReleaseCommand, releaseNoteApproval, releaseRequest } from './package-release.ts'
 import { reviewApproval } from './review-approval.ts'
 import { reviewCancellation } from './review-cancel.ts'
 import { reviewCheckRerun } from './review-check-rerun.ts'
@@ -170,6 +170,8 @@ export interface WebhookAppOptions {
     actorLogin: (repository: string) => string | null
     apply: (request: PackageReleaseRequest & { requestId: string }) => void
     command?: (command: PackageReleaseCommand) => void
+    /** Harlan ticked the apply control below a Release note draft. */
+    approveNote?: (request: ReleaseNoteApproval & { requestId: string }) => void
   }
   loggedFindingPickup?: {
     allowedAuthor: string
@@ -238,6 +240,12 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
         && release.requestedBy.toLowerCase() === options.packageRelease.allowedAuthor.toLowerCase()
         && options.packageRelease.actorLogin(hint.repository)?.toLowerCase() === release.commentAuthor.toLowerCase()) {
         options.packageRelease.apply({ ...release, requestId: delivery })
+      }
+      const noteApproval = releaseNoteApproval(name, payload)
+      if (noteApproval !== null && options.packageRelease?.approveNote !== undefined
+        && noteApproval.requestedBy.toLowerCase() === options.packageRelease.allowedAuthor.toLowerCase()
+        && options.packageRelease.actorLogin(hint.repository)?.toLowerCase() === noteApproval.commentAuthor.toLowerCase()) {
+        options.packageRelease.approveNote({ ...noteApproval, requestId: delivery })
       }
       const pickup = loggedFindingPickup(name, payload)
       if (pickup !== null && options.loggedFindingPickup !== undefined
