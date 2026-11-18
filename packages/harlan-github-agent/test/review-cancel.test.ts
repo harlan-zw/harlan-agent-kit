@@ -87,6 +87,33 @@ describe('stop Service Review for a subagent', () => {
     store.close()
   })
 
+  it('lets authenticated control resume a stopped Review for the selected head', () => {
+    const store = openJournalStore(':memory:', true)
+    try {
+      const mapping = repositoryMapping()
+      const subject = pullRequestItem({ headSha: 'a'.repeat(40), mergeState: 'clean' })
+      const at = '2026-08-13T01:00:00.000Z'
+      store.syncRepositories([mapping], at)
+      store.setRepositoryWritesEnabled(mapping.github, true)
+      const observation = store.recordObservation({ externalId: 'open', observedAt: at, source: 'poll', subject })
+      if (observation._tag !== 'Inserted')
+        throw new Error('Expected a recorded pull request.')
+      const target = { repository: mapping.github, pullRequestNumber: subject.number, at }
+      expect(store.stopReviewForHead({ ...target, headSha: subject.headSha })).toEqual({ _tag: 'Stopped' })
+      const rerun = { ...target, revisionId: observation.revisionId, requestedBy: 'harlan-zw' }
+      expect(store.requestReviewRerun({ ...rerun, source: 'github_check_run', requestId: 'github', resumeStoppedHead: subject.headSha })).toEqual({ _tag: 'Rejected', reason: { _tag: 'ReviewStopped' } })
+      expect(store.requestReviewRerun({ ...rerun, source: 'dashboard', requestId: 'wrong-head', resumeStoppedHead: 'b'.repeat(40) })).toEqual({ _tag: 'Rejected', reason: { _tag: 'RevisionMismatch' } })
+      expect(store.claimNextAdversarialReviewTask('reviewer', at, 60000)).toBeNull()
+      const resumed = store.requestReviewRerun({ ...rerun, source: 'dashboard', requestId: 'resume', resumeStoppedHead: subject.headSha })
+      expect(resumed).toEqual({ _tag: 'Queued', taskId: expect.any(String) })
+      store.recordObservation({ externalId: 'poll-after-resume', observedAt: at, source: 'poll', subject })
+      expect(store.claimNextAdversarialReviewTask('reviewer', at, 60000)).toEqual(expect.objectContaining({ kind: 'adversarial_review', revisionId: observation.revisionId }))
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('leaves a completed Review in charge while its outcome is pending', () => {
     const store = openJournalStore(':memory:')
     const mapping = repositoryMapping()

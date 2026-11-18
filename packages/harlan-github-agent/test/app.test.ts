@@ -1368,7 +1368,7 @@ describe('dashboard HTTP app', () => {
     expect(cancellations).toEqual([])
   })
 
-  it('queues one review rerun from the dashboard', async () => {
+  it.each([undefined, 'c'.repeat(40)])('queues one review rerun from the dashboard with stopped head %s', async (resumeStoppedHead) => {
     const requests: unknown[] = []
     const revisionId = 'a'.repeat(64)
     const app = createAgentApp({
@@ -1393,7 +1393,7 @@ describe('dashboard HTTP app', () => {
     const response = await app.request(`http://${allowedHost}/api/reviews/rerun`, {
       method: 'POST',
       headers: { 'authorization': authorization, 'content-type': 'application/json', 'host': allowedHost, 'origin': allowedOrigin },
-      body: JSON.stringify({ repository: 'harlan-zw/example', pullRequestNumber: 24, revisionId }),
+      body: JSON.stringify({ repository: 'harlan-zw/example', pullRequestNumber: 24, revisionId, resumeStoppedHead }),
     })
 
     expect(response.status).toBe(200)
@@ -1402,6 +1402,7 @@ describe('dashboard HTTP app', () => {
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
       revisionId,
+      ...(resumeStoppedHead === undefined ? {} : { resumeStoppedHead }),
       source: 'dashboard',
       requestedBy: 'dashboard',
     })])
