@@ -8,7 +8,9 @@ export const AGENT_ACTOR_LOGIN = 'harlan-github-agent[bot]'
 
 /** Show advice without implying that a Logged finding requires Repair. */
 export function reviewFindingFollowUp(finding: Extract<ReviewFinding, { _tag: 'Logged' }>): string {
-  const action = finding.nextAction === undefined ? '' : cleanText(finding.nextAction).replaceAll(/\s+/g, ' ')
+  const action = finding.nextAction === undefined
+    ? ''
+    : cleanText(finding.nextAction).replaceAll(/\s+/g, ' ').replace(/^(?:optional follow-up[.:]\s*)+/i, '')
   return action === '' ? 'Optional follow-up.' : `Optional follow-up: ${action}`
 }
 

@@ -113,7 +113,7 @@ export async function refreshReviewGates(
         : finding)
     }
     const commands = acceptedPullRequestCommands(mapping, live.value.pullRequest, options.allowedAuthors ?? [])
-    const body = terminalComment(review.headSha, live.value.pullRequest.baseSha, gates, findings, confidence, reportedChecks, review.mergeRisk?.combined, review.repository, commands)
+    const body = terminalComment(review.headSha, live.value.pullRequest.baseSha, gates, findings, confidence, reportedChecks, review.mergeRisk?.combined, review.repository, commands, mapping.ownership)
     // A red default branch holds this review PENDING until someone repairs
     // it. No review lease exists here, so this is the only place that can
     // queue that repair. The store answers Existing on every later pass.
