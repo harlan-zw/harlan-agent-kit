@@ -1,10 +1,14 @@
 import type { Octokit } from 'octokit'
 import type { AutoMergeControllerOptions, AutoMergeEvent } from '../src/auto-merge-controller.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewGates } from '../src/types.ts'
+import { createHmac } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createGitHubPullRequestMerger } from '../src/github.ts'
 import { createAutoMergeController, openJournalStore } from '../src/index.ts'
 import { ok } from '../src/result.ts'
+import { REVIEW_AUTO_MERGE_CONTROL, withReviewAutoMergeControl } from '../src/review-auto-merge.ts'
+import { AUTOMATED_REVIEW_MARKER } from '../src/review-comment.ts'
+import { createWebhookApp } from '../src/webhook.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: ReturnType<typeof openJournalStore>[] = []
@@ -17,11 +21,13 @@ const gates: ReviewGates = {
   ci: { _tag: 'Passed', evidence: [] },
 }
 
-function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
+function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, source: 'label' | 'comment' = 'label') {
   const store = openJournalStore(':memory:', true)
   stores.push(store)
   const repository = repositoryMapping(every ? { autoMerge: { _tag: 'Every', minimumConfidence: 90 } } : {})
-  const pullRequest = pullRequestItem({ autoMerge: !every, mergeState: 'clean', baseRef: boundary === 'retarget' ? 'fix/parent' : 'main' })
+  const pullRequest = pullRequestItem({ autoMerge: !every && source === 'label', headSha: 'a'.repeat(40), mergeState: 'clean', baseRef: boundary === 'retarget' ? 'fix/parent' : 'main' })
+  const confidence = source === 'comment' ? 81 : 95
+  const reviewBody = withReviewAutoMergeControl(`${AUTOMATED_REVIEW_MARKER}\n<!-- reviewed-sha: ${pullRequest.headSha} -->\n### 🤖 READY · ${confidence}/100`, repository, pullRequest, confidence, undefined)
   store.syncRepositories([repository], started)
   store.setRepositoryWritesEnabled(repository.github, true)
   const observation = store.recordObservation({ externalId: 'initial', observedAt: started, source: 'poll', subject: pullRequest })
@@ -43,7 +49,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
     startedAt: started,
     completedAt: at,
     gates,
-    confidence: 95,
+    confidence,
     findings: [],
   })
   expect(recordReview('review', started)._tag).toBe('Inserted')
@@ -57,7 +63,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
       revisionId: observation.revisionId,
       expectedHeadSha: pullRequest.headSha,
       gates,
-      body: `READY ${at}`,
+      body: source === 'comment' ? reviewBody : `READY ${at}`,
       desiredOutcome: 'READY',
       at,
     })
@@ -81,7 +87,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
     user: { login: pullRequest.author },
     head: { sha: pullRequest.headSha, repo: { full_name: repository.github } },
     base: { ref: pullRequest.baseRef, sha: pullRequest.baseSha, repo: { full_name: repository.github } },
-    labels: every ? [] : [{ name: 'harlan-agent-auto-merge' }],
+    labels: pullRequest.autoMerge ? [{ name: 'harlan-agent-auto-merge' }] : [],
   }
   const options: AutoMergeControllerOptions = {
     policy: { _tag: 'Enabled', minimumConfidence: 90, method: 'squash' },
@@ -139,6 +145,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
     observe,
     policy,
     recordReview,
+    reviewBody,
     publish,
     run(change = () => {}, duringFinalRead = false) {
       duringRead = change
@@ -147,6 +154,55 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
     },
   }
 }
+
+describe('auto merge requested from a READY Review', () => {
+  it('hands off an authenticated owner click once at 81 confidence without a label', async () => {
+    const test = harness('enable', false, 'comment')
+    const secret = 'webhook-secret'
+    const app = createWebhookApp({
+      allowedOwners: ['harlan-zw'],
+      logger: { info() {} },
+      onHint() {},
+      reviewAutoMerge: {
+        allowedAuthor: 'harlan-zw',
+        actorLogin: () => 'harlan-github-agent[bot]',
+        apply: (request) => { test.store.requestReviewAutoMerge({ ...request, at: changed }, test.options.policy) },
+      },
+      secret,
+    })
+    const checked = test.reviewBody.replace(REVIEW_AUTO_MERGE_CONTROL, REVIEW_AUTO_MERGE_CONTROL.replace('[ ]', '[x]'))
+    const click = async (sender: string, before: string, commentId: number, delivery: string, at = started, selection: 'checked' | 'unchecked' = 'checked') => {
+      const after = selection === 'checked'
+        ? before.replace(REVIEW_AUTO_MERGE_CONTROL, REVIEW_AUTO_MERGE_CONTROL.replace('[ ]', '[x]'))
+        : test.reviewBody
+      const body = JSON.stringify({
+        action: 'edited',
+        repository: { full_name: test.repository.github },
+        issue: { number: test.pullRequest.number, pull_request: {} },
+        comment: { id: commentId, user: { login: 'harlan-github-agent[bot]' }, body: after, updated_at: at },
+        changes: { body: { from: before } },
+        sender: { login: sender },
+      })
+      await app.fetch(new Request('http://localhost/webhook', { method: 'POST', headers: { 'x-github-event': 'issue_comment', 'x-github-delivery': delivery, 'x-hub-signature-256': `sha256=${createHmac('sha256', secret).update(body).digest('hex')}` }, body }))
+    }
+
+    await click('contributor', test.reviewBody, 42, 'outside')
+    await click('harlan-zw', `${test.reviewBody}\nModified body`, 42, 'modified')
+    await click('harlan-zw', test.reviewBody, 41, 'old-comment')
+    await test.run()
+    expect(test.mutations).toEqual([])
+    await click('harlan-zw', test.reviewBody, 42, 'owner')
+    await click('harlan-zw', checked, 42, 'withdrawn', started, 'unchecked')
+    await click('harlan-zw', test.reviewBody, 42, 'late-replay')
+    await test.run()
+    expect(test.mutations).toEqual([])
+    await click('harlan-zw', test.reviewBody, 42, 'selected-again', changed)
+    await test.run()
+    await click('harlan-zw', test.reviewBody, 42, 'repeat', changed)
+    await test.run()
+    expect(test.mutations).toEqual(['enable'])
+  })
+})
 
 type Harness = ReturnType<typeof harness>
 const revocations: Array<[string, (test: Harness) => void]> = [

@@ -22,15 +22,20 @@ export interface AutoMergeControllerOptions {
   policy: AutoMergePolicy
   /** Every merge and every refusal is reported. A refusal never fails the poll. */
   report: (event: AutoMergeEvent) => void
-  store: Pick<JournalStore, 'getAutoMergeContext' | 'listReviewRuns'>
+  store: Pick<JournalStore, 'confirmReviewAutoMerge' | 'getAutoMergeContext' | 'listReviewRuns' | 'pendingReviewAutoMerge'>
 }
 
 export function createAutoMergeController(options: AutoMergeControllerOptions): AutoMergeController {
   return {
     async reconcile(repository, subject, signal) {
-      if (options.policy._tag === 'Disabled' || subject.kind !== 'pull_request' || !autoMergeCandidate(repository, subject))
+      if (options.policy._tag === 'Disabled' || repository.ownership !== 'owned' || subject.kind !== 'pull_request')
         return
-      if (subject.baseRef === undefined)
+      const baseRef = subject.baseRef
+      if (baseRef === undefined)
+        return
+      const requestedReview = () => options.store.pendingReviewAutoMerge(repository.github, subject.number, subject.headSha, baseRef) ?? undefined
+      const requestedReviewRunId = requestedReview()
+      if (!autoMergeCandidate(repository, subject) && requestedReviewRunId === undefined)
         return
       // Labels stay out of stored Revisions. The helper supplies its live GitHub label before each write.
       const currentContext = (autoMerge = subject.autoMerge) => {
@@ -60,7 +65,7 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
           repository: context.repository,
           number: subject.number,
           expectedHeadSha: subject.headSha,
-          expectedBaseRef: subject.baseRef,
+          expectedBaseRef: baseRef,
           authorize,
         }, signal)
         if (retargeted._tag === 'Err')
@@ -75,6 +80,7 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
         policy: options.policy,
         pullRequest: context.pullRequest,
         repository: context.repository,
+        ...(requestedReviewRunId === undefined ? {} : { requestedReviewRunId }),
       })
       if (decision._tag === 'Hold')
         return
@@ -92,11 +98,13 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
           if (current === null)
             return err('Auto merge lost its current authority before the GitHub write.')
           const currentAttempts = options.store.listReviewRuns(repository.github, subject.number)
+          const currentRequest = requestedReview()
           const currentDecision = autoMergeDecision({
             attempts: currentAttempts,
             policy: options.policy,
             pullRequest: current.pullRequest,
             repository: current.repository,
+            ...(currentRequest === undefined ? {} : { requestedReviewRunId: currentRequest }),
           })
           const currentPublication = currentAttempts.find(attempt => attempt.id === decision.reviewRunId)?.gatePublication
           return currentDecision._tag === 'Merge' && currentDecision.headSha === decision.headSha
@@ -110,6 +118,8 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
         options.report({ _tag: 'Refused', repository: repository.github, pullRequestNumber: subject.number, reason: handoff.error.message })
         return
       }
+      if (requestedReviewRunId === decision.reviewRunId)
+        options.store.confirmReviewAutoMerge(decision.reviewRunId)
       options.report(handoff.value._tag === 'AutoMergeEnabled'
         ? { _tag: 'AutoMergeEnabled', repository: repository.github, pullRequestNumber: subject.number }
         : { _tag: 'Merged', repository: repository.github, pullRequestNumber: subject.number, sha: handoff.value.sha })

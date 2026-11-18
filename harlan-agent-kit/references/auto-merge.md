@@ -106,6 +106,17 @@ requirement it knows about is met.
 
 Everything else waits for Harlan.
 
+## Request auto-merge from a Review
+
+On an owned repository, a READY Review comment can offer **Enable auto-merge for this commit**.
+The Review must reach 81/100 and meet any higher minimum set for that repository.
+The repository needs signed comment webhooks and the GitHub App or a separate automation account.
+
+Only Harlan can select the checkbox. The request covers the published Review for the current commit and target branch.
+Clear the checkbox to withdraw the request before the service hands it to GitHub.
+After handover, use GitHub's **Disable auto-merge** control to cancel.
+The existing merge safeguards and GitHub branch rules still apply.
+
 ## Label
 
 ```bash

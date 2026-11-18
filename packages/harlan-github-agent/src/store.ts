@@ -1,5 +1,6 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { AgentTurnStore } from './agent-turn-store.ts'
+import type { AutoMergePolicy } from './auto-merge.ts'
 import type { BatchStore } from './batch-store.ts'
 import type { TransientKind } from './failure.ts'
 import type { FindingThreadSyncStore } from './finding-thread-sync-store.ts'
@@ -19,6 +20,7 @@ import type { RepairRecoveryTarget } from './repair-recovery.ts'
 import type { RepairRoundPlan } from './repair-rounds.ts'
 import type { Result } from './result.ts'
 import type { ReviewApproval } from './review-approval.ts'
+import type { ReviewAutoMergeRequest } from './review-auto-merge.ts'
 import type { ReviewProofStore } from './review-proof-store.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type { TakeOwnershipStore } from './take-ownership-store.ts'
@@ -138,14 +140,17 @@ import { redactSecrets, truncateOutput } from './agent-activity.ts'
 import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSelection, providerAgentSelection, REASONING_EFFORTS, resolveAgentProfile, resolveAgentSelection } from './agent-profile.ts'
 import { RESULT_PHASE_RANK } from './agent-progress.ts'
 import { agentTurnSchema, createAgentTurnStore } from './agent-turn-store.ts'
+import { autoMergeDecision } from './auto-merge.ts'
 import { createBatchStore } from './batch-store.ts'
 import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
+import { githubAccountBody } from './github-account.ts'
 import { gitHubRateLimitRetryAt } from './github-rate-limit.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { createImplicitSignalStore, implicitSignalSchema, isAgentPullRequest, recordClosureSignal, recordHeadChangeSignal } from './implicit-signal-store.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
+import { withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { createLoggedFindingStore, loggedFindingSchema } from './logged-finding-store.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
 import { createPaybackStore } from './payback-store.ts'
@@ -154,6 +159,7 @@ import { repairRecoveryProof } from './repair-recovery.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canResolveConflictPullRequestHead, canWorkIssues } from './repository-policy.ts'
 import { err, ok } from './result.ts'
+import { REVIEW_AUTO_MERGE_CONTROL } from './review-auto-merge.ts'
 import { createReviewProofStore } from './review-proof-store.ts'
 import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
 import { buildStats } from './stats.ts'
@@ -1247,6 +1253,9 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   hasCurrentReviewAuthority: (repository: string, pullRequestNumber: number) => boolean
   /** Reads current Auto merge inputs only while operator authority remains active. */
   getAutoMergeContext: (repository: string, pullRequestNumber: number) => { repository: RepositoryMapping, pullRequest: Omit<GitHubPullRequestItem, 'approvalLabels' | 'autoMerge'> } | null
+  requestReviewAutoMerge: (request: ReviewAutoMergeRequest & { at: string }, policy: AutoMergePolicy) => boolean
+  pendingReviewAutoMerge: (repository: string, pullRequestNumber: number, headSha: string, baseRef: string) => string | null
+  confirmReviewAutoMerge: (reviewRunId: string) => void
   /** What this service already holds for one head commit. */
   storedReviewForHead: (repository: string, pullRequestNumber: number, headSha: string) => StoredReviewForHead
   /** Replaces one person's explicit judgment about one Review run. */
@@ -7477,7 +7486,21 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, checkRunRerunMigration)
     version = 101
   }
-  if (version === 101)
+  if (version === 101) {
+    applyMigration(database, `
+      CREATE TABLE IF NOT EXISTS review_auto_merge_requests (
+        review_run_id TEXT PRIMARY KEY NOT NULL REFERENCES review_runs(id) ON DELETE CASCADE,
+        publication_id TEXT NOT NULL REFERENCES review_publications(id) ON DELETE CASCADE,
+        requested_by TEXT NOT NULL,
+        requested_at TEXT NOT NULL,
+        edited_at INTEGER NOT NULL,
+        selected INTEGER NOT NULL CHECK (selected IN (0, 1)),
+        handed_off INTEGER NOT NULL DEFAULT 0 CHECK (handed_off IN (0, 1))
+      );
+      PRAGMA user_version = 102;`)
+    version = 102
+  }
+  if (version === 102)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -10189,6 +10212,67 @@ export function openJournalStore(
           repository: JSON.parse(row.policy_json) as RepositoryMapping,
           pullRequest: JSON.parse(row.payload) as Omit<GitHubPullRequestItem, 'approvalLabels' | 'autoMerge'>,
         }
+  }
+
+  const requestReviewAutoMerge: JournalStore['requestReviewAutoMerge'] = (request, policy) => {
+    const context = getAutoMergeContext(request.repository, request.pullRequestNumber)
+    if (!mutationsEnabled || context === null || context.pullRequest.headSha !== request.headSha)
+      return false
+    const { repository, pullRequest } = context
+    const attempts = listReviewRuns(repository.github, request.pullRequestNumber)
+    const before = withoutLoggedFindingControls(request.beforeBody)
+    if (!before.split('\n').includes(REVIEW_AUTO_MERGE_CONTROL))
+      return false
+    const review = attempts.find((review) => {
+      if (review.headSha !== request.headSha || review.baseRef !== pullRequest.baseRef || review.gatePublication._tag !== 'Published')
+        return false
+      const publicationId = review.gatePublication.publicationId
+      return review.publications.some(publication => publication.id === publicationId
+        && publication.result._tag === 'Published' && publication.result.githubCommentId === request.commentId
+        && withoutLoggedFindingControls(githubAccountBody(publication.body, repository.githubAccount)) === before)
+    })
+    if (review?.gatePublication._tag !== 'Published')
+      return false
+    const decision = autoMergeDecision({
+      attempts,
+      policy,
+      repository,
+      pullRequest: { ...pullRequest, approvalLabels: [], autoMerge: false },
+      requestedReviewRunId: review.id,
+    })
+    if (decision._tag !== 'Merge' || decision.reviewRunId !== review.id)
+      return false
+    // GitHub timestamps can tie. Prefer clearing consent on a tie so a
+    // replayed selection cannot undo the owner's cancellation.
+    return database.prepare(`
+      INSERT INTO review_auto_merge_requests (review_run_id, publication_id, requested_by, requested_at, edited_at, selected)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(review_run_id) DO UPDATE SET
+        publication_id = excluded.publication_id, requested_by = excluded.requested_by,
+        requested_at = excluded.requested_at, edited_at = excluded.edited_at, selected = excluded.selected
+      WHERE handed_off = 0 AND (excluded.edited_at > edited_at OR (excluded.edited_at = edited_at AND excluded.selected < selected))
+    `).run(review.id, review.gatePublication.publicationId, request.requestedBy, request.at, request.updatedAt, Number(request.selection === 'Selected')).changes === 1
+  }
+
+  const pendingReviewAutoMerge: JournalStore['pendingReviewAutoMerge'] = (repository, pullRequestNumber, headSha, baseRef) => {
+    const row = database.prepare(`
+      SELECT requests.review_run_id AS id
+      FROM review_auto_merge_requests AS requests
+      JOIN review_runs ON review_runs.id = requests.review_run_id
+      JOIN review_gate_projections ON review_gate_projections.review_run_id = review_runs.id
+        AND review_gate_projections.command_id = requests.publication_id
+      JOIN subjects ON subjects.id = review_runs.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ?
+        AND review_runs.head_sha = ? AND review_runs.base_ref = ? AND requests.selected = 1 AND requests.handed_off = 0
+      ORDER BY review_runs.completed_at DESC, review_runs.id DESC
+      LIMIT 1
+    `).get(repository, pullRequestNumber, headSha, baseRef) as { id: string } | undefined
+    return row?.id ?? null
+  }
+
+  const confirmReviewAutoMerge: JournalStore['confirmReviewAutoMerge'] = (reviewRunId) => {
+    database.prepare('UPDATE review_auto_merge_requests SET handed_off = 1 WHERE review_run_id = ?').run(reviewRunId)
   }
 
   const getReviewFixFindings: JournalStore['getReviewFixFindings'] = (repository, pullRequestNumber, revisionId) => {
@@ -17663,6 +17747,9 @@ export function openJournalStore(
     listReviewRuns,
     hasCurrentReviewAuthority,
     getAutoMergeContext,
+    requestReviewAutoMerge,
+    pendingReviewAutoMerge,
+    confirmReviewAutoMerge,
     storedReviewForHead,
     recordAgentFeedback,
     needsAttentionTask,

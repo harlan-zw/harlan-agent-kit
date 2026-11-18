@@ -1163,6 +1163,8 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
       const authorization = input.authorize(autoMerge)
       if (authorization._tag === 'Err')
         return err({ repository: input.repository.github, message: authorization.error })
+      if (pullRequest.value.auto_merge)
+        return ok({ _tag: 'AutoMergeEnabled' })
       return octokit.graphql(enableAutoMergeMutation, {
         pullRequestId: pullRequest.value.node_id,
         mergeMethod: graphqlMergeMethod(input.method),

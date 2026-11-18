@@ -10,6 +10,7 @@ import { H3 } from 'h3'
 import { loggedFindingPickup } from './logged-finding-pickup.ts'
 import { packageReleaseCommand, releaseNoteApproval, releaseRequest } from './package-release.ts'
 import { reviewApproval } from './review-approval.ts'
+import { reviewAutoMergeRequest } from './review-auto-merge.ts'
 import { reviewCancellation } from './review-cancel.ts'
 import { reviewCheckRerun } from './review-check-rerun.ts'
 
@@ -150,6 +151,11 @@ export interface WebhookAppOptions {
   allowedOwners: readonly string[]
   logger: { info: (message: string) => void }
   onHint: (repository: string, event: string) => void
+  reviewAutoMerge?: {
+    allowedAuthor: string
+    actorLogin: (repository: string) => string | null
+    apply: (request: NonNullable<ReturnType<typeof reviewAutoMergeRequest>>) => void
+  }
   reviewApproval?: {
     allowedAuthor: string
     actorLogin: (repository: string) => string | null
@@ -268,6 +274,12 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
         && options.allowedOwners.some(author => author.toLowerCase() === cancellation.requestedBy.toLowerCase())
         && options.reviewCancellation?.actorLogin(hint.repository)?.toLowerCase() === cancellation.commentAuthor.toLowerCase()) {
         options.reviewCancellation.apply({ ...cancellation, requestId: delivery })
+      }
+      const autoMerge = reviewAutoMergeRequest(name, payload)
+      if (autoMerge !== null && options.reviewAutoMerge !== undefined
+        && autoMerge.requestedBy.toLowerCase() === options.reviewAutoMerge.allowedAuthor.toLowerCase()
+        && options.reviewAutoMerge.actorLogin(hint.repository)?.toLowerCase() === autoMerge.commentAuthor.toLowerCase()) {
+        options.reviewAutoMerge.apply(autoMerge)
       }
       const rerun = reviewCheckRerun(name, payload)
       if (rerun !== null && options.reviewCheckRerun !== undefined
