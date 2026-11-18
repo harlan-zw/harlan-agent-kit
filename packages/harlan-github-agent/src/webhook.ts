@@ -3,6 +3,7 @@ import type { PackageReleaseCommand, PackageReleaseRequest } from './package-rel
 import type { Result } from './result.ts'
 import type { ReviewApproval } from './review-approval.ts'
 import type { ReviewCancellation } from './review-cancel.ts'
+import type { ReviewCheckRerun } from './review-check-rerun.ts'
 import { Buffer } from 'node:buffer'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { H3 } from 'h3'
@@ -10,6 +11,7 @@ import { loggedFindingPickup } from './logged-finding-pickup.ts'
 import { packageReleaseCommand, releaseRequest } from './package-release.ts'
 import { reviewApproval } from './review-approval.ts'
 import { reviewCancellation } from './review-cancel.ts'
+import { reviewCheckRerun } from './review-check-rerun.ts'
 
 /**
  * Events that change something this service acts on.
@@ -157,6 +159,12 @@ export interface WebhookAppOptions {
     actorLogin: (repository: string) => string | null
     apply: (request: ReviewCancellation & { requestId: string }) => void
   }
+  /** `appId` returns null where this service publishes no Review check run. */
+  reviewCheckRerun?: {
+    allowedAuthor: string
+    appId: (repository: string) => number | null
+    apply: (request: ReviewCheckRerun & { requestId: string }) => void
+  }
   packageRelease?: {
     allowedAuthor: string
     actorLogin: (repository: string) => string | null
@@ -252,6 +260,12 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
         && options.allowedOwners.some(author => author.toLowerCase() === cancellation.requestedBy.toLowerCase())
         && options.reviewCancellation?.actorLogin(hint.repository)?.toLowerCase() === cancellation.commentAuthor.toLowerCase()) {
         options.reviewCancellation.apply({ ...cancellation, requestId: delivery })
+      }
+      const rerun = reviewCheckRerun(name, payload)
+      if (rerun !== null && options.reviewCheckRerun !== undefined
+        && rerun.requestedBy.toLowerCase() === options.reviewCheckRerun.allowedAuthor.toLowerCase()
+        && options.reviewCheckRerun.appId(hint.repository) === rerun.appId) {
+        options.reviewCheckRerun.apply({ ...rerun, requestId: delivery })
       }
       options.logger.info(`Webhook: ${name} on ${hint.repository}.`)
       options.onHint(hint.repository, name)
