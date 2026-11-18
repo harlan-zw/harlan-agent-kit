@@ -260,6 +260,24 @@ describe('release note drafts', () => {
     task.database.close()
   })
 
+  it('keeps a failed Published announcement as a pass failure on every pass', async () => {
+    const task = setup()
+    await task.run()
+    task.click()
+    await task.run()
+    task.source.merge = vi.fn<PackageReleaseSource['merge']>(async () => ({ _tag: 'Publishing', tag: 'v1.0.1', sha: 'd'.repeat(40) }))
+    await task.run()
+    task.source.publish = vi.fn(async () => url)
+    task.source.comment = vi.fn(async () => {
+      throw new Error('The release comment no longer belongs to this Task.')
+    })
+    await expect(task.run()).rejects.toThrow('no longer belongs to this Task')
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Completed')
+    await expect(task.run()).rejects.toThrow('no longer belongs to this Task')
+    expect(task.logger.error).not.toHaveBeenCalled()
+    task.database.close()
+  })
+
   it('keeps offering releases when a published release comment cannot change', async () => {
     const task = setup()
     await publish(task)

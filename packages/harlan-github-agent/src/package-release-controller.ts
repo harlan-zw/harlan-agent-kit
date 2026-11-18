@@ -176,9 +176,11 @@ export async function reconcilePackageReleases(options: {
           record = transition(record, url)
         }
       }
-      if (record.state._tag === 'Completed') {
-        // A published release can only gain its draft line here. A failed write
-        // logs and retries next pass, so it never stops offers for this repository.
+      if (record.state._tag === 'Completed' && record.body.startsWith(packageReleaseStatus(record).trimEnd())) {
+        // The comment already announces the release, so only its draft line can
+        // change. A failed write logs and retries next pass, and never stops
+        // offers for this repository. A failed Published write still throws,
+        // so it stays a Service Incident until the announcement lands.
         const completed = record
         await report(completed).catch((error: unknown) => {
           if (error === paused || signal.aborted)
