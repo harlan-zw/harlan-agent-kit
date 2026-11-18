@@ -1466,6 +1466,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                 store,
                 now: () => now().getTime(),
                 signal,
+                logger: { error: message => options.logger.error(message) },
                 source: assertLease => createPackageReleaseSource({
                   repository,
                   responseCache: releaseResponseCache,

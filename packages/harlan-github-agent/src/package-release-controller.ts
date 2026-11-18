@@ -18,22 +18,25 @@ export interface PackageReleaseSource {
 }
 
 /**
- * Shows an Agent's draft as quoted text.
+ * Shows an Agent's draft as a quoted code block.
  *
- * A quoted line cannot start a release control. Every line terminator becomes
- * a newline first, because a multiline pattern also breaks on `\r` and U+2028.
- * An escaped comment opener cannot hide text or add a marker. The comment may
- * use Harlan's token, so a copied `@name` must not notify anyone.
+ * The comment may use Harlan's token, so the draft must not render as his
+ * Markdown. A code block shows mentions, issue references, links, and HTML as
+ * plain text. Its fence is longer than any backtick run in the draft, so the
+ * draft cannot close it. Every line is quoted, so none can start a release
+ * control. Every line terminator becomes a newline first, because a multiline
+ * pattern also breaks on `\r` and U+2028. An escaped comment opener keeps the
+ * release marker unique.
  */
 function quoteReleaseNote(text: string): string {
-  return text
+  const lines = text
     .replace(/\r\n?|[\u0085\u2028\u2029]/g, '\n')
     .replace(/<!--/g, '&lt;!--')
-    .replace(/@(?=[\w-])/g, '@\u200B')
     .trim()
     .split('\n')
-    .map(line => line.trim() === '' ? '>' : `> ${line}`)
-    .join('\n')
+  const longestBackticks = Math.max(0, ...lines.flatMap(line => [...line.matchAll(/`+/g)].map(run => run[0].length)))
+  const fence = '`'.repeat(Math.max(3, longestBackticks + 1))
+  return [`${fence}markdown`, ...lines, fence].map(line => line.trim() === '' ? '>' : `> ${line}`).join('\n')
 }
 
 function releaseNoteStatus(note: ReleaseNote | null): string {
@@ -74,6 +77,8 @@ export async function reconcilePackageReleases(options: {
   mayPublish: () => boolean
   now: () => number
   signal: AbortSignal
+  /** Receives a failed comment write on a published release, which never stops the pass. */
+  logger: { error: (message: string) => void }
 }): Promise<{ _tag: 'Completed' } | { _tag: 'Paused' }> {
   const { repository, store, now, signal } = options
   if (!options.webhookReady || !canReleasePackages(repository))
@@ -171,7 +176,19 @@ export async function reconcilePackageReleases(options: {
           record = transition(record, url)
         }
       }
-      await report(record)
+      if (record.state._tag === 'Completed') {
+        // A published release can only gain its draft line here. A failed write
+        // logs and retries next pass, so it never stops offers for this repository.
+        const completed = record
+        await report(completed).catch((error: unknown) => {
+          if (error === paused || signal.aborted)
+            throw error
+          options.logger.error(`${repository.github}#${completed.pullRequestNumber}: the published release comment could not change: ${error instanceof Error ? error.message : String(error)}`)
+        })
+      }
+      else {
+        await report(record)
+      }
     }
     if (store.listPackageReleases(repository.github).some(record => ['Queued', 'Prepared', 'Publishing'].includes(record.state._tag)))
       return { _tag: 'Completed' }

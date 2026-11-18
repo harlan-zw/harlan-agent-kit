@@ -21,6 +21,7 @@ it('records no Incident when Pause stops an in-flight release request', async ()
       record,
       reconcile: async () => {
         await reconcilePackageReleases({
+          logger: { error: () => undefined },
           repository,
           store,
           signal,
