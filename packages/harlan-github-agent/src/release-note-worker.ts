@@ -28,68 +28,21 @@ export function parseReleaseNoteResponse(value: unknown): Result<string, string>
     return err('The release note draft is empty.')
   if (notes.length > MAXIMUM_RELEASE_NOTE_LENGTH)
     return err(`The release note draft exceeds ${MAXIMUM_RELEASE_NOTE_LENGTH} characters.`)
-  if (containsRawHtml(notes))
-    return err('The release note draft contains raw HTML. Use Markdown, and put tags in inline code.')
+  if (canOpenHtmlOrFence(notes))
+    return err('The release note draft contains an angle bracket or a code fence. Name tags in words, and use inline code without angle brackets.')
   return ok(notes)
 }
 
-/** CommonMark HTML block start names. These open a block without a closing bracket. */
-const HTML_BLOCK_TAG = /<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[\s/>]|$)/im
-/** A complete tag. A colon or `@` after the name makes it an autolink instead. */
-const HTML_TAG = /<\/?[a-z][a-z0-9-]*(?:[\s/][^>\n]*)?>/i
-/** Comments, declarations, CDATA, and processing instructions. */
-const HTML_DECLARATION = /<[!?]/
-
 /**
  * The release comment shows a draft escaped, but the GitHub release renders it.
- * Raw HTML there could hide the disclosure or fold the changelog.
- *
- * Renderers disagree about fences, lists, tabs, and footnotes, so this check
- * trusts only inline code spans on one line. It refuses any other text that a
- * renderer could read as HTML, including HTML inside fenced code. The prompt
- * asks for tags in inline code, so a refused draft is drafted again.
+ * Raw HTML there could hide the disclosure or fold the changelog, and an open
+ * fence could turn the disclosure into code. Renderers disagree on code spans,
+ * fences, tables, and block tag names, so no scan can tell safe HTML from raw.
+ * Raw HTML needs an angle bracket, so a draft holds none and no fence at all.
+ * The prompt asks for tags in words, so a refused draft is drafted again.
  */
-function containsRawHtml(notes: string): boolean {
-  const prose = notes.split(/\r\n?|\n/).map(withoutCodeSpans).join('\n')
-  return HTML_DECLARATION.test(prose) || HTML_BLOCK_TAG.test(prose) || HTML_TAG.test(prose)
-}
-
-/** Removes CommonMark code spans from one line. An escaped backtick never opens one. */
-function withoutCodeSpans(line: string): string {
-  let prose = ''
-  let index = 0
-  while (index < line.length) {
-    const character = line[index]!
-    if (character === '\\') {
-      prose += line.slice(index, index + 2)
-      index += 2
-      continue
-    }
-    if (character !== '`') {
-      prose += character
-      index++
-      continue
-    }
-    const opener = runLength(line, index)
-    let close = index + opener
-    while (close < line.length && !(line[close] === '`' && runLength(line, close) === opener))
-      close += line[close] === '`' ? runLength(line, close) : 1
-    if (close >= line.length) {
-      // No closing run of the same length, so these backticks are text.
-      prose += line.slice(index, index + opener)
-      index += opener
-      continue
-    }
-    index = close + opener
-  }
-  return prose
-}
-
-function runLength(line: string, start: number): number {
-  let end = start
-  while (line[end] === '`')
-    end++
-  return end - start
+function canOpenHtmlOrFence(notes: string): boolean {
+  return notes.includes('<') || /```|~~~/.test(notes)
 }
 
 export function releaseNotePrompt(task: ClaimedReleaseNote, workspace: PreparedWorkerWorkspace): string {
@@ -114,7 +67,7 @@ Destination: the introduction above the generated changelog on the GitHub releas
 - Keep a measured number only with its baseline and a source link from the pull requests.
 - Leave out tests, refactors, internal names, and headings.
 - Do not add a disclosure line. The controller adds it.
-- Use Markdown only. Write any HTML tag or generic type in inline code, such as \`<head>\` or \`Array<string>\`.
+- Never write the less-than character or a code fence. Name an HTML tag in words, such as the head tag. Use inline code for names, such as \`useHead\`.
 - One idea per sentence, under 20 words, active voice. No em dashes.
 - At most 120 words. Shorter is better.
 

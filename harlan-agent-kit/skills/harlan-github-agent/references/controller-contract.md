@@ -365,7 +365,7 @@ Add a draft to the GitHub release only after Harlan ticks its apply control on t
 Use the release credential. Prepend the draft once, with its disclosure and marker, and keep the generated changelog.
 A failed draft or a failed edit never blocks, reopens, or stops the published release.
 Settle an edit that GitHub refuses with a 4xx. Retry 401, rate limits, and other failures.
-Refuse a draft with raw HTML outside code. Count a running draft before a Service restart.
+Refuse a draft with an angle bracket or a code fence. Count a running draft before a Service restart.
 
 Read the package README in the Service checkout for repository setup and adapter limits.
 Do not enable this adapter for custom version generators or non-npm publishing destinations.

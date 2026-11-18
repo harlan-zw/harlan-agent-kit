@@ -122,14 +122,25 @@ it('retries when the release worktree cannot be prepared', async () => {
 })
 
 it.each([
-  ['tags in inline code', 'Tags now render in `<head>` before `</body>`, and ``a `<b>` c`` stays code.'],
-  ['an autolink and an email autolink', 'See <https://unhead.unjs.io> or <team@example.com>.'],
-  ['a less-than sign in prose', 'Supports Node <v20 or newer, and a < b comparisons.'],
-])('keeps a draft whose tags sit in inline code: %s', (_name, notes) => {
+  ['tags named in words and inline code', 'Tags now render in the head tag before `useHead()` returns.'],
+  ['links, bullets, and a quote', 'See the [guide](https://unhead.unjs.io/guide).\n\n- Faster builds.\n- Fewer requests.\n\n> Requires Node 20.'],
+  ['an escaped less-than entity', 'Supports Node &lt;20 or newer, and a &gt; b comparisons.'],
+])('keeps a draft with no angle bracket or fence: %s', (_name, notes) => {
   expect(parseReleaseNoteResponse({ notes })).toEqual({ _tag: 'Ok', value: notes })
 })
 
 it.each([
+  ['tags in inline code', 'Tags now render in `<head>` before `</body>`.'],
+  ['an autolink', 'See <https://unhead.unjs.io>.'],
+  ['a code span over two lines', 'Fixed a ` b\nc ` <details> ` d'],
+  ['an autolink before a backtick', 'See <http://x`> <details> `'],
+  ['a tag attribute before a backtick', 'Use <span title="`"> <details> `'],
+  ['a table cell split', '| `a | </table><details> | b` |\n| - | - | - |'],
+  ['an uppercase tag', 'Fixed <DETAILS open> handling.'],
+  ['a source tag with an open quote', 'Fixed.\n\n<source x=\''],
+  ['a tag over three lines', 'Fixed <s\na\nb> stuff'],
+  ['an unclosed backtick fence', 'Highlights.\n\n```'],
+  ['an unclosed tilde fence', 'Highlights.\n\n~~~'],
   ['a backtick in the fence info string', '```x`\n<!--'],
   ['an indented closing fence', '```\ncode\n   ```\n<!--'],
   ['an escaped backtick before a tag', 'Fixed \\`<details>` folding.'],
