@@ -487,6 +487,12 @@ A Batch owns no Item, like a Routine, so it holds its own lease. Only Routine-fi
 
 Use Batch. Do not use group, bundle, orchestration, or wave. The Agent that plans it is the Batch planning turn, never an orchestrator. A unit's Agent is an Agent, never a sub agent or worker.
 
+### Release note draft
+
+One Agent's proposed introduction for a published package release. The release comment shows it as a quoted code block for Harlan to review. It never changes the GitHub release.
+
+The Agent follows Brundlefly `release-notes`. Use Release note draft. Do not use summary, changelog, or announcement for it.
+
 ### Issue triage
 
 One agent Task that assesses one exact issue state.

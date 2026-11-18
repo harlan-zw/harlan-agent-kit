@@ -2,10 +2,11 @@ import type { DependencyUpdateLabel, PublishedPath } from './dependency-update-l
 import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubPullRequestPublisher, GitHubSource } from './github.ts'
+import type { ClaimedReleaseNote } from './package-release-store.ts'
 import type { PublicationRemote } from './publication-scheduler.ts'
 import type { RepairRecoveryArtifact, RepairRecoveryWorktrees } from './repair-recovery.ts'
 import type { Result } from './result.ts'
-import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedBatch, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase, RoutineIssueSource } from './types.ts'
+import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedBatch, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase, RepositoryMapping, RoutineIssueSource } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -97,6 +98,8 @@ export interface PreparedWorkerWorkspace {
   path: string
 }
 
+export type ReleaseNoteWorkspaceTask = ClaimedReleaseNote & { repositoryMapping: RepositoryMapping }
+
 export interface PreparedRoutineWorkspace extends PreparedWorkerWorkspace {
   defaultBranchSha: string
 }
@@ -131,6 +134,8 @@ export interface AgentWorkspaceManager {
   prepareRoutine: (task: ClaimedRoutineRun, signal: AbortSignal) => Promise<Result<PreparedRoutineWorkspace, string>>
   /** A Batch planning turn reads the default branch, so it can see which issues touch the same code. */
   prepareBatch: (batch: ClaimedBatch, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
+  /** Checks out the published commit. `baseSha` is the previous release, so the range is exact. */
+  prepareReleaseNote: (task: ReleaseNoteWorkspaceTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   verifyReview: (task: ClaimedAdversarialReviewTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
@@ -868,7 +873,7 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
 
 export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOptions): AgentWorkspaceManager {
   async function prepareRepository(
-    task: ClaimedAdversarialReviewTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask | ClaimedRoutineRun | ClaimedBatch,
+    task: ClaimedAdversarialReviewTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueTriageTask | ClaimedIssueWorkTask | ClaimedRoutineRun | ClaimedBatch | ReleaseNoteWorkspaceTask,
     label: string,
     refs: string[],
     headRef: string,
@@ -904,6 +909,26 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
         baseRef,
         signal,
       )
+    },
+
+    async prepareReleaseNote(task, signal) {
+      const key = task.id.slice(0, 12)
+      const releaseRef = `refs/harlan-github-agent/release-notes/${key}/release`
+      const previousRef = `refs/harlan-github-agent/release-notes/${key}/previous`
+      const prepared = await prepareRepository(
+        task,
+        `release-note-${key}`,
+        [`+${task.sha}:${releaseRef}`, `+refs/tags/${task.previousTag}:${previousRef}`],
+        releaseRef,
+        signal,
+      )
+      if (prepared._tag === 'Err')
+        return prepared
+      // An annotated tag names a tag object. Peel it to the commit the range starts from.
+      const previous = await runGitScalar(task.repositoryMapping.checkout, ['rev-parse', `${previousRef}^{commit}`], signal)
+      return previous.exitCode === 0
+        ? ok({ ...prepared.value, baseSha: previous.stdout })
+        : err(`Could not resolve the previous release ${task.previousTag}: ${previous.stderr}`)
     },
 
     async prepareRoutine(task, signal) {

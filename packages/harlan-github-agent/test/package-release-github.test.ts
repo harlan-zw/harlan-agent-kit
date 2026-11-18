@@ -33,6 +33,7 @@ it('stops a release comment retry when Pause arrives during authentication refre
     invalidate: () => {},
   }
   const run = () => reconcilePackageReleases({
+    logger: { error: () => undefined },
     repository: mapping,
     webhookReady: true,
     store,
@@ -94,6 +95,7 @@ it('stops the Octokit request when Pause arrives during credential acquisition',
   }
   try {
     const result = await reconcilePackageReleases({
+      logger: { error: () => undefined },
       repository: mapping,
       webhookReady: true,
       store,
@@ -356,7 +358,7 @@ it.each(['feat(nuxt)!: require Nuxt 4.6', 'refactor!: remove the old API'])('dis
 it('keeps one manual release comment across restarts and replaces it when a patch becomes eligible', async () => {
   const task = fixture()
   const database = new DatabaseSync(':memory:')
-  const run = () => reconcilePackageReleases({ repository: mapping, webhookReady: true, mayPublish: () => true, store: createPackageReleaseStore(database), source: () => task.source, now: () => Date.now(), signal: new AbortController().signal })
+  const run = () => reconcilePackageReleases({ logger: { error: () => undefined }, repository: mapping, webhookReady: true, mayPublish: () => true, store: createPackageReleaseStore(database), source: () => task.source, now: () => Date.now(), signal: new AbortController().signal })
   task.openSource('feat!: remove the old API')
   await run()
   await run()
@@ -433,7 +435,7 @@ it.each(['failure', 'cancelled', 'timed_out'])('records a completed %s release w
   store.saveReleaseOffer({ repository: mapping.github, pullRequestNumber: 24, plan, commentId: 99, body: '', policy: JSON.stringify(mapping) })
   store.requestPackageRelease({ repository: mapping.github, pullRequestNumber: 24, commentId: 99, before: '', selected: true, requestId: 'select', requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })
   const source = { ...task.source, prepare: async () => ({ _tag: 'Publishing' as const, tag: 'v1.0.1', sha: 'c'.repeat(40) }) }
-  const run = () => reconcilePackageReleases({ webhookReady: true, repository: mapping, mayPublish: () => true, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
+  const run = () => reconcilePackageReleases({ logger: { error: () => undefined }, webhookReady: true, repository: mapping, mayPublish: () => true, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
   await run()
   expect(store.listPackageReleases(mapping.github)[0]).toMatchObject({ plan: { version: '1.0.1' }, state: { _tag: 'Blocked', reason: 'Release workflow failed: https://github.com/run/1. Review that workflow before requesting recovery.' } })
   const writes = [...task.writes]
@@ -470,7 +472,7 @@ it('recreates a deleted release comment so one pass still advances the record', 
   const store = createPackageReleaseStore(new DatabaseSync(':memory:'))
   store.saveReleaseOffer({ repository: mapping.github, pullRequestNumber: 24, plan, commentId: 99, body: '', policy: JSON.stringify(mapping) })
   expect(store.requestPackageRelease({ repository: mapping.github, pullRequestNumber: 24, commentId: 99, before: '', selected: true, requestId: 'select', requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })).toBe(true)
-  await reconcilePackageReleases({ webhookReady: true, repository: mapping, mayPublish: () => true, store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
+  await reconcilePackageReleases({ logger: { error: () => undefined }, webhookReady: true, repository: mapping, mayPublish: () => true, store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
   expect(task.writes.some(write => write.path === '/issues/24/comments')).toBe(true)
   expect(store.listPackageReleases(mapping.github)[0]?.state).toEqual({ _tag: 'Prepared', pullRequestNumber: 25, headSha: 'c'.repeat(40), branch: 'release/24-1.0.1' })
 })
@@ -547,7 +549,7 @@ it('releases a preselected pull request only after merge and passing default bra
   task.openSource()
   const db = new DatabaseSync(':memory:')
   const store = createPackageReleaseStore(db)
-  const run = () => reconcilePackageReleases({ webhookReady: true, repository: mapping, mayPublish: () => true, store: createPackageReleaseStore(db), source: () => task.source, now: () => 1000, signal: new AbortController().signal })
+  const run = () => reconcilePackageReleases({ logger: { error: () => undefined }, webhookReady: true, repository: mapping, mayPublish: () => true, store: createPackageReleaseStore(db), source: () => task.source, now: () => 1000, signal: new AbortController().signal })
   store.queuePackageReleaseCommand({ repository: mapping.github, pullRequestNumber: 24, commentId: 101, requestedBy: 'harlan-zw', bump: 'auto' })
   await run()
   await run()
@@ -594,4 +596,38 @@ it('writes a maintained repository release with the user credential even when th
     { method: 'POST', path: '/repos/nuxt-modules/example/issues/24/comments', authorization: 'token user-token' },
   ])
   expect(appTokens.getToken).not.toHaveBeenCalled()
+})
+
+it('reads merged pull requests named in the published range for the release note draft', async () => {
+  const tokens = { getToken: async () => ({ _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }
+  const paths: string[] = []
+  const commit = (message: string) => ({ sha: 'c'.repeat(40), commit: { message } })
+  const pulls: Record<string, unknown> = {
+    20: { number: 20, title: 'fix: handle input', body: `Handles empty input.${'x'.repeat(5000)}`, merged_at: '2026-11-17T00:00:00Z' },
+    21: { number: 21, title: 'perf: cache reads', body: null, merged_at: '2026-11-17T00:00:00Z' },
+    23: { number: 23, title: 'chore(release): prepare v1.0.1', body: 'Release.', merged_at: '2026-11-17T00:00:00Z' },
+  }
+  const source = createPackageReleaseSource({
+    repository: mapping,
+    actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
+    template: async () => '',
+    assertLease: () => {},
+    review: () => ({ _tag: 'None' }),
+    signal: new AbortController().signal,
+    now: () => new Date(),
+    createClient: clientOptions => new Octokit({ ...clientOptions, retry: { enabled: false }, throttle: { enabled: false }, request: { fetch: async (input: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(new Request(input, init).url).pathname
+      paths.push(path)
+      if (path.endsWith(`/compare/v1.0.0...${'d'.repeat(40)}`))
+        return Response.json({ commits: [commit('fix: handle input (#20)\n\nBody'), commit('perf: cache reads (#21)'), commit('docs: typo'), commit('fix: see issue (#22)'), commit('chore(release): prepare v1.0.1 (#23)')] })
+      const number = /\/pulls\/(\d+)$/.exec(path)?.[1]
+      if (number !== undefined)
+        return number in pulls ? Response.json(pulls[number]) : Response.json({ message: 'Not Found' }, { status: 404 })
+      throw new Error(`Unexpected request ${path}`)
+    } } }),
+  })
+  const pullRequests = await source.releaseNoteContext({ ...record, state: { _tag: 'Publishing', tag: 'v1.0.1', sha: 'd'.repeat(40) } })
+  expect(pullRequests.map(pull => pull.number)).toEqual([20, 21])
+  expect(pullRequests[0]?.body).toHaveLength(4000)
+  expect(pullRequests[1]).toEqual({ number: 21, title: 'perf: cache reads', body: '' })
 })

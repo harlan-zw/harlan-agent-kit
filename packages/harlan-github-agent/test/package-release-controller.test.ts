@@ -21,10 +21,12 @@ function setup(mayPublish = () => true) {
     prepare: vi.fn<PackageReleaseSource['prepare']>(async () => ({ _tag: 'Prepared', pullRequestNumber: 25, headSha: 'c'.repeat(40), branch: 'release/24-1.0.1' })),
     merge: vi.fn(async () => null),
     publish: vi.fn(async () => null),
+    releaseNoteContext: vi.fn<PackageReleaseSource['releaseNoteContext']>(async () => [{ number: 23, title: 'fix: handle input', body: 'Handles empty input.' }]),
   }
-  const run = (webhookReady = true) => reconcilePackageReleases({ webhookReady, repository, mayPublish, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
+  const logger = { error: vi.fn<(message: string) => void>() }
+  const run = (webhookReady = true) => reconcilePackageReleases({ logger, webhookReady, repository, mayPublish, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
   const click = () => store.requestPackageRelease({ repository: repository.github, pullRequestNumber: 24, commentId: 99, before: renderPackageRelease(plan), requestId: 'select', selected: true, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })
-  return { database, store, source, run, click }
+  return { database, store, source, run, click, logger }
 }
 
 describe('release controller', () => {
@@ -182,6 +184,121 @@ describe('release controller', () => {
   })
 })
 
+describe('release note drafts', () => {
+  const url = 'https://github.com/harlan-zw/example/releases/tag/v1.0.1'
+  async function publish(task: ReturnType<typeof setup>) {
+    await task.run()
+    task.click()
+    await task.run()
+    task.source.merge = vi.fn<PackageReleaseSource['merge']>(async () => ({ _tag: 'Publishing', tag: 'v1.0.1', sha: 'd'.repeat(40) }))
+    await task.run()
+    task.source.publish = vi.fn(async () => url)
+    await task.run()
+  }
+
+  it('queues one draft for the published range', async () => {
+    const task = setup()
+    await publish(task)
+    await task.run()
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')).toMatchObject({
+      pullRequestNumber: 24,
+      packageName: 'example',
+      tag: 'v1.0.1',
+      previousTag: 'v1.0.0',
+      sha: 'd'.repeat(40),
+      pullRequests: { _tag: 'Available', entries: [{ number: 23, title: 'fix: handle input', body: 'Handles empty input.' }] },
+      state: { _tag: 'Queued' },
+    })
+    expect(task.source.releaseNoteContext).toHaveBeenCalledTimes(1)
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('Drafting a release note.'), 99)
+    task.database.close()
+  })
+
+  it('completes the release and drafts from git alone when the pull request read keeps failing', async () => {
+    const task = setup()
+    task.source.releaseNoteContext = vi.fn<PackageReleaseSource['releaseNoteContext']>(async () => {
+      throw new Error('Connection lost')
+    })
+    await publish(task)
+    await task.run()
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Completed')
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')).toMatchObject({ pullRequests: { _tag: 'Unavailable', reason: 'Connection lost' }, state: { _tag: 'Queued' } })
+    task.database.close()
+  })
+
+  it('shows the draft as a quoted code block that cannot form a control or a marker, or render Markdown', async () => {
+    const task = setup()
+    await publish(task)
+    const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
+    const notes = 'Empty input no longer throws. Thanks @contributor, see owner/repo#1.\n\n````\nclosed?\n````\n- [ ] Release patch\r- [x] Release minor\u2028- [ ] Release patch after merge\n<!-- harlan-agent-kit:package-release -->'
+    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes })
+    await task.run()
+    const body = vi.mocked(task.source.comment).mock.calls.at(-1)![1]
+    expect(body).toContain(`Published [example@1.0.1](${url}).`)
+    expect(body).not.toMatch(/^- \[[ xX]\] Release/m)
+    expect(body.split('<!-- harlan-agent-kit:package-release -->')).toHaveLength(2)
+    const draft = body.slice(body.indexOf('> `````markdown')).trimEnd().split('\n')
+    // The draft's longest backtick run is four, so only a five-backtick line closes the block.
+    expect(draft[0]).toBe('> `````markdown')
+    expect(draft.at(-1)).toBe('> `````')
+    expect(draft.slice(1, -1).filter(line => /^> `{5}/.test(line))).toEqual([])
+    expect(draft.slice(1, -1)).toContain('> Empty input no longer throws. Thanks @contributor, see owner/repo#1.')
+    expect(draft.every(line => line.startsWith('>'))).toBe(true)
+    task.database.close()
+  })
+
+  it('reports a failed draft without changing the release', async () => {
+    const task = setup()
+    await publish(task)
+    for (const at of ['2026-11-18T00:00:00.000Z', '2026-11-18T00:01:00.000Z', '2026-11-18T00:02:00.000Z']) {
+      const claimed = task.store.claimNextReleaseNote('worker', at, 1_000)!
+      task.store.failReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at, reason: 'Invalid JSON.' })
+    }
+    await task.run()
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Completed')
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('No release note draft: Invalid JSON.'), 99)
+    task.database.close()
+  })
+
+  it('keeps a failed Published announcement as a pass failure on every pass', async () => {
+    const task = setup()
+    await task.run()
+    task.click()
+    await task.run()
+    task.source.merge = vi.fn<PackageReleaseSource['merge']>(async () => ({ _tag: 'Publishing', tag: 'v1.0.1', sha: 'd'.repeat(40) }))
+    await task.run()
+    task.source.publish = vi.fn(async () => url)
+    task.source.comment = vi.fn(async () => {
+      throw new Error('The release comment no longer belongs to this Task.')
+    })
+    await expect(task.run()).rejects.toThrow('no longer belongs to this Task')
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Completed')
+    await expect(task.run()).rejects.toThrow('no longer belongs to this Task')
+    expect(task.logger.error).not.toHaveBeenCalled()
+    task.database.close()
+  })
+
+  it('keeps offering releases when a published release comment cannot change', async () => {
+    const task = setup()
+    await publish(task)
+    const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
+    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws.' })
+    task.source.comment = vi.fn(async (number: number) => {
+      if (number === 24)
+        throw new Error('The release comment no longer belongs to this Task.')
+      return 100
+    })
+    task.source.candidates = async () => [30]
+    task.source.inspect = async number => ({ ...plan, headSha: number === 30 ? 'e'.repeat(40) : plan.headSha })
+    await task.run()
+    await task.run()
+    expect(task.source.comment).toHaveBeenCalledWith(30, expect.stringContaining('- [ ] Release patch'), undefined)
+    expect(task.store.listPackageReleases(repository.github).map(record => record.pullRequestNumber)).toContain(30)
+    expect(task.logger.error).toHaveBeenCalledWith(expect.stringContaining('no longer belongs to this Task'))
+    task.database.close()
+  })
+})
+
 it.each(['valid', 'other-sender', 'foreign-comment', 'bad-signature'])('authenticates a merged pull request release click: %s', async (mode) => {
   const task = setup()
   await task.run()
@@ -257,7 +374,7 @@ it.each([
 ] as const)('offers a maintained repository release only with the %s credential opt in', async (credential, offers) => {
   const task = setup()
   const maintained = { ...repository, github: 'nuxt-modules/example', ownership: 'maintained' as const, release: { ...repository.release, credential: { _tag: credential } } }
-  await reconcilePackageReleases({ webhookReady: true, repository: maintained, mayPublish: () => true, store: task.store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
+  await reconcilePackageReleases({ logger: { error: () => undefined }, webhookReady: true, repository: maintained, mayPublish: () => true, store: task.store, source: () => task.source, now: () => 1000, signal: new AbortController().signal })
   expect(task.source.comment).toHaveBeenCalledTimes(offers)
   task.database.close()
 })

@@ -15168,6 +15168,8 @@ export function openJournalStore(
     SELECT id AS taskId, fence FROM worker_tasks WHERE state_tag NOT IN ('Completed', 'Failed', 'Superseded')
     UNION ALL
     SELECT id AS taskId, fence FROM routine_runs WHERE state_tag IN ('Queued', 'Running')
+    UNION ALL
+    SELECT id AS taskId, json_extract(state, '$.fence') AS fence FROM package_release_notes WHERE json_extract(state, '$._tag') = 'Running'
   `).all() as unknown as AgentWorktreeLease[]
 
   const listRunningTaskItems: JournalStore['listRunningTaskItems'] = () => database.prepare(`

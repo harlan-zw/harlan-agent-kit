@@ -357,6 +357,11 @@ This release authority does not permit merging unrelated pull requests.
 Publish a tag through the controller, then verify the existing GitHub Actions workflow and npm version.
 Keep progress in one self-identified release comment. Resume the same version after failures.
 Workers gain no GitHub or npm publication authority.
+After publication, queue one Release note draft for that version. Draft it in a fresh Agent turn from the exact tag range.
+The Agent holds no GitHub write credential. The controller reads only its answer.
+If the pull request read fails, draft from the tag range alone. Never hold a published release for a draft.
+Show the draft as a quoted code block in the release comment, so it renders no mention or reference. Never change the GitHub release from a draft.
+A failed draft never blocks, reopens, or changes the published release.
 
 Read the package README in the Service checkout for repository setup and adapter limits.
 Do not enable this adapter for custom version generators or non-npm publishing destinations.
