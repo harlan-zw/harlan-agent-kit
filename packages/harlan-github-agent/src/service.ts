@@ -96,6 +96,7 @@ import { publishStoppedReviews } from './review-stop-sweep.ts'
 import { planRoutineRuns, retireUnmappedRoutines, syncRepositoryRoutines } from './routine-controller.ts'
 import { createRoutineReportController } from './routine-report-controller.ts'
 import { ROUTINE_SPEC_PATH } from './routine-spec.ts'
+import { createRoutineTaskScheduler } from './routine-task-scheduler.ts'
 import { createRoutineScanWorker } from './routine-worker.ts'
 import { resolveRecoveredRunnerIncidents } from './runner-lost-recovery.ts'
 import { clearAbandonedRunningLabels } from './running-label-sweep.ts'
@@ -1017,13 +1018,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }),
         workerId: randomUUID(),
       })),
-      routines: createWorkerTaskScheduler({
+      routines: createRoutineTaskScheduler({
         // A manual choice checks its own provider. It cannot reopen the global Queue.
         canClaim: () => store.getAgentControl()._tag === 'Running' && restartAllowsTaskClaims(store.getRestartRequest()),
-        claim: (workerId, at, leaseMilliseconds) => store.claimNextRoutineRun(workerId, at, leaseMilliseconds, selection => selection === undefined
+        store,
+        canStartAgent: (selection, at) => selection === undefined
           ? canClaimRoutineRun(canClaim(), config.triggers, store, at, rateLimits.read().length === 0)
           : hasSpendableCapacity(capacity.read(selection.provider, selection.model ?? agentProfile(selection.provider).roles.routine_scan.model), config.agent.reservePercent[selection.provider])
-            && store.providerCanStart({ provider: selection.provider, credential: agentProfile(selection.provider).authentication, model: selection.model ?? agentProfile(selection.provider).roles.routine_scan.model, at })),
+            && store.providerCanStart({ provider: selection.provider, credential: agentProfile(selection.provider).authentication, model: selection.model ?? agentProfile(selection.provider).roles.routine_scan.model, at }),
         complete: store.completeRoutineRun,
         fail: store.failRoutineRun,
         heartbeat: store.heartbeatRoutineRun,

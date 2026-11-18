@@ -1,9 +1,11 @@
 import type { Trial } from '../src/trials.ts'
 import type { ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
+import { createAgentPermitPool } from '../src/agent-permit-pool.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { collectReadyDigest } from '../src/ready-digest.ts'
 import { ok } from '../src/result.ts'
+import { createRoutineTaskScheduler } from '../src/routine-task-scheduler.ts'
 import { createRoutineScanWorker } from '../src/routine-worker.ts'
 import { getRoutine } from '../src/routines/index.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -175,16 +177,13 @@ describe('ready-digest', () => {
     expect(digest.markdown).toContain('1 more pull request not listed.')
   })
 
-  it('posts the list to the run log without an Agent turn', async () => {
+  it('stages the run log without Agent capacity or an Agent turn', async () => {
     const store = createStore([kit, 'harlan-zw/example', 'harlan-zw/private-site'])
     store.setRepositoryWritesEnabled(kit, true)
     seedPullRequest(store, { repository: 'harlan-zw/private-site', number: 2, title: 'Secret launch plan', reviews: [{ at: '2026-11-03T00:00:00.000Z' }] })
     seedPullRequest(store, { repository: 'harlan-zw/example', number: 1, title: 'fix: keep the head', reviews: [{ at: '2026-11-22T00:00:00.000Z' }] })
     store.syncRoutines({ repository: kit, specSha: 'abc123', entries: [{ name: 'ready-digest', crons: ['30 6 * * 1'], timeZone: 'Australia/Melbourne', mode: 'report', enabled: true }], at: now.toISOString() })
     store.openRoutineRun({ routineId: `${kit}:ready-digest`, scheduledFor: now.toISOString(), specSha: 'abc123', at: now.toISOString() })
-    const task = store.claimNextRoutineRun('worker-1', now.toISOString(), 60 * 60_000)
-    if (task === null)
-      throw new Error('Expected the ready-digest run.')
     const turns: string[] = []
     const worker = createRoutineScanWorker({
       github: { getIssue: async () => { throw new Error('ready-digest reads no issue.') } },
@@ -200,11 +199,30 @@ describe('ready-digest', () => {
       workspaces: { prepareRoutine: async () => ok({ path: '/tmp/routine', baseSha: 'abc123', headSha: 'abc123', defaultBranchSha: 'abc123' }) },
     })
 
-    const result = await worker.run(task, new AbortController().signal)
+    const scheduler = createRoutineTaskScheduler({
+      canClaim: () => true,
+      canStartAgent: () => false,
+      permits: createAgentPermitPool(() => 0),
+      store,
+      worker,
+      workerId: 'worker-1',
+      complete: store.completeRoutineRun,
+      fail: store.failRoutineRun,
+      heartbeat: store.heartbeatRoutineRun,
+      intervalMilliseconds: 5_000,
+      leaseMilliseconds: 60_000,
+      now: () => now,
+      onError: (error) => { throw error },
+    })
+    try {
+      await scheduler.runNow()
+    }
+    finally {
+      await scheduler.stop()
+    }
 
-    expect(result).toEqual(ok({ evidence: 'ready-digest on harlan-zw/harlan-agent-kit | 2 pull requests READY with passing CI', usage: { _tag: 'Unavailable' } }))
+    expect(store.listRoutineRuns(`${kit}:ready-digest`)[0]?.state).toEqual({ _tag: 'Completed', evidence: 'ready-digest on harlan-zw/harlan-agent-kit | 2 pull requests READY with passing CI' })
     expect(turns).toEqual([])
-    store.completeRoutineRun({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: now.toISOString(), evidence: result._tag === 'Ok' ? result.value.evidence : '' })
     const body = store.claimNextRoutineReport('controller-1', now.toISOString(), 60_000)?.body
     expect(body).toContain('- `harlan-zw/private-site#2`: 20 days since READY')
     expect(body).toContain('- `harlan-zw/example#1` `fix: keep the head`: 1 day since READY')
