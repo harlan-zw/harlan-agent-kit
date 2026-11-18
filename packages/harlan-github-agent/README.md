@@ -527,6 +527,9 @@ The draft appears as a quoted code block in the release comment, with one checkb
 Tick **Add this draft to the GitHub release** to add it above the generated changelog. Nothing changes until you tick it.
 The tick binds to that exact comment. Only a signed webhook from the authenticated Harlan account counts.
 The release body gets the draft, a disclosure line, and a hidden marker, so a retry adds nothing.
+If GitHub refuses the edit, the comment shows the reason and the Service stops retrying it.
+A draft with raw HTML outside code is refused and drafted again, so it cannot hide the disclosure.
+A Service restart waits for a running draft to finish.
 A failed draft retries up to three times. The comment then states the failure, and the release stays published.
 
 The first adapter supports one jointly versioned npm package group per repository.

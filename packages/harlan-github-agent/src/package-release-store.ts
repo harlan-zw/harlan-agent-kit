@@ -49,6 +49,7 @@ export type ReleaseNoteState
     | { _tag: 'Drafted', text: string }
     | { _tag: 'Approved', text: string, requestedBy: string }
     | { _tag: 'Applied', text: string, url: string }
+    | { _tag: 'ApplyFailed', text: string, reason: string }
     | { _tag: 'Failed', reason: string }
 
 export interface ReleaseNote extends ReleaseNoteSubject {
@@ -278,6 +279,14 @@ export function createPackageReleaseStore(database: DatabaseSync) {
         WHERE repository=? AND version=? AND json_extract(state, '$._tag')='Approved'
         AND EXISTS (SELECT 1 FROM package_release_leases WHERE repository=? AND fence=? AND expires_at>?)
       `).run(input.url, input.repository, input.version, input.repository, fence, now).changes === 1
+    },
+    /** Settles an edit GitHub refused, so the pass stops retrying it. */
+    failReleaseNoteApply(input: { repository: string, version: string, reason: string }, fence: number, now: number): boolean {
+      return database.prepare(`UPDATE package_release_notes
+        SET state=json_object('_tag', 'ApplyFailed', 'text', json_extract(state, '$.text'), 'reason', ?)
+        WHERE repository=? AND version=? AND json_extract(state, '$._tag')='Approved'
+        AND EXISTS (SELECT 1 FROM package_release_leases WHERE repository=? AND fence=? AND expires_at>?)
+      `).run(input.reason, input.repository, input.version, input.repository, fence, now).changes === 1
     },
   }
 }

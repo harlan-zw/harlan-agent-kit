@@ -28,7 +28,30 @@ export function parseReleaseNoteResponse(value: unknown): Result<string, string>
     return err('The release note draft is empty.')
   if (notes.length > MAXIMUM_RELEASE_NOTE_LENGTH)
     return err(`The release note draft exceeds ${MAXIMUM_RELEASE_NOTE_LENGTH} characters.`)
+  if (containsRawHtml(notes))
+    return err('The release note draft contains raw HTML. Use Markdown, and put tags in inline code.')
   return ok(notes)
+}
+
+/**
+ * The release comment shows a draft escaped, but the GitHub release renders it.
+ * Raw HTML there could hide the disclosure or fold the changelog, so a draft
+ * may hold tags only in code. An autolink such as `<https://...>` stays allowed.
+ */
+function containsRawHtml(notes: string): boolean {
+  const prose: string[] = []
+  let fence: string | null = null
+  for (const line of notes.split('\n')) {
+    const opener = /^(?:`{3,}|~{3,})/.exec(line)?.[0]
+    if (fence === null && opener !== undefined)
+      fence = opener
+    // A closing fence repeats the opening character at least as many times, then ends.
+    else if (fence !== null && line.startsWith(fence) && /^[`~]*\s*$/.test(line.slice(fence.length)))
+      fence = null
+    else if (fence === null)
+      prose.push(line.replace(/``[^`]*``|`[^`\n]*`/g, ''))
+  }
+  return /<(?:!--|\/?[a-z][\w-]*(?:\s|\/?>))/i.test(prose.join('\n'))
 }
 
 export function releaseNotePrompt(task: ClaimedReleaseNote, workspace: PreparedWorkerWorkspace): string {
@@ -53,6 +76,7 @@ Destination: the introduction above the generated changelog on the GitHub releas
 - Keep a measured number only with its baseline and a source link from the pull requests.
 - Leave out tests, refactors, internal names, and headings.
 - Do not add a disclosure line. The controller adds it.
+- Use Markdown only. Write any HTML tag inside inline code, such as \`<head>\`.
 - One idea per sentence, under 20 words, active voice. No em dashes.
 - At most 120 words. Shorter is better.
 

@@ -54,6 +54,8 @@ function releaseNoteStatus(note: ReleaseNote | null): string {
       return `\n\nRelease note draft approved. Adding it to the GitHub release.\n\n${quoteReleaseNote(note.state.text)}\n\n- [x] ${RELEASE_NOTE_APPLY_LABEL}`
     case 'Applied':
       return `\n\nAdded this draft to the [GitHub release](${note.state.url}).\n\n${quoteReleaseNote(note.state.text)}`
+    case 'ApplyFailed':
+      return `\n\nCould not add this draft to the GitHub release: ${cleanLine(note.state.reason)}\nCopy it by hand if you still want it.\n\n${quoteReleaseNote(note.state.text)}`
     case 'Failed':
       return `\n\nNo release note draft: ${cleanLine(note.state.reason)}`
   }
@@ -184,8 +186,9 @@ export async function reconcilePackageReleases(options: {
       }
       const note = record.state._tag === 'Completed' ? store.getReleaseNote(record.repository, record.plan.version) : null
       if (note?.state._tag === 'Approved') {
-        // Harlan ticked the draft on this exact comment. A failed edit logs and
-        // retries next pass, and never stops offers for this repository.
+        // Harlan ticked the draft on this exact comment. A refused edit settles
+        // with its reason. Any other failure logs and retries next pass. Neither
+        // stops offers for this repository.
         assertLease()
         const approved = { repository: record.repository, version: record.plan.version, number: record.pullRequestNumber }
         await source.applyReleaseNote({ tag: note.tag, text: note.state.text }).then((url) => {
@@ -195,7 +198,14 @@ export async function reconcilePackageReleases(options: {
         }, (error: unknown) => {
           if (error === paused || signal.aborted)
             throw error
-          options.logger.error(`${repository.github}#${approved.number}: the approved release note could not be added: ${error instanceof Error ? error.message : String(error)}`)
+          const reason = cleanLine(error instanceof Error ? error.message : String(error))
+          options.logger.error(`${repository.github}#${approved.number}: the approved release note could not be added: ${reason}`)
+          // A 4xx other than a rate limit fails the same way on every retry.
+          const status = typeof error === 'object' && error !== null && 'status' in error && typeof error.status === 'number' ? error.status : null
+          if (status !== null && status >= 400 && status < 500 && status !== 429) {
+            assertLease()
+            store.failReleaseNoteApply({ repository: approved.repository, version: approved.version, reason }, fence, now())
+          }
         })
       }
       if (record.state._tag === 'Completed' && record.body.startsWith(packageReleaseStatus(record).trimEnd())) {

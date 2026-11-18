@@ -341,6 +341,35 @@ describe('release note drafts', () => {
     task.database.close()
   })
 
+  it.each([[404, 'Not Found'], [403, 'Resource not accessible by integration'], [422, 'Validation Failed']])('stops applying after GitHub refuses the edit: %s', async (status, message) => {
+    const task = setup()
+    const body = await drafted(task)
+    task.store.approveReleaseNote(approval(body))
+    task.source.applyReleaseNote = vi.fn<PackageReleaseSource['applyReleaseNote']>(async () => {
+      throw Object.assign(new Error(message), { status })
+    })
+    await task.run()
+    await task.run()
+    expect(task.source.applyReleaseNote).toHaveBeenCalledTimes(1)
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state).toEqual({ _tag: 'ApplyFailed', text: 'Empty input no longer throws.', reason: message })
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining(`Could not add this draft to the GitHub release: ${message}`), 99)
+    task.database.close()
+  })
+
+  it('keeps retrying an apply that GitHub rate limits', async () => {
+    const task = setup()
+    const body = await drafted(task)
+    task.store.approveReleaseNote(approval(body))
+    task.source.applyReleaseNote = vi.fn<PackageReleaseSource['applyReleaseNote']>(async () => {
+      throw Object.assign(new Error('API rate limit exceeded'), { status: 429 })
+    })
+    await task.run()
+    await task.run()
+    expect(task.source.applyReleaseNote).toHaveBeenCalledTimes(2)
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state._tag).toBe('Approved')
+    task.database.close()
+  })
+
   it('retries a failed apply without stopping release offers', async () => {
     const task = setup()
     const body = await drafted(task)
