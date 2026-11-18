@@ -1,6 +1,7 @@
 import type { PackageReleaseSource } from '../src/package-release-controller.ts'
 import { createHmac } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
+import { RequestError } from 'octokit'
 import { describe, expect, it, vi } from 'vitest'
 import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseStore } from '../src/package-release-store.ts'
@@ -356,12 +357,21 @@ describe('release note drafts', () => {
     task.database.close()
   })
 
-  it('keeps retrying an apply that GitHub rate limits', async () => {
+  const requestFailure = (status: number, message: string, headers: Record<string, string>) => new RequestError(message, status, {
+    request: { method: 'PATCH', url: 'https://api.github.com/repos/harlan-zw/example/releases/7', headers: {} },
+    response: { status, url: 'https://api.github.com/repos/harlan-zw/example/releases/7', headers, data: { message } },
+  })
+  it.each([
+    ['a 429', requestFailure(429, 'Too Many Requests', {})],
+    ['a primary limit sent as 403', requestFailure(403, 'API rate limit exceeded', { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1794952322' })],
+    ['a secondary limit sent as 403', requestFailure(403, 'You have exceeded a secondary rate limit', { 'retry-after': '60' })],
+    ['an expired credential', requestFailure(401, 'Bad credentials', {})],
+  ])('keeps retrying an apply after %s', async (_name, failure) => {
     const task = setup()
     const body = await drafted(task)
     task.store.approveReleaseNote(approval(body))
     task.source.applyReleaseNote = vi.fn<PackageReleaseSource['applyReleaseNote']>(async () => {
-      throw Object.assign(new Error('API rate limit exceeded'), { status: 429 })
+      throw failure
     })
     await task.run()
     await task.run()
