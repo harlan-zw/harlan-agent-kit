@@ -5,7 +5,7 @@ import type { PreparedWorkerWorkspace } from '../src/worktree.ts'
 import { expect, it } from 'vitest'
 import { createAgentPermitPool } from '../src/agent-permit-pool.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
-import { createReleaseNoteWorker } from '../src/release-note-worker.ts'
+import { createReleaseNoteWorker, parseReleaseNoteResponse } from '../src/release-note-worker.ts'
 import { err, ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
 import { createWorkerTaskScheduler } from '../src/worker-task-scheduler.ts'
@@ -81,6 +81,9 @@ it.each([
   ['an empty draft', { notes: '  ' }],
   ['an oversized draft', { notes: 'x'.repeat(4001) }],
   ['a missing field', { text: 'Empty input no longer throws.' }],
+  ['an HTML comment that could hide the disclosure', { notes: 'Empty input no longer throws.\n<!--' }],
+  ['a details block that could fold the changelog', { notes: '<details>\nEmpty input no longer throws.' }],
+  ['an inline HTML tag', { notes: 'Empty input no longer throws. <img src="x">' }],
 ])('retries %s instead of storing it', async (_name, answer) => {
   const task = setup(answer)
   task.store.queueReleaseNote(subject)
@@ -99,6 +102,16 @@ it('keeps a running draft worktree safe from the agent worktree sweep', () => {
   store.close()
 })
 
+it('holds a Service restart while a draft runs, until its lease ends', () => {
+  const store = openJournalStore(':memory:')
+  store.queueReleaseNote(subject)
+  expect(store.isSafeToRestart(now().toISOString())).toBe(true)
+  store.claimNextReleaseNote('worker-1', now().toISOString(), 60_000)
+  expect(store.isSafeToRestart(now().toISOString())).toBe(false)
+  expect(store.isSafeToRestart(new Date(now().getTime() + 61_000).toISOString())).toBe(true)
+  store.close()
+})
+
 it('retries when the release worktree cannot be prepared', async () => {
   const task = setup({ notes: 'Unused.' }, err('Git fetch failed: tag v1.0.0 is missing.'))
   task.store.queueReleaseNote(subject)
@@ -106,4 +119,9 @@ it('retries when the release worktree cannot be prepared', async () => {
   expect(task.requests).toEqual([])
   expect(task.store.getReleaseNote(subject.repository, subject.version)?.state._tag).toBe('Queued')
   task.store.close()
+})
+
+it('keeps HTML that sits in code', () => {
+  const notes = 'Tags now render in `<head>` before `</body>`.\n\n```html\n<div>example</div>\n```\n\nSee <https://unhead.unjs.io>.'
+  expect(parseReleaseNoteResponse({ notes })).toEqual({ _tag: 'Ok', value: notes })
 })

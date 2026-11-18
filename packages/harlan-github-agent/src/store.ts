@@ -14166,8 +14166,12 @@ export function openJournalStore(
           SELECT 1 FROM routine_report_commands
           WHERE state_tag = 'Running' AND (lease_expires_at IS NULL OR lease_expires_at > ?)
         )
+        OR EXISTS (
+          SELECT 1 FROM package_release_notes
+          WHERE json_extract(state, '$._tag') = 'Running' AND json_extract(state, '$.leaseExpiresAt') > ?
+        )
       ) AS busy
-    `).get(at, at, at, at, at, at, at, at) as { busy: number }
+    `).get(at, at, at, at, at, at, at, at, at) as { busy: number }
     return row.busy === 0
   }
 
