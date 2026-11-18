@@ -83,6 +83,7 @@ import { canReleasePackages } from './repository-policy.ts'
 import { createRestartController, restartAllowsTaskClaims } from './restart-request.ts'
 import { err, ok } from './result.ts'
 import { applyReviewApproval } from './review-approval.ts'
+import { requestReviewCheckRerun } from './review-check-rerun.ts'
 import { AGENT_ACTOR_LOGIN } from './review-comment.ts'
 import { createReviewFixWorker } from './review-fix-worker.ts'
 import { refreshReviewGates } from './review-gate-sweep.ts'
@@ -1919,6 +1920,23 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               return repository === undefined ? null : actorLogin(repository)
             },
             apply: request => store.cancelReviewForHead({ ...request, at: now().toISOString() }),
+          },
+          reviewCheckRerun: {
+            allowedAuthor: userLogin,
+            appId: (name) => {
+              const repository = config.repositories.find(repository => repository.github.toLowerCase() === name.toLowerCase() && repository.enabled)
+              // A user-token repository has no App check run to click.
+              return repository === undefined || !userLoginKnown || !repository.pullRequestReview || usesUserToken(repository.github)
+                ? null
+                : config.github.appId
+            },
+            apply: (request) => {
+              const repository = config.repositories.find(repository => repository.github.toLowerCase() === request.repository.toLowerCase())
+              if (repository === undefined)
+                return
+              const results = requestReviewCheckRerun(store, { ...request, repository: repository.github, at: now().toISOString() })
+              options.logger.info(`Review check run Re-run on ${repository.github} at ${request.headSha.slice(0, 7)}: ${results.length === 0 ? 'no open pull request at that head' : results.map(result => result._tag === 'Rejected' ? `Rejected (${result.reason._tag})` : result._tag).join(', ')}.`)
+            },
           },
           secret: options.webhookSecret,
         }),

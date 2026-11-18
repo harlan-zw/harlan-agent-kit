@@ -355,7 +355,7 @@ export type IssueTriageRerunResult
   = | { _tag: 'Queued' | 'AlreadyQueued', taskId: string }
     | { _tag: 'Rejected', reason: { _tag: 'ItemNotFound' | 'RevisionMismatch' | 'Dismissed' | 'NotAuthorized' | 'ApprovalRequired' | 'WorkActive' } }
 
-export type ReviewRerunSource = 'dashboard' | 'github_comment' | 'repair_dispute'
+export type ReviewRerunSource = 'dashboard' | 'github_comment' | 'github_check_run' | 'repair_dispute'
 
 export type ReviewRerunRejection
   = | { _tag: 'ItemNotFound' }

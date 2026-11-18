@@ -571,6 +571,8 @@ It concludes `success` only when the Review outcome is READY, and `neutral` for 
 
 The CI Review gate skips every check run this service's own GitHub App wrote, so a Review never gates on itself.
 
+Harlan's re-run of the Review check run requests a fresh Review of its head commit. GitHub cannot request a review from a regular App bot, so this re-run takes that place.
+
 Do not use agent check, review status check, or status check. Do not require it in branch protection.
 
 ### Review usage

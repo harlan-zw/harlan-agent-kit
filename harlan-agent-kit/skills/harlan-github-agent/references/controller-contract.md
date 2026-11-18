@@ -278,6 +278,15 @@ Treat trusted marked comments as status only. Complete queued Review only when s
 
 Allow Harlan to rerun the current head commit from the dashboard or with the exact pull request comment `@harlan-agent rerun`. The App bot's own logins and the slash form `/harlan-agent rerun` also queue it, because GitHub's mention picker does not offer regular GitHub App bots the way it offers `@claude` or `@coderabbitai`; `@harlan-agent` is an Organization that authenticates nothing and exists as the summon handle. Reject GitHub rerun commands from every other author. Store the command identity before queueing work. Repeated polls must not queue it twice.
 
+Treat Harlan's Re-run click on the `harlan-agent-kit / Review` check run as the same rerun request.
+GitHub cannot request a review from a regular App bot, so this click replaces a reviewer request.
+Accept it only from a signed `check_run.rerequested` delivery.
+Require Harlan as the sender, this App's id, and the exact check run name.
+Queue Review only for an open pull request whose stored head is the clicked commit.
+If the head has moved, queue nothing.
+Use the delivery id as the request identity, so a redelivery never queues twice.
+Polling cannot recover a missed click. Redeliver it from the App's webhook log.
+
 If GitHub closes the pull request unmerged, revoke its running task. Stop the agent within five seconds.
 
 Accept a leading Agent mention followed by a change request from the repository owner only.

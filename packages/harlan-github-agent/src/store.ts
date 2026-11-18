@@ -5647,6 +5647,23 @@ const repairDisputeRerunMigration = `
   PRAGMA user_version = 34;
 `
 
+/** Lets a Re-run click on the Review check run request a fresh Review. */
+const checkRunRerunMigration = `
+  ALTER TABLE review_rerun_requests RENAME TO review_rerun_requests_v100;
+  CREATE TABLE review_rerun_requests (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES worker_tasks(id),
+    source TEXT NOT NULL CHECK (source IN ('dashboard', 'github_comment', 'github_check_run', 'repair_dispute')),
+    requested_by TEXT NOT NULL,
+    requested_at TEXT NOT NULL
+  );
+  INSERT INTO review_rerun_requests (id, task_id, source, requested_by, requested_at)
+    SELECT id, task_id, source, requested_by, requested_at FROM review_rerun_requests_v100;
+  DROP TABLE review_rerun_requests_v100;
+  CREATE INDEX review_rerun_requests_task ON review_rerun_requests(task_id, requested_at);
+  PRAGMA user_version = 101;
+`
+
 /**
  * Gives Tasks exhausted by one poisoned provider session a fresh recovery.
  *
@@ -7455,7 +7472,11 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${implicitSignalSchema} PRAGMA user_version = 100;`)
     version = 100
   }
-  if (version === 100)
+  if (version === 100) {
+    applyMigration(database, checkRunRerunMigration)
+    version = 101
+  }
+  if (version === 101)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -8337,7 +8358,7 @@ export function openJournalStore(
       }
       const mapping = JSON.parse(row.policy_json) as RepositoryMapping
       if (
-        input.source === 'github_comment'
+        (input.source === 'github_comment' || input.source === 'github_check_run')
         && !mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === input.requestedBy.toLowerCase())
       ) {
         database.exec('COMMIT')
