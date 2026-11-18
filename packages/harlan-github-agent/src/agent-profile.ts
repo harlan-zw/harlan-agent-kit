@@ -8,7 +8,7 @@ export const CODEX_AGENT_PROFILE = {
   authentication: 'chatgpt',
   maximumActiveAgents: 4,
   roles: {
-    adversarial_review: { model: 'gpt-6.1-sol', reasoningEffort: 'high' },
+    adversarial_review: { model: 'gpt-6.2-sol', reasoningEffort: 'high' },
     baseline_repair: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
     conflict_resolution: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
     issue_triage: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
@@ -62,7 +62,7 @@ export const AGENT_ROLES = [
 
 /** Every model an Agent provider answers with, in the order the controls list them. */
 export const AGENT_MODELS = {
-  codex: ['gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+  codex: ['gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
   opencode: [
     'zai-coding-plan/glm-5.3-flash',
     'zai-coding-plan/glm-5.3',

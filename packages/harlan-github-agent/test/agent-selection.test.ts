@@ -34,6 +34,12 @@ describe('agent selection parsing', () => {
     expect(parsed).toEqual({ _tag: 'Ok', value: { _tag: 'Pinned', provider: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'max' } })
   })
 
+  it('accepts GPT 6.2 Sol from Codex', () => {
+    const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'codex', model: 'gpt-6.2-sol', reasoningEffort: 'high' })
+
+    expect(parsed).toEqual({ _tag: 'Ok', value: { _tag: 'Pinned', provider: 'codex', model: 'gpt-6.2-sol', reasoningEffort: 'high' } })
+  })
+
   it('accepts GLM 5.3 Flash from OpenCode Go', () => {
     const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'opencode', model: 'opencode-go/glm-5.3-flash', reasoningEffort: 'high' })
 
@@ -79,9 +85,9 @@ describe('agent profile resolution', () => {
   it('keeps each role default when the selection names only a provider', () => {
     const profile = resolveAgentProfile({ provider: 'codex', model: null, reasoningEffort: null }, 3)
 
-    expect(profile.roles.adversarial_review).toEqual({ model: 'gpt-6.1-sol', reasoningEffort: 'high' })
+    expect(profile.roles.adversarial_review).toEqual({ model: 'gpt-6.2-sol', reasoningEffort: 'high' })
     for (const [role, settings] of Object.entries(profile.roles)) {
-      expect(settings.model).toBe('gpt-6.1-sol')
+      expect(settings.model).toBe(role === 'adversarial_review' ? 'gpt-6.2-sol' : 'gpt-6.1-sol')
       expect(settings.reasoningEffort).toBe(role === 'adversarial_review' ? 'high' : 'medium')
     }
   })
