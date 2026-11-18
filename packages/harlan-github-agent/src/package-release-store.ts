@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { PackageReleaseCommand, PackageReleasePlan, PackageReleaseRequest } from './package-release.ts'
+import { createHash } from 'node:crypto'
 
 export type PackageReleaseState
   = | { _tag: 'Available' }
@@ -19,6 +20,44 @@ export interface PackageReleaseRecord {
   plan: PackageReleasePlan
   state: PackageReleaseState
 }
+
+/** A merged pull request in the release range, as untrusted text for the drafting Agent. */
+export interface ReleaseNotePullRequest {
+  number: number
+  title: string
+  body: string
+}
+
+/** One published version and the evidence its Release note draft starts from. */
+export interface ReleaseNoteSubject {
+  repository: string
+  /** The pull request whose release comment shows the draft. */
+  pullRequestNumber: number
+  packageName: string
+  version: string
+  tag: string
+  previousTag: string
+  /** The published commit. */
+  sha: string
+  pullRequests: ReleaseNotePullRequest[]
+}
+
+export type ReleaseNoteState
+  = | { _tag: 'Queued' }
+    | { _tag: 'Running', fence: number, workerId: string, leaseExpiresAt: string }
+    | { _tag: 'Drafted', text: string }
+    | { _tag: 'Failed', reason: string }
+
+export interface ReleaseNote extends ReleaseNoteSubject {
+  id: string
+  attempts: number
+  state: ReleaseNoteState
+}
+
+export type ClaimedReleaseNote = ReleaseNote & { state: Extract<ReleaseNoteState, { _tag: 'Running' }> }
+
+/** A draft is optional. After three attempts it stops, and the release stays published. */
+const MAXIMUM_RELEASE_NOTE_ATTEMPTS = 3
 
 export type PackageReleaseStore = ReturnType<typeof createPackageReleaseStore>
 
@@ -41,7 +80,30 @@ export function createPackageReleaseStore(database: DatabaseSync) {
     CREATE TABLE IF NOT EXISTS package_release_leases (
       repository TEXT PRIMARY KEY, fence INTEGER NOT NULL, expires_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS package_release_notes (
+      id TEXT PRIMARY KEY, repository TEXT NOT NULL, version TEXT NOT NULL, subject TEXT NOT NULL,
+      state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, UNIQUE(repository, version)
+    );
   `)
+  interface ReleaseNoteRow { id: string, subject: string, state: string, attempts: number }
+  const releaseNote = (row: ReleaseNoteRow): ReleaseNote => ({ ...JSON.parse(row.subject) as ReleaseNoteSubject, id: row.id, attempts: row.attempts, state: JSON.parse(row.state) as ReleaseNoteState })
+  /** Writes only for the worker that holds the current fence. A stale worker changes nothing. */
+  const settleReleaseNote = (owner: { taskId: string, workerId: string, fence: number }, state: ReleaseNoteState): boolean =>
+    database.prepare(`UPDATE package_release_notes SET state=? WHERE id=?
+      AND json_extract(state, '$._tag')='Running' AND json_extract(state, '$.workerId')=? AND json_extract(state, '$.fence')=?
+    `).run(JSON.stringify(state), owner.taskId, owner.workerId, owner.fence).changes === 1
+  const transaction = <T>(work: () => T): T => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const value = work()
+      database.exec('COMMIT')
+      return value
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
   const applyReleaseRequest = (input: PackageReleaseRequest): boolean => {
     if (!input.selected) {
       return database.prepare(`UPDATE package_releases SET state='{"_tag":"Available"}', body=?
@@ -133,6 +195,59 @@ export function createPackageReleaseStore(database: DatabaseSync) {
       return database.prepare(`UPDATE package_releases SET state=?, plan=? WHERE repository=? AND pull_request_number=? AND state=?
         AND EXISTS (SELECT 1 FROM package_release_leases WHERE repository=? AND fence=? AND expires_at>?)
       `).run(JSON.stringify(state), JSON.stringify(plan), input.repository, input.pullRequestNumber, JSON.stringify(input.state), input.repository, fence, now).changes === 1
+    },
+    /** Returns false when this version already has a draft. A replayed publish pass queues nothing new. */
+    queueReleaseNote(subject: ReleaseNoteSubject): boolean {
+      const id = createHash('sha256').update(`${subject.repository}\n${subject.version}`).digest('hex')
+      return database.prepare('INSERT OR IGNORE INTO package_release_notes(id, repository, version, subject, state) VALUES (?, ?, ?, ?, ?)')
+        .run(id, subject.repository, subject.version, JSON.stringify(subject), JSON.stringify({ _tag: 'Queued' }))
+        .changes === 1
+    },
+    getReleaseNote(repository: string, version: string): ReleaseNote | null {
+      const row = database.prepare('SELECT id, subject, state, attempts FROM package_release_notes WHERE repository=? AND version=?')
+        .get(repository, version) as ReleaseNoteRow | undefined
+      return row === undefined ? null : releaseNote(row)
+    },
+    /** Claims queued work, or work whose lease expired after a lost worker. Each claim spends one attempt. */
+    claimNextReleaseNote(workerId: string, at: string, leaseMilliseconds: number): ClaimedReleaseNote | null {
+      return transaction(() => {
+        const rows = database.prepare(`SELECT id, subject, state, attempts FROM package_release_notes
+          WHERE json_extract(state, '$._tag')='Queued'
+          OR (json_extract(state, '$._tag')='Running' AND json_extract(state, '$.leaseExpiresAt') <= ?)
+          ORDER BY rowid`).all(at) as unknown as ReleaseNoteRow[]
+        for (const row of rows) {
+          if (row.attempts >= MAXIMUM_RELEASE_NOTE_ATTEMPTS) {
+            database.prepare('UPDATE package_release_notes SET state=? WHERE id=?')
+              .run(JSON.stringify({ _tag: 'Failed', reason: 'The draft stopped after three attempts.' }), row.id)
+            continue
+          }
+          // The attempt count is the fence. Every claim raises it, so a stale worker cannot settle.
+          const attempts = row.attempts + 1
+          const state = { _tag: 'Running' as const, fence: attempts, workerId, leaseExpiresAt: new Date(Date.parse(at) + leaseMilliseconds).toISOString() }
+          database.prepare('UPDATE package_release_notes SET state=?, attempts=? WHERE id=?').run(JSON.stringify(state), attempts, row.id)
+          return { ...releaseNote(row), attempts, state }
+        }
+        return null
+      })
+    },
+    heartbeatReleaseNote(input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }): boolean {
+      return database.prepare(`UPDATE package_release_notes SET state=json_set(state, '$.leaseExpiresAt', ?) WHERE id=?
+        AND json_extract(state, '$._tag')='Running' AND json_extract(state, '$.workerId')=? AND json_extract(state, '$.fence')=?
+        AND json_extract(state, '$.leaseExpiresAt') > ?
+      `).run(new Date(Date.parse(input.at) + input.leaseMilliseconds).toISOString(), input.taskId, input.workerId, input.fence, input.at).changes === 1
+    },
+    completeReleaseNote(input: { taskId: string, workerId: string, fence: number, at: string, notes: string }): boolean {
+      return settleReleaseNote(input, { _tag: 'Drafted', text: input.notes })
+    },
+    failReleaseNote(input: { taskId: string, workerId: string, fence: number, at: string, reason: string }): 'Retrying' | 'Failed' | 'Rejected' {
+      return transaction(() => {
+        const row = database.prepare('SELECT attempts FROM package_release_notes WHERE id=?').get(input.taskId) as { attempts: number } | undefined
+        if (row === undefined)
+          return 'Rejected'
+        if (row.attempts < MAXIMUM_RELEASE_NOTE_ATTEMPTS)
+          return settleReleaseNote(input, { _tag: 'Queued' }) ? 'Retrying' : 'Rejected'
+        return settleReleaseNote(input, { _tag: 'Failed', reason: input.reason }) ? 'Failed' : 'Rejected'
+      })
     },
   }
 }

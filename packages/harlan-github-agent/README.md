@@ -519,6 +519,12 @@ If version changes already merged, it uses that checked commit directly.
 The existing tag workflow builds and publishes. The controller verifies the workflow, [npm](https://npmjs.com) versions, and GitHub release.
 Progress and failures stay in the release comment. Retries retain the original version.
 
+After the GitHub release publishes, an Agent writes a Release note draft for it.
+The Agent follows the installed Brundlefly `release-notes` Skill.
+It reads the exact range between the two tags and the merged pull requests that the commits name.
+The draft appears as quoted text in the release comment. The GitHub release stays unchanged.
+A failed draft retries up to three times. The comment then states the failure, and the release stays published.
+
 The first adapter supports one jointly versioned npm package group per repository.
 List every synchronized JSON version file. Public package manifests must appear in `version_files`.
 It does not execute the repository's release script or arbitrary shell commands.

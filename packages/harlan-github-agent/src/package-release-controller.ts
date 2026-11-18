@@ -1,4 +1,4 @@
-import type { PackageReleaseRecord, PackageReleaseState, PackageReleaseStore } from './package-release-store.ts'
+import type { PackageReleaseRecord, PackageReleaseState, PackageReleaseStore, ReleaseNote, ReleaseNotePullRequest } from './package-release-store.ts'
 import type { PackageReleaseOffer, PackageReleasePlan } from './package-release.ts'
 import type { RepositoryMapping } from './types.ts'
 import { PACKAGE_RELEASE_MARKER, renderManualMajorRelease, renderPackageRelease } from './package-release.ts'
@@ -13,9 +13,33 @@ export interface PackageReleaseSource {
   prepare: (record: PackageReleaseRecord & { plan: Extract<PackageReleasePlan, { _tag: 'Available' }> }) => Promise<Extract<PackageReleaseState, { _tag: 'Prepared' | 'Publishing' | 'Blocked' }> | null>
   merge: (record: PackageReleaseRecord & { plan: Extract<PackageReleasePlan, { _tag: 'Available' }>, state: Extract<PackageReleaseState, { _tag: 'Prepared' }> }) => Promise<Extract<PackageReleaseState, { _tag: 'Publishing' | 'Blocked' }> | null>
   publish: (record: PackageReleaseRecord & { plan: Extract<PackageReleasePlan, { _tag: 'Available' }>, state: Extract<PackageReleaseState, { _tag: 'Publishing' }> }) => Promise<string | Extract<PackageReleaseState, { _tag: 'Blocked' }> | null>
+  /** Merged pull requests in the published range, read before the release completes. */
+  releaseNoteContext: (record: PackageReleaseRecord & { plan: Extract<PackageReleasePlan, { _tag: 'Available' }>, state: Extract<PackageReleaseState, { _tag: 'Publishing' }> }) => Promise<ReleaseNotePullRequest[]>
 }
 
-export function packageReleaseStatus(record: PackageReleaseRecord): string {
+/**
+ * Shows an Agent's draft as quoted text. A quoted line cannot start a release
+ * control, and removed comment delimiters cannot hide text or add a marker.
+ */
+function quoteReleaseNote(text: string): string {
+  return text.replace(/<!--|-->/g, '').trim().split('\n').map(line => line.trim() === '' ? '>' : `> ${line}`).join('\n')
+}
+
+function releaseNoteStatus(note: ReleaseNote | null): string {
+  if (note === null)
+    return ''
+  switch (note.state._tag) {
+    case 'Queued':
+    case 'Running':
+      return '\n\nDrafting a release note.'
+    case 'Drafted':
+      return `\n\nRelease note draft for review. The GitHub release is unchanged.\n\n${quoteReleaseNote(note.state.text)}`
+    case 'Failed':
+      return `\n\nNo release note draft: ${cleanLine(note.state.reason)}`
+  }
+}
+
+export function packageReleaseStatus(record: PackageReleaseRecord, note: ReleaseNote | null = null): string {
   if (record.state._tag === 'Available')
     return renderPackageRelease(record.plan)
   if (record.state._tag === 'AwaitingMerge')
@@ -24,7 +48,7 @@ export function packageReleaseStatus(record: PackageReleaseRecord): string {
     Queued: 'Release requested. Waiting for passing default branch checks on the pinned release range.',
     Prepared: record.state._tag === 'Prepared' ? `Waiting for Review and required checks on #${record.state.pullRequestNumber}.` : '',
     Publishing: 'Waiting for GitHub Actions and npm publication.',
-    Completed: record.state._tag === 'Completed' ? `Published [${record.plan.packageName}@${record.plan.version}](${record.state.url}).` : '',
+    Completed: record.state._tag === 'Completed' ? `Published [${record.plan.packageName}@${record.plan.version}](${record.state.url}).${releaseNoteStatus(note)}` : '',
     Blocked: record.state._tag === 'Blocked' ? `Action required: ${record.state.reason}` : '',
   }
   return `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\n${details[record.state._tag]}\n`
@@ -65,7 +89,7 @@ export async function reconcilePackageReleases(options: {
     return { ...record, state, plan }
   }
   const report = async (record: PackageReleaseRecord): Promise<void> => {
-    const body = packageReleaseStatus(record)
+    const body = packageReleaseStatus(record, record.state._tag === 'Completed' ? store.getReleaseNote(record.repository, record.plan.version) : null)
     if (record.body === body)
       return
     assertLease()
@@ -116,9 +140,18 @@ export async function reconcilePackageReleases(options: {
           record = transition(record, merged)
       }
       if (record.state._tag === 'Publishing' && record.plan._tag === 'Available') {
-        const url = await source.publish({ ...record, plan: record.plan, state: record.state })
-        if (url !== null)
-          record = transition(record, typeof url === 'string' ? { _tag: 'Completed', url } : url)
+        const publishing = { ...record, plan: record.plan, state: record.state }
+        const url = await source.publish(publishing)
+        if (typeof url === 'string') {
+          // Read the draft evidence before completing. A failed read leaves the
+          // release Publishing, and the next pass verifies it and reads again.
+          const pullRequests = await source.releaseNoteContext(publishing)
+          record = transition(record, { _tag: 'Completed', url })
+          store.queueReleaseNote({ repository: record.repository, pullRequestNumber: record.pullRequestNumber, packageName: publishing.plan.packageName, version: publishing.plan.version, tag: publishing.state.tag, previousTag: publishing.plan.previousTag, sha: publishing.state.sha, pullRequests })
+        }
+        else if (url !== null) {
+          record = transition(record, url)
+        }
       }
       await report(record)
     }

@@ -77,6 +77,7 @@ import { createPullRequestStatusController } from './pull-request-status-control
 import { createPullRequestTriageController } from './pull-request-triage.ts'
 import { publishQueuePositions } from './queue-position-sweep.ts'
 import { reconcileAllRepositories } from './reconcile.ts'
+import { createReleaseNoteWorker } from './release-note-worker.ts'
 import { createRepairRecoveryController } from './repair-recovery.ts'
 import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCheckouts, discoverUserRepositories, installedWithoutCheckout } from './repository-discovery.ts'
 import { canReleasePackages } from './repository-policy.ts'
@@ -1052,6 +1053,28 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         }),
         workerId: randomUUID(),
       }),
+      // A Release note draft is optional and read only. It shares the Routine permits, so it never takes an Item slot.
+      releaseNotes: createWorkerTaskScheduler({
+        canClaim,
+        claim: store.claimNextReleaseNote,
+        complete: store.completeReleaseNote,
+        fail: store.failReleaseNote,
+        heartbeat: store.heartbeatReleaseNote,
+        intervalMilliseconds: 30_000,
+        leaseMilliseconds: 30 * 60_000,
+        now,
+        onError: error => options.logger.error(error),
+        permits: routinePermits,
+        worker: createReleaseNoteWorker({
+          activityLog,
+          repository: github => config.repositories.find(mapping => mapping.github === github),
+          now,
+          runtime,
+          store,
+          workspaces,
+        }),
+        workerId: randomUUID(),
+      }),
       issues: Array.from({ length: profile.maximumActiveAgents }, () => createWorkerTaskScheduler({
         canClaim,
         claim: store.claimNextIssueTriageTask,
@@ -1981,6 +2004,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     mutationSchedulers?.reviews.forEach(scheduler => scheduler.start())
   if (answers('github'))
     mutationSchedulers?.issues.forEach(scheduler => scheduler.start())
+  // Package releases answer GitHub webhooks, so their drafts do too.
+  if (answers('github'))
+    mutationSchedulers?.releaseNotes.start()
   if (answers('routine'))
     mutationSchedulers?.routines.start()
 
@@ -2009,6 +2035,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         ...(mutationSchedulers?.reviews.map(scheduler => scheduler.stop()) ?? []),
         ...(mutationSchedulers?.issues.map(scheduler => scheduler.stop()) ?? []),
         mutationSchedulers?.routines.stop() ?? Promise.resolve(),
+        mutationSchedulers?.releaseNotes.stop() ?? Promise.resolve(),
       ])
       dashboardShutdown.abort()
       await terminals?.close()

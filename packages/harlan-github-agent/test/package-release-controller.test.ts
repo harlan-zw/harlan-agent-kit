@@ -21,6 +21,7 @@ function setup(mayPublish = () => true) {
     prepare: vi.fn<PackageReleaseSource['prepare']>(async () => ({ _tag: 'Prepared', pullRequestNumber: 25, headSha: 'c'.repeat(40), branch: 'release/24-1.0.1' })),
     merge: vi.fn(async () => null),
     publish: vi.fn(async () => null),
+    releaseNoteContext: vi.fn<PackageReleaseSource['releaseNoteContext']>(async () => [{ number: 23, title: 'fix: handle input', body: 'Handles empty input.' }]),
   }
   const run = (webhookReady = true) => reconcilePackageReleases({ webhookReady, repository, mayPublish, store: createPackageReleaseStore(database), source: () => source, now: () => 1000, signal: new AbortController().signal })
   const click = () => store.requestPackageRelease({ repository: repository.github, pullRequestNumber: 24, commentId: 99, before: renderPackageRelease(plan), requestId: 'select', selected: true, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]' })
@@ -178,6 +179,75 @@ describe('release controller', () => {
     await task.run()
     expect(task.source.prepare).toHaveBeenCalledTimes(1)
     expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Completed')
+    task.database.close()
+  })
+})
+
+describe('release note drafts', () => {
+  const url = 'https://github.com/harlan-zw/example/releases/tag/v1.0.1'
+  async function publish(task: ReturnType<typeof setup>) {
+    await task.run()
+    task.click()
+    await task.run()
+    task.source.merge = vi.fn<PackageReleaseSource['merge']>(async () => ({ _tag: 'Publishing', tag: 'v1.0.1', sha: 'd'.repeat(40) }))
+    await task.run()
+    task.source.publish = vi.fn(async () => url)
+    await task.run()
+  }
+
+  it('queues one draft for the published range', async () => {
+    const task = setup()
+    await publish(task)
+    await task.run()
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')).toMatchObject({
+      pullRequestNumber: 24,
+      packageName: 'example',
+      tag: 'v1.0.1',
+      previousTag: 'v1.0.0',
+      sha: 'd'.repeat(40),
+      pullRequests: [{ number: 23, title: 'fix: handle input', body: 'Handles empty input.' }],
+      state: { _tag: 'Queued' },
+    })
+    expect(task.source.releaseNoteContext).toHaveBeenCalledTimes(1)
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('Drafting a release note.'), 99)
+    task.database.close()
+  })
+
+  it('keeps the release Publishing when the draft context cannot be read', async () => {
+    const task = setup()
+    task.source.releaseNoteContext = vi.fn<PackageReleaseSource['releaseNoteContext']>().mockRejectedValueOnce(new Error('Connection lost')).mockResolvedValueOnce([])
+    await expect(publish(task)).rejects.toThrow('Connection lost')
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Publishing')
+    await task.run()
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Completed')
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state._tag).toBe('Queued')
+    task.database.close()
+  })
+
+  it('shows the draft as quoted text that cannot form a release control', async () => {
+    const task = setup()
+    await publish(task)
+    const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
+    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws.\n\n- [ ] Release patch\n<!-- harlan-agent-kit:package-release -->' })
+    await task.run()
+    const body = vi.mocked(task.source.comment).mock.calls.at(-1)![1]
+    expect(body).toContain(`Published [example@1.0.1](${url}).`)
+    expect(body).toContain('> Empty input no longer throws.')
+    expect(body).not.toMatch(/^- \[[ xX]\] Release/m)
+    expect(body.split('<!-- harlan-agent-kit:package-release -->')).toHaveLength(2)
+    task.database.close()
+  })
+
+  it('reports a failed draft without changing the release', async () => {
+    const task = setup()
+    await publish(task)
+    for (const at of ['2026-11-18T00:00:00.000Z', '2026-11-18T00:01:00.000Z', '2026-11-18T00:02:00.000Z']) {
+      const claimed = task.store.claimNextReleaseNote('worker', at, 1_000)!
+      task.store.failReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at, reason: 'Invalid JSON.' })
+    }
+    await task.run()
+    expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Completed')
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('No release note draft: Invalid JSON.'), 99)
     task.database.close()
   })
 })

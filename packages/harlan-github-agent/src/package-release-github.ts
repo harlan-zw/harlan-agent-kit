@@ -14,6 +14,10 @@ interface Manifest { name?: string, version: string, private?: boolean, [key: st
 
 const releaseTitle = /^(?:feat|fix|perf)(?:\([^\n]*\))?:|^[a-z]+(?:\([^\n]*\))?!:/i
 
+/** Bounds the untrusted text a Release note draft receives. A patch release rarely holds more. */
+const MAXIMUM_RELEASE_NOTE_PULL_REQUESTS = 20
+const MAXIMUM_RELEASE_NOTE_BODY = 4000
+
 function stableVersionAtLeast(value: string | undefined, required: string): boolean {
   const current = stableVersion(value ?? '')
   const minimum = stableVersion(required)
@@ -419,6 +423,24 @@ export function createPackageReleaseSource(options: {
       if (release.data.draft || release.data.prerelease)
         throw new Error('The GitHub release is not a published stable release.')
       return release.data.html_url
+    },
+    async releaseNoteContext(record) {
+      const api = await client('read')
+      const range = (await api.rest.repos.compareCommits({ ...scope, base: record.plan.previousTag, head: record.state.sha })).data
+      // Squash merges name their pull request at the end of the subject.
+      const numbers = [...new Set(range.commits.flatMap((commit) => {
+        const number = /\(#(\d+)\)$/.exec(commit.commit.message.split('\n')[0]?.trim() ?? '')?.[1]
+        return number === undefined ? [] : [Number(number)]
+      }))].slice(0, MAXIMUM_RELEASE_NOTE_PULL_REQUESTS)
+      const pulls = await Promise.all(numbers.map(number => api.rest.pulls.get({ ...scope, pull_number: number }).then(result => result.data).catch((error: unknown) => {
+        // A subject can name an issue instead of a pull request. It adds no draft evidence.
+        if (typeof error === 'object' && error !== null && 'status' in error && error.status === 404)
+          return null
+        throw error
+      })))
+      return pulls.flatMap(pull => pull === null || pull.merged_at === null || /^chore\(release\)/i.test(pull.title)
+        ? []
+        : [{ number: pull.number, title: pull.title, body: (pull.body ?? '').slice(0, MAXIMUM_RELEASE_NOTE_BODY) }])
     },
   }
 }

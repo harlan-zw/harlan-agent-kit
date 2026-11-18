@@ -595,3 +595,37 @@ it('writes a maintained repository release with the user credential even when th
   ])
   expect(appTokens.getToken).not.toHaveBeenCalled()
 })
+
+it('reads merged pull requests named in the published range for the release note draft', async () => {
+  const tokens = { getToken: async () => ({ _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }
+  const paths: string[] = []
+  const commit = (message: string) => ({ sha: 'c'.repeat(40), commit: { message } })
+  const pulls: Record<string, unknown> = {
+    20: { number: 20, title: 'fix: handle input', body: `Handles empty input.${'x'.repeat(5000)}`, merged_at: '2026-11-17T00:00:00Z' },
+    21: { number: 21, title: 'perf: cache reads', body: null, merged_at: '2026-11-17T00:00:00Z' },
+    23: { number: 23, title: 'chore(release): prepare v1.0.1', body: 'Release.', merged_at: '2026-11-17T00:00:00Z' },
+  }
+  const source = createPackageReleaseSource({
+    repository: mapping,
+    actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
+    template: async () => '',
+    assertLease: () => {},
+    review: () => ({ _tag: 'None' }),
+    signal: new AbortController().signal,
+    now: () => new Date(),
+    createClient: clientOptions => new Octokit({ ...clientOptions, retry: { enabled: false }, throttle: { enabled: false }, request: { fetch: async (input: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(new Request(input, init).url).pathname
+      paths.push(path)
+      if (path.endsWith(`/compare/v1.0.0...${'d'.repeat(40)}`))
+        return Response.json({ commits: [commit('fix: handle input (#20)\n\nBody'), commit('perf: cache reads (#21)'), commit('docs: typo'), commit('fix: see issue (#22)'), commit('chore(release): prepare v1.0.1 (#23)')] })
+      const number = /\/pulls\/(\d+)$/.exec(path)?.[1]
+      if (number !== undefined)
+        return number in pulls ? Response.json(pulls[number]) : Response.json({ message: 'Not Found' }, { status: 404 })
+      throw new Error(`Unexpected request ${path}`)
+    } } }),
+  })
+  const pullRequests = await source.releaseNoteContext({ ...record, state: { _tag: 'Publishing', tag: 'v1.0.1', sha: 'd'.repeat(40) } })
+  expect(pullRequests.map(pull => pull.number)).toEqual([20, 21])
+  expect(pullRequests[0]?.body).toHaveLength(4000)
+  expect(pullRequests[1]).toEqual({ number: 21, title: 'perf: cache reads', body: '' })
+})
