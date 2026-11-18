@@ -1101,7 +1101,7 @@ function gateSummary(name: 'Merge' | 'Review' | 'CI', gate: ReviewGateState, fin
  * the settled merge gate. A raw mergeable state of `unknown` would rewrite the
  * comment on every base branch push.
  */
-export function terminalComment(headSha: string, baseSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[], mergeRisk?: MergeRisk, repository?: string, commands: readonly PullRequestCommand[] = []): string {
+export function terminalComment(headSha: string, baseSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[], mergeRisk?: MergeRisk, repository?: string, commands: readonly PullRequestCommand[] = [], ownership?: RepositoryMapping['ownership']): string {
   const result = reviewOutcome(gates)
   const heading = result === 'READY' && confidence !== undefined ? `${result} · ${confidence}/100` : result
   const workflow = JSON.stringify({
@@ -1128,19 +1128,29 @@ export function terminalComment(headSha: string, baseSha: string, gates: ReviewG
     // comment keeps the shape it always had.
     ...(mergeRisk === undefined ? [] : [`- **Merge risk:** ${describeMergeRisk(mergeRisk)}`]),
   ]
-  const findingLines = findings.map((finding) => {
+  const visibleFindings: string[] = []
+  const loggedFindings: string[] = []
+  for (const finding of findings) {
     const summary = cleanLine(finding.summary)
-    if (finding._tag === 'Fixed')
-      return `- **Fixed:** ${summary}`
+    if (finding._tag === 'Fixed') {
+      visibleFindings.push(`- **Fixed:** ${summary}`)
+      continue
+    }
     const sentence = `${summary}${/[.!?]$/.test(summary) ? '' : '.'}`
     const link = reviewFindingCodeLink(repository, headSha, finding)
-    if (finding._tag === 'Logged')
-      return `- **Logged (${finding.impact}/100):** ${sentence}${link} ${reviewFindingFollowUp(finding)}`
+    if (finding._tag === 'Logged') {
+      const destination = ownership === 'owned' ? loggedFindings : visibleFindings
+      destination.push(`- **Logged (${finding.impact}/100):** ${sentence}${link} ${reviewFindingFollowUp(finding)}`)
+      continue
+    }
     const score = finding.impact === undefined ? '' : ` (${finding.impact}/100)`
-    return finding.resolution === 'Dismissal'
+    visibleFindings.push(finding.resolution === 'Dismissal'
       ? `- **Dismissal recommended${score}:** ${sentence}${link} Next: ${cleanLine(finding.nextAction)}`
-      : `- **Open${score}:** ${sentence}${link} Next: ${cleanLine(finding.nextAction)}`
-  })
+      : `- **Open${score}:** ${sentence}${link} Next: ${cleanLine(finding.nextAction)}`)
+  }
+  const loggedSection = loggedFindings.length === 0
+    ? []
+    : ['', '<details>', `<summary>Logged findings (${loggedFindings.length})</summary>`, ...loggedFindings.flatMap(line => ['', line]), '', '</details>']
   const checkLines = reportedChecks.map(line => `- **Reported:** ${cleanLine(line)}`)
   const next = result === 'PENDING' ? ['', 'Next: The controller updates this comment when a Review gate changes.'] : []
   const commandLine = gates.merge._tag === 'Passed' ? pullRequestCommandFooter(commands) : undefined
@@ -1153,7 +1163,9 @@ export function terminalComment(headSha: string, baseSha: string, gates: ReviewG
     disclosure,
     '',
     ...gateLines,
-    ...[...findingLines, ...checkLines].flatMap(line => ['', line]),
+    ...visibleFindings.flatMap(line => ['', line]),
+    ...loggedSection,
+    ...checkLines.flatMap(line => ['', line]),
     ...next,
     ...(commandLine === undefined ? [] : ['', commandLine]),
   ].join('\n')
@@ -1454,7 +1466,7 @@ async function projectReviewRun(
   const outcome = reviewOutcome(gates)
   const confidence = outcome === 'READY' ? run.outcome.confidence : undefined
   const commands = acceptedPullRequestCommands(task.repositoryMapping, snapshot.pullRequest, options.allowedAuthors ?? [])
-  const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks, run.mergeRisk?.combined, task.repository, commands)
+  const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks, run.mergeRisk?.combined, task.repository, commands, task.repositoryMapping.ownership)
   const durablePublication = options.status.stageTerminal !== undefined
   const staged = !durablePublication
     ? await options.status.publish(task, 'terminal', body, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))

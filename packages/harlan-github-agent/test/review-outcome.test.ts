@@ -1,6 +1,7 @@
 import type { ReviewGates, ReviewGateState } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { reviewOutcome, terminalComment } from '../src/item-agent.ts'
+import { withLoggedFindingControls } from '../src/logged-finding-pickup.ts'
 import { reviewCheckRunUpdate } from '../src/review-check-run.ts'
 import { automatedReviewHead, priorAutomatedReviewForHead } from '../src/review-comment.ts'
 
@@ -72,6 +73,37 @@ describe('reviewOutcome', () => {
     expect(body).toContain('**Review gate:** Passed. No material issues.')
     expect(body).toContain('**CI gate:** PENDING. Base branch CI: deploy is still running.')
     expect(body).toContain('Next: The controller updates this comment when a Review gate changes.')
+  })
+
+  it.each(['owned', 'maintained'] as const)('keeps Open findings visible on %s repositories', (ownership) => {
+    const findings = [
+      {
+        _tag: 'Logged' as const,
+        impact: 45,
+        summary: 'The retry log omits a delay.',
+        nextAction: 'Optional follow-up. Include the delay.',
+        details: { fingerprint: 'a'.repeat(64), identity: 'retry log', location: { path: 'src/queue.ts', line: 5 }, proof: 'The log only records the attempt.' },
+      },
+      {
+        _tag: 'Open' as const,
+        impact: 85,
+        summary: 'The queue can drop events.',
+        nextAction: 'Preserve pending events.',
+      },
+    ]
+    const body = terminalComment('abc123', 'base123', gates({ review: failed('A defect remains.') }), findings, undefined, [], undefined, 'harlan-zw/example', [], ownership)
+    const decorated = withLoggedFindingControls(body, findings, [])
+    const summary = '<summary>Logged findings (1)</summary>'
+    expect(decorated).toContain('Optional follow-up: Include the delay.')
+    expect(decorated).toContain('Ask an agent to verify and fix this finding')
+    if (ownership === 'owned') {
+      expect(decorated).toContain(summary)
+      expect(decorated.indexOf('The queue can drop events.')).toBeLessThan(decorated.indexOf(summary))
+      expect(decorated.indexOf('Ask an agent to verify and fix this finding')).toBeLessThan(decorated.indexOf('</details>'))
+    }
+    else {
+      expect(decorated).not.toContain(summary)
+    }
   })
 
   it('links an open finding to the reviewed code line', () => {
