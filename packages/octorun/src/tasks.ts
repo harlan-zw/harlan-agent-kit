@@ -27,7 +27,7 @@ export function createKitTaskTypes(): TaskType[] {
       const { summary } = parsed.value
       if (context.event.target._tag !== 'PullRequest' || context.event.target.headSha !== summary.headSha)
         return { _tag: 'Failed', error: { _tag: 'Authorization', message: 'The change summary must match its pull request head.' } }
-      const result = await context.publish('summary', { _tag: 'Comment', repository: context.event.repository.fullName, number: context.event.target.number, namespace: 'change-summary', body: `🤖 Octorun change summary written by an agent.\n\n${summary.text}` })
+      const result = await context.publish('summary', { _tag: 'Comment', repository: context.event.repository.fullName, number: context.event.target.number, namespace: 'change-summary', body: `🤖 An Octorun agent wrote this summary.\n\n${summary.text}` })
       return result._tag === 'Err' ? { _tag: 'Failed', error: result.error } : { _tag: 'Succeeded', output: { publications: 1 } }
     },
   }]
