@@ -19,7 +19,8 @@ Select:
 Write:
 - Say what changes for the reader. Use active voice and one idea per sentence.
 - Use the words developers see in Git, GitHub, and JavaScript tools. Say pull request, branch, commit, check, or exit code when those are the things you mean.
-- Explain errors and retries in terms of what failed or what tries again. Leave out internal terms such as publication, snapshot, or lease.
+- Use Agent slots for how many Agents can run at once. Say “all Agent slots are in use” when they are full. Keep provider availability separate.
+- Explain errors and retries in terms of what failed or what tries again. Leave out internal terms such as Agent permit, publication, snapshot, or lease.
 - Mention the old behavior only when the diff shows it.
 - Keep the condition that turns a behavior on. Say when a new feature is off by default.
 - Keep exact package names, options, commands, labels, and versions that the reader uses.
