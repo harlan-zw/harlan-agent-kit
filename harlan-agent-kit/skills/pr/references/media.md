@@ -3,9 +3,17 @@
 Apply the [verification comment rule](../SKILL.md#verification-comments) before sharing media.
 Capture the actual changed surface at the pull request head. Keep mockups and captures of routine checks in the session.
 Attach a real capture only when it gives a reviewer a concrete reason to change the merge decision.
-Use the self-identified Agent comment.
+Find the existing self-identified Agent verification comment on the pull request before uploading media.
+If one exists, edit that exact comment and preserve evidence that still applies.
+If you cannot edit it, keep the capture in the session.
 
-GitHub CLI 2.99.0 or later uploads it to the pull request:
+With GitHub CLI 2.99.0 or later, use `--edit-last` with `--body-file` and `--attach` to update it.
+First confirm the intended comment is the latest one from the signed-in account.
+Leave `--create-if-none` off when editing.
+If a newer comment prevents that edit, use the GitHub editor on the intended comment to attach new media.
+For media with GitHub URLs, edit the intended comment by its ID.
+
+Use this first-post example only when the pull request has no Agent verification comment:
 
 ```bash
 HARLAN_AGENT_PR_SKILL=1 gh pr comment NUMBER \
@@ -30,7 +38,8 @@ Commit and push the repair without amending. Recapture the same view and inspect
 Keep a labelled `Before` image only when it explains the repaired defect. Its matching `After` image must show the same area.
 
 [nuxt-frontend-review](../../nuxt-frontend-review/SKILL.md) already captures the running page.
-If reviewers need both views to make the merge decision, label them `Before` and `After`:
+If reviewers need both views to make the merge decision, label them `Before` and `After`.
+This first-post example uses both views:
 
 ```bash
 HARLAN_AGENT_PR_SKILL=1 gh pr comment NUMBER \
@@ -46,7 +55,10 @@ EOF
   --attach ./.playwright/after.png
 ```
 
-GitHub CLI replaces each local Markdown path with its uploaded URL. If every upload fails, it posts no comment. If a later upload fails, it posts the successful files and exits with an error. Check the printed comment URL before retrying.
+GitHub CLI replaces each local Markdown path with its uploaded URL.
+If every upload fails, it posts no comment.
+If a later upload fails, it saves the successful files and exits with an error.
+Check the printed comment URL before retrying. If GitHub saved the comment, retry by editing that comment.
 
 Attach media that shows a changed surface, such as a page, component, CLI frame, or rendered email.
 
