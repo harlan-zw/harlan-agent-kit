@@ -696,7 +696,7 @@ onScopeDispose(() => {
       Copied
     </p>
     <p v-if="uncertain && !reviewDelivery" role="alert" class="shrink-0 px-3 py-2 text-sm text-warning">
-      Input delivery is unknown. Check the terminal before sending again.
+      {{ terminalFailureCopy.DeliveryUnknown }}
     </p>
     <p v-if="failure" role="alert" class="shrink-0 px-3 py-1 text-xs text-error">
       {{ failure }}
@@ -724,7 +724,7 @@ onScopeDispose(() => {
     <div v-if="phoneInput && (!ended || draft)" class="terminal-composer shrink-0 space-y-2 border-t border-default bg-default p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
       <div v-if="reviewDelivery" role="alert" class="space-y-2 text-sm">
         <p class="text-warning">
-          Input delivery is unknown. Check the terminal before sending again.
+          {{ terminalFailureCopy.DeliveryUnknown }}
         </p>
         <div class="flex gap-2">
           <UButton color="neutral" variant="outline" @click="resolveDelivery(true)">

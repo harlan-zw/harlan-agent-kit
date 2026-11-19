@@ -256,7 +256,7 @@ const controlCommand = defineCommand({
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.incidents().then(result => result._tag === 'Err' ? result : { _tag: 'Ok', value: { incidents: result.value } })),
     }),
-    'activity': controlTaskCommand({ name: 'activity', description: 'Show live activity for one active Task. The output hides sensitive data.' }),
+    'activity': controlTaskCommand({ name: 'activity', description: 'Show recent activity for one active Task.' }),
     'events': defineCommand({
       meta: { name: 'events', description: 'List saved workflow events.' },
       args: {
