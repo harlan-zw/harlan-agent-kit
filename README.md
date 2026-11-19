@@ -30,15 +30,15 @@ same directory and picks up the Skills.
 - 🧠 **Architecture review**: Separate rubrics for a Nuxt app and a plain TypeScript package
 - 📦 **Package conformance**: One pass over workspace catalogs, [ESLint](https://eslint.org), [Vitest](https://vitest.dev), CI, and playgrounds
 - ✍️ **Writing**: PRs, changelogs, tweets. Plus a pass that strips the AI tells back out
-- 📋 **Triage**: Issues, the PR backlog, [Sentry](https://sentry.io), and the inbox
+- 📋 **Triage**: Issues, open pull requests, [Sentry](https://sentry.io), and the inbox
 - 🪝 **Hooks**: [pnpm](https://pnpm.io) only. Lint on save. Checks before every push
 - 🤖 **GitHub agent**: A local service that opens the work on issues and PRs while I do something else
 
 ## How I use it
 
-My main checkout stays clean, I never work in it. Every task gets its own worktree with [worktrunk](https://github.com/max-sixty/worktrunk). The agent works in there and it can't commit or push until [`check`](./bin/check) passes, so lint, typecheck and tests. Then the [`pr` Skill](./harlan-agent-kit/skills/pr/SKILL.md) opens the PR. The [hooks](./harlan-agent-kit/hooks) block the command if any of that gets skipped, which is good, because I skip things when I'm tired.
+My main checkout stays clean, I never work in it. Every task gets its own worktree with [worktrunk](https://github.com/max-sixty/worktrunk). The agent works in there and it can't commit or push until [`check`](./bin/check) passes, so lint, typecheck and tests. Then the [`pr` Skill](./harlan-agent-kit/skills/pr/SKILL.md) opens the pull request. The [hooks](./harlan-agent-kit/hooks) block the command if any of that gets skipped, which is good, because I skip things when I'm tired.
 
-The other part runs on its own. I've got [a service](./packages/harlan-github-agent/README.md) on my machine that checks my repos, finds an issue or a PR that's been sitting there, and gives it to [Codex](https://developers.openai.com/codex/sdk/) or [opencode](https://opencode.ai). It reviews the thing but [can't touch the code](./harlan-agent-kit/skills/adversarial-review/SKILL.md). If it finds something real, a second agent does the fix, then the whole thing gets reviewed again. I don't want the same agent marking its own homework.
+The other part runs on its own. I've got [a service](./packages/harlan-github-agent/README.md) on my machine that checks my repos, finds an issue or pull request that's been sitting there, and gives it to [Codex](https://developers.openai.com/codex/sdk/) or [opencode](https://opencode.ai). It reviews the thing but [can't touch the code](./harlan-agent-kit/skills/adversarial-review/SKILL.md). If it finds something real, a second agent does the fix, then the whole thing gets reviewed again. I don't want the same agent marking its own homework.
 
 The bit I still have to do is read all of it. That's the slow part, not the agents. So I make them show me something first: a test that was failing and now passes, a typecheck, or for frontend work [the page running in a browser](./harlan-agent-kit/skills/nuxt-frontend-review/SKILL.md). [Small stuff like dependency bumps](./harlan-agent-kit/references/auto-merge.md) merges without me. If there's a real decision in it, it waits.
 
@@ -93,13 +93,12 @@ Service updates run the same restore before starting workers on either host.
 | `technical-guide` | Research and verify individual technical articles. |
 | `release-notes` | Write release notes that help readers decide whether to upgrade and understand required changes. |
 | `im-not-a-human` | Compress agent text while preserving its meaning. Replaces `im-a-fly` and `agentify-text`. |
-| `pull-request-summary` | Check PR description text before personal `pr` publishes it. |
+| `pull-request-summary` | Check a pull request description before `pr` posts it. |
 | `glossary` | Create or audit GLOSSARY.md for names and vocabulary drift. |
 | `copywriting` | Create or audit COPY.md for voice and canonical wording. |
 
 [`skilld.json`](./.skills/skilld.json) declares exact sources, Agent targets, and required Skills.
-Personal `pr` calls Brundlefly `pull-request-summary` for its description gate.
-Personal `pr` owns Hooks, publication, Review, and Service policy.
+The `pr` Skill uses Brundlefly's `pull-request-summary` to check the description. The `pr` Skill handles opening and updating the pull request.
 `content-refresh` coordinates collections and uses `technical-guide` for each technical article.
 Brundlefly's [`release-notes`](https://skilld.dev/gh/harlan-zw/brundlefly/release-notes) owns release text and its evidence.
 The declaration installs it alongside the other portable writing Skills.
@@ -107,7 +106,7 @@ The personal kit does not bundle this Skill in its marketplace package. Run `pnp
 
 | Skill | Description |
 |-------|-------------|
-| [`adversarial-review`](./harlan-agent-kit/skills/adversarial-review/SKILL.md) | Review one PR adversarially, hand defects to Repair, publish the bot status |
+| [`adversarial-review`](./harlan-agent-kit/skills/adversarial-review/SKILL.md) | Review a pull request, send findings to Repair, and report the result on GitHub |
 | [`agent-feedback`](./harlan-agent-kit/skills/agent-feedback/SKILL.md) | Improve one Agent Skill from explicit Review feedback |
 | [`brand-lab`](./harlan-agent-kit/skills/brand-lab/SKILL.md) | Compare brand directions for a logo and UI motifs on one private page |
 | [`browser`](./harlan-agent-kit/skills/browser/SKILL.md) | Select Chrome identities, use prompt-free debugging, and clean up task tabs |
@@ -126,7 +125,7 @@ The personal kit does not bundle this Skill in its marketplace package. Run `pnp
 | [`plan-ceo`](./harlan-agent-kit/skills/plan-ceo/SKILL.md) | Challenge scope and strategy before anyone writes code |
 | [`pr`](./harlan-agent-kit/skills/pr/SKILL.md) | Create or update a pull request from current work |
 | [`pr-lens`](./harlan-agent-kit/skills/pr-lens/SKILL.md) | Draw a change as animated architecture and data-flow diagrams with [PR Lens](https://prlens.dev) |
-| [`pr-triage`](./harlan-agent-kit/skills/pr-triage/SKILL.md) | Repair, rank, and order the owned PR backlog |
+| [`pr-triage`](./harlan-agent-kit/skills/pr-triage/SKILL.md) | Review, fix, and prioritize open pull requests in your repositories |
 | [`daily-checkin`](./harlan-agent-kit/skills/daily-checkin/SKILL.md) | Run nuxt-checkin and interpret site prompt items |
 | [`dependency-updates`](./harlan-agent-kit/skills/dependency-updates/SKILL.md) | Attempt weekly dependency updates, including majors, in one pull request |
 | [`ci-review`](./harlan-agent-kit/skills/ci-review/SKILL.md) | Review CI warnings and errors, then propose verified repairs |
@@ -155,9 +154,9 @@ Codex reads `~/.codex/hooks.json`, which `pnpm sync:context` renders from
 | WorktreeCreate | [`wt-worktree-create.sh`](./harlan-agent-kit/hooks/wt-worktree-create.sh) | Create Claude Code worktrees with `wt`, from the caller's HEAD |
 | WorktreeRemove | [`wt-worktree-remove.sh`](./harlan-agent-kit/hooks/wt-worktree-remove.sh) | Remove them with `wt`, never with force |
 | PreToolUse (Bash) | [`himalaya-read-only.sh`](./harlan-agent-kit/hooks/himalaya-read-only.sh) | Keep every agent's email access read only |
-| PreToolUse (Bash) | [`pr-skill-only.sh`](./harlan-agent-kit/hooks/pr-skill-only.sh) | Require the `pr` Skill to open a PR or edit its description |
+| PreToolUse (Bash) | [`pr-skill-only.sh`](./harlan-agent-kit/hooks/pr-skill-only.sh) | Require the `pr` Skill to open a pull request or edit its description |
 | PreToolUse (Bash) | [`merged-branch-guard.sh`](./harlan-agent-kit/hooks/merged-branch-guard.sh) | Block commits on an already merged branch |
-| PreToolUse (Bash) | [`pre-commit-push.sh`](./harlan-agent-kit/hooks/pre-commit-push.sh) | Run `check` before a commit, push, or PR |
+| PreToolUse (Bash) | [`pre-commit-push.sh`](./harlan-agent-kit/hooks/pre-commit-push.sh) | Run `check` before a commit, push, or pull request |
 | PostToolUse (Write, Edit) | [`eslint.sh`](./harlan-agent-kit/hooks/eslint.sh) | Autofix lint on the file that changed |
 | PostToolUse (Bash) | [`command-not-found.sh`](./harlan-agent-kit/hooks/command-not-found.sh) | Recover from a missing shell command |
 

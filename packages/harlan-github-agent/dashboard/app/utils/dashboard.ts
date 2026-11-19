@@ -346,7 +346,7 @@ function startBlockedLine(snapshot: DashboardSnapshot): string | undefined {
   switch (agentStartState(snapshot)._tag) {
     case 'Available': return undefined
     case 'Paused': return 'Paused. Nothing starts until you select Resume.'
-    case 'RestartRequested': return 'A Restart request is finishing active work.'
+    case 'RestartRequested': return 'The Service is waiting for active work to finish before restarting.'
     case 'WritesDisabled': return 'GitHub writes are off, so no agent will start.'
     case 'ReserveReached': return 'Every automatic Agent provider reached its Reserve.'
     case 'CapacityUnavailable': return 'Agent provider limits could not load. The controller will retry.'
@@ -550,7 +550,7 @@ export function incidentTone(incident: Incident): StatusTone {
 /** Says what the controller will do next, so the pane answers "do I act on this?". */
 export function incidentRecoveryLabel(incident: Incident, now: Date): string {
   if (incident.recovery._tag === 'OnNextOperation')
-    return 'The next Controller operation checks recovery.'
+    return 'The Service will check this again the next time it runs the operation.'
   if (incident.recovery._tag === 'Retrying') {
     const seconds = Math.max(0, Math.ceil((Date.parse(incident.recovery.nextAttemptAt) - now.getTime()) / 1000))
     const label = !Number.isFinite(seconds) || seconds === 0 ? 'Retry due' : `Retry in ${Math.floor(seconds / 60)}m ${seconds % 60}s`

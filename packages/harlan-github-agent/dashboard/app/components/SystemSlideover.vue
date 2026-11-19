@@ -405,7 +405,7 @@ function activityLine(item: AgentActivityItem): string {
           </p>
           <p v-for="notice in circuits" :key="notice.text" class="mt-2 text-sm status-warning">
             {{ notice.text }}<template v-if="notice._tag === 'Open'">
-              {{ retryDeadline(notice.retryAt, now) }}. The next Agent request checks recovery.
+              {{ retryDeadline(notice.retryAt, now) }}. The next Agent request will check whether the provider is available.
             </template>
           </p>
         </section>

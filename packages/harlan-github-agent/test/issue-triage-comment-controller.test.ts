@@ -154,7 +154,7 @@ describe('issue triage publication', () => {
 
     expect(result).toEqual(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/issues/12#issuecomment-42' }))
     expect(stamped).toEqual(['READY_TO_SPEC'])
-    expect(body).toContain('- **Route:** Ready to spec')
+    expect(body).toContain('- **Triage result:** Ready to spec')
   })
 
   it('publishes after the Running label moved updatedAt', async () => {

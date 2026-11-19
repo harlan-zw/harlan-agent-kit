@@ -201,7 +201,7 @@ export async function replayStoredTriage(input: {
     }
     for (const band of TRIAGE_BANDS) {
       const summary = summariseBand(replays, band)
-      input.log(`Band ${band}: ${summary.agreed} agreed, ${summary.reviewsAdded} extra Reviews, ${summary.skipsAdded} would skip what Review read${summary.skipPrecision === null ? '' : `, skip precision ${summary.skipPrecision}`}.`)
+      input.log(`Threshold ${band}: ${summary.agreed} matched, ${summary.reviewsAdded} additional reviews, ${summary.skipsAdded} reviews skipped${summary.skipPrecision === null ? '' : `, skip precision ${summary.skipPrecision}`}.`)
     }
     // Accuracy within probability bands, the check a threshold choice needs:
     // it shows where the model knows and where it guesses.
@@ -220,7 +220,7 @@ export async function replayStoredTriage(input: {
       input.log(`Confidence ${bucket}: ${entry.correct}/${entry.total} agreed with the stored decision.`)
     const suggestion = suggestBand(replays)
     if (suggestion.classified < 100)
-      input.log(`Only ${suggestion.classified} of ${replays.length} replays reached the classification: below the 100-150 example floor, so treat the suggested band as provisional.`)
+      input.log(`The classifier answered ${suggestion.classified} of ${replays.length} cases. With fewer than 100 answers, treat the suggested threshold as provisional.`)
     return {
       replayed: replays.length,
       classified: suggestion.classified,
@@ -347,16 +347,16 @@ export async function replayStoredIssueTriage(input: {
     }
     for (const band of TRIAGE_BANDS) {
       const summary = summariseIssueBand(replays, band)
-      input.log(`Band ${band}: ${summary.agreed}/${replays.length} agreed, ${summary.readyStalled} ready issues stalled, ${summary.routedAsStored} routed as stored, ${summary.unavailable} unavailable.`)
+      input.log(`Threshold ${band}: ${summary.agreed}/${replays.length} counted as agreement, ${summary.readyStalled} ready issues would wait, ${summary.routedAsStored} would skip Agent triage as expected, ${summary.unavailable} unanswered.`)
     }
     const suggestion = suggestIssueBand(replays)
     const answered = replays.length - suggestion.unavailable
     if (answered < 100)
-      input.log(`Only ${answered} of ${replays.length} replays reached the classification: below the 100-150 example floor, so treat the suggested band as provisional.`)
+      input.log(`The classifier answered ${answered} of ${replays.length} cases. With fewer than 100 answers, treat the suggested threshold as provisional.`)
     // Agreement counts every kept Agent turn, so a band that bypasses nothing
     // scores a perfect run. Say so, or the no-op reads as a result.
     if (suggestion.routedAsStored === 0)
-      input.log(`Band ${suggestion.band} bypasses no Issue, so it changes nothing. Read routed as stored, never agreement.`)
+      input.log(`At threshold ${suggestion.band}, no saved decision to skip Agent triage matched. Use the count of matching skips to measure how much Agent work the threshold would save.`)
     return { replayed: replays.length, answered, suggestion }
   }
   finally {

@@ -238,7 +238,7 @@ describe('issue triage classification', () => {
     if (decision._tag !== 'Routed')
       throw new Error('Expected a routed decision.')
     await expect(instance.settle(repositoryMapping(), issue, decision.result, new AbortController().signal)).resolves.toEqual(ok(undefined))
-    expect(comments[0]).toContain('ISSUE TRIAGE')
+    expect(comments[0]).toContain('Issue triage')
     expect(comments[0]).toContain('Wait to implement')
     expect(labels).toEqual(['WAIT_TO_IMPLEMENT'])
   })

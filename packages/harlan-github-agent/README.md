@@ -4,19 +4,19 @@ Local service for Harlan's selected [GitHub](https://github.com) repositories.
 
 Current:
 
-- GitHub App repository discovery with strict local checkout checks
+- finds repositories from the GitHub App installation and checks their local Git checkouts
 - [SQLite](https://sqlite.org) state and review history
-- saved review results, findings, checks, and exact GitHub comments
-- outside contributor issue approvals tied to the current issue state
+- review history with findings, check results, and GitHub comments
+- approval for outside contributors' issues applies to the current version of the issue
 - review and fix approvals tied to the current head commit
 - approved issue work resumes the triage agent session and opens a pull request ready for review
 - completed issue triage posts one self identified comment and updates it on reruns
-- read only Review, followed by a fresh Repair Agent with every material finding
-- fresh Review of every published Repair head SHA
+- read-only Review, followed by a fresh Repair Agent that receives every finding it must fix
+- a new Review after each push from Repair
 - separate Baseline repair pull requests when default branch CI fails
 - fixed cutoff date for old issues
 - bounded GitHub polling with retry backoff
-- optional GitHub webhooks on their own port, which hint a reconciliation instead of carrying state
+- optional GitHub webhooks on a separate port request a fresh read from GitHub
 - authenticated [H3](https://h3.dev) and [srvx](https://srvx.h3.dev) dashboard
 - safe merge conflict commits and pushes
 - two agent providers: [Codex](https://developers.openai.com/codex/sdk/) and [opencode](https://opencode.ai). Set `agent.provider` to `codex` or `opencode`
@@ -26,12 +26,12 @@ Current:
 - `Automatic` Agent selection picks the provider with capacity left, and keeps a reserve of each published window for your own terminal
 - opencode answers on the GLM Coding Plan with `zai-coding-plan/glm-5.3-flash`, and the service reads that plan's live quota
 - one global limit of three active agents across reviews, issue work, and pull request fixes
-- durable dashboard cancellation for active and queued tasks
+- cancel running or queued Tasks from the dashboard
 - read-only public issue watches outside the GitHub App installation
 - conflict fixes push only when the pull request head commit still matches
 - repair commits push only when the approved head commit still matches
 
-Still to build: Claude reviews, PR conformance, and deployment ownership.
+Still to build: Claude reviews, pull request conformance, and deployment ownership.
 
 ## Run
 
@@ -171,9 +171,9 @@ History stores each completed Review duration and Agent provider token usage. Ol
 
 If default branch CI already fails, Repair leaves the reviewed pull request unchanged. One Baseline repair Agent fixes that exact default branch commit in a separate pull request.
 
-Each Worker runs like a normal local agent session inside its own Git worktree. The controller creates each worktree from its mapped checkout with `wt`, so the global Worktrunk path template applies. Workers inherit the global agent context, installed skills, environment, provider login, and authenticated `gh` client. They may read past GitHub issues and pull requests. The controller still owns comments and pushes.
+Each Agent runs in its own Git worktree. The Service uses `wt` to create the worktree from the repository's configured checkout. Each Agent inherits the Agent instructions, installed Skills, environment, provider login, and authenticated `gh` client. Agents can read past GitHub issues and pull requests. The Service posts comments and pushes commits.
 
-Switching the Agent provider starts new sessions. A saved session belongs to the provider that created it, so no Worker resumes a session from the other provider.
+Switching the Agent provider starts new sessions. Only the provider that created a saved session can resume it.
 
 `agent.provider` names the Agent provider the service starts with. A switch from the dashboard or the tray overrides it and survives a restart.
 

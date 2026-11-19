@@ -34,7 +34,7 @@ const rows = computed(() => snapshot.value.githubRateLimits.map(hold => githubRa
       Checking GitHub rate limits.
     </p>
     <p v-else class="mt-2 text-sm text-muted">
-      No controller GitHub requests paused.
+      The Service has no paused GitHub requests.
     </p>
   </section>
 </template>

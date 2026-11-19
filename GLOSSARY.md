@@ -1,12 +1,11 @@
 # Glossary
 
-Canonical vocabulary for this repository. Every user-visible string, public
-identifier, doc heading, and commit scope uses these terms and no synonyms.
+Use these names for product concepts in messages, docs, public APIs, and commit scopes.
+Use the terms developers already see in Git, GitHub, Node.js, and JavaScript.
+Use plain words for everything else. Keep exact commands, flags, and API names in code formatting.
 
-**Provenance.** `packages/harlan-github-agent/GLOSSARY.md` already holds a ratified
-57-term vocabulary for the GitHub agent service, with a Map, a `Banned` table, and
-a table of GitHub terms adopted unchanged. That file stays authoritative for every
-service word. This file cites it and does not restate it.
+The [Service glossary](packages/harlan-github-agent/GLOSSARY.md) defines the
+GitHub agent service terms and lists the terms it takes from GitHub.
 
 This file covers what the package glossary does not: the **plugin surface**, meaning
 Skills, Hooks, References, Agent instructions, the `check` command, and worktrees.
@@ -37,7 +36,7 @@ Where the two files disagree about a service word, the package glossary wins.
 | Service | `packages/harlan-github-agent`, systemd `harlan-github-agent` | Harlan, GitHub | 1 Dashboard, 1 Control API | "GitHub agent" |
 | Octorun | standalone `harlan-zw/octorun`; consumer in `packages/octorun` | this repository's GitHub App and Claude provider | independent workflow runtime; uses its [own vocabulary](https://github.com/harlan-zw/octorun/blob/main/GLOSSARY.md) | "Octorun" |
 | Dashboard | `packages/harlan-github-agent/dashboard/` | a browser | 1 per Service | "dashboard" |
-| Agent, Task, Routine, Review run, Incident, and 52 more | `packages/harlan-github-agent/GLOSSARY.md` | the Service | defined there, not here | see that file |
+| Agent, Task, Routine, Review run, Incident | `packages/harlan-github-agent/GLOSSARY.md` | the Service | the package glossary defines these and other Service terms | see that file |
 
 Collisions
 

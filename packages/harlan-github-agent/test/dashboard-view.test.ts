@@ -598,7 +598,7 @@ describe('cardStateLine', () => {
     [{ _tag: 'WritesDisabled' } as const, 'GitHub writes are off, so no agent will start.'],
     [{ _tag: 'ReserveReached' } as const, 'Every automatic Agent provider reached its Reserve.'],
     [{ _tag: 'CapacityUnavailable' } as const, 'Agent provider limits could not load. The controller will retry.'],
-    [{ _tag: 'RestartRequested' } as const, 'A Restart request is finishing active work.'],
+    [{ _tag: 'RestartRequested' } as const, 'The Service is waiting for active work to finish before restarting.'],
   ])('tells queued work what holds it: %o', (agentStart, text) => {
     expect(cardStateLine(queueEntry(), dashboardSnapshot({ agentStart }), now).text).toBe(text)
   })
@@ -924,7 +924,7 @@ describe('incident pane', () => {
     expect(incidentRecoveryLabel(incident(), new Date('2026-08-14T12:02:00Z'))).toBe('Retry due · retry 2')
     expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'Exhausted' } }), now)).toBe('Retries exhausted')
     expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'ActionRequired' } }), now)).toBe('Action required')
-    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'OnNextOperation' } }), now)).toBe('The next Controller operation checks recovery.')
+    expect(incidentRecoveryLabel(incident({ recovery: { _tag: 'OnNextOperation' } }), now)).toBe('The Service will check this again the next time it runs the operation.')
   })
 
   it('names the scope a person can act on', () => {

@@ -67,7 +67,7 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Terminal observer | Read-only viewer | Agent session without input authority |
 | Terminal reconnect | Reconnecting to the terminal. | Detached Agent session |
 | Terminal offline | Offline. Your draft is saved. | Browser reports no network connection |
-| Terminal uncertain input | Input delivery is unknown. Check the terminal before sending again. | Disconnect with unconfirmed input |
+| Terminal uncertain input | Your input may have reached the terminal. Check the terminal before sending again. | Disconnect with unconfirmed input |
 | Terminal input control | Use terminal | Acquire available input authority |
 | Terminal release control | Release terminal | Release input authority |
 | Terminal split control | Split terminal | Show two Agent sessions |
@@ -133,15 +133,15 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Terminal protocol | Update the terminal host before connecting. | Protocol mismatch |
 | Terminal stale generation | The Agent session changed. Reload. | Old process generation |
 | Terminal writer busy | Another viewer controls this terminal. Release it there before taking control. | Busy writer |
-| Terminal stale writer | Terminal input authority expired. Select Use terminal to reconnect. | Expired writer |
+| Terminal stale writer | You lost control of the terminal. Select Use terminal to reconnect. | Expired writer |
 | Terminal duplicate input | The terminal refused repeated input. Check the screen before sending again. | Duplicate sequence |
 | Terminal input limit | Terminal input exceeds the size limit. Paste less text. | Input size refusal |
 | Terminal provider missing | Install the selected Agent provider on this host. | Missing provider |
 | Terminal project missing | The Project is unavailable on this host. Reload. | Missing Project |
-| Terminal capacity unavailable | Shared host capacity is unavailable. Check the host setup. | Unavailable admission authority |
+| Terminal capacity unavailable | The host could not check for a free session slot. Check the host setup. | Unavailable admission authority |
 | Terminal capacity refused | The host has no capacity for another Agent. Stop a session or wait. | Refused admission |
 | Terminal launch conflict | The session request conflicts with saved work. Reload before starting another. | Conflicting launch intent |
-| Terminal ownership unknown | The host cannot confirm process ownership. Check the session before starting another. | Unknown process ownership |
+| Terminal ownership unknown | The host could not verify which process runs this session. Check the session before starting another. | Unknown process ownership |
 | Terminal unavailable | The terminal is unavailable. Reload. | Missing terminal process |
 | Terminal project filter | Filter projects | Project search label |
 | Terminal checking | Connecting to the terminal host. | Initial host discovery |
@@ -157,10 +157,10 @@ The dashboard uses short, direct controls and specific state descriptions.
 | GitHub warning | GitHub rate limit | System chip |
 | GitHub section | GitHub rate limits | System pane |
 | GitHub loading | Checking GitHub rate limits. | System pane |
-| GitHub empty state | No controller GitHub requests paused. | System pane |
+| GitHub empty state | The Service has no paused GitHub requests. | System pane |
 | GitHub hold | Requests using this credential are paused. | System pane |
 | GitHub retry due | Retry due | System pane countdown |
-| GitHub recovery | The next GitHub request checks recovery. | System pane after the deadline |
+| GitHub recovery | The next GitHub request will check whether the rate limit still applies. | System pane after the deadline |
 | Service data unavailable | Service data is unavailable. Reload before changing settings or work. | System pane and refused controls |
 | Service read only | Read-only Service connection. | Remote Service badge and refused controls |
 | Service state missing | The Service returned no state. | State request error |
@@ -198,8 +198,8 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Desktop memory configuration | Change Desktop memory in the host configuration. | Refused memory budget writes |
 | Desktop incompatible | Update required | Desktop state when protocols differ |
 | Desktop warning | Desktop update required | System chip and pane summary |
-| Operation recovery | The next Controller operation checks recovery. | Incident with no scheduled retry |
-| Agent recovery | The next Agent request checks recovery. | Capacity after the circuit deadline |
+| Operation recovery | The Service will check this again the next time it runs the operation. | Incident with no scheduled retry |
+| Agent recovery | The next Agent request will check whether the provider is available. | Capacity after the circuit deadline |
 | Host power off | Power off Hogwild | System pane power control |
 | Host power-off acknowledgement | I understand someone must physically turn Hogwild back on. | Required power-off confirmation |
 | Host power-off consequence | This stops all work and takes agent.harlanzw.com and hogwild.harlanzw.com offline. Someone must physically turn Hogwild back on. | Power-off dialog |
@@ -224,6 +224,8 @@ The dashboard uses short, direct controls and specific state descriptions.
 3. Describe observed state without promising completion.
 4. Keep technical evidence inside disclosures.
 5. Keep failed activity visible. Fold successful activity into one quiet line.
+6. Use Git and GitHub terms for branches, commits, pull requests, and checks.
+7. State what happened and what the reader can do. Use familiar JavaScript terms such as exit code when they help.
 
 ## Banned language
 

@@ -138,7 +138,7 @@ export function githubRateLimitRow(hold: GitHubRateLimitHold, now: Date) {
     retryAt: hold.retryAt,
     deadline: new Date(hold.retryAt).toUTCString(),
     retry: seconds === 0 ? 'Retry due' : `Retry in ${minutes > 0 ? `${minutes}m ` : ''}${seconds % 60}s`,
-    detail: seconds === 0 ? 'The next GitHub request checks recovery.' : 'Requests using this credential are paused.',
+    detail: seconds === 0 ? 'The next GitHub request will check whether the rate limit still applies.' : 'Requests using this credential are paused.',
   }
 }
 

@@ -75,7 +75,7 @@ did not cover it.
 | Legacy issue cutoff | `issue_cutoff` | Configuration | One per service | none |
 | Action required | `tasks.state_tag` | Scheduler | One Task state | action required |
 | Incident | `incidents` | Controller | N to 1 Repository mapping, Task, or the service | incident |
-| Recovery | `incidents.recovery` | Controller | One per Incident | Retrying, OnNextOperation, Retries exhausted, or Action required |
+| Recovery | `incidents.recovery` | Controller | One per Incident | Retry in, Retry due, Retries exhausted, or Action required |
 | Process finding | `process_findings` | Supervision | N per workflow | none |
 
 ### GitHub terms adopted unchanged
@@ -88,8 +88,8 @@ knows GitHub already knows them.
 | pull request | a pull request | PR in prose, merge request |
 | issue | an issue | ticket, bug report, card |
 | draft | a pull request not ready for review | WIP, unfinished |
-| base branch, base SHA | what the pull request merges into | target branch, destination |
-| head ref, head SHA | the pull request's own branch and tip commit | source branch, commit id |
+| base branch, base SHA | the branch a pull request merges into and its commit | target branch, destination |
+| head branch, head SHA | the branch with the proposed changes and its tip commit | source branch, commit id |
 | stack, stacked pull request | a pull request based on another pull request's head | chain, dependent PR, child PR |
 | default branch | the repository's default branch | main, master, trunk |
 | fork | a fork | copy, mirror |
@@ -770,8 +770,9 @@ Use instead of error, problem, outage, or alert in dashboard copy.
 
 What the controller will do about one Incident without being asked.
 
-Recovery names a scheduled retry deadline, the next Controller operation, exhausted retries, or a required action.
-A past deadline reads `Retry due`. It does not claim that a retry is running.
+Recovery shows when the Service will retry or whether you need to act.
+If the retry deadline has passed, the dashboard shows `Retry due`.
+If the Service will check on its next operation, it says so in plain words.
 
 ### Merge risk
 
@@ -878,7 +879,7 @@ Evidence that a skill, policy, or workflow should change.
 | risk level, merge tier, skip review, review waiver, review exemption | Auto merge, or Merge risk for the routing value | Auto merge never affects whether review runs |
 | restart queue, drain mode | Restart request | Queue and Pause already name different service concepts |
 | upgrade, refresh, sync | Service update | These words name different package and data operations |
-| journal, lease, fence, mutation, publication, revision, snapshot, item, agent role | rewrite the sentence | Internal machinery, never user-visible |
+| journal, lease, fence, mutation, publication, revision, snapshot, item, agent role | Name the issue, pull request, commit, or action the reader can see | These words name internal Service details in this context |
 
 ## Open questions
 
