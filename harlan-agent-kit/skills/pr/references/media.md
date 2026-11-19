@@ -1,11 +1,24 @@
 # Pull request media
 
-A visible change earns media in the same comment. GitHub CLI 2.99.0 or later uploads it to the pull request:
+Apply the [verification comment rule](../SKILL.md#verification-comments) before sharing media.
+Capture the actual changed surface at the pull request head. Keep mockups and captures of routine checks in the session.
+Attach a real capture only when it gives a reviewer a concrete reason to change the merge decision.
+Find the existing self-identified Agent verification comment on the pull request before uploading media.
+If one exists, edit that exact comment and preserve evidence that still applies.
+If you cannot edit it, keep the capture in the session.
+
+With GitHub CLI 2.99.0 or later, use `--edit-last` with `--body-file` and `--attach` to update it.
+First confirm the intended comment is the latest one from the signed-in account.
+Leave `--create-if-none` off when editing.
+If a newer comment prevents that edit, use the GitHub editor on the intended comment to attach new media.
+For media with GitHub URLs, edit the intended comment by its ID.
+
+Use this first-post example only when the pull request has no Agent verification comment:
 
 ```bash
 HARLAN_AGENT_PR_SKILL=1 gh pr comment NUMBER \
-  --body "Checked the visible change in the running app." \
-  --attach './.playwright/after.png#The updated page'
+  --body "🤖 Harlan Agent Kit captured the running app. The account selector stays visible at 320px." \
+  --attach './.playwright/after.png#The account selector at 320px'
 ```
 
 Use `--attach` for images and videos. Repeat the flag for up to 50 files. GitHub hosts the files with the pull request. Never upload pull request media to another service.
@@ -24,11 +37,15 @@ Commit and push the repair without amending. Recapture the same view and inspect
 
 Keep a labelled `Before` image only when it explains the repaired defect. Its matching `After` image must show the same area.
 
-Take the picture before you need it. [nuxt-frontend-review](../../nuxt-frontend-review/SKILL.md) already captures the running page. Two images beat one, labelled `Before` and `After`:
+[nuxt-frontend-review](../../nuxt-frontend-review/SKILL.md) already captures the running page.
+If reviewers need both views to make the merge decision, label them `Before` and `After`.
+This first-post example uses both views:
 
 ```bash
 HARLAN_AGENT_PR_SKILL=1 gh pr comment NUMBER \
   --body "$(cat <<'EOF'
+🤖 Harlan Agent Kit captured the running app at 320px to verify the account selector stays visible.
+
 | Before | After |
 | --- | --- |
 | ![Before](./.playwright/before.png) | ![After](./.playwright/after.png) |
@@ -38,7 +55,10 @@ EOF
   --attach ./.playwright/after.png
 ```
 
-GitHub CLI replaces each local Markdown path with its uploaded URL. If every upload fails, it posts no comment. If a later upload fails, it posts the successful files and exits with an error. Check the printed comment URL before retrying.
+GitHub CLI replaces each local Markdown path with its uploaded URL.
+If every upload fails, it posts no comment.
+If a later upload fails, it saves the successful files and exits with an error.
+Check the printed comment URL before retrying. If GitHub saved the comment, retry by editing that comment.
 
-Only attach media for a visible change: a page, a component, a CLI frame, or a rendered email. Never attach a screenshot of passing tests or a green terminal.
+Attach media that shows a changed surface, such as a page, component, CLI frame, or rendered email.
 
