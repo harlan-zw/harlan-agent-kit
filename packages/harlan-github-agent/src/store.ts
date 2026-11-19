@@ -1243,6 +1243,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     at: string
   }) => boolean
   listReviewRuns: (repository: string, pullRequestNumber: number) => ReviewRun[]
+  readReviewFindings: (reviewRunId: string) => ReviewFinding[]
   /** Answers whether the current pull request remains eligible for Review writes. */
   hasCurrentReviewAuthority: (repository: string, pullRequestNumber: number) => boolean
   /** Reads current Auto merge inputs only while operator authority remains active. */
@@ -10158,6 +10159,11 @@ export function openJournalStore(
     return reviewRuns.map(row => reviewRunFromRow(row, publicationsByRun.get(row.id) ?? []))
   }
 
+  const readReviewFindings: JournalStore['readReviewFindings'] = (reviewRunId) => {
+    const row = database.prepare('SELECT findings FROM review_runs WHERE id = ?').get(reviewRunId) as { findings: string } | undefined
+    return row === undefined ? [] : JSON.parse(row.findings) as ReviewFinding[]
+  }
+
   const hasCurrentReviewAuthority: JournalStore['hasCurrentReviewAuthority'] = (repository, pullRequestNumber) => database.prepare(`
     SELECT 1
     FROM subjects
@@ -17661,6 +17667,7 @@ export function openJournalStore(
     getRepairedHeadFindings,
     listAgentFeedback,
     listReviewRuns,
+    readReviewFindings,
     hasCurrentReviewAuthority,
     getAutoMergeContext,
     storedReviewForHead,

@@ -260,6 +260,7 @@ Record duration and Agent provider token usage for every completed Review run. S
 Carry Approval to the exact commit published by that approved repair. Do not carry it to any other new head commit.
 
 Publish each completed App-authenticated Review as a native GitHub `COMMENT` review.
+Show Logged findings as expandable optional follow-ups in the review entry.
 Link it to the canonical comment so the bot appears in GitHub's Reviewers sidebar.
 Reuse one native review per head commit. Update it when Review runs again.
 Never submit it through Harlan's user token.

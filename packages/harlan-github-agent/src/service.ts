@@ -8,6 +8,7 @@ import type { GitHubQuota } from './github-rate-limit.ts'
 import type { GitHubUserAccess } from './github-user-access.ts'
 import type { AgentSlotLimits } from './host-capacity.ts'
 import type { AgentSlotCounts } from './host-memory.ts'
+import type { NativeReviewMirror } from './native-review.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunReport } from './review-check-run.ts'
 import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
@@ -868,14 +869,16 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         validateMapping,
       }),
     })
-    const reviewStatus = createReviewStatusController({
-      nativeReviews: {
-        publisher: workerGithub,
-        report: (repository, result) => {
-          if (result._tag === 'Err')
-            options.logger.error(`${repository}: native Review failed: ${result.error}`)
-        },
+    const nativeReviews: NativeReviewMirror = {
+      publisher: workerGithub,
+      readFindings: store.readReviewFindings,
+      report: (repository, result) => {
+        if (result._tag === 'Err')
+          options.logger.error(`${repository}: native Review failed: ${result.error}`)
       },
+    }
+    const reviewStatus = createReviewStatusController({
+      nativeReviews,
       checkRuns: { publisher: workerGithub, report: reportCheckRun },
       commentControls: webhookControls.available,
       loggedFindings: store,
@@ -1113,13 +1116,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         workerId: randomUUID(),
       }),
       reviewStatuses: createReviewStatusScheduler({
-        nativeReviews: {
-          publisher: workerGithub,
-          report: (repository, result) => {
-            if (result._tag === 'Err')
-              options.logger.error(`${repository}: native Review failed: ${result.error}`)
-          },
-        },
+        nativeReviews,
         checkRuns: { publisher: workerGithub, report: reportCheckRun },
         github: workerGithub,
         intervalMilliseconds: 2_000,
