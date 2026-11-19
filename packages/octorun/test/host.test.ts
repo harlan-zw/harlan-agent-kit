@@ -77,7 +77,7 @@ it('runs the installed workflow chain and publishes one disclosed summary across
   try {
     expect(await second.value.command('run', args)).toEqual(run)
     expect(f.calls()).toBe(1)
-    expect(f.comments.map(comment => comment.body)).toEqual([expect.stringContaining('🤖 Octorun change summary written by an agent.\n\nMissing values now return undefined.')])
+    expect(f.comments.map(comment => comment.body)).toEqual([expect.stringContaining('🤖 An Octorun agent wrote this summary.\n\nMissing values now return undefined.')])
     expect(f.checks.every(check => check.status === 'completed')).toBe(true)
   }
   finally {
@@ -85,7 +85,7 @@ it('runs the installed workflow chain and publishes one disclosed summary across
   }
 })
 
-it('writes the summary with the kit release note brief', async () => {
+it('writes the summary with the kit GitHub comment brief', async () => {
   const f = await fixture()
   const systems: string[] = []
   const provider: AgentProvider = { id: 'brief-test', generate: async (request) => {
