@@ -144,8 +144,7 @@ Supply the intended base, complete net diff, user intent, effective template, an
 Add these local description requirements:
 
 - Use the effective template and preserve its required comments and sections.
-- Omit verification, testing, and QA sections or mentions. CI owns that evidence.
-  Evidence CI cannot produce belongs in the self-identified Agent comment from Step 5.
+- Omit verification, testing, and QA sections or mentions. Apply the [verification comment rule](#verification-comments).
 - Add Breaking Changes and Migration sections only when the operator needs them.
 - Include relevant measured benchmarks. Never invent or estimate a figure.
 - Append the exact AI disclosure from Step 3. Preserve it on every rewrite.
@@ -249,24 +248,24 @@ gh pr edit NUMBER --add-label harlan-agent-auto-merge
 
 Pass `--label harlan-agent-auto-merge` to `gh pr create` instead when the label already exists. Remove it with `gh pr edit NUMBER --remove-label harlan-agent-auto-merge` when the pull request grows past the change it was added for.
 
-**Verification evidence goes here, as a comment, not in the description.** Post it directly only on a repo the user owns or maintains, since it is part of submitting their own PR. Anywhere else, show the draft and let them post it. Post one only when you did something CI cannot show: ran a migration against a restored database, exercised the change in a browser, checked an authorization boundary by hand. Skip it entirely when the proof is just lint, typecheck, and the test suite; CI already reports those.
+### Verification comments
 
-```bash
-gh pr comment NUMBER --body "$(cat <<'EOF'
-Checked by hand, since CI cannot cover it:
-- Backfill on a 5 Aug 2026 live restore produced 7,438 snapshots, rerun added none
-- Signed agreement kept the same SHA256 after editing venue, purchaser, and contract ID
-- Crafted Staff export request returned 403
-EOF
-)"
-```
+Keep routine verification in the session. This includes fixture runs, documentation examples, parser checks, and passing tests.
+Post only evidence or concerns that give a reviewer a concrete reason to change the merge decision.
+The information must add to what the PR and CI already show.
+If the effect on that decision is unclear, keep the evidence in the session.
 
-Keep it to the checks a reviewer would otherwise have to repeat. Prose lines, not ticked boxes.
+A migration rehearsal against restored data can show whether a backfill is safe.
+A manual authorization check or real screenshot can resolve a material concern.
+For a concern, name the observation or gap in verification.
+Explain why it matters and what the reviewer needs to decide.
+
+On a repository the user owns or maintains, put the evidence in one short, self-identified Agent comment.
+Update that comment if its evidence changes. On another repository, show the draft to the user.
 
 ### Screenshots and video
 
 For a visible change, read and follow [media](references/media.md) before capture, inspection, or upload.
-Keep verification evidence in a self-identified Agent comment. Do not attach screenshots of passing checks.
 
 ## Step 6: Wait for CI and Review
 
