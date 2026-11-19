@@ -300,7 +300,13 @@ export async function publishClaimedReviewStatus(
       command.repositoryMapping,
       command.pullRequestNumber,
       command.expectedHeadSha,
-      nativeReviewBody(command.expectedHeadSha, command.desiredOutcome, published.value.url),
+      nativeReviewBody({
+        repository: command.repository,
+        headSha: command.expectedHeadSha,
+        outcome: command.desiredOutcome,
+        commentUrl: published.value.url,
+        findings: options.nativeReviews.readFindings(command.reviewRunId),
+      }),
       signal,
       () => authorizeWrite(options, command),
     )
