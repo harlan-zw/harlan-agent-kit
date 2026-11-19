@@ -11,11 +11,11 @@ export function issueTriageComment(input: IssueTriageResult): string {
     ...(input.relatedPullRequests.length === 0 ? [] : [`- **Related pull requests:** ${input.relatedPullRequests.map(reference => `#${reference.number}: ${reference.reason}`).join('; ')}`]),
   ]
   return `${AUTOMATED_ISSUE_TRIAGE_MARKER}
-### 🤖 ISSUE TRIAGE
+### 🤖 Issue triage
 
 ${automatedDisclosure({ kind: 'triage', disclaimer: `It is not Harlan's personal assessment or commitment.` })}
 
-- **Route:** ${issueTriageStateLabel(input._tag)}
+- **Triage result:** ${issueTriageStateLabel(input._tag)}
 - **Difficulty:** ${input.difficulty}/5
 - **Impact:** ${input.impact}/5
 - **Reproduction:** ${input.hasReproduction ? 'Yes' : 'No'}

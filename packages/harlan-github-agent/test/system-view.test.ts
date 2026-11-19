@@ -46,7 +46,7 @@ it('names the GitHub credential and counts down without claiming recovery', () =
   })
   expect(githubRateLimitRow(hold, new Date('2026-10-10T16:07:00Z'))).toMatchObject({
     retry: 'Retry due',
-    detail: 'The next GitHub request checks recovery.',
+    detail: 'The next GitHub request will check whether the rate limit still applies.',
   })
 })
 

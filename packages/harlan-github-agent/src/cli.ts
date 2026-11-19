@@ -182,7 +182,7 @@ const controlCommand = defineCommand({
   },
   subCommands: {
     'reviews': defineCommand({
-      meta: { name: 'reviews', description: 'Read Review runs, findings, and gates for one pull request.' },
+      meta: { name: 'reviews', description: 'Show automated review runs, findings, and Review gates for one pull request.' },
       args: {
         ...controlConnectionArguments,
         repository: { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
@@ -200,12 +200,12 @@ const controlCommand = defineCommand({
       },
     }),
     'watch-pr': defineCommand({
-      meta: { name: 'watch-pr', description: 'Watch one pull request through Service events, without polling GitHub.' },
+      meta: { name: 'watch-pr', description: 'Watch the Service for updates on one pull request.' },
       args: {
         ...controlConnectionArguments,
         'repository': { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
         'number': { type: 'string', description: 'Pull request number.', required: true },
-        'until': { type: 'string', description: 'Stop at attention, review readiness, or merge: attention, review, merged.', default: 'attention' },
+        'until': { type: 'string', description: 'Choose when to stop watching. Use attention, review, or merged.', default: 'attention' },
         'timeout-seconds': { type: 'string', description: 'Optional watch duration from 1 to 86400 seconds.' },
       },
       async run({ args }) {
@@ -242,7 +242,7 @@ const controlCommand = defineCommand({
       },
     }),
     'status': defineCommand({
-      meta: { name: 'status', description: 'Read service health and the shared dashboard state.' },
+      meta: { name: 'status', description: 'Show Service health and the current dashboard data.' },
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.status()),
     }),
@@ -256,9 +256,9 @@ const controlCommand = defineCommand({
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.incidents().then(result => result._tag === 'Err' ? result : { _tag: 'Ok', value: { incidents: result.value } })),
     }),
-    'activity': controlTaskCommand({ name: 'activity', description: 'Read the redacted activity for one active Task.' }),
+    'activity': controlTaskCommand({ name: 'activity', description: 'Show live activity for one active Task. The output hides sensitive data.' }),
     'events': defineCommand({
-      meta: { name: 'events', description: 'List durable workflow events.' },
+      meta: { name: 'events', description: 'List saved workflow events.' },
       args: {
         ...controlConnectionArguments,
         stream: {
@@ -317,13 +317,13 @@ const controlCommand = defineCommand({
     }),
     'cancel': controlTaskCommand({ name: 'cancel', description: 'Cancel one active or queued Task.' }),
     'recover-repair': defineCommand({
-      meta: { name: 'recover-repair', description: 'Plan retained Repair recovery. Apply runs fresh checks before normal Publication.' },
+      meta: { name: 'recover-repair', description: 'Preview recovery from a saved Repair commit. Use --apply to run checks before opening a pull request.' },
       args: {
         ...controlConnectionArguments,
-        'task': { type: 'string', description: 'Selected finding Task ID.', required: true },
-        'commit': { type: 'string', description: 'Exact retained commit SHA.', required: true },
-        'apply': { type: 'boolean', description: 'Claim recovery and run fresh checks.', default: false },
-        'expected-base': { type: 'string', description: 'Exact base SHA from the current Plan.' },
+        'task': { type: 'string', description: 'Task ID for the Repair you want to recover.', required: true },
+        'commit': { type: 'string', description: 'Full SHA of the saved Repair commit.', required: true },
+        'apply': { type: 'boolean', description: 'Start recovery and run the checks again.', default: false },
+        'expected-base': { type: 'string', description: 'Base SHA from the recovery preview.' },
       },
       run: ({ args }) => runControl(args, client => client.recoverRepair(args.apply
         ? { _tag: 'Apply', taskId: args.task, commitSha: args.commit, expectedBase: args['expected-base'] ?? '' }
@@ -348,7 +348,7 @@ const controlCommand = defineCommand({
       },
     }),
     'stop-review': defineCommand({
-      meta: { name: 'stop-review', description: 'Stop Service Review for one pull request head.' },
+      meta: { name: 'stop-review', description: 'Stop automated review for one pull request head commit.' },
       args: {
         ...controlConnectionArguments,
         repository: { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
@@ -366,17 +366,17 @@ const controlCommand = defineCommand({
       },
     }),
     'rerun-issue': defineCommand({
-      meta: { name: 'rerun-issue', description: 'Rerun Issue triage for one current Revision.' },
+      meta: { name: 'rerun-issue', description: 'Run Issue triage again for the current version of a GitHub issue.' },
       args: {
         ...controlConnectionArguments,
         repository: { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
         number: { type: 'string', description: 'Issue number.', required: true },
-        revision: { type: 'string', description: 'Exact Revision ID. Defaults to the tracked current Revision.' },
+        revision: { type: 'string', description: 'Optional ID of the current issue version.' },
       },
       async run({ args }) {
         const number = Number(args.number)
         if (!/^[^/]+\/[^/]+$/.test(args.repository) || !Number.isSafeInteger(number) || number < 1 || (args.revision !== undefined && !/^[a-f\d]{64}$/.test(args.revision))) {
-          writeJson({ _tag: 'InvalidIssueTarget', message: 'Set a valid repository, issue number, and Revision ID.' } satisfies ControlCommandError, process.stderr)
+          writeJson({ _tag: 'InvalidIssueTarget', message: 'Enter a repository and issue number. If you pass --revision, use the current issue version ID.' } satisfies ControlCommandError, process.stderr)
           process.exitCode = 1
           return
         }
@@ -389,7 +389,7 @@ const controlCommand = defineCommand({
       },
     }),
     'routine-run': defineCommand({
-      meta: { name: 'routine-run', description: 'Open one Routine run now, ahead of its schedule.' },
+      meta: { name: 'routine-run', description: 'Queue a Routine run before its next scheduled time.' },
       args: {
         ...controlConnectionArguments,
         routine: {
@@ -509,7 +509,7 @@ const rootArguments = {
 const evaluateTriage = defineCommand({
   meta: {
     name: 'evaluate-triage',
-    description: 'Replay recorded Pull request triage decisions through the classification service and suggest a skip band.',
+    description: 'Replay saved pull request triage decisions and suggest when to skip automated review.',
   },
   args: {
     ...rootArguments,
@@ -526,7 +526,7 @@ const evaluateTriage = defineCommand({
       throw new Error(parsed.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
     const classification = parsed.value.classification
     if (classification._tag !== 'Enabled')
-      throw new Error('The configuration has no classification block, so there is nothing to evaluate with.')
+      throw new Error('Add a classification block to the configuration before running this command.')
     const token = await loadClassificationToken(classification.tokenPath)
     if (token._tag === 'Err')
       throw new Error(token.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
@@ -546,15 +546,15 @@ const evaluateTriage = defineCommand({
       }),
       log: line => consola.info(line),
     })
-    consola.success(`Replayed ${summary.replayed} decisions, of which ${summary.classified} reached the classification. ${summary.skippedWithoutFiles} recorded decisions carry no changed-file list and are excluded from every replay; only decisions recorded after this change replay.`)
-    consola.info(`Suggested skip band: ${summary.suggestion.band}, ${summary.suggestion.agreed}/${summary.classified} agreed, ${summary.suggestion.skipsAdded} would skip what Review read.`)
+    consola.success(`Replayed ${summary.replayed} pull request triage decisions. The classifier answered ${summary.classified}. Saved decisions without a list of changed files: ${summary.skippedWithoutFiles}.`)
+    consola.info(`Suggested threshold for skipping review is ${summary.suggestion.band}. It matched ${summary.suggestion.agreed} of ${summary.classified} saved decisions. It would skip review for ${summary.suggestion.skipsAdded} decisions marked for review.`)
   },
 })
 
 const evaluateIssueTriage = defineCommand({
   meta: {
     name: 'evaluate-issue-triage',
-    description: 'Replay recorded Issue triage decisions through the classification service and suggest a route band.',
+    description: 'Replay saved issue triage decisions and suggest a confidence threshold.',
   },
   args: {
     ...rootArguments,
@@ -571,7 +571,7 @@ const evaluateIssueTriage = defineCommand({
       throw new Error(parsed.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
     const classification = parsed.value.classification
     if (classification._tag !== 'Enabled')
-      throw new Error('The configuration has no classification block, so there is nothing to evaluate with.')
+      throw new Error('Add a classification block to the configuration before running this command.')
     const token = await loadClassificationToken(classification.tokenPath)
     if (token._tag === 'Err')
       throw new Error(token.error.map(issue => `${issue.path}: ${issue.message}`).join('\n'))
@@ -592,8 +592,8 @@ const evaluateIssueTriage = defineCommand({
       classification: source,
       log: line => consola.info(line),
     })
-    consola.success(`Replayed ${summary.replayed} Agent triage decisions from titles alone; bodies are not in the journal. ${summary.answered} reached the classification.`)
-    consola.info(`Suggested issue_triage_band: ${summary.suggestion.band}, ${summary.suggestion.routedAsStored}/${summary.answered} routed as stored, ${summary.suggestion.readyStalled} ready issues would stall.`)
+    consola.success(`Replayed ${summary.replayed} triage decisions using issue titles. The classifier answered ${summary.answered}.`)
+    consola.info(`Suggested issue_triage_band is ${summary.suggestion.band}. It would skip Agent triage for ${summary.suggestion.routedAsStored} of ${summary.answered} answered cases, in line with the saved decisions. ${summary.suggestion.readyStalled} issues marked ready would wait.`)
   },
 })
 
@@ -622,7 +622,7 @@ const command = defineCommand({
   meta: {
     name: 'harlan-github-agent',
     version: '0.0.0',
-    description: 'Run the local GitHub maintenance control plane.',
+    description: 'Run the local Harlan GitHub Agent service.',
   },
   args: rootArguments,
   subCommands: {
