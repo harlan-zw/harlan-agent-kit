@@ -36,9 +36,6 @@ export function weeklyCodexCapacity(result: unknown): ProviderCapacity {
   if (typeof result !== 'object' || result === null)
     return { _tag: 'Unavailable', reason: 'Codex answered no rate limits.' }
   const record = result as Record<string, unknown>
-  // Codex says outright when its limit holds now, whatever the weekly window shows.
-  if (record.ordinaryUsageAllowed === false)
-    return { _tag: 'Unavailable', reason: 'Codex reports that its usage limit is reached.' }
   const byLimitId = record.rateLimitsByLimitId
   const scoped = typeof byLimitId === 'object' && byLimitId !== null
     ? (byLimitId as Record<string, unknown>).codex
@@ -55,6 +52,17 @@ export function weeklyCodexCapacity(result: unknown): ProviderCapacity {
     return { _tag: 'Unavailable', reason: 'Codex reported no seven-day window.' }
   if (typeof weekly.usedPercent !== 'number' || typeof weekly.resetsAt !== 'number')
     return { _tag: 'Unavailable', reason: 'Codex reported an unreadable seven-day window.' }
+
+  // A shorter window can run out while the week has room, and Codex can refuse
+  // usage outright. Either is a full reading until its window resets, so it
+  // stops starts and is never mistaken for a failed read or for spare usage.
+  const exhausted = windows.filter(candidate => typeof candidate.usedPercent === 'number' && candidate.usedPercent >= 100 && typeof candidate.resetsAt === 'number')
+  if (exhausted.length > 0 || record.ordinaryUsageAllowed === false) {
+    const resets = (exhausted.length > 0 ? exhausted : windows)
+      .map(candidate => candidate.resetsAt)
+      .filter((value): value is number => typeof value === 'number')
+    return { _tag: 'Available', usedPercent: 100, resetsAt: new Date(Math.min(...resets) * 1_000).toISOString() }
+  }
 
   return {
     _tag: 'Available',
