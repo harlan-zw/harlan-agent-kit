@@ -44,6 +44,15 @@
   --ui-warning: #9a6700;
   --ui-error: #cf222e;
   --status-mix: var(--ui-text) 30%;
+  /* Timeline canvas. Marks are neutral; colour arrives only with state. */
+  --canvas-ground: oklch(98.6% 0 0);
+  --canvas-future: oklch(96.6% 0 0);
+  --canvas-grid: oklch(93.5% 0 0);
+  --canvas-row-hover: oklch(96.4% 0 0);
+  --canvas-span: oklch(74% 0 0);
+  --canvas-span-live: oklch(32% 0 0);
+  --canvas-texture: oklch(87% 0 0);
+  --canvas-now: oklch(21% 0 0);
 }
 
 .dark {
@@ -68,6 +77,14 @@
   --ui-warning: #d29922;
   --ui-error: #f85149;
   --status-mix: var(--ui-text) 20%;
+  --canvas-ground: oklch(14.5% 0 0);
+  --canvas-future: oklch(16.4% 0 0);
+  --canvas-grid: oklch(19.5% 0 0);
+  --canvas-row-hover: oklch(17.6% 0 0);
+  --canvas-span: oklch(43% 0 0);
+  --canvas-span-live: oklch(88% 0 0);
+  --canvas-texture: oklch(31% 0 0);
+  --canvas-now: oklch(96% 0 0);
 }
 
 html {
@@ -231,4 +248,18 @@ body {
 .workspace-header { height: 2.5rem; }
 @media (pointer: coarse), (max-width: 47.999rem) {
   .workspace-header { height: 3rem; }
+}
+
+/* A floating control group over the Timeline canvas. The one place the app uses blur. */
+.canvas-cluster {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 2.5rem;
+  padding: 0.25rem;
+  border: 1px solid var(--ui-border);
+  border-radius: 0.625rem;
+  background: color-mix(in oklch, var(--ui-bg-muted) 86%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px oklch(0% 0 0 / 0.22);
 }

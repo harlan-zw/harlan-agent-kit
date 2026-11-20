@@ -30,6 +30,8 @@ did not cover it.
 | ready-digest | compiled Routine definition | Scheduler | One weekly Routine, kit only | ready-digest |
 | Lease holder | `tasks.worker_id` | Scheduler | One per Running Task | none |
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
+| Timeline | derived dashboard state, `/api/timeline` | Dashboard | Places Tasks, deliveries, and Routine runs on one time axis | Timeline |
+| Delivery | webhook listener | Controller | N per repository, 0 to N per Item | delivery |
 | Stats | derived from Journal records | Dashboard | N completed records per date range | Stats |
 | Control API | authenticated HTTP routes | Controller | One per service, used by the dashboard and CLI | Control API |
 | Agent slots | `agent_slots` | Controller | One count per host, 1 to N Agents | Agent slots |
@@ -322,6 +324,22 @@ The ordered dashboard view of active Tasks and actionable Items.
 GitHub ships a **merge queue**, which this is not. Always write "merge queue" in full when you mean GitHub's feature.
 
 Use `Queue` for this view. Do not use backlog or inbox.
+
+### Timeline
+
+The dashboard view that places Agent work, deliveries, and Routine runs on one time axis, with now near the right edge.
+
+GitHub calls the event history of one issue or pull request its timeline. The Timeline applies the same idea to every watched repository.
+
+Use Timeline for this view. Never call the view a canvas, river, feed, or stream. Code may name its drawing surface canvas.
+
+### Delivery
+
+One GitHub webhook delivery the Service accepted.
+
+GitHub uses the same word: Recent Deliveries, and the `X-GitHub-Delivery` header. A delivery only asks for an earlier poll or runs a direct command. Polling still reads GitHub.
+
+Use delivery. Never use webhook event, hook, payload, or notification.
 
 ### Stats
 
@@ -857,6 +875,8 @@ Evidence that a skill, policy, or workflow should change.
 | needs attention, stuck, human required | Action required | GitHub's own check conclusion |
 | waiting, in progress | PENDING | GitHub's own check status and review state |
 | failed, as a Review outcome | BLOCKED | GitHub's own mergeable state |
+| canvas, river, feed, stream, as the view's name | Timeline | One view, named after GitHub's own timeline |
+| webhook event, hook, payload, notification | Delivery | GitHub's word for one webhook send |
 | job | Task | `job` is a GitHub Actions unit and must keep that meaning |
 | scheduled task, cron task | Routine | A Task belongs to an Item. A Routine answers a clock. |
 | bot | Agent | Reads as a GitHub App, which the agent is not |

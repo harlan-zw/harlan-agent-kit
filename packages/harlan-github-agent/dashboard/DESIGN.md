@@ -70,6 +70,7 @@ Repository health, provider limits, Routines, and host metrics are reference mat
 | Route | Answers | Shape |
 | --- | --- | --- |
 | `/` Board | Questions 1 to 3, and the last eight of 4 | A full-width **Needs you** list, then three fixed columns: **Up next** (with a **Waiting** disclosure), **Running**, **Done** |
+| `/timeline` | Questions 1 to 4 on one time axis | Rows of issues, pull requests, and Routines beside a live canvas. See Timeline |
 | `/sessions` | What to work on in a desktop project | Projects and sessions at left, terminal at center, optional diff dock |
 | `/history` | What happened, on what evidence | GitHub style list rows. Evidence opens in a slideover |
 | `/watching` | What is being polled | Repository table that flags exceptions only, open items, Dismissed group |
@@ -159,6 +160,19 @@ Three shapes for three questions. A Needs you entry is a one-line row, because a
 - One work kind filter, all four columns, hidden until two kinds are present.
 - Done holds eight rows in one bordered list. The ninth is a link to History.
 
+### Timeline
+
+`/timeline` puts the four questions on one time axis. It uses the `canvas` layout: three floating clusters, no rail.
+
+- Now rests at three quarters of the width, so the next hour stays in view. The ruler pill shows the time, or Paused in amber.
+- Every row is one issue, pull request, or Routine. A 360px gutter holds the title and `repository #number`. Marks hold time and state.
+- Sections follow the Board: Needs you, Agent tasks, Running, Up next, Routines, Earlier. A Routine due within two hours never folds.
+- Decisions ride the now line. When now is off screen they wait at the nearest edge.
+- Marks: a bar per Task, a dot per delivery, a diamond per Routine run, a dashed diamond for the next run. Colour only for state.
+- Deliveries are one histogram under the ruler, never one mark each.
+- The wheel scrolls rows. Shift with the wheel, a horizontal swipe, or a drag pans time. Ctrl or ⌘ with the wheel zooms. `.` returns to now.
+- Below md the gutter takes the full width and the rows read as a list.
+
 ## Every Element Earns Its Place
 
 New copy has to answer one question the reader cannot already answer from the screen. If it cannot, it does not ship.
@@ -245,7 +259,7 @@ Hide on demand: terminal, evidence, candidates, per-repository controls, host me
 - **Page margins**: 24px, 40px above `xl`. Content max width 1600px.
 - **Rhythm**: sections separated by 40px and a hairline. Never a heading alone doing the separating.
 - **Transitions**: 120ms colour and opacity on hover, 160ms on state, 200ms slide for overlays, `cubic-bezier(0.2, 0, 0, 1)`.
-- **Animation**: the live dot pulses. Nothing else loops. Nothing enters with motion.
+- **Animation**: the live dot and running caps pulse. On the Timeline, time drifts with the clock. Nothing else loops. Nothing enters with motion.
 - **Reduced motion**: every transition drops to 0ms; the live dot holds solid.
 
 ## Responsive Strategy
@@ -271,6 +285,8 @@ Hide on demand: terminal, evidence, candidates, per-repository controls, host me
 | `.terminal` | Capped 20rem, mono, muted surface, wraps | Agent and Routine output inside slideovers |
 | `.skip-link` | Offscreen until keyboard focus, then a solid ink pill at the top left | The first focusable element in the layout, targets `#main` |
 | `--ease-out` | `cubic-bezier(0.2, 0, 0, 1)` | Every transition |
+| `.canvas-cluster` | Floating control group with blur and an overlay shadow | Chrome over the Timeline canvas only |
+| `--canvas-*` | Ground, future, grid, row hover, span, live span, texture, now | Timeline marks. Neutral until state adds colour |
 
 ## Migration decisions
 

@@ -49,7 +49,7 @@ export default defineNuxtConfig({
     },
     prerender: {
       // `/kit` stays out on purpose. It is a dev page and nothing links to it.
-      routes: ['/', '/sessions', '/history', '/stats', '/watching', '/routines', '/flow'],
+      routes: ['/', '/timeline', '/sessions', '/history', '/stats', '/watching', '/routines', '/flow'],
       ignore: ['/kit'],
     },
   },

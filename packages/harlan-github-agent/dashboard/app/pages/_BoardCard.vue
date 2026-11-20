@@ -26,10 +26,14 @@ import BoardCardSlideover from './_BoardCardSlideover.vue'
  * identity and one decision and nothing else. Every write goes through the
  * composable; this component only decides which controls exist.
  */
-const { card, tabindex = 0 } = defineProps<{
+const { card, tabindex = 0, face: faceShape, actionLeft } = defineProps<{
   card: BoardCard
   /** Roving tabindex for the Needs you list. */
   tabindex?: 0 | -1
+  /** `timeline` is the two-line row label beside a Timeline row. The marks carry time and state. */
+  face?: 'timeline'
+  /** Timeline only: where the one decision sits, in pixels from the row start. It rides the now line. */
+  actionLeft?: number
 }>()
 
 const {
@@ -202,7 +206,9 @@ const confirmOpen = computed({
  * twenty decisions fit half a screen. Queued and Running are three-line cards.
  * Done is a one-line row, because an outcome is read, not decided.
  */
-const shape = computed<'row' | 'card' | 'done'>(() => {
+const shape = computed<'row' | 'card' | 'done' | 'timeline'>(() => {
+  if (faceShape === 'timeline')
+    return 'timeline'
   if (card._tag === 'NeedsYou' || card._tag === 'AgentTask')
     return 'row'
   return card._tag === 'Done' ? 'done' : 'card'
@@ -239,7 +245,7 @@ defineExpose({
 <template>
   <article
     class="group relative"
-    :class="shape === 'card' ? 'rounded-md border border-default bg-elevated transition-colors hover:border-accented' : 'transition-colors hover:bg-muted'"
+    :class="shape === 'card' ? 'rounded-md border border-default bg-elevated transition-colors hover:border-accented' : shape === 'timeline' ? 'h-full' : 'transition-colors hover:bg-muted'"
   >
     <!-- The face. Stretched under the content so links and buttons stay their own controls. -->
     <button
@@ -311,6 +317,56 @@ defineExpose({
           />
         </UDropdownMenu>
       </div>
+    </div>
+
+    <!-- Timeline: what it is, where it lives, and the one decision. Time and state live on the canvas. -->
+    <div
+      v-else-if="shape === 'timeline' && identity"
+      class="pointer-events-none relative flex h-full items-center gap-3 pe-2 ps-4 [&_a]:pointer-events-auto [&_button]:pointer-events-auto"
+    >
+      <UIcon :name="kindIcon[identity.kind]" class="size-4 shrink-0 text-dimmed" aria-hidden="true" />
+      <div class="min-w-0 flex-1 leading-tight">
+        <p class="truncate text-sm text-highlighted" :title="identity.title">
+          <span class="sr-only">{{ identity.kind === 'issue' ? 'Issue' : 'Pull request' }}: </span>{{ identity.title }}
+        </p>
+        <p class="mt-0.5 flex min-w-0 items-center gap-1.5 font-mono text-[0.8125rem] text-dimmed">
+          <a :href="identity.url" target="_blank" rel="noreferrer" class="entity-link truncate">{{ repositoryName(identity.repository) }} #{{ identity.number }}</a>
+          <template v-if="agent">
+            <span aria-hidden="true">·</span><span class="truncate">{{ meta }}</span>
+          </template>
+        </p>
+      </div>
+      <UButton
+        v-if="primaryLabel && (card._tag === 'NeedsYou' || card._tag === 'AgentTask')"
+        ref="primaryControl"
+        size="xs"
+        class="z-10 min-h-11 shrink-0 whitespace-nowrap md:min-h-0"
+        :class="actionLeft === undefined ? undefined : 'absolute top-1/2 -translate-y-1/2'"
+        :style="actionLeft === undefined ? undefined : { left: `${actionLeft}px` }"
+        :loading="primaryPending"
+        :color="recommendation?.owner === 'Agent' ? 'neutral' : 'primary'"
+        :variant="recommendation?.owner === 'Agent' ? 'outline' : 'solid'"
+        :disabled="busy && (recommendation?._tag === 'Approve' || recommendation?._tag === 'Dismiss')"
+        :to="recommendation?._tag === 'OpenGitHub' ? recommendation.url : undefined"
+        :target="recommendation?._tag === 'OpenGitHub' ? '_blank' : undefined"
+        :rel="recommendation?._tag === 'OpenGitHub' ? 'noreferrer' : undefined"
+        :trailing-icon="recommendation?._tag === 'OpenGitHub' ? 'i-octicon-link-external-16' : undefined"
+        :title="recommendation?.description"
+        @click="runPrimary"
+      >
+        {{ primaryLabel }}
+      </UButton>
+      <UDropdownMenu :items="menuItems" :content="{ align: 'end' }">
+        <UButton
+          icon="i-octicon-kebab-horizontal-16"
+          color="neutral"
+          variant="ghost"
+          size="xs"
+          square
+          :class="menuButtonClass"
+          :aria-label="`More actions for ${identity.repository} number ${identity.number}`"
+        />
+      </UDropdownMenu>
     </div>
 
     <!-- Done: an outcome, then what it was about. -->
