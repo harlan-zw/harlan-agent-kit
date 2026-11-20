@@ -172,6 +172,16 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Routine coverage detail | Coverage incomplete. | Routine result detail |
 | Routine collapsed attention | More | Shows the remaining Routine actions |
 | Routine expanded attention | Show less | Returns to the first six Routine actions |
+| Timeline name | Timeline | Navigation and document title |
+| Timeline live | Live | Zoom cluster control that keeps now in view |
+| Timeline return | Back to now | Shown after panning away from now |
+| Timeline deliveries | Deliveries | Histogram row label |
+| Timeline delivery rate | {n} in the last hour | Under the Deliveries label |
+| Timeline no deliveries | No records yet | Deliveries row before the Service records deliveries |
+| Timeline folded | {n} more | Expands a folded Timeline section |
+| Timeline waiting | Waiting | Queue capsule for work that waits outside the engine |
+| Timeline next run | Next run | Tooltip on the next Routine run |
+| Timeline wait | Waiting on you | Tooltip on a Needs you wait line |
 | Routine manual control | Run now | Opens the choice for one Routine scan |
 | Routine manual scope | Applies to this scan only. | Routine run dialog |
 | Routine manual usage | This scan uses the selected provider's usage. Reserve applies before it starts. | Routine run dialog |
