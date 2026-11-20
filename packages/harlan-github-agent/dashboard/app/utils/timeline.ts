@@ -72,6 +72,23 @@ export interface TimelineHistory {
   pauses: Array<{ from: string, to: string | null }>
 }
 
+/**
+ * Parse the Timeline API answer once, at the boundary. Anything else, such as
+ * an HTML page from an older Service, reads as no history.
+ */
+export function parseTimelineHistory(value: unknown): TimelineHistory | undefined {
+  if (typeof value !== 'object' || value === null)
+    return undefined
+  const candidate = value as Partial<TimelineHistory>
+  const deliveries = candidate.deliveries
+  const lists = [candidate.tasks, candidate.itemEvents, candidate.routineRuns, candidate.upcoming, candidate.pauses]
+  if (typeof candidate.generatedAt !== 'string' || !lists.every(Array.isArray))
+    return undefined
+  if (typeof deliveries !== 'object' || deliveries === null || typeof deliveries.start !== 'string' || typeof deliveries.bucketSeconds !== 'number' || deliveries.bucketSeconds <= 0 || !Array.isArray(deliveries.counts))
+    return undefined
+  return candidate as TimelineHistory
+}
+
 /* ---------- View math ---------- */
 
 /** What the canvas shows: its scale and the time at its right edge. */

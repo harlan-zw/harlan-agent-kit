@@ -122,7 +122,14 @@ const diamond = (cx: number, cy: number, r: number): string => `M${cx} ${cy - r}
       >
         <path :d="diamond(x(mark.at), mid, 5.5)" fill="var(--canvas-future)" stroke="var(--ui-text-muted)" stroke-width="1.4" stroke-dasharray="2.2 2" />
         <rect :x="x(mark.at) - 8" :y="mid - 10" width="16" height="20" fill="transparent" />
-        <text v-if="mark.at === nextAt" :x="x(mark.at) + 12" :y="mid + 4.5" class="fill-(--ui-text-muted) font-mono text-[0.8125rem]">{{ countdown(mark.at, now) }}</text>
+        <!-- Near the right edge the countdown flips to the left of its diamond, so it never clips. -->
+        <text
+          v-if="mark.at === nextAt"
+          :x="x(mark.at) + (x(mark.at) > width - 84 ? -12 : 12)"
+          :y="mid + 4.5"
+          :text-anchor="x(mark.at) > width - 84 ? 'end' : 'start'"
+          class="fill-(--ui-text-muted) font-mono text-[0.8125rem]"
+        >{{ countdown(mark.at, now) }}</text>
       </g>
     </template>
   </svg>

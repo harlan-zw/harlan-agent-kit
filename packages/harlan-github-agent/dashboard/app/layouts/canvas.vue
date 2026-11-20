@@ -7,7 +7,12 @@ import { isTypingTarget } from '../utils/keyboard.ts'
  * nothing else. The page owns the whole viewport. Like the default layout,
  * this layout keeps the shared snapshot alive while it is mounted.
  */
-const { start } = useDashboard()
+const { start, controlError, isStale } = useDashboard()
+const toast = useToast()
+watch(controlError, (error) => {
+  if (error !== undefined)
+    toast.add({ title: 'The request failed.', description: error, color: 'error' })
+})
 const { show: showSystem } = useSystemPane()
 useDocumentStatus()
 const terminalHost = useTerminalHost()
@@ -72,8 +77,11 @@ onMounted(() => {
       </div>
     </header>
 
-    <main id="main" class="h-full min-h-0">
-      <slot />
+    <main id="main" class="flex h-full min-h-0 flex-col pt-16">
+      <AppBanners v-if="terminalHost.controller.value" class="shrink-0" />
+      <div class="min-h-0 flex-1" :class="isStale ? 'stale' : undefined">
+        <slot />
+      </div>
     </main>
 
     <SystemSlideover />

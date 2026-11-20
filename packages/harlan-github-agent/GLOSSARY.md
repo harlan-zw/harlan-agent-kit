@@ -331,7 +331,7 @@ The dashboard view that places Agent work, deliveries, and Routine runs on one t
 
 GitHub calls the event history of one issue or pull request its timeline. The Timeline applies the same idea to every watched repository.
 
-Use Timeline for this view. Never use canvas, river, feed, or stream.
+Use Timeline for this view. Never call the view a canvas, river, feed, or stream. Code may name its drawing surface canvas.
 
 ### Delivery
 
@@ -875,7 +875,7 @@ Evidence that a skill, policy, or workflow should change.
 | needs attention, stuck, human required | Action required | GitHub's own check conclusion |
 | waiting, in progress | PENDING | GitHub's own check status and review state |
 | failed, as a Review outcome | BLOCKED | GitHub's own mergeable state |
-| canvas, river, feed, stream | Timeline | One view, named after GitHub's own timeline |
+| canvas, river, feed, stream, as the view's name | Timeline | One view, named after GitHub's own timeline |
 | webhook event, hook, payload, notification | Delivery | GitHub's word for one webhook send |
 | job | Task | `job` is a GitHub Actions unit and must keep that meaning |
 | scheduled task, cron task | Routine | A Task belongs to an Item. A Routine answers a clock. |

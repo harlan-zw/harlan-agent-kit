@@ -8,6 +8,7 @@ import {
   deliveriesLastHour,
   deliveryBins,
   followView,
+  parseTimelineHistory,
   spanLabel,
   timeAt,
   timelineSections,
@@ -30,7 +31,7 @@ definePageMeta({ layout: 'canvas' })
 usePageTitle('Timeline')
 useHead({ meta: [{ name: 'description', content: 'GitHub deliveries, Agent work, and Routines on one live Timeline.' }] })
 
-const { snapshot, loading, now: clockNow, relativeTime, setAgentControl, controlPending } = useDashboard()
+const { snapshot, loading, now: clockNow, relativeTime, setAgentControl, controlPending, isStale } = useDashboard()
 const now = computed(() => clockNow.value.getTime())
 
 /* ---------- History ---------- */
@@ -38,10 +39,11 @@ const now = computed(() => clockNow.value.getTime())
 const history = shallowRef<TimelineHistory>()
 const historyError = ref(false)
 async function loadHistory(): Promise<void> {
-  await $fetch<TimelineHistory>('/api/timeline', { timeout: 15_000 })
+  await $fetch<unknown>('/api/timeline', { timeout: 15_000 })
     .then((value) => {
-      history.value = value
-      historyError.value = false
+      const parsed = parseTimelineHistory(value)
+      history.value = parsed
+      historyError.value = parsed === undefined
     })
     .catch(() => {
       // The Service has no Timeline API yet. The rows still come from the live snapshot.
@@ -258,7 +260,7 @@ const kindIcon = { issue: 'i-octicon-issue-opened-16', pull_request: 'i-octicon-
 </script>
 
 <template>
-  <div class="relative flex h-full flex-col pt-16">
+  <div class="relative flex h-full flex-col">
     <h1 class="sr-only">
       Timeline
     </h1>
@@ -414,7 +416,7 @@ const kindIcon = { issue: 'i-octicon-issue-opened-16', pull_request: 'i-octicon-
         :aria-pressed="follow"
         @click="backToNow"
       >
-        <LiveDot :tone="follow ? 'success' : 'neutral'" :live="follow" />
+        <LiveDot :tone="follow && !isStale ? 'success' : 'neutral'" :live="follow && !isStale" />
         Live
       </UButton>
       <span class="h-5 w-px bg-(--ui-border)" aria-hidden="true" />
@@ -427,13 +429,11 @@ const kindIcon = { issue: 'i-octicon-issue-opened-16', pull_request: 'i-octicon-
       <UButton icon="i-octicon-plus-16" color="neutral" variant="ghost" size="sm" square aria-label="Zoom in" @click="zoom(nowX, 0.7)" />
     </div>
 
-    <div v-if="paused" class="absolute bottom-3 left-1/2 z-40 -translate-x-1/2">
-      <UButton icon="i-octicon-play-16" :loading="controlPending" :disabled="controlPending" @click="setAgentControl('resume')">
+    <div v-if="paused || !follow" class="absolute bottom-3 left-1/2 z-40 flex -translate-x-1/2 gap-2">
+      <UButton v-if="paused" icon="i-octicon-play-16" :loading="controlPending" :disabled="controlPending" @click="setAgentControl('resume')">
         Resume
       </UButton>
-    </div>
-    <div v-else-if="!follow" class="absolute bottom-3 left-1/2 z-40 -translate-x-1/2">
-      <UButton icon="i-octicon-arrow-right-16" color="neutral" variant="subtle" @click="backToNow">
+      <UButton v-if="!follow" icon="i-octicon-arrow-right-16" color="neutral" variant="subtle" @click="backToNow">
         Back to now
       </UButton>
     </div>

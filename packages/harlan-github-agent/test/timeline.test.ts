@@ -1,7 +1,7 @@
 import type { TimelineHistory, TimelineTaskRecord } from '../dashboard/app/utils/timeline.ts'
 import type { QueueEntry } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { deliveryBins, followView, nowFraction, timelineSections, timeTicks, xOf, zoomAt } from '../dashboard/app/utils/timeline.ts'
+import { deliveryBins, followView, nowFraction, parseTimelineHistory, timelineSections, timeTicks, xOf, zoomAt } from '../dashboard/app/utils/timeline.ts'
 import { dashboardSnapshot } from './fixtures.ts'
 
 const now = Date.parse('2026-11-20T03:30:00.000Z')
@@ -134,5 +134,14 @@ describe('timeline sections', () => {
     const sections = timelineSections({ snapshot: dashboardSnapshot(), history: history({ tasks: [older, newer, outside] }), now, ...window })
     const earlier = sections.find(section => section._tag === 'Earlier')!
     expect(earlier.rows.map(row => row._tag === 'Item' && row.item.number)).toEqual([2, 1])
+  })
+})
+
+describe('timeline history parsing', () => {
+  it('accepts the API shape and refuses an HTML page or a partial answer', () => {
+    expect(parseTimelineHistory(history())).toEqual(history())
+    expect(parseTimelineHistory('<!doctype html><html></html>')).toBeUndefined()
+    expect(parseTimelineHistory({ ...history(), deliveries: { start: 'x', bucketSeconds: 0, counts: [] } })).toBeUndefined()
+    expect(parseTimelineHistory({ generatedAt: 'now' })).toBeUndefined()
   })
 })
