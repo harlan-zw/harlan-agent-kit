@@ -12,11 +12,11 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Asset | String | Where |
 | --- | --- | --- |
 | Name | Agent | Navigation and document title |
-| Public password policy | Configure one public browser origin before disabling password login. | Configuration error |
-| Public Passkey setup | Public Passkey login requires an enrolled Passkey | Startup error |
-| Public Passkey storage | Public Passkey login requires persistent storage and an HTTPS private origin. | Configuration and startup error |
-| Final Passkey | Add another Passkey before removing the last Passkey. | Passkey management without password login |
-| Public terminals | Public terminals require private Agent sessions and public Passkey-only login. | Configuration and startup error |
+| Passkey setup | No Passkey is set up for {origin}. Run `{pairing command}` on this host. | Startup log for an origin with no Passkey |
+| Pairing command | harlan-github-agent pair --origin {origin} | Host command that prints a pairing link |
+| Passkey recovery | If you lose every Passkey, open a new pairing link from the host. | Sign-in page and Passkey management |
+| Final Passkey | Add another Passkey before removing the last Passkey. | Passkey management on a Service address |
+| Public terminals | Public terminals require private Agent sessions and one public browser origin. | Configuration and startup error |
 | Start control | New session | Navigation and session sidebar |
 | Terminal start | Start session | Submit a launch when regular capacity is available |
 | Terminal uncertain start | The host may have started this session. Retry the same request to confirm. | Unconfirmed session admission, not terminal input delivery |
@@ -241,8 +241,10 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Browser sign in | Sign in to Agent |
 | Browser opening | Opening Agent |
 | Passkey sign in | Sign in with Passkey |
-| Password sign in | Sign in with password |
-| Browser password label | Password |
+| Passkey missing | No Passkey is set up for this address. Run this command on the host: |
+| Passkey enrolment heading | Add a Passkey |
+| Passkey enrolment guidance | This pairing link lets this browser add one Passkey. |
+| Passkey enrolment refused | Add a Passkey before you use Agent. |
 | Browser sign-in checking | Checking sign-in access. |
 | Browser access retry | Retry |
 | Passkey management | Manage Passkeys |
@@ -257,9 +259,7 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Passkey default name | Passkey |
 | Browser sign out | Sign out |
 | Passkey unsupported | This browser does not support Passkeys. |
-| Passkey recovery | Use the password or pairing link if you lose a Passkey. |
 | Passkey cancelled | Passkey request was cancelled. Retry. |
-| Browser password failure | Could not sign in. Check the password and retry. |
 | Browser access failure | Could not check sign-in access. Retry. |
 | Browser sign-out failure | Could not sign out. Retry. |
 | Passkey request failure | The Passkey request failed. Retry. |
@@ -270,6 +270,10 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Passkey cancel | Cancel |
 | Passkey request timeout | The Passkey request timed out. Retry. |
 | Passkey browser timeout | The browser Passkey prompt did not finish. Retry or check your password manager. |
+| Pairing link ready | Open this link in the browser that should hold the Passkey. It works once and expires in 5 minutes. Keep it private. |
+| Pairing origin refused | Choose a configured origin with --origin: {origins}. |
+| Pairing storage | Pairing links require persistent storage. |
+| Pairing limit | Too many pairing links are open for this origin. Wait five minutes, then retry. |
 
 ## Open questions
 

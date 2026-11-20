@@ -905,7 +905,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     issues.push({ path: '$.server.port', message: 'Expected an integer from 1 to 65535.' })
   const allowedOrigin = server === undefined ? undefined : requiredString(server, 'allowed_origin', '$.server', issues)
   const browserOrigins = server === undefined || server.browser_origins === undefined ? [] : stringArray(server, 'browser_origins', '$.server', issues)
-  const publicBrowserPasswordLogin = server?.public_browser_password_login === undefined ? true : requiredBoolean(server, 'public_browser_password_login', '$.server', issues)
+  // Browser sign-in is Passkey-only. A stale public_browser_password_login key is ignored, because the previous revision required it with public terminals.
   const publicTerminalSessions = server?.public_terminal_sessions === undefined ? false : requiredBoolean(server, 'public_terminal_sessions', '$.server', issues)
   const agentSessions = server?.agent_sessions === undefined ? false : requiredBoolean(server, 'agent_sessions', '$.server', issues)
   const codexModeValue = server?.agent_sessions_codex_mode
@@ -1019,12 +1019,8 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   }
   if (frameAncestors?.some(origin => !isFrameAncestorOrigin(origin)))
     issues.push({ path: '$.server.frame_ancestors', message: 'Expected HTTPS or loopback HTTP origins without a path.' })
-  if (publicBrowserPasswordLogin === false && browserOrigins?.length !== 1)
-    issues.push({ path: '$.server.public_browser_password_login', message: 'Configure one public browser origin before disabling password login.' })
-  if (publicTerminalSessions === true && (agentSessions !== true || publicBrowserPasswordLogin !== false || browserOrigins?.length !== 1 || storagePath === ':memory:'))
-    issues.push({ path: '$.server.public_terminal_sessions', message: 'Public terminals require private Agent sessions and public Passkey-only login.' })
-  if (publicBrowserPasswordLogin === false && (storagePath === ':memory:' || !allowedOrigin || !URL.canParse(allowedOrigin) || new URL(allowedOrigin).protocol !== 'https:'))
-    issues.push({ path: '$.server.public_browser_password_login', message: 'Public Passkey login requires persistent storage and an HTTPS private origin.' })
+  if (publicTerminalSessions === true && (agentSessions !== true || browserOrigins?.length !== 1 || storagePath === ':memory:'))
+    issues.push({ path: '$.server.public_terminal_sessions', message: 'Public terminals require private Agent sessions and one public browser origin.' })
   if (storagePath !== undefined && storagePath !== ':memory:' && !isAbsolute(storagePath))
     issues.push({ path: '$.storage.path', message: 'Expected an absolute path or :memory:.' })
   if (mutationsEnabled === true && storagePath === ':memory:')
@@ -1045,7 +1041,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
     || allowedOwners === undefined
     || port === undefined
     || allowedOrigin === undefined
-    || agentSessions === undefined || agentSessionsCodexMode === undefined || publicBrowserPasswordLogin === undefined || publicTerminalSessions === undefined
+    || agentSessions === undefined || agentSessionsCodexMode === undefined || publicTerminalSessions === undefined
     || frameAncestors === undefined
     || storagePath === undefined
     || pollIntervalSeconds === undefined
@@ -1066,7 +1062,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   return ok({
     agent,
     github: { appId, privateKeyPath, allowedOwners },
-    server: { host, port, allowedOrigin, frameAncestors, agentSessions, agentSessionsCodexMode, browserOrigins: browserOrigins ?? [], publicBrowserPasswordLogin, publicTerminalSessions },
+    server: { host, port, allowedOrigin, frameAncestors, agentSessions, agentSessionsCodexMode, browserOrigins: browserOrigins ?? [], publicTerminalSessions },
     webhook,
     classification,
     triggers,

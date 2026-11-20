@@ -35,8 +35,8 @@ const browserSupported = computed(() => import.meta.client && !!window.PublicKey
         <p v-if="auth.session.value?.bootstrapKind === 'passkey'" class="text-sm text-muted">
           Add another Passkey before removing the last Passkey.
         </p>
-        <p v-else class="text-sm text-muted">
-          Use the password or pairing link if you lose a Passkey.
+        <p class="text-sm text-muted">
+          If you lose every Passkey, open a new pairing link from the host.
         </p>
         <UButton label="Sign out" icon="i-octicon-sign-out-16" color="neutral" variant="outline" class="min-h-11" :loading="auth.pending.value === 'logout'" :disabled="auth.pending.value !== null" @click="auth.logout" />
         <p v-if="auth.error.value" role="alert" class="text-sm text-error">

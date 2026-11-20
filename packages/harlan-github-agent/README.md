@@ -69,12 +69,28 @@ The sync rejects missing files, unsafe symlinks, untrusted paths, and files that
 The dashboard denies framing. If another page must frame it, list its origin in `server.frame_ancestors`: HTTPS, or `http://localhost` with a port.
 
 Save the dashboard password in `dashboard-password` beside the config file. Use at least 32 bytes and restrict the file to mode `600`.
+The password is the machine credential. The control CLI, the desktop client, and terminal controllers send it as Basic auth.
+Browsers never use it.
 
-Sign in with that password, then select `Manage Passkeys` and `Add Passkey`.
-Use `Sign in with Passkey` on later visits. The password remains available for recovery and machine clients.
+Browsers sign in with a Passkey only. Each browser address keeps its own Passkeys, so add one Passkey per address.
+To add the first Passkey, run this on the Service host:
+
+```bash
+harlan-github-agent pair --origin https://your-tailnet-host.ts.net
+```
+
+The command prints a pairing link. Open it in the browser that should hold the Passkey.
+The link works once and expires after five minutes. Keep it private.
+The link opens `Add a Passkey`. It can add one Passkey and nothing else.
+After you add the Passkey, the browser is signed in.
+Use `Sign in with Passkey` on later visits.
+
+If you lose every Passkey, open a new pairing link from the host.
+To add a Passkey from another device, open a new pairing link, or select `Manage Passkeys` while signed in.
+The Service refuses to remove the last Passkey of an address.
 Removing a Passkey revokes its signed-in sessions. Signing out closes authenticated browser streams.
-The Service stores Passkeys and opaque sessions in private SQLite files beside its configured database.
-Passkeys remain available after a restart.
+The Service stores Passkeys, pairing links, and opaque sessions in private SQLite files beside its configured database.
+Passkeys remain available after a restart. An address with no Passkey still starts, and the Service logs the `pair` command to run.
 
 If a public proxy rewrites the private address, configure its exact browser address explicitly:
 
@@ -84,16 +100,15 @@ server:
 ```
 
 Configure one public address. Its Passkeys remain separate from the private address.
+Run `harlan-github-agent pair --origin https://agent.example.com` to add its first Passkey.
 The public proxy must set `X-Harlan-Agent-Ingress: public` and preserve the existing trusted Host and Origin mapping.
-The public address refuses terminals unless you enable them explicitly.
+The public address refuses Basic auth and refuses terminals unless you enable them explicitly.
 
-Enroll a public Passkey before disabling its password login.
-Then enable public terminals with persistent storage and private Agent sessions:
+Enable public terminals with persistent storage and private Agent sessions:
 
 ```yaml
 server:
   browser_origins: [https://agent.example.com]
-  public_browser_password_login: false
   agent_sessions: true
   public_terminal_sessions: true
 ```

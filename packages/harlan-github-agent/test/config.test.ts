@@ -43,26 +43,20 @@ repositories:
 `
 
 describe('configuration boundary', () => {
-  it('requires private Agent sessions and public Passkey-only login before enabling public terminals', () => {
-    const configured = configText.replace('server:', 'server:\n  public_terminal_sessions: true\n  public_browser_password_login: false\n  agent_sessions: true\n  browser_origins: [https://agent.example.com]')
+  it('requires private Agent sessions and one public origin before enabling public terminals', () => {
+    const configured = configText.replace('server:', 'server:\n  public_terminal_sessions: true\n  agent_sessions: true\n  browser_origins: [https://agent.example.com]')
     const valid = parseConfigText(configured)
     expect(valid._tag === 'Ok' && valid.value.server.publicTerminalSessions).toBe(true)
-    for (const text of [configured.replace('agent_sessions: true', 'agent_sessions: false'), configured.replace('public_browser_password_login: false', 'public_browser_password_login: true'), configured.replace('  browser_origins: [https://agent.example.com]', ''), configured.replace(`path: ${homedir()}/.local/share/harlan-github-agent/state.sqlite`, 'path: ":memory:"')]) {
+    for (const text of [configured.replace('agent_sessions: true', 'agent_sessions: false'), configured.replace('  browser_origins: [https://agent.example.com]', ''), configured.replace(`path: ${homedir()}/.local/share/harlan-github-agent/state.sqlite`, 'path: ":memory:"')]) {
       const result = parseConfigText(text)
       expect(result._tag === 'Err' && result.error.map(issue => issue.path)).toContain('$.server.public_terminal_sessions')
     }
   })
-  it('requires an explicit public origin when its browser password login is disabled', () => {
-    const withoutOrigin = parseConfigText(configText.replace('server:', 'server:\n  public_browser_password_login: false'))
-    expect(withoutOrigin._tag === 'Err' && withoutOrigin.error.map(issue => issue.path)).toContain('$.server.public_browser_password_login')
-    const configured = parseConfigText(configText.replace('server:', 'server:\n  public_browser_password_login: false\n  browser_origins: [https://agent.example.com]'))
-    expect(configured._tag === 'Ok' && configured.value.server.publicBrowserPasswordLogin).toBe(false)
-    for (const text of [
-      configText.replace('allowed_origin: https://harlan-github-agent.localhost', 'allowed_origin: http://127.0.0.1:3210'),
-      configText.replace(`path: ${homedir()}/.local/share/harlan-github-agent/state.sqlite`, 'path: ":memory:"'),
-    ]) {
-      const unsafe = parseConfigText(text.replace('server:', 'server:\n  public_browser_password_login: false\n  browser_origins: [https://agent.example.com]'))
-      expect(unsafe._tag === 'Err' && unsafe.error.map(issue => issue.path)).toContain('$.server.public_browser_password_login')
+  it('accepts a configuration that still names the retired public_browser_password_login key', () => {
+    // The previous revision required this key with public terminals, so Hogwild keeps it until the deploy lands.
+    for (const value of ['false', 'true']) {
+      const result = parseConfigText(configText.replace('server:', `server:\n  public_browser_password_login: ${value}\n  public_terminal_sessions: true\n  agent_sessions: true\n  browser_origins: [https://agent.example.com]`))
+      expect(result._tag === 'Ok' && result.value.server.publicTerminalSessions).toBe(true)
     }
   })
   it('accepts one explicit public Passkey origin and rejects ambiguous or insecure authorities', () => {

@@ -21,7 +21,7 @@ it('authenticates public terminal HTTP and upgrades only with the public browser
   const store = openBrowserAuthStore(join(path, 'auth.sqlite'))
   store.addCredential({ id: 'key', label: 'Passkey', created: 1, credential: { id: 'key', publicKey: new Uint8Array([1]), counter: 0 } })
   store.close()
-  const auth = createBrowserAuthorities({ directory, origin, publicOrigin, publicPasswordLogin: false, publicTerminalHost: true, privateTerminalHost: true, password: 'fixture', now: Date.now })
+  const auth = createBrowserAuthorities({ directory, origin, publicOrigin, publicTerminalHost: true, privateTerminalHost: true, now: Date.now })
   let running = false
   const api = createTerminalServer({ manager: { capabilities: () => ({ hostLabel: 'Hogwild' }), intent: () => running ? { session: { state: 'Running' } } : undefined } as never, origin, authorize: () => true, browserAuth: auth.private, publicBrowserAuth: auth.public!, now: Date.now, log: () => {} })
   await new Promise<void>(resolve => api.server.listen(0, '127.0.0.1', resolve))
@@ -31,7 +31,7 @@ it('authenticates public terminal HTTP and upgrades only with the public browser
   const url = `http://127.0.0.1:${address.port}`
   const cookie = auth.public!.issueSession('key').split(';')[0]!
   const privateCookie = auth.private.issueSession(null).split(';')[0]!
-  const passwordCookie = auth.public!.issueSession(null).split(';')[0]!
+  const legacyCookie = auth.public!.issueSession(null).split(';')[0]!
   const headers = { 'host': 'private.example.com', 'x-harlan-agent-ingress': 'public', 'connection': 'close' }
   const fetch = (url: string, options: { method?: string, headers: Record<string, string>, body?: string }) => new Promise<Response>((resolve, reject) => {
     const request = httpRequest(url, { method: options.method, headers: options.headers }, (response) => {
@@ -55,15 +55,15 @@ it('authenticates public terminal HTTP and upgrades only with the public browser
     const session = await auth.public!.handle(new Request(`${publicOrigin}/api/browser-auth/session`, { headers: { host: 'agent.example.com' } }))
     expect(await session!.json()).toMatchObject({ surface: { _tag: 'TerminalHost' } })
     expect((await fetch(`${url}/api/terminal/capabilities`, { headers: { ...headers, cookie } })).status).toBe(200)
-    for (const credential of ['', privateCookie, passwordCookie])
+    for (const credential of ['', privateCookie, legacyCookie])
       expect((await fetch(`${url}/api/terminal/capabilities`, { headers: { ...headers, cookie: credential } })).status).toBe(401)
-    const passwordSession = await auth.public!.handle(new Request(`${publicOrigin}/api/browser-auth/session`, { headers: { host: 'agent.example.com', cookie: passwordCookie } }))
-    expect(await passwordSession!.json()).toMatchObject({ authenticated: false })
+    const legacySession = await auth.public!.handle(new Request(`${publicOrigin}/api/browser-auth/session`, { headers: { host: 'agent.example.com', cookie: legacyCookie } }))
+    expect(await legacySession!.json()).toMatchObject({ authenticated: false })
     expect((await fetch(`${url}/api/terminal/capabilities`, { headers: { ...headers, cookie, origin: 'https://evil.example.com' } })).status).toBe(403)
     expect((await fetch(`${url}/api/terminal/sessions`, { method: 'POST', headers: { ...headers, cookie }, body: '{}' })).status).toBe(403)
     expect(await upgrade(cookie)).toContain('409 Conflict')
     expect(await upgrade(privateCookie)).toContain('403 Forbidden')
-    expect(await upgrade(passwordCookie)).toContain('403 Forbidden')
+    expect(await upgrade(legacyCookie)).toContain('403 Forbidden')
     expect(await upgrade(cookie, 'https://evil.example.com')).toContain('403 Forbidden')
     running = true
     const websocket = new WebSocket(`ws://127.0.0.1:${address.port}/api/terminal/sessions/${'a'.repeat(24)}/stream`, { headers: { ...headers, origin, cookie } })

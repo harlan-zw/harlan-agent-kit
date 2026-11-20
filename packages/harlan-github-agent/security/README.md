@@ -34,7 +34,7 @@ Use isolation for recoverable workload containment. Never test power off on prod
 ## Trust boundary
 
 The dashboard requires a public Passkey session and its normal same-origin POST
-check. Basic credentials and private/password browser sessions cannot invoke this
+check. Basic credentials, private browser sessions, and pairing links cannot invoke this
 control. The Agent forwards only status, challenge, isolation, and power-off requests over a
 fixed Unix socket. It receives no sudo, restore, reboot, or arbitrary-command access.
 
@@ -92,6 +92,8 @@ adding or revoking a Passkey, an administrator must explicitly replace the appro
 root snapshot and restart only `hogwild-emergency-broker.service`. Preserve
 `/var/lib/hogwild-emergency/passkey-counters.json`; do not roll counters backward.
 Changing keys in the dashboard does not change the root snapshot automatically.
+A Passkey added from a pairing link signs in to the dashboard. It cannot confirm host
+actions until an administrator installs a snapshot that includes it.
 
 ## Safe verification
 

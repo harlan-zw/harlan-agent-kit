@@ -422,6 +422,9 @@ export function createAgentApp(options: AgentAppOptions): H3 {
         return
       const browserShell = options.browserAuth && (event.req.method === 'GET' || event.req.method === 'HEAD') && !path.startsWith('/api/') && path !== '/health'
       if (!browserShell && !machineDashboardAccess(event.req) && !authority?.session(event.req.headers)) {
+        // A pairing link's enrolment can add a Passkey and nothing else.
+        if (authority?.enrolment(event.req.headers))
+          throw createError({ status: 403, statusText: 'Forbidden', message: 'Add a Passkey before you use Agent.' })
         throw createError({
           status: 401,
           statusText: 'Unauthorized',

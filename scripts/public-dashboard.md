@@ -1,7 +1,7 @@
 # Public Dashboard
 
 The Dashboard uses `https://agent.harlanzw.com` through Hogwild's existing Cloudflare Tunnel.
-Sign in as `agent` with the existing Dashboard password.
+Sign in with a Passkey. To add the first Passkey, run `harlan-github-agent pair --origin https://agent.harlanzw.com` on Hogwild and open the printed link.
 The Service still binds `127.0.0.1:3210`.
 
 ```mermaid

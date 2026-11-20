@@ -33,7 +33,7 @@ import { retireObsoleteBaselineRepairs } from './baseline-repair-sweep.ts'
 import { createBaselineRepairWorker, inspectWorkspaceFiles } from './baseline-repair-worker.ts'
 import { createBatchScheduler } from './batch-scheduler.ts'
 import { createBatchWorker } from './batch-worker.ts'
-import { createBrowserAuthorities } from './browser-auth-authorities.ts'
+import { createBrowserAuthorities, pairingCommand } from './browser-auth-authorities.ts'
 import { createCandidateIssueController } from './candidate-issue-controller.ts'
 import { agentStartBlockedReason, hasSpendableCapacity, resolveAgentStartState } from './capacity.ts'
 import { createClassificationSource } from './classification.ts'
@@ -1695,12 +1695,15 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       })
     : undefined
   const browserAuth = config.storage.path !== ':memory:' && new URL(config.server.allowedOrigin).protocol === 'https:'
-    ? createBrowserAuthorities({ directory: join(dirname(config.storage.path), 'browser-auth'), origin: config.server.allowedOrigin, privateTerminalHost: config.server.agentSessions === true, publicTerminalHost: config.server.publicTerminalSessions === true, ...(config.server.browserOrigins?.[0] ? { publicOrigin: config.server.browserOrigins[0] } : {}), publicPasswordLogin: config.server.publicBrowserPasswordLogin !== false, password: options.dashboardPassword, now: () => now().getTime() })
+    ? createBrowserAuthorities({ directory: join(dirname(config.storage.path), 'browser-auth'), origin: config.server.allowedOrigin, privateTerminalHost: config.server.agentSessions === true, publicTerminalHost: config.server.publicTerminalSessions === true, ...(config.server.browserOrigins?.[0] ? { publicOrigin: config.server.browserOrigins[0] } : {}), now: () => now().getTime() })
     : undefined
-  if (config.server.publicBrowserPasswordLogin === false && !browserAuth?.public)
-    throw new Error('Public Passkey login requires persistent storage and an HTTPS private origin.')
-  if (config.server.publicTerminalSessions === true && (config.server.agentSessions !== true || config.server.publicBrowserPasswordLogin !== false || !browserAuth?.public))
-    throw new Error('Public terminals require private Agent sessions and public Passkey-only login.')
+  if (config.server.publicTerminalSessions === true && (config.server.agentSessions !== true || !browserAuth?.public))
+    throw new Error('Public terminals require private Agent sessions and one public browser origin.')
+  // An origin without a Passkey still starts. Its first Passkey comes from a pairing link.
+  for (const authority of [browserAuth?.private, browserAuth?.public]) {
+    if (authority !== undefined && !authority.hasPasskeys())
+      options.logger.info(`No Passkey is set up for ${authority.origin}. Run \`${pairingCommand(authority.origin, options.configPath)}\` on this host.`)
+  }
   // The poll pass and Control API must read the same live provider capacity.
   // Stored snapshots carry no provider readings.
   function getDashboardSnapshot(at: string): DashboardSnapshot {

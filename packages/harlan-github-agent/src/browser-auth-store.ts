@@ -7,6 +7,8 @@ import { DatabaseSync } from 'node:sqlite'
 export interface BrowserCredential { id: string, label: string, credential: WebAuthnCredential, created: number }
 export interface BrowserChallenge { hash: string, challenge: string, ceremony: 'registration' | 'authentication', sessionHash: string | null, origin: string, rpId: string, expires: number }
 export interface BrowserSession { hash: string, credentialId: string | null, expires: number }
+/** A pairing link's session. It can add one Passkey and nothing else. */
+export interface BrowserEnrolment { hash: string, expires: number }
 
 /** Each browser authority has its own private database. Tokens are never stored. */
 export function openBrowserAuthStore(path: string) {
@@ -23,7 +25,9 @@ export function openBrowserAuthStore(path: string) {
     CREATE TABLE IF NOT EXISTS account (id INTEGER PRIMARY KEY CHECK(id=1), user_id TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS credentials (id TEXT PRIMARY KEY, label TEXT NOT NULL, credential TEXT NOT NULL, created INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS challenges (hash TEXT PRIMARY KEY, challenge TEXT NOT NULL, ceremony TEXT NOT NULL, session_hash TEXT, origin TEXT NOT NULL, rp_id TEXT NOT NULL, expires INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, credential_id TEXT, expires INTEGER NOT NULL);`)
+    CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, credential_id TEXT, expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS pairings (hash TEXT PRIMARY KEY, expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS enrolments (hash TEXT PRIMARY KEY, expires INTEGER NOT NULL);`)
   database.prepare('INSERT OR IGNORE INTO account VALUES (1, ?)').run(randomBytes(32).toString('base64url'))
   function credentials(): BrowserCredential[] {
     return database.prepare('SELECT * FROM credentials ORDER BY created').all().map(row => ({ id: String(row.id), label: String(row.label), credential: { ...JSON.parse(String(row.credential)), publicKey: Buffer.from(JSON.parse(String(row.credential)).publicKey, 'base64url') }, created: Number(row.created) }))
@@ -80,6 +84,26 @@ export function openBrowserAuthStore(path: string) {
       return row ? { hash, credentialId: row.credential_id === null ? null : String(row.credential_id), expires: Number(row.expires) } : null
     },
     revokeSession(hash: string) { database.prepare('DELETE FROM sessions WHERE hash=?').run(hash) },
+    /** The host CLI and the Service open this file separately, so a pairing lives here, not in memory. */
+    pairing(value: { hash: string, expires: number }, now: number) {
+      database.prepare('DELETE FROM pairings WHERE expires<=?').run(now)
+      if (Number(database.prepare('SELECT count(*) AS count FROM pairings').get()!.count) >= 16)
+        return false
+      database.prepare('INSERT INTO pairings VALUES (?, ?)').run(value.hash, value.expires)
+      return true
+    },
+    redeemPairing(hash: string, now: number) {
+      return database.prepare('DELETE FROM pairings WHERE hash=? AND expires>? RETURNING hash').get(hash, now) !== undefined
+    },
+    enrolment(value: BrowserEnrolment, now: number) {
+      database.prepare('DELETE FROM enrolments WHERE expires<=?').run(now)
+      database.prepare('INSERT INTO enrolments VALUES (?, ?)').run(value.hash, value.expires)
+    },
+    enrolmentByHash(hash: string, now: number): BrowserEnrolment | null {
+      const row = database.prepare('SELECT * FROM enrolments WHERE hash=? AND expires>?').get(hash, now)
+      return row ? { hash, expires: Number(row.expires) } : null
+    },
+    revokeEnrolment(hash: string) { database.prepare('DELETE FROM enrolments WHERE hash=?').run(hash) },
     sessionsForCredential(id: string) { return database.prepare('SELECT hash FROM sessions WHERE credential_id=?').all(id).map(row => String(row.hash)) },
     close() { database.close() },
   }
