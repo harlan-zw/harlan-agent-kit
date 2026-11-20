@@ -125,6 +125,31 @@ it('refuses every Control API route to an enrol-only session', async () => {
   }
 })
 
+it('enrols the public origin through the public ingress with only its own pairing links', async () => {
+  const directory = temporary()
+  const authorities = createBrowserAuthorities({ directory, origin: privateOrigin, publicOrigin, privateTerminalHost: false, now: Date.now })
+  try {
+    const app = createAgentApp({ allowedOrigin: privateOrigin, dashboardPassword: 'fixture', browserAuth: authorities, now: () => new Date(), store: { getDashboardSnapshot: () => dashboardSnapshot() } as never })
+    const publicIngress = { 'host': 'private.example.com', 'origin': privateOrigin, 'x-harlan-agent-ingress': 'public' }
+    const mint = (origin: string) => {
+      const link = createPairingLink({ directory, origin, now: Date.now })
+      if (link._tag !== 'Ok')
+        throw new Error('Expected a pairing link')
+      return token(link.value.url)
+    }
+    const bootstrap = (secret: string) => app.fetch(new Request(`${privateOrigin}/api/browser-auth/bootstrap`, { method: 'POST', headers: publicIngress, body: JSON.stringify({ token: secret }) }))
+    expect((await bootstrap(mint(privateOrigin))).status).toBe(401)
+    const response = await bootstrap(mint(publicOrigin))
+    expect(response.status).toBe(200)
+    const [enrolment] = cookies(response)
+    expect((await app.fetch(new Request(`${privateOrigin}/api/state`, { headers: { ...publicIngress, cookie: enrolment! } }))).status).toBe(403)
+    expect((await app.fetch(new Request(`${privateOrigin}/api/state`, { headers: { host: 'private.example.com', cookie: enrolment! } }))).status).toBe(401)
+  }
+  finally {
+    authorities.close()
+  }
+})
+
 it('lets an enrol-only session add one discoverable, verified Passkey, then signs in with it', async () => {
   const directory = temporary()
   const webauthn = stubWebAuthn()
