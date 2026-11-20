@@ -375,3 +375,36 @@ describe('persistent Agent provider circuits', () => {
     expect(journal.listProviderCircuits().map(entry => entry.state._tag).sort()).toEqual(['Closed', 'Open'])
   })
 })
+
+describe('a usage limit that a later reading contradicts', () => {
+  const codex = { provider: 'codex' as const, credential: 'chatgpt', model: 'gpt-6.1-sol' }
+  const limitAt = '2026-11-20T04:01:41.348Z'
+
+  it('ends when Codex later reports that usage is allowed', () => {
+    const journal = store()
+    journal.recordProviderFailure({ ...codex, failureClass: 'usage_limit', detail: 'The Agent provider reached its usage limit.', at: limitAt })
+    // Usage limits hold every Codex model, so the current model is blocked too.
+    expect(journal.providerCanStart({ provider: 'codex', credential: 'chatgpt', model: 'gpt-6.2-sol', at: '2026-11-20T06:00:00.000Z' })).toBe(false)
+
+    expect(journal.closeStaleUsageLimitCircuits({ provider: 'codex', credential: 'chatgpt', readAt: '2026-11-20T06:00:00.000Z', at: '2026-11-20T06:00:01.000Z' })).toBe(1)
+
+    expect(journal.providerCanStart({ provider: 'codex', credential: 'chatgpt', model: 'gpt-6.2-sol', at: '2026-11-20T06:00:02.000Z' })).toBe(true)
+    expect(journal.listProviderCircuits().find(entry => entry.model === 'gpt-6.1-sol')?.state).toEqual({ _tag: 'Closed' })
+  })
+
+  it('stays open when the reading came before the limit', () => {
+    const journal = store()
+    journal.recordProviderFailure({ ...codex, failureClass: 'usage_limit', detail: 'The Agent provider reached its usage limit.', at: limitAt })
+
+    expect(journal.closeStaleUsageLimitCircuits({ provider: 'codex', credential: 'chatgpt', readAt: '2026-11-20T04:00:00.000Z', at: '2026-11-20T04:02:00.000Z' })).toBe(0)
+    expect(journal.providerCanStart({ provider: 'codex', credential: 'chatgpt', at: '2026-11-20T04:02:01.000Z' })).toBe(false)
+  })
+
+  it('leaves other failure classes open', () => {
+    const journal = store()
+    for (let attempt = 0; attempt < 5; attempt++)
+      journal.recordProviderFailure({ ...codex, failureClass: 'authentication', detail: 'Unauthorized.', at: limitAt })
+
+    expect(journal.closeStaleUsageLimitCircuits({ provider: 'codex', credential: 'chatgpt', readAt: '2026-11-20T06:00:00.000Z', at: '2026-11-20T06:00:01.000Z' })).toBe(0)
+  })
+})

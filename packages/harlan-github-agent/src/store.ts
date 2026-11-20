@@ -1104,6 +1104,11 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     canaryFence?: number
     at: string
   }) => number
+  /**
+   * Ends Open usage limits that a later provider reading contradicts.
+   * A usage limit holds every model of a provider, so a stale one stops the fleet.
+   */
+  closeStaleUsageLimitCircuits: (input: { provider: AgentProviderName, credential: string, readAt: string, at: string }) => number
   listProviderCircuits: () => ProviderCircuit[]
   getAgentControl: () => StoredAgentControl
   /** Never act on this Item again. Cancels live work and stops every planner. */
@@ -14596,6 +14601,38 @@ export function openJournalStore(
     }
   }
 
+  const closeStaleUsageLimitCircuits: JournalStore['closeStaleUsageLimitCircuits'] = (input) => {
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const rows = database.prepare(`
+        SELECT * FROM provider_circuits
+        WHERE provider = ? AND credential = ? AND failure_class = 'usage_limit'
+          AND state_tag = 'Open' AND updated_at < ?
+      `).all(input.provider, input.credential, input.readAt) as unknown as ProviderCircuitRow[]
+      let changed = 0
+      for (const row of rows) {
+        const updated = database.prepare(`
+          UPDATE provider_circuits
+          SET state_tag = 'Closed', failures = 0, retry_at = NULL,
+            canary_worker_id = NULL, canary_lease_expires_at = NULL, updated_at = ?
+          WHERE id = ? AND state_tag = 'Open'
+        `).run(input.at, row.id).changes === 1
+        if (!updated)
+          continue
+        changed += 1
+        const closed = database.prepare('SELECT * FROM provider_circuits WHERE id = ?')
+          .get(row.id) as unknown as ProviderCircuitRow
+        recordProviderCircuitEvent(database, closed, 'Closed', row.state_tag, 'Closed', input.at, 'The provider reported that usage is allowed.')
+      }
+      database.exec('COMMIT')
+      return changed
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   const recordProviderSuccess: JournalStore['recordProviderSuccess'] = (input) => {
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -17655,6 +17692,7 @@ export function openJournalStore(
     renewProviderStart,
     recordProviderFailure,
     recordProviderSuccess,
+    closeStaleUsageLimitCircuits,
     listProviderCircuits,
     getWorkerSession,
     heartbeatPublication,

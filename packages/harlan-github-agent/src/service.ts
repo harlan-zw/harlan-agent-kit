@@ -519,6 +519,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // path of every agent turn.
   const capacity = createProviderCapacitySource({
     onError: error => options.logger.error(error),
+    // A usage limit holds every Codex model until its retry. When Codex itself
+    // later says usage is allowed, that limit is stale and must not stop the fleet.
+    onUsageAllowed: (provider, readAt) => {
+      const closed = store.closeStaleUsageLimitCircuits({ provider, credential: agentProfile(provider).authentication, readAt: new Date(readAt).toISOString(), at: now().toISOString() })
+      if (closed > 0)
+        options.logger.info(`Closed ${closed} ${provider} usage limit${closed === 1 ? '' : 's'}, because ${provider} reports that usage is allowed.`)
+    },
   })
   const automaticSelection = (provider: AgentProviderName) => {
     const profile = agentProfile(provider)

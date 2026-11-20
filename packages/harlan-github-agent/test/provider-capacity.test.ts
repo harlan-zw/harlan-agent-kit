@@ -607,3 +607,59 @@ describe('the capacity source under load', () => {
     await source.stop()
   })
 })
+
+describe('a Codex reading that confirms usage', () => {
+  const available: ProviderCapacity = { _tag: 'Available', usedPercent: 7, resetsAt: '2026-11-27T04:02:29.000Z' }
+
+  it('reads a usage refusal as a full window, so it stops starts', () => {
+    expect(weeklyCodexCapacity({ ...(codexResult(7) as object), ordinaryUsageAllowed: false })).toEqual({ _tag: 'Available', usedPercent: 100, resetsAt: new Date(1_800_000_000_000).toISOString() })
+  })
+
+  it('reads an exhausted five-hour window as full while the week has room', () => {
+    const result = { rateLimitsByLimitId: { codex: {
+      primary: { windowDurationMins: 300, usedPercent: 100, resetsAt: 1_700_000_000 },
+      secondary: { windowDurationMins: WEEKLY_WINDOW_MINUTES, usedPercent: 7, resetsAt: 1_800_000_000 },
+    } } }
+    expect(weeklyCodexCapacity(result)).toEqual({ _tag: 'Available', usedPercent: 100, resetsAt: new Date(1_700_000_000_000).toISOString() })
+  })
+
+  it('never lets a kept reading hide a fresh refusal', async () => {
+    const full: ProviderCapacity = { _tag: 'Available', usedPercent: 100, resetsAt: '2026-11-20T09:00:00.000Z' }
+    const readings = [available, full]
+    const confirmed: number[] = []
+    const source = createProviderCapacitySource({
+      onError: () => undefined,
+      onUsageAllowed: (_provider, readAt) => confirmed.push(readAt),
+      readCodex: async () => readings.shift()!,
+      readOpencode: async () => available,
+    })
+
+    await source.refresh()
+    await source.refresh()
+
+    expect(source.read('codex')).toEqual(full)
+    expect(confirmed).toHaveLength(1)
+  })
+
+  it('reports each fresh reading that allows usage, and never a kept one', async () => {
+    const readings: ProviderCapacity[] = [available, { _tag: 'Unavailable', reason: 'The Codex rate limit request timed out.' }]
+    const confirmed: number[] = []
+    let clock = 1_000
+    const source = createProviderCapacitySource({
+      onError: () => undefined,
+      now: () => clock,
+      onUsageAllowed: (provider, readAt) => {
+        expect(provider).toBe('codex')
+        confirmed.push(readAt)
+      },
+      readCodex: async () => readings.shift()!,
+      readOpencode: async () => available,
+    })
+
+    await source.refresh()
+    clock = 2_000
+    await source.refresh()
+
+    expect(confirmed).toEqual([1_000])
+  })
+})

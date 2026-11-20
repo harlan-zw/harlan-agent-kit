@@ -53,6 +53,17 @@ export function weeklyCodexCapacity(result: unknown): ProviderCapacity {
   if (typeof weekly.usedPercent !== 'number' || typeof weekly.resetsAt !== 'number')
     return { _tag: 'Unavailable', reason: 'Codex reported an unreadable seven-day window.' }
 
+  // A shorter window can run out while the week has room, and Codex can refuse
+  // usage outright. Either is a full reading until its window resets, so it
+  // stops starts and is never mistaken for a failed read or for spare usage.
+  const exhausted = windows.filter(candidate => typeof candidate.usedPercent === 'number' && candidate.usedPercent >= 100 && typeof candidate.resetsAt === 'number')
+  if (exhausted.length > 0 || record.ordinaryUsageAllowed === false) {
+    const resets = (exhausted.length > 0 ? exhausted : windows)
+      .map(candidate => candidate.resetsAt)
+      .filter((value): value is number => typeof value === 'number')
+    return { _tag: 'Available', usedPercent: 100, resetsAt: new Date(Math.min(...resets) * 1_000).toISOString() }
+  }
+
   return {
     _tag: 'Available',
     usedPercent: Math.max(0, Math.min(100, weekly.usedPercent)),
@@ -286,6 +297,8 @@ export interface ProviderCapacitySourceOptions {
   /** How long a good reading still decides after later reads fail. */
   staleMilliseconds?: number
   now?: () => number
+  /** A fresh reading allows usage. Kept readings never count, because they prove nothing new. */
+  onUsageAllowed?: (provider: 'codex', readAt: number) => void
   onError: (error: unknown) => void
   readCodex?: () => Promise<ProviderCapacity>
   readOpencode?: () => Promise<ProviderCapacity>
@@ -353,6 +366,9 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
   const refresh = (): Promise<void> => {
     active = active
       .then(async () => {
+        // A reading speaks for the moment it started. A limit hit during a slow
+        // read is newer than the reading, so the reading must not end it.
+        const readAt = now()
         // One failing provider must not stop the other being read, or a Codex
         // outage would make opencode look exhausted and stop the fleet.
         const [nextCodex, nextOpencode, nextGo] = await Promise.all([
@@ -366,6 +382,8 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
         opencode = settledOpencode.capacity
         go = nextGo
         failures = settledCodex.failed || settledOpencode.failed ? failures + 1 : 0
+        if (nextCodex._tag === 'Available' && nextCodex.usedPercent < 100)
+          options.onUsageAllowed?.('codex', readAt)
       })
       .catch(options.onError)
     return active
