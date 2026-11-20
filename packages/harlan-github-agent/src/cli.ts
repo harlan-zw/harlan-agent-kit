@@ -631,8 +631,11 @@ const pair = defineCommand({
   },
   async run({ args }) {
     const parsed = await loadConfig(resolve(args.config))
-    if (parsed._tag === 'Err')
-      throw new Error(describePreflightIssues(parsed.error))
+    if (parsed._tag === 'Err') {
+      consola.error(describePreflightIssues(parsed.error))
+      process.exitCode = 1
+      return
+    }
     const target = pairingTarget(parsed.value, args.origin)
     if (target._tag === 'Err') {
       consola.error(target.error)
