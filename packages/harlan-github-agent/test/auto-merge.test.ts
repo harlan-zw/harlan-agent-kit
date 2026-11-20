@@ -53,12 +53,14 @@ function decide(input: {
   policy?: AutoMergePolicy
   pullRequest?: Parameters<typeof pullRequestItem>[0]
   repository?: Parameters<typeof repositoryMapping>[0]
+  requestedReviewRunId?: string
 } = {}) {
   return autoMergeDecision({
     attempts: input.attempts ?? [attempt()],
     policy: input.policy ?? enabled,
     pullRequest: pullRequestItem({ autoMerge: true, mergeState: 'clean', ...input.pullRequest }),
     repository: repositoryMapping(input.repository),
+    ...(input.requestedReviewRunId === undefined ? {} : { requestedReviewRunId: input.requestedReviewRunId }),
   })
 }
 
@@ -71,6 +73,24 @@ describe('auto merge label', () => {
 })
 
 describe('auto merge decision', () => {
+  it.each([80, 81])('honors an owner request only above 80 confidence (%i)', (confidence) => {
+    const input = {
+      attempts: [attempt({ outcome: { _tag: 'Ready', confidence } })],
+      pullRequest: { autoMerge: false },
+    }
+    expect(decide(input)._tag).toBe('Hold')
+    expect(decide({ ...input, requestedReviewRunId: 'different-review' })._tag).toBe('Hold')
+    expect(decide({ ...input, requestedReviewRunId: 'attempt-1' })._tag).toBe(confidence === 81 ? 'Merge' : 'Hold')
+  })
+
+  it('keeps an explicit repository confidence requirement after an owner request', () => {
+    expect(decide({
+      attempts: [attempt({ outcome: { _tag: 'Ready', confidence: 86 } })],
+      pullRequest: { autoMerge: false },
+      repository: { autoMerge: { _tag: 'Labelled', minimumConfidence: 90 } },
+      requestedReviewRunId: 'attempt-1',
+    })._tag).toBe('Hold')
+  })
   it('holds when a newer Review is PENDING for the same head', () => {
     expect(decide({ attempts: [attempt(), attempt({ completedAt: '2026-08-18T01:00:00.000Z', outcome: { _tag: 'Pending', confidence: 100 } })] })._tag).toBe('Hold')
   })

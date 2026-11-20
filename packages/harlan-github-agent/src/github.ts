@@ -977,6 +977,10 @@ export interface GitHubPullRequestMerger {
     number: number
     expectedHeadSha: string
     method: AutoMergeMethod
+    /**
+     * Rejects legacy checkbox requests. GitHub cannot enforce their selected target atomically.
+     */
+    onlyReviewedCommit?: { commentId: number, body: string }
     /** Synchronous current authority, checked again before a fallback merge. */
     authorize: (autoMerge: boolean) => Result<void, string>
   }, signal?: AbortSignal) => Promise<Result<MergeHandoff, GitHubReadError>>
@@ -1040,6 +1044,7 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
         return credential
       const octokit = options.createClient?.(credential.value.token) ?? createAuthenticatedClient({
         access: 'pull_request_merge',
+        retryWrites: false,
         repository: mapping.github,
         signal,
         token: credential.value.token,
@@ -1090,6 +1095,11 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
         .catch(failure)
     },
     async merge(input, signal) {
+      // Neither REST merge nor GraphQL auto-merge has a base-ref precondition.
+      // A client-side read cannot bind checkbox consent to the selected target.
+      // Refuse before any network handoff, including credential acquisition.
+      if (input.onlyReviewedCommit !== undefined)
+        return err({ repository: input.repository.github, message: 'Review checkbox merging is unavailable. Merge the pull request on GitHub.' })
       const { owner, repo } = repositoryParts(input.repository.github)
       const credential = await options.tokens.getToken(input.repository.github, 'pull_request_merge', signal)
       if (credential._tag === 'Err')
@@ -1097,6 +1107,7 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
       const octokit = options.createClient?.(credential.value.token)
         ?? createAuthenticatedClient({
           access: 'pull_request_merge',
+          retryWrites: false,
           repository: input.repository.github,
           signal,
           token: credential.value.token,
@@ -1116,10 +1127,7 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
       /**
        * Merges in this call, pinned to the reviewed head SHA.
        *
-       * Only reached when GitHub says auto-merge has nothing to wait for, which
-       * means the pull request already satisfies every requirement GitHub knows
-       * about. GitHub rejects the call when `sha` is not the current head, so a
-       * head that moved after the review can still never be merged here.
+       * GitHub applies its required checks and rejects a moved head.
        */
       const mergeNow = async (): Promise<Result<MergeHandoff, GitHubReadError>> => {
         const latest = await octokit.rest.pulls.get({ owner, repo, pull_number: input.number, ...request })
@@ -1130,6 +1138,8 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
         const refusal = autoMergePullRequestRefusal(input.repository, input.expectedHeadSha, input.repository.defaultBranch, latest.value)
         if (refusal !== null)
           return err({ repository: input.repository.github, message: refusal })
+        // GitHub pins only the head SHA. A retarget after this final read remains
+        // possible: the merge API offers no atomic base-ref precondition.
         const authorization = input.authorize(hasAutoMergeLabel(labelNames(latest.value.labels)))
         if (authorization._tag === 'Err')
           return err({ repository: input.repository.github, message: authorization.error })
@@ -1156,13 +1166,14 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
       if (refusal !== null)
         return err({ repository: input.repository.github, message: refusal })
 
-      // GitHub owns the merge decision from here. `expectedHeadOid` makes GitHub
-      // cancel its own auto-merge when a new commit lands, so a review can never
-      // merge a commit it did not read.
+      // GitHub owns the merge decision from here. expectedHeadOid binds the
+      // request to the current head at handoff.
       const autoMerge = hasAutoMergeLabel(labelNames(pullRequest.value.labels))
       const authorization = input.authorize(autoMerge)
       if (authorization._tag === 'Err')
         return err({ repository: input.repository.github, message: authorization.error })
+      if (pullRequest.value.auto_merge)
+        return ok({ _tag: 'AutoMergeEnabled' })
       return octokit.graphql(enableAutoMergeMutation, {
         pullRequestId: pullRequest.value.node_id,
         mergeMethod: graphqlMergeMethod(input.method),

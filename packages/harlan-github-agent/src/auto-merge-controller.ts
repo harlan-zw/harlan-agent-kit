@@ -28,9 +28,13 @@ export interface AutoMergeControllerOptions {
 export function createAutoMergeController(options: AutoMergeControllerOptions): AutoMergeController {
   return {
     async reconcile(repository, subject, signal) {
-      if (options.policy._tag === 'Disabled' || subject.kind !== 'pull_request' || !autoMergeCandidate(repository, subject))
+      if (options.policy._tag === 'Disabled' || repository.ownership !== 'owned' || subject.kind !== 'pull_request')
         return
-      if (subject.baseRef === undefined)
+      const baseRef = subject.baseRef
+      if (baseRef === undefined)
+        return
+      // Saved checkbox selections cannot authorize a merge without an atomic target precondition.
+      if (!autoMergeCandidate(repository, subject))
         return
       // Labels stay out of stored Revisions. The helper supplies its live GitHub label before each write.
       const currentContext = (autoMerge = subject.autoMerge) => {
@@ -60,7 +64,7 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
           repository: context.repository,
           number: subject.number,
           expectedHeadSha: subject.headSha,
-          expectedBaseRef: subject.baseRef,
+          expectedBaseRef: baseRef,
           authorize,
         }, signal)
         if (retargeted._tag === 'Err')

@@ -1,14 +1,19 @@
 import type { Octokit } from 'octokit'
 import type { AutoMergeControllerOptions, AutoMergeEvent } from '../src/auto-merge-controller.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewGates } from '../src/types.ts'
-import { afterEach, describe, expect, it } from 'vitest'
+import { createHmac } from 'node:crypto'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createGitHubPullRequestMerger } from '../src/github.ts'
 import { createAutoMergeController, openJournalStore } from '../src/index.ts'
 import { ok } from '../src/result.ts'
+import { REVIEW_AUTO_MERGE_CONTROL, withReviewAutoMergeControl } from '../src/review-auto-merge.ts'
+import { AUTOMATED_REVIEW_MARKER } from '../src/review-comment.ts'
+import { createWebhookApp } from '../src/webhook.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: ReturnType<typeof openJournalStore>[] = []
 afterEach(() => stores.splice(0).forEach(store => store.close()))
+afterEach(() => vi.restoreAllMocks())
 const started = '2026-08-13T01:00:00.000Z'
 const changed = '2026-08-13T01:01:00.000Z'
 const gates: ReviewGates = {
@@ -17,11 +22,14 @@ const gates: ReviewGates = {
   ci: { _tag: 'Passed', evidence: [] },
 }
 
-function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
+function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, source: 'label' | 'comment' = 'label') {
   const store = openJournalStore(':memory:', true)
   stores.push(store)
   const repository = repositoryMapping(every ? { autoMerge: { _tag: 'Every', minimumConfidence: 90 } } : {})
-  const pullRequest = pullRequestItem({ autoMerge: !every, mergeState: 'clean', baseRef: boundary === 'retarget' ? 'fix/parent' : 'main' })
+  const pullRequest = pullRequestItem({ autoMerge: !every && source === 'label', headSha: 'a'.repeat(40), mergeState: 'clean', baseRef: boundary === 'retarget' ? 'fix/parent' : 'main' })
+  const confidence = source === 'comment' ? 81 : 95
+  // A previously published checkbox remains in GitHub after the feature is disabled.
+  const reviewBody = `${AUTOMATED_REVIEW_MARKER}\n<!-- reviewed-sha: ${pullRequest.headSha} -->\n### 🤖 READY · ${confidence}/100\n\n${REVIEW_AUTO_MERGE_CONTROL}`
   store.syncRepositories([repository], started)
   store.setRepositoryWritesEnabled(repository.github, true)
   const observation = store.recordObservation({ externalId: 'initial', observedAt: started, source: 'poll', subject: pullRequest })
@@ -43,7 +51,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
     startedAt: started,
     completedAt: at,
     gates,
-    confidence: 95,
+    confidence,
     findings: [],
   })
   expect(recordReview('review', started)._tag).toBe('Inserted')
@@ -57,7 +65,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
       revisionId: observation.revisionId,
       expectedHeadSha: pullRequest.headSha,
       gates,
-      body: `READY ${at}`,
+      body: reviewBody,
       desiredOutcome: 'READY',
       at,
     })
@@ -73,6 +81,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
   let duringRead = () => {}
   let finalRead = false
   let reads = 0
+  const comment = { body: reviewBody.replace('[ ]', '[x]') }
   const current = {
     node_id: 'PR_node_1',
     state: 'open',
@@ -81,7 +90,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
     user: { login: pullRequest.author },
     head: { sha: pullRequest.headSha, repo: { full_name: repository.github } },
     base: { ref: pullRequest.baseRef, sha: pullRequest.baseSha, repo: { full_name: repository.github } },
-    labels: every ? [] : [{ name: 'harlan-agent-auto-merge' }],
+    labels: pullRequest.autoMerge ? [{ name: 'harlan-agent-auto-merge' }] : [],
   }
   const options: AutoMergeControllerOptions = {
     policy: { _tag: 'Enabled', minimumConfidence: 90, method: 'squash' },
@@ -100,7 +109,11 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
           }
           return {}
         },
-        rest: { pulls: {
+        rest: { issues: { getComment: async ({ comment_id }: { comment_id: number }) => {
+          if (comment_id !== 42)
+            throw new Error('Comment not found.')
+          return { data: structuredClone(comment) }
+        } }, pulls: {
           get: async () => {
             reads++
             await Promise.resolve()
@@ -134,11 +147,13 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
     pullRequest,
     options,
     current,
+    comment,
     mutations,
     events,
     observe,
     policy,
     recordReview,
+    reviewBody,
     publish,
     run(change = () => {}, duringFinalRead = false) {
       duringRead = change
@@ -148,7 +163,136 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
   }
 }
 
+describe('auto merge requested from a READY Review', () => {
+  it.each(['withdrawal', 'retarget'] as const)('refuses checkbox merging with a delayed %s after the last read', async (race) => {
+    const test = harness('enable', false, 'comment')
+    await ownerSelection(test, true, started)
+    let reads = 0
+    const mergedTargets: string[] = []
+    test.options.merger = createGitHubPullRequestMerger({
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2126-01-01T00:00:00.000Z' }), invalidate() {} },
+      createClient: () => ({
+        rest: {
+          issues: { getComment: async () => ({ data: structuredClone(test.comment) }) },
+          pulls: {
+            get: async () => {
+              const snapshot = structuredClone(test.current)
+              if (++reads === 2) {
+                if (race === 'withdrawal')
+                  test.comment.body = test.reviewBody
+                else
+                  test.current.base.ref = 'release'
+                // The signed delivery and journal observation have not arrived.
+                await Promise.resolve()
+              }
+              return { data: snapshot }
+            },
+            merge: async () => {
+              mergedTargets.push(test.current.base.ref!)
+              return { data: { merged: true, sha: 'merged' } }
+            },
+          },
+        },
+        graphql: async () => { throw new Error('Checkbox consent cannot enable deferred auto-merge.') },
+      }) as unknown as Octokit,
+    })
+    const result = await test.options.merger.merge({
+      repository: test.repository,
+      number: test.pullRequest.number,
+      expectedHeadSha: test.pullRequest.headSha,
+      method: 'squash',
+      onlyReviewedCommit: { commentId: 42, body: test.reviewBody },
+      authorize: () => ok(undefined),
+    })
+    expect(mergedTargets).toEqual([])
+    expect(result._tag).toBe('Err')
+  })
+
+  it('leaves a saved owner checkbox request to the owner without a merge handoff', async () => {
+    const test = harness('enable', false, 'comment')
+    await ownerSelection(test, true, started)
+    const merge = vi.spyOn(test.options.merger, 'merge')
+    await test.run()
+    expect(merge).not.toHaveBeenCalled()
+    expect(test.mutations).toEqual([])
+  })
+
+  it('does not offer a checkbox without a server-enforced target precondition', () => {
+    const repository = repositoryMapping()
+    const pullRequest = pullRequestItem({ baseRef: repository.defaultBranch })
+    const body = `${AUTOMATED_REVIEW_MARKER}\nREADY`
+    expect(withReviewAutoMergeControl(body, repository, pullRequest, 100, undefined)).toBe(body)
+  })
+})
+
 type Harness = ReturnType<typeof harness>
+
+async function ownerSelection(test: Harness, selected: boolean, at: string) {
+  const secret = 'local-webhook-secret'
+  const app = createWebhookApp({
+    allowedOwners: ['harlan-zw'],
+    logger: { info() {} },
+    onHint() {},
+    secret,
+    reviewAutoMerge: {
+      allowedAuthor: 'harlan-zw',
+      actorLogin: () => 'harlan-github-agent[bot]',
+      apply: (request) => { test.store.requestReviewAutoMerge({ ...request, at }, test.options.policy) },
+    },
+  })
+  const checked = test.reviewBody.replace('[ ]', '[x]')
+  const body = JSON.stringify({
+    action: 'edited',
+    repository: { full_name: test.repository.github },
+    issue: { number: test.pullRequest.number, pull_request: {} },
+    comment: { id: 42, user: { login: 'harlan-github-agent[bot]' }, body: selected ? checked : test.reviewBody, updated_at: at },
+    changes: { body: { from: selected ? test.reviewBody : checked } },
+    sender: { login: 'harlan-zw' },
+  })
+  const response = await app.fetch(new Request('http://localhost/webhook', {
+    method: 'POST',
+    body,
+    headers: { 'x-github-event': 'issue_comment', 'x-github-delivery': `${selected}-${at}`, 'x-hub-signature-256': `sha256=${createHmac('sha256', secret).update(body).digest('hex')}` },
+  }))
+  expect(response.status).toBe(204)
+}
+
+it.each(['repository', 'global'] as const)('honors a signed withdrawal during %s Pause after resume', async (pause) => {
+  const test = harness('enable', false, 'comment')
+  await ownerSelection(test, true, started)
+  if (pause === 'repository')
+    test.store.setRepositoryPaused(test.repository.github, true)
+  else
+    test.store.pauseAgents(changed)
+  await ownerSelection(test, false, changed)
+  if (pause === 'repository')
+    test.store.setRepositoryPaused(test.repository.github, false)
+  else
+    test.store.resumeAgents(changed)
+  await test.run()
+  expect(test.mutations).toEqual([])
+})
+
+it.each(['unchecked', 'removed', 'replaced'] as const)('blocks a live %s comment while its withdrawal delivery is delayed', async (state) => {
+  const test = harness('enable', false, 'comment')
+  await ownerSelection(test, true, started)
+  test.comment.body = state === 'unchecked'
+    ? test.reviewBody
+    : state === 'removed' ? '' : test.comment.body.replace(test.pullRequest.headSha, 'b'.repeat(40))
+  await test.run()
+  expect(test.mutations).toEqual([])
+})
+
+it('does not replace removed label authority with saved checkbox consent', async () => {
+  const test = harness('enable')
+  await test.run(() => {
+    test.current.labels = []
+  })
+  await ownerSelection(test, true, changed)
+  await test.run()
+  expect(test.mutations).toEqual([])
+})
+
 const revocations: Array<[string, (test: Harness) => void]> = [
   ['Pause', test => test.store.setRepositoryPaused(test.repository.github, true)],
   ['global Pause', test => test.store.pauseAgents(changed)],

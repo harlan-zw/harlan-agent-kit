@@ -60,8 +60,24 @@ function source() {
 }
 
 describe('editReviewStatus compare and swap', () => {
+  it.each([false, true])('cannot restore withdrawn consent from a stale logged-finding read, copied selection: %s', async (copiedSelection) => {
+    const body = `${publishedBody}\n<!-- reviewed-sha: ${'a'.repeat(40)} -->\n<!-- review-publication: fixture -->\n- [ ] Enable auto-merge for this commit`
+    hoisted.state.remoteBody = body.replace('[ ] Enable', '[x] Enable')
+    hoisted.state.writes = 0
+    const next = `${body}\n  Repair: Queued <!-- logged-finding: ${'f'.repeat(64)} -->`
+    const result = await source().editReviewStatus(repositoryMapping(), 24, 5, body, copiedSelection ? next.replace('[ ] Enable', '[x] Enable') : next, new AbortController().signal, () => {
+      // Owner edits GitHub after the writer reads. Its webhook has not arrived.
+      hoisted.state.remoteBody = body
+      return ok(undefined)
+    })
+    expect(result._tag).toBe('Ok')
+    expect(hoisted.state.writes).toBe(1)
+    expect(hoisted.state.remoteBody).toBe(next)
+  })
+
   it('reports Edited when the written body survives', async () => {
     hoisted.state.remoteBody = publishedBody
+    hoisted.state.writes = 0
     hoisted.state.reads = 0
     const result = await source().editReviewStatus(repositoryMapping(), 24, 5, publishedBody, 'updated body', new AbortController().signal)
     expect(hoisted.state.writes).toBe(1)

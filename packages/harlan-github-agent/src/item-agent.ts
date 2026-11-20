@@ -50,6 +50,7 @@ import { queuedReviewHistoryLine } from './queue-position-sweep.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { acceptedPullRequestCommands, canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
+import { withReviewAutoMergeControl } from './review-auto-merge.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, pullRequestCommandFooter, reviewFindingCodeLink, reviewFindingFollowUp } from './review-comment.ts'
 import { applyReviewReasoningEffortBand, DEFAULT_REVIEW_REASONING_EFFORT_POLICY, reviewReasoningEffortBand } from './review-effort.ts'
 import { cleanLine, cleanText, updatedAtLabel } from './text.ts'
@@ -109,6 +110,7 @@ export interface ItemAgentOptions {
 }
 
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
+  reviewAutoMergeControls?: (repository: RepositoryMapping) => boolean
   /** Logins whose pull request comments count as commands: `github.allowed_owners`. Absent offers no command. */
   allowedAuthors?: readonly string[]
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
@@ -1468,9 +1470,12 @@ async function projectReviewRun(
   const commands = acceptedPullRequestCommands(task.repositoryMapping, snapshot.pullRequest, options.allowedAuthors ?? [])
   const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks, run.mergeRisk?.combined, task.repository, commands, task.repositoryMapping.ownership)
   const durablePublication = options.status.stageTerminal !== undefined
+  const publicationBody = options.reviewAutoMergeControls?.(task.repositoryMapping)
+    ? withReviewAutoMergeControl(body, task.repositoryMapping, snapshot.pullRequest, confidence, run.mergeRisk?.combined)
+    : body
   const staged = !durablePublication
-    ? await options.status.publish(task, 'terminal', body, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))
-    : options.status.stageTerminal?.(task, body, outcome, run.id, gates) ?? err('The terminal Review status could not be staged.')
+    ? await options.status.publish(task, 'terminal', publicationBody, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))
+    : options.status.stageTerminal?.(task, publicationBody, outcome, run.id, gates) ?? err('The terminal Review status could not be staged.')
   if (staged._tag === 'Err')
     return staged
   if (!durablePublication)

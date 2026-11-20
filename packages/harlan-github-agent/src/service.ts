@@ -647,6 +647,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   })
   const releaseResponseCache = createGitHubResponseCache()
   const usesUserToken = (repository: string): boolean => userRepositoryNames.has(repository.toLowerCase())
+  const reviewAutoMergeControls = (repository: RepositoryMapping): boolean => userLoginKnown
+    && config.mutationsEnabled && config.autoMerge._tag === 'Enabled'
+    && repository.enabled && repository.ownership === 'owned' && repository.pullRequestReview
+    && (repository.githubAccount !== undefined || (repository.authentication === 'app' && !usesUserToken(repository.github)))
+    && store.mayWriteRepository(repository.github) && webhookControls.available(repository.github)
   const rawUserTokens = createUserTokenProvider({ readToken: signal => userAccess.token(signal) })
   // A rate limited quota refuses its credentials until GitHub resets it, so a
   // held installation spends no request and the System pane names it.
@@ -891,6 +896,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     })
     const subjectWorkerOptions = {
       allowedAuthors: config.github.allowedOwners,
+      reviewAutoMergeControls,
       mediaSource,
       activityLog,
       claudeHome: agentContext.value.claudeHome,
@@ -1280,6 +1286,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       options.logger.error(`Baseline repair: ${baseline.error}`)
     const settled = await refreshReviewGates({
       allowedAuthors: config.github.allowedOwners,
+      reviewAutoMergeControls,
       github: workerGithub,
       now,
       preflightRepair: (name, refreshSignal) => preflightGitHubWriteAccess(tokens, name, ['contents_write'], refreshSignal),
@@ -1942,6 +1949,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               return repository === undefined ? null : actorLogin(repository)
             },
             apply: request => store.cancelReviewForHead({ ...request, at: now().toISOString() }),
+          },
+          reviewAutoMerge: {
+            allowedAuthor: userLogin,
+            actorLogin: (name) => {
+              const repository = config.repositories.find(repository => repository.github.toLowerCase() === name.toLowerCase())
+              return repository === undefined || !reviewAutoMergeControls(repository) ? null : actorLogin(repository)
+            },
+            apply: (request) => {
+              const repository = config.repositories.find(repository => repository.github.toLowerCase() === request.repository.toLowerCase())
+              if (repository !== undefined)
+                store.requestReviewAutoMerge({ ...request, repository: repository.github, at: now().toISOString() }, config.autoMerge)
+            },
           },
           reviewCheckRerun: {
             allowedAuthor: userLogin,

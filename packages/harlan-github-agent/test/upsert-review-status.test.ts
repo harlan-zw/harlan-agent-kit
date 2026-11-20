@@ -2,6 +2,7 @@ import type { Octokit } from 'octokit'
 import { describe, expect, it, vi } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { ok } from '../src/result.ts'
+import { REVIEW_AUTO_MERGE_CONTROL } from '../src/review-auto-merge.ts'
 import { repositoryMapping } from './fixtures.ts'
 
 const headSha = '1031dc93dddca88266cb32a085c7b90dcd58ec23'
@@ -87,6 +88,26 @@ describe('review status actor handoff', () => {
     const stopped = await source.editReviewStatus(repositoryMapping(), 24, 5, unchecked, newBody, new AbortController().signal)
     expect(stopped._tag === 'Ok' && stopped.value._tag).toBe('Edited')
     expect(userUpdate).toHaveBeenCalledOnce()
+  })
+
+  it('requires a new owner selection after changing the Review', async () => {
+    const expected = `${newBody}\n\n${REVIEW_AUTO_MERGE_CONTROL}`
+    const checked = expected.replace('[ ]', '[x]')
+    const { source, comment } = legacySource(checked)
+    const updated = `${expected}\n\nOptional follow-up is ready.`
+    const receipt = await source.editReviewStatus(repositoryMapping(), 24, 5, expected, updated, new AbortController().signal)
+
+    expect(receipt._tag === 'Ok' && receipt.value._tag).toBe('Edited')
+    expect(comment.body).toBe(updated)
+  })
+
+  it('clears copied consent when a publisher receives a previously checked body', async () => {
+    const unchecked = `${newBody}\n\n${REVIEW_AUTO_MERGE_CONTROL}`
+    const checked = unchecked.replace('[ ]', '[x]')
+    const { source, comment } = legacySource(checked)
+    const receipt = await source.upsertReviewStatus(repositoryMapping(), 24, 5, checked, true, new AbortController().signal)
+    expect(receipt._tag).toBe('Ok')
+    expect(comment.body).toBe(unchecked)
   })
 
   it('refuses an unmarked comment from the original user actor', async () => {

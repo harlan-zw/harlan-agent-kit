@@ -11,6 +11,7 @@ import { refreshControllerGates, repairPreflight, reviewOutcome, terminalComment
 import { repairRoundLabel } from './repair-rounds.ts'
 import { acceptedPullRequestCommands } from './repository-policy.ts'
 import { err, ok } from './result.ts'
+import { REVIEW_AUTO_MERGE_CONTROL, withReviewAutoMergeControl } from './review-auto-merge.ts'
 
 /**
  * `baselineRepair` is present only when the default branch failed under this
@@ -23,6 +24,7 @@ export type ReviewGateRefreshOutcome
     | { _tag: 'Retired', repository: string, pullRequestNumber: number, reason: string }
 
 export interface ReviewGateSweepOptions {
+  reviewAutoMergeControls?: (repository: RepositoryMapping) => boolean
   /** Logins whose pull request comments count as commands: `github.allowed_owners`. Absent offers no command. */
   allowedAuthors?: readonly string[]
   github: Pick<GitHubAgentSource, 'editReviewStatus' | 'getPullRequestReviewSnapshot'> & Pick<ReviewPublicationSource, 'stampAgentLabel'>
@@ -121,9 +123,13 @@ export async function refreshReviewGates(
       ? { baselineRepair: await queueBaselineRepair(options, review, live.value.pullRequest.baseSha, signal) }
       : {}
     const gatesChanged = JSON.stringify(gates) !== JSON.stringify(review.gates)
+    const publicationBody = options.reviewAutoMergeControls?.(mapping)
+      ? withReviewAutoMergeControl(body, mapping, live.value.pullRequest, confidence, review.mergeRisk?.combined)
+      : body
+    const addAutoMergeControl = publicationBody !== body && !review.publishedBody.includes(REVIEW_AUTO_MERGE_CONTROL)
     if (!gatesChanged)
       reportOverdueCiGate(options, review, gates, ciCause, stalled)
-    if (!gatesChanged && review.gatePublication._tag === 'Published' && !(repairable && body !== review.publishedBody)) {
+    if (!gatesChanged && review.gatePublication._tag === 'Published' && !addAutoMergeControl && !(repairable && publicationBody !== review.publishedBody)) {
       const confirmed = await options.github.editReviewStatus(
         mapping,
         review.pullRequestNumber,
@@ -160,7 +166,7 @@ export async function refreshReviewGates(
           revisionId: review.revisionId,
           expectedHeadSha: review.headSha,
           gates,
-          body,
+          body: publicationBody,
           desiredOutcome: outcome,
           reconciliationId: `${confirmed.value._tag}:${review.commentId}:${at}`,
           at,
@@ -196,7 +202,7 @@ export async function refreshReviewGates(
       revisionId: review.revisionId,
       expectedHeadSha: review.headSha,
       gates,
-      body,
+      body: publicationBody,
       desiredOutcome: outcome,
       at,
     })

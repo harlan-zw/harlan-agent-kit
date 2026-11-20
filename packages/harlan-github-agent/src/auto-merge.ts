@@ -44,6 +44,12 @@ export interface AutoMergeInput {
   policy: AutoMergePolicy
   pullRequest: GitHubPullRequestItem
   repository: RepositoryMapping
+  /** The Review run an owner selected in its canonical comment. */
+  requestedReviewRunId?: string
+}
+
+export function reviewAutoMergeMinimumConfidence(repository: RepositoryMapping): number {
+  return Math.max(81, repository.autoMerge.minimumConfidence ?? 0)
 }
 
 function latestReviewForHead(attempts: ReviewRun[], headSha: string, baseRef: string): ReviewRun | undefined {
@@ -63,10 +69,11 @@ export function hasCurrentPublishedReadyReview(attempts: ReviewRun[], headSha: s
 
 /** Every condition is rechecked against GitHub immediately before the merge. */
 export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
-  const { attempts, policy, pullRequest, repository } = input
+  const { attempts, policy, pullRequest, repository, requestedReviewRunId } = input
   if (policy._tag === 'Disabled')
     return { _tag: 'Hold', reason: 'Auto merge is disabled.' }
-  if (!autoMergeCandidate(repository, pullRequest))
+  const candidate = autoMergeCandidate(repository, pullRequest)
+  if (!candidate && requestedReviewRunId === undefined)
     return { _tag: 'Hold', reason: `The pull request has no ${AUTO_MERGE_LABEL} label.` }
   if (!repository.enabled)
     return { _tag: 'Hold', reason: 'The repository is disabled.' }
@@ -86,6 +93,9 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
   const attempt = latestReviewForHead(attempts, pullRequest.headSha, pullRequest.baseRef)
   if (attempt === undefined || attempt.outcome._tag !== 'Ready')
     return { _tag: 'Hold', reason: 'The current head commit has no READY review.' }
+  const requested = attempt.id === requestedReviewRunId
+  if (!candidate && !requested)
+    return { _tag: 'Hold', reason: 'The owner request covers a different Review.' }
   if (!hasCurrentPublishedReadyReview(attempts, pullRequest.headSha, pullRequest.baseRef)) {
     return { _tag: 'Hold', reason: 'The current head commit has no published READY review.' }
   }
@@ -104,16 +114,16 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
       return { _tag: 'Hold', reason: 'The current review recorded no Merge risk.' }
     if (risk._tag === 'Sensitive' && !scope.labelOverridesRisk)
       return { _tag: 'Hold', reason: `Merge risk is Sensitive: ${risk.reason}` }
-    if (risk._tag !== 'Contained' && !pullRequest.autoMerge)
+    if (risk._tag !== 'Contained' && !pullRequest.autoMerge && !requested)
       return { _tag: 'Hold', reason: `Merge risk is ${risk._tag}: ${risk.reason}` }
     // The label is the qualification whenever it is present, so only an
     // unlabelled pull request ever clears the repository's Merge risk bar.
     qualifiedByRisk = risk._tag === 'Contained' && !pullRequest.autoMerge
   }
 
-  const minimumConfidence = scope._tag === 'Every'
-    ? scope.minimumConfidence
-    : scope._tag === 'Contained' && qualifiedByRisk
+  const minimumConfidence = requested
+    ? reviewAutoMergeMinimumConfidence(repository)
+    : scope._tag === 'Every' || (scope._tag === 'Contained' && qualifiedByRisk)
       ? scope.minimumConfidence
       : scope._tag === 'Labelled' && scope.minimumConfidence !== null
         ? scope.minimumConfidence

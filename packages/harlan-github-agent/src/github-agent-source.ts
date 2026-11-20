@@ -27,6 +27,7 @@ import { collectJobWorkflowContext } from './job-workflow-context.ts'
 import { withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
 import { err, ok } from './result.ts'
+import { normalizeReviewAutoMergeControl } from './review-auto-merge.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
 import { AGENT_ACTOR_LOGIN, AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
@@ -1222,7 +1223,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async editReviewStatus(repository, pullRequestNumber, commentId, expectedBodyText, bodyText, signal, authorize) {
-      const body = githubAccountBody(bodyText, repository.githubAccount)
+      const body = normalizeReviewAutoMergeControl(githubAccountBody(bodyText, repository.githubAccount))
       const expectedBody = githubAccountBody(expectedBodyText, repository.githubAccount)
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
@@ -1248,12 +1249,13 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             && existingHead === nextHead
           if (existing.data.user?.login.toLowerCase() !== actor && !legacyOwned)
             return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another GitHub actor.' as const })
+          const existingBody = withoutLoggedFindingControls(normalizeReviewAutoMergeControl(existing.data.body ?? ''))
           if ((existing.data.body === body || (expectedBody === body
-            && withoutLoggedFindingControls(existing.data.body ?? '') === withoutLoggedFindingControls(body)))
+            && existingBody === withoutLoggedFindingControls(normalizeReviewAutoMergeControl(body))))
           && existing.data.html_url !== undefined) {
             return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
           }
-          if (withoutLoggedFindingControls(normalizeReviewControl(existing.data.body ?? '')) !== withoutLoggedFindingControls(normalizeReviewControl(expectedBody)))
+          if (normalizeReviewControl(existingBody) !== withoutLoggedFindingControls(normalizeReviewControl(normalizeReviewAutoMergeControl(expectedBody))))
             return ok({ _tag: 'Changed' as const })
           const writer = legacyOwned && legacyActor !== undefined
             ? await clientWith(legacyActor.tokens, repository.github, 'item_write', signal)
@@ -1263,7 +1265,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           const authority = authorize?.()
           if (authority?._tag === 'Err')
             return authority
-          await writer.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body, ...requestOptions })
+          // GitHub has no atomic comment update. Never copy consent from a stale
+          // read. A changed Review requires the owner to select it again.
+          const next = body
+          await writer.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body: next, ...requestOptions })
           // The compare and swap above is a client side read then write, so a
           // concurrent writer can land between the two. Reading back is the
           // only way to see that the written body no longer holds.
@@ -1271,7 +1276,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           const writerLogin = legacyOwned && legacyActor !== undefined ? legacyActor.login.toLowerCase() : actor
           if (confirmed.data.user?.login.toLowerCase() !== writerLogin)
             return err('GitHub did not confirm the edited automated review comment.')
-          if (confirmed.data.body !== body)
+          if (confirmed.data.body !== next)
             return ok({ _tag: 'Changed' as const })
           return ok({ _tag: 'Edited' as const, commentId: confirmed.data.id, url: confirmed.data.html_url })
         })
@@ -1279,7 +1284,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async upsertReviewStatus(repository, pullRequestNumber, commentId, bodyText, replacePriorReview, signal, authorize) {
-      const body = githubAccountBody(bodyText, repository.githubAccount)
+      const body = normalizeReviewAutoMergeControl(githubAccountBody(bodyText, repository.githubAccount))
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
