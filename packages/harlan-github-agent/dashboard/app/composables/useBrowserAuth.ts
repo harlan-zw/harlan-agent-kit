@@ -5,9 +5,10 @@ import { createSharedComposable, until, useEventListener } from '@vueuse/core'
 import { runPasskeyOperation } from '../utils/passkey-ceremony.ts'
 import { createTerminalPairingDiscovery, takeTerminalPairing } from '../utils/terminal-pairing.ts'
 
-interface Session { authenticated: boolean, bootstrapKind: 'pairing' | 'password' | 'passkey', surface: BrowserSurface, passkeys: boolean }
+/** `enrolment`: a pairing link's session, which can add one Passkey and nothing else. */
+interface Session { authenticated: boolean, enrolment: boolean, bootstrapKind: 'pairing' | 'passkey', surface: BrowserSurface, passkeys: boolean }
 interface Credential { id: string, label: string, created: number }
-type Operation = 'check' | 'password' | 'login' | 'add' | 'remove' | 'logout' | 'list'
+type Operation = 'check' | 'login' | 'add' | 'remove' | 'logout' | 'list'
 
 export const useBrowserAuth = createSharedComposable(() => {
   const session = shallowRef<Session | null>(null)
@@ -32,13 +33,11 @@ export const useBrowserAuth = createSharedComposable(() => {
     await action().catch((cause: unknown) => {
       error.value = cause instanceof Error && cause.name === 'NotAllowedError'
         ? 'Passkey request was cancelled. Retry.'
-        : operation === 'password'
-          ? 'Could not sign in. Check the password and retry.'
-          : operation === 'check'
-            ? 'Could not check sign-in access. Retry.'
-            : operation === 'logout'
-              ? 'Could not sign out. Retry.'
-              : 'The Passkey request failed. Retry.'
+        : operation === 'check'
+          ? 'Could not check sign-in access. Retry.'
+          : operation === 'logout'
+            ? 'Could not sign out. Retry.'
+            : 'The Passkey request failed. Retry.'
     })
     pending.value = null
   }
@@ -73,12 +72,6 @@ export const useBrowserAuth = createSharedComposable(() => {
   function initialize() {
     return discovery.start()
   }
-  async function passwordLogin(password: string) {
-    await perform('password', async () => {
-      await authFetch(`${endpoint}bootstrap`, { method: 'POST', body: { password } })
-      await refresh()
-    })
-  }
   async function passkeyLogin() {
     await perform('login', async () => {
       const result = await ceremony({
@@ -107,10 +100,9 @@ export const useBrowserAuth = createSharedComposable(() => {
         browser: optionsJSON => startRegistration({ optionsJSON }),
         verify: async (response, signal) => {
           await authFetch(`${endpoint}registration/verify`, { method: 'POST', body: { response, label: label.trim() || 'Passkey' }, signal })
-          const [credentials, session] = await Promise.all([
-            authFetch<Credential[]>(`${endpoint}credentials`, { signal }),
-            authFetch<Session>(`${endpoint}session`, { signal }),
-          ])
+          // An enrolment becomes a signed-in session here. Only the Passkeys dialog lists credentials.
+          const session = await authFetch<Session>(`${endpoint}session`, { signal })
+          const credentials = managing.value && session.authenticated ? await authFetch<Credential[]>(`${endpoint}credentials`, { signal }) : []
           return { credentials, session }
         },
       })
@@ -164,5 +156,5 @@ export const useBrowserAuth = createSharedComposable(() => {
       cancelPasskey()
   })
   onScopeDispose(() => cancelPasskey())
-  return { session, pending, error, credentials, managing, passkeyPhase, cancelPasskey: () => cancelPasskey(), initialize, passwordLogin, passkeyLogin, manage, add, remove, logout }
+  return { session, pending, error, credentials, managing, passkeyPhase, cancelPasskey: () => cancelPasskey(), initialize, passkeyLogin, manage, add, remove, logout }
 })

@@ -95,10 +95,11 @@ node packages/harlan-github-agent/dist/terminal-cli.mjs /absolute/private/termin
 The command prints a pairing link. Open that exact link in the browser on this host.
 The link expires after five minutes and works once. Restart the command to obtain another link.
 Keep pairing links private. Pairing grants access to this host's terminals.
+This standalone terminal keeps pairing as a full sign-in. The Service Dashboard is different: its pairing link can only add a Passkey.
 The browser saves local authentication and removes the pairing code from its address.
 Select `Manage Passkeys`, then `Add Passkey`, after opening the pairing link.
 Use `Sign in with Passkey` on later visits. Each Passkey belongs to this address.
-If you lose a Passkey, use a new pairing link. Removing a Passkey revokes its signed-in sessions.
+If you lose every Passkey, restart the command for a new pairing link. Removing a Passkey revokes its signed-in sessions.
 Signing out closes authenticated terminal streams. The Agent session keeps running.
 The CLI starts from a configuration filename. It provides no install or uninstall subcommands.
 
@@ -123,7 +124,7 @@ Add this optional configuration to show a remote Harlan GitHub Agent Service:
 ```
 
 Use the exact HTTPS origin, without a path, query, or trailing slash.
-The password file must contain the remote Dashboard password. Restrict it with `chmod 600`.
+The password file must contain the remote Service's dashboard password, its machine credential. Restrict it with `chmod 600`.
 The host reads it directly. The browser and local Agents do not receive it.
 Remote Service controls remain read only. Local terminals keep their own providers, credentials, and capacity.
 A remote connection failure does not stop local Agent sessions.

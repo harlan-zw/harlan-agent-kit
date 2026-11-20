@@ -191,7 +191,6 @@ export interface AgentConfig {
     allowedOrigin: string
     /** One explicitly configured public browser authority behind the trusted ingress. */
     browserOrigins?: readonly string[]
-    publicBrowserPasswordLogin?: boolean
     publicTerminalSessions?: boolean
     /** Enable only after the public ingress denies desktop session routes. */
     agentSessions?: boolean

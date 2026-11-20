@@ -7,6 +7,7 @@ import { jev } from 'advocaat'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
 import { checkAgentWorker } from './agent-sandbox.ts'
+import { createPairingLink, pairingTarget } from './browser-auth-authorities.ts'
 import { createClassificationSource } from './classification.ts'
 import { forwardLeadingOptions } from './cli-leading-options.ts'
 import { invokesSubCommand } from './cli-subcommand.ts'
@@ -616,7 +617,43 @@ const checkConfig = defineCommand({
   },
 })
 
-const rootSubCommandNames = ['check-config', 'combine-service-state', 'sweep-worktrees', 'control', 'evaluate-triage', 'evaluate-issue-triage']
+const pair = defineCommand({
+  meta: {
+    name: 'pair',
+    description: 'Print a single-use link that adds a Passkey to one browser origin.',
+  },
+  args: {
+    ...rootArguments,
+    origin: {
+      type: 'string',
+      description: 'Browser origin: server.allowed_origin or the server.browser_origins entry.',
+    },
+  },
+  async run({ args }) {
+    const parsed = await loadConfig(resolve(args.config))
+    if (parsed._tag === 'Err') {
+      consola.error(describePreflightIssues(parsed.error))
+      process.exitCode = 1
+      return
+    }
+    const target = pairingTarget(parsed.value, args.origin)
+    if (target._tag === 'Err') {
+      consola.error(target.error)
+      process.exitCode = 1
+      return
+    }
+    const link = createPairingLink({ ...target.value, now: Date.now })
+    if (link._tag === 'Err') {
+      consola.error(link.error)
+      process.exitCode = 1
+      return
+    }
+    consola.info('Open this link in the browser that should hold the Passkey. It works once and expires in 5 minutes. Keep it private.')
+    process.stdout.write(`${link.value.url}\n`)
+  },
+})
+
+const rootSubCommandNames = ['check-config', 'combine-service-state', 'sweep-worktrees', 'control', 'evaluate-triage', 'evaluate-issue-triage', 'pair']
 
 const command = defineCommand({
   meta: {
@@ -632,6 +669,7 @@ const command = defineCommand({
     'control': controlCommand,
     'evaluate-triage': evaluateTriage,
     'evaluate-issue-triage': evaluateIssueTriage,
+    'pair': pair,
   },
   async run({ args, rawArgs }) {
     // citty runs this after it ran the subcommand, so stop before the service

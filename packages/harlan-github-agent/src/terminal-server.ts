@@ -82,7 +82,7 @@ export function createTerminalServer(options: {
   }
   const browserAuth = options.browserAuth ?? createBrowserAuth({ origin: canonical.origin, rpId: canonical.hostname, store: authStore!, now: options.now, surface: { _tag: 'TerminalHost' }, bootstrapKind: 'pairing', bootstrap: body => consumePair(body.token ?? body.code) })
   if (options.publicBrowserAuth && (!options.authorize || options.publicBrowserAuth.bootstrapKind !== 'passkey'))
-    throw new Error('Public terminals require private Agent sessions and public Passkey-only login.')
+    throw new Error('Public terminals require private Agent sessions and one public browser origin.')
   function authority(request: IncomingMessage) {
     return request.headers['x-harlan-agent-ingress'] === 'public' ? options.publicBrowserAuth : browserAuth
   }
