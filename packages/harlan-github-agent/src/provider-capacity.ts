@@ -75,7 +75,7 @@ export interface CodexCapacityOptions {
  * remaining capacity.
  */
 export async function readCodexCapacity(options: CodexCapacityOptions = {}): Promise<ProviderCapacity> {
-  const timeoutMilliseconds = options.timeoutMilliseconds ?? 10_000
+  const timeoutMilliseconds = options.timeoutMilliseconds ?? 30_000
   const child = options.spawnCodex?.() ?? spawn(options.binaryPath ?? 'codex', ['app-server'], {
     stdio: ['pipe', 'pipe', 'ignore'],
   }) as CodexProcess
@@ -243,7 +243,7 @@ export async function readZaiCapacity(options: ZaiCapacityOptions = {}): Promise
     return { _tag: 'Unpublished' }
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMilliseconds ?? 10_000)
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMilliseconds ?? 30_000)
   timeout.unref()
   try {
     const body = options.fetchQuota === undefined
@@ -281,6 +281,11 @@ export interface ProviderCapacitySource {
 
 export interface ProviderCapacitySourceOptions {
   intervalMilliseconds?: number
+  /** First retry after a failed read. Each further failure doubles it, up to the interval. */
+  retryMilliseconds?: number
+  /** How long a good reading still decides after later reads fail. */
+  staleMilliseconds?: number
+  now?: () => number
   onError: (error: unknown) => void
   readCodex?: () => Promise<ProviderCapacity>
   readOpencode?: () => Promise<ProviderCapacity>
@@ -312,9 +317,16 @@ export function readOpencodeGoCapacity(configPath = OPENCODE_CONFIG_PATH): Provi
  * it. The refresh runs on its own interval and every turn reads the last
  * answer. A window moves over hours, so a reading minutes old still decides
  * correctly.
+ *
+ * A read can time out while the host is busy, as it is right after a restart.
+ * One failed read must not stop the fleet, so a good reading keeps deciding
+ * for up to an hour, and a failed read retries in seconds, not minutes.
  */
 export function createProviderCapacitySource(options: ProviderCapacitySourceOptions): ProviderCapacitySource {
   const intervalMilliseconds = options.intervalMilliseconds ?? 5 * 60_000
+  const retryMilliseconds = options.retryMilliseconds ?? 30_000
+  const staleMilliseconds = options.staleMilliseconds ?? 60 * 60_000
+  const now = options.now ?? Date.now
   const readCodex = options.readCodex ?? (() => readCodexCapacity())
   const readOpencode = options.readOpencode ?? (() => readZaiCapacity())
   const readGo = options.readOpencodeGo ?? (async () => readOpencodeGoCapacity())
@@ -324,6 +336,19 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
   let timer: NodeJS.Timeout | undefined
   let stopped = true
   let active: Promise<void> = Promise.resolve()
+  let failures = 0
+  const lastGood = new Map<'codex' | 'opencode', { capacity: ProviderCapacity, at: number }>()
+
+  /** The reading that decides now, and whether this read failed. */
+  const settle = (provider: 'codex' | 'opencode', next: ProviderCapacity): { capacity: ProviderCapacity, failed: boolean } => {
+    if (next._tag !== 'Unavailable') {
+      lastGood.set(provider, { capacity: next, at: now() })
+      return { capacity: next, failed: false }
+    }
+    const previous = lastGood.get(provider)
+    const fresh = previous !== undefined && now() - previous.at <= staleMilliseconds
+    return { capacity: fresh ? previous.capacity : next, failed: true }
+  }
 
   const refresh = (): Promise<void> => {
     active = active
@@ -335,18 +360,26 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
           readOpencode().catch(() => ({ _tag: 'Unavailable', reason: 'The GLM Coding Plan quota could not be read.' }) as ProviderCapacity),
           readGo().catch(() => ({ _tag: 'Unavailable', reason: 'OpenCode Go credentials could not be read.' }) as ProviderCapacity),
         ])
-        codex = nextCodex
-        opencode = nextOpencode
+        const settledCodex = settle('codex', nextCodex)
+        const settledOpencode = settle('opencode', nextOpencode)
+        codex = settledCodex.capacity
+        opencode = settledOpencode.capacity
         go = nextGo
+        failures = settledCodex.failed || settledOpencode.failed ? failures + 1 : 0
       })
       .catch(options.onError)
     return active
   }
 
+  /** The interval after a clean read. After a failed read, 30s doubling up to the interval. */
+  const delay = (): number => failures === 0
+    ? intervalMilliseconds
+    : Math.min(intervalMilliseconds, retryMilliseconds * 2 ** (failures - 1))
+
   const schedule = (): void => {
     if (stopped)
       return
-    timer = setTimeout(() => void refresh().finally(schedule), intervalMilliseconds)
+    timer = setTimeout(() => void refresh().finally(schedule), delay())
     timer.unref()
   }
 

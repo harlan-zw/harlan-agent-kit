@@ -3,7 +3,7 @@ import type { ProviderCapacity } from '../src/types.ts'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentRuntimeSource, parseAgentSelection, resolveAgentSelection } from '../src/agent-profile.ts'
 import { agentStartBlockedReason, resolveAgentStartState } from '../src/capacity.ts'
 import {
@@ -541,4 +541,69 @@ it('recognizes the Go login from native OpenCode V2 provider settings', () => {
   finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+describe('the capacity source under load', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const available: ProviderCapacity = { _tag: 'Available', usedPercent: 5, resetsAt: '2026-11-27T00:00:00.000Z' }
+  const timedOut: ProviderCapacity = { _tag: 'Unavailable', reason: 'The Codex rate limit request timed out.' }
+
+  it('keeps the last good reading when a later read times out', async () => {
+    const readings = [available, timedOut]
+    let clock = 0
+    const source = createProviderCapacitySource({
+      onError: () => undefined,
+      now: () => clock,
+      readCodex: async () => readings.shift()!,
+      readOpencode: async () => available,
+    })
+
+    await source.refresh()
+    clock += 10 * 60_000
+    await source.refresh()
+
+    expect(source.read('codex')).toEqual(available)
+  })
+
+  it('stops trusting the last good reading after an hour', async () => {
+    const readings = [available, timedOut]
+    let clock = 0
+    const source = createProviderCapacitySource({
+      onError: () => undefined,
+      now: () => clock,
+      readCodex: async () => readings.shift()!,
+      readOpencode: async () => available,
+    })
+
+    await source.refresh()
+    clock += 61 * 60_000
+    await source.refresh()
+
+    expect(source.read('codex')).toEqual(timedOut)
+  })
+
+  it('retries a failed read after 30 seconds instead of waiting for the interval', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    const source = createProviderCapacitySource({
+      onError: () => undefined,
+      readCodex: async () => {
+        calls += 1
+        return calls === 1 ? timedOut : available
+      },
+      readOpencode: async () => available,
+    })
+
+    source.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(source.read('codex')).toEqual(timedOut)
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(calls).toBe(2)
+    expect(source.read('codex')).toEqual(available)
+    await source.stop()
+  })
 })
