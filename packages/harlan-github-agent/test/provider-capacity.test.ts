@@ -607,3 +607,33 @@ describe('the capacity source under load', () => {
     await source.stop()
   })
 })
+
+describe('a Codex reading that confirms usage', () => {
+  const available: ProviderCapacity = { _tag: 'Available', usedPercent: 7, resetsAt: '2026-11-27T04:02:29.000Z' }
+
+  it('treats a reading that disallows usage as unavailable', () => {
+    expect(weeklyCodexCapacity({ ...(codexResult(7) as object), ordinaryUsageAllowed: false })).toMatchObject({ _tag: 'Unavailable' })
+  })
+
+  it('reports each fresh reading that allows usage, and never a kept one', async () => {
+    const readings: ProviderCapacity[] = [available, { _tag: 'Unavailable', reason: 'The Codex rate limit request timed out.' }]
+    const confirmed: number[] = []
+    let clock = 1_000
+    const source = createProviderCapacitySource({
+      onError: () => undefined,
+      now: () => clock,
+      onUsageAllowed: (provider, readAt) => {
+        expect(provider).toBe('codex')
+        confirmed.push(readAt)
+      },
+      readCodex: async () => readings.shift()!,
+      readOpencode: async () => available,
+    })
+
+    await source.refresh()
+    clock = 2_000
+    await source.refresh()
+
+    expect(confirmed).toEqual([1_000])
+  })
+})

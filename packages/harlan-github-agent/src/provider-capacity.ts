@@ -36,6 +36,9 @@ export function weeklyCodexCapacity(result: unknown): ProviderCapacity {
   if (typeof result !== 'object' || result === null)
     return { _tag: 'Unavailable', reason: 'Codex answered no rate limits.' }
   const record = result as Record<string, unknown>
+  // Codex says outright when its limit holds now, whatever the weekly window shows.
+  if (record.ordinaryUsageAllowed === false)
+    return { _tag: 'Unavailable', reason: 'Codex reports that its usage limit is reached.' }
   const byLimitId = record.rateLimitsByLimitId
   const scoped = typeof byLimitId === 'object' && byLimitId !== null
     ? (byLimitId as Record<string, unknown>).codex
@@ -286,6 +289,8 @@ export interface ProviderCapacitySourceOptions {
   /** How long a good reading still decides after later reads fail. */
   staleMilliseconds?: number
   now?: () => number
+  /** A fresh reading allows usage. Kept readings never count, because they prove nothing new. */
+  onUsageAllowed?: (provider: 'codex', readAt: number) => void
   onError: (error: unknown) => void
   readCodex?: () => Promise<ProviderCapacity>
   readOpencode?: () => Promise<ProviderCapacity>
@@ -353,6 +358,9 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
   const refresh = (): Promise<void> => {
     active = active
       .then(async () => {
+        // A reading speaks for the moment it started. A limit hit during a slow
+        // read is newer than the reading, so the reading must not end it.
+        const readAt = now()
         // One failing provider must not stop the other being read, or a Codex
         // outage would make opencode look exhausted and stop the fleet.
         const [nextCodex, nextOpencode, nextGo] = await Promise.all([
@@ -366,6 +374,8 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
         opencode = settledOpencode.capacity
         go = nextGo
         failures = settledCodex.failed || settledOpencode.failed ? failures + 1 : 0
+        if (nextCodex._tag === 'Available' && nextCodex.usedPercent < 100)
+          options.onUsageAllowed?.('codex', readAt)
       })
       .catch(options.onError)
     return active
