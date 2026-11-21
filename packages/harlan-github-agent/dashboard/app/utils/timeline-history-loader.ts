@@ -85,7 +85,8 @@ function mergeHistory(parts: TimelineHistory[]): TimelineHistory {
   return {
     generatedAt: first.generatedAt,
     deliveries: { ...first.deliveries, counts: Array.from({ length: counts.length }, (_, index) => counts[index] ?? 0) },
-    tasks: [...new Map(parts.flatMap(part => part.tasks).map(task => [task.id, task])).values()],
+    // Reruns reuse the Task ID. Only merge rows for the same finished interval.
+    tasks: [...new Map(parts.flatMap(part => part.tasks).map(task => [JSON.stringify([task.id, task.startedAt, task.endedAt]), task])).values()],
     routineRuns: [...new Map(parts.flatMap(part => part.routineRuns).map(run => [`${run.routineId}:${run.scheduledFor}`, run])).values()],
     upcoming: [...new Map(parts.flatMap(part => part.upcoming).map(instant => [`${instant.routineId}:${instant.at}`, instant])).values()],
     itemEvents: parts.flatMap(part => part.itemEvents),

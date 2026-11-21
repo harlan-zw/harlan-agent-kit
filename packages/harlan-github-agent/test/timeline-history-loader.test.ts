@@ -30,6 +30,38 @@ function deferred() {
 }
 
 describe('timeline viewport history', () => {
+  it.each([1, 2])('draws both attempts of a rerun Task across %i response windows', async (windows) => {
+    const fixture = history()
+    fixture.tasks = [4, 2].map(hoursAgo => ({
+      id: 'rerun-task',
+      repository: 'harlan-zw/harlan-agent-kit',
+      number: 736,
+      kind: 'issue',
+      title: 'Rerun issue triage',
+      work: 'issue_triage',
+      startedAt: new Date(now - hoursAgo * 3_600_000).toISOString(),
+      endedAt: new Date(now - (hoursAgo - 1) * 3_600_000).toISOString(),
+      outcome: 'Completed',
+    }))
+    let result: TimelineHistory | undefined
+    // Repeated rows across response windows must not create extra spans.
+    const loader = createTimelineHistoryLoader(async () => fixture, (value) => {
+      result = value
+    })
+    await loader.load(windows === 1 ? viewport : { from: now - 31 * day, to: now })
+    const sections = timelineSections({ snapshot: dashboardSnapshot(), history: result, now, ...viewport })
+    const spans = sections.flatMap(section => [...section.rows, ...section.folded])
+      .flatMap(row => row._tag === 'Item' && row.item.title === 'Rerun issue triage' ? row.marks : [])
+      .filter(mark => mark._tag === 'Span')
+    expect(spans).toEqual(fixture.tasks.map(task => ({
+      _tag: 'Span',
+      start: Date.parse(task.startedAt),
+      end: Date.parse(task.endedAt),
+      work: task.work,
+      outcome: task.outcome,
+    })))
+  })
+
   it('requests the visible interval and draws a finished Task eight days ago', async () => {
     const ended = now - 8 * day
     const fixture = history()
