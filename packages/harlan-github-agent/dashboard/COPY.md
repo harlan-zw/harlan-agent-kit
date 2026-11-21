@@ -220,6 +220,10 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Host power off | Power off Hogwild | System pane power control |
 | Host power-off acknowledgement | I understand someone must physically turn Hogwild back on. | Required power-off confirmation |
 | Host power-off consequence | This stops all work and takes agent.harlanzw.com and hogwild.harlanzw.com offline. Someone must physically turn Hogwild back on. | Power-off dialog |
+| Conflict stop blocker | Merge conflict | Needs you card for a stopped Conflict resolution. Never "Access needed" |
+| Conflict stop summary | The Service cannot resolve this merge conflict. | Needs you card for a stopped Conflict resolution |
+| Conflict stop control | View conflict steps | Opens the Service reason, which names one exact step |
+| Conflict stop control description | Read the exact step below. This button changes nothing. | Conflict stop control |
 
 ## Register by context
 

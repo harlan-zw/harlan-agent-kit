@@ -381,11 +381,19 @@ Never update a pull request with a clean mergeable state because its base branch
 
 Delegate it to the pull request's implementation worker. Use a fresh worktree from the current remote head.
 
-Establish mutation authority before editing. If the head branch is not writable, mark `Needs attention` with the exact boundary.
+Establish mutation authority before editing. If the head branch is not writable, mark Action required with the exact rule and one step.
+Every conflict stop names one exact step. Never ask Harlan to check permissions or settings.
 
 Merge the actual base branch into the head branch. Do not rebase, amend, force push, or push the base branch.
 
 Resolve against the pull request intent. Run focused and repository-required checks. Push one fix-forward commit.
+
+If a required check cannot start, the Agent returns `checks_unavailable` with the exact command and error.
+A missing toolchain, setup step, or generated output stops a check from starting.
+Never push a merge whose required check did not run. CI can pass without running that check.
+Mark Action required with the command, the error, and the merge-by-hand step.
+If a prerequisite ran and found a code failure, the Agent returns `blocked`.
+If a check ran and failed, and the fix needs a path outside the merge, the Agent returns `blocked`.
 
 After the push, invalidate old evidence and run `adversarial-review` again against the new remote SHA.
 

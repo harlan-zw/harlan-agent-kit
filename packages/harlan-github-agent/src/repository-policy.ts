@@ -58,12 +58,45 @@ export function canRepairSelectedFindingOnHead(mapping: RepositoryMapping, pullR
     && canRepairPullRequestHead(mapping, pullRequest)
 }
 
+/**
+ * The first rule that stops the controller resolving a merge conflict on one branch.
+ *
+ * Each rule has its own tag, so a stopped conflict names the rule and one step.
+ * A single "cannot write" reason left Harlan to guess which rule applied.
+ */
+export type ConflictWriteBoundary
+  = | { _tag: 'ConflictResolutionOff' }
+    | { _tag: 'RepositoryNotWritable' }
+    | { _tag: 'DefaultBranchHead' }
+    | { _tag: 'MaintainerEditsOff' }
+    | { _tag: 'HeadPrefixNotWritable', prefixes: string[] }
+    | { _tag: 'AuthorNotWritable' }
+
+function isForkHead(mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): boolean {
+  return pullRequest.headRepository.toLowerCase() !== mapping.github.toLowerCase()
+}
+
+/** Null when conflict planning and publication have branch and author authority. */
+export function conflictWriteBoundary(mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): ConflictWriteBoundary | null {
+  if (!mapping.conflictResolution)
+    return { _tag: 'ConflictResolutionOff' }
+  if (!canWritePullRequestHead(mapping))
+    return { _tag: 'RepositoryNotWritable' }
+  if (pullRequest.headRef === mapping.defaultBranch)
+    return { _tag: 'DefaultBranchHead' }
+  const fork = isForkHead(mapping, pullRequest)
+  if (fork && pullRequest.maintainerCanModify !== true)
+    return { _tag: 'MaintainerEditsOff' }
+  if (!mapping.writablePullRequestHeadPrefixes.some(prefix => pullRequest.headRef.startsWith(prefix)))
+    return { _tag: 'HeadPrefixNotWritable', prefixes: mapping.writablePullRequestHeadPrefixes }
+  if (!fork && !mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.author.toLowerCase()))
+    return { _tag: 'AuthorNotWritable' }
+  return null
+}
+
 /** Conflict planning and publication require the same branch and author authority. */
 export function canResolveConflictPullRequestHead(mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): boolean {
-  return mapping.conflictResolution
-    && canRepairPullRequestHead(mapping, pullRequest)
-    && (pullRequest.headRepository.toLowerCase() !== mapping.github.toLowerCase()
-      || mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.author.toLowerCase()))
+  return conflictWriteBoundary(mapping, pullRequest) === null
 }
 
 /**

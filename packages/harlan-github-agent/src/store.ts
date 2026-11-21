@@ -140,6 +140,7 @@ import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSele
 import { RESULT_PHASE_RANK } from './agent-progress.ts'
 import { agentTurnSchema, createAgentTurnStore } from './agent-turn-store.ts'
 import { createBatchStore } from './batch-store.ts'
+import { conflictByHandStep, conflictStopReason } from './conflict-stop.ts'
 import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
 import { gitHubRateLimitRetryAt } from './github-rate-limit.ts'
@@ -153,7 +154,7 @@ import { createPaybackStore } from './payback-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON, triageDecider } from './pull-request-triage.ts'
 import { repairRecoveryProof } from './repair-recovery.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
-import { canRepairBaseline, canRepairPullRequestHead, canResolveConflictPullRequestHead, canWorkIssues } from './repository-policy.ts'
+import { canRepairBaseline, canRepairPullRequestHead, canResolveConflictPullRequestHead, canWorkIssues, conflictWriteBoundary } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { createReviewProofStore } from './review-proof-store.ts'
 import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
@@ -3344,8 +3345,15 @@ function dashboardQueue(
       switch (task.state._tag) {
         case 'Running':
         case 'Publishing': return [{ ...pullRequest, state: { _tag: 'Active', work: 'conflict_resolution' } }]
-        case 'ActionRequired': return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason: task.state.reason } }]
-        case 'Failed': return [{ ...pullRequest, state: failedQueueState(task.state.reason, task.recoveryAttempts) }]
+        case 'ActionRequired': return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason: task.state.reason, work: 'conflict_resolution' } }]
+        case 'Failed': {
+          // An exhausted failure reads like a controller error. The card still
+          // owes Harlan one step, and merging by hand always works.
+          const state = failedQueueState(task.state.reason, task.recoveryAttempts)
+          return [{ ...pullRequest, state: state._tag === 'ActionRequired'
+            ? { _tag: 'ActionRequired', reason: `${state.reason} ${conflictByHandStep(mapping, subject)}`, work: 'conflict_resolution' }
+            : state }]
+        }
         case 'Queued': return [{ ...pullRequest, state: { _tag: 'Queued', work: 'conflict_resolution' } }]
         case 'Completed': return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Waiting for GitHub to report the updated head.' } }]
         case 'Superseded': break
@@ -3366,8 +3374,13 @@ function dashboardQueue(
     if (subject.draft)
       return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Draft pull request.' } }]
     if (subject.mergeState === 'conflicting') {
-      const reason = 'Conflict resolution is off for this repository. Enable it or resolve the merge conflicts on GitHub.'
-      return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason } }]
+      // No live conflict Task exists. Name the rule that stops one, never a
+      // switch that may be on.
+      const boundary = conflictWriteBoundary(mapping, subject)
+      const reason = boundary === null
+        ? `No conflict resolution is running for this head commit. ${conflictByHandStep(mapping, subject)} A new head commit starts another.`
+        : conflictStopReason({ _tag: 'Boundary', boundary }, mapping, subject)
+      return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason, work: 'conflict_resolution' } }]
     }
     if (subject.mergeState === 'unknown')
       return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Waiting for mergeability.' } }]
@@ -4136,7 +4149,8 @@ function planConflictResolution(
     FROM tasks
     WHERE subject_id = ? AND kind = 'resolve_conflict' AND revision_id = ?
   `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, recovery_attempts: number, updated_at: string, cancelled: number } | undefined
-  const ready = canResolveConflictPullRequestHead(mapping, subject)
+  const boundary = conflictWriteBoundary(mapping, subject)
+  const ready = boundary === null
     && (subject.headRepository.toLowerCase() === mapping.github.toLowerCase() || reviewApproved)
   // Recovery used to match two exact reasons collected from past incidents, so
   // every new transient failure left the conflict dead until someone added its
@@ -4232,7 +4246,7 @@ function planConflictResolution(
   const finishedTurns = countFinishedConflictTurns(database, subjectId, revisionId, observedAt)
   const stale = finishedTurns >= MAXIMUM_RECOVERY_ATTEMPTS
   const state: TaskState = !ready
-    ? { _tag: 'ActionRequired', reason: 'The controller cannot write this pull request branch.' }
+    ? { _tag: 'ActionRequired', reason: conflictStopReason(boundary === null ? { _tag: 'ApprovalRequired' } : { _tag: 'Boundary', boundary }, mapping, subject) }
     : stale
       ? { _tag: 'ActionRequired', reason: `The controller resolved this conflict ${finishedTurns} times in one day and the pull request conflicts again. Rebase it by hand.` }
       : { _tag: 'Queued' }
@@ -10696,9 +10710,11 @@ export function openJournalStore(
       const repositoryMapping = JSON.parse(row.policy_json) as RepositoryMapping
       // A policy update can revoke branch authority before the next observation.
       // Decline the lease before any Worktree or Agent starts.
-      if (kind === 'resolve_conflict' && subject.kind === 'pull_request'
-        && !canResolveConflictPullRequestHead(repositoryMapping, subject)) {
-        const reason = 'The controller cannot write this pull request branch.'
+      const conflictBoundary = kind === 'resolve_conflict' && subject.kind === 'pull_request'
+        ? conflictWriteBoundary(repositoryMapping, subject)
+        : null
+      if (conflictBoundary !== null && subject.kind === 'pull_request') {
+        const reason = conflictStopReason({ _tag: 'Boundary', boundary: conflictBoundary }, repositoryMapping, subject)
         database.prepare('UPDATE tasks SET state_tag = \'ActionRequired\', reason = ?, updated_at = ? WHERE id = ?')
           .run(reason, now, row.id)
         recordTransition(database, { taskId: row.id, from: 'Queued', to: 'ActionRequired', reason, fence: row.fence, at: now })

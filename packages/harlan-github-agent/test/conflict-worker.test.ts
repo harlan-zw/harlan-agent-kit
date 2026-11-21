@@ -8,8 +8,9 @@ import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stub
 const resolved = {
   outcome: 'resolved',
   summary: 'Resolved.',
-  checks: ['pnpm test'],
+  checks: [{ command: 'pnpm test', outcome: 'passed', details: 'All tests passed.' }],
   commitMessage: 'merge: reconcile parser changes',
+  unavailableCheck: { command: '', error: '' },
 }
 
 it('supplies conflict intent instead of asking a public-only CLI for private metadata', () => {
@@ -55,12 +56,54 @@ function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>,
 
 describe('conflict worker', () => {
   it.each([
-    ['an unapproved prefix', {}, { headRef: 'v4/core-experiment' }],
-    ['the default branch', {}, { headRef: 'main' }],
-    ['an external repository', { ownership: 'external' as const }, {}],
-    ['disabled conflict resolution', { conflictResolution: false }, {}],
-    ['an untrusted same-repository author', {}, { author: 'contributor' }],
-  ])('does not prepare or run conflict work for %s', async (_name, mapping, snapshot) => {
+    ['Required pnpm test could not start because generated types are missing'],
+    [{ command: 'pnpm test', outcome: 'unavailable', details: 'Generated types are missing' }],
+    [{ command: 'pnpm test', outcome: 'failed', details: 'Assertion failed' }],
+    [{ command: 'pnpm test', details: 'Missing outcome' }],
+    [{ command: 'pnpm test', outcome: 'skipped', details: 'Skipped' }],
+    [{ command: '', outcome: 'passed', details: 'No command' }],
+    [],
+    [
+      { command: 'pnpm lint', outcome: 'passed', details: 'Passed' },
+      { command: 'pnpm test', outcome: 'unavailable', details: 'Generated types are missing' },
+    ],
+  ])('stops before verification or commit when resolved lacks passing check reports: %j', async (...checks) => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem()
+    const options = conflictWorkerOptions(repository, current)
+    const attempts: string[] = []
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        ...resolved,
+        checks,
+      }))),
+      worktrees: {
+        ...options.worktrees,
+        verify: () => {
+          attempts.push('verify')
+          return options.worktrees.verify()
+        },
+        commit: () => {
+          attempts.push('commit')
+          return options.worktrees.commit()
+        },
+      },
+    })
+
+    const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+
+    expect(result).toEqual(err('The agent returned an invalid conflict resolution result.'))
+    expect(attempts).toEqual([])
+  })
+
+  it.each([
+    ['an unapproved prefix', {}, { headRef: 'v4/core-experiment' }, /v4\/core-experiment does not start with/],
+    ['the default branch', {}, { headRef: 'main' }, /default branch main/],
+    ['an external repository', { ownership: 'external' as const }, {}, /does not write to harlan-zw\/example/],
+    ['disabled conflict resolution', { conflictResolution: false }, {}, /Conflict resolution is off for harlan-zw\/example/],
+    ['an untrusted same-repository author', {}, { author: 'contributor' }, /contributor is not a writable pull request author/],
+  ])('does not prepare or run conflict work for %s', async (_name, mapping, snapshot, reason) => {
     const repository = repositoryMapping(mapping)
     const current = pullRequestItem(snapshot)
     const capture: ProviderCapture = { requests: [] }
@@ -77,7 +120,7 @@ describe('conflict worker', () => {
 
     expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(ok({
       _tag: 'ActionRequired',
-      reason: 'The controller cannot write this pull request branch.',
+      reason: expect.stringMatching(reason),
       evidence: expect.any(String),
     }))
     expect(prepared).toBe(false)
@@ -96,7 +139,7 @@ describe('conflict worker', () => {
     })
     expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(ok({
       _tag: 'ActionRequired',
-      reason: 'The pull request head branch is protected.',
+      reason: 'Branch fix/broken-thing is protected. Merge main into it by hand.',
       evidence: expect.any(String),
     }))
     expect(capture.requests).toEqual([])
@@ -135,7 +178,7 @@ describe('conflict worker', () => {
 
     expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(ok({
       _tag: 'ActionRequired',
-      reason: 'The controller cannot write this pull request branch.',
+      reason: expect.stringContaining('fix/broken-thing does not start with feat/.'),
       evidence: expect.any(String),
       usage: expect.anything(),
     }))
@@ -150,7 +193,222 @@ describe('conflict worker', () => {
     expect(prompt).toMatch(/matching base evidence.*pre-existing/)
     expect(prompt).toMatch(/Otherwise, report its cause as unknown/)
     expect(prompt).not.toMatch(/A failure in a file that neither side of the merge changed is pre-existing/)
-    expect(prompt).toMatch(/verification fails outside the files the merge touched.*outcome blocked/)
+    expect(prompt).toMatch(/check ran and failed outside the files the merge touched.*outcome blocked/)
+    expect(prompt).toMatch(/cannot start.*outcome checks_unavailable/)
+    expect(prompt).not.toMatch(/If setup fails.*outcome blocked/)
+  })
+
+  it('keeps an unchecked head from reaching Review when no replacement verification is proven', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base' })
+    const options = conflictWorkerOptions(repository, current)
+    let message = ''
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        ...resolved,
+        outcome: 'checks_unavailable',
+        unavailableCheck: { command: 'pnpm vitest run test/gsc.test.ts', error: 'Cannot find modules/dataforseo/.nuxt/tsconfig.app.json.' },
+      }))),
+      worktrees: { ...options.worktrees, commit: (_task, _worktree, _patch, value) => {
+        message = value
+        return options.worktrees.commit()
+      } },
+    })
+
+    const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired' })))
+    expect(message).toBe('')
+  })
+
+  it('does not commit when a prerequisite build found a code failure before tests could start', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem()
+    const options = conflictWorkerOptions(repository, current)
+    let committed = false
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        ...resolved,
+        outcome: 'checks_unavailable',
+        checks: [{ command: 'pnpm build', outcome: 'failed', details: 'src/outside-scope.ts TS2322: Type string is not assignable to number' }],
+        unavailableCheck: { command: 'pnpm test', error: 'Cannot import dist/index.mjs because pnpm build failed' },
+      }))),
+      worktrees: { ...options.worktrees, commit: () => {
+        committed = true
+        return options.worktrees.commit()
+      } },
+    })
+
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal))
+      .toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired' })))
+    expect(committed).toBe(false)
+  })
+
+  it.each([
+    { command: 'pnpm test', error: 'Required check could not start: generated output missing' },
+    { command: 'pnpm test', error: '' },
+    { command: '', error: 'Required check could not start: generated output missing' },
+  ])('rejects a resolved result with unavailable-check details before verification or commit: %o', async (unavailableCheck) => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem()
+    const options = conflictWorkerOptions(repository, current)
+    const attempts: string[] = []
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({ ...resolved, unavailableCheck }))),
+      worktrees: {
+        ...options.worktrees,
+        verify: () => {
+          attempts.push('verify')
+          return options.worktrees.verify()
+        },
+        commit: () => {
+          attempts.push('commit')
+          return options.worktrees.commit()
+        },
+      },
+    })
+
+    const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+
+    expect(result).toEqual(err('The agent returned an invalid conflict resolution result.'))
+    expect(attempts).toEqual([])
+  })
+
+  it.each(['same-repository', 'fork', 'blocked', 'resolved'] as const)(
+    'redacts diagnostics before truncation, returned evidence, status text, or commits for %s',
+    async (surface) => {
+      const repository = repositoryMapping()
+      const current = pullRequestItem(surface === 'fork'
+        ? { author: 'contributor', headRepository: 'contributor/example', maintainerCanModify: true }
+        : {})
+      const options = conflictWorkerOptions(repository, current)
+      const token = 'syntheticCredentialForRegressionOnly123456'
+      const diagnostic = `${'x'.repeat(220)} Bearer ${token}: generated output missing`
+      let message = ''
+      const worker = createConflictWorker({
+        ...options,
+        runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+          outcome: surface === 'resolved' || surface === 'blocked' ? surface : 'checks_unavailable',
+          summary: diagnostic,
+          checks: [{ command: diagnostic, outcome: surface === 'resolved' ? 'passed' : 'unavailable', details: diagnostic }],
+          commitMessage: `fix: setup Bearer ${token}`,
+          unavailableCheck: surface === 'resolved' ? { command: '', error: '' } : { command: diagnostic, error: diagnostic },
+        }))),
+        worktrees: { ...options.worktrees, commit: (_task, _worktree, _patch, value) => {
+          message = value
+          return options.worktrees.commit()
+        } },
+      })
+
+      const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+      const exposed = `${JSON.stringify(result)} ${message}`
+      expect(exposed.includes(token)).toBe(false)
+      expect(exposed.includes(token.slice(0, 10))).toBe(false)
+      expect(exposed.includes('Bearer ***')).toBe(true)
+      if (surface === 'resolved') {
+        expect(result).toEqual(ok(expect.objectContaining({ _tag: 'Publish' })))
+      }
+      else {
+        expect(result).toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired' })))
+        expect(message).toBe('')
+        if (result._tag === 'Ok' && result.value._tag === 'ActionRequired') {
+          const evidence = JSON.parse(result.value.evidence ?? '{}')
+          expect(evidence.checks).toEqual([{
+            command: `${'x'.repeat(220)} Bearer ***: generated output missing`,
+            outcome: 'unavailable',
+            details: `${'x'.repeat(220)} Bearer ***: generated output missing`,
+          }])
+          if (surface !== 'blocked') {
+            expect(evidence.command).toBe(`${'x'.repeat(220)} Bearer ***: generated`.slice(0, 240))
+            expect(evidence.error).toBe(evidence.command)
+          }
+        }
+      }
+    },
+  )
+
+  it.each([
+    ['a branch in the repository', {}, 'fix/broken-thing'],
+    ['a contributor fork', { author: 'contributor', headRepository: 'contributor/example', maintainerCanModify: true }, 'contributor/example:fix/broken-thing'],
+  ])('names the check that could not start on %s and never commits', async (_name, head, branch) => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base', ...head })
+    const options = conflictWorkerOptions(repository, current)
+    let committed = false
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        ...resolved,
+        outcome: 'checks_unavailable',
+        unavailableCheck: { command: 'cargo test', error: 'cargo: command not found' },
+      }))),
+      worktrees: { ...options.worktrees, commit: () => {
+        committed = true
+        return options.worktrees.commit()
+      } },
+    })
+
+    const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      _tag: 'ActionRequired',
+      reason: 'The agent resolved the merge conflict, but cargo test could not start: cargo: command not found. '
+        + `The Service does not push a merge whose required check did not run. Merge main into ${branch} by hand.`,
+    })))
+    expect(committed).toBe(false)
+  })
+
+  it.each([
+    { command: '', error: 'missing' },
+    { command: 'pnpm vitest run', error: ' ' },
+  ])('rejects an unavailable check without its exact command and error: %o', async (unavailableCheck) => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base' })
+    const worker = createConflictWorker({
+      ...conflictWorkerOptions(repository, current),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({ ...resolved, outcome: 'checks_unavailable', unavailableCheck }))),
+    })
+
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal))
+      .toEqual(err('The agent returned checks_unavailable without the exact command and error.'))
+  })
+
+  it.each(['null', '[]', '"resolved"'])('rejects a non-object Agent response %s as invalid', async (response) => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base' })
+    const worker = createConflictWorker({
+      ...conflictWorkerOptions(repository, current),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([
+        { _tag: 'SessionStarted', sessionId: 'session-1' },
+        { _tag: 'Message', text: response },
+        { _tag: 'TurnCompleted' },
+      ])),
+    })
+
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal))
+      .toEqual(err('The agent returned an invalid conflict resolution result.'))
+  })
+
+  it('stops a blocked resolution with one exact step', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base' })
+    const worker = createConflictWorker({
+      ...conflictWorkerOptions(repository, current),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        ...resolved,
+        outcome: 'blocked',
+        summary: 'Both branches add ADR-0023, and renumbering one needs paths outside the merge',
+        commitMessage: '',
+      }))),
+    })
+
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(ok(expect.objectContaining({
+      _tag: 'ActionRequired',
+      reason: 'Both branches add ADR-0023, and renumbering one needs paths outside the merge. Merge main into fix/broken-thing by hand.',
+    })))
   })
 
   it('completes a clean merge without an agent turn and asks GitHub to recompute once', async () => {

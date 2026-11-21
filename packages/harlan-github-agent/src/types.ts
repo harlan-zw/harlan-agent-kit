@@ -1562,7 +1562,8 @@ export type AgentSelection
 
 export type QueueState
   = | { _tag: 'Active', work: AgentRole }
-    | { _tag: 'ActionRequired', reason: string }
+    /** `work` names the Task kind that stopped, when one did. */
+    | { _tag: 'ActionRequired', reason: string, work?: AgentRole }
     | { _tag: 'AwaitingApproval', kind: PullRequestApprovalKind | IssueApprovalWork }
     | { _tag: 'Queued', work: AgentRole }
     | { _tag: 'Pending', reason: string }
