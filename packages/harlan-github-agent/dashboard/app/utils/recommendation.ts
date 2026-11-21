@@ -25,26 +25,22 @@ export function queueRecommendation(entry: QueueEntry, snapshot: DashboardSnapsh
       return { ...context, _tag: 'Dismiss', label: 'Dismiss', description: attention.instructions }
     case 'Checks':
       return { ...context, _tag: 'OpenGitHub', label: 'View checks', description: attention.summary, url: `${entry.subjectUrl}/checks` }
-    case 'Permissions': {
-      const item = snapshot.items.find(item => item.kind === 'pull_request'
-        && item.repository === entry.repository && item.number === entry.number && item.revisionId === entry.revisionId)
-      if (item?.kind === 'pull_request' && item.approval._tag === 'ReviewRequired') {
-        return {
-          ...context,
-          _tag: 'OpenGitHub',
-          label: 'Approve on GitHub',
-          description: 'Add harlan-agent-review on GitHub to authorize review and repair for this head.',
-          url: entry.subjectUrl,
-        }
+    case 'ConflictApproval':
+      return {
+        ...context,
+        _tag: 'OpenGitHub',
+        label: 'Approve on GitHub',
+        description: 'Add harlan-agent-review on GitHub to authorize review and repair for this head.',
+        url: entry.subjectUrl,
       }
+    case 'Conflict':
       return {
         ...context,
         _tag: 'Inspect',
-        label: 'View access steps',
-        description: 'Check repository conflict settings and branch permissions. This button does not change them.',
+        label: 'View conflict steps',
+        description: 'Read the exact step below. This button changes nothing.',
         instructions: attention.instructions,
       }
-    }
     default: {
       const labels = {
         Spec: 'Open spec task',

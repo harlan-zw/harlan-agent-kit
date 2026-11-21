@@ -1,5 +1,6 @@
 import type { ActiveAgent, DashboardRoutineRun, DashboardTask, Incident, QueueEntry, ReviewAgent, Routine } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
+import { queueAttention } from '../dashboard/app/utils/attention.ts'
 import {
   activeAgentActivity,
   activeEntries,
@@ -478,20 +479,44 @@ describe('queueRecommendation', () => {
       .toMatchObject({ _tag: 'OpenGitHub', label: 'View checks', url: `${blocked.subjectUrl}/checks` })
   })
 
-  it.each(['ReviewRequired', 'NotRequired'] as const)('opens a conflicting pull request with %s without granting approval', (approval) => {
-    const item = {
+  describe('a merge conflict the Service cannot resolve', () => {
+    const conflictItem = (approval: 'ReviewRequired' | 'NotRequired', revisionId = blocked.revisionId) => ({
       ...pullRequestItem({ repository: blocked.repository, number: blocked.number, mergeState: 'conflicting' }),
-      revisionId: blocked.revisionId,
+      revisionId,
       observedAt: blocked.updatedAt,
       dismissed: false,
       approval: { _tag: approval },
-    }
-    expect(queueRecommendation(blocked, dashboardSnapshot({ items: [item] })))
-      .toMatchObject(approval === 'ReviewRequired'
-        ? { _tag: 'OpenGitHub', label: 'Approve on GitHub', url: blocked.subjectUrl }
-        : { _tag: 'Inspect', label: 'View access steps' })
-    expect(queueRecommendation(blocked, dashboardSnapshot({ items: [{ ...item, revisionId: 'old' }] })))
-      .toMatchObject({ _tag: 'Inspect', label: 'View blocker' })
+    })
+    const stopped = (reason: string) => queueEntry({ state: { _tag: 'ActionRequired', reason, work: 'conflict_resolution' } })
+
+    it.each([
+      'Conflicts resolved, preserving gscdump 7.19.0. Merge main into feat/bing-data-totals by hand.',
+      'Branch feat-funnel-steps does not start with feat/. Merge main into it by hand. Use a writable prefix for the next branch.',
+      'The controller resolved this conflict 3 times in one day and the pull request conflicts again. Rebase it by hand.',
+    ])('shows the Service step verbatim and never asks to check access: %s', (reason) => {
+      const snapshot = dashboardSnapshot({ items: [conflictItem('NotRequired')] })
+      const attention = queueAttention(stopped(reason), snapshot)
+      const recommendation = queueRecommendation(stopped(reason), snapshot)
+
+      expect(attention).toMatchObject({ owner: 'You', blocker: 'Merge conflict', instructions: reason })
+      expect(recommendation).toMatchObject({ _tag: 'Inspect', label: 'View conflict steps', instructions: reason })
+      expect(JSON.stringify([attention, recommendation])).not.toMatch(/access|permission/i)
+    })
+
+    it('asks for Approval on GitHub when the contributor commit is unapproved', () => {
+      expect(queueRecommendation(stopped('Approval first.'), dashboardSnapshot({ items: [conflictItem('ReviewRequired')] })))
+        .toMatchObject({ _tag: 'OpenGitHub', label: 'Approve on GitHub', url: blocked.subjectUrl })
+    })
+
+    it('keeps the conflict card when the snapshot has no current item', () => {
+      expect(queueRecommendation(stopped('A step.'), dashboardSnapshot({ items: [conflictItem('ReviewRequired', 'old')] })))
+        .toMatchObject({ _tag: 'Inspect', label: 'View conflict steps' })
+    })
+
+    it('does not call another stop on a conflicting pull request a merge conflict', () => {
+      expect(queueRecommendation(blocked, dashboardSnapshot({ items: [conflictItem('NotRequired')] })))
+        .toMatchObject({ _tag: 'Inspect', label: 'View blocker' })
+    })
   })
 
   it('recommends Dismiss only from a current open Dismissal finding', () => {

@@ -4,7 +4,7 @@ import { parseStoredIssueTriage } from '../../../src/issue-triage.ts'
 interface AttentionDetails { blocker: string, summary: string, instructions: string }
 
 export type QueueAttention = AttentionDetails & (
-  | { owner: 'You', _tag: 'Approval' | 'Decision' | 'Information' | 'Permissions' | 'Dismissal' | 'Unknown' }
+  | { owner: 'You', _tag: 'Approval' | 'ConflictApproval' | 'Conflict' | 'Decision' | 'Information' | 'Dismissal' | 'Unknown' }
   | { owner: 'Agent', _tag: 'Spec' | 'Evidence' | 'Repair' | 'Checks' | 'Recovery' }
 )
 
@@ -80,21 +80,28 @@ export function queueAttention(entry: QueueEntry, snapshot: DashboardSnapshot): 
     return unknown
   }
 
-  const item = snapshot.items.find(item => item.kind === 'pull_request'
-    && item.repository === entry.repository && item.number === entry.number && item.revisionId === entry.revisionId)
-  if (item?.kind === 'pull_request' && item.mergeState === 'conflicting') {
+  // The Service names the stopped work and writes one exact step into the
+  // reason. A conflicting pull request alone says nothing about why it stopped:
+  // reading it as a permission problem sent Harlan to check access for merges
+  // the agent had already resolved.
+  if (entry.state.work === 'conflict_resolution') {
+    const item = snapshot.items.find(item => item.kind === 'pull_request'
+      && item.repository === entry.repository && item.number === entry.number && item.revisionId === entry.revisionId)
+    if (item?.kind === 'pull_request' && item.approval._tag === 'ReviewRequired') {
+      return {
+        owner: 'You',
+        _tag: 'ConflictApproval',
+        blocker: 'Approval required',
+        summary: 'Approve work on this contributor commit before conflict resolution.',
+        instructions: entry.state.reason,
+      }
+    }
     return {
       owner: 'You',
-      _tag: 'Permissions',
-      blocker: item.approval._tag === 'ReviewRequired' ? 'Approval required' : 'Access needed',
-      summary: item.approval._tag === 'ReviewRequired'
-        ? 'Approve work on this contributor commit before conflict resolution.'
-        : 'Allow conflict resolution or resolve the conflicts yourself.',
-      instructions: item.approval._tag === 'ReviewRequired'
-        ? entry.state.reason
-        : /conflict resolution is off/i.test(entry.state.reason)
-          ? `${entry.state.reason}\n\nEnable conflict_resolution for ${entry.repository} in the service configuration, or resolve the conflicts on GitHub.`
-          : `${entry.state.reason}\n\nCheck write permission for ${item.headRepository}:${item.headRef}. Keep any permission change limited to this repository and branch.`,
+      _tag: 'Conflict',
+      blocker: 'Merge conflict',
+      summary: 'The Service cannot resolve this merge conflict.',
+      instructions: entry.state.reason,
     }
   }
 

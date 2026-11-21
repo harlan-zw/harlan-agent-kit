@@ -10,8 +10,9 @@ import type { ConflictWorktreeManager, PreparedConflictWorktree } from './worktr
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
 import { agentPhase } from './agent-progress.ts'
 import { runAgentTurn } from './agent-turn.ts'
+import { conflictStopReason } from './conflict-stop.ts'
 import { isAutomatedGitHubActor } from './github.ts'
-import { canResolveConflictPullRequestHead } from './repository-policy.ts'
+import { canPublishUncheckedConflictResolution, conflictWriteBoundary } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -35,22 +36,41 @@ export interface ConflictWorkerOptions {
   worktrees: ConflictWorktreeManager
 }
 
+/**
+ * The conflict Agent's answer, parsed once.
+ *
+ * `ChecksUnavailable` is a resolved merge whose required check could not
+ * start. Missing toolchains and generated output stopped most resolved merges
+ * before this outcome existed, and every one waited for Harlan.
+ */
+type AgentResult
+  = | { _tag: 'Resolved', summary: string, checks: string[], commitMessage: string }
+    | { _tag: 'ChecksUnavailable', summary: string, checks: string[], commitMessage: string, command: string, error: string }
+    | { _tag: 'Blocked', summary: string, checks: string[] }
+
 interface AgentResponse {
-  outcome: 'resolved' | 'blocked'
+  outcome: 'resolved' | 'checks_unavailable' | 'blocked'
   summary: string
   checks: string[]
   commitMessage: string
+  unavailableCheck: { command: string, error: string }
 }
 
 const outputSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['outcome', 'summary', 'checks', 'commitMessage'],
+  required: ['outcome', 'summary', 'checks', 'commitMessage', 'unavailableCheck'],
   properties: {
-    outcome: { type: 'string', enum: ['resolved', 'blocked'] },
+    outcome: { type: 'string', enum: ['resolved', 'checks_unavailable', 'blocked'] },
     summary: { type: 'string' },
     checks: { type: 'array', items: { type: 'string' } },
     commitMessage: { type: 'string' },
+    unavailableCheck: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['command', 'error'],
+      properties: { command: { type: 'string' }, error: { type: 'string' } },
+    },
   },
 }
 
@@ -91,49 +111,75 @@ Generated workspace and native outputs are verification setup.
 If a focused check cannot import generated output, inspect documented scripts and declare the smallest prepare or build prerequisite.
 Run that prerequisite and rerun the same focused checks within the check budget.
 Keep tracked edits within the listed paths and generated artifacts out of the patch.
-If setup fails, report the exact command and error, then return outcome blocked.
+If a required check still cannot start, return outcome checks_unavailable.
+A check cannot start when setup, a toolchain binary, or generated output is missing.
+Put that exact command and its error in unavailableCheck. The controller then publishes the merge, and CI verifies it.
 Unchanged tests and call sites can fail because the merge changed their dependencies.
-If verification fails outside the files the merge touched, report the failure and return outcome blocked.
+If a check ran and failed outside the files the merge touched, report the failure and return outcome blocked.
 If the resolution breaks a test or call site that the base branch moved, fix that file too. The controller accepts edits to files the merge touched.
 
 Do not stage files. The controller stages verified conflict files.
 Do not commit, push, amend, rebase, abort the merge, or edit Git configuration.
 Choose a commit message that describes the resolved conflict.
-Return the required JSON result. Use outcome blocked when intent is ambiguous or safe verification cannot finish.
-The controller rejects a resolved outcome without a commit message. Return an empty commit message only with outcome blocked.`
+Return the required JSON result. Use outcome blocked when intent is ambiguous or a failing check needs a path outside the list.
+The controller rejects a resolved or checks_unavailable outcome without a commit message. Return an empty commit message only with outcome blocked.
+Leave unavailableCheck command and error empty unless the outcome is checks_unavailable.`
 }
 
-function parseAgentResponse(text: string): Result<AgentResponse, string> {
+function parseAgentResponse(text: string): Result<AgentResult, string> {
+  let value: Partial<AgentResponse>
   try {
-    const value = JSON.parse(text) as Partial<AgentResponse>
-    if (
-      (value.outcome !== 'resolved' && value.outcome !== 'blocked')
-      || typeof value.summary !== 'string'
-      || !Array.isArray(value.checks)
-      || !value.checks.every(check => typeof check === 'string')
-      || typeof value.commitMessage !== 'string'
-      || (value.outcome === 'resolved' && value.commitMessage.trim().length === 0)
-    ) {
-      return err('The agent returned an invalid conflict resolution result.')
-    }
-    return ok(value as AgentResponse)
+    value = JSON.parse(text) as Partial<AgentResponse>
   }
   catch {
     return err('The agent returned malformed conflict resolution JSON.')
   }
+  const unavailable = value.unavailableCheck
+  if (
+    (value.outcome !== 'resolved' && value.outcome !== 'checks_unavailable' && value.outcome !== 'blocked')
+    || typeof value.summary !== 'string'
+    || !Array.isArray(value.checks)
+    || !value.checks.every(check => typeof check === 'string')
+    || typeof value.commitMessage !== 'string'
+    || (value.outcome !== 'blocked' && value.commitMessage.trim().length === 0)
+    || typeof unavailable !== 'object' || unavailable === null
+    || typeof unavailable.command !== 'string' || typeof unavailable.error !== 'string'
+  ) {
+    return err('The agent returned an invalid conflict resolution result.')
+  }
+  const { summary, checks, commitMessage } = value
+  switch (value.outcome) {
+    case 'blocked':
+      return ok({ _tag: 'Blocked', summary, checks })
+    case 'resolved':
+      return ok({ _tag: 'Resolved', summary, checks, commitMessage })
+    case 'checks_unavailable':
+      return unavailable.command.trim() === '' || unavailable.error.trim() === ''
+        ? err('The agent returned checks_unavailable without the exact command and error.')
+        : ok({ _tag: 'ChecksUnavailable', summary, checks, commitMessage, command: cleanLine(unavailable.command), error: cleanLine(unavailable.error) })
+  }
+}
+
+/** A merge pushed without its local check says so, and says what verifies it. */
+function conflictCommitMessage(result: Extract<AgentResult, { _tag: 'Resolved' | 'ChecksUnavailable' }>): string {
+  const subject = cleanLine(result.commitMessage)
+  return result._tag === 'Resolved'
+    ? subject
+    : `${subject}\n\nLocal check could not start: ${result.command}: ${result.error}\nCI on this commit verifies the merge.`
 }
 
 export function createConflictWorker(options: ConflictWorkerOptions): ConflictWorker {
   async function authority(mapping: RepositoryMapping, pullRequest: ClaimedConflictResolutionTask['pullRequest'], signal: AbortSignal): Promise<Result<Extract<MutationWorkerOutcome, { _tag: 'ActionRequired' }> | null, string>> {
     const evidence = JSON.stringify({ repository: mapping.github, headRef: pullRequest.headRef, headRepository: pullRequest.headRepository })
-    if (!canResolveConflictPullRequestHead(mapping, pullRequest))
-      return ok({ _tag: 'ActionRequired', reason: 'The controller cannot write this pull request branch.', evidence })
+    const boundary = conflictWriteBoundary(mapping, pullRequest)
+    if (boundary !== null)
+      return ok({ _tag: 'ActionRequired', reason: conflictStopReason({ _tag: 'Boundary', boundary }, mapping, pullRequest), evidence })
     if (pullRequest.headRepository.toLowerCase() === mapping.github.toLowerCase()) {
       const protectedBranch = await options.github.isBranchProtected(mapping, pullRequest.headRef, signal)
       if (protectedBranch._tag === 'Err')
         return err(protectedBranch.error.message)
       if (protectedBranch.value)
-        return ok({ _tag: 'ActionRequired', reason: 'The pull request head branch is protected.', evidence })
+        return ok({ _tag: 'ActionRequired', reason: conflictStopReason({ _tag: 'ProtectedHead' }, mapping, pullRequest), evidence })
     }
     return ok(null)
   }
@@ -216,11 +262,20 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       const parsed = parseAgentResponse(turn.value.response)
       if (parsed._tag === 'Err')
         return parsed
-      if (parsed.value.outcome === 'blocked') {
+      const result = parsed.value
+      if (result._tag === 'Blocked') {
         return ok({
           _tag: 'ActionRequired',
-          reason: cleanLine(parsed.value.summary),
-          evidence: JSON.stringify(parsed.value),
+          reason: conflictStopReason({ _tag: 'AgentBlocked', summary: result.summary }, validated.value, current.value),
+          evidence: JSON.stringify(result),
+          usage: turn.value.usage,
+        })
+      }
+      if (result._tag === 'ChecksUnavailable' && !canPublishUncheckedConflictResolution(validated.value, current.value)) {
+        return ok({
+          _tag: 'ActionRequired',
+          reason: conflictStopReason({ _tag: 'UncheckedFork', command: result.command, error: result.error }, validated.value, current.value),
+          evidence: JSON.stringify(result),
           usage: turn.value.usage,
         })
       }
@@ -258,7 +313,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
         currentTask,
         worktree,
         verified.value,
-        cleanLine(parsed.value.commitMessage),
+        conflictCommitMessage(result),
         signal,
       )
       if (committed._tag === 'Err')

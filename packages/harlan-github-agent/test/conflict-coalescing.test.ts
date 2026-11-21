@@ -128,7 +128,7 @@ describe('base movement conflict dispatch', () => {
 
     expect(claim(store, 400)).toBeNull()
     const snapshot = store.getDashboardSnapshot(at(400))
-    expect(snapshot.queue.map(entry => entry.state)).toEqual([{ _tag: 'ActionRequired', reason }])
+    expect(snapshot.queue.map(entry => entry.state)).toEqual([{ _tag: 'ActionRequired', reason, work: 'conflict_resolution' }])
     expect(snapshot.tasks.filter(value => value.kind === 'resolve_conflict').map(value => [value.id, value.state]))
       .toEqual([[task.id, { _tag: 'ActionRequired', reason }]])
 

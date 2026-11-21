@@ -10,6 +10,7 @@ const resolved = {
   summary: 'Resolved.',
   checks: ['pnpm test'],
   commitMessage: 'merge: reconcile parser changes',
+  unavailableCheck: { command: '', error: '' },
 }
 
 it('supplies conflict intent instead of asking a public-only CLI for private metadata', () => {
@@ -55,12 +56,12 @@ function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>,
 
 describe('conflict worker', () => {
   it.each([
-    ['an unapproved prefix', {}, { headRef: 'v4/core-experiment' }],
-    ['the default branch', {}, { headRef: 'main' }],
-    ['an external repository', { ownership: 'external' as const }, {}],
-    ['disabled conflict resolution', { conflictResolution: false }, {}],
-    ['an untrusted same-repository author', {}, { author: 'contributor' }],
-  ])('does not prepare or run conflict work for %s', async (_name, mapping, snapshot) => {
+    ['an unapproved prefix', {}, { headRef: 'v4/core-experiment' }, /v4\/core-experiment does not start with/],
+    ['the default branch', {}, { headRef: 'main' }, /default branch main/],
+    ['an external repository', { ownership: 'external' as const }, {}, /does not write to harlan-zw\/example/],
+    ['disabled conflict resolution', { conflictResolution: false }, {}, /Conflict resolution is off for harlan-zw\/example/],
+    ['an untrusted same-repository author', {}, { author: 'contributor' }, /contributor is not a writable pull request author/],
+  ])('does not prepare or run conflict work for %s', async (_name, mapping, snapshot, reason) => {
     const repository = repositoryMapping(mapping)
     const current = pullRequestItem(snapshot)
     const capture: ProviderCapture = { requests: [] }
@@ -77,7 +78,7 @@ describe('conflict worker', () => {
 
     expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(ok({
       _tag: 'ActionRequired',
-      reason: 'The controller cannot write this pull request branch.',
+      reason: expect.stringMatching(reason),
       evidence: expect.any(String),
     }))
     expect(prepared).toBe(false)
@@ -96,7 +97,7 @@ describe('conflict worker', () => {
     })
     expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(ok({
       _tag: 'ActionRequired',
-      reason: 'The pull request head branch is protected.',
+      reason: 'Branch fix/broken-thing is protected. Merge main into it by hand.',
       evidence: expect.any(String),
     }))
     expect(capture.requests).toEqual([])
@@ -135,7 +136,7 @@ describe('conflict worker', () => {
 
     expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(ok({
       _tag: 'ActionRequired',
-      reason: 'The controller cannot write this pull request branch.',
+      reason: expect.stringContaining('fix/broken-thing does not start with feat/.'),
       evidence: expect.any(String),
       usage: expect.anything(),
     }))
@@ -150,7 +151,97 @@ describe('conflict worker', () => {
     expect(prompt).toMatch(/matching base evidence.*pre-existing/)
     expect(prompt).toMatch(/Otherwise, report its cause as unknown/)
     expect(prompt).not.toMatch(/A failure in a file that neither side of the merge changed is pre-existing/)
-    expect(prompt).toMatch(/verification fails outside the files the merge touched.*outcome blocked/)
+    expect(prompt).toMatch(/check ran and failed outside the files the merge touched.*outcome blocked/)
+    expect(prompt).toMatch(/cannot start.*outcome checks_unavailable/)
+    expect(prompt).not.toMatch(/If setup fails.*outcome blocked/)
+  })
+
+  it('publishes a merge whose local check could not start to a branch in the repository', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base' })
+    const options = conflictWorkerOptions(repository, current)
+    let message = ''
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        ...resolved,
+        outcome: 'checks_unavailable',
+        unavailableCheck: { command: 'pnpm vitest run test/gsc.test.ts', error: 'Cannot find modules/dataforseo/.nuxt/tsconfig.app.json.' },
+      }))),
+      worktrees: { ...options.worktrees, commit: (_task, _worktree, _patch, value) => {
+        message = value
+        return options.worktrees.commit()
+      } },
+    })
+
+    const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'Publish' })))
+    expect(message).toBe('merge: reconcile parser changes\n\n'
+      + 'Local check could not start: pnpm vitest run test/gsc.test.ts: Cannot find modules/dataforseo/.nuxt/tsconfig.app.json.\n'
+      + 'CI on this commit verifies the merge.')
+  })
+
+  it('keeps an unchecked merge off a contributor fork and names the step', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base', author: 'contributor', headRepository: 'contributor/example', maintainerCanModify: true })
+    const options = conflictWorkerOptions(repository, current)
+    let committed = false
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        ...resolved,
+        outcome: 'checks_unavailable',
+        unavailableCheck: { command: 'cargo test', error: 'cargo: command not found' },
+      }))),
+      worktrees: { ...options.worktrees, commit: () => {
+        committed = true
+        return options.worktrees.commit()
+      } },
+    })
+
+    const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      _tag: 'ActionRequired',
+      reason: 'The agent resolved the merge conflict, but cargo test could not start: cargo: command not found. '
+        + 'The Service pushes an unchecked merge only to a branch in harlan-zw/example. Merge main into contributor/example:fix/broken-thing by hand.',
+    })))
+    expect(committed).toBe(false)
+  })
+
+  it.each([
+    { command: '', error: 'missing' },
+    { command: 'pnpm vitest run', error: ' ' },
+  ])('rejects an unavailable check without its exact command and error: %o', async (unavailableCheck) => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base' })
+    const worker = createConflictWorker({
+      ...conflictWorkerOptions(repository, current),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({ ...resolved, outcome: 'checks_unavailable', unavailableCheck }))),
+    })
+
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal))
+      .toEqual(err('The agent returned checks_unavailable without the exact command and error.'))
+  })
+
+  it('stops a blocked resolution with one exact step', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base' })
+    const worker = createConflictWorker({
+      ...conflictWorkerOptions(repository, current),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        ...resolved,
+        outcome: 'blocked',
+        summary: 'Both branches add ADR-0023, and renumbering one needs paths outside the merge',
+        commitMessage: '',
+      }))),
+    })
+
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal)).toEqual(ok(expect.objectContaining({
+      _tag: 'ActionRequired',
+      reason: 'Both branches add ADR-0023, and renumbering one needs paths outside the merge. Merge main into fix/broken-thing by hand.',
+    })))
   })
 
   it('completes a clean merge without an agent turn and asks GitHub to recompute once', async () => {

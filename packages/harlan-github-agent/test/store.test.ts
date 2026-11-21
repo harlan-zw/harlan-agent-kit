@@ -849,7 +849,7 @@ describe('journal store', () => {
     }))
     expect(snapshot.queue).toContainEqual(expect.objectContaining({
       number: 24,
-      state: { _tag: 'ActionRequired', reason: 'The mutation failed for an unknown reason.' },
+      state: { _tag: 'ActionRequired', reason: 'The mutation failed for an unknown reason.', work: 'conflict_resolution' },
     }))
   })
 
@@ -865,7 +865,43 @@ describe('journal store', () => {
 
     expect(store.getDashboardSnapshot('2026-08-13T01:00:00.000Z').queue[0]?.state).toEqual({
       _tag: 'ActionRequired',
-      reason: 'Conflict resolution is off for this repository. Enable it or resolve the merge conflicts on GitHub.',
+      reason: 'Conflict resolution is off for harlan-zw/example. Set conflict_resolution: true for harlan-zw/example in the Service configuration, or merge main into fix/broken-thing by hand.',
+      work: 'conflict_resolution',
+    })
+  })
+
+  it('names the branch rule a conflict waits on instead of a switch that is on', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping({ writablePullRequestHeadPrefixes: ['feat/'] })], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({ externalId: 'slashless', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: pullRequestItem({ headRef: 'feat-funnel-steps' }) })
+
+    expect(store.getDashboardSnapshot('2026-08-13T01:00:01.000Z').queue[0]?.state).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'Branch feat-funnel-steps does not start with feat/. Merge main into it by hand. Use a writable prefix for the next branch.',
+      work: 'conflict_resolution',
+    })
+  })
+
+  it('marks an Agent conflict stop as conflict resolution work', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({ externalId: 'conflict', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: pullRequestItem() })
+    const task = store.claimNextConflictTask('worker', '2026-08-13T01:00:01.000Z', 60_000)
+    if (task === null)
+      throw new Error('Expected a running conflict Task.')
+    store.needsAttentionTask({
+      taskId: task.id,
+      workerId: task.state.workerId,
+      fence: task.state.fence,
+      at: '2026-08-13T01:00:02.000Z',
+      reason: 'Intent is ambiguous. Merge main into fix/broken-thing by hand.',
+      evidence: 'local fixture',
+    })
+
+    expect(store.getDashboardSnapshot('2026-08-13T01:00:03.000Z').queue[0]?.state).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'Intent is ambiguous. Merge main into fix/broken-thing by hand.',
+      work: 'conflict_resolution',
     })
   })
 
@@ -975,7 +1011,7 @@ describe('journal store', () => {
     expect(store.claimNextConflictTask('worker', '2026-08-13T01:01:01.000Z', 60_000)).toBeNull()
     expect(store.getDashboardSnapshot('2026-08-13T01:01:02.000Z').tasks[0]?.state).toEqual({
       _tag: 'ActionRequired',
-      reason: 'The controller cannot write this pull request branch.',
+      reason: 'Branch fix/broken-thing does not start with feat/. Merge main into it by hand. Use a writable prefix for the next branch.',
     })
   })
 
@@ -1022,7 +1058,7 @@ describe('journal store', () => {
     expect(store.claimNextConflictTask('worker', '2026-10-29T00:01:02.000Z', 60_000)).toBeNull()
     expect(store.getDashboardSnapshot('2026-10-29T00:01:03.000Z').tasks[0]?.state).toEqual({
       _tag: 'ActionRequired',
-      reason: 'The controller cannot write this pull request branch.',
+      reason: 'Branch fix/broken-thing does not start with feat/. Merge main into it by hand. Use a writable prefix for the next branch.',
     })
 
     store.syncRepositories([mapping], '2026-10-29T00:01:04.000Z')
@@ -1086,6 +1122,7 @@ describe('journal store', () => {
     expect(store.getDashboardSnapshot(at()).queue[0]?.state).toEqual({
       _tag: 'ActionRequired',
       reason: 'The base branch changed before publication. The controller resolved this conflict 6 times without publishing. Resolve it by hand, or push a new commit to the pull request.',
+      work: 'conflict_resolution',
     })
     // A later poll of the same head commit must not wake it again.
     store.recordObservation({ externalId: 'base-race', observedAt: at(), source: 'poll', subject })
@@ -1121,6 +1158,7 @@ describe('journal store', () => {
     expect(store.getDashboardSnapshot(at()).queue[0]?.state).toEqual({
       _tag: 'ActionRequired',
       reason: 'The controller resolved this conflict 5 times in one day and the pull request conflicts again. Rebase it by hand.',
+      work: 'conflict_resolution',
     })
     // The same head polled again must not wake it.
     store.recordObservation({ externalId: `stale-${MAXIMUM_RECOVERY_ATTEMPTS}`, observedAt: at(), source: 'poll', subject: pullRequestItem({ mergeState: 'conflicting', headSha: `head-${MAXIMUM_RECOVERY_ATTEMPTS}` }) })
