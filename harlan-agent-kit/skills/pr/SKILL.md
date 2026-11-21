@@ -37,7 +37,7 @@ Running the git and `gh` commands by hand is the failure mode this skill exists 
 - **`gh pr create` fails silently with bad body** -- always use HEREDOC for the body, never inline quotes.
 - **CI flakes vs real failures** -- if the same check fails twice with different errors, it's flaky. If same error, it's real. Don't retry flakes more than once.
 - **CodeRabbit reviews can be noisy** -- address security/correctness findings, but style suggestions are optional. Don't block the loop on nitpicks. An optional suggestion still gets a Follow-up reply under [review threads](references/review-threads.md).
-- **No review comment stays silent** -- every review thread and top-level review comment gets Fixed, Answered, or Follow-up. Never reply to or resolve a Service finding thread by hand. A reply requests another Review. Resolving a Logged thread dismisses its follow-up control.
+- **No review comment stays silent** -- every review thread and top-level review comment gets Fixed, Answered, or Follow-up. Reply to a Service finding thread only right after the push that fixes it, while that head's Review is queued or running. At any other time a reply requests another Review, and resolving a Logged thread dismisses its follow-up control.
 - **Worktree cleanup** -- if you forget `wt remove`, orphaned worktrees accumulate. Clean up after merge.
 
 ## Data Storage
@@ -200,6 +200,7 @@ For stacked work, add `--base PARENT_BRANCH` to `gh pr create`, then link it wit
 When Step 3 rendered a diagram, add `--attach .pr-lens/<view>-dark-<hash>.svg` for each image the body references. GitHub CLI rewrites the Markdown path to the uploaded asset.
 
 Record the pull request URL. Continue to Step 6 after creation or update.
+After each push, run the [review threads](references/review-threads.md) sweep without waiting for the Service. Other reviewers can comment before Review ends, and an untracked repository has no Service Review.
 Log the URL to `${CLAUDE_PLUGIN_DATA}/pr-history.log`.
 
 For an Agent-submitted pull request in a repository tracked by `harlan-github-agent`, decide whether it needs `harlan-agent-review`.
@@ -305,6 +306,7 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
 5. Read each scored finding from `/api/reviews?repository=OWNER%2FREPO&pull_request=NUMBER`.
    Leave findings at 80/100 or below Logged. They do not require a code change.
    Their Service finding threads stay open as the follow-up control. List each one with its link in the hand-back as an optional follow-up.
+   When your push fixes one, reply and resolve it in the window that [review threads](references/review-threads.md) describes.
    Keep authorized Repair work moving until fixed or blocked by an exact boundary.
    If the resolution is `Dismissal`, report the `BLOCKED` outcome and ask Harlan to decide whether to Dismiss the pull request.
    Do not repair or request another Review for a Dismissal finding.

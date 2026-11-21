@@ -21,19 +21,25 @@ query='query($owner: String!, $repo: String!, $number: Int!, $endCursor: String)
     reviewThreads(first: 100, after: $endCursor) {
       pageInfo { hasNextPage endCursor }
       nodes { id isResolved isOutdated path line
-        comments(first: 100) { nodes { fullDatabaseId url author { login } body } } } } } } }'
+        root: comments(first: 1) { nodes { fullDatabaseId url author { login } body } }
+        latest: comments(last: 100) { totalCount nodes { fullDatabaseId author { login } body } } } } } } }'
 gh api graphql -X POST --paginate -f query="$query" -f owner=OWNER -f repo=REPO -F number=NUMBER \
-  --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)
-    | {thread: .id, comment: .comments.nodes[0].fullDatabaseId, author: .comments.nodes[0].author.login,
-       replies: [.comments.nodes[1:][] | {author: .author.login, first: (.body | split("\n")[0] | .[0:120])}],
-       outdated: .isOutdated, path, line, url: .comments.nodes[0].url, first: (.comments.nodes[0].body | .[0:300])}'
+  --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not) | .root.nodes[0] as $root
+    | {thread: .id, comment: $root.fullDatabaseId, author: $root.author.login, comments: .latest.totalCount,
+       replies: [.latest.nodes[] | select(.fullDatabaseId != $root.fullDatabaseId)
+         | {author: .author.login, first: (.body | split("\n")[0] | .[0:120])}],
+       outdated: .isOutdated, path, line, url: $root.url, first: ($root.body | .[0:300])}'
 ```
 
 GraphQL drops the `[bot]` suffix, so the Service shows as `harlan-github-agent`.
+`replies` holds the last 100 replies. `comments` counts every comment in the thread.
 The list shows only the start of each body. Read the full body of each item before you choose its response.
 An outdated thread still needs a response. The code moved, and the comment can still apply.
-An Agent reply starts with `🤖 Harlan Agent Kit Agent:`. If the last reply is an Agent reply, the thread already has its response.
-If that response was Fixed and the thread is still open, run only the resolve command again.
+
+An Agent reply comes from the login that `gh api user --jq .login` prints, and its body starts with `🤖 Harlan Agent Kit Agent:`.
+Count a reply as the thread's response only when both match. If the last reply is an Agent reply, the thread already has its response.
+If such a thread is still open, resolve it again only when this session saw its resolve command fail.
+Otherwise a reviewer reopened it. Read the thread again and give it a new response.
 
 List top-level reviews and comments. For a verified private repository, use `HARLAN_AGENT_GITHUB_PRIVATE=OWNER/REPO gh` in place of `agent-gh`.
 
@@ -50,11 +56,25 @@ A review body from another reviewer needs a response once, even when it is on an
 
 ## 2. Service finding threads
 
-The Service owns each review thread it opened for a Review finding. Its first comment carries a `review-finding:` marker. Never reply to it or resolve it while the pull request is open:
+The Service owns each review thread it opened for a Review finding. Its first comment carries a `review-finding:` marker. Two side effects limit what you may do on it while the pull request is open:
 
-- A reply from Harlan's account is a finding reply. The Service requests a new Review of the current revision for it.
-  That Review reads the reply as Harlan's words.
+- A reply from Harlan's account is a finding reply. The Service requests a Review of the current revision for it, and that Review reads the reply as Harlan's words.
+  If that revision's Review is `Queued` or `Running`, the request joins it. If that Review has ended, the request starts another one.
 - Resolving a Logged finding thread dismisses its "Ask an agent to verify and fix" control. The Service ignores a later tick and cancels a queued Repair for that finding.
+
+So reply to a Service finding thread only in one window. It opens when you push the commit that fixes the finding.
+It stays open while the Service Review of that new head is `Queued` or `Running`.
+The first event that `watch-pr` writes names the head the Service sees and that head's Tasks:
+
+```bash
+harlan-github-agent control watch-pr --repository OWNER/REPO --number NUMBER --until review --timeout-seconds 60 2>&1 >/dev/null \
+  | head -1 | jq '{headSha, tasks: [.tasks[] | {kind, state}]}'
+```
+
+Continue only when `headSha` is your pushed SHA and the `adversarial_review` Task is `Queued` or `Running`.
+In that window, post the Fixed reply from section 3 and resolve the thread. A fixed finding needs no follow-up control.
+A Follow-up reply is also allowed in the window. Leave that thread open, because its control holds the follow-up.
+Outside the window, do not reply. Name the commit or the follow-up in the hand-back.
 
 This sweep only reports Service findings. It grants no Repair authority, regardless of impact.
 List each finding and its thread link for Step 6's disposition and Task ownership checks.
@@ -63,8 +83,8 @@ If those checks are unavailable, report the missing Service state and do not edi
 - **Dismissal:** report it through Step 6. Do not repair or request another Review.
 - **Repair:** use Step 6's authority checks before editing or pushing. Leave a current-head `Queued`, `Running`, or `Publishing` Repair Task to the Service.
 - **80/100 or below (Logged):** list it as optional follow-up in the hand-back. Harlan ticks its control or resolves it.
-  A Logged finding outside the diff has no thread. List it with a link to the Service's marked comment.
-- **Already fixed:** name the commit in the hand-back. Do not resolve the thread yourself.
+  If a Logged finding has no thread, list it with a link to the Service's marked comment. A finding outside the diff never has one, and a failed thread sync can leave out others.
+- **Fixed by your push:** reply and resolve in the window above. If you missed the window, name the commit in the hand-back.
 - **False positive or not applicable:** use Step 6's evidence and comment procedure.
 
 After an authorized Repair, the next Service Review resolves the thread when the finding clears. Confirm that it did.
@@ -82,11 +102,12 @@ Leave a human reviewer's thread open after Answered or Follow-up. That reviewer 
 If a bot reviewer already marked its comment addressed and resolved the thread, it needs nothing more. CodeRabbit writes "✅ Addressed in commit".
 A reply to CodeRabbit makes it answer. Post one reply per thread.
 
-Reply on the thread, then resolve it:
+Reply on the thread. Just before you resolve it, run the list again. If a comment arrived after your reply, respond to it first.
+The `&&` runs the resolve only after the reply succeeds:
 
 ```bash
 gh api -X POST repos/OWNER/REPO/pulls/NUMBER/comments/COMMENT_ID/replies \
-  -f body='🤖 Harlan Agent Kit Agent: fixed in [abc1234](https://github.com/OWNER/REPO/commit/FULL_SHA).'
+  -f body='🤖 Harlan Agent Kit Agent: fixed in [abc1234](https://github.com/OWNER/REPO/commit/FULL_SHA).' && \
 gh api graphql -X POST \
   -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' \
   -f id=THREAD_ID --jq .data.resolveReviewThread.thread.isResolved
@@ -95,8 +116,9 @@ gh api graphql -X POST \
 `COMMENT_ID` is the first comment's `fullDatabaseId`. Preserve its complete decimal string in the REST path.
 Do not convert it to a 32-bit integer or a JavaScript number.
 `THREAD_ID` is the `PRRT_` ID. Both come from the list.
-Run the resolve command only after the reply command succeeds. It prints `true` when GitHub resolved the thread.
+The resolve command prints `true` when GitHub resolved the thread.
 If either command fails, the thread stays open. Report the error. Never retry it with other credentials or another tool.
+This applies to every response that resolves a thread: Fixed, and Answered or Follow-up on a bot's thread.
 
 Answer top-level items in one comment. Link each item it answers.
 
