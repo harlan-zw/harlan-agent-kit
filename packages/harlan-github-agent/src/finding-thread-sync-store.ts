@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { InlineFindingReceipt } from './review-finding-threads.ts'
+import type { InlineFindingReceipt, VerifiedFindingRepair } from './review-finding-threads.ts'
 import type { RepositoryMapping, ReviewFinding } from './types.ts'
 
 export interface FindingThreadSync {
@@ -10,7 +10,7 @@ export interface FindingThreadSync {
   baseRef: string
   repositoryMapping: RepositoryMapping
   findings: ReviewFinding[]
-  fixedFingerprints: string[]
+  verifiedRepairs: VerifiedFindingRepair[]
   workerId: string
   fence: number
 }
@@ -148,7 +148,7 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
       database.prepare(`UPDATE finding_thread_syncs SET state_tag = 'Running', worker_id = ?, fence = ?,
         lease_expires_at = ?, attempts = attempts + 1, updated_at = ? WHERE review_run_id = ?`)
         .run(workerId, fence, new Date(Date.parse(at) + leaseMilliseconds).toISOString(), at, row.review_run_id)
-      const fixed = database.prepare(`
+      const verifiedRepairs = database.prepare(`
         WITH RECURSIVE scope AS (
           SELECT subject_id, head_sha, base_ref FROM review_runs WHERE id = ?
         ), repaired_heads(commit_sha) AS (
@@ -160,14 +160,18 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
           JOIN scope ON scope.subject_id = tasks.subject_id AND scope.base_ref = publication.base_ref
           WHERE tasks.kind = 'review_fix' AND publication.state_tag = 'Published' AND publication.pull_request_title IS NULL
         )
-        SELECT DISTINCT requests.fingerprint FROM logged_finding_requests AS requests
-        JOIN publication_commands AS publication ON publication.task_id = requests.task_id
-        JOIN repaired_heads ON repaired_heads.commit_sha = publication.commit_sha
-        JOIN scope ON scope.subject_id = requests.subject_id AND scope.base_ref = publication.base_ref
-        WHERE requests.on_head = 1 AND publication.state_tag = 'Published' AND publication.pull_request_title IS NULL
-      `).all(row.review_run_id) as Array<{ fingerprint: string }>
+        SELECT fingerprint, commitSha FROM (
+          SELECT requests.fingerprint, publication.commit_sha AS commitSha,
+            ROW_NUMBER() OVER (PARTITION BY requests.fingerprint ORDER BY publication.published_at DESC, publication.id DESC) AS rank
+          FROM logged_finding_requests AS requests
+          JOIN publication_commands AS publication ON publication.task_id = requests.task_id
+          JOIN repaired_heads ON repaired_heads.commit_sha = publication.commit_sha
+          JOIN scope ON scope.subject_id = requests.subject_id AND scope.base_ref = publication.base_ref
+          WHERE requests.on_head = 1 AND publication.state_tag = 'Published' AND publication.pull_request_title IS NULL
+        ) WHERE rank = 1
+      `).all(row.review_run_id) as Array<{ fingerprint: string, commitSha: string }>
       database.exec('COMMIT')
-      return { reviewRunId: row.review_run_id, repository: row.github, pullRequestNumber: row.github_number, headSha: row.head_sha, baseRef: row.base_ref, repositoryMapping: JSON.parse(row.policy_json), findings: JSON.parse(row.findings), fixedFingerprints: fixed.map(row => row.fingerprint), workerId, fence }
+      return { reviewRunId: row.review_run_id, repository: row.github, pullRequestNumber: row.github_number, headSha: row.head_sha, baseRef: row.base_ref, repositoryMapping: JSON.parse(row.policy_json), findings: JSON.parse(row.findings), verifiedRepairs, workerId, fence }
     }
     catch (error) {
       database.exec('ROLLBACK')

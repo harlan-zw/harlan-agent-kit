@@ -166,7 +166,8 @@ Use 91 to 100 for credible data loss, security bypass, or broad outage.
 Use 0 to 80 for limited, recoverable defects.
 Score independently of the effort to fix it. Do not inflate a score to trigger Repair.
 Each finding needs impact, stable identity, exact path and line, proof, summary, and next action. Every field is required, including summary.
-Example finding: {"identity":"buffered-byte-loss","impact":92,"path":"src/parser.ts","line":42,"proof":"A split UTF-8 sequence loses its first byte.","regressionTest":"Split one sequence across two chunks and assert the original string.","summary":"The parser drops data.","nextAction":"Keep the buffered bytes."}
+Write the summary as a short title that names the concrete problem. In proof, explain when it happens and what breaks. Write the next action as a sentence a maintainer can act on.
+Example finding: {"identity":"buffered-byte-loss","impact":92,"path":"src/parser.ts","line":42,"proof":"When a UTF-8 sequence spans two chunks, the parser loses its first byte. That corrupts the decoded text.","regressionTest":"Split one sequence across two chunks and assert the original string.","summary":"Split UTF-8 sequences lose their first byte","nextAction":"Keep the buffered bytes until the next chunk arrives."}
 Keep the identity stable across line changes.
 For a sound premise, describe one test that fails before Repair and passes after it.
 Return null for regressionTest only when no test can cover the finding, such as a stale comment or documentation.
