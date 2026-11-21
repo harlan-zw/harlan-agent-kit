@@ -64,7 +64,7 @@ import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
-import { publishLoggedFindingPickups } from './logged-finding-sweep.ts'
+import { publishLoggedFindingPickups, refreshLoggedFindingThreads } from './logged-finding-sweep.ts'
 import { createMaintenanceCheckCommand, createMaintenanceScopeProvider } from './maintenance-scope.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
 import { createPackageReleaseSource } from './package-release-github.ts'
@@ -735,12 +735,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     source: workerGithub,
     report: createReviewFindingThreadsReport(store, now),
   }
+  const refreshSelectedThreads = (signal: AbortSignal, taskId?: string, hold?: (selection: { repository: string, pullRequestNumber: number }, reason: string) => void) => refreshLoggedFindingThreads(store, (repository, number) => {
+    const mapping = config.repositories.find(mapping => mapping.github === repository && mapping.enabled)
+    return mapping === undefined ? Promise.resolve(err('Repository policy does not authorize this pull request branch.')) : workerGithub.listReviewFindingThreads(mapping, number, signal)
+  }, now().toISOString(), taskId, hold)
   const findingThreadSync = createFindingThreadSyncController({
     store,
     readPullRequest: github.getPullRequest,
     mirror: findingThreads,
     now,
     workerId: randomUUID(),
+    controls: () => releaseWebhookReady && userLoginKnown,
   })
   const pullRequestTriage = createPullRequestTriageController({
     classification,
@@ -763,6 +768,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     if (!config.mutationsEnabled)
       return undefined
     const controllerRoot = join(dirname(config.storage.path), 'worktrees')
+    const publicationRemote = createGitPublicationRemote({
+      github,
+      forkWorkflowTokens: gatedTokens(userTokens),
+      pullRequests: createGitHubPullRequestPublisher({ tokens, uploadAsset: createUserAssetUploader({ token: signal => userAccess.token(signal) }) }),
+      root: controllerRoot,
+      routineIssueSource: store.getRoutineIssueSource,
+      tokens,
+    })
     const worktrees = createConflictWorktreeManager({
       gitIdentity: options.gitIdentity,
       root: controllerRoot,
@@ -1112,14 +1125,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         now,
         onError: error => options.logger.error(error),
         store,
-        publisher: createGitPublicationRemote({
-          github,
-          forkWorkflowTokens: gatedTokens(userTokens),
-          pullRequests: createGitHubPullRequestPublisher({ tokens, uploadAsset: createUserAssetUploader({ token: signal => userAccess.token(signal) }) }),
-          root: controllerRoot,
-          routineIssueSource: store.getRoutineIssueSource,
-          tokens,
-        }),
+        publisher: publicationRemote,
+        beforeAuthorize: (command, signal) => refreshSelectedThreads(signal, command.taskId),
         workerId: randomUUID(),
       }),
       reviewStatuses: createReviewStatusScheduler({
@@ -1149,7 +1156,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }),
       repairs: Array.from({ length: profile.maximumActiveAgents }, () => createTaskScheduler({
         canClaim,
-        claim: store.claimNextReviewFixTask,
+        claim: async (workerId, _at, leaseMilliseconds, signal) => {
+          const held: Array<{ repository: string, pullRequestNumber: number }> = []
+          await refreshSelectedThreads(AbortSignal.any([signal, AbortSignal.timeout(25_000)]), undefined, (selection, reason) => {
+            held.push(selection)
+            options.logger.error(`${selection.repository}#${selection.pullRequestNumber}: ${reason}`)
+          })
+          return signal.aborted ? null : store.claimNextReviewFixTask(workerId, now().toISOString(), leaseMilliseconds, held)
+        },
         intervalMilliseconds: 5_000,
         leaseMilliseconds: 45 * 60_000,
         now,
@@ -1527,16 +1541,15 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }
         })
         recordPassIncidents('stopped_review_comment', stopped.results.flatMap(result => result._tag === 'Err' ? [result.error] : []))
-        if (releaseWebhookReady) {
-          const errors = await guarded('Logged finding status', () => publishLoggedFindingPickups({
-            github: workerGithub,
-            store,
-            repositories: config.repositories,
-            now,
-            workerId: 'logged-finding-status',
-          }, signal), ['The finding status update failed.'])
-          errors.forEach(error => options.logger.error(error))
-        }
+        const findingErrors = await guarded('Logged finding status', () => publishLoggedFindingPickups({
+          github: workerGithub,
+          store,
+          repositories: config.repositories,
+          now,
+          workerId: 'logged-finding-status',
+          controls: webhookControls.available,
+        }, signal), ['The finding status update failed.'])
+        findingErrors.forEach(error => options.logger.error(error))
         const positions = await guarded('Queue position comments', () => publishQueuePositions({
           github: workerGithub,
           now,
@@ -1925,11 +1938,34 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             allowedAuthor: userLogin,
             actorLogin: (name) => {
               const repository = config.repositories.find(repository => repository.github.toLowerCase() === name.toLowerCase() && repository.enabled)
-              return repository === undefined || !config.mutationsEnabled || !repository.pullRequestReview
+              return repository === undefined || !userLoginKnown || !config.mutationsEnabled || !repository.pullRequestReview
                 ? null
                 : actorLogin(repository)
             },
-            apply: (request) => { store.requestLoggedFindingPickup({ ...request, at: now().toISOString() }) },
+            apply: async (request) => {
+              const repository = config.repositories.find(mapping => mapping.github.toLowerCase() === request.repository.toLowerCase())
+              if (repository === undefined)
+                return ok(undefined)
+              const signal = AbortSignal.timeout(25_000)
+              const observed = store.getOpenPullRequest(repository.github, request.pullRequestNumber)
+              const live = await github.getPullRequest(repository, request.pullRequestNumber, signal)
+              if (live._tag === 'Err')
+                return err(live.error.message)
+              if (live.value.headSha !== request.headSha || (live.value.state === 'open' && observed?.baseRef !== live.value.baseRef))
+                return ok(undefined)
+              if (request.inline) {
+                const threads = await workerGithub.listReviewFindingThreads(repository, request.pullRequestNumber, signal)
+                if (threads._tag === 'Err')
+                  return threads
+                if (!threads.value.some(thread => !thread.resolved && thread.comment?.id === request.commentId))
+                  return ok(undefined)
+              }
+              if (store.requestLoggedFindingPickup({ ...request, at: now().toISOString() }) && config.triggers.includes('github')) {
+                for (const scheduler of mutationSchedulers?.repairs ?? [])
+                  void scheduler.runNow().catch(error => options.logger.error(error))
+              }
+              return ok(undefined)
+            },
           },
           reviewApproval: {
             allowedAuthor: userLogin,

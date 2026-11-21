@@ -99,6 +99,8 @@ describe('review fix Worker', () => {
 
   it.each([
     { merged: false, outcome: 'repaired', existing: false },
+    { merged: false, outcome: 'repaired', existing: false, pickup: true },
+    { merged: false, outcome: 'disputed', existing: false, pickup: true },
     { merged: false, outcome: 'repaired', existing: false, ownerRequest: true },
     { merged: false, outcome: 'disputed', existing: false, ownerRequest: true },
     { merged: true, outcome: 'repaired', existing: false },
@@ -135,7 +137,7 @@ describe('review fix Worker', () => {
       },
     }]
     if (pickup) {
-      task.pickup = { _tag: 'LoggedFinding', finding: {
+      task.pickup = { _tag: 'LoggedFinding', ...(merged ? {} : { target: 'head' as const }), finding: {
         _tag: 'Logged',
         impact: 40,
         summary: 'The parser drops buffered bytes.',
@@ -201,7 +203,7 @@ describe('review fix Worker', () => {
     }).run(task, new AbortController().signal)
 
     if (existing || outcome !== 'repaired') {
-      expect(result).toMatchObject(ok({ _tag: outcome === 'blocked' || ownerRequest ? 'ActionRequired' : 'Completed' }))
+      expect(result).toMatchObject(ok({ _tag: outcome === 'blocked' || ownerRequest || !merged ? 'ActionRequired' : 'Completed' }))
       expect(committedMessage).toBe('')
       if (existing)
         expect(capture.requests).toEqual([])

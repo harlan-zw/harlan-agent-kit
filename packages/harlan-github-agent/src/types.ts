@@ -685,7 +685,7 @@ export interface ClaimedReviewFixTask extends ReviewFixTask {
   repositoryMapping: RepositoryMapping
   pullRequest: GitHubPullRequestItem
   rounds: { number: number, limit: number, prior: RepairRound[] }
-  pickup?: { _tag: 'LoggedFinding', finding: Extract<ReviewFinding, { _tag: 'Logged' }> }
+  pickup?: { _tag: 'LoggedFinding', finding: Extract<ReviewFinding, { _tag: 'Logged' }>, target?: 'head' }
   request?: { _tag: 'OwnerComment', instruction: string, requestedBy: string, requestId: string }
 }
 
@@ -1351,6 +1351,8 @@ export type MutationWorkerOutcome
     | { _tag: 'Superseded', reason: string, usage?: AgentTokenUsage }
 
 export type ClaimedPublicationCommand = PublicationCommand & {
+  /** Durable selected finding authority, distinct from general Review Repair approval. */
+  selectedFinding?: true
   workerId: string
   fence: number
   leaseExpiresAt: string

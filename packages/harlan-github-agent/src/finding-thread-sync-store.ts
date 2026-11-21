@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
+import type { InlineFindingReceipt } from './review-finding-threads.ts'
 import type { RepositoryMapping, ReviewFinding } from './types.ts'
 
 export interface FindingThreadSync {
@@ -9,6 +10,7 @@ export interface FindingThreadSync {
   baseRef: string
   repositoryMapping: RepositoryMapping
   findings: ReviewFinding[]
+  fixedFingerprints: string[]
   workerId: string
   fence: number
 }
@@ -18,7 +20,7 @@ export interface FindingThreadSyncStore {
   restoreReviewFindingThreadSyncs: (at: string) => number
   claimReviewFindingThreadSync: (workerId: string, at: string, leaseMilliseconds: number) => FindingThreadSync | null
   authorizeReviewFindingThreadSync: (command: FindingThreadSync, at: string) => boolean
-  completeReviewFindingThreadSync: (command: FindingThreadSync, at: string) => boolean
+  completeReviewFindingThreadSync: (command: FindingThreadSync, at: string, inline?: InlineFindingReceipt[]) => boolean
   deferReviewFindingThreadSync: (command: FindingThreadSync, at: string, reason: string) => boolean
   supersedeReviewFindingThreadSync: (command: FindingThreadSync, at: string) => boolean
   hasPendingReviewFindingThreadSync: (repository: string) => boolean
@@ -146,8 +148,26 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
       database.prepare(`UPDATE finding_thread_syncs SET state_tag = 'Running', worker_id = ?, fence = ?,
         lease_expires_at = ?, attempts = attempts + 1, updated_at = ? WHERE review_run_id = ?`)
         .run(workerId, fence, new Date(Date.parse(at) + leaseMilliseconds).toISOString(), at, row.review_run_id)
+      const fixed = database.prepare(`
+        WITH RECURSIVE scope AS (
+          SELECT subject_id, head_sha, base_ref FROM review_runs WHERE id = ?
+        ), repaired_heads(commit_sha) AS (
+          SELECT head_sha FROM scope
+          UNION
+          SELECT publication.expected_head_sha FROM repaired_heads
+          JOIN publication_commands AS publication ON publication.commit_sha = repaired_heads.commit_sha
+          JOIN tasks ON tasks.id = publication.task_id
+          JOIN scope ON scope.subject_id = tasks.subject_id AND scope.base_ref = publication.base_ref
+          WHERE tasks.kind = 'review_fix' AND publication.state_tag = 'Published' AND publication.pull_request_title IS NULL
+        )
+        SELECT DISTINCT requests.fingerprint FROM logged_finding_requests AS requests
+        JOIN publication_commands AS publication ON publication.task_id = requests.task_id
+        JOIN repaired_heads ON repaired_heads.commit_sha = publication.commit_sha
+        JOIN scope ON scope.subject_id = requests.subject_id AND scope.base_ref = publication.base_ref
+        WHERE requests.on_head = 1 AND publication.state_tag = 'Published' AND publication.pull_request_title IS NULL
+      `).all(row.review_run_id) as Array<{ fingerprint: string }>
       database.exec('COMMIT')
-      return { reviewRunId: row.review_run_id, repository: row.github, pullRequestNumber: row.github_number, headSha: row.head_sha, baseRef: row.base_ref, repositoryMapping: JSON.parse(row.policy_json), findings: JSON.parse(row.findings), workerId, fence }
+      return { reviewRunId: row.review_run_id, repository: row.github, pullRequestNumber: row.github_number, headSha: row.head_sha, baseRef: row.base_ref, repositoryMapping: JSON.parse(row.policy_json), findings: JSON.parse(row.findings), fixedFingerprints: fixed.map(row => row.fingerprint), workerId, fence }
     }
     catch (error) {
       database.exec('ROLLBACK')
@@ -159,18 +179,18 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
       WHERE sync.review_run_id = ? AND sync.state_tag = 'Running' AND sync.worker_id = ?
         AND sync.fence = ? AND sync.lease_expires_at > ? AND ${canWrite}`)
       .get(command.reviewRunId, command.workerId, command.fence, at) !== undefined
-  const settle = (command: FindingThreadSync, at: string, state: 'Written' | 'Superseded'): boolean =>
+  const settle = (command: FindingThreadSync, at: string, state: 'Written' | 'Superseded', inline: InlineFindingReceipt[] = []): boolean =>
     database.prepare(`UPDATE finding_thread_syncs SET state_tag = ?, worker_id = NULL,
-      lease_expires_at = NULL, reason = NULL, updated_at = ?
+      lease_expires_at = NULL, reason = NULL, updated_at = ?, inline_findings = ?
       WHERE review_run_id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?`)
-      .run(state, at, command.reviewRunId, command.workerId, command.fence)
+      .run(state, at, JSON.stringify(inline), command.reviewRunId, command.workerId, command.fence)
       .changes === 1
   return {
     queueReviewFindingThreadSync,
     restoreReviewFindingThreadSyncs,
     claimReviewFindingThreadSync,
     authorizeReviewFindingThreadSync,
-    completeReviewFindingThreadSync: (command, at) => settle(command, at, 'Written'),
+    completeReviewFindingThreadSync: (command, at, inline) => settle(command, at, 'Written', inline),
     supersedeReviewFindingThreadSync: (command, at) => settle(command, at, 'Superseded'),
     deferReviewFindingThreadSync(command, at, reason) {
       return database.prepare(`UPDATE finding_thread_syncs SET state_tag = 'Pending', worker_id = NULL,

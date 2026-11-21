@@ -1,7 +1,31 @@
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { LoggedFindingStore } from './logged-finding-store.ts'
+import type { Result } from './result.ts'
+import type { ReviewFindingThread } from './review-finding-threads.ts'
 import type { RepositoryMapping } from './types.ts'
 import { err, ok } from './result.ts'
+
+/** Refresh conversation authority before claiming work or publishing a fix. */
+export async function refreshLoggedFindingThreads(
+  store: LoggedFindingStore,
+  read: (repository: string, number: number) => Promise<Result<ReviewFindingThread[], string>>,
+  at: string,
+  taskId?: string,
+  hold?: (selection: { repository: string, pullRequestNumber: number }, reason: string) => void,
+): Promise<Result<void, string>> {
+  for (const selection of store.listLoggedFindingThreadSelections(taskId)) {
+    const threads = await read(selection.repository, selection.pullRequestNumber)
+    store.holdLoggedFindingSelection(selection, threads._tag === 'Err')
+    if (threads._tag === 'Err') {
+      if (hold === undefined)
+        return threads
+      hold(selection, threads.error)
+      continue
+    }
+    store.reconcileLoggedFindingThreads(selection.repository, selection.pullRequestNumber, threads.value, at)
+  }
+  return ok(undefined)
+}
 
 /** Updates the existing canonical comment under a durable Publication lease. */
 export async function publishLoggedFindingPickups(options: {
@@ -10,11 +34,12 @@ export async function publishLoggedFindingPickups(options: {
   repositories: readonly RepositoryMapping[]
   now: () => Date
   workerId: string
+  controls?: (repository: string) => boolean
 }, signal: AbortSignal): Promise<string[]> {
   const errors: string[] = []
   // Bound one pass. A failed comment releases itself when its lease expires.
   for (let index = 0; index < 20 && !signal.aborted; index++) {
-    const command = options.store.claimLoggedFindingComment(options.workerId, options.now().toISOString(), 60_000)
+    const command = options.store.claimLoggedFindingComment(options.workerId, options.now().toISOString(), 60_000, options.controls)
     if (command === null)
       break
     const mapping = options.repositories.find(mapping => mapping.github.toLowerCase() === command.repository.toLowerCase())

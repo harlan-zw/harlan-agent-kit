@@ -15,7 +15,7 @@ import { agentPhase } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { mediaEvidenceLines, snapshotMedia } from './github-media.ts'
 import { repairRoundHistory } from './repair-rounds.ts'
-import { canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
+import { canRepairBaseline, canRepairPullRequestHead, canRepairSelectedFindingOnHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 import { collectRepairGitHubEvidence } from './worker-github-evidence.ts'
@@ -141,7 +141,8 @@ Head SHA: ${task.pullRequest.headSha}
 Owner request:
 ${JSON.stringify(task.request)}`
   }
-  return `Repair the exact material Review findings for ${task.repository}#${task.pullRequestNumber}.
+  const instruction = task.pickup === undefined ? 'Repair the exact material Review findings' : 'Verify and fix the selected Review finding'
+  return `${instruction} for ${task.repository}#${task.pullRequestNumber}.
 
 Work as a fresh local Agent session inside this prepared Git worktree.
 ${instructionFilesLine(input.instructionFiles)}
@@ -206,7 +207,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
         })
         if (!saved)
           return err('This Agent is no longer assigned to the current pull request.')
-        if (task.pullRequest.state === 'closed' && task.pullRequest.mergedAt !== null)
+        if (task.pickup?.target === 'head' || (task.pullRequest.state === 'closed' && task.pullRequest.mergedAt !== null))
           return ok(undefined)
         const published = await options.status.publishRepair(task, signal)
         if (published._tag === 'Err' && !signal.aborted)
@@ -229,10 +230,11 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       }
       if (
         (current.state !== 'open' && !merged)
-        || (task.pickup !== undefined && !merged)
+        || (task.pickup !== undefined && (task.pickup.target === 'head' ? !canRepairSelectedFindingOnHead(validated.value, current) : !merged))
         || current.draft
         || (!merged && current.mergeState !== 'clean')
         || current.headSha !== task.pullRequest.headSha
+        || (!merged && current.baseRef !== task.pullRequest.baseRef)
         || (merged ? !canRepairBaseline(validated.value) : !canRepairPullRequestHead(validated.value, current))
       ) {
         return ok({ _tag: 'ActionRequired', reason: 'The pull request no longer has safe Repair authority.', evidence: task.revisionId })
@@ -296,6 +298,8 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       if (turn.value.value.outcome === 'disputed') {
         if (task.request !== undefined)
           return ok({ _tag: 'ActionRequired', reason: turn.value.value.summary, evidence: JSON.stringify(task.request), usage: turn.value.usage })
+        if (task.pickup?.target === 'head')
+          return ok({ _tag: 'ActionRequired', reason: turn.value.value.summary, evidence: JSON.stringify({ findings, checks: turn.value.value.checks }), usage: turn.value.usage })
         if (merged)
           return ok({ _tag: 'Completed', evidence: `No Repair remains on the default branch: ${turn.value.value.summary}`, usage: turn.value.usage })
         const evidence = JSON.stringify({ findings, checks: turn.value.value.checks })
@@ -364,7 +368,7 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
         return frozen
       if (merged
         ? frozen.value.pullRequest.mergedAt === null || frozen.value.pullRequest.headSha !== current.headSha || frozen.value.pullRequest.baseSha !== prepared.value.baseSha
-        : frozen.value.pullRequest.state !== 'open' || frozen.value.pullRequest.headSha !== prepared.value.headSha) {
+        : frozen.value.pullRequest.state !== 'open' || frozen.value.pullRequest.headSha !== prepared.value.headSha || frozen.value.pullRequest.baseRef !== current.baseRef) {
         return err('The pull request changed before the controller committed the Repair.')
       }
 

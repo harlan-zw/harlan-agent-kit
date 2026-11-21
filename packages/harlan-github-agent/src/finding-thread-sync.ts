@@ -1,6 +1,8 @@
 import type { FindingThreadSyncStore } from './finding-thread-sync-store.ts'
 import type { GitHubSource } from './github.ts'
-import type { ReviewFindingThreadMirror, ReviewFindingThreadsOutcome } from './review-finding-threads.ts'
+import type { InlineFindingReceipt, ReviewFindingThreadMirror, ReviewFindingThreadsOutcome } from './review-finding-threads.ts'
+import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
+import { canRepairSelectedFindingOnHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { mirrorReviewFindingThreads } from './review-finding-threads.ts'
 
@@ -10,6 +12,7 @@ export function createFindingThreadSyncController(options: {
   mirror: ReviewFindingThreadMirror
   now: () => Date
   workerId: string
+  controls?: (repository: RepositoryMapping, pull: GitHubPullRequestItem) => boolean
 }) {
   return {
     async run(signal: AbortSignal): Promise<Array<{ repository: string, number: number, outcome: ReviewFindingThreadsOutcome }>> {
@@ -21,10 +24,11 @@ export function createFindingThreadSyncController(options: {
           break
         let authorityLost = false
         let receiptSaved = true
+        let inline: InlineFindingReceipt[] = []
         const report = (outcome: ReviewFindingThreadsOutcome): void => {
           const at = options.now().toISOString()
           receiptSaved = outcome._tag === 'Written'
-            ? options.store.completeReviewFindingThreadSync(command, at)
+            ? options.store.completeReviewFindingThreadSync(command, at, inline)
             : options.store.deferReviewFindingThreadSync(command, at, outcome.message)
           if (receiptSaved && !signal.aborted && !authorityLost)
             options.mirror.report(command.repository, outcome)
@@ -45,7 +49,12 @@ export function createFindingThreadSyncController(options: {
         const outcome = await mirrorReviewFindingThreads({ ...options.mirror, report: (_repository, result) => report(result) }, command.repositoryMapping, command.pullRequestNumber, command.headSha, command.findings, signal, () => {
           authorityLost = signal.aborted || !options.store.authorizeReviewFindingThreadSync(command, options.now().toISOString())
           return authorityLost ? err('The finding thread sync lost its Publication authority.') : ok(undefined)
-        }, pull.state === 'closed' ? 'merged' : 'open')
+        }, pull.state === 'closed' ? 'merged' : 'open', {
+          baseRef: command.baseRef,
+          controls: canRepairSelectedFindingOnHead(command.repositoryMapping, pull) && options.controls?.(command.repositoryMapping, pull) === true,
+          fixed: command.fixedFingerprints,
+          recordInline: (receipts) => { inline = receipts },
+        })
         results.push({ repository: command.repository, number: command.pullRequestNumber, outcome: receiptSaved ? outcome : { _tag: 'Failed', message: 'The finding thread sync receipt lost its Publication lease.' } })
       }
       return results

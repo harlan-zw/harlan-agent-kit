@@ -183,7 +183,7 @@ export interface UserRepositoryDiscoveryOptions {
  *
  * Matching is case insensitive, because GitHub logins are.
  */
-export function isAllowedRepository(github: string, allowedOwners: string[]): boolean {
+export function isAllowedRepository(github: string, allowedOwners: readonly string[]): boolean {
   const full = github.toLowerCase()
   const owner = full.split('/')[0]
   return allowedOwners.some((entry) => {

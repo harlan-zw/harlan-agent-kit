@@ -20,7 +20,7 @@ import { APPROVAL_LABELS } from './approval-labels.ts'
 import { AUTO_MERGE_LABEL_SPEC } from './auto-merge.ts'
 import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
 import { dependencyUpdateLabel, isDependencyFile } from './dependency-update-label.ts'
-import { canPushBranch, canRepairBaseline, canResolveConflictPullRequestHead, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
+import { canPushBranch, canRepairBaseline, canRepairSelectedFindingOnHead, canResolveConflictPullRequestHead, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -1711,6 +1711,14 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
         if (!canWritePullRequestHead(command.repositoryMapping))
           return err('Repository policy does not authorize writing this pull request head.')
         const headRepository = publicationTargetRepository(command)
+        if (headRepository.toLowerCase() === command.repository.toLowerCase()) {
+          const protectedBranch = await options.github.isBranchProtected(command.repositoryMapping, command.headRef, signal)
+          if (protectedBranch._tag === 'Err')
+            return err(protectedBranch.error.message)
+          if (protectedBranch.value)
+            return err('The pull request head branch is protected.')
+        }
+        // Read the live Repair scope after every other remote preparation read.
         const pullRequest = await options.github.getPullRequest(command.repositoryMapping, command.pullRequestNumber, signal)
         if (pullRequest._tag === 'Err')
           return err(pullRequest.error.message)
@@ -1722,31 +1730,26 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
           || pullRequest.value.draft
           || pullRequest.value.mergeState !== (command.taskKind === 'resolve_conflict' ? 'conflicting' : 'clean')
           || pullRequest.value.headSha !== command.expectedHeadSha
+          || (command.taskKind === 'review_fix' && pullRequest.value.baseRef !== command.baseRef)
           || pullRequest.value.headRef !== command.headRef
           || pullRequest.value.headRepository.toLowerCase() !== headRepository.toLowerCase()
           || !canWriteHead
+          || (command.selectedFinding === true && !canRepairSelectedFindingOnHead(command.repositoryMapping, pullRequest.value))
           || (command.taskKind === 'resolve_conflict' && !canResolveConflictPullRequestHead(command.repositoryMapping, pullRequest.value))
         ) {
           return err('The pull request no longer authorizes publication.')
         }
-        if (headRepository.toLowerCase() === command.repository.toLowerCase()) {
-          const protectedBranch = await options.github.isBranchProtected(command.repositoryMapping, command.headRef, signal)
-          if (protectedBranch._tag === 'Err')
-            return err(protectedBranch.error.message)
-          if (protectedBranch.value)
-            return err('The pull request head branch is protected.')
-        }
       }
       if (!isSafeGitRef(command.baseRef) || command.baseRef === command.headRef)
         return err('The pull request base branch is unsafe.')
-      const credential = await token(command, signal)
-      if (credential._tag === 'Err')
-        return credential
       // A Repair commit is based on the unchanged pull request head. A moving
       // base cannot invalidate its patch, and fresh Review checks the new head
       // against the latest base after publication.
       if (command._tag === 'UpdatePullRequest' && command.taskKind === 'review_fix')
         return ok(undefined)
+      const credential = await token(command, signal)
+      if (credential._tag === 'Err')
+        return credential
       // A stacked pull request merges into another pull request's head branch, so
       // the branch this pins is the recorded base, never the default branch.
       const base = await runGit(repositoryGitDirectory(options.root, command.repository), [
@@ -1790,7 +1793,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
       const headSha = result.stdout.split(/\s+/)[0]
       return headSha === undefined || headSha.length === 0 ? ok(null) : ok(headSha)
     },
-    async push(command, signal) {
+    async push(command, signal, beforeSend) {
       if (!isSafeGitRef(command.headRef))
         return err('Pull request head ref is unsafe.')
       const repository = repositoryGitDirectory(options.root, command.repository)
@@ -1820,6 +1823,9 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
       const credential = await token(command, signal)
       if (credential._tag === 'Err')
         return credential
+      const authorized = await beforeSend?.()
+      if (authorized?._tag === 'Err')
+        return authorized
       const ref = `refs/heads/${command.headRef}`
       // Replace a leftover branch from an earlier attempt. Never rewrite a contributor's pull request branch.
       const refspec = command._tag === 'OpenPullRequest'
@@ -1827,6 +1833,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
         : `${command.artifactRef}:${ref}`
       const result = await runGit(repository, [
         'push',
+        ...(command._tag === 'UpdatePullRequest' && command.taskKind === 'review_fix' ? [`--force-with-lease=${ref}:${command.expectedHeadSha}`] : []),
         remoteUrl(publicationTargetRepository(command)),
         refspec,
       ], signal, credential.value, options.remoteUrl !== undefined)

@@ -9,6 +9,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { H3 } from 'h3'
 import { loggedFindingPickup } from './logged-finding-pickup.ts'
 import { packageReleaseCommand, releaseNoteApproval, releaseRequest } from './package-release.ts'
+import { isAllowedRepository } from './repository-discovery.ts'
 import { reviewApproval } from './review-approval.ts'
 import { reviewCancellation } from './review-cancel.ts'
 import { reviewCheckRerun } from './review-check-rerun.ts'
@@ -72,9 +73,8 @@ export function webhookHint(event: string, payload: unknown, allowedOwners: read
   if (typeof repository !== 'string' || !repository.includes('/'))
     return { _tag: 'Ignored', reason: 'the delivery names no repository' }
 
-  const owner = repository.split('/')[0] ?? ''
-  if (!allowedOwners.some(allowed => allowed.toLowerCase() === owner.toLowerCase()))
-    return { _tag: 'Ignored', reason: `${owner} is not an allowed owner` }
+  if (!isAllowedRepository(repository, allowedOwners))
+    return { _tag: 'Ignored', reason: `${repository} is outside the allowed repository scope` }
 
   return { _tag: 'Reconcile', repository }
 }
@@ -176,7 +176,7 @@ export interface WebhookAppOptions {
   loggedFindingPickup?: {
     allowedAuthor: string
     actorLogin: (repository: string) => string | null
-    apply: (request: LoggedFindingPickup & { requestId: string }) => void
+    apply: (request: LoggedFindingPickup & { requestId: string }) => void | Promise<Result<void, string>>
   }
   secret: string
   now?: () => number
@@ -251,7 +251,11 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
       if (pickup !== null && options.loggedFindingPickup !== undefined
         && pickup.requestedBy.toLowerCase() === options.loggedFindingPickup.allowedAuthor.toLowerCase()
         && options.loggedFindingPickup.actorLogin(hint.repository)?.toLowerCase() === pickup.commentAuthor.toLowerCase()) {
-        options.loggedFindingPickup.apply({ ...pickup, requestId: delivery })
+        const applied = await options.loggedFindingPickup.apply({ ...pickup, requestId: delivery })
+        if (applied?._tag === 'Err') {
+          options.logger.info(`Finding selection failed: ${applied.error}`)
+          return new Response('Finding selection failed. Retry this delivery.', { status: 503 })
+        }
       }
       const approval = reviewApproval(name, payload)
       if (approval !== null && options.reviewApproval !== undefined

@@ -2,14 +2,16 @@ import type { ReviewPublicationAuthority } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { RepositoryMapping, ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
-import { cleanLine } from './text.ts'
+import { loggedFindingBaseMarker, loggedFindingControl, normalizeLoggedFindingControls } from './logged-finding-pickup.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, reviewFindingFollowUp } from './review-comment.ts'
+import { cleanLine, cleanText } from './text.ts'
 
 /** One review thread this service opened for one Review finding. */
 export interface ReviewFindingThread {
   threadId: string
   fingerprint: string
   resolved: boolean
+  comment?: { id: number, body: string }
 }
 
 /** One inline comment on the reviewed head. A null line comments on the whole file. */
@@ -18,6 +20,7 @@ export interface ReviewFindingComment {
   path: string
   line: number | null
   body: string
+  lineOnly?: true
 }
 
 /**
@@ -28,7 +31,7 @@ export interface ReviewFindingComment {
  * comment is the only place it shows.
  */
 export type ReviewFindingCommentOutcome
-  = | { _tag: 'Posted' }
+  = | { _tag: 'Posted', comment?: { id: number, body: string } }
     | { _tag: 'OutsideDiff' }
 
 export interface ReviewFindingThreadSource {
@@ -36,6 +39,21 @@ export interface ReviewFindingThreadSource {
   listReviewFindingThreads: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<ReviewFindingThread[], string>>
   postReviewFindingComment: (repository: RepositoryMapping, pullRequestNumber: number, comment: ReviewFindingComment, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<ReviewFindingCommentOutcome, string>>
   resolveReviewFindingThread: (repository: RepositoryMapping, threadId: string, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<void, string>>
+  editReviewFindingComment?: (repository: RepositoryMapping, comment: { id: number, body: string }, body: string, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<{ id: number, body: string }, string>>
+}
+
+export interface InlineFindingReceipt {
+  fingerprint: string
+  commentId: number
+  body: string
+  resolved: boolean
+}
+
+interface FindingThreadOptions {
+  controls?: boolean
+  baseRef?: string
+  fixed?: readonly string[]
+  recordInline?: (receipts: InlineFindingReceipt[]) => void
 }
 
 export type ReviewFindingThreadsOutcome
@@ -49,7 +67,7 @@ export interface ReviewFindingThreadMirror {
 }
 
 const FINDING_MARKER_PATTERN = /<!-- review-finding: ([a-f\d]{64})(?: ([\w-]+))? -->/i
-const FINDING_SUMMARY_PATTERN = /^\*\*(?:Open|Dismissal recommended):\*\* (.+)$/m
+const FINDING_SUMMARY_PATTERN = /^\*\*(?:Open|Logged|Dismissal recommended)(?: \(\d+\/100\))?:\*\* (.+)$/m
 
 /** What one finding thread's first comment says about its finding. */
 export interface ReviewFindingThreadMarker {
@@ -79,6 +97,7 @@ export function reviewFindingThreadFingerprint(body: string): string | null {
 }
 
 type OpenFinding = Extract<ReviewFinding, { _tag: 'Open' }> & { details: NonNullable<Extract<ReviewFinding, { _tag: 'Open' }>['details']> }
+type ThreadFinding = OpenFinding | Extract<ReviewFinding, { _tag: 'Logged' }>
 
 function sentence(text: string): string {
   const line = cleanLine(text)
@@ -91,8 +110,8 @@ function sentence(text: string): string {
  * It carries the canonical comment's marker, so the next Review reads it as
  * this service's own words and never as feedback from a person.
  */
-export function reviewFindingThreadBody(finding: OpenFinding): string {
-  const heading = finding.resolution === 'Dismissal' ? 'Dismissal recommended' : 'Open'
+export function reviewFindingThreadBody(finding: ThreadFinding, headSha?: string, baseRef?: string): string {
+  const heading = finding._tag === 'Logged' ? 'Logged' : finding.resolution === 'Dismissal' ? 'Dismissal recommended' : 'Open'
   const score = finding.impact === undefined ? '' : ` (${finding.impact}/100)`
   return [
     AUTOMATED_REVIEW_MARKER,
@@ -100,10 +119,18 @@ export function reviewFindingThreadBody(finding: OpenFinding): string {
     `<!-- review-finding: ${finding.details.fingerprint.toLowerCase()}${finding.details.identity === undefined ? '' : ` ${Buffer.from(finding.details.identity, 'utf8').toString('base64url')}`} -->`,
     `**${heading}${score}:** ${sentence(finding.summary)}`,
     '',
-    `**Proof:** ${sentence(finding.details.proof)}`,
+    `**Proof:** ${cleanText(finding.details.proof)}`,
     '',
-    `Next: ${sentence(finding.nextAction)}`,
+    finding._tag === 'Logged' ? reviewFindingFollowUp(finding) : `Next: ${sentence(finding.nextAction)}`,
     '',
+    ...(headSha === undefined || finding._tag !== 'Logged'
+      ? []
+      : [
+          `<!-- reviewed-sha: ${headSha} -->`,
+          ...(baseRef === undefined ? [] : [loggedFindingBaseMarker(baseRef)]),
+          loggedFindingControl(finding.details.fingerprint),
+          '',
+        ]),
     automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.` }),
   ].join('\n')
 }
@@ -116,36 +143,46 @@ export interface ReviewFindingThreadPlan {
 /**
  * Decides which findings get a new thread and which old threads close.
  *
- * A fingerprint that already has a thread gets no second one, resolved or
- * not: a person who resolved it has answered it, and a new head only marks it
- * outdated. A thread closes when the latest Review no longer reports its
- * finding as open.
+ * Reuse the thread for the same finding across Reviews. Keep a resolved thread
+ * closed. A Logged finding needs evidence of a fix before automatic resolution.
  */
-export function planReviewFindingThreads(headSha: string, findings: ReviewFinding[], threads: ReviewFindingThread[]): ReviewFindingThreadPlan {
-  const open = findings.filter((finding): finding is OpenFinding => finding._tag === 'Open' && finding.details !== undefined)
-  const openFingerprints = new Set(open.map(finding => finding.details.fingerprint.toLowerCase()))
+export function planReviewFindingThreads(headSha: string, findings: ReviewFinding[], threads: ReviewFindingThread[], options: FindingThreadOptions = {}): ReviewFindingThreadPlan {
+  const current = findings.filter((finding): finding is ThreadFinding => finding._tag === 'Logged' || (finding._tag === 'Open' && finding.details !== undefined))
+  const currentFingerprints = new Set(current.map(finding => finding.details.fingerprint.toLowerCase()))
+  const fixedSummaries = new Set(findings.filter(finding => finding._tag === 'Fixed').map(finding => sentence(finding.summary)))
   const threaded = new Set(threads.map(thread => thread.fingerprint))
   const post = new Map<string, ReviewFindingComment>()
-  for (const finding of open) {
+  for (const finding of current) {
     const fingerprint = finding.details.fingerprint.toLowerCase()
     if (threaded.has(fingerprint) || post.has(fingerprint))
       continue
     const { path, line } = finding.details.location
+    const anchor = line !== null && Number.isSafeInteger(line) && line > 0 ? line : null
+    if (finding._tag === 'Logged' && anchor === null)
+      continue
     post.set(fingerprint, {
       headSha,
       path,
-      line: line !== null && Number.isSafeInteger(line) && line > 0 ? line : null,
-      body: reviewFindingThreadBody(finding),
+      line: anchor,
+      body: reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef),
+      ...(finding._tag === 'Logged' ? { lineOnly: true } as const : {}),
     })
   }
   return {
     post: [...post.values()],
-    resolve: threads.filter(thread => !thread.resolved && !openFingerprints.has(thread.fingerprint)).map(thread => thread.threadId),
+    resolve: threads.filter((thread) => {
+      if (thread.resolved || currentFingerprints.has(thread.fingerprint))
+        return false
+      if (thread.comment === undefined || !/^\*\*Logged \(/m.test(thread.comment.body))
+        return true
+      const summary = reviewFindingThreadMarker(thread.comment.body)?.summary
+      return options.fixed?.includes(thread.fingerprint) === true || (summary != null && fixedSummaries.has(summary))
+    }).map(thread => thread.threadId),
   }
 }
 
 /**
- * Puts each open finding beside its code and closes the threads a Review no longer reports.
+ * Puts findings beside their code and closes threads when the finding is cleared.
  *
  * The threads mirror the canonical comment. They never gate the comment, the
  * outcome label, or the command that carries them.
@@ -159,8 +196,9 @@ export async function mirrorReviewFindingThreads(
   signal: AbortSignal,
   authorize: ReviewPublicationAuthority,
   state: 'open' | 'merged' = 'open',
+  options: FindingThreadOptions = {},
 ): Promise<ReviewFindingThreadsOutcome> {
-  const outcome = await syncReviewFindingThreads(mirror.source, repository, pullRequestNumber, headSha, findings, signal, authorize, state)
+  const outcome = await syncReviewFindingThreads(mirror.source, repository, pullRequestNumber, headSha, findings, signal, authorize, state, options)
   mirror.report(repository.github, outcome)
   return outcome
 }
@@ -174,27 +212,50 @@ async function syncReviewFindingThreads(
   signal: AbortSignal,
   authorize: ReviewPublicationAuthority,
   state: 'open' | 'merged',
+  options: FindingThreadOptions,
 ): Promise<ReviewFindingThreadsOutcome> {
   const threads = await source.listReviewFindingThreads(repository, pullRequestNumber, signal)
   if (threads._tag === 'Err')
     return { _tag: 'Failed', message: threads.error }
-  const plan = planReviewFindingThreads(headSha, findings, threads.value)
+  const plan = planReviewFindingThreads(headSha, findings, threads.value, options)
+  const receipts: InlineFindingReceipt[] = []
+  const logged = new Map(findings.filter(finding => finding._tag === 'Logged').map(finding => [finding.details.fingerprint, finding]))
+  for (const thread of threads.value) {
+    const finding = logged.get(thread.fingerprint)
+    if (thread.comment === undefined || finding === undefined)
+      continue
+    let comment = thread.comment
+    if (state === 'open' && !thread.resolved && source.editReviewFindingComment !== undefined) {
+      const body = reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef)
+      const edited = await source.editReviewFindingComment(repository, comment, body, signal, authorize)
+      if (edited._tag === 'Err')
+        return { _tag: 'Failed', message: edited.error }
+      comment = edited.value
+    }
+    receipts.push({ fingerprint: thread.fingerprint, commentId: comment.id, body: normalizeLoggedFindingControls(comment.body), resolved: thread.resolved })
+  }
   let posted = 0
   let outsideDiff = 0
   for (const comment of state === 'merged' ? [] : plan.post) {
     const result = await source.postReviewFindingComment(repository, pullRequestNumber, comment, signal, authorize)
     if (result._tag === 'Err')
       return { _tag: 'Failed', message: result.error }
-    if (result.value._tag === 'Posted')
+    if (result.value._tag === 'Posted') {
       posted++
-    else
+      const fingerprint = reviewFindingThreadFingerprint(comment.body)
+      if (result.value.comment !== undefined && fingerprint !== null && logged.has(fingerprint))
+        receipts.push({ fingerprint, commentId: result.value.comment.id, body: result.value.comment.body, resolved: false })
+    }
+    else {
       outsideDiff++
+    }
   }
   for (const threadId of plan.resolve) {
     const result = await source.resolveReviewFindingThread(repository, threadId, signal, authorize)
     if (result._tag === 'Err')
       return { _tag: 'Failed', message: result.error }
   }
+  options.recordInline?.(receipts)
   return { _tag: 'Written', posted, outsideDiff, resolved: plan.resolve.length }
 }
 

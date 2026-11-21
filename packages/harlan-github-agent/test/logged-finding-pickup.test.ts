@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { loggedFindingPickup, normalizeLoggedFindingControls, withLoggedFindingControls, withoutLoggedFindingControls } from '../src/logged-finding-pickup.ts'
 import { AUTOMATED_REVIEW_MARKER, pullRequestCommandFooter } from '../src/review-comment.ts'
+import { reviewFindingThreadBody } from '../src/review-finding-threads.ts'
 import { createWebhookApp } from '../src/webhook.ts'
 
 const fingerprint = 'f'.repeat(64)
@@ -27,6 +28,42 @@ function payload(after = before.replace('[ ]', '[x]')) {
 }
 
 describe('logged finding pickup', () => {
+  it('accepts a signed inline edit on an individually allowed repository', async () => {
+    const inline = reviewFindingThreadBody(finding, headSha, 'main')
+    const data = payload(inline.replace('[ ]', '[x]'))
+    const body = JSON.stringify({
+      ...data,
+      issue: undefined,
+      repository: { full_name: 'unjs/unhead' },
+      pull_request: { number: 24 },
+      changes: { body: { from: inline } },
+      comment: { ...data.comment, id: 4_640_421_240 },
+    })
+    const requests: unknown[] = []
+    const app = createWebhookApp({
+      secret: 'inline-test',
+      allowedOwners: ['harlan-zw', 'unjs/unhead'],
+      logger: { info: () => undefined },
+      onHint: () => undefined,
+      loggedFindingPickup: {
+        allowedAuthor: 'harlan-zw',
+        actorLogin: () => 'harlan-github-agent[bot]',
+        apply: (request) => { requests.push(request) },
+      },
+    })
+    const response = await app.fetch(new Request('http://localhost/webhook', {
+      method: 'POST',
+      headers: {
+        'x-github-event': 'pull_request_review_comment',
+        'x-github-delivery': 'inline-edit',
+        'x-hub-signature-256': `sha256=${createHmac('sha256', 'inline-test').update(body).digest('hex')}`,
+      },
+      body,
+    }))
+    expect(response.status).toBe(204)
+    expect(requests).toEqual([expect.objectContaining({ repository: 'unjs/unhead', inline: true, headSha, commentId: 4_640_421_240, fingerprints: [fingerprint] })])
+  })
+
   it('binds a checkbox click to the finding, comment, and reviewed commit', () => {
     expect(loggedFindingPickup('issue_comment', payload())).toEqual({
       repository: 'harlan-zw/example',
@@ -89,7 +126,7 @@ describe('logged finding pickup', () => {
       allowedOwners: ['harlan-zw'],
       logger: { info: () => undefined },
       onHint: () => undefined,
-      loggedFindingPickup: { allowedAuthor: 'harlan-zw', actorLogin: () => kind === 'disabled' ? null : 'harlan-github-agent[bot]', apply: request => requests.push(request) },
+      loggedFindingPickup: { allowedAuthor: 'harlan-zw', actorLogin: () => kind === 'disabled' ? null : 'harlan-github-agent[bot]', apply: (request) => { requests.push(request) } },
     })
     const input = payload()
     if (kind === 'sender')

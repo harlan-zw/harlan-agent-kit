@@ -51,6 +51,13 @@ export function canRepairPullRequestHead(mapping: RepositoryMapping, pullRequest
     && pullRequest.headRef !== mapping.defaultBranch
 }
 
+/** A finding checkbox grants scoped Repair on a trusted author's open branch. */
+export function canRepairSelectedFindingOnHead(mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): boolean {
+  return pullRequest.state === 'open' && !pullRequest.draft && mapping.pullRequestReview
+    && mapping.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.author.toLowerCase())
+    && canRepairPullRequestHead(mapping, pullRequest)
+}
+
 /** Conflict planning and publication require the same branch and author authority. */
 export function canResolveConflictPullRequestHead(mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): boolean {
   return mapping.conflictResolution
