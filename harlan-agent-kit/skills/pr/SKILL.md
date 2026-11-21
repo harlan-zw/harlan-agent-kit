@@ -307,7 +307,8 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    Give each other item one response: Fixed, Answered, or Follow-up. After a fix, reply on its thread with the fixing commit, then resolve it.
 5. Read each scored finding from `/api/reviews?repository=OWNER%2FREPO&pull_request=NUMBER`.
    Leave findings at 80/100 or below Logged. Never change code for them.
-   Close each one as a Follow-up, as [review threads](references/review-threads.md) describes, and list it in the hand-back.
+   Leave their Service threads and Repair controls intact, as [review threads](references/review-threads.md) describes.
+   List them in the hand-back. A Logged score does not cancel a maintainer-selected Repair. Leave that Task to the Service.
    Keep authorized Repair work moving until fixed or blocked by an exact boundary.
    If the resolution is `Dismissal`, report the `BLOCKED` outcome and ask Harlan to decide whether to Dismiss the pull request.
    Do not repair or request another Review for a Dismissal finding.
