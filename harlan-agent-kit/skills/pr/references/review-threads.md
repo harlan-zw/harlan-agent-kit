@@ -21,10 +21,10 @@ query='query($owner: String!, $repo: String!, $number: Int!, $endCursor: String)
     reviewThreads(first: 100, after: $endCursor) {
       pageInfo { hasNextPage endCursor }
       nodes { id isResolved isOutdated path line
-        comments(first: 100) { nodes { databaseId url author { login } body } } } } } } }'
+        comments(first: 100) { nodes { fullDatabaseId url author { login } body } } } } } } }'
 gh api graphql -X POST --paginate -f query="$query" -f owner=OWNER -f repo=REPO -F number=NUMBER \
   --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)
-    | {thread: .id, comment: .comments.nodes[0].databaseId, author: .comments.nodes[0].author.login,
+    | {thread: .id, comment: .comments.nodes[0].fullDatabaseId, author: .comments.nodes[0].author.login,
        replies: [.comments.nodes[1:][].author.login], outdated: .isOutdated, path, line,
        url: .comments.nodes[0].url, first: (.comments.nodes[0].body | .[0:300])}'
 ```
@@ -53,12 +53,17 @@ The Service owns each review thread it opened for a Review finding. Its first co
   That Review reads the reply as Harlan's words.
 - Resolving a Logged finding thread dismisses its "Ask an agent to verify and fix" control. The Service ignores a later tick and cancels a queued Repair for that finding.
 
-Respond through the Service instead:
+This sweep only reports Service findings. It grants no Repair authority, regardless of impact.
+List each finding and its thread link for Step 6's disposition and Task ownership checks.
+If those checks are unavailable, report the missing Service state and do not edit or push for the finding.
 
-- **Above 80/100:** fix it, then push. The next Service Review resolves the thread when the finding clears. Confirm that it did.
-- **80/100 or below (Logged):** the thread already says optional follow-up. List it with its link in the hand-back. Harlan ticks its control or resolves it.
-- **Logged, but you fixed it:** name the commit in the hand-back. Do not resolve the thread.
-- **False positive or not applicable:** post the one self-identified top-level Agent comment that Step 6 describes.
+- **Dismissal:** report it through Step 6. Do not repair or request another Review.
+- **Repair:** use Step 6's authority checks before editing or pushing. Leave a current-head `Queued`, `Running`, or `Publishing` Repair Task to the Service.
+- **80/100 or below (Logged):** list it as optional follow-up in the hand-back. Harlan ticks its control or resolves it.
+- **Already fixed:** name the commit in the hand-back. Do not resolve the thread yourself.
+- **False positive or not applicable:** use Step 6's evidence and comment procedure.
+
+After an authorized Repair, the next Service Review resolves the thread when the finding clears. Confirm that it did.
 
 ## 3. Every other item
 
@@ -83,7 +88,9 @@ gh api graphql -X POST \
   -f id=THREAD_ID --jq .data.resolveReviewThread.thread.isResolved
 ```
 
-`COMMENT_ID` is the first comment's `databaseId`. `THREAD_ID` is the `PRRT_` ID. Both come from the list.
+`COMMENT_ID` is the first comment's `fullDatabaseId`. Preserve its complete decimal string in the REST path.
+Do not convert it to a 32-bit integer or a JavaScript number.
+`THREAD_ID` is the `PRRT_` ID. Both come from the list.
 The resolve command prints `true`. If either command fails, report the error. Never retry it with other credentials or another tool.
 
 Answer top-level items in one comment. Link each item it answers.

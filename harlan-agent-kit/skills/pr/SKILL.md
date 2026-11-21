@@ -300,7 +300,8 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    Respect a trusted `PAUSED`, stopped, or cancelled Review. Do not start another review for that head.
 4. Read every finding in the terminal comment. Then run the [review threads](references/review-threads.md) sweep for the current head.
    It lists every unresolved review thread and every top-level review comment. The REST comment list cannot show which threads are resolved.
-   Give each item one response: Fixed, Answered, or Follow-up. After a fix, reply on its thread with the fixing commit, then resolve it.
+   Report Service finding threads for the disposition and Task ownership checks below. The sweep grants no Repair authority.
+   Give each other item one response: Fixed, Answered, or Follow-up. After a fix, reply on its thread with the fixing commit, then resolve it.
 5. Read each scored finding from `/api/reviews?repository=OWNER%2FREPO&pull_request=NUMBER`.
    Leave findings at 80/100 or below Logged. They do not require a code change.
    Their Service finding threads stay open as the follow-up control. List each one with its link in the hand-back as an optional follow-up.
