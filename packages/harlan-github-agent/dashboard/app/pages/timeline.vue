@@ -45,7 +45,7 @@ async function loadHistory(): Promise<void> {
       historyError.value = parsed === undefined
     })
     .catch(() => {
-      // The Service has no Timeline API yet. The rows still come from the live snapshot.
+      // A Service older than the Timeline API answers 404. The rows still come from the live snapshot.
       historyError.value = true
     })
 }

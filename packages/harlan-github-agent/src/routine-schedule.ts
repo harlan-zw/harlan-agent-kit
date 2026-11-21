@@ -112,15 +112,14 @@ const WEEKDAY_INDEX: Record<string, number> = {
   Sat: 6,
 }
 
-/** Reads one instant as wall-clock parts in the Routine's own time zone. */
-export function wallClockParts(at: Date, timeZone: string): {
-  year: number
-  minute: number
-  hour: number
-  dayOfMonth: number
-  month: number
-  dayOfWeek: number
-} {
+// A formatter costs far more to build than to use, and the Timeline reads
+// hundreds of wall clocks per request. One per time zone is enough.
+const formatters = new Map<string, Intl.DateTimeFormat>()
+
+function wallClockFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = formatters.get(timeZone)
+  if (cached !== undefined)
+    return cached
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone,
     hour12: false,
@@ -131,7 +130,20 @@ export function wallClockParts(at: Date, timeZone: string): {
     hour: 'numeric',
     minute: 'numeric',
   })
-  const parts = new Map(formatter.formatToParts(at).map(part => [part.type, part.value]))
+  formatters.set(timeZone, formatter)
+  return formatter
+}
+
+/** Reads one instant as wall-clock parts in the Routine's own time zone. */
+export function wallClockParts(at: Date, timeZone: string): {
+  year: number
+  minute: number
+  hour: number
+  dayOfMonth: number
+  month: number
+  dayOfWeek: number
+} {
+  const parts = new Map(wallClockFormatter(timeZone).formatToParts(at).map(part => [part.type, part.value]))
   // `hour12: false` still answers midnight as 24 in some runtimes, so fold it.
   const hour = Number(parts.get('hour')) % 24
   return {
@@ -288,4 +300,45 @@ export function dueRoutine(input: DueRoutineInput): DueRoutine {
     scheduledFor: candidate,
     reason: `This run was due more than ${Math.round(catchUpMinutes / 60)} hours ago, so it was skipped.`,
   }
+}
+
+const QUARTER_HOUR = 15 * MINUTE
+
+export interface CronSchedule {
+  expression: CronExpression
+  timeZone: string
+}
+
+/**
+ * Every instant each schedule matches in `[from, to)`, oldest first, at most
+ * `limit` per schedule. The answer keeps the order of `schedules`.
+ *
+ * Every time zone offset is a whole number of quarter hours, so the local
+ * hour and date never change inside a UTC quarter hour. The walk reads the
+ * wall clock once per quarter hour per time zone and tests the minutes inside
+ * it as a set, so a hundred Routines over two days cost a few hundred reads.
+ */
+export function cronInstants(input: { schedules: readonly CronSchedule[], from: number, to: number, limit: number }): Date[][] {
+  const instants = input.schedules.map((): Date[] => [])
+  const byTimeZone = new Map<string, number[]>()
+  input.schedules.forEach((schedule, index) => byTimeZone.set(schedule.timeZone, [...(byTimeZone.get(schedule.timeZone) ?? []), index]))
+  for (const [timeZone, indexes] of byTimeZone) {
+    for (let quarter = Math.floor(input.from / QUARTER_HOUR) * QUARTER_HOUR; quarter < input.to; quarter += QUARTER_HOUR) {
+      const open = indexes.filter(index => instants[index]!.length < input.limit)
+      if (open.length === 0)
+        break
+      const parts = wallClockParts(new Date(quarter), timeZone)
+      for (const index of open) {
+        const expression = input.schedules[index]!.expression
+        if (!expression.hours.has(parts.hour) || !matchesCronDate(expression, parts))
+          continue
+        for (let offset = 0; offset < 15; offset += 1) {
+          const at = quarter + offset * MINUTE
+          if (at >= input.from && at < input.to && expression.minutes.has(parts.minute + offset) && instants[index]!.length < input.limit)
+            instants[index]!.push(new Date(at))
+        }
+      }
+    }
+  }
+  return instants
 }

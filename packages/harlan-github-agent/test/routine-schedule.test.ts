@@ -1,6 +1,6 @@
 import type { CronExpression } from '../src/routine-schedule.ts'
 import { describe, expect, it } from 'vitest'
-import { dueRoutine, matchesCron, parseCron } from '../src/routine-schedule.ts'
+import { cronInstants, dueRoutine, matchesCron, parseCron } from '../src/routine-schedule.ts'
 
 function cron(text: string): CronExpression {
   const parsed = parseCron(text)
@@ -213,5 +213,48 @@ describe('deciding whether a Routine owes a run', () => {
     })
 
     expect(due).toEqual({ _tag: 'NotDue' })
+  })
+})
+
+describe('listing the instants a schedule matches', () => {
+  it('lists each schedule in its own time zone, oldest first, up to the limit', () => {
+    const [weekly, halfHourly] = cronInstants({
+      schedules: [
+        { expression: cron('0 9 * * 2'), timeZone: 'Australia/Melbourne' },
+        { expression: cron('*/30 * * * *'), timeZone: 'UTC' },
+      ],
+      from: Date.parse('2026-10-12T00:00:00.000Z'),
+      to: Date.parse('2026-10-21T00:00:00.000Z'),
+      limit: 3,
+    })
+
+    expect(weekly?.map(at => at.toISOString())).toEqual(['2026-10-12T22:00:00.000Z', '2026-10-19T22:00:00.000Z'])
+    expect(halfHourly?.map(at => at.toISOString())).toEqual(['2026-10-12T00:00:00.000Z', '2026-10-12T00:30:00.000Z', '2026-10-12T01:00:00.000Z'])
+  })
+
+  it('follows daylight saving time and quarter hour offsets', () => {
+    const [melbourne, kathmandu] = cronInstants({
+      schedules: [
+        { expression: cron('0 9 * * *'), timeZone: 'Australia/Melbourne' },
+        { expression: cron('50 9 * * *'), timeZone: 'Asia/Kathmandu' },
+      ],
+      from: Date.parse('2026-10-02T12:00:00.000Z'),
+      to: Date.parse('2026-10-04T12:00:00.000Z'),
+      limit: 10,
+    })
+
+    expect(melbourne?.map(at => at.toISOString())).toEqual(['2026-10-02T23:00:00.000Z', '2026-10-03T22:00:00.000Z'])
+    expect(kathmandu?.map(at => at.toISOString())).toEqual(['2026-10-03T04:05:00.000Z', '2026-10-04T04:05:00.000Z'])
+  })
+
+  it('leaves out an instant before the window start inside the same quarter hour', () => {
+    const [instants] = cronInstants({
+      schedules: [{ expression: cron('5 10 * * *'), timeZone: 'UTC' }],
+      from: Date.parse('2026-10-12T10:06:00.000Z'),
+      to: Date.parse('2026-10-13T10:06:00.000Z'),
+      limit: 5,
+    })
+
+    expect(instants?.map(at => at.toISOString())).toEqual(['2026-10-13T10:05:00.000Z'])
   })
 })

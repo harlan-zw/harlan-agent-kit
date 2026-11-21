@@ -74,6 +74,9 @@ const agentControls = {
   listPaybackTasks: () => [],
   listPaybackRoutineRuns: () => [],
   listPaybackSignals: () => [],
+  getTimelineHistory: () => {
+    throw new Error('These app tests never read the Timeline.')
+  },
 }
 
 afterEach(() => vi.useRealTimers())
