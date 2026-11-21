@@ -62,7 +62,11 @@ The Service owns each review thread it opened for a Review finding. Its first co
   If that revision's Review is `Queued` or `Running`, the request joins it. If that Review has ended, the request starts another one.
 - Resolving a Logged finding thread dismisses its "Ask an agent to verify and fix" control. The Service ignores a later tick and cancels a queued Repair for that finding.
 
-So reply to a Service finding thread only in one window. It opens when you push the commit that fixes the finding.
+Never resolve a Service finding thread during this sweep. The Service verifies the fix and resolves the thread.
+Keep the thread open even when your push attempts to fix it. Review may report the same finding again.
+Include the fixing commit and thread link in the hand-back while verification is pending.
+
+Reply to a Service finding thread only in one window. It opens when you push the commit that fixes the finding.
 It stays open while the Service Review of that new head is `Queued` or `Running`.
 The first event that `watch-pr` writes names the head the Service sees and that head's Tasks:
 
@@ -72,7 +76,7 @@ harlan-github-agent control watch-pr --repository OWNER/REPO --number NUMBER --u
 ```
 
 Continue only when `headSha` is your pushed SHA and the `adversarial_review` Task is `Queued` or `Running`.
-In that window, post the Fixed reply from section 3 and resolve the thread. A fixed finding needs no follow-up control.
+In that window, post only the Fixed reply from section 3. Leave the thread open for Service verification.
 A Follow-up reply is also allowed in the window. Leave that thread open, because its control holds the follow-up.
 Outside the window, do not reply. Name the commit or the follow-up in the hand-back.
 
@@ -84,10 +88,13 @@ If those checks are unavailable, report the missing Service state and do not edi
 - **Repair:** use Step 6's authority checks before editing or pushing. Leave a current-head `Queued`, `Running`, or `Publishing` Repair Task to the Service.
 - **80/100 or below (Logged):** list it as optional follow-up in the hand-back. Harlan ticks its control or resolves it.
   If a Logged finding has no thread, list it with a link to the Service's marked comment. A finding outside the diff never has one, and a failed thread sync can leave out others.
-- **Fixed by your push:** reply and resolve in the window above. If you missed the window, name the commit in the hand-back.
+- **Fixed by your push:** reply in the window above and leave the thread open for Service verification.
+  Include the fixing commit and thread link in the hand-back while verification is pending, even after replying.
+  If you missed the window, do not reply. Name the commit in the hand-back.
 - **False positive or not applicable:** use Step 6's evidence and comment procedure.
 
 After an authorized Repair, the next Service Review resolves the thread when the finding clears. Confirm that it did.
+If Review reports the same finding, leave its thread and Repair control open.
 
 ## 3. Every other item
 

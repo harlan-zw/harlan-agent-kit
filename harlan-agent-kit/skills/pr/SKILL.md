@@ -38,6 +38,8 @@ Running the git and `gh` commands by hand is the failure mode this skill exists 
 - **CI flakes vs real failures** -- if the same check fails twice with different errors, it's flaky. If same error, it's real. Don't retry flakes more than once.
 - **CodeRabbit reviews can be noisy** -- address security/correctness findings, but style suggestions are optional. Don't block the loop on nitpicks. An optional suggestion still gets a Follow-up reply under [review threads](references/review-threads.md).
 - **No review comment stays silent** -- every review thread and top-level review comment gets Fixed, Answered, or Follow-up. Reply to a Service finding thread only right after the push that fixes it, while that head's Review is queued or running. At any other time a reply requests another Review, and resolving a Logged thread dismisses its follow-up control.
+  Never resolve a Service finding thread during the sweep. The Service verifies the fix and resolves it.
+  Include the fixing commit and thread link in the hand-back while verification is pending.
 - **Worktree cleanup** -- if you forget `wt remove`, orphaned worktrees accumulate. Clean up after merge.
 
 ## Data Storage
@@ -306,7 +308,9 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
 5. Read each scored finding from `/api/reviews?repository=OWNER%2FREPO&pull_request=NUMBER`.
    Leave findings at 80/100 or below Logged. They do not require a code change.
    Their Service finding threads stay open as the follow-up control. List each one with its link in the hand-back as an optional follow-up.
-   When your push fixes one, reply and resolve it in the window that [review threads](references/review-threads.md) describes.
+   When your push fixes one, reply in the window that [review threads](references/review-threads.md) describes.
+   Leave its thread open until the Service verifies the fix and resolves it.
+   Include the fixing commit and thread link in the hand-back while verification is pending.
    Keep authorized Repair work moving until fixed or blocked by an exact boundary.
    If the resolution is `Dismissal`, report the `BLOCKED` outcome and ask Harlan to decide whether to Dismiss the pull request.
    Do not repair or request another Review for a Dismissal finding.
