@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { MarkTip, TimelineHistory, TimelineRow, TimelineSection, TimelineView } from '../utils/timeline.ts'
-import { refDebounced, useElementSize, useEventListener, useIntervalFn, useMediaQuery } from '@vueuse/core'
+import { refDebounced, useElementSize, useEventListener, useIntervalFn, useLocalStorage, useMediaQuery } from '@vueuse/core'
 import { incidentEntries, repositoryName } from '../utils/dashboard.ts'
 import { isTypingTarget, overlayOpen } from '../utils/keyboard.ts'
 import {
@@ -27,7 +27,6 @@ import TimelineMarks from './_TimelineMarks.vue'
  * in order: Needs you, Running, Up next, Routines, then what already happened.
  * The page owns the view and the pointer; the utils own every number.
  */
-definePageMeta({ layout: 'canvas' })
 usePageTitle('Timeline')
 useHead({ meta: [{ name: 'description', content: 'GitHub deliveries, Agent work, and Routines on one live Timeline.' }] })
 
@@ -116,7 +115,15 @@ const sections = computed<TimelineSection[]>(() => timelineSections({
   to: settledRange.value.to,
 }))
 const openSections = ref(new Set<string>())
+/** Needs you and Agent tasks start collapsed. Each choice stays in this browser. */
+const collapsedSections = useLocalStorage<string[]>('agent:timeline-collapsed', ['NeedsYou', 'AgentTasks'], { initOnMounted: true })
+const isCollapsed = (tag: string): boolean => collapsedSections.value.includes(tag)
+function toggleCollapsed(tag: string): void {
+  collapsedSections.value = isCollapsed(tag) ? collapsedSections.value.filter(entry => entry !== tag) : [...collapsedSections.value, tag]
+}
 function rowsOf(section: TimelineSection): TimelineRow[] {
+  if (isCollapsed(section._tag))
+    return []
   return openSections.value.has(section._tag) ? [...section.rows, ...section.folded] : section.rows
 }
 function toggleSection(tag: string): void {
@@ -228,7 +235,10 @@ useEventListener('keydown', (event: KeyboardEvent) => {
     if (needsYouCount.value === 0)
       return
     focused.value = Math.min(Math.max(focused.value + direction, 0), needsYouCount.value - 1)
-    needsYouCards.value[focused.value]?.focus()
+    // Walking Needs you opens it first, so the keys always reach a row.
+    if (isCollapsed('NeedsYou'))
+      toggleCollapsed('NeedsYou')
+    void nextTick(() => needsYouCards.value[focused.value]?.focus())
   }
   const handlers: Record<string, () => void> = {
     'j': () => step(1),
@@ -267,7 +277,7 @@ const kindIcon = { issue: 'i-octicon-issue-opened-16', pull_request: 'i-octicon-
 
     <BoardIncidentRow
       v-if="topIncident"
-      class="mx-3 mb-2 shrink-0"
+      class="mx-3 mt-3 mb-1 shrink-0"
       :incident="topIncident"
       :age="relativeTime(topIncident.lastSeenAt)"
       :more="incidents.length - 1"
@@ -300,7 +310,7 @@ const kindIcon = { issue: 'i-octicon-issue-opened-16', pull_request: 'i-octicon-
               <div class="absolute inset-y-0 right-0 bg-(--canvas-future)" :style="{ left: `${Math.max(0, nowX)}px` }" />
               <template v-for="tick in ticks" :key="tick.at">
                 <span
-                  v-if="Math.abs(xOf(view, width, tick.at) - nowX) > 44"
+                  v-if="Math.abs(xOf(view, width, tick.at) - nowX) > 44 && xOf(view, width, tick.at) > 24"
                   class="absolute top-1.5 -translate-x-1/2 font-mono text-[0.8125rem] whitespace-nowrap"
                   :class="tick.day ? 'font-sans font-medium text-toned' : 'text-dimmed'"
                   :style="{ left: `${xOf(view, width, tick.at)}px` }"
@@ -338,15 +348,23 @@ const kindIcon = { issue: 'i-octicon-issue-opened-16', pull_request: 'i-octicon-
         <!-- Sections. -->
         <section v-for="section in sections" :key="section._tag" class="relative" :aria-label="`${section.label}, ${section.rows.length + section.folded.length}`">
           <div class="grid h-10 items-end pb-1.5" :style="{ gridTemplateColumns: `${gutter}px 1fr` }">
-            <h2 class="flex items-center gap-2 ps-5 text-sm font-medium text-toned">
-              <LiveDot v-if="section._tag === 'NeedsYou' && section.rows.length > 0" tone="warning" />
-              <LiveDot v-else-if="section._tag === 'Running' && section.rows.length > 0" tone="success" live />
-              {{ section.label }}
-              <span class="font-mono font-normal" :class="section._tag === 'NeedsYou' && section.rows.length > 0 ? 'text-warning' : 'text-dimmed'">{{ section.rows.length + section.folded.length }}</span>
+            <h2 class="ps-3 text-sm font-medium text-toned">
+              <button
+                type="button"
+                class="flex min-h-8 items-center gap-2 rounded-md px-2 transition-colors hover:bg-accented/50 hover:text-highlighted"
+                :aria-expanded="!isCollapsed(section._tag)"
+                @click="toggleCollapsed(section._tag)"
+              >
+                <UIcon name="i-octicon-chevron-down-16" class="size-4 text-dimmed transition-transform duration-150 motion-reduce:transition-none" :class="isCollapsed(section._tag) ? '-rotate-90' : undefined" aria-hidden="true" />
+                <LiveDot v-if="section._tag === 'NeedsYou' && section.rows.length > 0" tone="warning" />
+                <LiveDot v-else-if="section._tag === 'Running' && section.rows.length > 0" tone="success" live />
+                {{ section.label }}
+                <span class="font-mono font-normal" :class="section._tag === 'NeedsYou' && section.rows.length > 0 ? 'text-warning' : 'text-dimmed'">{{ section.rows.length + section.folded.length }}</span>
+              </button>
             </h2>
           </div>
 
-          <p v-if="section.rows.length === 0 && !loading" class="ps-5 pb-2 text-sm text-dimmed">
+          <p v-if="section.rows.length === 0 && !loading && !isCollapsed(section._tag)" class="ps-5 pb-2 text-sm text-dimmed">
             Nothing needs you.
           </p>
 
@@ -392,7 +410,7 @@ const kindIcon = { issue: 'i-octicon-issue-opened-16', pull_request: 'i-octicon-
           </div>
 
           <button
-            v-if="section.folded.length > 0"
+            v-if="section.folded.length > 0 && !isCollapsed(section._tag)"
             type="button"
             class="ms-5 mt-1 mb-2 flex items-center gap-1.5 rounded-sm text-sm text-muted hover:text-highlighted"
             @click="toggleSection(section._tag)"
@@ -408,7 +426,7 @@ const kindIcon = { issue: 'i-octicon-issue-opened-16', pull_request: 'i-octicon-
     </div>
 
     <!-- Zoom and live. -->
-    <div v-if="!narrow" class="canvas-cluster absolute bottom-3 left-3 z-40">
+    <div v-if="!narrow" class="canvas-cluster absolute right-3 bottom-3 z-40">
       <UButton
         color="neutral"
         variant="ghost"

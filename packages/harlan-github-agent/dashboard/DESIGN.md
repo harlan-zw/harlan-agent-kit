@@ -81,16 +81,16 @@ Repository health, provider limits, Routines, and host metrics are reference mat
 
 ### Chrome
 
-One persistent 48px activity rail and one compact view header.
-The header uses 40px on desktop and 48px on touch layouts.
+One shell for every page: a sidebar on desktop, a tab bar on a phone, and a 48px header.
 
-- Navigation: Agent icon, then `Sessions`, `Board`, `History`, `Watching`, `Routines`, `Stats`.
-  Icons have accessible names and tooltips. `How it works` sits below.
-- Right: **System** chip, Agent selection button, Pause or Resume, overflow menu.
+- Sidebar: Agent, then `Sessions`, `Board`, `Timeline`, a hairline, `History`, `Watching`, `Routines`, `Stats`. `How it works` and Collapse sit at the foot.
+  Labels by default; Collapse leaves icons, remembered per browser; a tablet always gets icons. Board and Timeline show the Needs you count, Watching a red dot while a repository fails.
+- Phone tab bar: `Sessions`, `Board`, `Timeline`, `More` for the reference pages. It steps aside on Sessions.
+- Header: the page name, then **System** chip, Agent selection, Pause or Resume, overflow menu. Agent selection and Pause show from `lg`; below it Pause moves into the menu.
 - The System chip reads `n/3` agents with a state dot. Grey is normal. Amber means work cannot start (Paused, Manual, writes off, Reserve reached, capacity unavailable, restart requested) and the chip names the reason. Red means an unresolved Incident and the chip carries the count. Red outranks amber. Before the first snapshot the chip shows a grey placeholder and no reason. Clicking it opens the System slideover.
-- The overflow menu holds `Selection mode`, `Restart after current work`, `Notifications`, `Theme`, `How it works`.
-- Terminal views may show their host and input ownership in a quiet status bar.
-  Per-role maintenance model configuration stays inside the Agent selection menu.
+- The overflow menu holds `Selection mode`, `Restart after current work`, `Notifications`, `Theme`, `Passkeys`, `Keyboard`.
+- Needs you and Agent tasks start collapsed on Board and Timeline. `j` opens them.
+- Terminal views may show their host and input ownership in a quiet status bar. Per-role models stay in the Agent selection menu.
 
 ### Agent sessions
 
@@ -162,7 +162,7 @@ Three shapes for three questions. A Needs you entry is a one-line row, because a
 
 ### Timeline
 
-`/timeline` puts the four questions on one time axis. It uses the `canvas` layout: three floating clusters, no rail.
+`/timeline` puts the four questions on one time axis. It fills the shell edge to edge, like Sessions.
 
 - Now rests at three quarters of the width, so the next hour stays in view. The ruler pill shows the time, or Paused in amber.
 - Every row is one issue, pull request, or Routine. A 360px gutter holds the title and `repository #number`. Marks hold time and state.
@@ -265,7 +265,7 @@ Hide on demand: terminal, evidence, candidates, per-repository controls, host me
 ## Responsive Strategy
 
 - **Approach**: desktop first, three breakpoints. Below `xl` the board is two columns; below `md` one column, in pipeline order.
-- **Chrome**: below `md` the tabs move into the overflow menu and the header keeps wordmark, System chip, and the menu.
+- **Chrome**: from `lg` a labelled sidebar, from `md` an icon sidebar, below `md` the tab bar. Filter button rows scroll sideways on a phone (`.filter-row`).
 - **Input method**: `pointer: coarse` raises every control to 44px. Hover styles only under `hover: hover`.
 - **Tables**: scroll inside their own container. The page never scrolls sideways.
 

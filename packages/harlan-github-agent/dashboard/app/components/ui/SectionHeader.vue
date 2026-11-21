@@ -35,7 +35,7 @@ const slots = useSlots()
 </script>
 
 <template>
-  <div data-ui="UiSectionHeader" class="mb-3 flex items-center justify-between gap-3">
+  <div data-ui="UiSectionHeader" class="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
     <div class="flex min-w-0 items-center gap-2">
       <UiIcon v-if="icon" :name="icon" class="size-4 shrink-0 text-dimmed" aria-hidden="true" />
       <div class="min-w-0">

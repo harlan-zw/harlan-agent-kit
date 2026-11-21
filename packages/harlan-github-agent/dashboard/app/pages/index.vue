@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AgentRole } from '../../../src/types.ts'
-import { useEventListener } from '@vueuse/core'
+import { useEventListener, useLocalStorage } from '@vueuse/core'
 import { boardColumns, columnEmptyReason, incidentEntries, presentWorkKinds } from '../utils/dashboard.ts'
 import { isTypingTarget, overlayOpen } from '../utils/keyboard.ts'
 import BoardCard from './_BoardCard.vue'
@@ -22,6 +22,12 @@ const columns = computed(() => boardColumns(snapshot.value, workFilter.value))
 const attentionOwner = ref<'You' | 'Agent'>('You')
 const attentionCards = computed(() => attentionOwner.value === 'You' ? columns.value.needsYou : columns.value.agentTasks)
 const attentionLabel = computed(() => attentionOwner.value === 'You' ? 'Needs you' : 'Agent tasks')
+/** Needs you and Agent tasks start collapsed. The choice stays in this browser. */
+const attentionOpen = useLocalStorage('agent:board-attention-open', false, { initOnMounted: true })
+function showAttention(owner: 'You' | 'Agent'): void {
+  attentionOwner.value = owner
+  attentionOpen.value = true
+}
 /** Chips come from the whole board, so choosing one never hides the others. */
 const workKinds = computed(() => presentWorkKinds(boardColumns(snapshot.value)))
 const incidents = computed(() => incidentEntries(snapshot.value.incidents))
@@ -47,7 +53,9 @@ function focusCard(index: number): void {
     return
   const next = Math.min(Math.max(index, 0), count - 1)
   focused.value = next
-  needsYouCards.value[next]?.focus()
+  // Walking the list opens it first, so the keys always reach a row.
+  attentionOpen.value = true
+  void nextTick(() => needsYouCards.value[next]?.focus())
 }
 
 useEventListener('keydown', (event: KeyboardEvent) => {
@@ -99,7 +107,7 @@ useHead({
       @open="openSystem"
     />
 
-    <div v-if="workKinds.length > 1" class="flex shrink-0 flex-wrap items-center gap-1" role="group" aria-label="Filter by work">
+    <div v-if="workKinds.length > 1" class="filter-row flex shrink-0 flex-wrap items-center gap-1" role="group" aria-label="Filter by work">
       <UButton
         size="xs"
         color="neutral"
@@ -133,49 +141,62 @@ useHead({
       <div class="flex flex-wrap items-center gap-2 px-2 pb-2" role="group" aria-label="Who acts next">
         <UButton
           color="neutral"
+          variant="ghost"
+          square
           class="min-h-11 md:min-h-0"
-          :variant="attentionOwner === 'You' ? 'outline' : 'ghost'"
+          :icon="attentionOpen ? 'i-octicon-chevron-down-16' : 'i-octicon-chevron-right-16'"
+          :aria-label="attentionOpen ? `Hide ${attentionLabel}` : `Show ${attentionLabel}`"
+          :aria-expanded="attentionOpen"
+          aria-controls="attention-list"
+          @click="attentionOpen = !attentionOpen"
+        />
+        <UButton
+          color="neutral"
+          class="min-h-11 md:min-h-0"
+          :variant="attentionOwner === 'You' && attentionOpen ? 'outline' : 'ghost'"
           :aria-pressed="attentionOwner === 'You'"
           aria-controls="attention-list"
-          @click="attentionOwner = 'You'"
+          @click="showAttention('You')"
         >
           Needs you <span class="font-mono" :class="columns.needsYou.length > 0 ? 'text-warning' : 'text-dimmed'">{{ columns.needsYou.length }}</span>
         </UButton>
         <UButton
           color="neutral"
           class="min-h-11 md:min-h-0"
-          :variant="attentionOwner === 'Agent' ? 'outline' : 'ghost'"
+          :variant="attentionOwner === 'Agent' && attentionOpen ? 'outline' : 'ghost'"
           :aria-pressed="attentionOwner === 'Agent'"
           aria-controls="attention-list"
-          @click="attentionOwner = 'Agent'"
+          @click="showAttention('Agent')"
         >
           Agent tasks <span class="font-mono text-muted">{{ columns.agentTasks.length }}</span>
         </UButton>
       </div>
-      <p class="px-2 pb-2 text-sm text-muted">
-        {{ attentionOwner === 'You'
-          ? 'Your decisions, permissions, or account access. Each row explains what is needed.'
-          : 'An agent can handle these next steps. They are not queued. Open a task to copy its instructions.' }}
-      </p>
-      <div v-if="loading" id="attention-list" class="flex flex-col gap-px border-y border-default" aria-busy="true">
-        <USkeleton v-for="row in 3" :key="row" class="h-8 rounded-sm" />
-      </div>
-      <ul v-else-if="attentionCards.length > 0" id="attention-list" :aria-label="attentionLabel" class="min-h-0 divide-y divide-muted border-y border-default md:overflow-y-auto" role="list">
-        <li v-for="(card, index) in attentionCards" :key="card.key">
-          <BoardCard
-            :ref="component => setNeedsYouCard(index, component)"
-            :card="card"
-            :tabindex="index === Math.max(focused, 0) ? 0 : -1"
-          />
-        </li>
-      </ul>
-      <p v-else id="attention-list" class="border-y border-default px-2 py-2 text-sm text-dimmed">
-        {{ attentionOwner === 'You' ? emptyReason('needsYou').text : 'No agent tasks need follow-up.' }}
-      </p>
+      <template v-if="attentionOpen">
+        <p class="px-2 pb-2 text-sm text-muted">
+          {{ attentionOwner === 'You'
+            ? 'Your decisions, permissions, or account access. Each row explains what is needed.'
+            : 'An agent can handle these next steps. They are not queued. Open a task to copy its instructions.' }}
+        </p>
+        <div v-if="loading" id="attention-list" class="flex flex-col gap-px border-y border-default" aria-busy="true">
+          <USkeleton v-for="row in 3" :key="row" class="h-8 rounded-sm" />
+        </div>
+        <ul v-else-if="attentionCards.length > 0" id="attention-list" :aria-label="attentionLabel" class="min-h-0 divide-y divide-muted border-y border-default md:overflow-y-auto" role="list">
+          <li v-for="(card, index) in attentionCards" :key="card.key">
+            <BoardCard
+              :ref="component => setNeedsYouCard(index, component)"
+              :card="card"
+              :tabindex="index === Math.max(focused, 0) ? 0 : -1"
+            />
+          </li>
+        </ul>
+        <p v-else id="attention-list" class="border-y border-default px-2 py-2 text-sm text-dimmed">
+          {{ attentionOwner === 'You' ? emptyReason('needsYou').text : 'No agent tasks need follow-up.' }}
+        </p>
+      </template>
     </section>
 
     <!-- Questions two to four. Three columns that share the rest of the board. -->
-    <div class="grid min-h-0 flex-1 gap-4 md:grid-cols-3">
+    <div class="grid min-h-0 flex-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       <BoardColumn id="up-next" label="Up next" :count="columns.queued.length" :loading="loading">
         <BoardCard v-for="card in columns.queued" :key="card.key" :card="card" />
         <div v-if="columns.queued.length === 0" class="flex flex-wrap items-center gap-2 px-1 py-1 text-sm text-dimmed">

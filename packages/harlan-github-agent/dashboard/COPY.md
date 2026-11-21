@@ -173,6 +173,13 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Routine collapsed attention | More | Shows the remaining Routine actions |
 | Routine expanded attention | Show less | Returns to the first six Routine actions |
 | Timeline name | Timeline | Navigation and document title |
+| Sidebar collapse | Collapse | Sidebar foot control |
+| Sidebar collapse label | Collapse sidebar | Accessible name and tooltip |
+| Sidebar expand label | Expand sidebar | Accessible name and tooltip of the collapsed sidebar |
+| Tab bar more | More | Phone tab for reference pages |
+| Passkeys menu | Passkeys | Overflow menu item that opens Passkey management |
+| Attention show | Show {Needs you or Agent tasks} | Accessible name of the Board toggle while collapsed |
+| Attention hide | Hide {Needs you or Agent tasks} | Accessible name of the Board toggle while open |
 | Timeline live | Live | Zoom cluster control that keeps now in view |
 | Timeline return | Back to now | Shown after panning away from now |
 | Timeline deliveries | Deliveries | Histogram row label |

@@ -1,11 +1,13 @@
 <script setup lang="ts">
+/** The Passkeys modal. The header shows its own trigger only where no overflow menu offers it. */
+const { trigger = true } = defineProps<{ trigger?: boolean }>()
 const auth = useBrowserAuth()
 const label = ref('')
 const browserSupported = computed(() => import.meta.client && !!window.PublicKeyCredential)
 </script>
 
 <template>
-  <div class="flex shrink-0 items-center gap-1">
+  <div v-if="trigger" class="flex shrink-0 items-center gap-1">
     <UButton aria-label="Manage Passkeys" title="Manage Passkeys" icon="i-octicon-key-16" color="neutral" variant="ghost" class="size-11 justify-center" :disabled="auth.pending.value !== null" @click="auth.manage" />
   </div>
   <UModal v-model:open="auth.managing.value" title="Passkeys" description="Manage Passkeys for this address.">
