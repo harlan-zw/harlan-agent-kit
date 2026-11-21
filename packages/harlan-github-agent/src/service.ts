@@ -1917,6 +1917,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         app: createWebhookApp({
           allowedOwners: config.github.allowedOwners,
           logger: { info: message => options.logger.info(message) },
+          appId: config.github.appId,
+          recordDelivery: delivery => store.recordDelivery(delivery),
           onHint: (repository, event) => {
             webhookControls.observe(repository, event)
             const name = repository.toLowerCase()

@@ -161,7 +161,7 @@ import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-
 import { buildStats } from './stats.ts'
 import { createTakeOwnershipStore } from './take-ownership-store.ts'
 import { cleanLine } from './text.ts'
-import { createTimelineStore, timelineSchema } from './timeline-store.ts'
+import { createTimelineStore, deliverySchema, timelineSchema } from './timeline-store.ts'
 import { createTrialStore } from './trial-store.ts'
 import { parseConflictCleanMergeEvidence } from './worktree.ts'
 
@@ -7569,7 +7569,11 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${timelineSchema} PRAGMA user_version = 105;`)
     version = 105
   }
-  if (version === 105)
+  if (version === 105) {
+    applyMigration(database, `${deliverySchema} PRAGMA user_version = 106;`)
+    version = 106
+  }
+  if (version === 106)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }

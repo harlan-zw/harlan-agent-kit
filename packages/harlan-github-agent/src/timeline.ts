@@ -72,7 +72,7 @@ export interface TimelineHistory {
 
 /* ---------- Window ---------- */
 
-/** The longest window one request may read. */
+/** The longest window one request may read. Its delivery series stays under 43,200 minutes. */
 export const TIMELINE_MAXIMUM_DAYS = 30
 export const TIMELINE_DEFAULT_PAST_DAYS = 7
 export const TIMELINE_DEFAULT_FUTURE_DAYS = 2
@@ -125,6 +125,20 @@ export function timelineWindowMessage(error: TimelineWindowError): string {
     case 'EmptyWindow': return 'The end time must follow the start time.'
     case 'WindowTooLong': return `Choose a window of ${error.maximumDays} days or less.`
   }
+}
+
+/* ---------- Deliveries ---------- */
+
+/**
+ * The minute buckets for delivery counts between `from` and now. The series
+ * starts on the hour, so a refetch a minute later keeps every bin in place,
+ * and it ends at now, so its tail is the last hour. Every window uses one
+ * minute per bucket, so the dashboard can join series from adjacent windows.
+ */
+export function deliveryBuckets(window: TimelineWindow, now: number): { start: number, length: number } {
+  const start = Math.floor(window.from / hour) * hour
+  const end = Math.min(window.to, now)
+  return { start, length: Math.max(0, Math.ceil((end - start) / minute)) }
 }
 
 /* ---------- Outcomes ---------- */

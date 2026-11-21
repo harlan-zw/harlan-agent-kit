@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { createReconcileHint, createWebhookApp, verifyWebhookSignature, webhookHint } from '../src/index.ts'
+import { createReconcileHint, createWebhookApp, deliveryRecord, verifyWebhookSignature, webhookHint } from '../src/index.ts'
 
 const secret = 'a'.repeat(40)
 
@@ -392,5 +392,37 @@ describe('delivery recovery', () => {
     finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('reading what the Timeline keeps of a delivery', () => {
+  const at = Date.parse('2026-10-13T12:00:00.000Z')
+  const allowedOwners = ['harlan-zw']
+  const repository = { full_name: 'harlan-zw/example' }
+  const read = (event: string, payload: object, command = false, appId: number | null = null) => deliveryRecord({ event, payload, at, allowedOwners, appId, command })
+
+  it('marks a check run that this Service\'s own App created', () => {
+    expect(read('check_run', { action: 'completed', check_run: { app: { id: 77 } }, repository }, false, 77))
+      .toEqual({ at, repository: 'harlan-zw/example', event: 'check_run', action: 'completed', ownCheck: true, workItem: null })
+    expect(read('check_suite', { action: 'completed', check_suite: { app: { id: 15368 } }, repository }, false, 77).ownCheck).toBe(false)
+  })
+
+  it('names the item a work-causing delivery moves, and nothing for other actions', () => {
+    expect(read('pull_request', { action: 'opened', number: 24, pull_request: { number: 24 }, repository }).workItem).toBe(24)
+    expect(read('issues', { action: 'opened', issue: { number: 9 }, repository }).workItem).toBe(9)
+    expect(read('issue_comment', { action: 'edited', issue: { number: 9 }, repository }, true).workItem).toBe(9)
+    expect(read('issue_comment', { action: 'created', issue: { number: 9 }, repository }).workItem).toBeNull()
+    expect(read('pull_request', { action: 'labeled', number: 24, repository }).workItem).toBeNull()
+  })
+
+  it('keeps the repository of any event inside the allowed scope, and no item outside it', () => {
+    expect(read('workflow_run', { action: 'completed', repository }).repository).toBe('harlan-zw/example')
+    expect(read('pull_request', { action: 'opened', number: 24, repository: { full_name: 'someone-else/example' } }))
+      .toMatchObject({ repository: null, workItem: null })
+  })
+
+  it('keeps an empty action for an event that has none, and refuses a malformed name', () => {
+    expect(read('push', { ref: 'refs/heads/main', repository })).toMatchObject({ event: 'push', action: '' })
+    expect(read('Push; DROP', { action: 'x'.repeat(65) })).toMatchObject({ event: 'unknown', action: '', repository: null })
   })
 })

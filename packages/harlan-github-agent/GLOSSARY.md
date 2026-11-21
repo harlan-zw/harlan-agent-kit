@@ -30,8 +30,8 @@ did not cover it.
 | ready-digest | compiled Routine definition | Scheduler | One weekly Routine, kit only | ready-digest |
 | Lease holder | `tasks.worker_id` | Scheduler | One per Running Task | none |
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
-| Timeline | `/api/timeline`, read from `workflow_events`, `routine_runs`, and `routines` | Dashboard | Places Tasks, deliveries, and Routine runs on one time axis | Timeline |
-| Delivery | webhook listener | Controller | N per repository, 0 to N per Item | delivery |
+| Timeline | `/api/timeline`, read from `workflow_events`, `routine_runs`, and the delivery tables | Dashboard | Places Tasks, deliveries, and Routine runs on one time axis | Timeline |
+| Delivery | webhook listener; `delivery_counts` per minute, `item_deliveries` per Item | Controller | N per repository, 0 to N per Item | delivery |
 | Stats | derived from Journal records | Dashboard | N completed records per date range | Stats |
 | Control API | authenticated HTTP routes | Controller | One per service, used by the dashboard and CLI | Control API |
 | Agent slots | `agent_slots` | Controller | One count per host, 1 to N Agents | Agent slots |
@@ -338,6 +338,8 @@ Use Timeline for this view. Never call the view a canvas, river, feed, or stream
 One GitHub webhook delivery the Service accepted.
 
 GitHub uses the same word: Recent Deliveries, and the `X-GitHub-Delivery` header. A delivery only asks for an earlier poll or runs a direct command. Polling still reads GitHub.
+
+The Timeline keeps a count per repository, event, action, and minute for 90 days, and never the payload. It keeps a delivery that opens, pushes to, or closes a pull request, opens an issue, or runs a comment command for 30 days, on its Item.
 
 Use delivery. Never use webhook event, hook, payload, or notification.
 
