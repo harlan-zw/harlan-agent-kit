@@ -992,7 +992,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   completeRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, commentId: number, trackingIssueNumber: number }) => boolean
   recordRoutineReportReceipt: (input: { commandId: string, workerId: string, fence: number, at: string, sink: 'tracking_issue' | 'run_comment' }) => boolean
   failRoutineReport: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
-  claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number, canStart?: (selection: PinnedAgentSelection | undefined) => boolean) => ClaimedRoutineRun | null
+  claimNextRoutineRun: (workerId: string, now: string, leaseMilliseconds: number, canStart?: (selection: PinnedAgentSelection | undefined, name: ClaimedRoutineRun['name']) => boolean) => ClaimedRoutineRun | null
   hasOverdueRoutineRun: (now: string) => boolean
   heartbeatRoutineRun: (input: { taskId: string, workerId: string, fence: number, at: string, leaseMilliseconds: number }) => boolean
   updateRoutineRunProgress: (input: { taskId: string, workerId: string, fence: number, progress: AgentProgress, at: string }) => boolean
@@ -16947,7 +16947,7 @@ export function openJournalStore(
         agent_selection_json: string | null
         policy_json: string
       }>
-      const row = rows.find(candidate => canStart?.(candidate.agent_selection_json === null ? undefined : JSON.parse(candidate.agent_selection_json) as PinnedAgentSelection) !== false)
+      const row = rows.find(candidate => canStart?.(candidate.agent_selection_json === null ? undefined : JSON.parse(candidate.agent_selection_json) as PinnedAgentSelection, candidate.name as ClaimedRoutineRun['name']) !== false)
       if (row === undefined) {
         database.exec('COMMIT')
         return null
