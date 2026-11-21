@@ -52,7 +52,7 @@ export function createFindingThreadSyncController(options: {
         }, pull.state === 'closed' ? 'merged' : 'open', {
           baseRef: command.baseRef,
           controls: canRepairSelectedFindingOnHead(command.repositoryMapping, pull) && options.controls?.(command.repositoryMapping, pull) === true,
-          fixed: command.fixedFingerprints,
+          fixed: command.verifiedRepairs,
           recordInline: (receipts) => { inline = receipts },
         })
         results.push({ repository: command.repository, number: command.pullRequestNumber, outcome: receiptSaved ? outcome : { _tag: 'Failed', message: 'The finding thread sync receipt lost its Publication lease.' } })

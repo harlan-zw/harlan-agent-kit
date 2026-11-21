@@ -55,18 +55,20 @@ function fakeSource(threads: ReviewFindingThread[], outcome: 'Posted' | 'Outside
 describe('review finding threads', () => {
   it('puts an optional finding and its Repair checkbox beside the code', async () => {
     const { mirror, posted } = fakeSource([])
-    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 497, headSha, [logged], new AbortController().signal, authorize, 'open', { controls: true })
+    const finding = { ...logged, nextAction: 'As an optional follow-up, preserve buffered bytes.\n\nKeep both chunks until decoding finishes.' }
+    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 497, headSha, [finding], new AbortController().signal, authorize, 'open', { controls: true })
     expect(posted).toEqual([expect.objectContaining({
       path: 'src/parser.ts',
       line: 32,
       body: expect.stringContaining('- [ ] Ask an agent to verify and fix this finding'),
     })])
+    expect(posted[0]!.body).toContain('**Minor (42/100): A split sequence drops bytes**\n\nThe last chunk loses a byte.\n\nPreserve buffered bytes.\n\nKeep both chunks until decoding finishes.')
   })
 
   it.each([
     { findings: [], fixed: [], resolved: [] },
-    { findings: [logged], fixed: [lockFingerprint], resolved: [] },
-    { findings: [], fixed: [lockFingerprint], resolved: ['selected'] },
+    { findings: [logged], fixed: [{ fingerprint: lockFingerprint, commitSha: headSha }], resolved: [] },
+    { findings: [], fixed: [{ fingerprint: lockFingerprint, commitSha: headSha }], resolved: ['selected'] },
   ])('resolves a Logged thread only after its Repair and a Review that clears it', async ({ findings, fixed, resolved: expected }) => {
     const { mirror, resolved } = fakeSource([{
       threadId: 'selected',
@@ -76,6 +78,34 @@ describe('review finding threads', () => {
     }])
     await mirrorReviewFindingThreads(mirror, repositoryMapping(), 497, headSha, findings, new AbortController().signal, authorize, 'open', { fixed })
     expect(resolved).toEqual(expected)
+  })
+
+  it('links the confirmed Repair before closing the thread and reuses the link on retry', async () => {
+    const commitSha = 'e'.repeat(40)
+    const repository = repositoryMapping()
+    const thread = {
+      threadId: 'selected',
+      fingerprint: lockFingerprint,
+      resolved: false,
+      comment: { id: 4_640_421_240, body: reviewFindingThreadBody(logged, headSha) },
+    }
+    const { mirror } = fakeSource([thread])
+    const edit = vi.fn(async (_repository, _comment, body: string) => {
+      thread.comment.body = body
+      return ok(thread.comment)
+    })
+    mirror.source.editReviewFindingComment = edit
+    mirror.source.resolveReviewFindingThread = vi.fn()
+      .mockResolvedValueOnce(err('GitHub timed out.'))
+      .mockResolvedValueOnce(ok(undefined))
+    const sync = () => mirrorReviewFindingThreads(mirror, repository, 497, headSha, [], new AbortController().signal, authorize, 'open', {
+      fixed: [{ fingerprint: lockFingerprint, commitSha }],
+    })
+    await expect(sync()).resolves.toEqual({ _tag: 'Failed', message: 'GitHub timed out.' })
+    await expect(sync()).resolves.toMatchObject({ _tag: 'Written', resolved: 1 })
+    expect(edit).toHaveBeenCalledTimes(1)
+    expect(thread.comment.body).toContain(`✅ Addressed in commit [eeeeeee](https://github.com/${repository.github}/commit/${commitSha})`)
+    expect(thread.comment.body).not.toContain('Ask an agent to verify and fix this finding')
   })
 
   it('resolves obsolete threads after merge without posting or closing a current finding', async () => {
@@ -100,8 +130,8 @@ describe('review finding threads', () => {
     ], new AbortController().signal, authorize)
 
     expect(posted).toEqual([expect.objectContaining({ headSha, path: 'test/jobs/lane.test.ts', line: 32 })])
-    expect(posted[0]!.body).toContain('**Open:** Lane tests share the isolate lock.')
-    expect(posted[0]!.body).toContain('Next: Reset the module state between tests.')
+    expect(posted[0]!.body).toContain('**Finding: Lane tests share the isolate lock**')
+    expect(posted[0]!.body).toContain('Two tests hold the lock at once\n\nReset the module state between tests')
     expect(reports).toEqual([{ _tag: 'Written', posted: 1, outsideDiff: 0, resolved: 0 }])
   })
 
@@ -114,9 +144,16 @@ describe('review finding threads', () => {
   })
 
   it('resolves open threads whose finding the latest Review no longer reports', async () => {
+    const body = `<!-- harlan-agent-kit:pr-triage -->
+<!-- review-finding: ${clockFingerprint} -->
+**Major (84/100): A fixture reports the wrong score**
+
+The user sees the wrong score in this text:
+
+**Logged (42/100):** A split sequence drops bytes.`
     const { mirror, resolved } = fakeSource([
       { threadId: 'T1', fingerprint: lockFingerprint, resolved: false },
-      { threadId: 'T2', fingerprint: clockFingerprint, resolved: false },
+      { threadId: 'T2', fingerprint: clockFingerprint, resolved: false, comment: { id: 10, body } },
       { threadId: 'T3', fingerprint: 'c'.repeat(64), resolved: true },
     ])
 

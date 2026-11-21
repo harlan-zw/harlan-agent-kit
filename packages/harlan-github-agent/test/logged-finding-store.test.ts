@@ -402,8 +402,11 @@ describe('durable Logged finding pickup', () => {
       }
     }
     expect(store.claimNextReviewFixTask('duplicate', at, 60_000)).toBeNull()
-    expect(store.claimReviewFindingThreadSync('threads', at, 60_000)?.fixedFingerprints)
-      .toEqual(expect.arrayContaining([finding.details.fingerprint, second.details.fingerprint]))
+    expect(store.claimReviewFindingThreadSync('threads', at, 60_000)?.verifiedRepairs)
+      .toEqual(expect.arrayContaining([
+        { fingerprint: finding.details.fingerprint, commitSha: 'd'.repeat(40) },
+        { fingerprint: second.details.fingerprint, commitSha: 'e'.repeat(40) },
+      ]))
   })
 
   it('routes a published inline checkbox and keeps the unanchored finding in the summary', () => {
