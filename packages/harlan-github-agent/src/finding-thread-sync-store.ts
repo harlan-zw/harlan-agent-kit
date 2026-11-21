@@ -148,15 +148,25 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
       database.prepare(`UPDATE finding_thread_syncs SET state_tag = 'Running', worker_id = ?, fence = ?,
         lease_expires_at = ?, attempts = attempts + 1, updated_at = ? WHERE review_run_id = ?`)
         .run(workerId, fence, new Date(Date.parse(at) + leaseMilliseconds).toISOString(), at, row.review_run_id)
-      database.exec('COMMIT')
       const fixed = database.prepare(`
-        SELECT requests.fingerprint FROM logged_finding_requests AS requests
+        WITH RECURSIVE scope AS (
+          SELECT subject_id, head_sha, base_ref FROM review_runs WHERE id = ?
+        ), repaired_heads(commit_sha) AS (
+          SELECT head_sha FROM scope
+          UNION
+          SELECT publication.expected_head_sha FROM repaired_heads
+          JOIN publication_commands AS publication ON publication.commit_sha = repaired_heads.commit_sha
+          JOIN tasks ON tasks.id = publication.task_id
+          JOIN scope ON scope.subject_id = tasks.subject_id AND scope.base_ref = publication.base_ref
+          WHERE tasks.kind = 'review_fix' AND publication.state_tag = 'Published' AND publication.pull_request_title IS NULL
+        )
+        SELECT DISTINCT requests.fingerprint FROM logged_finding_requests AS requests
         JOIN publication_commands AS publication ON publication.task_id = requests.task_id
-        JOIN review_runs AS review ON review.subject_id = requests.subject_id
-        WHERE review.id = ? AND requests.on_head = 1
-          AND publication.state_tag = 'Published' AND publication.commit_sha = review.head_sha
-          AND publication.base_ref = review.base_ref
+        JOIN repaired_heads ON repaired_heads.commit_sha = publication.commit_sha
+        JOIN scope ON scope.subject_id = requests.subject_id AND scope.base_ref = publication.base_ref
+        WHERE requests.on_head = 1 AND publication.state_tag = 'Published' AND publication.pull_request_title IS NULL
       `).all(row.review_run_id) as Array<{ fingerprint: string }>
+      database.exec('COMMIT')
       return { reviewRunId: row.review_run_id, repository: row.github, pullRequestNumber: row.github_number, headSha: row.head_sha, baseRef: row.base_ref, repositoryMapping: JSON.parse(row.policy_json), findings: JSON.parse(row.findings), fixedFingerprints: fixed.map(row => row.fingerprint), workerId, fence }
     }
     catch (error) {

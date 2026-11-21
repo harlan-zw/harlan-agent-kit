@@ -153,48 +153,54 @@ describe('durable Logged finding pickup', () => {
     expect(store.claimNextReviewFixTask('duplicate', at, 60_000)).toBeNull()
   })
 
-  it('carries another selection through the confirmed Repair and marks the fixed finding for thread resolution', () => {
+  it('keeps both fixed threads eligible for resolution after consecutive Repairs', () => {
     const second = { ...finding, summary: 'A second finding.', details: { ...finding.details, fingerprint: '9'.repeat(64) } }
     const { store, mapping, pullRequest, request } = setup([finding, second], ':memory:', 'head')
     expect(store.requestLoggedFindingPickup(request)).toBe(true)
-    const task = store.claimNextReviewFixTask('repair', at, 60_000)!
-    expect(store.requestLoggedFindingPickup({ ...request, fingerprints: [second.details.fingerprint] })).toBe(true)
-    const commitSha = 'd'.repeat(40)
-    const staged = store.stagePublication({
-      taskId: task.id,
-      workerId: task.state.workerId,
-      fence: task.state.fence,
-      at,
-      publication: {
-        _tag: 'UpdatePullRequest',
-        taskKind: 'review_fix',
-        baseRef: 'main',
-        pullRequestNumber: pullRequest.number,
-        commitSha,
-        baseSha: pullRequest.baseSha,
-        expectedHeadSha: pullRequest.headSha,
-        headRef: pullRequest.headRef,
-        artifactRef: 'refs/harlan-github-agent/publications/repair',
-        patchDigest: 'patch',
-        changedFiles: 1,
-      },
-    })
-    if (staged._tag !== 'Staged')
-      throw new Error('Expected a staged Repair.')
-    const publication = store.claimNextPublication('publisher', at, 60_000)!
-    expect(store.completePublication({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at, evidence: 'Pushed the verified fix.' })).toBe(true)
-    expect(store.getRepairedHeadFindings(mapping.github, pullRequest.number, commitSha)).toEqual([finding])
-    const observed = store.recordObservation({ externalId: 'fixed-head', observedAt: at, source: 'poll', subject: { ...pullRequest, headSha: commitSha } })
-    if (observed._tag !== 'Inserted')
-      throw new Error('Expected the repaired head.')
-    const review = store.claimNextAdversarialReviewTask('reviewer', at, 60_000)!
+    expect(store.requestLoggedFindingPickup({ ...request, at: '2026-09-30T00:00:01.000Z', fingerprints: [second.details.fingerprint] })).toBe(true)
     const gates = store.listReviewRuns(mapping.github, pullRequest.number)[0]!.gates
-    store.recordReviewRun({ id: 'review-after-fix', repository: mapping.github, pullRequestNumber: pullRequest.number, revisionId: observed.revisionId, headSha: commitSha, provider: 'codex', sessionId: 'session', model: 'model', agentVersion: 'version', skillDigest: 'c'.repeat(64), startedAt: at, completedAt: at, gates, findings: [second] })
-    store.completeWorkerTask({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at, evidence: 'review-after-fix' })
-    store.recordReviewPublication({ id: 'publication-after-fix', reviewRunId: 'review-after-fix', body: 'Review after the fix.', at, result: { _tag: 'Published', githubCommentId: 42, url: `${pullRequest.url}#issuecomment-42` } })
-    store.queueReviewFindingThreadSync('review-after-fix', at)
-    expect(store.claimReviewFindingThreadSync('threads', at, 60_000)?.fixedFingerprints).toEqual([finding.details.fingerprint])
-    expect(store.claimNextReviewFixTask('next-repair', at, 60_000)).toMatchObject({ pullRequest: { headSha: commitSha }, pickup: { finding: second } })
+    let current = pullRequest
+    for (const [index, item] of [finding, second].entries()) {
+      const task = store.claimNextReviewFixTask('repair', at, 60_000)!
+      expect(task).toMatchObject({ pullRequest: { headSha: current.headSha }, pickup: { finding: item } })
+      const commitSha = (index === 0 ? 'd' : 'e').repeat(40)
+      const staged = store.stagePublication({
+        taskId: task.id,
+        workerId: task.state.workerId,
+        fence: task.state.fence,
+        at,
+        publication: {
+          _tag: 'UpdatePullRequest',
+          taskKind: 'review_fix',
+          baseRef: 'main',
+          pullRequestNumber: current.number,
+          commitSha,
+          baseSha: current.baseSha,
+          expectedHeadSha: current.headSha,
+          headRef: current.headRef,
+          artifactRef: 'refs/harlan-github-agent/publications/repair',
+          patchDigest: 'patch',
+          changedFiles: 1,
+        },
+      })
+      if (staged._tag !== 'Staged')
+        throw new Error('Expected a staged Repair.')
+      const publication = store.claimNextPublication('publisher', at, 60_000)!
+      expect(store.completePublication({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at, evidence: 'Pushed the verified fix.' })).toBe(true)
+      expect(store.getRepairedHeadFindings(mapping.github, current.number, commitSha)).toEqual([item])
+      current = { ...current, headSha: commitSha }
+      const observed = store.recordObservation({ externalId: `fixed-head-${index}`, observedAt: at, source: 'poll', subject: current })
+      if (observed._tag !== 'Inserted')
+        throw new Error('Expected the repaired head.')
+      const review = store.claimNextAdversarialReviewTask('reviewer', at, 60_000)!
+      const reviewRunId = `review-after-fix-${index}`
+      store.recordReviewRun({ id: reviewRunId, repository: mapping.github, pullRequestNumber: current.number, revisionId: observed.revisionId, headSha: commitSha, provider: 'codex', sessionId: 'session', model: 'model', agentVersion: 'version', skillDigest: 'c'.repeat(64), startedAt: at, completedAt: at, gates, findings: index === 0 ? [second] : [] })
+      store.completeWorkerTask({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at, evidence: reviewRunId })
+      store.recordReviewPublication({ id: `publication-after-fix-${index}`, reviewRunId, body: 'Review after the fix.', at, result: { _tag: 'Published', githubCommentId: 42, url: `${current.url}#issuecomment-42` } })
+      store.queueReviewFindingThreadSync(reviewRunId, at)
+    }
+    expect(store.claimReviewFindingThreadSync('threads', at, 60_000)?.fixedFingerprints)
+      .toEqual(expect.arrayContaining([finding.details.fingerprint, second.details.fingerprint]))
   })
 
   it('routes a published inline checkbox and keeps the unanchored finding in the summary', () => {
