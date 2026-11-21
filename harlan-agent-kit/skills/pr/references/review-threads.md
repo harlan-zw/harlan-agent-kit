@@ -8,7 +8,7 @@ Run this sweep after every push to the pull request. Run it again before you cal
 
 - On a repository Harlan owns or maintains, post the self-identified Agent replies below. Resolve the threads they close. No approval is needed.
 - On any other repository, draft each reply in the session. Show Harlan the exact text. Do not post or resolve.
-- In a Service implementation or Repair Task, `gh` is the read-only public wrapper. Return the open items in the Task result. The controller owns GitHub writes.
+- In a Service implementation or Repair Task, `gh` is the read-only public wrapper. It cannot list thread state. Skip this sweep and say so in the Task result. The controller owns GitHub writes.
 
 ## 1. List every item
 
@@ -25,18 +25,21 @@ query='query($owner: String!, $repo: String!, $number: Int!, $endCursor: String)
 gh api graphql -X POST --paginate -f query="$query" -f owner=OWNER -f repo=REPO -F number=NUMBER \
   --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)
     | {thread: .id, comment: .comments.nodes[0].fullDatabaseId, author: .comments.nodes[0].author.login,
-       replies: [.comments.nodes[1:][].author.login], outdated: .isOutdated, path, line,
-       url: .comments.nodes[0].url, first: (.comments.nodes[0].body | .[0:300])}'
+       replies: [.comments.nodes[1:][] | {author: .author.login, first: (.body | split("\n")[0] | .[0:120])}],
+       outdated: .isOutdated, path, line, url: .comments.nodes[0].url, first: (.comments.nodes[0].body | .[0:300])}'
 ```
 
 GraphQL drops the `[bot]` suffix, so the Service shows as `harlan-github-agent`.
+The list shows only the start of each body. Read the full body of each item before you choose its response.
 An outdated thread still needs a response. The code moved, and the comment can still apply.
+An Agent reply starts with `🤖 Harlan Agent Kit Agent:`. If the last reply is an Agent reply, the thread already has its response.
+If that response was Fixed and the thread is still open, run only the resolve command again.
 
 List top-level reviews and comments. For a verified private repository, use `HARLAN_AGENT_GITHUB_PRIVATE=OWNER/REPO gh` in place of `agent-gh`.
 
 ```bash
 agent-gh api repos/OWNER/REPO/pulls/NUMBER/reviews --paginate \
-  --jq '.[] | select(.body != "") | {author: .user.login, state, commit: .commit_id, url: .html_url}'
+  --jq '.[] | select(.body != "") | {author: .user.login, state, commit: .commit_id, url: .html_url, first: (.body | .[0:200])}'
 agent-gh api repos/OWNER/REPO/issues/NUMBER/comments --paginate \
   --jq '.[] | {author: .user.login, url: .html_url, first: (.body | .[0:200])}'
 ```
@@ -60,6 +63,7 @@ If those checks are unavailable, report the missing Service state and do not edi
 - **Dismissal:** report it through Step 6. Do not repair or request another Review.
 - **Repair:** use Step 6's authority checks before editing or pushing. Leave a current-head `Queued`, `Running`, or `Publishing` Repair Task to the Service.
 - **80/100 or below (Logged):** list it as optional follow-up in the hand-back. Harlan ticks its control or resolves it.
+  A Logged finding outside the diff has no thread. List it with a link to the Service's marked comment.
 - **Already fixed:** name the commit in the hand-back. Do not resolve the thread yourself.
 - **False positive or not applicable:** use Step 6's evidence and comment procedure.
 
@@ -91,7 +95,8 @@ gh api graphql -X POST \
 `COMMENT_ID` is the first comment's `fullDatabaseId`. Preserve its complete decimal string in the REST path.
 Do not convert it to a 32-bit integer or a JavaScript number.
 `THREAD_ID` is the `PRRT_` ID. Both come from the list.
-The resolve command prints `true`. If either command fails, report the error. Never retry it with other credentials or another tool.
+Run the resolve command only after the reply command succeeds. It prints `true` when GitHub resolved the thread.
+If either command fails, the thread stays open. Report the error. Never retry it with other credentials or another tool.
 
 Answer top-level items in one comment. Link each item it answers.
 
@@ -106,5 +111,7 @@ Run the list again. Each unresolved thread must be one of these:
 - a Service finding thread that the hand-back lists
 - a thread with an Agent reply from this sweep
 - a human reviewer's thread that waits for that reviewer
+- on a repository Harlan does not maintain, a thread whose drafted reply waits for Harlan
 
-Each top-level item from another reviewer must have an Agent answer. Report the counts in the hand-back: Fixed, Answered, Follow-up, and waiting.
+Each top-level item from another reviewer must have an Agent answer or a drafted answer.
+Put the exact text of each draft in the hand-back. Report the counts there: Fixed, Answered, Follow-up, waiting, and drafted.

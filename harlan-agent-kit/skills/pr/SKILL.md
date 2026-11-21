@@ -362,7 +362,7 @@ After current-head CI and Review pass, check whether only Harlan's merge decisio
 If so, hand the pull request back.
 Record the repository, number, URL, head SHA, branch, and absolute worktree path in the session scratchpad.
 Retain current-head CI and Review evidence, remaining findings, and required delivery stages with that target.
-List each review thread that stays open, with its link. These are Logged Service finding threads and human threads that wait for their reviewer.
+List each review thread that stays open, with its link. These are Logged Service finding threads, human threads that wait for their reviewer, and drafts that wait for Harlan.
 Report readiness and the pull request link, then end the turn.
 Preserve unintegrated work. Release this task's live worktree claim while no mutation is active.
 Ownership of later delivery remains with the submitting Agent.
