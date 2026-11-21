@@ -90,5 +90,5 @@ export function githubPublicationFixture(options: {
       invalidate: () => undefined,
     } },
   })
-  return { writes, source: { upsertReviewStatus: source.upsertReviewStatus, stampAgentLabel: source.stampAgentLabel } }
+  return { writes, source: { upsertReviewStatus: source.upsertReviewStatus, stampAgentLabel: source.stampAgentLabel, editReviewStatus: source.editReviewStatus } }
 }

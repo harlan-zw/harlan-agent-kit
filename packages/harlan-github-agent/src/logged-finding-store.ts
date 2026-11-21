@@ -7,6 +7,7 @@ import { recordLoggedFindingSignal } from './implicit-signal-store.ts'
 import { normalizeLoggedFindingControls, onHeadPickupHint, withLoggedFindingControls } from './logged-finding-pickup.ts'
 import { canRepairBaseline, canRepairSelectedFindingOnHead } from './repository-policy.ts'
 import { automatedReviewHead } from './review-comment.ts'
+import { reviewFindingThreadBody } from './review-finding-threads.ts'
 
 export const loggedFindingSchema = `
   CREATE TABLE IF NOT EXISTS logged_finding_requests (
@@ -183,9 +184,16 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
       const pullRequest = JSON.parse(candidate.payload) as GitHubPullRequestItem
       const before = normalizeLoggedFindingControls(input.before)
       const onHead = input.inline === true || before.split('\n').includes(onHeadPickupHint)
+      // The signed webhook already verifies the comment's actor and pull request.
+      // Recognize each exact control while GitHub's write response is still pending.
+      const publishingInline = input.inline === true && database.prepare(`SELECT 1 FROM finding_thread_syncs
+        WHERE review_run_id = ? AND state_tag IN ('Pending', 'Running')`).get(candidate.review_run_id) !== undefined
+        && (JSON.parse(candidate.findings) as ReviewFinding[]).some(finding => finding._tag === 'Logged'
+          && finding.details.fingerprint === input.fingerprints[0]
+          && normalizeLoggedFindingControls(githubAccountBody(reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef ?? undefined), mapping.githubAccount)) === before)
       const authorizedComment = input.inline === true
-        ? input.fingerprints.length === 1 && inlineFindings(candidate.review_run_id).some(receipt => !receipt.resolved
-          && receipt.commentId === input.commentId && receipt.fingerprint === input.fingerprints[0] && receipt.body === before)
+        ? input.fingerprints.length === 1 && (publishingInline || inlineFindings(candidate.review_run_id).some(receipt => !receipt.resolved
+          && receipt.commentId === input.commentId && receipt.fingerprint === input.fingerprints[0] && receipt.body === before))
         : candidate.github_comment_id === input.commentId
           && normalizeLoggedFindingControls(githubAccountBody(publishedBody(candidate), mapping.githubAccount)) === before
       if (!authorizedComment || pullRequest.headSha !== input.headSha || typeof pullRequest.baseRef !== 'string'
@@ -272,16 +280,16 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
     },
     decorateLoggedFindings(body, reviewRunId) {
       const row = database.prepare(`
-        SELECT review_runs.findings, revisions.payload, repositories.policy_json
+        SELECT review_runs.subject_id, review_runs.findings, revisions.payload, repositories.policy_json
         FROM review_runs JOIN subjects ON subjects.id = review_runs.subject_id
         JOIN revisions ON revisions.id = subjects.current_revision_id
         JOIN repositories ON repositories.id = subjects.repository_id WHERE review_runs.id = ?
-      `).get(reviewRunId) as { findings: string, payload: string, policy_json: string } | undefined
+      `).get(reviewRunId) as { subject_id: number, findings: string, payload: string, policy_json: string } | undefined
       if (row === undefined)
         return body
       const pull = JSON.parse(row.payload) as GitHubPullRequestItem
       const target = pickupTarget(JSON.parse(row.policy_json) as RepositoryMapping, pull)
-      return withLoggedFindingControls(body, JSON.parse(row.findings) as ReviewFinding[], [], { target, baseRef: pull.baseRef ?? undefined, inline: new Set(inlineFindings(reviewRunId).map(receipt => receipt.fingerprint)) })
+      return withLoggedFindingControls(body, JSON.parse(row.findings) as ReviewFinding[], statuses(row.subject_id, pull), { target, baseRef: pull.baseRef ?? undefined, inline: new Set(inlineFindings(reviewRunId).map(receipt => receipt.fingerprint)) })
     },
     claimLoggedFindingComment(workerId, at, leaseMilliseconds, controls = () => true) {
       for (const candidate of candidates()) {

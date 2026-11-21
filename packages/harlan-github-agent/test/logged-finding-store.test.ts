@@ -2,13 +2,16 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { terminalComment } from '../src/item-agent.ts'
+import { createFindingThreadSyncController } from '../src/finding-thread-sync.ts'
+import { refreshControllerGates, terminalComment } from '../src/item-agent.ts'
 import { withLoggedFindingControls } from '../src/logged-finding-pickup.ts'
 import { publishLoggedFindingPickups } from '../src/logged-finding-sweep.ts'
-import { ok } from '../src/result.ts'
+import { err, ok } from '../src/result.ts'
 import { reviewFindingThreadBody } from '../src/review-finding-threads.ts'
+import { refreshReviewGates } from '../src/review-gate-sweep.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { githubPublicationFixture } from './github-publication-fixture.ts'
 
 const stores: ReturnType<typeof openJournalStore>[] = []
 const directories: string[] = []
@@ -49,6 +52,97 @@ function setup(findings = [finding], path = ':memory:', target: 'head' | 'after-
 }
 
 describe('durable Logged finding pickup', () => {
+  it.each(['head', 'base'] as const)('revokes a pending selection across a %s change and return', (change) => {
+    const second = { ...finding, details: { ...finding.details, fingerprint: '9'.repeat(64) } }
+    const { store, pullRequest, request } = setup([finding, second], ':memory:', 'head')
+    expect(store.requestLoggedFindingPickup(request)).toBe(true)
+    const running = store.claimNextReviewFixTask('repair', at, 60_000)!
+    expect(store.requestLoggedFindingPickup({ ...request, fingerprints: [second.details.fingerprint] })).toBe(true)
+    store.recordObservation({ externalId: 'away', observedAt: at, source: 'poll', subject: { ...pullRequest, ...(change === 'head' ? { headSha: 'd'.repeat(40) } : { baseRef: 'next' }) } })
+    store.recordObservation({ externalId: 'return', observedAt: at, source: 'poll', subject: pullRequest })
+    store.completeTask({ taskId: running.id, workerId: running.state.workerId, fence: running.state.fence, at, evidence: 'Settled.' })
+    expect(store.claimNextReviewFixTask('stale-selection', at, 60_000)).toBeNull()
+  })
+
+  it.each(['Written', 'Failed'] as const)('retains an early signed inline selection when the sync ends %s', async (outcome) => {
+    const second = { ...finding, details: { ...finding.details, fingerprint: '9'.repeat(64) } }
+    const { store, pullRequest, request } = setup([finding, second], ':memory:', 'head')
+    store.queueReviewFindingThreadSync('review', at)
+    let posted = 0
+    let accepted: boolean | undefined
+    const controller = createFindingThreadSyncController({ store, workerId: 'threads', now: () => new Date(at), readPullRequest: async () => ok(pullRequest), controls: () => true, mirror: { report: () => {}, source: {
+      listReviewFindingThreads: async () => ok([]),
+      postReviewFindingComment: async (_mapping, _number, comment) => {
+        if (posted++ === 0) {
+          // GitHub accepted this comment before the controller receives its response.
+          accepted = store.requestLoggedFindingPickup({ ...request, inline: true, commentId: 101, before: comment.body })
+        }
+        else if (outcome === 'Failed') {
+          return err('GitHub rejected the second comment.')
+        }
+        return ok({ _tag: 'Posted', comment: { id: 100 + posted, body: comment.body } })
+      },
+      resolveReviewFindingThread: async () => ok(undefined),
+    } } })
+    expect(await controller.run(new AbortController().signal)).toMatchObject([{ outcome: { _tag: outcome } }])
+    expect(accepted).toBe(true)
+    expect(store.claimNextReviewFixTask('repair', at, 60_000)?.pickup?.finding).toEqual(finding)
+    expect(store.claimNextReviewFixTask('duplicate', at, 60_000)).toBeNull()
+  })
+
+  it.each(['body', 'base', 'head'] as const)('rejects an unreceipted inline control with a changed %s', (change) => {
+    const { store, pullRequest, request } = setup([finding], ':memory:', 'head')
+    store.queueReviewFindingThreadSync('review', at)
+    store.claimReviewFindingThreadSync('threads', at, 60_000)
+    const before = reviewFindingThreadBody(finding, change === 'head' ? 'd'.repeat(40) : pullRequest.headSha, change === 'base' ? 'next' : pullRequest.baseRef)
+    expect(store.requestLoggedFindingPickup({ ...request, inline: true, commentId: 101, before: change === 'body' ? `${before}\nForged scope` : before })).toBe(false)
+    expect(store.claimNextReviewFixTask('repair', at, 60_000)).toBeNull()
+  })
+
+  it.each(['inline', 'disputed'] as const)('keeps the canonical Review stable after %s pickup processing', async (mode) => {
+    const { store, mapping, pullRequest, request } = setup([finding], ':memory:', 'head')
+    let clock = '2026-09-30T00:00:01.000Z'
+    const snapshot = { pullRequest, body: '', comments: [], findingDiscussions: [], reviews: [], priorAutomatedReview: { _tag: 'None' as const }, checks: { _tag: 'Available' as const, checks: [] }, baseChecks: { _tag: 'Available' as const, checks: [] }, requiredChecks: { _tag: 'None' as const } }
+    const passed = store.listReviewRuns(mapping.github, pullRequest.number)[0]!.gates
+    const refreshed = refreshControllerGates(passed, snapshot, mapping, { reviewStartedAt: at, now: new Date(at) })
+    const gates = mode === 'disputed' ? { ...refreshed.gates, ci: { _tag: 'Pending' as const, reason: 'CI is running.', evidence: [] } } : refreshed.gates
+    const initialBody = store.decorateLoggedFindings(terminalComment(pullRequest.headSha, pullRequest.baseSha, gates, [finding], undefined, refreshed.reportedChecks, undefined, mapping.github), 'review')
+    const staged = store.stageReviewGateStatus({ reviewRunId: 'review', repository: mapping.github, pullRequestNumber: pullRequest.number, revisionId: store.listReviewGateRefreshes()[0]!.revisionId, expectedHeadSha: pullRequest.headSha, gates, body: initialBody, desiredOutcome: mode === 'disputed' ? 'PENDING' : 'READY', at: clock })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'publisher', clock, 60_000)!
+    store.completeReviewStatus({ commandId: command.id, workerId: command.workerId, fence: command.fence, at: clock, commentId: 42, url: `${pullRequest.url}#issuecomment-42` })
+    const fixture = githubPublicationFixture({ body: command.body, mode: 'idempotent' })
+    if (mode === 'inline') {
+      store.queueReviewFindingThreadSync('review', clock)
+      const sync = store.claimReviewFindingThreadSync('threads', clock, 60_000)!
+      store.completeReviewFindingThreadSync(sync, clock, [{ fingerprint: finding.details.fingerprint, commentId: 101, body: reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef), resolved: false }])
+    }
+    else {
+      expect(store.requestLoggedFindingPickup({ ...request, before: command.body })).toBe(true)
+      const repair = store.claimNextReviewFixTask('repair', at, 60_000)!
+      store.needsAttentionTask({ taskId: repair.id, workerId: repair.state.workerId, fence: repair.state.fence, at, reason: 'Disputed: the finding is false.', evidence: 'Verified the parser.' })
+    }
+    clock = '2026-09-30T00:00:02.000Z'
+    const options = { store, repositories: [mapping], now: () => new Date(clock), workerId: 'publisher', github: fixture.source }
+    expect(await publishLoggedFindingPickups(options, new AbortController().signal)).toEqual([])
+    const writes = fixture.writes.filter(write => write.includes('comment')).length
+    const gateOptions = { ...options, preflightRepair: async () => ok(undefined), github: { ...fixture.source, getPullRequestReviewSnapshot: async () => ok(snapshot) } }
+    for (let index = 0; index < 2; index++) {
+      const result = await refreshReviewGates(gateOptions, new AbortController().signal)
+      expect(result).toMatchObject([{ _tag: 'Ok', value: { _tag: mode === 'disputed' && index === 0 ? 'PublicationQueued' : 'Unchanged' } }])
+      if (mode === 'disputed' && index === 0) {
+        const next = store.claimNextTerminalReviewStatus('publisher', clock, 60_000)!
+        expect(next.body).toContain('Disputed: the finding is false.')
+        expect(next.body).toContain('### 🤖 READY')
+        await fixture.source.upsertReviewStatus(mapping, pullRequest.number, 42, next.body, true, new AbortController().signal)
+        store.completeReviewStatus({ commandId: next.id, workerId: next.workerId, fence: next.fence, at: clock, commentId: 42, url: `${pullRequest.url}#issuecomment-42` })
+      }
+      expect(await publishLoggedFindingPickups(options, new AbortController().signal)).toEqual([])
+    }
+    expect(fixture.writes.filter(write => write.includes('comment'))).toHaveLength(writes + (mode === 'disputed' ? 1 : 0))
+  })
+
   it('starts a selected finding on the open head and does not replay a delivery', () => {
     const { store, pullRequest, request } = setup([finding], ':memory:', 'head')
     expect(request.before).toContain('Selected findings run on this pull request.')

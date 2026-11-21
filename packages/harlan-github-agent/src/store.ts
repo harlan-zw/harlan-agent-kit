@@ -8590,6 +8590,14 @@ export function openJournalStore(
         }
       }
       const planCurrentWork = (): void => {
+        // Delete pending authority on the first accepted scope change. Returning
+        // to an old revision cannot restore it. Confirmed Repair carries it first.
+        if (input.subject.kind === 'pull_request') {
+          database.prepare(`DELETE FROM logged_finding_requests
+            WHERE subject_id = ? AND on_head = 1 AND task_id IS NULL AND dismissed = 0
+              AND (head_sha != ? OR base_ref != ? OR ? != 'open')`)
+            .run(subject.id, input.subject.headSha, input.subject.baseRef ?? '', input.subject.state)
+        }
         updateConflictDispatchWindow(database, subject.id, subject.current_payload === null ? null : JSON.parse(subject.current_payload) as GitHubItem, input.subject, input.observedAt)
         // A Dismissal outranks every planner. Nothing is queued, whatever changed.
         if (dismissed()) {
@@ -12283,6 +12291,7 @@ export function openJournalStore(
   }
 
   const stageReviewGateStatus: JournalStore['stageReviewGateStatus'] = (input) => {
+    input = { ...input, body: loggedFindingStore.decorateLoggedFindings(input.body, input.reviewRunId) }
     const outcome = derivedReviewOutcome(input.gates)
     const desiredOutcome = outcome === 'Ready' ? 'READY' : outcome === 'Pending' ? 'PENDING' : 'BLOCKED'
     if (desiredOutcome !== input.desiredOutcome)
@@ -15735,7 +15744,9 @@ export function openJournalStore(
       COALESCE(projection.confidence, ranked.confidence) AS confidence,
       ranked.merge_risk,
       published.github_comment_id,
-      published.body AS published_body
+      CASE WHEN finding_comment.source_body = published.body
+        AND finding_comment.comment_id = published.github_comment_id
+        THEN finding_comment.published_body ELSE published.body END AS published_body
     FROM ranked
     JOIN subjects ON subjects.id = ranked.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
@@ -15748,6 +15759,7 @@ export function openJournalStore(
       ORDER BY candidate.created_at DESC, candidate.id DESC
       LIMIT 1
     )
+    LEFT JOIN logged_finding_comments AS finding_comment ON finding_comment.subject_id = ranked.subject_id
     WHERE ranked.run_rank = 1
       AND (
         json_extract(ranked.gates, '$.review._tag') = 'Passed'
@@ -15814,6 +15826,9 @@ export function openJournalStore(
         WHERE repair.subject_id = ranked.subject_id AND repair.kind = 'review_fix'
           AND repair.state_tag IN ('Queued', 'ActionRequired', 'Running', 'Publishing')
           AND (repair.state_tag != 'ActionRequired' OR repair.updated_at >= ranked.started_at)
+          AND (repair.state_tag != 'ActionRequired' OR NOT EXISTS (
+            SELECT 1 FROM logged_finding_requests WHERE task_id = repair.id AND on_head = 1
+          ))
       )
     ORDER BY repositories.github, subjects.github_number
   `).all() as unknown as ReviewGateRefreshRow[]).map(row => ({
