@@ -31,6 +31,7 @@ import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { parseRepairRecoveryRequest } from './repair-recovery.ts'
 import { registerSessionRoutes } from './session-routes.ts'
 import { parseStatsRange } from './stats.ts'
+import { parseTimelineWindow, timelineWindowMessage } from './timeline.ts'
 
 export interface AgentAppOptions {
   emergencyIsolation?: EmergencyProxy
@@ -51,7 +52,7 @@ export interface AgentAppOptions {
   hostSlotPolicy?: () => { hogwild: number, desktop: number }
   /** Dated rates and an hourly value for Payback. Absent leaves every cost unpriced. */
   paybackPricing?: PaybackPricing
-  store: Pick<JournalStore, 'getTask' | 'listTasks' | 'listCompletionTasks' | 'listIncidents' | 'getOpenPullRequest' | 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'listAgentTurns' | 'listPaybackRoutineRuns' | 'listPaybackSignals' | 'listPaybackTasks' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'finishUpdatePreparation' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
+  store: Pick<JournalStore, 'getTask' | 'listTasks' | 'listCompletionTasks' | 'listIncidents' | 'getOpenPullRequest' | 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'getTimelineHistory' | 'listAgentTurns' | 'listPaybackRoutineRuns' | 'listPaybackSignals' | 'listPaybackTasks' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'finishUpdatePreparation' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
   allowedOrigin: string
   /**
    * The service's own listen address, such as `http://127.0.0.1:3210`. The
@@ -794,6 +795,15 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       signals: options.store.listPaybackSignals(range.value),
       pricing: options.paybackPricing ?? { rates: {}, ratesCheckedOn: null, hourlyValue: null },
     })
+  })
+
+  app.get('/api/timeline', (event) => {
+    const query = new URL(event.req.url).searchParams
+    const now = options.now().getTime()
+    const window = parseTimelineWindow({ from: query.get('from') ?? undefined, to: query.get('to') ?? undefined }, now)
+    if (window._tag === 'Err')
+      throw createError({ status: 400, statusText: 'Bad Request', message: timelineWindowMessage(window.error) })
+    return options.store.getTimelineHistory({ ...window.value, now })
   })
 
   app.get('/api/workflow-events', (event) => {

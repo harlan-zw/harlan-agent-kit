@@ -22,6 +22,7 @@ import type { ReviewApproval } from './review-approval.ts'
 import type { ReviewProofStore } from './review-proof-store.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type { TakeOwnershipStore } from './take-ownership-store.ts'
+import type { TimelineStore } from './timeline-store.ts'
 import type { TrialStore } from './trial-store.ts'
 import type {
   AdversarialReviewTask,
@@ -159,6 +160,7 @@ import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-
 import { buildStats } from './stats.ts'
 import { createTakeOwnershipStore } from './take-ownership-store.ts'
 import { cleanLine } from './text.ts'
+import { createTimelineStore, timelineSchema } from './timeline-store.ts'
 import { createTrialStore } from './trial-store.ts'
 import { parseConflictCleanMergeEvidence } from './worktree.ts'
 
@@ -828,7 +830,7 @@ export type StoredIssueTriageRun
     }
     | { _tag: 'Discussion', confidence: number, decidedAt: string }
 
-export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore, TrialStore, ImplicitSignalStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore, TrialStore, ImplicitSignalStore, TimelineStore {
   getTask: (taskId: string) => DashboardTask | null
   listTasks: () => DashboardTask[]
   getOpenPullRequest: (repository: string, number: number) => GitHubPullRequestItem | null
@@ -7549,7 +7551,11 @@ function installSchema(database: DatabaseSync): void {
     PRAGMA user_version = 104;`)
     version = 104
   }
-  if (version === 104)
+  if (version === 104) {
+    applyMigration(database, `${timelineSchema} PRAGMA user_version = 105;`)
+    version = 105
+  }
+  if (version === 105)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7850,6 +7856,7 @@ export function openJournalStore(
   const paybackStore = createPaybackStore(database)
   const trialStore = createTrialStore(database)
   const implicitSignalStore = createImplicitSignalStore(database)
+  const timelineStore = createTimelineStore(database)
   const loggedFindingStore = createLoggedFindingStore(database, {
     writeAuthoritySql: repositoryWriteAuthoritySql,
     digest,
@@ -17684,6 +17691,7 @@ export function openJournalStore(
     ...paybackStore,
     ...trialStore,
     ...implicitSignalStore,
+    ...timelineStore,
     ...reviewProofStore,
     ...loggedFindingStore,
     approveIssue,

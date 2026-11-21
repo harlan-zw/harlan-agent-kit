@@ -1,3 +1,4 @@
+import type { DeliverySeries, RoutineResult, TimelineHistory, TimelineItemEvent, TimelineOutcome, TimelineTaskRecord } from '../../../src/timeline.ts'
 import type { AgentRole, DashboardSnapshot } from '../../../src/types.ts'
 import type { BoardCard } from './dashboard.ts'
 import { boardCardIdentity, boardColumns } from './dashboard.ts'
@@ -15,62 +16,8 @@ const day = 24 * hour
 
 /* ---------- History, as the Timeline API returns it ---------- */
 
-export type TimelineOutcome = 'READY' | 'PENDING' | 'BLOCKED' | 'Completed' | 'Failed' | 'Needs info'
-
-export interface TimelineTaskRecord {
-  id: string
-  repository: string
-  number: number
-  kind: 'issue' | 'pull_request'
-  title: string
-  work: AgentRole
-  startedAt: string
-  endedAt: string
-  outcome: TimelineOutcome
-}
-
-export type RoutineResult = 'Clear' | 'Action required' | 'Blocked' | 'Skipped' | 'Unchanged'
-
-export interface TimelineRoutineRun {
-  routineId: string
-  repository: string
-  name: string
-  scheduledFor: string
-  endedAt: string | null
-  result: RoutineResult
-}
-
-export interface TimelineRoutineInstant {
-  routineId: string
-  repository: string
-  name: string
-  at: string
-}
-
-/** Delivery counts in fixed buckets, oldest first. */
-export interface DeliverySeries {
-  start: string
-  bucketSeconds: number
-  counts: number[]
-}
-
-/** One work-causing delivery for one issue or pull request, such as `pull_request · synchronize`. */
-export interface TimelineItemEvent {
-  repository: string
-  number: number
-  at: string
-  event: string
-}
-
-export interface TimelineHistory {
-  generatedAt: string
-  deliveries: DeliverySeries
-  tasks: TimelineTaskRecord[]
-  itemEvents: TimelineItemEvent[]
-  routineRuns: TimelineRoutineRun[]
-  upcoming: TimelineRoutineInstant[]
-  pauses: Array<{ from: string, to: string | null }>
-}
+// The Service owns the wire shape. The dashboard reads it through these names.
+export type { DeliverySeries, RoutineResult, TimelineHistory, TimelineItemEvent, TimelineOutcome, TimelineRoutineInstant, TimelineRoutineRun, TimelineTaskRecord } from '../../../src/timeline.ts'
 
 /**
  * Parse the Timeline API answer once, at the boundary. Anything else, such as

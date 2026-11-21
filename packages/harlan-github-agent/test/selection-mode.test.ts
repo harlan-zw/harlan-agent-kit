@@ -221,6 +221,9 @@ describe('selection mode route', () => {
         listPaybackTasks: () => [],
         listPaybackRoutineRuns: () => [],
         listPaybackSignals: () => [],
+        getTimelineHistory: () => {
+          throw new Error('Selection mode never reads the Timeline.')
+        },
         pauseAgents: (at: string) => ({ _tag: 'Paused' as const, pausedAt: at }),
         recordAgentFeedback: () => ({ _tag: 'Rejected', reason: { _tag: 'ReviewRunNotFound' } }),
         requestRestart: input => ({ _tag: 'Requested', id: input.id, source: input.source, operation: input.operation, requestedAt: input.at }),

@@ -30,7 +30,7 @@ did not cover it.
 | ready-digest | compiled Routine definition | Scheduler | One weekly Routine, kit only | ready-digest |
 | Lease holder | `tasks.worker_id` | Scheduler | One per Running Task | none |
 | Queue | derived dashboard state | Controller | Orders active Tasks and actionable Items | queue |
-| Timeline | derived dashboard state, `/api/timeline` | Dashboard | Places Tasks, deliveries, and Routine runs on one time axis | Timeline |
+| Timeline | `/api/timeline`, read from `workflow_events`, `routine_runs`, and `routines` | Dashboard | Places Tasks, deliveries, and Routine runs on one time axis | Timeline |
 | Delivery | webhook listener | Controller | N per repository, 0 to N per Item | delivery |
 | Stats | derived from Journal records | Dashboard | N completed records per date range | Stats |
 | Control API | authenticated HTTP routes | Controller | One per service, used by the dashboard and CLI | Control API |
