@@ -4,7 +4,11 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, expect, it } from 'vitest'
+import { parseTimelineHistory, timelineSections } from '../dashboard/app/utils/timeline.ts'
+import { createAgentApp, openJournalStore } from '../src/index.ts'
+import { createTerminalControllerObserver } from '../src/terminal-controller-observer.ts'
 import { createTerminalManager, createTerminalServer } from '../src/terminal.ts'
+import { dashboardSnapshot, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const cleanup: (() => Promise<void>)[] = []
 // Each restart probe opens a fresh client connection. Existing transports may close during an API restart.
@@ -16,7 +20,7 @@ function request(url: string, options?: Parameters<typeof fetch>[1]) {
 afterEach(async () => {
   for (const close of cleanup.splice(0)) await close()
 })
-it('pairs once, rejects unauthenticated and wrong-origin access, and preserves pairing across API restart', async () => {
+it('pairs once, reads controller Timeline history, and preserves authentication across API restart', async () => {
   const root = join(homedir(), 'scratch')
   await mkdir(root, { recursive: true })
   const directory = await mkdtemp(join(root, 'terminal-server-test-'))
@@ -28,7 +32,8 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
     directory,
     bootId: 'boot',
     hostLabel: 'Fixture',
-    controller: false,
+    controller: true,
+    controllerReadOnly: true,
     projects: [],
     providers: {
       codex: { executable: '/missing', argv: [], available: false },
@@ -73,8 +78,31 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
     log: () => {},
   })
   const origin = 'http://localhost:43627'
+  const now = '2026-11-21T12:00:00.000Z'
+  const store = openJournalStore(':memory:', true)
+  cleanup.push(async () => store.close())
+  store.syncRepositories([repositoryMapping()], now)
+  store.setRepositoryWritesEnabled('harlan-zw/example', true)
+  store.recordPollObservation({ observedAt: now, subject: pullRequestItem() })
+  const task = store.claimNextConflictTask('worker', '2026-11-21T09:00:00.000Z', 3_600_000)
+  if (!task)
+    throw new Error('Expected a conflict Task')
+  store.completeTask({ taskId: task.id, workerId: 'worker', fence: task.state.fence, at: '2026-11-21T09:20:00.000Z', evidence: 'Resolved.' })
+  const controllerOrigin = 'https://controller.example'
+  const controller = createAgentApp({ allowedOrigin: controllerOrigin, dashboardPassword: 'fixture-controller-password', now: () => new Date(now), store })
+  const observer = createTerminalControllerObserver({
+    origin: controllerOrigin,
+    password: 'fixture-controller-password',
+    fetch: async (url, init) => {
+      const headers = new Headers(init?.headers)
+      headers.set('host', new URL(String(url)).host)
+      return controller.request(String(url), { ...init, headers })
+    },
+    log: () => {},
+  })
   const options = {
     manager,
+    observer,
     origin,
     staticDirectory: directory,
     now: Date.now,
@@ -101,6 +129,8 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
   expect((await request(`${origin}/api/terminal/capabilities`)).status).toBe(
     401,
   )
+  const historyUrl = `${origin}/api/maintenance/timeline?from=2026-11-21T08:00:00.000Z&to=2026-11-21T13:00:00.000Z`
+  expect((await request(historyUrl)).status).toBe(401)
   expect(
     (
       await request(`${origin}/api/terminal/pair`, {
@@ -117,6 +147,13 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
   })
   expect(await paired.json()).toEqual({ _tag: 'Ok', value: true })
   const cookie = paired.headers.get('set-cookie')!.split(';')[0]!
+  const historyResponse = await request(historyUrl, { headers: { cookie } })
+  expect(historyResponse.status).toBe(200)
+  const history = parseTimelineHistory(await historyResponse.json())
+  expect(history?.tasks).toEqual([expect.objectContaining({ id: task.id, title: 'Fix the broken thing' })])
+  const sections = timelineSections({ snapshot: dashboardSnapshot(), history, now: Date.parse(now), from: Date.parse('2026-11-21T08:00:00.000Z'), to: Date.parse('2026-11-21T13:00:00.000Z') })
+  expect(sections.flatMap(section => [...section.rows, ...section.folded]).some(row => row._tag === 'Item' && row.item.title === 'Fix the broken thing' && row.marks.some(mark => mark._tag === 'Span'))).toBe(true)
+  expect((await request(historyUrl, { method: 'POST', headers: { cookie, origin } })).status).toBe(405)
   const forcedBrowser = await request(`${origin}/api/terminal/sessions`, {
     method: 'POST',
     headers: { origin, cookie },
@@ -139,7 +176,7 @@ it('pairs once, rejects unauthenticated and wrong-origin access, and preserves p
         headers: { cookie },
       })
     ).json(),
-  ).toMatchObject({ controller: false, hostLabel: 'Fixture' })
+  ).toMatchObject({ controller: true, controllerReadOnly: true, hostLabel: 'Fixture' })
   await api.close()
   api = createTerminalServer(options)
   await new Promise<void>(resolve =>

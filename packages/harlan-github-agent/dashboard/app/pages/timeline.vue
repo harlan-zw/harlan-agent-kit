@@ -37,8 +37,13 @@ const now = computed(() => clockNow.value.getTime())
 
 const history = shallowRef<TimelineHistory>()
 const historyError = ref(false)
+const terminalHost = useTerminalHost()
 const historyLoader = createTimelineHistoryLoader(
-  query => $fetch<unknown>('/api/timeline', { query, timeout: 15_000 }),
+  async (query) => {
+    // A direct page entry can mount before the layout finishes host discovery.
+    await terminalHost.start()
+    return $fetch<unknown>(terminalHost.controllerPath('/api/timeline'), { query, timeout: 15_000 })
+  },
   (value, error) => {
     history.value = value
     historyError.value = error
