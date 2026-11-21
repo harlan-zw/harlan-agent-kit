@@ -79,6 +79,65 @@ export function webhookHint(event: string, payload: unknown, allowedOwners: read
   return { _tag: 'Reconcile', repository }
 }
 
+/** One accepted delivery, as the Timeline records it. Nothing else of the payload is kept. */
+export interface DeliveryRecord {
+  at: number
+  /** The repository the delivery names inside the allowed scope, or null. */
+  repository: string | null
+  event: string
+  /** The payload `action`, or an empty string when the event has none, such as `push`. */
+  action: string
+  /** A check run or check suite that this Service's own GitHub App created. */
+  ownCheck: boolean
+  /** The issue or pull request this delivery asks the Service to act on, or null. */
+  workItem: number | null
+}
+
+/** Deliveries that start or change Agent work on one item. Comments count only as a command. */
+const WORK_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  pull_request: new Set(['opened', 'synchronize', 'closed']),
+  issues: new Set(['opened']),
+}
+
+const deliveryName = /^[a-z_]{1,64}$/
+
+function field(value: unknown, ...path: string[]): unknown {
+  let current = value
+  for (const key of path) {
+    if (typeof current !== 'object' || current === null)
+      return undefined
+    current = (current as Record<string, unknown>)[key]
+  }
+  return current
+}
+
+function itemNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
+}
+
+/**
+ * Reads what the Timeline keeps of one accepted delivery: its repository
+ * inside the allowed scope, event, action, and minute, whether the Service's
+ * own App sent the check, and which item it moves. `command` says the
+ * delivery ran an authorized comment command.
+ */
+export function deliveryRecord(input: { event: string, payload: unknown, at: number, allowedOwners: readonly string[], appId: number | null, command: boolean }): DeliveryRecord {
+  const event = deliveryName.test(input.event) ? input.event : 'unknown'
+  const rawAction = field(input.payload, 'action')
+  const action = typeof rawAction === 'string' && deliveryName.test(rawAction) ? rawAction : ''
+  const named = field(input.payload, 'repository', 'full_name')
+  const repository = typeof named === 'string' && named.includes('/') && isAllowedRepository(named, input.allowedOwners) ? named : null
+  const checkApp = event === 'check_run' || event === 'check_suite' ? field(input.payload, event, 'app', 'id') : undefined
+  const ownCheck = input.appId !== null && checkApp === input.appId
+  const works = repository !== null && (WORK_ACTIONS[event]?.has(action) === true || (event === 'issue_comment' && input.command))
+  const workItem = !works
+    ? null
+    : event === 'pull_request'
+      ? itemNumber(field(input.payload, 'pull_request', 'number') ?? field(input.payload, 'number'))
+      : itemNumber(field(input.payload, 'issue', 'number'))
+  return { at: input.at, repository, event, action, ownCheck, workItem }
+}
+
 export interface ReconcileHint {
   hint: (repository: string) => void
   stop: () => Promise<void>
@@ -180,6 +239,10 @@ export interface WebhookAppOptions {
   }
   secret: string
   now?: () => number
+  /** This Service's GitHub App, so its own check deliveries can be told apart. */
+  appId?: number
+  /** Keeps one accepted delivery for the Timeline. A failure is logged and never refuses the delivery. */
+  recordDelivery?: (delivery: DeliveryRecord) => void
 }
 
 /**
@@ -228,24 +291,28 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
     }
 
     const hint = webhookHint(name, payload, options.allowedOwners)
+    let commanded = false
     if (hint._tag === 'Reconcile') {
       const command = packageReleaseCommand(name, payload)
       if (command !== null && options.packageRelease !== undefined
         && command.requestedBy.toLowerCase() === options.packageRelease.allowedAuthor.toLowerCase()
         && options.packageRelease.actorLogin(hint.repository) !== null) {
         options.packageRelease.command?.(command)
+        commanded = true
       }
       const release = releaseRequest(name, payload)
       if (release !== null && options.packageRelease !== undefined
         && release.requestedBy.toLowerCase() === options.packageRelease.allowedAuthor.toLowerCase()
         && options.packageRelease.actorLogin(hint.repository)?.toLowerCase() === release.commentAuthor.toLowerCase()) {
         options.packageRelease.apply({ ...release, requestId: delivery })
+        commanded = true
       }
       const noteApproval = releaseNoteApproval(name, payload)
       if (noteApproval !== null && options.packageRelease?.approveNote !== undefined
         && noteApproval.requestedBy.toLowerCase() === options.packageRelease.allowedAuthor.toLowerCase()
         && options.packageRelease.actorLogin(hint.repository)?.toLowerCase() === noteApproval.commentAuthor.toLowerCase()) {
         options.packageRelease.approveNote({ ...noteApproval, requestId: delivery })
+        commanded = true
       }
       const pickup = loggedFindingPickup(name, payload)
       if (pickup !== null && options.loggedFindingPickup !== undefined
@@ -256,6 +323,7 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
           options.logger.info(`Finding selection failed: ${applied.error}`)
           return new Response('Finding selection failed. Retry this delivery.', { status: 503 })
         }
+        commanded = true
       }
       const approval = reviewApproval(name, payload)
       if (approval !== null && options.reviewApproval !== undefined
@@ -266,12 +334,14 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
           options.logger.info(`Review Approval failed: ${applied.error}`)
           return new Response('Review Approval failed. Retry this delivery.', { status: 503 })
         }
+        commanded = true
       }
       const cancellation = reviewCancellation(name, payload)
       if (cancellation !== null
         && options.allowedOwners.some(author => author.toLowerCase() === cancellation.requestedBy.toLowerCase())
         && options.reviewCancellation?.actorLogin(hint.repository)?.toLowerCase() === cancellation.commentAuthor.toLowerCase()) {
         options.reviewCancellation.apply({ ...cancellation, requestId: delivery })
+        commanded = true
       }
       const rerun = reviewCheckRerun(name, payload)
       if (rerun !== null && options.reviewCheckRerun !== undefined
@@ -289,6 +359,15 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
         deliveries.delete(oldest)
     }
     deliveries.set(delivery, at + retentionMilliseconds)
+    if (options.recordDelivery !== undefined) {
+      try {
+        options.recordDelivery(deliveryRecord({ event: name, payload, at, allowedOwners: options.allowedOwners, appId: options.appId ?? null, command: commanded }))
+      }
+      catch (error) {
+        // The Timeline loses one count. The delivery itself already did its work.
+        options.logger.info(`Delivery recording failed: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
+    }
     // Acknowledge ignored events as well as scheduled reads.
     return new Response(null, { status: 204 })
   })

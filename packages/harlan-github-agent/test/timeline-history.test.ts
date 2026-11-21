@@ -1,15 +1,19 @@
 import type { JournalStore } from '../src/store.ts'
 import { Buffer } from 'node:buffer'
+import { createHmac } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parseTimelineHistory } from '../dashboard/app/utils/timeline.ts'
-import { createAgentApp, openJournalStore } from '../src/index.ts'
+import { createAgentApp, createWebhookApp, openJournalStore } from '../src/index.ts'
+import { REVIEW_CANCEL_CONTROL } from '../src/review-cancel.ts'
 import { routineResult, timelineOutcome } from '../src/timeline.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const origin = 'https://agent.example.test'
 const password = 'test-password-with-at-least-32-bytes'
 const headers = { host: 'agent.example.test', authorization: `Basic ${Buffer.from(`agent:${password}`).toString('base64')}` }
+const secret = 'a'.repeat(40)
 const minute = 60_000
+const day = 24 * 60 * minute
 
 const stores: JournalStore[] = []
 afterEach(() => stores.splice(0).forEach(store => store.close()))
@@ -35,15 +39,43 @@ async function readTimeline(store: JournalStore, now: string, query = '') {
   return history
 }
 
+function webhookApp(store: JournalStore, now: () => number) {
+  return createWebhookApp({
+    allowedOwners: ['harlan-zw'],
+    logger: { info: () => {} },
+    onHint: () => {},
+    secret,
+    appId: 77,
+    now,
+    recordDelivery: delivery => store.recordDelivery(delivery),
+    reviewCancellation: { actorLogin: () => 'harlan-github-agent[bot]', apply: () => {} },
+  })
+}
+
+async function deliver(app: ReturnType<typeof createWebhookApp>, event: string, payload: object, delivery: string): Promise<number> {
+  const body = JSON.stringify(payload)
+  const response = await app.fetch(new Request('http://127.0.0.1/webhook', {
+    method: 'POST',
+    body,
+    headers: {
+      'content-type': 'application/json',
+      'x-github-delivery': delivery,
+      'x-github-event': event,
+      'x-hub-signature-256': `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`,
+    },
+  }))
+  return response.status
+}
+
 describe('the Timeline API window', () => {
-  it('answers the last seven days and the next two by default, with no delivery records yet', async () => {
+  it('answers the last seven days and the next two by default', async () => {
     const now = '2026-10-13T12:34:56.000Z'
     const history = await readTimeline(createStore(now), now)
 
     expect(history.generatedAt).toBe(now)
-    // An empty series reads as no records, never as a quiet week.
-    expect(history.deliveries).toEqual({ start: '2026-10-06T12:00:00.000Z', bucketSeconds: 60, counts: [] })
-    expect(history.itemEvents).toEqual([])
+    // The series starts on the hour and ends at now, so its tail is the last hour.
+    expect(history.deliveries).toMatchObject({ start: '2026-10-06T12:00:00.000Z', bucketSeconds: 60 })
+    expect(history.deliveries.counts).toHaveLength(7 * 24 * 60 + 35)
     expect(history.pauses).toEqual([])
   })
 
@@ -57,11 +89,12 @@ describe('the Timeline API window', () => {
     }
   })
 
-  it('answers a window of exactly 30 days', async () => {
+  it('answers a 30 day window in buckets that keep the series small', async () => {
     const now = '2026-10-13T12:00:00.000Z'
     const history = await readTimeline(createStore(now), now, '?from=2026-09-13T12:00:00.000Z&to=2026-10-13T12:00:00.000Z')
 
-    expect(history.deliveries.start).toBe('2026-09-13T12:00:00.000Z')
+    expect(history.deliveries.bucketSeconds).toBe(180)
+    expect(history.deliveries.counts.length).toBeLessThanOrEqual(15_000)
   })
 
   it('keeps dashboard authentication', async () => {
@@ -177,6 +210,66 @@ describe('routines on the Timeline', () => {
       { routineId: 'harlan-zw/example:daily-checkin', repository: 'harlan-zw/example', name: 'daily-checkin', at: '2026-10-14T07:00:00.000Z' },
       { routineId: 'harlan-zw/example:daily-checkin', repository: 'harlan-zw/example', name: 'daily-checkin', at: '2026-10-15T07:00:00.000Z' },
     ])
+  })
+})
+
+describe('deliveries on the Timeline', () => {
+  it('counts each accepted delivery once in its minute, and keeps the ones that move an item', async () => {
+    const now = '2026-10-13T12:00:30.000Z'
+    const store = createStore(now)
+    const app = webhookApp(store, () => Date.parse(now) - 2 * minute)
+    const repository = { full_name: 'Harlan-ZW/Example' }
+
+    expect(await deliver(app, 'pull_request', { action: 'synchronize', number: 24, pull_request: { number: 24 }, repository }, 'delivery-1')).toBe(204)
+    expect(await deliver(app, 'pull_request', { action: 'synchronize', number: 24, pull_request: { number: 24 }, repository }, 'delivery-1')).toBe(204)
+    expect(await deliver(app, 'check_run', { action: 'completed', check_run: { app: { id: 77 } }, repository }, 'delivery-2')).toBe(204)
+    expect(await deliver(app, 'push', { ref: 'refs/heads/main', repository }, 'delivery-3')).toBe(204)
+    expect(await deliver(app, 'issue_comment', { action: 'created', issue: { number: 5 }, comment: { body: 'Looks good.' }, repository }, 'delivery-4')).toBe(204)
+
+    const history = await readTimeline(store, now)
+
+    expect(history.deliveries.counts.at(-3)).toBe(4)
+    expect(history.deliveries.counts.reduce((total, count) => total + count, 0)).toBe(4)
+    // The item takes the repository as the Service maps it, so it joins its Task row.
+    expect(history.itemEvents).toEqual([{ repository: 'harlan-zw/example', number: 24, at: '2026-10-13T11:58:30.000Z', event: 'pull_request · synchronize' }])
+  })
+
+  it('keeps a comment command on its item only when the Service ran it', async () => {
+    const now = '2026-10-13T12:00:30.000Z'
+    const store = createStore(now)
+    const app = webhookApp(store, () => Date.parse(now) - minute)
+    const before = `<!-- harlan-agent-kit:pr-triage -->\n<!-- reviewed-sha: ${'a'.repeat(40)} -->\n${REVIEW_CANCEL_CONTROL}`
+    const click = (sender: string) => ({ action: 'edited', repository: { full_name: 'harlan-zw/example' }, issue: { number: 24, pull_request: {} }, sender: { login: sender }, comment: { id: 42, user: { login: 'harlan-github-agent[bot]' }, body: before.replace('[ ]', '[x]') }, changes: { body: { from: before } } })
+
+    expect(await deliver(app, 'issue_comment', click('contributor'), 'click-by-contributor')).toBe(204)
+    expect(await deliver(app, 'issue_comment', click('harlan-zw'), 'click-by-owner')).toBe(204)
+
+    const history = await readTimeline(store, now)
+
+    expect(history.deliveries.counts.at(-2)).toBe(2)
+    expect(history.itemEvents).toEqual([{ repository: 'harlan-zw/example', number: 24, at: '2026-10-13T11:59:30.000Z', event: 'issue_comment · edited' }])
+  })
+
+  it('keeps delivery counts for 90 days and item deliveries for 30', async () => {
+    const start = Date.parse('2026-07-01T00:00:00.000Z')
+    const store = createStore(new Date(start).toISOString())
+    let at = start
+    const app = webhookApp(store, () => at)
+    const repository = { full_name: 'harlan-zw/example' }
+    const opened = (delivery: string) => deliver(app, 'issues', { action: 'opened', issue: { number: 9 }, repository }, delivery)
+
+    await opened('day-0')
+    at = start + 31 * day
+    await opened('day-31')
+    const day31 = new Date(at).toISOString()
+    let history = await readTimeline(store, day31, `?from=${new Date(start - minute).toISOString()}&to=${new Date(start + day).toISOString()}`)
+    expect(history.deliveries.counts.reduce((total, count) => total + count, 0)).toBe(1)
+    expect(history.itemEvents).toEqual([])
+
+    at = start + 91 * day
+    await opened('day-91')
+    history = await readTimeline(store, new Date(at).toISOString(), `?from=${new Date(start - minute).toISOString()}&to=${new Date(start + day).toISOString()}`)
+    expect(history.deliveries.counts.reduce((total, count) => total + count, 0)).toBe(0)
   })
 })
 

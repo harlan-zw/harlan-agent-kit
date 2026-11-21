@@ -1,27 +1,36 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { CronSchedule } from './routine-schedule.ts'
-import type { RoutineRunEnd, RoutineVerdict, TaskEnd, TimelineHistory, TimelineRoutineInstant, TimelineRoutineRun, TimelineTaskRecord, TimelineWindow } from './timeline.ts'
+import type { RoutineRunEnd, RoutineVerdict, TaskEnd, TimelineHistory, TimelineItemEvent, TimelineRoutineInstant, TimelineRoutineRun, TimelineTaskRecord, TimelineWindow } from './timeline.ts'
 import type { AgentRole } from './types.ts'
+import type { DeliveryRecord } from './webhook.ts'
 import { cronInstants, parseCron } from './routine-schedule.ts'
-import { routineResult, timelineOutcome } from './timeline.ts'
+import { deliveryBuckets, routineResult, timelineOutcome } from './timeline.ts'
 
 /**
- * The Timeline's reads over the journal. Every read is a range over an index,
- * and every list has a hard limit, so a 30 day window never walks the whole
- * journal. Deliveries are not recorded yet, so their lists stay empty.
+ * The Timeline's reads over the journal, and the delivery records it alone
+ * owns. Every read is a range over an index, and every list has a hard limit,
+ * so a 30 day window never walks the whole journal.
  */
 
 const minute = 60_000
 const hour = 60 * minute
 const day = 24 * hour
 
+/** Delivery counts answer the density band for 90 days. */
+export const DELIVERY_COUNT_RETENTION_DAYS = 90
+/** Item deliveries answer the white dots on item rows for 30 days, the longest window. */
+export const ITEM_DELIVERY_RETENTION_DAYS = 30
+
 const maximumTasks = 4_000
+const maximumItemEvents = 5_000
 const maximumRoutineRuns = 3_000
 /** Routine instants reach at most a week ahead, and at most two a day for a week per Routine. */
 const upcomingDays = 7
 const upcomingPerRoutine = 14
 
 export interface TimelineStore {
+  /** Counts one accepted delivery in its minute, and keeps it per item when it moves one. */
+  recordDelivery: (delivery: DeliveryRecord) => void
   /** The stored history behind the Timeline for one window. */
   getTimelineHistory: (input: TimelineWindow & { now: number }) => TimelineHistory
 }
@@ -29,6 +38,27 @@ export interface TimelineStore {
 export const timelineSchema = `
   CREATE INDEX IF NOT EXISTS routine_runs_scheduled ON routine_runs(scheduled_for);
   CREATE INDEX IF NOT EXISTS candidates_run ON candidates(run_id);
+`
+
+export const deliverySchema = `
+  CREATE TABLE IF NOT EXISTS delivery_counts (
+    minute INTEGER NOT NULL,
+    repository TEXT NOT NULL DEFAULT '',
+    event TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL DEFAULT '',
+    own_check INTEGER NOT NULL DEFAULT 0 CHECK (own_check IN (0, 1)),
+    count INTEGER NOT NULL CHECK (count > 0),
+    PRIMARY KEY (minute, repository, event, action, own_check)
+  ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS item_deliveries (
+    id INTEGER PRIMARY KEY,
+    received_at TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    item_number INTEGER NOT NULL CHECK (item_number > 0),
+    event TEXT NOT NULL,
+    action TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS item_deliveries_received ON item_deliveries(received_at);
 `
 
 interface TaskEndRow {
@@ -75,6 +105,37 @@ const iso = (at: number): string => new Date(at).toISOString()
 const work = (kind: string): AgentRole => (kind === 'resolve_conflict' ? 'conflict_resolution' : kind) as AgentRole
 
 export function createTimelineStore(database: DatabaseSync): TimelineStore {
+  const canonicalRepository = database.prepare('SELECT github FROM repositories WHERE github = ? COLLATE NOCASE LIMIT 1')
+  const countDelivery = database.prepare(`
+    INSERT INTO delivery_counts (minute, repository, event, action, own_check, count) VALUES (?, ?, ?, ?, ?, 1)
+    ON CONFLICT (minute, repository, event, action, own_check) DO UPDATE SET count = count + 1
+  `)
+  const keepItemDelivery = database.prepare('INSERT INTO item_deliveries (received_at, repository, item_number, event, action) VALUES (?, ?, ?, ?, ?)')
+  const pruneCounts = database.prepare('DELETE FROM delivery_counts WHERE minute < ?')
+  const pruneItems = database.prepare('DELETE FROM item_deliveries WHERE received_at < ?')
+  let prunedAt = Number.NEGATIVE_INFINITY
+
+  const recordDelivery: TimelineStore['recordDelivery'] = (delivery) => {
+    const named = delivery.repository === null
+      ? ''
+      : (canonicalRepository.get(delivery.repository) as { github: string } | undefined)?.github ?? delivery.repository
+    countDelivery.run(Math.floor(delivery.at / minute), named, delivery.event, delivery.action, delivery.ownCheck ? 1 : 0)
+    if (delivery.workItem !== null && named !== '')
+      keepItemDelivery.run(iso(delivery.at), named, delivery.workItem, delivery.event, delivery.action)
+    // Retention runs on the write path, at most once an hour, so no timer owns it.
+    if (delivery.at - prunedAt >= hour) {
+      pruneCounts.run(Math.floor((delivery.at - DELIVERY_COUNT_RETENTION_DAYS * day) / minute))
+      pruneItems.run(iso(delivery.at - ITEM_DELIVERY_RETENTION_DAYS * day))
+      prunedAt = delivery.at
+    }
+  }
+
+  const deliveryCounts = database.prepare('SELECT minute, SUM(count) AS count FROM delivery_counts WHERE minute >= ? AND minute < ? GROUP BY minute')
+  const itemDeliveries = database.prepare(`
+    SELECT received_at, repository, item_number, event, action FROM item_deliveries
+    WHERE received_at >= ? AND received_at < ?
+    ORDER BY received_at DESC, id DESC LIMIT ?
+  `)
   // Only a run that ended while it ran gets a bar. Work that never started,
   // or was replaced in the Queue, has no span to draw.
   const taskEnds = database.prepare(`
@@ -142,6 +203,18 @@ export function createTimelineStore(database: DatabaseSync): TimelineStore {
   `)
   const enabledRoutines = database.prepare('SELECT id, repository, name, crons, time_zone FROM routines WHERE enabled = 1 AND retired_at IS NULL ORDER BY id')
 
+  function deliveries(window: TimelineWindow, now: number): TimelineHistory['deliveries'] {
+    const buckets = deliveryBuckets(window, now)
+    const counts = Array.from<number>({ length: buckets.length }).fill(0)
+    const firstMinute = buckets.start / minute
+    const rows = deliveryCounts.all(firstMinute, firstMinute + buckets.length * buckets.bucketMinutes) as Array<{ minute: number, count: number }>
+    for (const row of rows) {
+      const index = Math.floor((row.minute - firstMinute) / buckets.bucketMinutes)
+      counts[index] = (counts[index] ?? 0) + row.count
+    }
+    return { start: iso(buckets.start), bucketSeconds: buckets.bucketMinutes * 60, counts }
+  }
+
   function tasks(window: TimelineWindow): TimelineTaskRecord[] {
     const ends = (taskEnds.all(iso(window.from), iso(window.to), maximumTasks) as unknown as TaskEndRow[])
       .filter(row => row.started_at !== null && row.kind !== null && row.subject_id !== null)
@@ -201,13 +274,19 @@ export function createTimelineStore(database: DatabaseSync): TimelineStore {
       .map(instant => ({ ...instant, at: iso(instant.at) }))
   }
 
+  function itemEvents(window: TimelineWindow): TimelineItemEvent[] {
+    return (itemDeliveries.all(iso(window.from), iso(window.to), maximumItemEvents) as Array<{ received_at: string, repository: string, item_number: number, event: string, action: string }>)
+      .map(row => ({ repository: row.repository, number: row.item_number, at: row.received_at, event: row.action === '' ? row.event : `${row.event} · ${row.action}` }))
+      .reverse()
+  }
+
   return {
+    recordDelivery,
     getTimelineHistory: ({ from, to, now }) => ({
       generatedAt: iso(now),
-      // No delivery is recorded yet. An empty series reads as no records.
-      deliveries: { start: iso(Math.floor(from / hour) * hour), bucketSeconds: 60, counts: [] },
+      deliveries: deliveries({ from, to }, now),
       tasks: tasks({ from, to }),
-      itemEvents: [],
+      itemEvents: itemEvents({ from, to }),
       routineRuns: routineHistory({ from, to }),
       upcoming: upcoming({ from, to }, now),
       // Pause history is not recorded yet.
