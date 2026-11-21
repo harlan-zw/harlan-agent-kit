@@ -61,6 +61,11 @@ describe('reading what one delivery asks for', () => {
       .toMatchObject({ _tag: 'Ignored' })
   })
 
+  it('keeps a sibling repository outside an individually allowed repository', () => {
+    expect(webhookHint('pull_request_review_comment', { repository: { full_name: 'unjs/other' } }, ['unjs/unhead']))
+      .toMatchObject({ _tag: 'Ignored' })
+  })
+
   it('matches an owner whatever its case', () => {
     expect(webhookHint('issues', { repository: { full_name: 'Harlan-ZW/example' } }, owners))
       .toMatchObject({ _tag: 'Reconcile' })

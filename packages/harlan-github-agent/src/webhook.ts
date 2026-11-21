@@ -9,6 +9,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { H3 } from 'h3'
 import { loggedFindingPickup } from './logged-finding-pickup.ts'
 import { packageReleaseCommand, releaseNoteApproval, releaseRequest } from './package-release.ts'
+import { isAllowedRepository } from './repository-discovery.ts'
 import { reviewApproval } from './review-approval.ts'
 import { reviewCancellation } from './review-cancel.ts'
 import { reviewCheckRerun } from './review-check-rerun.ts'
@@ -72,9 +73,8 @@ export function webhookHint(event: string, payload: unknown, allowedOwners: read
   if (typeof repository !== 'string' || !repository.includes('/'))
     return { _tag: 'Ignored', reason: 'the delivery names no repository' }
 
-  const owner = repository.split('/')[0] ?? ''
-  if (!allowedOwners.some(allowed => allowed.toLowerCase() === owner.toLowerCase()))
-    return { _tag: 'Ignored', reason: `${owner} is not an allowed owner` }
+  if (!isAllowedRepository(repository, allowedOwners))
+    return { _tag: 'Ignored', reason: `${repository} is outside the allowed repository scope` }
 
   return { _tag: 'Reconcile', repository }
 }

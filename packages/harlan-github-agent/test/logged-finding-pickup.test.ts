@@ -28,12 +28,13 @@ function payload(after = before.replace('[ ]', '[x]')) {
 }
 
 describe('logged finding pickup', () => {
-  it('accepts a signed inline edit with a GitHub review comment ID', async () => {
+  it('accepts a signed inline edit on an individually allowed repository', async () => {
     const inline = reviewFindingThreadBody(finding, headSha, 'main')
     const data = payload(inline.replace('[ ]', '[x]'))
     const body = JSON.stringify({
       ...data,
       issue: undefined,
+      repository: { full_name: 'unjs/unhead' },
       pull_request: { number: 24 },
       changes: { body: { from: inline } },
       comment: { ...data.comment, id: 4_640_421_240 },
@@ -41,7 +42,7 @@ describe('logged finding pickup', () => {
     const requests: unknown[] = []
     const app = createWebhookApp({
       secret: 'inline-test',
-      allowedOwners: ['harlan-zw'],
+      allowedOwners: ['harlan-zw', 'unjs/unhead'],
       logger: { info: () => undefined },
       onHint: () => undefined,
       loggedFindingPickup: {
@@ -60,7 +61,7 @@ describe('logged finding pickup', () => {
       body,
     }))
     expect(response.status).toBe(204)
-    expect(requests).toEqual([expect.objectContaining({ inline: true, headSha, commentId: 4_640_421_240, fingerprints: [fingerprint] })])
+    expect(requests).toEqual([expect.objectContaining({ repository: 'unjs/unhead', inline: true, headSha, commentId: 4_640_421_240, fingerprints: [fingerprint] })])
   })
 
   it('binds a checkbox click to the finding, comment, and reviewed commit', () => {
