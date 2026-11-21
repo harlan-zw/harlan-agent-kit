@@ -244,13 +244,23 @@ body {
   }
 }
 
-/* Keep the workspace header compact while preserving touch targets. */
-.workspace-header { height: 2.5rem; }
-@media (pointer: coarse), (max-width: 47.999rem) {
-  .workspace-header { height: 3rem; }
+/* A row of filter buttons. On a phone it scrolls sideways inside itself instead of wrapping into a wall. */
+@media (max-width: 47.999rem) {
+  .filter-row {
+    flex-wrap: nowrap;
+    max-width: calc(100% + 2rem);
+    margin-inline: -1rem;
+    padding-inline: 1rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .filter-row > * {
+    flex-shrink: 0;
+  }
 }
 
-/* A floating control group over the Timeline canvas. The one place the app uses blur. */
+/* A floating control group over the Timeline canvas, such as its zoom control. The one place the app uses blur. */
 .canvas-cluster {
   display: flex;
   align-items: center;

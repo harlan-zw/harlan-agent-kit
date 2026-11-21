@@ -5,16 +5,18 @@ import { restartNotice } from '../utils/system.ts'
 
 /**
  * Everything that is not a decision: Selection mode, Restart, Notifications,
- * Theme, Keyboard, How it works. Below `md` the tabs and Pause live here too.
+ * Theme, Passkeys, Keyboard. Below `lg` Pause lives here too, because the header
+ * shows it only on wide screens. Pages live in the sidebar and the tab bar.
  */
 const emit = defineEmits<{ keyboard: [] }>()
 
 const { snapshot, controlsUnavailable, controlPending, setSelectionMode, setAgentControl, requestRestart } = useDashboard()
+const auth = useBrowserAuth()
 const notifications = useNotifications()
 const colorMode = useColorMode()
 const toast = useToast()
 
-const wide = useMediaQuery('(min-width: 48rem)')
+const wide = useMediaQuery('(min-width: 64rem)')
 const route = useRoute()
 const sessionPage = computed(() => route.path === '/sessions')
 
@@ -38,15 +40,6 @@ const items = computed<DropdownMenuItem[][]>(() => {
   const compact: DropdownMenuItem[][] = wide.value
     ? []
     : [
-        [
-          { label: 'Timeline', to: '/timeline', icon: 'i-octicon-clock-16' },
-          { label: 'Sessions', to: '/sessions', icon: 'i-octicon-comment-discussion-16' },
-          { label: 'Board', to: '/', icon: 'i-octicon-columns-16' },
-          { label: 'History', to: '/history', icon: 'i-octicon-history-16' },
-          { label: 'Watching', to: '/watching', icon: 'i-octicon-broadcast-16' },
-          { label: 'Routines', to: '/routines', icon: 'i-octicon-calendar-16' },
-          { label: 'Stats', to: '/stats', icon: 'i-octicon-graph-16' },
-        ],
         sessionPage.value
           ? []
           : [
@@ -106,12 +99,16 @@ const items = computed<DropdownMenuItem[][]>(() => {
         })),
       },
       {
+        label: 'Passkeys',
+        icon: 'i-octicon-key-16',
+        onSelect: () => auth.manage(),
+      },
+      {
         label: 'Keyboard',
         icon: 'i-octicon-command-palette-16',
         kbds: ['?'],
         onSelect: () => emit('keyboard'),
       },
-      { label: 'How it works', to: '/flow', icon: 'i-octicon-workflow-16' },
     ],
     sessionPage.value
       ? []

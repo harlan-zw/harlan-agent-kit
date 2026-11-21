@@ -115,7 +115,7 @@ useHead({
         <span class="font-mono text-sm font-normal text-muted">{{ rows.length }}</span>
       </template>
       <template #actions>
-        <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by outcome">
+        <div class="filter-row flex flex-wrap items-center gap-1" role="group" aria-label="Filter by outcome">
           <UButton
             v-for="filter in outcomeFilters"
             :key="filter.value"

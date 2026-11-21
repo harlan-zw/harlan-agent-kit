@@ -209,7 +209,7 @@ useHead({
             <span class="font-mono text-sm font-normal text-muted">{{ openItems.length }}</span>
           </template>
           <template #actions>
-            <div class="flex items-center gap-1" role="group" aria-label="Filter by kind">
+            <div class="filter-row flex items-center gap-1" role="group" aria-label="Filter by kind">
               <UButton
                 v-for="filter in itemFilters"
                 :key="filter.value"
