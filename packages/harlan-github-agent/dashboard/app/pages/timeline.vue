@@ -3,12 +3,12 @@ import type { MarkTip, TimelineHistory, TimelineRow, TimelineSection, TimelineVi
 import { refDebounced, useElementSize, useEventListener, useIntervalFn, useLocalStorage, useMediaQuery } from '@vueuse/core'
 import { incidentEntries, repositoryName } from '../utils/dashboard.ts'
 import { isTypingTarget, overlayOpen } from '../utils/keyboard.ts'
+import { createTimelineHistoryLoader } from '../utils/timeline-history-loader.ts'
 import {
   clampScale,
   deliveriesLastHour,
   deliveryBins,
   followView,
-  parseTimelineHistory,
   spanLabel,
   timeAt,
   timelineSections,
@@ -37,20 +37,13 @@ const now = computed(() => clockNow.value.getTime())
 
 const history = shallowRef<TimelineHistory>()
 const historyError = ref(false)
-async function loadHistory(): Promise<void> {
-  await $fetch<unknown>('/api/timeline', { timeout: 15_000 })
-    .then((value) => {
-      const parsed = parseTimelineHistory(value)
-      history.value = parsed
-      historyError.value = parsed === undefined
-    })
-    .catch(() => {
-      // A Service older than the Timeline API answers 404. The rows still come from the live snapshot.
-      historyError.value = true
-    })
-}
-onMounted(loadHistory)
-useIntervalFn(loadHistory, 60_000)
+const historyLoader = createTimelineHistoryLoader(
+  query => $fetch<unknown>('/api/timeline', { query, timeout: 15_000 }),
+  (value, error) => {
+    history.value = value
+    historyError.value = error
+  },
+)
 
 /* ---------- View ---------- */
 
@@ -107,6 +100,12 @@ const range = computed(() => narrow.value
   ? { from: now.value - 6 * 3_600_000, to: now.value + 2 * 3_600_000 }
   : { from: from.value, to: to.value })
 const settledRange = refDebounced(range, 250)
+// Invalidate before the debounce, so an old read cannot win during a pan.
+watch(range, value => historyLoader.invalidate(value), { flush: 'sync' })
+watch(settledRange, value => void historyLoader.load(value))
+onMounted(() => historyLoader.load(range.value))
+useIntervalFn(() => historyLoader.load(range.value, true), 60_000)
+onUnmounted(historyLoader.dispose)
 const sections = computed<TimelineSection[]>(() => timelineSections({
   snapshot: snapshot.value,
   history: history.value,
