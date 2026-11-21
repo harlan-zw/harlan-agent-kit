@@ -156,7 +156,7 @@ describe('conflict worker', () => {
     expect(prompt).not.toMatch(/If setup fails.*outcome blocked/)
   })
 
-  it('publishes a merge whose local check could not start to a branch in the repository', async () => {
+  it('keeps an unchecked head from reaching Review when no replacement verification is proven', async () => {
     const repository = repositoryMapping()
     const current = pullRequestItem({ baseSha: 'current-base' })
     const options = conflictWorkerOptions(repository, current)
@@ -176,11 +176,82 @@ describe('conflict worker', () => {
 
     const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
 
-    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'Publish' })))
-    expect(message).toBe('merge: reconcile parser changes\n\n'
-      + 'Local check could not start: pnpm vitest run test/gsc.test.ts: Cannot find modules/dataforseo/.nuxt/tsconfig.app.json.\n'
-      + 'CI on this commit verifies the merge.')
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired' })))
+    expect(message).toBe('')
   })
+
+  it('does not commit when a prerequisite build found a code failure before tests could start', async () => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem()
+    const options = conflictWorkerOptions(repository, current)
+    let committed = false
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        ...resolved,
+        outcome: 'checks_unavailable',
+        checks: ['pnpm build ran and failed: src/outside-scope.ts TS2322: Type string is not assignable to number'],
+        unavailableCheck: { command: 'pnpm test', error: 'Cannot import dist/index.mjs because pnpm build failed' },
+      }))),
+      worktrees: { ...options.worktrees, commit: () => {
+        committed = true
+        return options.worktrees.commit()
+      } },
+    })
+
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal))
+      .toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired' })))
+    expect(committed).toBe(false)
+  })
+
+  it.each(['same-repository', 'fork', 'blocked', 'resolved'] as const)(
+    'redacts diagnostics before truncation, returned evidence, status text, or commits for %s',
+    async (surface) => {
+      const repository = repositoryMapping()
+      const current = pullRequestItem(surface === 'fork'
+        ? { author: 'contributor', headRepository: 'contributor/example', maintainerCanModify: true }
+        : {})
+      const options = conflictWorkerOptions(repository, current)
+      const token = 'syntheticCredentialForRegressionOnly123456'
+      const diagnostic = `${'x'.repeat(220)} Bearer ${token}: generated output missing`
+      let message = ''
+      const worker = createConflictWorker({
+        ...options,
+        runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+          outcome: surface === 'resolved' || surface === 'blocked' ? surface : 'checks_unavailable',
+          summary: diagnostic,
+          checks: [diagnostic],
+          commitMessage: `fix: setup Bearer ${token}`,
+          unavailableCheck: { command: diagnostic, error: diagnostic },
+        }))),
+        worktrees: { ...options.worktrees, commit: (_task, _worktree, _patch, value) => {
+          message = value
+          return options.worktrees.commit()
+        } },
+      })
+
+      const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+      const exposed = `${JSON.stringify(result)} ${message}`
+      expect(exposed.includes(token)).toBe(false)
+      expect(exposed.includes(token.slice(0, 10))).toBe(false)
+      expect(exposed.includes('Bearer ***')).toBe(true)
+      if (surface === 'resolved') {
+        expect(result).toEqual(ok(expect.objectContaining({ _tag: 'Publish' })))
+      }
+      else {
+        expect(result).toEqual(ok(expect.objectContaining({ _tag: 'ActionRequired' })))
+        expect(message).toBe('')
+        if (result._tag === 'Ok' && result.value._tag === 'ActionRequired') {
+          const evidence = JSON.parse(result.value.evidence ?? '{}')
+          expect(evidence.checks).toEqual([`${'x'.repeat(220)} Bearer ***: generated output missing`])
+          if (surface !== 'blocked') {
+            expect(evidence.command).toBe(`${'x'.repeat(220)} Bearer ***: generated`.slice(0, 240))
+            expect(evidence.error).toBe(evidence.command)
+          }
+        }
+      }
+    },
+  )
 
   it('keeps an unchecked merge off a contributor fork and names the step', async () => {
     const repository = repositoryMapping()
