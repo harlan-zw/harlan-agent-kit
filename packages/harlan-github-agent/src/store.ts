@@ -139,7 +139,7 @@ import { AGENT_MODELS, AGENT_PROVIDER_NAMES, CODEX_AGENT_PROFILE, parseAgentSele
 import { RESULT_PHASE_RANK } from './agent-progress.ts'
 import { agentTurnSchema, createAgentTurnStore } from './agent-turn-store.ts'
 import { createBatchStore } from './batch-store.ts'
-import { conflictStopReason } from './conflict-stop.ts'
+import { conflictByHandStep, conflictStopReason } from './conflict-stop.ts'
 import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
 import { gitHubRateLimitRetryAt } from './github-rate-limit.ts'
@@ -3179,13 +3179,13 @@ function reviewAttemptState(row: Pick<QueuedReviewStatusRow, 'state_tag' | 'fail
   }
 }
 
-function failedQueueState(reason: string, recoveryAttempts?: number, work?: AgentRole): QueueState {
+function failedQueueState(reason: string, recoveryAttempts?: number): QueueState {
   // A Task the controller can still requeue is Pending. An exhausted failure is
   // never requeued, so it needs a person and reads ActionRequired.
   const recoverable = canRecoverFailure({ message: reason }, recoveryAttempts ?? 0)
   return recoverable
     ? { _tag: 'Pending', reason: `${reason} The controller will retry.` }
-    : { _tag: 'ActionRequired', reason, ...(work === undefined ? {} : { work }) }
+    : { _tag: 'ActionRequired', reason }
 }
 
 function isProviderCircuitPause(reason: string): boolean {
@@ -3344,7 +3344,14 @@ function dashboardQueue(
         case 'Running':
         case 'Publishing': return [{ ...pullRequest, state: { _tag: 'Active', work: 'conflict_resolution' } }]
         case 'ActionRequired': return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason: task.state.reason, work: 'conflict_resolution' } }]
-        case 'Failed': return [{ ...pullRequest, state: failedQueueState(task.state.reason, task.recoveryAttempts, 'conflict_resolution') }]
+        case 'Failed': {
+          // An exhausted failure reads like a controller error. The card still
+          // owes Harlan one step, and merging by hand always works.
+          const state = failedQueueState(task.state.reason, task.recoveryAttempts)
+          return [{ ...pullRequest, state: state._tag === 'ActionRequired'
+            ? { _tag: 'ActionRequired', reason: `${state.reason} ${conflictByHandStep(mapping, subject)}`, work: 'conflict_resolution' }
+            : state }]
+        }
         case 'Queued': return [{ ...pullRequest, state: { _tag: 'Queued', work: 'conflict_resolution' } }]
         case 'Completed': return [{ ...pullRequest, state: { _tag: 'Pending', reason: 'Waiting for GitHub to report the updated head.' } }]
         case 'Superseded': break
@@ -3369,7 +3376,7 @@ function dashboardQueue(
       // switch that may be on.
       const boundary = conflictWriteBoundary(mapping, subject)
       const reason = boundary === null
-        ? `Conflict resolution has not started for this head commit. Merge ${subject.baseRef ?? mapping.defaultBranch} into ${subject.headRef} by hand, or push a commit to start it.`
+        ? `No conflict resolution is running for this head commit. ${conflictByHandStep(mapping, subject)} A new head commit starts another.`
         : conflictStopReason({ _tag: 'Boundary', boundary }, mapping, subject)
       return [{ ...pullRequest, state: { _tag: 'ActionRequired', reason, work: 'conflict_resolution' } }]
     }

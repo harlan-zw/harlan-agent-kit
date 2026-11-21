@@ -60,6 +60,6 @@ describe('conflict stop reason', () => {
       repositoryMapping(),
       pullRequestItem({ ...fork, maintainerCanModify: true }),
     )).toBe('The agent resolved the merge conflict, but pnpm vitest run could not start: Cannot find tsconfig.app.json. '
-      + 'The Service pushes an unchecked merge only to a branch in harlan-zw/example. Merge main into contributor/example:fix/broken-thing by hand.')
+      + 'The Service pushes a merge without local checks only to a branch in harlan-zw/example. Merge main into contributor/example:fix/broken-thing by hand.')
   })
 })

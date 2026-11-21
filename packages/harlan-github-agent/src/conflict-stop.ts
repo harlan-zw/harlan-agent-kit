@@ -24,12 +24,24 @@ function sentence(value: string): string {
   return `${cleanLine(value).replace(/[.\s]+$/, '')}.`
 }
 
+function branches(mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): { base: string, head: string } {
+  const fork = pullRequest.headRepository.toLowerCase() !== mapping.github.toLowerCase()
+  return {
+    base: pullRequest.baseRef ?? mapping.defaultBranch,
+    head: fork ? `${pullRequest.headRepository}:${pullRequest.headRef}` : pullRequest.headRef,
+  }
+}
+
+/** The step every conflict stop can fall back on. */
+export function conflictByHandStep(mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): string {
+  const { base, head } = branches(mapping, pullRequest)
+  return `Merge ${base} into ${head} by hand.`
+}
+
 export function conflictStopReason(stop: ConflictStop, mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): string {
   const repository = mapping.github
-  const base = pullRequest.baseRef ?? mapping.defaultBranch
-  const fork = pullRequest.headRepository.toLowerCase() !== repository.toLowerCase()
-  const head = fork ? `${pullRequest.headRepository}:${pullRequest.headRef}` : pullRequest.headRef
-  const byHand = `Merge ${base} into ${head} by hand.`
+  const { base, head } = branches(mapping, pullRequest)
+  const byHand = conflictByHandStep(mapping, pullRequest)
   switch (stop._tag) {
     case 'ApprovalRequired':
       return `This contributor commit needs Approval before conflict resolution. Add the ${APPROVAL_LABELS.review} label to approve it.`
@@ -37,7 +49,7 @@ export function conflictStopReason(stop: ConflictStop, mapping: RepositoryMappin
       return `Branch ${head} is protected. Merge ${base} into it by hand.`
     case 'UncheckedFork':
       return `The agent resolved the merge conflict, but ${cleanLine(stop.command)} could not start: ${sentence(stop.error)} `
-        + `The Service pushes an unchecked merge only to a branch in ${repository}. ${byHand}`
+        + `The Service pushes a merge without local checks only to a branch in ${repository}. ${byHand}`
     case 'AgentBlocked':
       return `${sentence(stop.summary)} ${byHand}`
     case 'Boundary':

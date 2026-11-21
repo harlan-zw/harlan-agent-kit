@@ -849,7 +849,7 @@ describe('journal store', () => {
     }))
     expect(snapshot.queue).toContainEqual(expect.objectContaining({
       number: 24,
-      state: { _tag: 'ActionRequired', reason: 'The mutation failed for an unknown reason.', work: 'conflict_resolution' },
+      state: { _tag: 'ActionRequired', reason: 'The mutation failed for an unknown reason. Merge main into fix/broken-thing by hand.', work: 'conflict_resolution' },
     }))
   })
 
@@ -878,6 +878,23 @@ describe('journal store', () => {
     expect(store.getDashboardSnapshot('2026-08-13T01:00:01.000Z').queue[0]?.state).toEqual({
       _tag: 'ActionRequired',
       reason: 'Branch feat-funnel-steps does not start with feat/. Merge main into it by hand. Use a writable prefix for the next branch.',
+      work: 'conflict_resolution',
+    })
+  })
+
+  it('names a step when a cancelled conflict leaves no live Task', () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    store.recordObservation({ externalId: 'conflict', observedAt: '2026-08-13T01:00:00.000Z', source: 'poll', subject: pullRequestItem() })
+    const task = store.getDashboardSnapshot('2026-08-13T01:00:01.000Z').tasks.find(value => value.kind === 'resolve_conflict')
+    if (task === undefined)
+      throw new Error('Expected a conflict Task.')
+    store.cancelTask({ taskId: task.id, at: '2026-08-13T01:00:02.000Z' })
+    store.recordObservation({ externalId: 'conflict', observedAt: '2026-08-13T01:00:03.000Z', source: 'poll', subject: pullRequestItem() })
+
+    expect(store.getDashboardSnapshot('2026-08-13T01:00:04.000Z').queue[0]?.state).toEqual({
+      _tag: 'ActionRequired',
+      reason: 'No conflict resolution is running for this head commit. Merge main into fix/broken-thing by hand. A new head commit starts another.',
       work: 'conflict_resolution',
     })
   })

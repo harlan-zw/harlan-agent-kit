@@ -205,7 +205,7 @@ describe('conflict worker', () => {
     expect(result).toEqual(ok(expect.objectContaining({
       _tag: 'ActionRequired',
       reason: 'The agent resolved the merge conflict, but cargo test could not start: cargo: command not found. '
-        + 'The Service pushes an unchecked merge only to a branch in harlan-zw/example. Merge main into contributor/example:fix/broken-thing by hand.',
+        + 'The Service pushes a merge without local checks only to a branch in harlan-zw/example. Merge main into contributor/example:fix/broken-thing by hand.',
     })))
     expect(committed).toBe(false)
   })
