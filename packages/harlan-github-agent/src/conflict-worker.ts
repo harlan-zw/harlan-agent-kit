@@ -149,6 +149,7 @@ function parseAgentResponse(text: string): Result<AgentResult, string> {
     || (value.outcome !== 'blocked' && value.commitMessage.trim().length === 0)
     || typeof unavailable !== 'object' || unavailable === null
     || typeof unavailable.command !== 'string' || typeof unavailable.error !== 'string'
+    || (value.outcome === 'resolved' && (unavailable.command !== '' || unavailable.error !== ''))
   ) {
     return err('The agent returned an invalid conflict resolution result.')
   }

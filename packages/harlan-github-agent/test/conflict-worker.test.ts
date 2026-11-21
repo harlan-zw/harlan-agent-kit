@@ -204,6 +204,37 @@ describe('conflict worker', () => {
     expect(committed).toBe(false)
   })
 
+  it.each([
+    { command: 'pnpm test', error: 'Required check could not start: generated output missing' },
+    { command: 'pnpm test', error: '' },
+    { command: '', error: 'Required check could not start: generated output missing' },
+  ])('rejects a resolved result with unavailable-check details before verification or commit: %o', async (unavailableCheck) => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem()
+    const options = conflictWorkerOptions(repository, current)
+    const attempts: string[] = []
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({ ...resolved, unavailableCheck }))),
+      worktrees: {
+        ...options.worktrees,
+        verify: () => {
+          attempts.push('verify')
+          return options.worktrees.verify()
+        },
+        commit: () => {
+          attempts.push('commit')
+          return options.worktrees.commit()
+        },
+      },
+    })
+
+    const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+
+    expect(result).toEqual(err('The agent returned an invalid conflict resolution result.'))
+    expect(attempts).toEqual([])
+  })
+
   it.each(['same-repository', 'fork', 'blocked', 'resolved'] as const)(
     'redacts diagnostics before truncation, returned evidence, status text, or commits for %s',
     async (surface) => {
@@ -222,7 +253,7 @@ describe('conflict worker', () => {
           summary: diagnostic,
           checks: [diagnostic],
           commitMessage: `fix: setup Bearer ${token}`,
-          unavailableCheck: { command: diagnostic, error: diagnostic },
+          unavailableCheck: surface === 'resolved' ? { command: '', error: '' } : { command: diagnostic, error: diagnostic },
         }))),
         worktrees: { ...options.worktrees, commit: (_task, _worktree, _patch, value) => {
           message = value
