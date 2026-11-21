@@ -176,7 +176,7 @@ export interface WebhookAppOptions {
   loggedFindingPickup?: {
     allowedAuthor: string
     actorLogin: (repository: string) => string | null
-    apply: (request: LoggedFindingPickup & { requestId: string }) => void
+    apply: (request: LoggedFindingPickup & { requestId: string }) => void | Promise<Result<void, string>>
   }
   secret: string
   now?: () => number
@@ -251,7 +251,11 @@ export function createWebhookApp(options: WebhookAppOptions): H3 {
       if (pickup !== null && options.loggedFindingPickup !== undefined
         && pickup.requestedBy.toLowerCase() === options.loggedFindingPickup.allowedAuthor.toLowerCase()
         && options.loggedFindingPickup.actorLogin(hint.repository)?.toLowerCase() === pickup.commentAuthor.toLowerCase()) {
-        options.loggedFindingPickup.apply({ ...pickup, requestId: delivery })
+        const applied = await options.loggedFindingPickup.apply({ ...pickup, requestId: delivery })
+        if (applied?._tag === 'Err') {
+          options.logger.info(`Finding selection failed: ${applied.error}`)
+          return new Response('Finding selection failed. Retry this delivery.', { status: 503 })
+        }
       }
       const approval = reviewApproval(name, payload)
       if (approval !== null && options.reviewApproval !== undefined

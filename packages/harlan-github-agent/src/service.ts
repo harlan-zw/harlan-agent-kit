@@ -741,6 +741,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     mirror: findingThreads,
     now,
     workerId: randomUUID(),
+    controls: () => releaseWebhookReady && userLoginKnown,
   })
   const pullRequestTriage = createPullRequestTriageController({
     classification,
@@ -1527,16 +1528,15 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }
         })
         recordPassIncidents('stopped_review_comment', stopped.results.flatMap(result => result._tag === 'Err' ? [result.error] : []))
-        if (releaseWebhookReady) {
-          const errors = await guarded('Logged finding status', () => publishLoggedFindingPickups({
-            github: workerGithub,
-            store,
-            repositories: config.repositories,
-            now,
-            workerId: 'logged-finding-status',
-          }, signal), ['The finding status update failed.'])
-          errors.forEach(error => options.logger.error(error))
-        }
+        const findingErrors = await guarded('Logged finding status', () => publishLoggedFindingPickups({
+          github: workerGithub,
+          store,
+          repositories: config.repositories,
+          now,
+          workerId: 'logged-finding-status',
+          controls: webhookControls.available,
+        }, signal), ['The finding status update failed.'])
+        findingErrors.forEach(error => options.logger.error(error))
         const positions = await guarded('Queue position comments', () => publishQueuePositions({
           github: workerGithub,
           now,
@@ -1925,11 +1925,34 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             allowedAuthor: userLogin,
             actorLogin: (name) => {
               const repository = config.repositories.find(repository => repository.github.toLowerCase() === name.toLowerCase() && repository.enabled)
-              return repository === undefined || !config.mutationsEnabled || !repository.pullRequestReview
+              return repository === undefined || !userLoginKnown || !config.mutationsEnabled || !repository.pullRequestReview
                 ? null
                 : actorLogin(repository)
             },
-            apply: (request) => { store.requestLoggedFindingPickup({ ...request, at: now().toISOString() }) },
+            apply: async (request) => {
+              const repository = config.repositories.find(mapping => mapping.github.toLowerCase() === request.repository.toLowerCase())
+              if (repository === undefined)
+                return ok(undefined)
+              const signal = AbortSignal.timeout(25_000)
+              const observed = store.getOpenPullRequest(repository.github, request.pullRequestNumber)
+              const live = await github.getPullRequest(repository, request.pullRequestNumber, signal)
+              if (live._tag === 'Err')
+                return err(live.error.message)
+              if (live.value.headSha !== request.headSha || (live.value.state === 'open' && observed?.baseRef !== live.value.baseRef))
+                return ok(undefined)
+              if (request.inline) {
+                const threads = await workerGithub.listReviewFindingThreads(repository, request.pullRequestNumber, signal)
+                if (threads._tag === 'Err')
+                  return threads
+                if (!threads.value.some(thread => !thread.resolved && thread.comment?.id === request.commentId))
+                  return ok(undefined)
+              }
+              if (store.requestLoggedFindingPickup({ ...request, at: now().toISOString() }) && config.triggers.includes('github')) {
+                for (const scheduler of mutationSchedulers?.repairs ?? [])
+                  void scheduler.runNow().catch(error => options.logger.error(error))
+              }
+              return ok(undefined)
+            },
           },
           reviewApproval: {
             allowedAuthor: userLogin,

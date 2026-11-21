@@ -322,15 +322,17 @@ When required CI fails on the current base of an owned repository, dispatch a se
 
 ## Selected Review findings
 
-Offer one pickup checkbox beside each Logged Review finding when signed webhooks are active.
-Only Harlan's click authorizes the selected finding.
-Bind it to the canonical comment, exact head commit, base branch, and finding identity.
-Reject other comment edits and stale selections.
-Keep selections across restarts. Never queue the same selection twice.
-After merge, run each selection as separate Repair work on the current default branch.
-Require a failing regression test before editing. Record disputed findings without opening a pull request.
-Open a separate linked pull request for each confirmed fix.
-Replace its checkbox with progress and the resulting pull request link.
+Post a Logged Review finding beside its line in the pull request diff.
+Keep findings without an accepted line in the canonical comment.
+On an eligible open pull request, offer a Repair checkbox with signed webhooks.
+Subscribe to Issue comment and Pull request review comment deliveries.
+Use Resolve conversation to dismiss an inline finding. The canonical comment offers Dismiss for findings without an accepted line.
+Accept only Harlan's isolated checkbox edit on the published comment. Bind it to the head commit, base branch, and finding identity.
+Persist each selection before waking Repair. Reject stale selections and duplicate work.
+Run scoped Repair on the current pull request branch. Require a failing regression test before editing.
+Preserve pending selections across a confirmed scoped Repair push on the same branch. A contributor push or retarget revokes their authority.
+Resolve the Agent's finding thread after a published fix and a fresh Review that clears the finding. Keep disputed or failed work visible.
+After merge, selections made for the default branch still run separately and open linked pull requests for confirmed fixes.
 
 ## Package releases
 

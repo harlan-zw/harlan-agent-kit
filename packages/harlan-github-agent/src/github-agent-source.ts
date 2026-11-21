@@ -9,7 +9,7 @@ import type { NativeReviewPublisher } from './native-review.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunPublisher, ReviewCheckRunUpdate } from './review-check-run.ts'
 import type { PriorAutomatedReview } from './review-comment.ts'
-import type { FindingDiscussion, ReviewFindingThread, ReviewFindingThreadSource } from './review-finding-threads.ts'
+import type { FindingDiscussion, ReviewFindingCommentOutcome, ReviewFindingThread, ReviewFindingThreadSource } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, GitHubRepositoryAccess, RepositoryMapping } from './types.ts'
 import { readArtifactText } from './actions-artifact.ts'
 import { AGENT_LABELS, agentLabelStateName, planAgentLabels, staleAgentLabels } from './agent-label.ts'
@@ -24,7 +24,7 @@ import { renderedMediaReferences } from './github-media.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { collectJobWorkflowContext } from './job-workflow-context.ts'
-import { withoutLoggedFindingControls } from './logged-finding-pickup.ts'
+import { normalizeLoggedFindingControls, withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
@@ -517,7 +517,7 @@ const reviewThreadsQuery = `query($owner: String!, $repo: String!, $number: Int!
     pullRequest(number: $number) {
       reviewThreads(first: 100, after: $after) {
         pageInfo { hasNextPage endCursor }
-        nodes { id isResolved comments(first: 1) { nodes { body author { login } } } }
+        nodes { id isResolved comments(first: 1) { nodes { fullDatabaseId body author { login } } } }
       }
     }
   }
@@ -529,7 +529,7 @@ const resolveReviewThreadMutation = `mutation($threadId: ID!) {
 
 interface ReviewThreadsPage {
   pageInfo: { hasNextPage: boolean, endCursor: string | null }
-  nodes: Array<{ id: string, isResolved: boolean, comments: { nodes: Array<{ body: string, author: { login: string } | null } | null> | null } } | null> | null
+  nodes: Array<{ id: string, isResolved: boolean, comments: { nodes: Array<{ fullDatabaseId: string | number | null, body: string, author: { login: string } | null } | null> | null } } | null> | null
 }
 
 interface ReviewThreadsResponse {
@@ -1385,8 +1385,11 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           if (node === null || node === undefined || first === null || first === undefined || first.author === null || botLogin(first.author.login) !== actor)
             continue
           const fingerprint = reviewFindingThreadFingerprint(first.body)
-          if (fingerprint !== null)
-            threads.push({ threadId: node.id, fingerprint, resolved: node.isResolved })
+          if (fingerprint !== null) {
+            const id = Number(first.fullDatabaseId)
+            const comment = Number.isSafeInteger(id) && id > 0 ? { id, body: first.body } : undefined
+            threads.push({ threadId: node.id, fingerprint, resolved: node.isResolved, ...(comment === undefined ? {} : { comment }) })
+          }
         }
         after = page.value.pageInfo.hasNextPage ? page.value.pageInfo.endCursor : null
       } while (after !== null)
@@ -1401,25 +1404,43 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       const request = { owner, repo, pull_number: pullRequestNumber, commit_id: comment.headSha, path: comment.path, body: githubAccountBody(comment.body, repository.githubAccount), request: { signal } }
       // GitHub refuses a line outside the diff with 422, and a file outside
       // the diff the same way. A line it refuses falls back to the file.
-      const post = (line: number | null): Promise<Result<'Posted' | 'Refused', string>> => {
+      const post = (line: number | null): Promise<Result<ReviewFindingCommentOutcome, string>> => {
         const authorized = authorize()
         if (authorized._tag === 'Err')
           return Promise.resolve(authorized)
         return octokit.value.rest.pulls.createReviewComment(line === null
           ? { ...request, subject_type: 'file' }
           : { ...request, line, side: 'RIGHT' })
-          .then((): Result<'Posted' | 'Refused', string> => ok('Posted'))
-          .catch((error: unknown): Result<'Posted' | 'Refused', string> => errorStatus(error) === 422 ? ok('Refused') : err(message(error)))
+          .then(({ data }): Result<ReviewFindingCommentOutcome, string> => ok({
+            _tag: 'Posted',
+            ...(typeof data.body === 'string' ? { comment: { id: data.id, body: data.body } } : {}),
+          }))
+          .catch((error: unknown): Result<ReviewFindingCommentOutcome, string> => errorStatus(error) === 422 ? ok({ _tag: 'OutsideDiff' }) : err(message(error)))
       }
       const onLine = await post(comment.line)
-      if (onLine._tag === 'Err' || onLine.value === 'Posted')
-        return onLine._tag === 'Err' ? onLine : ok({ _tag: 'Posted' as const })
-      if (comment.line === null)
-        return ok({ _tag: 'OutsideDiff' as const })
-      const onFile = await post(null)
-      if (onFile._tag === 'Err')
-        return onFile
-      return ok(onFile.value === 'Posted' ? { _tag: 'Posted' as const } : { _tag: 'OutsideDiff' as const })
+      if (onLine._tag === 'Err' || onLine.value._tag === 'Posted' || comment.line === null || comment.lineOnly)
+        return onLine
+      return post(null)
+    },
+
+    async editReviewFindingComment(repository, comment, bodyText, signal, authorize) {
+      const body = githubAccountBody(bodyText, repository.githubAccount)
+      if (normalizeLoggedFindingControls(comment.body) === body)
+        return ok(comment)
+      const octokit = await client(repository.github, 'item_write', signal)
+      if (octokit._tag === 'Err')
+        return octokit
+      const { owner, repo } = repositoryParts(repository.github)
+      const request = { owner, repo, comment_id: comment.id, request: { signal } }
+      return octokit.value.rest.pulls.getReviewComment(request).then((current) => {
+        if (current.data.body !== comment.body || botLogin(current.data.user?.login ?? '') !== botLogin(options.actorLogin(repository)))
+          return err('The finding comment changed before it could be updated.')
+        const authority = authorize()
+        if (authority._tag === 'Err')
+          return authority
+        return octokit.value.rest.pulls.updateReviewComment({ ...request, body })
+          .then(({ data }) => data.body === body ? ok({ id: data.id, body: data.body }) : err('GitHub did not confirm the finding comment.'))
+      }).catch((error: unknown) => err(message(error)))
     },
 
     async resolveReviewFindingThread(repository, threadId, signal, authorize) {

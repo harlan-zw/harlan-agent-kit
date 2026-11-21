@@ -1283,8 +1283,8 @@ export function reviewPrompt(task: ClaimedAdversarialReviewTask, snapshot: PullR
   const repeatedFindings = repairedHeadFindings.length === 0
     ? ''
     : `
-A published Repair built this exact head commit, and its source Review reported these open findings:
-${JSON.stringify(repairedHeadFindings.map(finding => finding._tag === 'Open'
+A published Repair built this exact head commit and targeted these findings:
+${JSON.stringify(repairedHeadFindings.map(finding => finding._tag !== 'Fixed'
   ? { identity: finding.details?.identity ?? null, summary: finding.summary }
   : finding))}
 If one of these names the same defect you find, return its identity value exactly. Do not coin new wording for it.`

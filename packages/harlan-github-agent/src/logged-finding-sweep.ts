@@ -10,11 +10,12 @@ export async function publishLoggedFindingPickups(options: {
   repositories: readonly RepositoryMapping[]
   now: () => Date
   workerId: string
+  controls?: (repository: string) => boolean
 }, signal: AbortSignal): Promise<string[]> {
   const errors: string[] = []
   // Bound one pass. A failed comment releases itself when its lease expires.
   for (let index = 0; index < 20 && !signal.aborted; index++) {
-    const command = options.store.claimLoggedFindingComment(options.workerId, options.now().toISOString(), 60_000)
+    const command = options.store.claimLoggedFindingComment(options.workerId, options.now().toISOString(), 60_000, options.controls)
     if (command === null)
       break
     const mapping = options.repositories.find(mapping => mapping.github.toLowerCase() === command.repository.toLowerCase())

@@ -4293,7 +4293,8 @@ function reviewFixRounds(database: DatabaseSync, subjectId: number, headSha: str
   const repairedBy = database.prepare(`
     SELECT tasks.id AS task_id, tasks.revision_id, publication_commands.commit_sha,
       json_extract(revisions.payload, '$.headSha') AS repaired_head_sha,
-      repair_reports.summary, repair_reports.checks
+      repair_reports.summary, repair_reports.checks,
+      EXISTS (SELECT 1 FROM logged_finding_requests WHERE task_id = tasks.id AND on_head = 1) AS selected_finding
     FROM publication_commands
     JOIN tasks ON tasks.id = publication_commands.task_id
     JOIN revisions ON revisions.id = tasks.revision_id
@@ -4316,17 +4317,20 @@ function reviewFixRounds(database: DatabaseSync, subjectId: number, headSha: str
       repaired_head_sha: string | null
       summary: string | null
       checks: string | null
+      selected_finding: number
     } | undefined
     if (row === undefined || row.repaired_head_sha === null)
       break
-    rounds.unshift({
-      number: 0,
-      revisionId: row.revision_id,
-      commitSha: row.commit_sha,
-      summary: row.summary,
-      checks: row.checks === null ? [] : JSON.parse(row.checks) as string[],
-      findings: openReviewFindings(database, subjectId, row.revision_id).map(finding => finding.summary),
-    })
+    if (row.selected_finding === 0) {
+      rounds.unshift({
+        number: 0,
+        revisionId: row.revision_id,
+        commitSha: row.commit_sha,
+        summary: row.summary,
+        checks: row.checks === null ? [] : JSON.parse(row.checks) as string[],
+        findings: openReviewFindings(database, subjectId, row.revision_id).map(finding => finding.summary),
+      })
+    }
     commitSha = row.repaired_head_sha
   }
   return rounds.map((round, index) => ({ ...round, number: index + 1 }))
@@ -7483,7 +7487,45 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, checkRunRerunMigration)
     version = 101
   }
-  if (version === 101)
+  if (version === 101) {
+    const requestColumns = (database.prepare('PRAGMA table_info(logged_finding_requests)').all() as Array<{ name: string }>).map(column => column.name)
+    const syncColumns = (database.prepare('PRAGMA table_info(finding_thread_syncs)').all() as Array<{ name: string }>).map(column => column.name)
+    applyMigration(database, `
+      ${requestColumns.includes('on_head') ? '' : 'ALTER TABLE logged_finding_requests ADD COLUMN on_head INTEGER NOT NULL DEFAULT 0 CHECK (on_head IN (0, 1));'}
+      ${requestColumns.includes('dismissed') ? '' : 'ALTER TABLE logged_finding_requests ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0 CHECK (dismissed IN (0, 1));'}
+      ALTER TABLE logged_finding_requests RENAME TO logged_finding_requests_v82;
+      CREATE TABLE logged_finding_requests (
+        id TEXT PRIMARY KEY,
+        subject_id INTEGER NOT NULL REFERENCES subjects(id),
+        head_sha TEXT NOT NULL,
+        base_ref TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        finding_json TEXT NOT NULL CHECK (json_valid(finding_json)),
+        requested_by TEXT NOT NULL,
+        requested_at TEXT NOT NULL,
+        task_id TEXT UNIQUE REFERENCES tasks(id),
+        on_head INTEGER NOT NULL DEFAULT 0 CHECK (on_head IN (0, 1)),
+        dismissed INTEGER NOT NULL DEFAULT 0 CHECK (dismissed IN (0, 1)),
+        UNIQUE (subject_id, head_sha, base_ref, fingerprint)
+      );
+      INSERT INTO logged_finding_requests
+        (id, subject_id, head_sha, base_ref, fingerprint, finding_json, requested_by, requested_at, task_id, on_head, dismissed)
+      SELECT id, subject_id, head_sha, base_ref, fingerprint, finding_json, requested_by, requested_at, task_id, on_head, dismissed
+      FROM logged_finding_requests_v82;
+      DROP TABLE logged_finding_requests_v82;
+      ${syncColumns.includes('inline_findings') ? '' : 'ALTER TABLE finding_thread_syncs ADD COLUMN inline_findings TEXT NOT NULL DEFAULT \'[]\' CHECK (json_valid(inline_findings));'}
+      UPDATE finding_thread_syncs SET state_tag = 'Pending'
+      WHERE state_tag = 'Written' AND review_run_id IN (
+        SELECT review_runs.id FROM review_runs JOIN subjects ON subjects.id = review_runs.subject_id
+        JOIN revisions ON revisions.id = subjects.current_revision_id
+        WHERE review_runs.head_sha = json_extract(revisions.payload, '$.headSha')
+          AND json_extract(revisions.payload, '$.state') = 'open'
+          AND EXISTS (SELECT 1 FROM json_each(review_runs.findings) WHERE json_extract(value, '$._tag') = 'Logged')
+      );
+      PRAGMA user_version = 102;`)
+    version = 102
+  }
+  if (version === 102)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -10240,7 +10282,7 @@ export function openJournalStore(
 
   const getRepairedHeadFindings: JournalStore['getRepairedHeadFindings'] = (repository, pullRequestNumber, commitSha) => {
     const repaired = database.prepare(`
-      SELECT tasks.revision_id AS revision_id
+      SELECT tasks.revision_id AS revision_id, tasks.id AS task_id
       FROM publication_commands
       JOIN tasks ON tasks.id = publication_commands.task_id
       JOIN subjects ON subjects.id = tasks.subject_id
@@ -10251,8 +10293,11 @@ export function openJournalStore(
         AND publication_commands.commit_sha = ?
       ORDER BY publication_commands.published_at DESC, publication_commands.id DESC
       LIMIT 1
-    `).get(repository, pullRequestNumber, commitSha) as { revision_id: string } | undefined
-    return repaired === undefined ? [] : getReviewFixFindings(repository, pullRequestNumber, repaired.revision_id)
+    `).get(repository, pullRequestNumber, commitSha) as { revision_id: string, task_id: string } | undefined
+    if (repaired === undefined)
+      return []
+    const selected = loggedFindingStore.getLoggedFindingForTask(repaired.task_id)
+    return selected === null ? getReviewFixFindings(repository, pullRequestNumber, repaired.revision_id) : [selected]
   }
 
   const repairRoundPlan: JournalStore['repairRoundPlan'] = (repository, pullRequestNumber, headSha) => {
@@ -10450,9 +10495,12 @@ export function openJournalStore(
             WHERE combined.task_id = tasks.id AND commands.state_tag IN ('Pending', 'Running')
           )
           AND ${mutationRevisionAuthoritySql}
-          AND NOT EXISTS (SELECT 1 FROM tasks AS owner_task JOIN pull_request_change_requests ON task_id = owner_task.id
-            WHERE owner_task.subject_id = subjects.id AND owner_task.id != tasks.id AND owner_task.state_tag IN ('Running', 'Publishing'))
-          AND (NOT EXISTS (SELECT 1 FROM pull_request_change_requests WHERE task_id = tasks.id) OR (
+          AND NOT EXISTS (SELECT 1 FROM tasks AS scoped
+            WHERE scoped.subject_id = subjects.id AND scoped.id != tasks.id AND scoped.state_tag IN ('Running', 'Publishing')
+              AND (EXISTS (SELECT 1 FROM pull_request_change_requests WHERE task_id = scoped.id)
+                OR EXISTS (SELECT 1 FROM logged_finding_requests WHERE task_id = scoped.id AND on_head = 1)))
+          AND ((NOT EXISTS (SELECT 1 FROM pull_request_change_requests WHERE task_id = tasks.id)
+            AND NOT EXISTS (SELECT 1 FROM logged_finding_requests WHERE task_id = tasks.id AND on_head = 1)) OR (
             NOT EXISTS (SELECT 1 FROM worker_tasks WHERE subject_id = subjects.id AND state_tag IN ('Queued', 'Running', 'Publishing'))
             AND NOT EXISTS (SELECT 1 FROM tasks AS sibling WHERE sibling.subject_id = subjects.id AND sibling.id != tasks.id
               AND (sibling.state_tag IN ('Running', 'Publishing') OR (sibling.state_tag = 'Queued' AND (sibling.updated_at < tasks.updated_at OR (sibling.updated_at = tasks.updated_at AND sibling.id < tasks.id)))))
@@ -10634,7 +10682,14 @@ export function openJournalStore(
         const finding = loggedFindingStore.getLoggedFindingForTask(row.id)
         const request = database.prepare('SELECT id, instruction, requested_by FROM pull_request_change_requests WHERE task_id = ?')
           .get(row.id) as { id: string, instruction: string, requested_by: string } | undefined
-        return { ...task, kind, ...(request === undefined ? {} : { request: { _tag: 'OwnerComment' as const, instruction: request.instruction, requestedBy: request.requested_by, requestId: request.id } }), ...(finding === null ? {} : { pickup: { _tag: 'LoggedFinding' as const, finding } }), rounds: finding === null ? { number: prior.length + 1, limit: REPAIR_ROUND_LIMIT, prior } : { number: 1, limit: 1, prior: [] } }
+        const pickup = finding === null
+          ? undefined
+          : {
+              _tag: 'LoggedFinding' as const,
+              finding,
+              ...(loggedFindingStore.loggedFindingRepairsHead(row.id) ? { target: 'head' as const } : {}),
+            }
+        return { ...task, kind, ...(request === undefined ? {} : { request: { _tag: 'OwnerComment' as const, instruction: request.instruction, requestedBy: request.requested_by, requestId: request.id } }), ...(pickup === undefined ? {} : { pickup }), rounds: finding === null ? { number: prior.length + 1, limit: REPAIR_ROUND_LIMIT, prior } : { number: 1, limit: 1, prior: [] } }
       }
       if (kind === 'resolve_conflict')
         return { ...task, kind }
@@ -13747,6 +13802,18 @@ export function openJournalStore(
         fence: task.task_fence,
         at: input.at,
       })
+      // Carry selections only through a confirmed Repair from their exact head.
+      // A contributor push or base change ends their authority.
+      database.prepare(`
+        UPDATE OR IGNORE logged_finding_requests SET head_sha = publication.commit_sha
+        FROM publication_commands AS publication
+        JOIN logged_finding_requests AS selected ON selected.task_id = publication.task_id
+        WHERE publication.id = ? AND selected.on_head = 1
+          AND logged_finding_requests.task_id IS NULL AND logged_finding_requests.on_head = 1 AND logged_finding_requests.dismissed = 0
+          AND logged_finding_requests.subject_id = selected.subject_id
+          AND logged_finding_requests.head_sha = publication.expected_head_sha
+          AND logged_finding_requests.base_ref = publication.base_ref
+      `).run(input.commandId)
       resolveTaskIncidents(database, task.task_id, input.at)
       const combined = database.prepare(`
         SELECT tasks.id, tasks.fence FROM combined_issue_publications

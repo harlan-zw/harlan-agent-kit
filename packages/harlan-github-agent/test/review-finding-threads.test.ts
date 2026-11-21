@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { createRepositoryTokenProvider } from '../src/github-auth.ts'
 import { err, ok } from '../src/result.ts'
-import { mirrorReviewFindingThreads } from '../src/review-finding-threads.ts'
+import { mirrorReviewFindingThreads, reviewFindingThreadBody } from '../src/review-finding-threads.ts'
 import { repositoryMapping } from './fixtures.ts'
 
 const headSha = '5a885d2507bd5c0f86f027c7054fcda215d444f1'
@@ -21,6 +21,14 @@ function openFinding(fingerprint: string, path: string, line: number | null): Re
     resolution: 'Repair',
     details: { fingerprint, location: { path, line }, proof: 'Two tests hold the lock at once', regressionTest: null },
   }
+}
+
+const logged: Extract<ReviewFinding, { _tag: 'Logged' }> = {
+  _tag: 'Logged',
+  impact: 42,
+  summary: 'A split sequence drops bytes',
+  nextAction: 'Preserve buffered bytes.',
+  details: { fingerprint: lockFingerprint, identity: 'split-sequence', location: { path: 'src/parser.ts', line: 32 }, proof: 'The last chunk loses a byte.' },
 }
 
 function fakeSource(threads: ReviewFindingThread[], outcome: 'Posted' | 'OutsideDiff' = 'Posted') {
@@ -45,6 +53,31 @@ function fakeSource(threads: ReviewFindingThread[], outcome: 'Posted' | 'Outside
 }
 
 describe('review finding threads', () => {
+  it('puts an optional finding and its Repair checkbox beside the code', async () => {
+    const { mirror, posted } = fakeSource([])
+    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 497, headSha, [logged], new AbortController().signal, authorize, 'open', { controls: true })
+    expect(posted).toEqual([expect.objectContaining({
+      path: 'src/parser.ts',
+      line: 32,
+      body: expect.stringContaining('- [ ] Ask an agent to verify and fix this finding'),
+    })])
+  })
+
+  it.each([
+    { findings: [], fixed: [], resolved: [] },
+    { findings: [logged], fixed: [lockFingerprint], resolved: [] },
+    { findings: [], fixed: [lockFingerprint], resolved: ['selected'] },
+  ])('resolves a Logged thread only after its Repair and a Review that clears it', async ({ findings, fixed, resolved: expected }) => {
+    const { mirror, resolved } = fakeSource([{
+      threadId: 'selected',
+      fingerprint: lockFingerprint,
+      resolved: false,
+      comment: { id: 4_640_421_240, body: reviewFindingThreadBody(logged, headSha) },
+    }])
+    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 497, headSha, findings, new AbortController().signal, authorize, 'open', { fixed })
+    expect(resolved).toEqual(expected)
+  })
+
   it('resolves obsolete threads after merge without posting or closing a current finding', async () => {
     const { mirror, posted, resolved } = fakeSource([
       { threadId: 'obsolete', fingerprint: 'c'.repeat(64), resolved: false },
@@ -172,6 +205,12 @@ describe('gitHub review finding threads', () => {
     expect(await source.postReviewFindingComment(repositoryMapping(), 497, comment, new AbortController().signal, authorize)).toEqual(ok({ _tag: 'OutsideDiff' }))
   })
 
+  it('keeps a Logged finding off the file when GitHub refuses the line', async () => {
+    const { createReviewComment, source } = github([422, null])
+    expect(await source.postReviewFindingComment(repositoryMapping(), 497, { ...comment, lineOnly: true }, new AbortController().signal, authorize)).toEqual(ok({ _tag: 'OutsideDiff' }))
+    expect(createReviewComment).toHaveBeenCalledTimes(1)
+  })
+
   it('writes nothing once the publication lost its authority', async () => {
     const { createReviewComment, source } = github([null])
 
@@ -182,12 +221,12 @@ describe('gitHub review finding threads', () => {
   it('reads only the finding threads this App opened', async () => {
     const marked = `<!-- harlan-agent-kit:pr-triage -->\n<!-- review-finding: ${lockFingerprint} -->\n**Open:** x`
     const { source } = github([], [
-      { id: 'T1', isResolved: false, comments: { nodes: [{ body: marked, author: { login: 'harlan-github-agent' } }] } },
+      { id: 'T1', isResolved: false, comments: { nodes: [{ fullDatabaseId: '4640421240', body: marked, author: { login: 'harlan-github-agent' } }] } },
       { id: 'T2', isResolved: false, comments: { nodes: [{ body: marked, author: { login: 'someone-else' } }] } },
       { id: 'T3', isResolved: true, comments: { nodes: [{ body: 'A person asks a question.', author: { login: 'harlan-github-agent' } }] } },
     ])
 
     expect(await source.listReviewFindingThreads(repositoryMapping(), 497, new AbortController().signal))
-      .toEqual(ok([{ threadId: 'T1', fingerprint: lockFingerprint, resolved: false }]))
+      .toEqual(ok([{ threadId: 'T1', fingerprint: lockFingerprint, resolved: false, comment: { id: 4_640_421_240, body: marked } }]))
   })
 })
