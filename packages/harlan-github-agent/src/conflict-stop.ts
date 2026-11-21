@@ -13,8 +13,8 @@ export type ConflictStop
   = | { _tag: 'Boundary', boundary: ConflictWriteBoundary }
     | { _tag: 'ApprovalRequired' }
     | { _tag: 'ProtectedHead' }
-    /** The agent resolved the merge, a local check could not start, and the head is a contributor fork. */
-    | { _tag: 'UncheckedFork', command: string, error: string }
+    /** The agent resolved the merge, but a required local check could not start. */
+    | { _tag: 'ChecksUnavailable', command: string, error: string }
     /** The agent found ambiguous intent, or a check failed that it could not fix inside the merge. */
     | { _tag: 'AgentBlocked', summary: string }
 
@@ -47,9 +47,9 @@ export function conflictStopReason(stop: ConflictStop, mapping: RepositoryMappin
       return `This contributor commit needs Approval before conflict resolution. Add the ${APPROVAL_LABELS.review} label to approve it.`
     case 'ProtectedHead':
       return `Branch ${head} is protected. Merge ${base} into it by hand.`
-    case 'UncheckedFork':
+    case 'ChecksUnavailable':
       return `The agent resolved the merge conflict, but ${cleanLine(stop.command)} could not start: ${sentence(stop.error)} `
-        + `The Service pushes a merge without local checks only to a branch in ${repository}. ${byHand}`
+        + `The Service does not push a merge whose required check did not run. ${byHand}`
     case 'AgentBlocked':
       return `${sentence(stop.summary)} ${byHand}`
     case 'Boundary':

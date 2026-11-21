@@ -390,9 +390,9 @@ Resolve against the pull request intent. Run focused and repository-required che
 
 If a required check cannot start, the Agent returns `checks_unavailable` with the exact command and error.
 A missing toolchain, setup step, or generated output stops a check from starting.
-For a branch in the repository itself, the controller pushes that merge. CI and the next Review verify it.
-The commit body names the check that could not start.
-Never push an unchecked merge to a contributor fork. Name the command, the error, and the step instead.
+Never push a merge whose required check did not run. CI can pass without running that check.
+Mark Action required with the command, the error, and the merge-by-hand step.
+If a prerequisite ran and found a code failure, the Agent returns `blocked`.
 If a check ran and failed, and the fix needs a path outside the merge, the Agent returns `blocked`.
 
 After the push, invalidate old evidence and run `adversarial-review` again against the new remote SHA.

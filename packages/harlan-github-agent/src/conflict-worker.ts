@@ -13,7 +13,7 @@ import { agentPhase } from './agent-progress.ts'
 import { runAgentTurn } from './agent-turn.ts'
 import { conflictStopReason } from './conflict-stop.ts'
 import { isAutomatedGitHubActor } from './github.ts'
-import { canPublishUncheckedConflictResolution, conflictWriteBoundary } from './repository-policy.ts'
+import { conflictWriteBoundary } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { cleanLine } from './text.ts'
 
@@ -41,8 +41,9 @@ export interface ConflictWorkerOptions {
  * The conflict Agent's answer, parsed once.
  *
  * `ChecksUnavailable` is a resolved merge whose required check could not
- * start. It remains blocked until local verification succeeds. A future CI
- * run is not proof that the missing local check will run.
+ * start. The controller never publishes it: CI can pass without running that
+ * check, and a head with no CI still reaches READY. It stops with the exact
+ * command and error instead of a blocker Harlan has to decode.
  */
 type AgentResult
   = | { _tag: 'Resolved', summary: string, checks: string[], commitMessage: string }
@@ -114,7 +115,7 @@ Run that prerequisite and rerun the same focused checks within the check budget.
 Keep tracked edits within the listed paths and generated artifacts out of the patch.
 If a required check still cannot start, return outcome checks_unavailable.
 A check cannot start when setup, a toolchain binary, or generated output is missing.
-Put that exact command and its error in unavailableCheck. The controller keeps the merge blocked until verification succeeds.
+Put that exact command and its error in unavailableCheck. The controller does not publish that merge. It reports the command and error.
 If a prerequisite ran and found a code failure, return outcome blocked, even when the downstream check cannot start.
 Unchanged tests and call sites can fail because the merge changed their dependencies.
 If a check ran and failed outside the files the merge touched, report the failure and return outcome blocked.
@@ -136,6 +137,8 @@ function parseAgentResponse(text: string): Result<AgentResult, string> {
   catch {
     return err('The agent returned malformed conflict resolution JSON.')
   }
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return err('The agent returned an invalid conflict resolution result.')
   const unavailable = value.unavailableCheck
   if (
     (value.outcome !== 'resolved' && value.outcome !== 'checks_unavailable' && value.outcome !== 'blocked')
@@ -269,21 +272,13 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
           usage: turn.value.usage,
         })
       }
-      if (result._tag === 'ChecksUnavailable' && !canPublishUncheckedConflictResolution(validated.value, current.value)) {
-        return ok({
-          _tag: 'ActionRequired',
-          reason: conflictStopReason({ _tag: 'UncheckedFork', command: result.command, error: result.error }, validated.value, current.value),
-          evidence: JSON.stringify(result),
-          usage: turn.value.usage,
-        })
-      }
       if (result._tag === 'ChecksUnavailable') {
         // Branch authority does not prove that CI replaces the unavailable
         // command. The publication protocol carries no such obligation, so
         // do not create a head that Review could accept without that check.
         return ok({
           _tag: 'ActionRequired',
-          reason: conflictStopReason({ _tag: 'AgentBlocked', summary: `Local verification is incomplete: ${result.command}: ${result.error}` }, validated.value, current.value),
+          reason: conflictStopReason({ _tag: 'ChecksUnavailable', command: result.command, error: result.error }, validated.value, current.value),
           evidence: JSON.stringify(result),
           usage: turn.value.usage,
         })

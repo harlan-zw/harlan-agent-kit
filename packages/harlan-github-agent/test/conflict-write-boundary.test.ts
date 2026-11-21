@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { conflictStopReason } from '../src/conflict-stop.ts'
-import { canPublishUncheckedConflictResolution, canResolveConflictPullRequestHead, conflictWriteBoundary } from '../src/repository-policy.ts'
+import { canResolveConflictPullRequestHead, conflictWriteBoundary } from '../src/repository-policy.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const fork = { author: 'contributor', headRepository: 'contributor/example' }
@@ -26,13 +26,6 @@ describe('conflict write boundary', () => {
     }
     expect(conflictWriteBoundary(repositoryMapping(), pullRequestItem({ ...fork, maintainerCanModify: true }))).toBeNull()
   })
-
-  it('publishes an unchecked merge only to a branch in the repository itself', () => {
-    expect(canPublishUncheckedConflictResolution(repositoryMapping(), pullRequestItem())).toBe(true)
-    expect(canPublishUncheckedConflictResolution(repositoryMapping({ ownership: 'maintained' }), pullRequestItem())).toBe(true)
-    expect(canPublishUncheckedConflictResolution(repositoryMapping(), pullRequestItem({ ...fork, maintainerCanModify: true }))).toBe(false)
-    expect(canPublishUncheckedConflictResolution(repositoryMapping(), pullRequestItem({ headRef: 'wip/x' }))).toBe(false)
-  })
 })
 
 describe('conflict stop reason', () => {
@@ -52,14 +45,14 @@ describe('conflict stop reason', () => {
     expect(reason).not.toMatch(/permission/i)
   })
 
-  it('names the protected branch and the unchecked fork merge', () => {
+  it('names the protected branch and the check that could not start', () => {
     expect(conflictStopReason({ _tag: 'ProtectedHead' }, repositoryMapping(), pullRequestItem()))
       .toBe('Branch fix/broken-thing is protected. Merge main into it by hand.')
     expect(conflictStopReason(
-      { _tag: 'UncheckedFork', command: 'pnpm vitest run', error: 'Cannot find tsconfig.app.json' },
+      { _tag: 'ChecksUnavailable', command: 'pnpm vitest run', error: 'Cannot find tsconfig.app.json' },
       repositoryMapping(),
       pullRequestItem({ ...fork, maintainerCanModify: true }),
     )).toBe('The agent resolved the merge conflict, but pnpm vitest run could not start: Cannot find tsconfig.app.json. '
-      + 'The Service pushes a merge without local checks only to a branch in harlan-zw/example. Merge main into contributor/example:fix/broken-thing by hand.')
+      + 'The Service does not push a merge whose required check did not run. Merge main into contributor/example:fix/broken-thing by hand.')
   })
 })

@@ -100,17 +100,6 @@ export function canResolveConflictPullRequestHead(mapping: RepositoryMapping, pu
 }
 
 /**
- * True when the controller may push a conflict resolution whose local check could not start.
- *
- * CI on the pushed commit and the next Review verify that merge. Only a branch
- * in the repository itself qualifies: a contributor's fork never receives an
- * unchecked merge.
- */
-export function canPublishUncheckedConflictResolution(mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): boolean {
-  return canResolveConflictPullRequestHead(mapping, pullRequest) && !isForkHead(mapping, pullRequest)
-}
-
-/**
  * True when the controller may open a pull request for an issue here.
  *
  * A maintained repository must opt in. Authentication decides which trusted

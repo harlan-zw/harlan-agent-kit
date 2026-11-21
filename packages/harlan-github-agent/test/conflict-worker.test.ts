@@ -253,9 +253,12 @@ describe('conflict worker', () => {
     },
   )
 
-  it('keeps an unchecked merge off a contributor fork and names the step', async () => {
+  it.each([
+    ['a branch in the repository', {}, 'fix/broken-thing'],
+    ['a contributor fork', { author: 'contributor', headRepository: 'contributor/example', maintainerCanModify: true }, 'contributor/example:fix/broken-thing'],
+  ])('names the check that could not start on %s and never commits', async (_name, head, branch) => {
     const repository = repositoryMapping()
-    const current = pullRequestItem({ baseSha: 'current-base', author: 'contributor', headRepository: 'contributor/example', maintainerCanModify: true })
+    const current = pullRequestItem({ baseSha: 'current-base', ...head })
     const options = conflictWorkerOptions(repository, current)
     let committed = false
     const worker = createConflictWorker({
@@ -276,7 +279,7 @@ describe('conflict worker', () => {
     expect(result).toEqual(ok(expect.objectContaining({
       _tag: 'ActionRequired',
       reason: 'The agent resolved the merge conflict, but cargo test could not start: cargo: command not found. '
-        + 'The Service pushes a merge without local checks only to a branch in harlan-zw/example. Merge main into contributor/example:fix/broken-thing by hand.',
+        + `The Service does not push a merge whose required check did not run. Merge main into ${branch} by hand.`,
     })))
     expect(committed).toBe(false)
   })
@@ -294,6 +297,22 @@ describe('conflict worker', () => {
 
     expect(await worker.run(conflictTask(repository, current), new AbortController().signal))
       .toEqual(err('The agent returned checks_unavailable without the exact command and error.'))
+  })
+
+  it.each(['null', '[]', '"resolved"'])('rejects a non-object Agent response %s as invalid', async (response) => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base' })
+    const worker = createConflictWorker({
+      ...conflictWorkerOptions(repository, current),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider([
+        { _tag: 'SessionStarted', sessionId: 'session-1' },
+        { _tag: 'Message', text: response },
+        { _tag: 'TurnCompleted' },
+      ])),
+    })
+
+    expect(await worker.run(conflictTask(repository, current), new AbortController().signal))
+      .toEqual(err('The agent returned an invalid conflict resolution result.'))
   })
 
   it('stops a blocked resolution with one exact step', async () => {
