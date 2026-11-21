@@ -1,6 +1,8 @@
+import { createHmac } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createFindingThreadSyncController } from '../src/finding-thread-sync.ts'
 import { refreshControllerGates, terminalComment } from '../src/item-agent.ts'
@@ -11,6 +13,8 @@ import { err, ok } from '../src/result.ts'
 import { reviewFindingThreadBody } from '../src/review-finding-threads.ts'
 import { refreshReviewGates } from '../src/review-gate-sweep.ts'
 import { openJournalStore } from '../src/store.ts'
+import { createWebhookApp } from '../src/webhook.ts'
+import { createGitPublicationRemote } from '../src/worktree.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 import { githubPublicationFixture } from './github-publication-fixture.ts'
 
@@ -53,6 +57,99 @@ function setup(findings = [finding], path = ':memory:', target: 'head' | 'after-
 }
 
 describe('durable Logged finding pickup', () => {
+  it('revokes a staged selection when a signed Dismiss delivery finishes after the status rewrite', async () => {
+    const { store, pullRequest, request } = setup([finding], ':memory:', 'head')
+    expect(store.requestLoggedFindingPickup(request)).toBe(true)
+    const task = store.claimNextReviewFixTask('repair', at, 60_000)!
+    expect(store.stagePublication({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, publication: { _tag: 'UpdatePullRequest', taskKind: 'review_fix', baseRef: 'main', pullRequestNumber: pullRequest.number, commitSha: 'd'.repeat(40), baseSha: pullRequest.baseSha, expectedHeadSha: pullRequest.headSha, headRef: pullRequest.headRef, artifactRef: 'refs/harlan-github-agent/publications/repair', patchDigest: 'patch', changedFiles: 1 } })._tag).toBe('Staged')
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const app = createWebhookApp({ secret: 'dismiss-test', allowedOwners: ['harlan-zw'], logger: { info: () => undefined }, onHint: () => undefined, loggedFindingPickup: { allowedAuthor: 'harlan-zw', actorLogin: () => 'harlan-github-agent[bot]', apply: async (input) => {
+      entered.resolve()
+      await release.promise
+      return store.requestLoggedFindingPickup({ ...input, at }) ? ok(undefined) : err('Dismiss was rejected.')
+    } } })
+    const before = request.before.replace('- [ ] Ask an agent', '- [x] Ask an agent')
+    const payload = JSON.stringify({ action: 'edited', repository: { full_name: request.repository }, issue: { number: pullRequest.number, pull_request: {} }, sender: { login: 'harlan-zw' }, comment: { id: 42, user: { login: 'harlan-github-agent[bot]' }, body: before.replace('- [ ] Dismiss', '- [x] Dismiss') }, changes: { body: { from: before } } })
+    const delivery = app.fetch(new Request('http://localhost/webhook', { method: 'POST', body: payload, headers: { 'x-github-event': 'issue_comment', 'x-github-delivery': 'delayed-dismiss', 'x-hub-signature-256': `sha256=${createHmac('sha256', 'dismiss-test').update(payload).digest('hex')}` } }))
+    await entered.promise
+    const status = store.claimLoggedFindingComment('status', at, 60_000)!
+    expect(store.completeLoggedFindingComment(status, at)).toBe(true)
+    release.resolve()
+    expect((await delivery).status).toBe(204)
+    expect(store.claimNextPublication('publisher', at, 60_000)).toBeNull()
+  })
+
+  it('applies the current author policy to a staged inline selection', async () => {
+    const { store, mapping, pullRequest, request } = setup([finding], ':memory:', 'head')
+    store.queueReviewFindingThreadSync('review', at)
+    const sync = store.claimReviewFindingThreadSync('threads', at, 60_000)!
+    const body = reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef)
+    store.completeReviewFindingThreadSync(sync, at, [{ fingerprint: finding.details.fingerprint, commentId: 101, body, resolved: false }])
+    store.requestLoggedFindingPickup({ ...request, inline: true, commentId: 101, before: body })
+    const task = store.claimNextReviewFixTask('repair', at, 60_000)!
+    store.stagePublication({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, publication: { _tag: 'UpdatePullRequest', taskKind: 'review_fix', baseRef: 'main', pullRequestNumber: pullRequest.number, commitSha: 'd'.repeat(40), baseSha: pullRequest.baseSha, expectedHeadSha: pullRequest.headSha, headRef: pullRequest.headRef, artifactRef: 'refs/harlan-github-agent/publications/repair', patchDigest: 'patch', changedFiles: 1 } })
+    store.syncRepositories([{ ...mapping, writablePullRequestAuthors: [] }], at)
+    const command = store.claimNextPublication('publisher', at, 60_000)!
+    const remote = createGitPublicationRemote({ root: '/unused', github: { getPullRequest: async () => ok(pullRequest), isBranchProtected: async () => ok(false), hasOpenPullRequestForBranch: async () => ok(false) }, tokens: { getToken: async () => {
+      throw new Error('Revoked author cannot receive credentials.')
+    }, invalidate: () => undefined } })
+    expect(await remote.validateAuthority(command, new AbortController().signal)).toEqual(err('The pull request no longer authorizes publication.'))
+  })
+
+  it('retains issued Dismiss controls across a version 103 upgrade and restart', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'finding-upgrade-'))
+    directories.push(directory)
+    const path = join(directory, 'journal.sqlite')
+    const initial = setup([finding], path, 'head')
+    initial.store.requestLoggedFindingPickup(initial.request)
+    initial.store.close()
+    stores.pop()
+    const legacy = new DatabaseSync(path)
+    legacy.exec('DROP TABLE IF EXISTS logged_finding_control_receipts; PRAGMA user_version = 103;')
+    legacy.close()
+    const upgraded = openJournalStore(path, true)
+    const queued = upgraded.claimLoggedFindingComment('status', at, 60_000)!
+    expect(upgraded.completeLoggedFindingComment(queued, at)).toBe(true)
+    const task = upgraded.claimNextReviewFixTask('repair', at, 60_000)!
+    const running = upgraded.claimLoggedFindingComment('status', at, 60_000)!
+    expect(upgraded.completeLoggedFindingComment(running, at)).toBe(true)
+    upgraded.close()
+    const restarted = openJournalStore(path, true)
+    stores.push(restarted)
+    expect(restarted.requestLoggedFindingPickup({ ...initial.request, before: queued.body, fingerprints: [], dismissedFingerprints: [finding.details.fingerprint] })).toBe(true)
+    expect(restarted.getDashboardSnapshot(at).tasks.find(item => item.id === task.id)?.state._tag).toBe('Superseded')
+  })
+
+  it('keeps Dismiss visible while a summary Repair remains cancellable', () => {
+    const { store, request } = setup([finding], ':memory:', 'head')
+    store.requestLoggedFindingPickup(request)
+    const status = store.claimLoggedFindingComment('status', at, 60_000)!
+    expect(status.body).toContain(`- [ ] Dismiss this finding <!-- dismiss-logged-finding: ${finding.details.fingerprint} -->`)
+  })
+
+  it('lets Baseline repair claim while a higher priority inline selection cannot be read', async () => {
+    const { store, mapping, pullRequest, request } = setup([finding], ':memory:', 'head')
+    store.queueReviewFindingThreadSync('review', at)
+    const sync = store.claimReviewFindingThreadSync('threads', at, 60_000)!
+    const body = reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef)
+    store.completeReviewFindingThreadSync(sync, at, [{ fingerprint: finding.details.fingerprint, commentId: 101, body, resolved: false }])
+    store.requestLoggedFindingPickup({ ...request, inline: true, commentId: 101, before: body })
+    const healthy = repositoryMapping({ github: 'harlan-zw/healthy', ownership: 'maintained' })
+    store.syncRepositories([{ ...mapping, priority: 10 }, healthy], at)
+    store.setRepositoryWritesEnabled(healthy.github, true)
+    const observed = store.recordObservation({ externalId: 'healthy', observedAt: at, source: 'poll', subject: { ...pullRequest, repository: healthy.github } })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected healthy observation.')
+    expect(store.queueBaselineRepairForGate({ repository: healthy.github, pullRequestNumber: pullRequest.number, revisionId: observed.revisionId, baseSha: pullRequest.baseSha, at })._tag).toBe('Queued')
+    const held: Array<{ repository: string, pullRequestNumber: number }> = []
+    await refreshLoggedFindingThreads(store, async () => err('Repository cannot be read.'), at, undefined, selection => held.push(selection))
+    expect(store.claimNextReviewFixTask('repair', at, 60_000, held)).toBeNull()
+    expect(store.claimNextBaselineRepairTask('baseline', at, 60_000)?.repository).toBe(healthy.github)
+    await refreshLoggedFindingThreads(store, async () => ok([{ threadId: 'thread', fingerprint: finding.details.fingerprint, resolved: false, comment: { id: 101, body } }]), at)
+    expect(store.claimNextReviewFixTask('retry-repair', at, 60_000)?.repository).toBe(mapping.github)
+  })
+
   it.each(['pending', 'staged'] as const)('revokes an accepted summary selection on Dismiss: %s', (phase) => {
     const { store, pullRequest, request } = setup([finding], ':memory:', 'head')
     expect(store.requestLoggedFindingPickup(request)).toBe(true)
@@ -91,7 +188,7 @@ describe('durable Logged finding pickup', () => {
     expect(store.claimNextReviewFixTask('held-repair', at, 60_000, blocked)).toBeNull()
   })
 
-  it.each(['resolved', 'transient'] as const)('checks the inline conversation after remote publication validation: %s', async (mode) => {
+  it.each(['resolved', 'transient', 'preparation-resolved'] as const)('checks the inline conversation after remote publication validation: %s', async (mode) => {
     const { store, pullRequest, request } = setup([finding], ':memory:', 'head')
     store.queueReviewFindingThreadSync('review', at)
     const sync = store.claimReviewFindingThreadSync('threads', at, 60_000)!
@@ -121,7 +218,13 @@ describe('durable Logged finding pickup', () => {
         validated = true
         return ok(undefined)
       },
-      push: async (command) => {
+      push: async (command, _signal, beforeSend) => {
+        if (mode === 'preparation-resolved') {
+          store.reconcileLoggedFindingThreads(request.repository, pullRequest.number, [{ threadId: 'thread', fingerprint: finding.details.fingerprint, resolved: true, comment: { id: 101, body } }], at)
+          const authority = await beforeSend?.()
+          if (authority?._tag === 'Err')
+            return authority
+        }
         pushes++
         remoteHead = command.commitSha
         return ok(undefined)

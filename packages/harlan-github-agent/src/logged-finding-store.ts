@@ -48,6 +48,8 @@ export interface LoggedFindingComment {
 }
 
 export interface LoggedFindingStore {
+  holdLoggedFindingSelection: (selection: { repository: string, pullRequestNumber: number }, held: boolean) => void
+  heldLoggedFindingSelections: () => Array<{ repository: string, pullRequestNumber: number }>
   listLoggedFindingThreadSelections: (taskId?: string) => Array<{ repository: string, pullRequestNumber: number }>
   reconcileLoggedFindingThreads: (repository: string, pullRequestNumber: number, threads: readonly ReviewFindingThread[], at: string) => void
   requestLoggedFindingPickup: (input: LoggedFindingPickup & { requestId: string, at: string }) => boolean
@@ -128,6 +130,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
   transition: (taskId: string, at: string) => void
   cancel: (taskId: string, at: string) => void
 }): LoggedFindingStore {
+  const heldSelections = new Map<string, { repository: string, pullRequestNumber: number }>()
   function candidates(): Candidate[] {
     const rows = database.prepare(`${candidatesSql} ${options.writeAuthoritySql}
       AND (SELECT state_tag FROM agent_control WHERE singleton = 1) = 'Running'
@@ -163,6 +166,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
     }>
     return rows.map(row => ({
       fingerprint: row.fingerprint,
+      cancellable: row.on_head === 1 && row.dismissed === 0 && (row.state_tag === null || ['Queued', 'Running', 'Publishing'].includes(row.state_tag)),
       status: row.dismissed === 1
         ? 'Dismissed.'
         : row.state_tag === null
@@ -177,17 +181,33 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
     }))
   }
 
+  const listLoggedFindingThreadSelections: LoggedFindingStore['listLoggedFindingThreadSelections'] = taskId => database.prepare(`SELECT DISTINCT repositories.github AS repository, subjects.github_number AS pullRequestNumber
+    FROM logged_finding_requests AS requests
+    JOIN subjects ON subjects.id = requests.subject_id JOIN repositories ON repositories.id = subjects.repository_id
+    LEFT JOIN tasks ON tasks.id = requests.task_id
+    WHERE requests.inline_comment_id IS NOT NULL AND requests.dismissed = 0
+      AND (requests.task_id IS NULL OR tasks.state_tag IN ('Queued', 'Running', 'Publishing'))
+      AND (? IS NULL OR requests.task_id = ?)`)
+    .all(taskId ?? null, taskId ?? null) as Array<{ repository: string, pullRequestNumber: number }>
+
   return {
-    listLoggedFindingThreadSelections(taskId) {
-      return database.prepare(`SELECT DISTINCT repositories.github AS repository, subjects.github_number AS pullRequestNumber
-        FROM logged_finding_requests AS requests
-        JOIN subjects ON subjects.id = requests.subject_id JOIN repositories ON repositories.id = subjects.repository_id
-        LEFT JOIN tasks ON tasks.id = requests.task_id
-        WHERE requests.inline_comment_id IS NOT NULL AND requests.dismissed = 0
-          AND (requests.task_id IS NULL OR tasks.state_tag IN ('Queued', 'Running', 'Publishing'))
-          AND (? IS NULL OR requests.task_id = ?)`)
-        .all(taskId ?? null, taskId ?? null) as Array<{ repository: string, pullRequestNumber: number }>
+    holdLoggedFindingSelection(selection, held) {
+      const key = JSON.stringify([selection.repository, selection.pullRequestNumber])
+      if (held)
+        heldSelections.set(key, selection)
+      else
+        heldSelections.delete(key)
     },
+    heldLoggedFindingSelections() {
+      // Cancellation or a new head must not retain an unrelated scheduling hold.
+      const active = listLoggedFindingThreadSelections()
+      for (const [key, selection] of heldSelections) {
+        if (!active.some(target => target.repository === selection.repository && target.pullRequestNumber === selection.pullRequestNumber))
+          heldSelections.delete(key)
+      }
+      return [...heldSelections.values()]
+    },
+    listLoggedFindingThreadSelections,
     reconcileLoggedFindingThreads(repository, pullRequestNumber, threads, at) {
       // The root comment binds a selection to its conversation, across Reviews.
       const rows = database.prepare(`SELECT requests.id, requests.task_id, requests.inline_comment_id, requests.fingerprint
@@ -229,11 +249,17 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         && (JSON.parse(candidate.findings) as ReviewFinding[]).some(finding => finding._tag === 'Logged'
           && finding.details.fingerprint === input.fingerprints[0]
           && normalizeLoggedFindingControls(githubAccountBody(reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef ?? undefined), mapping.githubAccount)) === before)
+      // A delayed Dismiss addresses the same selection, even after its progress changes.
+      // Accept only an exact issued control body from this Review and comment.
+      const delayedDismiss = input.inline !== true && input.fingerprints.length === 0 && (input.dismissedFingerprints?.length ?? 0) > 0
+        && (normalizeLoggedFindingControls(githubAccountBody(candidate.body, mapping.githubAccount)) === before
+          || database.prepare(`SELECT 1 FROM logged_finding_control_receipts WHERE review_run_id = ? AND comment_id = ? AND body = ?`)
+            .get(candidate.review_run_id, input.commentId, before) !== undefined)
       const authorizedComment = input.inline === true
         ? input.fingerprints.length === 1 && (publishingInline || inlineFindings(candidate.review_run_id).some(receipt => !receipt.resolved
           && receipt.commentId === input.commentId && receipt.fingerprint === input.fingerprints[0] && receipt.body === before))
         : candidate.github_comment_id === input.commentId
-          && normalizeLoggedFindingControls(githubAccountBody(publishedBody(candidate), mapping.githubAccount)) === before
+          && (normalizeLoggedFindingControls(githubAccountBody(publishedBody(candidate), mapping.githubAccount)) === before || delayedDismiss)
       if (!authorizedComment || pullRequest.headSha !== input.headSha || typeof pullRequest.baseRef !== 'string'
         || (onHead ? pickupTarget(mapping, pullRequest) !== 'head' : !canRepairBaseline(mapping))) {
         return false
@@ -365,6 +391,9 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
           RETURNING fence
         `).get(candidate.subject_id, candidate.body, expectedBody, body, candidate.github_comment_id, workerId, new Date(new Date(at).getTime() + leaseMilliseconds).toISOString(), at) as { fence: number } | undefined
         if (row !== undefined) {
+          const receipt = database.prepare('INSERT OR IGNORE INTO logged_finding_control_receipts (review_run_id, comment_id, body) VALUES (?, ?, ?)')
+          for (const issued of [expectedBody, body])
+            receipt.run(candidate.review_run_id, candidate.github_comment_id, normalizeLoggedFindingControls(githubAccountBody(issued, (JSON.parse(candidate.policy_json) as RepositoryMapping).githubAccount)))
           return { subjectId: candidate.subject_id, repository: candidate.repository, pullRequestNumber: candidate.github_number, headSha: pullRequest.headSha, commentId: candidate.github_comment_id, sourceBody: candidate.body, expectedBody, body, workerId, fence: row.fence }
         }
       }

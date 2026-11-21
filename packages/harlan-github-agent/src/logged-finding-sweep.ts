@@ -15,6 +15,7 @@ export async function refreshLoggedFindingThreads(
 ): Promise<Result<void, string>> {
   for (const selection of store.listLoggedFindingThreadSelections(taskId)) {
     const threads = await read(selection.repository, selection.pullRequestNumber)
+    store.holdLoggedFindingSelection(selection, threads._tag === 'Err')
     if (threads._tag === 'Err') {
       if (hold === undefined)
         return threads

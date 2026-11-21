@@ -1351,6 +1351,8 @@ export type MutationWorkerOutcome
     | { _tag: 'Superseded', reason: string, usage?: AgentTokenUsage }
 
 export type ClaimedPublicationCommand = PublicationCommand & {
+  /** Durable selected finding authority, distinct from general Review Repair approval. */
+  selectedFinding?: true
   workerId: string
   fence: number
   leaseExpiresAt: string

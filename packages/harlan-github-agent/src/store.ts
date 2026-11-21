@@ -7539,7 +7539,17 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 103;`)
     version = 103
   }
-  if (version === 103)
+  if (version === 103) {
+    applyMigration(database, `CREATE TABLE IF NOT EXISTS logged_finding_control_receipts (
+      review_run_id TEXT NOT NULL REFERENCES review_runs(id),
+      comment_id INTEGER NOT NULL,
+      body TEXT NOT NULL,
+      PRIMARY KEY (review_run_id, comment_id, body)
+    );
+    PRAGMA user_version = 104;`)
+    version = 104
+  }
+  if (version === 104)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -10628,7 +10638,7 @@ export function openJournalStore(
           CASE WHEN tasks.kind != 'issue_work' THEN 1 WHEN tasks.updated_at <= ? THEN 2 ELSE 0 END DESC,
           tasks.updated_at, tasks.id
         LIMIT 1
-      `).get(kind, kind, JSON.stringify(held), now, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests, new Date(Date.parse(now) - issueWaitMilliseconds).toISOString()) as ClaimRow | undefined
+      `).get(kind, kind, JSON.stringify([...held, ...loggedFindingStore.heldLoggedFindingSelections()]), now, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests, new Date(Date.parse(now) - issueWaitMilliseconds).toISOString()) as ClaimRow | undefined
 
   const issueWaitMilliseconds = 30 * 60 * 1_000
   const deliveryPriority = (kind: AgentTask['kind'], queuedAt: string, now: string): number =>
@@ -13733,6 +13743,7 @@ export function openJournalStore(
         patchDigest: row.patch_digest,
         changedFiles: row.changed_files,
         outcomeUnknown: row.outcome_unknown === 1,
+        ...(loggedFindingStore.loggedFindingRepairsHead(row.task_id) ? { selectedFinding: true as const } : {}),
         workerId,
         fence,
         leaseExpiresAt,

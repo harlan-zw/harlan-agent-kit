@@ -1,6 +1,7 @@
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedPublicationCommand } from './types.ts'
+import { err, ok } from './result.ts'
 
 export interface FinalizedPublication {
   evidence: string
@@ -11,7 +12,7 @@ export interface PublicationRemote {
   /** Opens or confirms the pull request. The number lets a stacked unit find its base without a GitHub poll. */
   finalize: (command: ClaimedPublicationCommand, signal: AbortSignal) => Promise<Result<FinalizedPublication, string>>
   getHeadSha: (command: ClaimedPublicationCommand, signal: AbortSignal) => Promise<Result<string | null, string>>
-  push: (command: ClaimedPublicationCommand, signal: AbortSignal) => Promise<Result<void, string>>
+  push: (command: ClaimedPublicationCommand, signal: AbortSignal, beforeSend?: () => Promise<Result<void, string>>) => Promise<Result<void, string>>
   validateAuthority: (command: ClaimedPublicationCommand, signal: AbortSignal) => Promise<Result<void, string>>
 }
 
@@ -72,6 +73,7 @@ export function createPublicationScheduler(options: PublicationSchedulerOptions)
       return
 
     controller = new AbortController()
+    const signal = controller.signal
     const heartbeat = setInterval(() => {
       const renewed = options.store.heartbeatPublication({
         commandId: command.id,
@@ -157,7 +159,29 @@ export function createPublicationScheduler(options: PublicationSchedulerOptions)
         return
       }
 
-      const pushed = await options.publisher.push(command, controller.signal)
+      let prevented = false
+      // Artifact reads and credentials can await. Recheck authority at the transport boundary.
+      const pushed = await options.publisher.push(command, controller.signal, async () => {
+        const refreshed = await options.beforeAuthorize?.(command, signal)
+        if (refreshed?._tag === 'Err') {
+          prevented = true
+          options.store.deferPublication({ commandId: command.id, workerId: command.workerId, fence: command.fence, at: options.now().toISOString(), reason: refreshed.error, outcomeUnknown: command.outcomeUnknown })
+          return refreshed
+        }
+        const authority = await options.publisher.validateAuthority(command, signal)
+        if (authority._tag === 'Err') {
+          prevented = true
+          options.store.supersedePublication({ commandId: command.id, workerId: command.workerId, fence: command.fence, at: options.now().toISOString(), reason: authority.error })
+          return authority
+        }
+        if (signal.aborted || !options.store.authorizePublication({ commandId: command.id, workerId: command.workerId, fence: command.fence, at: options.now().toISOString() })) {
+          prevented = true
+          return err('The pull request no longer authorizes publication.')
+        }
+        return ok(undefined)
+      })
+      if (prevented)
+        return
       if (pushed._tag === 'Err') {
         const reconciledHead = await options.publisher.getHeadSha(command, controller.signal)
         if (reconciledHead._tag === 'Err') {

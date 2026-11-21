@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { createPublicationScheduler } from '../src/publication-scheduler.ts'
 import { err, ok } from '../src/result.ts'
 import { createGitPublicationRemote } from '../src/worktree.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -272,6 +273,87 @@ describe('dependency update Auto merge label on publication', () => {
 })
 
 describe('git publication remote', () => {
+  it.each(['retarget', 'resolved', 'author'] as const)('rejects selected Repair changed during final preparation: %s', async (mode) => {
+    const { bare, checkout, command, root } = fixture()
+    const controller = join(root, 'repositories', 'harlan-zw__example.git')
+    git(checkout, 'reset', '--hard', command.expectedHeadSha)
+    writeFileSync(join(checkout, 'repair.txt'), 'repair\n')
+    git(checkout, 'add', 'repair.txt')
+    git(checkout, 'commit', '-m', 'fix: repair')
+    const commitSha = git(checkout, 'rev-parse', 'HEAD')
+    git(controller, 'fetch', checkout, 'HEAD')
+    git(controller, 'update-ref', command.artifactRef, commitSha)
+    const repair = { ...command, taskKind: 'review_fix' as const, selectedFinding: true as const, commitSha, patchDigest: contentDigest(controller, command.expectedHeadSha, commitSha) }
+    let baseRef = 'main'
+    let resolved = false
+    let authorized = false
+    let claimed = false
+    const remote = createGitPublicationRemote({ root, remoteUrl: () => bare, github: {
+      getPullRequest: async () => ok(pullRequestItem({ headSha: repair.expectedHeadSha, headRef: repair.headRef, baseRef, mergeState: 'clean' })),
+      isBranchProtected: async () => ok(false),
+      hasOpenPullRequestForBranch: async () => ok(false),
+    }, tokens: { getToken: async () => {
+      if (mode === 'resolved' && authorized)
+        resolved = true
+      return ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })
+    }, invalidate: () => undefined } })
+    const scheduler = createPublicationScheduler({ intervalMilliseconds: 60_000, leaseMilliseconds: 60_000, now: () => new Date('2026-08-13T00:00:00.000Z'), onError: (error) => {
+      throw error
+    }, workerId: 'publisher', store: {
+      claimNextPublication: () => {
+        if (claimed)
+          return null
+        claimed = true
+        return repair
+      },
+      authorizePublication: () => {
+        authorized = true
+        return !resolved
+      },
+      heartbeatPublication: () => !resolved,
+      completePublication: () => true,
+      deferPublication: () => true,
+      failPublication: () => 'Rejected',
+      supersedePublication: () => true,
+    }, beforeAuthorize: async () => {
+      if (mode === 'retarget')
+        baseRef = 'next'
+      if (mode === 'author')
+        repair.repositoryMapping = { ...repair.repositoryMapping, writablePullRequestAuthors: [] }
+      return ok(undefined)
+    }, publisher: remote })
+    await scheduler.runNow()
+    await scheduler.stop()
+    expect(git(bare, 'rev-parse', `refs/heads/${command.headRef}`)).toBe(command.expectedHeadSha)
+  })
+
+  it('rejects a rewound contributor branch without restoring withdrawn commits', async () => {
+    const { bare, checkout, command, root } = fixture()
+    const controller = join(root, 'repositories', 'harlan-zw__example.git')
+    // The approved head has a parent, and Repair is a verified descendant.
+    git(checkout, 'checkout', 'main')
+    const expectedHeadSha = git(checkout, 'rev-parse', 'HEAD')
+    git(bare, 'update-ref', `refs/heads/${command.headRef}`, expectedHeadSha)
+    writeFileSync(join(checkout, 'repair.txt'), 'repair\n')
+    git(checkout, 'add', 'repair.txt')
+    git(checkout, 'commit', '-m', 'fix: repair')
+    const commitSha = git(checkout, 'rev-parse', 'HEAD')
+    git(controller, 'fetch', checkout, 'HEAD')
+    git(controller, 'update-ref', command.artifactRef, commitSha)
+    const repair = { ...command, taskKind: 'review_fix' as const, expectedHeadSha, commitSha, patchDigest: contentDigest(controller, expectedHeadSha, commitSha) }
+    const remote = createGitPublicationRemote({ root, remoteUrl: () => bare, github: {
+      getPullRequest: async () => ok(pullRequestItem({ headSha: expectedHeadSha, headRef: repair.headRef, mergeState: 'clean' })),
+      isBranchProtected: async () => ok(false),
+      hasOpenPullRequestForBranch: async () => ok(false),
+    }, tokens: { getToken: async () => {
+      // Credentials are acquired after artifact validation, before Git sends the update.
+      git(bare, 'update-ref', `refs/heads/${repair.headRef}`, command.expectedHeadSha)
+      return ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })
+    }, invalidate: () => undefined } })
+    expect((await remote.push(repair, new AbortController().signal))._tag).toBe('Err')
+    expect(git(bare, 'rev-parse', `refs/heads/${command.headRef}`)).toBe(command.expectedHeadSha)
+  })
+
   it.each([
     ['fork workflow merge', 'contributor/example', '.github/workflows/ci.yml', 'maintainer'],
     ['fork source merge', 'contributor/example', 'base.txt', 'app'],

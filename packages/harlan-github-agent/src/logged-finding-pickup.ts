@@ -21,6 +21,7 @@ export interface LoggedFindingPickup {
 export interface LoggedFindingStatus {
   fingerprint: string
   status: string
+  cancellable?: boolean
 }
 
 const afterMergePickupHint = 'Selected findings run after merge and open separate pull requests.'
@@ -69,7 +70,7 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
     rendered.add(finding.details.fingerprint)
     const status = statuses.find(status => status.fingerprint === finding.details.fingerprint)
     if (status !== undefined)
-      return [line, `  Repair: ${status.status.replace(/\s+/g, ' ').trim()} <!-- logged-finding: ${finding.details.fingerprint} -->`]
+      return [line, `  Repair: ${status.status.replace(/\s+/g, ' ').trim()} <!-- logged-finding: ${finding.details.fingerprint} -->`, ...(options.target === 'head' && status.cancellable ? [dismissalControl(finding.details.fingerprint)] : [])]
     if (options.inline?.has(finding.details.fingerprint))
       return []
     return [
@@ -81,7 +82,7 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
     const count = [...content.matchAll(/^- \*\*Logged \(/gm)].length
     return count === 0 ? '' : `<details>\n<summary>Logged findings (${count})</summary>\n${content}</details>`
   }).replace(/\n{3,}/g, '\n\n').trimEnd()
-  if (options.target === undefined || !/ {2}- \[ \] Ask an agent to verify and fix this finding/.test(decorated))
+  if (options.target === undefined || !/ {2}- \[ \] (?:Ask an agent to verify and fix this finding|Dismiss this finding)/.test(decorated))
     return decorated
   const pickupHint = options.target === 'head'
     ? [options.baseRef === undefined ? '' : loggedFindingBaseMarker(options.baseRef), onHeadPickupHint].filter(Boolean).join('\n')
