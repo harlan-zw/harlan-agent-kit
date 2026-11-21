@@ -3952,7 +3952,8 @@ const COMBINED_ISSUE_AUTHORITY_SQL = `NOT EXISTS (
  */
 // Baseline repair answers a repository commit. Its triggering Item is provenance.
 // Other mutation Tasks still answer the current Item revision.
-const mutationRevisionAuthoritySql = `(tasks.kind = 'baseline_repair' OR tasks.revision_id = subjects.current_revision_id)`
+const mutationRevisionAuthoritySql = `((tasks.kind = 'baseline_repair' OR tasks.revision_id = subjects.current_revision_id)
+  AND NOT EXISTS (SELECT 1 FROM logged_finding_requests AS selection WHERE selection.task_id = tasks.id AND selection.dismissed = 1))`
 
 const PUBLICATION_AUTHORITY_SQL = `
   (
@@ -7525,7 +7526,20 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 102;`)
     version = 102
   }
-  if (version === 102)
+  if (version < 103) {
+    applyMigration(database, `ALTER TABLE logged_finding_requests ADD COLUMN inline_comment_id INTEGER;
+      UPDATE logged_finding_requests SET inline_comment_id = (
+        SELECT json_extract(receipt.value, '$.commentId') FROM finding_thread_syncs AS sync
+        JOIN review_runs ON review_runs.id = sync.review_run_id, json_each(sync.inline_findings) AS receipt
+        WHERE review_runs.subject_id = logged_finding_requests.subject_id
+          AND review_runs.head_sha = logged_finding_requests.head_sha AND review_runs.base_ref = logged_finding_requests.base_ref
+          AND json_extract(receipt.value, '$.fingerprint') = logged_finding_requests.fingerprint
+        ORDER BY review_runs.completed_at DESC LIMIT 1
+      ) WHERE on_head = 1;
+      PRAGMA user_version = 103;`)
+    version = 103
+  }
+  if (version === 103)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7830,6 +7844,7 @@ export function openJournalStore(
     writeAuthoritySql: repositoryWriteAuthoritySql,
     digest,
     transition: (taskId, at) => recordTransition(database, { taskId, from: null, to: 'Queued', reason: null, fence: 0, at }),
+    cancel: (taskId, at) => { cancelStoredTask(database, taskId, at, 'Dismissed.') },
   })
   // Retained gates answer the current head, target, and policy through stored Review evidence.
   const reviewGateEvidenceAuthoritySql = `
@@ -8580,6 +8595,32 @@ export function openJournalStore(
         current_source: 'poll' | 'webhook' | null
       }
       const mapping = JSON.parse(repository.policy_json) as RepositoryMapping
+      if (input.subject.kind === 'pull_request' && input.subject.state === 'open' && subject.current_revision_id !== null) {
+        // A pushed commit can arrive before its receipt. Keep the exact staged
+        // publication's revision authoritative until the publisher confirms it.
+        const publishing = database.prepare(`SELECT 1 FROM publication_commands AS publication
+          JOIN tasks ON tasks.id = publication.task_id
+          JOIN logged_finding_requests AS selected ON selected.task_id = tasks.id
+          WHERE tasks.subject_id = ? AND tasks.revision_id = ? AND selected.on_head = 1
+            AND publication.state_tag IN ('Pending', 'Running') AND tasks.state_tag = 'Publishing'
+            AND publication.commit_sha = ? AND publication.base_ref = ?
+            AND publication.head_ref = ?`).get(subject.id, subject.current_revision_id, input.subject.headSha, input.subject.baseRef ?? '', input.subject.headRef)
+        // An older in-flight read cannot revoke selections carried by a receipt.
+        // Reconciliation stamps observedAt before its remote read. A later
+        // read of a contributor push still revokes the carried authority.
+        const prior = subject.current_payload === null ? null : JSON.parse(subject.current_payload) as GitHubItem
+        const stale = database.prepare(`SELECT 1 FROM publication_commands AS publication
+          JOIN tasks ON tasks.id = publication.task_id
+          JOIN logged_finding_requests AS selected ON selected.task_id = tasks.id
+          WHERE tasks.subject_id = ? AND selected.on_head = 1 AND publication.state_tag = 'Published'
+            AND publication.expected_head_sha = ? AND publication.base_ref = ? AND publication.head_ref = ?
+            AND publication.published_at >= ? AND (? = publication.expected_head_sha OR ? = publication.commit_sha)`)
+          .get(subject.id, input.subject.headSha, input.subject.baseRef ?? '', input.subject.headRef, input.observedAt, prior?.kind === 'pull_request' ? prior.headSha : '', prior?.kind === 'pull_request' ? prior.headSha : '')
+        if (publishing !== undefined || stale !== undefined) {
+          database.exec('COMMIT')
+          return { _tag: 'Stale', revisionId, currentRevisionId: subject.current_revision_id }
+        }
+      }
       const dismissed = (): boolean =>
         database.prepare('SELECT 1 FROM item_dismissals WHERE subject_id = ?').get(subject.id) !== undefined
       const recordHeadSignal = (): void => {

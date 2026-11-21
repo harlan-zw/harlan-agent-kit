@@ -64,7 +64,7 @@ import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
-import { publishLoggedFindingPickups } from './logged-finding-sweep.ts'
+import { publishLoggedFindingPickups, refreshLoggedFindingThreads } from './logged-finding-sweep.ts'
 import { createMaintenanceCheckCommand, createMaintenanceScopeProvider } from './maintenance-scope.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
 import { createPackageReleaseSource } from './package-release-github.ts'
@@ -735,6 +735,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     source: workerGithub,
     report: createReviewFindingThreadsReport(store, now),
   }
+  const refreshSelectedThreads = (signal: AbortSignal, taskId?: string) => refreshLoggedFindingThreads(store, (repository, number) => {
+    const mapping = config.repositories.find(mapping => mapping.github === repository && mapping.enabled)
+    return mapping === undefined ? Promise.resolve(err('Repository policy does not authorize this pull request branch.')) : workerGithub.listReviewFindingThreads(mapping, number, signal)
+  }, now().toISOString(), taskId)
   const findingThreadSync = createFindingThreadSyncController({
     store,
     readPullRequest: github.getPullRequest,
@@ -764,6 +768,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     if (!config.mutationsEnabled)
       return undefined
     const controllerRoot = join(dirname(config.storage.path), 'worktrees')
+    const publicationRemote = createGitPublicationRemote({
+      github,
+      forkWorkflowTokens: gatedTokens(userTokens),
+      pullRequests: createGitHubPullRequestPublisher({ tokens, uploadAsset: createUserAssetUploader({ token: signal => userAccess.token(signal) }) }),
+      root: controllerRoot,
+      routineIssueSource: store.getRoutineIssueSource,
+      tokens,
+    })
     const worktrees = createConflictWorktreeManager({
       gitIdentity: options.gitIdentity,
       root: controllerRoot,
@@ -1113,14 +1125,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         now,
         onError: error => options.logger.error(error),
         store,
-        publisher: createGitPublicationRemote({
-          github,
-          forkWorkflowTokens: gatedTokens(userTokens),
-          pullRequests: createGitHubPullRequestPublisher({ tokens, uploadAsset: createUserAssetUploader({ token: signal => userAccess.token(signal) }) }),
-          root: controllerRoot,
-          routineIssueSource: store.getRoutineIssueSource,
-          tokens,
-        }),
+        publisher: {
+          ...publicationRemote,
+          validateAuthority: async (command, signal) => {
+            const refreshed = await refreshSelectedThreads(signal, command.taskId)
+            return refreshed._tag === 'Err' ? refreshed : publicationRemote.validateAuthority(command, signal)
+          },
+        },
         workerId: randomUUID(),
       }),
       reviewStatuses: createReviewStatusScheduler({
@@ -1151,6 +1162,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       repairs: Array.from({ length: profile.maximumActiveAgents }, () => createTaskScheduler({
         canClaim,
         claim: store.claimNextReviewFixTask,
+        beforeClaim: async (signal) => {
+          const refreshed = await refreshSelectedThreads(AbortSignal.any([signal, AbortSignal.timeout(25_000)]))
+          if (refreshed._tag === 'Err')
+            throw new Error(refreshed.error)
+        },
         intervalMilliseconds: 5_000,
         leaseMilliseconds: 45 * 60_000,
         now,

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { LoggedFindingPickup, LoggedFindingStatus, LoggedReviewFinding } from './logged-finding-pickup.ts'
-import type { InlineFindingReceipt } from './review-finding-threads.ts'
+import type { InlineFindingReceipt, ReviewFindingThread } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewFinding } from './types.ts'
 import { githubAccountBody } from './github-account.ts'
 import { recordLoggedFindingSignal } from './implicit-signal-store.ts'
@@ -48,6 +48,8 @@ export interface LoggedFindingComment {
 }
 
 export interface LoggedFindingStore {
+  listLoggedFindingThreadSelections: (taskId?: string) => Array<{ repository: string, pullRequestNumber: number }>
+  reconcileLoggedFindingThreads: (repository: string, pullRequestNumber: number, threads: readonly ReviewFindingThread[], at: string) => void
   requestLoggedFindingPickup: (input: LoggedFindingPickup & { requestId: string, at: string }) => boolean
   planLoggedFindingPickups: (at: string) => void
   getLoggedFindingForTask: (taskId: string) => LoggedReviewFinding | null
@@ -124,6 +126,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
   writeAuthoritySql: string
   digest: (value: string) => string
   transition: (taskId: string, at: string) => void
+  cancel: (taskId: string, at: string) => void
 }): LoggedFindingStore {
   function candidates(): Candidate[] {
     const rows = database.prepare(`${candidatesSql} ${options.writeAuthoritySql}
@@ -175,6 +178,41 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
   }
 
   return {
+    listLoggedFindingThreadSelections(taskId) {
+      return database.prepare(`SELECT DISTINCT repositories.github AS repository, subjects.github_number AS pullRequestNumber
+        FROM logged_finding_requests AS requests
+        JOIN subjects ON subjects.id = requests.subject_id JOIN repositories ON repositories.id = subjects.repository_id
+        LEFT JOIN tasks ON tasks.id = requests.task_id
+        WHERE requests.inline_comment_id IS NOT NULL AND requests.dismissed = 0
+          AND (requests.task_id IS NULL OR tasks.state_tag IN ('Queued', 'Running', 'Publishing'))
+          AND (? IS NULL OR requests.task_id = ?)`)
+        .all(taskId ?? null, taskId ?? null) as Array<{ repository: string, pullRequestNumber: number }>
+    },
+    reconcileLoggedFindingThreads(repository, pullRequestNumber, threads, at) {
+      // The root comment binds a selection to its conversation, across Reviews.
+      const rows = database.prepare(`SELECT requests.id, requests.task_id, requests.inline_comment_id, requests.fingerprint
+        FROM logged_finding_requests AS requests JOIN subjects ON subjects.id = requests.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE repositories.github = ? AND subjects.github_number = ? AND requests.inline_comment_id IS NOT NULL
+          AND requests.dismissed = 0 AND (requests.task_id IS NULL OR EXISTS (
+            SELECT 1 FROM tasks WHERE tasks.id = requests.task_id AND tasks.state_tag IN ('Queued', 'Running', 'Publishing')
+          ))`).all(repository, pullRequestNumber) as Array<{ id: string, task_id: string | null, inline_comment_id: number, fingerprint: string }>
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        for (const row of rows) {
+          if (threads.some(thread => thread.comment?.id === row.inline_comment_id && thread.fingerprint === row.fingerprint && !thread.resolved))
+            continue
+          database.prepare('UPDATE logged_finding_requests SET dismissed = 1 WHERE id = ?').run(row.id)
+          if (row.task_id !== null)
+            options.cancel(row.task_id, at)
+        }
+        database.exec('COMMIT')
+      }
+      catch (error) {
+        database.exec('ROLLBACK')
+        throw error
+      }
+    },
     requestLoggedFindingPickup(input) {
       const candidate = candidates().find(candidate => candidate.repository.toLowerCase() === input.repository.toLowerCase()
         && candidate.github_number === input.pullRequestNumber)
@@ -215,11 +253,12 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
           const fingerprint = finding.details.fingerprint
           const dismiss = dismissed.includes(fingerprint)
           database.prepare(`INSERT INTO logged_finding_requests
-            (id, subject_id, head_sha, base_ref, fingerprint, finding_json, requested_by, requested_at, on_head, dismissed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(subject_id, head_sha, base_ref, fingerprint) DO UPDATE SET on_head = excluded.on_head, dismissed = excluded.dismissed
+            (id, subject_id, head_sha, base_ref, fingerprint, finding_json, requested_by, requested_at, on_head, dismissed, inline_comment_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(subject_id, head_sha, base_ref, fingerprint) DO UPDATE SET on_head = excluded.on_head, dismissed = excluded.dismissed,
+              inline_comment_id = excluded.inline_comment_id
               WHERE logged_finding_requests.task_id IS NULL AND logged_finding_requests.on_head = 0 AND excluded.on_head = 1
-          `).run(options.digest(JSON.stringify([candidate.subject_id, input.headSha, pullRequest.baseRef, fingerprint])), candidate.subject_id, input.headSha, pullRequest.baseRef, fingerprint, JSON.stringify(finding), input.requestedBy, input.at, Number(onHead), Number(dismiss))
+          `).run(options.digest(JSON.stringify([candidate.subject_id, input.headSha, pullRequest.baseRef, fingerprint])), candidate.subject_id, input.headSha, pullRequest.baseRef, fingerprint, JSON.stringify(finding), input.requestedBy, input.at, Number(onHead), Number(dismiss), input.inline ? input.commentId : null)
           if (!dismiss)
             recordLoggedFindingSignal(database, { subjectId: candidate.subject_id, headSha: input.headSha, fingerprint, reviewRunId: candidate.review_run_id, at: input.at })
         }
@@ -289,7 +328,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         return body
       const pull = JSON.parse(row.payload) as GitHubPullRequestItem
       const target = pickupTarget(JSON.parse(row.policy_json) as RepositoryMapping, pull)
-      return withLoggedFindingControls(body, JSON.parse(row.findings) as ReviewFinding[], statuses(row.subject_id, pull), { target, baseRef: pull.baseRef ?? undefined, inline: new Set(inlineFindings(reviewRunId).map(receipt => receipt.fingerprint)) })
+      return withLoggedFindingControls(body, JSON.parse(row.findings) as ReviewFinding[], statuses(row.subject_id, pull), { target, baseRef: pull.baseRef ?? undefined, inline: new Set(inlineFindings(reviewRunId).filter(receipt => target !== 'after-merge' || receipt.resolved).map(receipt => receipt.fingerprint)) })
     },
     claimLoggedFindingComment(workerId, at, leaseMilliseconds, controls = () => true) {
       for (const candidate of candidates()) {
@@ -301,7 +340,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         const body = withLoggedFindingControls(candidate.body, JSON.parse(candidate.findings) as ReviewFinding[], statuses(candidate.subject_id, pullRequest), {
           target,
           baseRef: pullRequest.baseRef ?? undefined,
-          inline: new Set(inlineFindings(candidate.review_run_id).map(receipt => receipt.fingerprint)),
+          inline: new Set(inlineFindings(candidate.review_run_id).filter(receipt => target !== 'after-merge' || receipt.resolved).map(receipt => receipt.fingerprint)),
         })
         if (body === expectedBody)
           continue

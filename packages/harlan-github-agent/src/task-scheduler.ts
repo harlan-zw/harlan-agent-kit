@@ -110,6 +110,7 @@ export async function runClaimedTask<Task extends PublicationTask>(task: Task, o
 export interface TaskSchedulerOptions<Task extends PublicationTask = ClaimedConflictResolutionTask> {
   canClaim?: () => boolean
   claim?: (workerId: string, now: string, leaseMilliseconds: number) => Task | null
+  beforeClaim?: (signal: AbortSignal) => Promise<void>
   intervalMilliseconds: number
   leaseMilliseconds: number
   now: () => Date
@@ -144,12 +145,15 @@ export function createTaskScheduler<Task extends PublicationTask = ClaimedConfli
     if (permit === null)
       return
     try {
+      controller = new AbortController()
+      await options.beforeClaim?.(controller.signal)
+      if (controller.signal.aborted || options.canClaim?.() === false)
+        return
       const claim = options.claim ?? options.store.claimNextConflictTask
       const task = claim(options.workerId, options.now().toISOString(), options.leaseMilliseconds) as Task | null
       if (task === null)
         return
       settled = task
-      controller = new AbortController()
       activeTaskId = task.id
       options.onTaskStarted?.(task)
       await runClaimedTask(task, {

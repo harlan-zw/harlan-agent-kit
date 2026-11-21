@@ -8,6 +8,29 @@ import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 afterEach(() => vi.useRealTimers())
 
 describe('task scheduler', () => {
+  it('does not claim when its authority refresh fails', async () => {
+    const store = openJournalStore(':memory:')
+    const claim = vi.fn(() => null)
+    const errors: unknown[] = []
+    const scheduler = createTaskScheduler({
+      claim,
+      beforeClaim: async () => { throw new Error('Thread read failed.') },
+      intervalMilliseconds: 60_000,
+      leaseMilliseconds: 10_000,
+      now: () => new Date('2026-08-13T02:00:00.000Z'),
+      onError: error => errors.push(error),
+      permits: createAgentPermitPool(1),
+      store,
+      worker: { run: vi.fn() },
+      workerId: 'worker-1',
+    })
+    await scheduler.runNow()
+    expect(errors).toEqual([new Error('Thread read failed.')])
+    expect(claim).not.toHaveBeenCalled()
+    await scheduler.stop()
+    store.close()
+  })
+
   it('does not claim new work while agents are paused', async () => {
     const claim = vi.fn(() => null)
     const worker = { run: vi.fn() }

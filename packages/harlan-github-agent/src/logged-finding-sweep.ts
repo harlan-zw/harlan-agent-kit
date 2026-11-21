@@ -1,7 +1,25 @@
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { LoggedFindingStore } from './logged-finding-store.ts'
+import type { Result } from './result.ts'
+import type { ReviewFindingThread } from './review-finding-threads.ts'
 import type { RepositoryMapping } from './types.ts'
 import { err, ok } from './result.ts'
+
+/** Refresh conversation authority before claiming work or publishing a fix. */
+export async function refreshLoggedFindingThreads(
+  store: LoggedFindingStore,
+  read: (repository: string, number: number) => Promise<Result<ReviewFindingThread[], string>>,
+  at: string,
+  taskId?: string,
+): Promise<Result<void, string>> {
+  for (const selection of store.listLoggedFindingThreadSelections(taskId)) {
+    const threads = await read(selection.repository, selection.pullRequestNumber)
+    if (threads._tag === 'Err')
+      return threads
+    store.reconcileLoggedFindingThreads(selection.repository, selection.pullRequestNumber, threads.value, at)
+  }
+  return ok(undefined)
+}
 
 /** Updates the existing canonical comment under a durable Publication lease. */
 export async function publishLoggedFindingPickups(options: {
