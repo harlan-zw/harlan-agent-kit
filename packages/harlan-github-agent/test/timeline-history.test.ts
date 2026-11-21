@@ -89,12 +89,17 @@ describe('the Timeline API window', () => {
     }
   })
 
-  it('answers a 30 day window in buckets that keep the series small', async () => {
+  it('counts in one minute buckets for any window, so adjacent windows join', async () => {
     const now = '2026-10-13T12:00:00.000Z'
-    const history = await readTimeline(createStore(now), now, '?from=2026-09-13T12:00:00.000Z&to=2026-10-13T12:00:00.000Z')
+    const store = createStore(now)
+    await deliver(webhookApp(store, () => Date.parse('2026-10-01T08:30:20.000Z')), 'push', { ref: 'refs/heads/main', repository: { full_name: 'harlan-zw/example' } }, 'push-1')
+    const month = await readTimeline(store, now, '?from=2026-09-13T12:00:00.000Z&to=2026-10-13T12:00:00.000Z')
+    const day = await readTimeline(store, now, '?from=2026-10-01T00:00:00.000Z&to=2026-10-02T00:00:00.000Z')
 
-    expect(history.deliveries.bucketSeconds).toBe(180)
-    expect(history.deliveries.counts.length).toBeLessThanOrEqual(15_000)
+    const minuteOf = (series: typeof month.deliveries) => Date.parse(series.start) + series.counts.findIndex(count => count > 0) * series.bucketSeconds * 1000
+    expect([month.deliveries.bucketSeconds, day.deliveries.bucketSeconds]).toEqual([60, 60])
+    expect(month.deliveries.counts).toHaveLength(30 * 24 * 60)
+    expect([minuteOf(month.deliveries), minuteOf(day.deliveries)]).toEqual([Date.parse('2026-10-01T08:30:00.000Z'), Date.parse('2026-10-01T08:30:00.000Z')])
   })
 
   it('keeps dashboard authentication', async () => {

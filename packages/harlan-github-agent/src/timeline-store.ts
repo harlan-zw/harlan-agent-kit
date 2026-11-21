@@ -207,12 +207,10 @@ export function createTimelineStore(database: DatabaseSync): TimelineStore {
     const buckets = deliveryBuckets(window, now)
     const counts = Array.from<number>({ length: buckets.length }).fill(0)
     const firstMinute = buckets.start / minute
-    const rows = deliveryCounts.all(firstMinute, firstMinute + buckets.length * buckets.bucketMinutes) as Array<{ minute: number, count: number }>
-    for (const row of rows) {
-      const index = Math.floor((row.minute - firstMinute) / buckets.bucketMinutes)
-      counts[index] = (counts[index] ?? 0) + row.count
-    }
-    return { start: iso(buckets.start), bucketSeconds: buckets.bucketMinutes * 60, counts }
+    const rows = deliveryCounts.all(firstMinute, firstMinute + buckets.length) as Array<{ minute: number, count: number }>
+    for (const row of rows)
+      counts[row.minute - firstMinute] = row.count
+    return { start: iso(buckets.start), bucketSeconds: 60, counts }
   }
 
   function tasks(window: TimelineWindow): TimelineTaskRecord[] {
