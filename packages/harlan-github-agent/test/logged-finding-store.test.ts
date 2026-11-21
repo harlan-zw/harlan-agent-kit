@@ -61,12 +61,50 @@ function setup(findings = [finding], path = ':memory:', target: 'head' | 'after-
 }
 
 describe('durable Logged finding pickup', () => {
+  it.each(['Follow-up', 'Answered'])('leaves a human %s thread unresolved', (response) => {
+    const root = { body: 'Please rename this local variable.', user: { type: 'User' } }
+    expect(canResolveThread(root.body, response, root.user.type)).toBe(false)
+  })
+
+  it.each(['Follow-up', 'Answered'])('permits a bot %s thread to resolve', (response) => {
+    const root = { body: 'Please rename this local variable.', user: { type: 'Bot' } }
+    expect(canResolveThread(root.body, response, root.user.type)).toBe(true)
+  })
+
+  it('permits a fixed human thread to resolve', () => {
+    expect(canResolveThread('Preserve buffered bytes.', 'Fixed', 'User')).toBe(true)
+  })
+
+  it.each([undefined, null, 'User', 'Organization', 'bot'])('requires verified bot identity for Follow-up with actor type %j', (authorType) => {
+    expect(canResolveThread('Please rename this local variable.', 'Follow-up', authorType)).toBe(false)
+  })
+
+  it.each(['', undefined, 'follow-up'])('rejects unknown response %j', (response) => {
+    expect(canResolveThread('Please rename this local variable.', response, 'Bot')).toBe(false)
+  })
+
+  it.each([
+    ['User', 'Follow-up', 1],
+    ['User', 'Answered', 1],
+    ['Bot', 'Follow-up', 0],
+    ['Bot', 'Answered', 0],
+    [null, 'Follow-up', 1],
+  ])('sweeps author %j with one %s reply before checking resolution', (authorType, response, status) => {
+    // Local boundary fixture: record the reply and resolve calls around the real CLI check.
+    const result = spawnSync('bash', ['-c', 'printf "reply\\n" && "$@" && printf "resolve\\n"', 'sweep', process.execPath, '--experimental-strip-types', fileURLToPath(new URL('../../../harlan-agent-kit/skills/pr/scripts/can-resolve-thread.ts', import.meta.url)), response], {
+      input: JSON.stringify({ body: 'Please rename this local variable.', user: { type: authorType } }),
+      encoding: 'utf8',
+    })
+    expect(result.status).toBe(status)
+    expect(result.stdout).toBe(status === 0 ? 'reply\nresolve\n' : 'reply\n')
+  })
+
   it.each([
     ['', false],
     ['  \n', false],
     ['Please preserve buffered bytes.', true],
   ])('checks automatic resolution permission for %j', (body, expected) => {
-    expect(canResolveThread(body)).toBe(expected)
+    expect(canResolveThread(body, 'Fixed', 'Bot')).toBe(expected)
   })
 
   it.each([
@@ -74,8 +112,8 @@ describe('durable Logged finding pickup', () => {
     ['Please preserve buffered bytes.', 0],
     [`<!-- review-finding: ${'f'.repeat(64)} -->\n- [ ] Ask an agent to verify and fix this finding`, 1],
   ])('enforces automatic resolution permission at the CLI boundary for %j', (body, status) => {
-    const result = spawnSync(process.execPath, ['--experimental-strip-types', fileURLToPath(new URL('../../../harlan-agent-kit/skills/pr/scripts/can-resolve-thread.ts', import.meta.url))], {
-      input: body,
+    const result = spawnSync(process.execPath, ['--experimental-strip-types', fileURLToPath(new URL('../../../harlan-agent-kit/skills/pr/scripts/can-resolve-thread.ts', import.meta.url)), 'Fixed'], {
+      input: JSON.stringify({ body, user: { type: 'Bot' } }),
       encoding: 'utf8',
     })
     expect(result.status).toBe(status)
@@ -93,7 +131,7 @@ describe('durable Logged finding pickup', () => {
       thread,
       select: () => fixture.store.requestLoggedFindingPickup({ ...fixture.request, inline: true, commentId: 101, before: body }),
       close: () => {
-        if (canResolveThread(body))
+        if (canResolveThread(body, 'Follow-up', 'Bot'))
           thread.resolved = true
         fixture.store.reconcileLoggedFindingThreads(fixture.request.repository, fixture.pullRequest.number, [thread], at)
       },

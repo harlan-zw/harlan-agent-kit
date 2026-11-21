@@ -130,19 +130,23 @@ If a bot reviewer already marked its comment addressed and resolved the thread, 
 A reply to CodeRabbit makes it answer. Post one reply per thread.
 
 Reply on the thread. Just before you resolve it, run the list again. If a comment arrived after your reply, respond to it first.
-Before replying or resolving, save the full root body in a scratch file.
+Before replying or resolving, save the full root comment, including its body and `user.type`, in a scratch file.
 For a verified private repository, use `HARLAN_AGENT_GITHUB_PRIVATE=OWNER/REPO gh` instead of `agent-gh` for this read.
 Set `PR_SKILL_DIR` to the absolute directory of the installed `pr` Skill you read.
-The [automatic resolution check](../scripts/can-resolve-thread.ts) refuses Service finding markers and empty input.
+The [automatic resolution check](../scripts/can-resolve-thread.ts) reads that REST JSON and the response classification.
+It refuses Service finding markers, empty bodies, and unknown response classifications.
+Answered and Follow-up require `user.type` equal to `Bot`. Never infer bot identity from a login.
+Post one reply before checking resolution permission. A human Answered or Follow-up still needs its reply.
 Its nonzero exit leaves the thread open. Never bypass it after a read failure.
+Set `RESPONSE` to `Fixed`, `Answered`, or `Follow-up`. Set `REPLY` to the matching reply from the table.
 The `&&` runs each step only after the preceding step succeeds:
 
 ```bash
-ROOT_BODY=~/scratch/review-thread-COMMENT_ID.txt
-agent-gh api repos/OWNER/REPO/pulls/comments/COMMENT_ID --jq '.body // empty' > "$ROOT_BODY" && \
-pnpm exec node --experimental-strip-types "$PR_SKILL_DIR/scripts/can-resolve-thread.ts" < "$ROOT_BODY" && \
+ROOT_COMMENT=~/scratch/review-thread-COMMENT_ID.json
+agent-gh api repos/OWNER/REPO/pulls/comments/COMMENT_ID > "$ROOT_COMMENT" && \
 gh api -X POST repos/OWNER/REPO/pulls/NUMBER/comments/COMMENT_ID/replies \
-  -f body='🤖 Harlan Agent Kit Agent: fixed in [abc1234](https://github.com/OWNER/REPO/commit/FULL_SHA).' && \
+  -f body="$REPLY" && \
+pnpm exec node --experimental-strip-types "$PR_SKILL_DIR/scripts/can-resolve-thread.ts" "$RESPONSE" < "$ROOT_COMMENT" && \
 gh api graphql -X POST \
   -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' \
   -f id=THREAD_ID --jq .data.resolveReviewThread.thread.isResolved
@@ -152,7 +156,9 @@ gh api graphql -X POST \
 Do not convert it to a 32-bit integer or a JavaScript number.
 `THREAD_ID` is the `PRRT_` ID. Both come from the list.
 The resolve command prints `true` when GitHub resolved the thread.
-If either command fails, the thread stays open. Report the error. Never retry it with other credentials or another tool.
+If a read, reply, or resolve fails, leave the thread open and report the error.
+A denied resolution check is expected for human Answered and Follow-up threads. Do not post another reply for that denial.
+Never retry a failed command with other credentials or another tool.
 This applies to every response that resolves a thread: Fixed, and Answered or Follow-up on a bot's thread.
 
 Answer top-level items in one comment. Link each item it answers.

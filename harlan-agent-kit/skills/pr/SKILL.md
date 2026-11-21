@@ -36,9 +36,11 @@ Running the git and `gh` commands by hand is the failure mode this skill exists 
 - **Never move unknown changes** -- primary checkout changes may belong to another task. Copy only changes this task owns.
 - **`gh pr create` fails silently with bad body** -- always use HEREDOC for the body, never inline quotes.
 - **CI flakes vs real failures** -- if the same check fails twice with different errors, it's flaky. If same error, it's real. Don't retry flakes more than once.
-- **CodeRabbit reviews can be noisy** -- fix security and correctness findings you can show. Style suggestions and nitpicks get one Follow-up reply and are resolved, never worked.
+- **CodeRabbit reviews can be noisy** -- fix security and correctness findings you can show. Style suggestions and nitpicks get one Follow-up reply. Resolve only bot threads outside the Service.
 - **Answer every review comment, work only what matters** -- the [review threads](references/review-threads.md) sweep gives each one Fixed, Answered, or Follow-up.
-  Change code only for a finding above 80/100 or a defect you can show. Close everything else with one Follow-up reply and resolve it.
+  Change code only for a finding above 80/100 or a defect you can show. Give everything else one Follow-up reply.
+  Resolve Answered and Follow-up threads only when the reviewer is a bot outside the Service.
+  Leave human Answered and Follow-up threads open for the reviewer. Keep every Service finding thread open during automatic sweeps.
   Never resolve a Service finding thread above 80/100 yourself. The Service resolves it when a later Review clears it.
   Never resolve a Logged thread whose Repair was selected. Resolving it cancels that Repair.
 - **Worktree cleanup** -- if you forget `wt remove`, orphaned worktrees accumulate. Clean up after merge.
