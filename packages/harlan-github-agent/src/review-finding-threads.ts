@@ -72,8 +72,10 @@ export interface ReviewFindingThreadMirror {
 }
 
 const FINDING_MARKER_PATTERN = /<!-- review-finding: ([a-f\d]{64})(?: ([\w-]+))? -->/i
-const FINDING_SUMMARY_PATTERN = /^\*\*(?:(?:Finding|(?:Trivial|Minor|Major|Critical) \(\d+\/100\)): (.+)\*\*|(?:Open|Logged|Dismissal recommended)(?: \(\d+\/100\))?:\*\* (.+))$/m
+const FINDING_HEADING_PATTERN = /^\*\*(?:Finding|(?:Trivial|Minor|Major|Critical) \(\d+\/100\)): (.+)\*\*$/
+const LEGACY_FINDING_HEADING_PATTERN = /^\*\*(Open|Logged|Dismissal recommended)(?: \(\d+\/100\))?:\*\* (.+)$/
 const LOGGED_FINDING_MARKER = '<!-- review-finding-disposition: logged -->'
+const OPTIONAL_ACTION_PREFIX = /^(?:(?:optional follow-up[.:]|as an optional follow-up,)\s*)+/i
 
 /** What one finding thread's first comment says about its finding. */
 export interface ReviewFindingThreadMarker {
@@ -81,6 +83,7 @@ export interface ReviewFindingThreadMarker {
   /** The Review's own name for the finding, so a later Review can reuse it exactly. */
   identity: string | null
   summary: string | null
+  logged: boolean
 }
 
 /** Reads the finding one inline comment opened, or null on any other comment. */
@@ -90,12 +93,16 @@ export function reviewFindingThreadMarker(body: string): ReviewFindingThreadMark
   const marker = FINDING_MARKER_PATTERN.exec(body)
   if (marker?.[1] === undefined)
     return null
-  const heading = FINDING_SUMMARY_PATTERN.exec(body)
-  const summary = heading?.[1] ?? heading?.[2]
+  const [firstLine, nextLine] = body.slice(marker.index + marker[0].length).trimStart().split(/\r?\n/, 2)
+  const logged = firstLine === LOGGED_FINDING_MARKER
+  const heading = (logged ? nextLine : firstLine) ?? ''
+  const legacyHeading = LEGACY_FINDING_HEADING_PATTERN.exec(heading)
+  const summary = FINDING_HEADING_PATTERN.exec(heading)?.[1] ?? legacyHeading?.[2]
   return {
     fingerprint: marker[1].toLowerCase(),
     identity: marker[2] === undefined ? null : Buffer.from(marker[2], 'base64url').toString('utf8'),
     summary: summary === undefined ? null : sentence(summary),
+    logged: logged || legacyHeading?.[1] === 'Logged',
   }
 }
 
@@ -130,7 +137,10 @@ export function reviewFindingThreadBody(finding: ThreadFinding, headSha?: string
   const { impact } = finding
   const heading = impact === undefined ? 'Finding' : `${findingSeverity(impact)} (${impact}/100)`
   const summary = cleanLine(finding.summary).replace(/\.$/, '')
-  const action = cleanText(finding.nextAction ?? '').replaceAll(/\s+/g, ' ').replace(/^(?:optional follow-up[.:]\s*)+/i, '')
+  const recommendation = cleanText(finding.nextAction ?? '')
+  const action = OPTIONAL_ACTION_PREFIX.test(recommendation)
+    ? recommendation.replace(OPTIONAL_ACTION_PREFIX, '').replace(/^[a-z]/, letter => letter.toUpperCase())
+    : recommendation
   return [
     AUTOMATED_REVIEW_MARKER,
     // The identity rides base64url encoded, so no finding text can close the HTML comment.
@@ -192,11 +202,10 @@ export function planReviewFindingThreads(headSha: string, findings: ReviewFindin
     resolve: threads.filter((thread) => {
       if (thread.resolved || currentFingerprints.has(thread.fingerprint))
         return false
-      const body = thread.comment?.body
-      if (body === undefined || (!body.includes(LOGGED_FINDING_MARKER) && !/^\*\*Logged \(/m.test(body)))
+      const marker = thread.comment === undefined ? null : reviewFindingThreadMarker(thread.comment.body)
+      if (marker?.logged !== true)
         return true
-      const summary = reviewFindingThreadMarker(body)?.summary
-      return repairs.has(thread.fingerprint) || (summary != null && fixedSummaries.has(summary))
+      return repairs.has(thread.fingerprint) || (marker.summary !== null && fixedSummaries.has(marker.summary))
     }).map(thread => ({ thread, commitSha: repairs.get(thread.fingerprint) })),
   }
 }
@@ -346,8 +355,10 @@ export function findingDiscussions(comments: InlineReviewComment[], actorLogin: 
   const roots = new Map<number, FindingDiscussion>()
   for (const comment of comments) {
     const marker = comment.inReplyToId === null && own(comment) ? reviewFindingThreadMarker(comment.body) : null
-    if (marker !== null)
-      roots.set(comment.id, { ...marker, path: comment.path, line: comment.line, replies: [] })
+    if (marker !== null) {
+      const { fingerprint, identity, summary } = marker
+      roots.set(comment.id, { fingerprint, identity, summary, path: comment.path, line: comment.line, replies: [] })
+    }
   }
   for (const comment of comments) {
     const root = comment.inReplyToId === null ? undefined : roots.get(comment.inReplyToId)

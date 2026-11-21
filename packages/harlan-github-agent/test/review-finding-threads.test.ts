@@ -55,13 +55,14 @@ function fakeSource(threads: ReviewFindingThread[], outcome: 'Posted' | 'Outside
 describe('review finding threads', () => {
   it('puts an optional finding and its Repair checkbox beside the code', async () => {
     const { mirror, posted } = fakeSource([])
-    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 497, headSha, [logged], new AbortController().signal, authorize, 'open', { controls: true })
+    const finding = { ...logged, nextAction: 'As an optional follow-up, preserve buffered bytes.\n\nKeep both chunks until decoding finishes.' }
+    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 497, headSha, [finding], new AbortController().signal, authorize, 'open', { controls: true })
     expect(posted).toEqual([expect.objectContaining({
       path: 'src/parser.ts',
       line: 32,
       body: expect.stringContaining('- [ ] Ask an agent to verify and fix this finding'),
     })])
-    expect(posted[0]!.body).toContain('**Minor (42/100): A split sequence drops bytes**\n\nThe last chunk loses a byte.\n\nPreserve buffered bytes.')
+    expect(posted[0]!.body).toContain('**Minor (42/100): A split sequence drops bytes**\n\nThe last chunk loses a byte.\n\nPreserve buffered bytes.\n\nKeep both chunks until decoding finishes.')
   })
 
   it.each([
@@ -143,9 +144,16 @@ describe('review finding threads', () => {
   })
 
   it('resolves open threads whose finding the latest Review no longer reports', async () => {
+    const body = `<!-- harlan-agent-kit:pr-triage -->
+<!-- review-finding: ${clockFingerprint} -->
+**Major (84/100): A fixture reports the wrong score**
+
+The user sees the wrong score in this text:
+
+**Logged (42/100):** A split sequence drops bytes.`
     const { mirror, resolved } = fakeSource([
       { threadId: 'T1', fingerprint: lockFingerprint, resolved: false },
-      { threadId: 'T2', fingerprint: clockFingerprint, resolved: false },
+      { threadId: 'T2', fingerprint: clockFingerprint, resolved: false, comment: { id: 10, body } },
       { threadId: 'T3', fingerprint: 'c'.repeat(64), resolved: true },
     ])
 
