@@ -10,8 +10,9 @@ Run this sweep after every push to the pull request. Run it again before you cal
 The sweep exists so nothing stays silent. It does not exist to implement every suggestion.
 
 - Fix a finding only when it scores above 80/100, or when you can show the defect with a failing command, test, or reproduction.
-- Close everything else with one Follow-up reply, then resolve the thread. This covers findings at 80/100 or below, style, wording, and nitpicks.
-  The one exception is a Logged Service finding whose Repair was selected. Section 2 keeps it open.
+- Close other reviewers' low-value bot threads with one Follow-up reply, then resolve the thread.
+  This covers findings at 80/100 or below, style, wording, and nitpicks.
+  Service finding threads stay open under section 2, including unchecked Logged controls.
 - Never change code or push a commit for a low-value thread.
 - Each fix commit counts toward Step 6's limit of three review-driven pushes.
 
@@ -44,7 +45,7 @@ gh api graphql -X POST --paginate -f query="$query" -f owner=OWNER -f repo=REPO 
        outdated: .isOutdated, path, line, url: $root.url, first: ($root.body | .[0:300])}'
 ```
 
-GraphQL drops the `[bot]` suffix, so the Service shows as `harlan-github-agent`.
+GraphQL drops the `[bot]` suffix. Identify Service finding threads by their `review-finding:` marker, regardless of actor login.
 `replies` holds the last 100 replies. `comments` counts every comment in the thread.
 The list shows only the start of each body. Read the full body of each item before you choose its response.
 An outdated thread still needs a response. The code moved, and the comment can still apply.
@@ -73,19 +74,19 @@ The Service owns each review thread it opened for a Review finding. Its first co
 
 - A reply from Harlan's account is a finding reply. The Service requests a Review of the current revision for it, and that Review reads the reply as Harlan's words.
   If that revision's Review is `Queued` or `Running`, the request joins it. If that Review has ended, the request starts another one.
-- Resolving a Logged finding thread dismisses its "Ask an agent to verify and fix" control. The Service ignores a later tick and cancels a queued Repair for that finding.
-  Reopening the thread does not restore the selection. So never resolve a Logged thread whose Repair was selected.
+- Resolving a Logged finding thread dismisses its "Ask an agent to verify and fix" control.
+  The Service cancels its Repair, including `Queued`, `Running`, and `Publishing` work.
+  Reopening the thread does not restore the selection.
 
-A Repair was selected when the thread list shows `selected: true`, or when the Service's marked comment shows that finding as ticked or with a `Repair:` line.
-This prints the finding fingerprints that the marked comment shows as selected:
+Never resolve a Service finding thread during an automatic sweep.
+Keep unchecked controls open so Harlan can select a Repair after hand-back.
+A selection can arrive after any read. GitHub's resolve mutation cannot check that the control remains unchecked.
+Another read cannot make that mutation safe.
 
-```bash
-agent-gh api repos/OWNER/REPO/issues/NUMBER/comments --paginate \
-  --jq '.[] | select(.user.login == "harlan-github-agent[bot]" and (.body | contains("<!-- harlan-agent-kit:pr-triage -->")))
-    | .body | scan("(?m)^ *(?:- \\[[xX]\\] Ask an agent to verify and fix this finding|Repair: [^\\n]+) <!-- logged-finding: ([a-f0-9]{64}) -->")[0]'
-```
-
-Match each against the thread's `finding` fingerprint.
+Selection evidence is for reporting only. It never permits automatic resolution.
+Use Step 6's trusted canonical comment and repository read route when reporting Repair status.
+Do not assume one actor login. If selection evidence is unavailable, report it as unknown and keep the thread open.
+No canonical comment lookup is needed to decide whether a Service thread stays open.
 
 The sweep grants no Repair authority. Handle each Service finding by its score:
 
@@ -94,8 +95,9 @@ The sweep grants no Repair authority. Handle each Service finding by its score:
 - **Dismissal:** report it through Step 6. Do not repair or request another Review.
 - **False positive or not applicable:** use Step 6's evidence and comment procedure.
 - **80/100 or below (Logged), Repair selected:** leave the thread open and the Repair to the Service. List it in the hand-back.
-- **80/100 or below (Logged), not selected:** never change code. Close it as a Follow-up: reply, then resolve.
-  If a Logged finding has no thread, list it in the hand-back with a link to the Service's marked comment.
+- **80/100 or below (Logged), unchecked or selection unknown:** never change code. Leave the thread and its Repair control open.
+  Link each available control in the hand-back. Harlan may select the Repair or explicitly dismiss the finding.
+  If a Logged finding has no thread, link its control in the Service's marked comment.
 
 Reply to a Service finding thread only in a window, so the reply joins a Review that is already due.
 The window opens when you push. It stays open while the Service Review of that new head is `Queued` or `Running`.
@@ -107,10 +109,12 @@ harlan-github-agent control watch-pr --repository OWNER/REPO --number NUMBER --u
 ```
 
 Continue only when `headSha` is your pushed SHA and the `adversarial_review` Task is `Queued` or `Running`.
-In the window, post the Follow-up replies and resolve those threads. You may also post a Fixed reply on a thread above 80/100. Leave that one open.
-Outside the window, resolve an unselected Logged thread without a reply. A reply would start another Review, and each Review can file new Logged threads.
-The finding's own text already marks it as an optional follow-up.
-In the hand-back, list the Logged threads you closed, each selected Repair, and each fix that waits for Service verification.
+In the window, you may post a Follow-up or Fixed reply. Leave every Service finding thread open.
+Outside the window, leave Service threads open without a reply. A reply would start another Review.
+The finding's own text already marks a Logged finding as an optional follow-up.
+In the hand-back, link each unchecked or unknown Repair control, each selected Repair, and each fix awaiting Service verification.
+An unchecked Logged control counts as waiting for Harlan. It does not block readiness by itself.
+Only Harlan's explicit dismissal or the Service's verified finding lifecycle may close these threads.
 
 ## 3. Every other item
 
@@ -126,9 +130,17 @@ If a bot reviewer already marked its comment addressed and resolved the thread, 
 A reply to CodeRabbit makes it answer. Post one reply per thread.
 
 Reply on the thread. Just before you resolve it, run the list again. If a comment arrived after your reply, respond to it first.
-The `&&` runs the resolve only after the reply succeeds:
+Before replying or resolving, save the full root body in a scratch file.
+For a verified private repository, use `HARLAN_AGENT_GITHUB_PRIVATE=OWNER/REPO gh` instead of `agent-gh` for this read.
+Set `PR_SKILL_DIR` to the absolute directory of the installed `pr` Skill you read.
+The [automatic resolution check](../scripts/can-resolve-thread.ts) refuses Service finding markers and empty input.
+Its nonzero exit leaves the thread open. Never bypass it after a read failure.
+The `&&` runs each step only after the preceding step succeeds:
 
 ```bash
+ROOT_BODY=~/scratch/review-thread-COMMENT_ID.txt
+agent-gh api repos/OWNER/REPO/pulls/comments/COMMENT_ID --jq '.body // empty' > "$ROOT_BODY" && \
+pnpm exec node --experimental-strip-types "$PR_SKILL_DIR/scripts/can-resolve-thread.ts" < "$ROOT_BODY" && \
 gh api -X POST repos/OWNER/REPO/pulls/NUMBER/comments/COMMENT_ID/replies \
   -f body='🤖 Harlan Agent Kit Agent: fixed in [abc1234](https://github.com/OWNER/REPO/commit/FULL_SHA).' && \
 gh api graphql -X POST \
@@ -153,7 +165,7 @@ gh pr comment NUMBER --repo OWNER/REPO --body '🤖 Harlan Agent Kit Agent: ...'
 
 Run the list again. Each unresolved thread must be one of these:
 
-- a Service finding above 80/100 that waits for Service verification, or a Logged finding whose Repair was selected
+- a Service finding that waits for Service verification, or a Logged finding with its Repair control available to Harlan
 - a thread with an Agent reply from this sweep whose resolve failed and that the hand-back reports
 - a human reviewer's thread that waits for that reviewer
 - on a repository Harlan does not maintain, a thread whose drafted reply waits for Harlan
