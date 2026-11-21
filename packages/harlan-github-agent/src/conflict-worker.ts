@@ -37,6 +37,12 @@ export interface ConflictWorkerOptions {
   worktrees: ConflictWorktreeManager
 }
 
+interface CheckReport {
+  command: string
+  outcome: 'passed' | 'failed' | 'unavailable'
+  details: string
+}
+
 /**
  * The conflict Agent's answer, parsed once.
  *
@@ -46,14 +52,14 @@ export interface ConflictWorkerOptions {
  * command and error instead of a blocker Harlan has to decode.
  */
 type AgentResult
-  = | { _tag: 'Resolved', summary: string, checks: string[], commitMessage: string }
-    | { _tag: 'ChecksUnavailable', summary: string, checks: string[], commitMessage: string, command: string, error: string }
-    | { _tag: 'Blocked', summary: string, checks: string[] }
+  = | { _tag: 'Resolved', summary: string, checks: CheckReport[], commitMessage: string }
+    | { _tag: 'ChecksUnavailable', summary: string, checks: CheckReport[], commitMessage: string, command: string, error: string }
+    | { _tag: 'Blocked', summary: string, checks: CheckReport[] }
 
 interface AgentResponse {
   outcome: 'resolved' | 'checks_unavailable' | 'blocked'
   summary: string
-  checks: string[]
+  checks: CheckReport[]
   commitMessage: string
   unavailableCheck: { command: string, error: string }
 }
@@ -65,7 +71,19 @@ const outputSchema = {
   properties: {
     outcome: { type: 'string', enum: ['resolved', 'checks_unavailable', 'blocked'] },
     summary: { type: 'string' },
-    checks: { type: 'array', items: { type: 'string' } },
+    checks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['command', 'outcome', 'details'],
+        properties: {
+          command: { type: 'string' },
+          outcome: { type: 'string', enum: ['passed', 'failed', 'unavailable'] },
+          details: { type: 'string' },
+        },
+      },
+    },
     commitMessage: { type: 'string' },
     unavailableCheck: {
       type: 'object',
@@ -126,7 +144,20 @@ Do not commit, push, amend, rebase, abort the merge, or edit Git configuration.
 Choose a commit message that describes the resolved conflict.
 Return the required JSON result. Use outcome blocked when intent is ambiguous or a failing check needs a path outside the list.
 The controller rejects a resolved or checks_unavailable outcome without a commit message. Return an empty commit message only with outcome blocked.
-Leave unavailableCheck command and error empty unless the outcome is checks_unavailable.`
+Leave unavailableCheck command and error empty unless the outcome is checks_unavailable.
+Report every required command in checks with its command, outcome, and details.
+Use check outcome passed only when the command ran and passed.
+Use failed when the command ran and failed. Use unavailable when it could not start.
+Return resolved only with a nonempty checks list and every reported check passed.`
+}
+
+function isCheckReport(value: unknown): value is CheckReport {
+  if (typeof value !== 'object' || value === null)
+    return false
+  const check = value as Partial<CheckReport>
+  return typeof check.command === 'string' && check.command.trim() !== ''
+    && (check.outcome === 'passed' || check.outcome === 'failed' || check.outcome === 'unavailable')
+    && typeof check.details === 'string'
 }
 
 function parseAgentResponse(text: string): Result<AgentResult, string> {
@@ -144,7 +175,8 @@ function parseAgentResponse(text: string): Result<AgentResult, string> {
     (value.outcome !== 'resolved' && value.outcome !== 'checks_unavailable' && value.outcome !== 'blocked')
     || typeof value.summary !== 'string'
     || !Array.isArray(value.checks)
-    || !value.checks.every(check => typeof check === 'string')
+    || !value.checks.every(isCheckReport)
+    || (value.outcome === 'resolved' && (value.checks.length === 0 || value.checks.some(check => check.outcome !== 'passed')))
     || typeof value.commitMessage !== 'string'
     || (value.outcome !== 'blocked' && value.commitMessage.trim().length === 0)
     || typeof unavailable !== 'object' || unavailable === null
@@ -156,7 +188,7 @@ function parseAgentResponse(text: string): Result<AgentResult, string> {
   // Diagnostics may also be repeated in these fields. Redact the complete
   // strings before any line cap, evidence persistence, or publication.
   const summary = redactSecrets(value.summary)
-  const checks = value.checks.map(redactSecrets)
+  const checks = value.checks.map(check => ({ command: redactSecrets(check.command), outcome: check.outcome, details: redactSecrets(check.details) }))
   const commitMessage = redactSecrets(value.commitMessage)
   switch (value.outcome) {
     case 'blocked':

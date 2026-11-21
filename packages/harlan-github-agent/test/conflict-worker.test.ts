@@ -8,7 +8,7 @@ import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stub
 const resolved = {
   outcome: 'resolved',
   summary: 'Resolved.',
-  checks: ['pnpm test'],
+  checks: [{ command: 'pnpm test', outcome: 'passed', details: 'All tests passed.' }],
   commitMessage: 'merge: reconcile parser changes',
   unavailableCheck: { command: '', error: '' },
 }
@@ -55,6 +55,48 @@ function conflictWorkerOptions(repository: ReturnType<typeof repositoryMapping>,
 }
 
 describe('conflict worker', () => {
+  it.each([
+    ['Required pnpm test could not start because generated types are missing'],
+    [{ command: 'pnpm test', outcome: 'unavailable', details: 'Generated types are missing' }],
+    [{ command: 'pnpm test', outcome: 'failed', details: 'Assertion failed' }],
+    [{ command: 'pnpm test', details: 'Missing outcome' }],
+    [{ command: 'pnpm test', outcome: 'skipped', details: 'Skipped' }],
+    [{ command: '', outcome: 'passed', details: 'No command' }],
+    [],
+    [
+      { command: 'pnpm lint', outcome: 'passed', details: 'Passed' },
+      { command: 'pnpm test', outcome: 'unavailable', details: 'Generated types are missing' },
+    ],
+  ])('stops before verification or commit when resolved lacks passing check reports: %j', async (...checks) => {
+    const repository = repositoryMapping()
+    const current = pullRequestItem()
+    const options = conflictWorkerOptions(repository, current)
+    const attempts: string[] = []
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        ...resolved,
+        checks,
+      }))),
+      worktrees: {
+        ...options.worktrees,
+        verify: () => {
+          attempts.push('verify')
+          return options.worktrees.verify()
+        },
+        commit: () => {
+          attempts.push('commit')
+          return options.worktrees.commit()
+        },
+      },
+    })
+
+    const result = await worker.run(conflictTask(repository, current), new AbortController().signal)
+
+    expect(result).toEqual(err('The agent returned an invalid conflict resolution result.'))
+    expect(attempts).toEqual([])
+  })
+
   it.each([
     ['an unapproved prefix', {}, { headRef: 'v4/core-experiment' }, /v4\/core-experiment does not start with/],
     ['the default branch', {}, { headRef: 'main' }, /default branch main/],
@@ -190,7 +232,7 @@ describe('conflict worker', () => {
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
         ...resolved,
         outcome: 'checks_unavailable',
-        checks: ['pnpm build ran and failed: src/outside-scope.ts TS2322: Type string is not assignable to number'],
+        checks: [{ command: 'pnpm build', outcome: 'failed', details: 'src/outside-scope.ts TS2322: Type string is not assignable to number' }],
         unavailableCheck: { command: 'pnpm test', error: 'Cannot import dist/index.mjs because pnpm build failed' },
       }))),
       worktrees: { ...options.worktrees, commit: () => {
@@ -251,7 +293,7 @@ describe('conflict worker', () => {
         runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
           outcome: surface === 'resolved' || surface === 'blocked' ? surface : 'checks_unavailable',
           summary: diagnostic,
-          checks: [diagnostic],
+          checks: [{ command: diagnostic, outcome: surface === 'resolved' ? 'passed' : 'unavailable', details: diagnostic }],
           commitMessage: `fix: setup Bearer ${token}`,
           unavailableCheck: surface === 'resolved' ? { command: '', error: '' } : { command: diagnostic, error: diagnostic },
         }))),
@@ -274,7 +316,11 @@ describe('conflict worker', () => {
         expect(message).toBe('')
         if (result._tag === 'Ok' && result.value._tag === 'ActionRequired') {
           const evidence = JSON.parse(result.value.evidence ?? '{}')
-          expect(evidence.checks).toEqual([`${'x'.repeat(220)} Bearer ***: generated output missing`])
+          expect(evidence.checks).toEqual([{
+            command: `${'x'.repeat(220)} Bearer ***: generated output missing`,
+            outcome: 'unavailable',
+            details: `${'x'.repeat(220)} Bearer ***: generated output missing`,
+          }])
           if (surface !== 'blocked') {
             expect(evidence.command).toBe(`${'x'.repeat(220)} Bearer ***: generated`.slice(0, 240))
             expect(evidence.error).toBe(evidence.command)
