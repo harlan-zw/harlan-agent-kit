@@ -470,7 +470,7 @@ describe('git publication remote', () => {
     expect(git(bare, 'rev-parse', 'refs/heads/fix/baseline-ci')).toBe(repairSha)
   })
 
-  it('authorizes an approved repair after its clean pull request base moves', async () => {
+  it.each(['main', 'next'])('checks the live Repair base ref after staging: %s', async (baseRef) => {
     const { bare, checkout, command, root } = fixture()
     const repair = {
       ...command,
@@ -492,6 +492,7 @@ describe('git publication remote', () => {
           headRepository: repair.repository,
           headRef: repair.headRef,
           mergeState: 'clean',
+          baseRef,
         }))),
         hasOpenPullRequestForBranch: () => Promise.resolve(ok(false)),
         isBranchProtected: () => Promise.resolve(ok(false)),
@@ -501,7 +502,8 @@ describe('git publication remote', () => {
       tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
     })
 
-    expect(await remote.validateAuthority(repair, new AbortController().signal)).toEqual(ok(undefined))
+    const authority = await remote.validateAuthority(repair, new AbortController().signal)
+    expect(authority._tag).toBe(baseRef === 'main' ? 'Ok' : 'Err')
   })
 
   it('publishes an approved repair to a modifiable contributor branch', async () => {

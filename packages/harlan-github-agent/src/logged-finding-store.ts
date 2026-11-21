@@ -252,6 +252,17 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
             continue
           const fingerprint = finding.details.fingerprint
           const dismiss = dismissed.includes(fingerprint)
+          if (dismiss) {
+            const existing = database.prepare(`SELECT id, task_id FROM logged_finding_requests
+              WHERE subject_id = ? AND head_sha = ? AND base_ref = ? AND fingerprint = ? AND on_head = 1`)
+              .get(candidate.subject_id, input.headSha, pullRequest.baseRef, fingerprint) as { id: string, task_id: string | null } | undefined
+            if (existing !== undefined) {
+              database.prepare('UPDATE logged_finding_requests SET dismissed = 1 WHERE id = ?').run(existing.id)
+              if (existing.task_id !== null)
+                options.cancel(existing.task_id, input.at)
+              continue
+            }
+          }
           database.prepare(`INSERT INTO logged_finding_requests
             (id, subject_id, head_sha, base_ref, fingerprint, finding_json, requested_by, requested_at, on_head, dismissed, inline_comment_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

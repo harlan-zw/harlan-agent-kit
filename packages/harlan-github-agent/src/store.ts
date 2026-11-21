@@ -871,7 +871,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   claimNextConflictTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedConflictResolutionTask | null
   claimNextIssueTriageTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedIssueTriageTask | null
   claimNextIssueWorkTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedIssueWorkTask | null
-  claimNextReviewFixTask: (workerId: string, now: string, leaseMilliseconds: number) => ClaimedReviewFixTask | null
+  claimNextReviewFixTask: (workerId: string, now: string, leaseMilliseconds: number, held?: readonly { repository: string, pullRequestNumber: number }[]) => ClaimedReviewFixTask | null
   queueReviewFixTaskForReview: (input: {
     taskId: string
     workerId: string
@@ -1050,7 +1050,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     url?: string
   }) => boolean
   completePublication: (input: { commandId: string, workerId: string, fence: number, at: string, evidence: string, pullRequestNumber?: number }) => boolean
-  deferPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
+  deferPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string, outcomeUnknown?: boolean }) => boolean
   failTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   failWorkerTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   deferReviewStatus: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
@@ -10489,7 +10489,7 @@ export function openJournalStore(
     })
   }
 
-  const nextMutationTask = (kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work' | null, now: string, exactTaskId?: string, includeQueuedBatches = false): ClaimRow | undefined => database.prepare(`
+  const nextMutationTask = (kind: 'resolve_conflict' | 'review_fix' | 'baseline_repair' | 'issue_work' | null, now: string, exactTaskId?: string, includeQueuedBatches = false, held: readonly { repository: string, pullRequestNumber: number }[] = []): ClaimRow | undefined => database.prepare(`
         SELECT
           tasks.id,
           tasks.kind,
@@ -10512,6 +10512,9 @@ export function openJournalStore(
         JOIN repositories ON repositories.id = subjects.repository_id
         JOIN revisions ON revisions.id = tasks.revision_id
         WHERE (? IS NULL OR tasks.kind = ?) AND tasks.state_tag = 'Queued'
+          AND NOT EXISTS (SELECT 1 FROM json_each(?) AS held
+            WHERE json_extract(held.value, '$.repository') = repositories.github
+              AND json_extract(held.value, '$.pullRequestNumber') = subjects.github_number)
           AND (tasks.kind != 'resolve_conflict' OR NOT EXISTS (
             SELECT 1 FROM conflict_dispatch_windows AS window
             WHERE window.subject_id = tasks.subject_id
@@ -10625,7 +10628,7 @@ export function openJournalStore(
           CASE WHEN tasks.kind != 'issue_work' THEN 1 WHEN tasks.updated_at <= ? THEN 2 ELSE 0 END DESC,
           tasks.updated_at, tasks.id
         LIMIT 1
-      `).get(kind, kind, now, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests, new Date(Date.parse(now) - issueWaitMilliseconds).toISOString()) as ClaimRow | undefined
+      `).get(kind, kind, JSON.stringify(held), now, exactTaskId ?? null, exactTaskId ?? null, exactTaskId ?? null, includeQueuedBatches ? 1 : 0, maxOpenPullRequests, new Date(Date.parse(now) - issueWaitMilliseconds).toISOString()) as ClaimRow | undefined
 
   const issueWaitMilliseconds = 30 * 60 * 1_000
   const deliveryPriority = (kind: AgentTask['kind'], queuedAt: string, now: string): number =>
@@ -10635,8 +10638,8 @@ export function openJournalStore(
 
   // Fresh issues yield to delivery. Older issues take the next free permit to prevent starvation.
   // Compare only claimable work, so missing Approval never holds the Queue.
-  const hasHigherPriorityTask = (priority: number, now: string, kind: AgentTask['kind'] = 'issue_work', queuedAt = now): boolean =>
-    [nextMutationTask(null, now, undefined, true), nextWorkerTask(null, now)].some((row) => {
+  const hasHigherPriorityTask = (priority: number, now: string, kind: AgentTask['kind'] = 'issue_work', queuedAt = now, held: readonly { repository: string, pullRequestNumber: number }[] = []): boolean =>
+    [nextMutationTask(null, now, undefined, true, held), nextWorkerTask(null, now)].some((row) => {
       if (row === undefined)
         return false
       const candidatePriority = (JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0
@@ -10650,11 +10653,12 @@ export function openJournalStore(
     now: string,
     leaseMilliseconds: number,
     exactTaskId?: string,
+    held: readonly { repository: string, pullRequestNumber: number }[] = [],
   ): ClaimedConflictResolutionTask | ClaimedReviewFixTask | ClaimedBaselineRepairTask | ClaimedIssueWorkTask | null => {
     database.exec('BEGIN IMMEDIATE')
     try {
       recoverExpiredTasks(now)
-      const row = nextMutationTask(kind, now, exactTaskId)
+      const row = nextMutationTask(kind, now, exactTaskId, false, held)
       if (row === undefined) {
         database.exec('COMMIT')
         return null
@@ -10662,7 +10666,7 @@ export function openJournalStore(
 
       // A Batch already owns an Agent permit when it claims an exact unit Task.
       // New priority work competes for free permits without interrupting that Batch.
-      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind, row.updated_at)) {
+      if (exactTaskId === undefined && hasHigherPriorityTask((JSON.parse(row.policy_json) as RepositoryMapping).priority ?? 0, now, kind, row.updated_at, held)) {
         database.exec('COMMIT')
         return null
       }
@@ -10771,9 +10775,9 @@ export function openJournalStore(
     throw new Error('Repair Task crossed the conflict resolution claim boundary.')
   }
 
-  const claimNextReviewFixTask: JournalStore['claimNextReviewFixTask'] = (workerId, now, leaseMilliseconds) => {
+  const claimNextReviewFixTask: JournalStore['claimNextReviewFixTask'] = (workerId, now, leaseMilliseconds, held) => {
     loggedFindingStore.planLoggedFindingPickups(now)
-    const task = claimMutationTask('review_fix', workerId, now, leaseMilliseconds)
+    const task = claimMutationTask('review_fix', workerId, now, leaseMilliseconds, undefined, held)
     if (task === null || task.kind === 'review_fix')
       return task
     throw new Error('Conflict resolution Task crossed the repair claim boundary.')
@@ -13942,11 +13946,11 @@ export function openJournalStore(
     try {
       const update = database.prepare(`
         UPDATE publication_commands
-        SET state_tag = 'Pending', outcome_unknown = 1, reason = ?, worker_id = NULL,
+        SET state_tag = 'Pending', outcome_unknown = ?, reason = ?, worker_id = NULL,
           lease_expires_at = NULL, updated_at = ?
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
           AND lease_expires_at > ?
-      `).run(input.reason, input.at, input.commandId, input.workerId, input.fence, input.at)
+      `).run(Number(input.outcomeUnknown ?? true), input.reason, input.at, input.commandId, input.workerId, input.fence, input.at)
       if (update.changes === 1) {
         recordPublicationEvent(database, {
           commandId: input.commandId,

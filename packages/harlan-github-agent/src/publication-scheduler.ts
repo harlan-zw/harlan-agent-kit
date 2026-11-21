@@ -34,6 +34,8 @@ export interface PublicationSchedulerOptions {
   | 'heartbeatPublication'
   | 'supersedePublication'>
   publisher: PublicationRemote
+  /** Read selected conversations after remote validation, immediately before local push authority. */
+  beforeAuthorize?: (command: ClaimedPublicationCommand, signal: AbortSignal) => Promise<Result<void, string>>
   workerId: string
 }
 
@@ -131,6 +133,18 @@ export function createPublicationScheduler(options: PublicationSchedulerOptions)
           fence: command.fence,
           at: options.now().toISOString(),
           reason: authority.error,
+        })
+        return
+      }
+      const refreshed = await options.beforeAuthorize?.(command, controller.signal)
+      if (refreshed?._tag === 'Err') {
+        options.store.deferPublication({
+          commandId: command.id,
+          workerId: command.workerId,
+          fence: command.fence,
+          at: options.now().toISOString(),
+          reason: refreshed.error,
+          outcomeUnknown: command.outcomeUnknown,
         })
         return
       }

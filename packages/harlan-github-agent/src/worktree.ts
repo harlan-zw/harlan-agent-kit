@@ -1722,6 +1722,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
           || pullRequest.value.draft
           || pullRequest.value.mergeState !== (command.taskKind === 'resolve_conflict' ? 'conflicting' : 'clean')
           || pullRequest.value.headSha !== command.expectedHeadSha
+          || (command.taskKind === 'review_fix' && pullRequest.value.baseRef !== command.baseRef)
           || pullRequest.value.headRef !== command.headRef
           || pullRequest.value.headRepository.toLowerCase() !== headRepository.toLowerCase()
           || !canWriteHead

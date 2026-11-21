@@ -6,6 +6,7 @@ import { createFindingThreadSyncController } from '../src/finding-thread-sync.ts
 import { refreshControllerGates, terminalComment } from '../src/item-agent.ts'
 import { withLoggedFindingControls } from '../src/logged-finding-pickup.ts'
 import { publishLoggedFindingPickups, refreshLoggedFindingThreads } from '../src/logged-finding-sweep.ts'
+import { createPublicationScheduler } from '../src/publication-scheduler.ts'
 import { err, ok } from '../src/result.ts'
 import { reviewFindingThreadBody } from '../src/review-finding-threads.ts'
 import { refreshReviewGates } from '../src/review-gate-sweep.ts'
@@ -52,6 +53,92 @@ function setup(findings = [finding], path = ':memory:', target: 'head' | 'after-
 }
 
 describe('durable Logged finding pickup', () => {
+  it.each(['pending', 'staged'] as const)('revokes an accepted summary selection on Dismiss: %s', (phase) => {
+    const { store, pullRequest, request } = setup([finding], ':memory:', 'head')
+    expect(store.requestLoggedFindingPickup(request)).toBe(true)
+    if (phase === 'staged') {
+      const task = store.claimNextReviewFixTask('repair', at, 60_000)!
+      expect(store.stagePublication({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, publication: { _tag: 'UpdatePullRequest', taskKind: 'review_fix', baseRef: 'main', pullRequestNumber: pullRequest.number, commitSha: 'd'.repeat(40), baseSha: pullRequest.baseSha, expectedHeadSha: pullRequest.headSha, headRef: pullRequest.headRef, artifactRef: 'refs/harlan-github-agent/publications/repair', patchDigest: 'patch', changedFiles: 1 } })._tag).toBe('Staged')
+    }
+    expect(store.requestLoggedFindingPickup({ ...request, before: request.before.replace('- [ ] Ask an agent', '- [x] Ask an agent'), fingerprints: [], dismissedFingerprints: [finding.details.fingerprint] })).toBe(true)
+    expect(store.claimNextReviewFixTask('repair-again', at, 60_000)).toBeNull()
+    expect(store.claimNextPublication('publisher', at, 60_000)).toBeNull()
+  })
+
+  it.each(['disabled', 'unreadable'] as const)('keeps another repository Repair claimable when an inline repository is %s', async (mode) => {
+    const { store, mapping, pullRequest, request } = setup([finding], ':memory:', 'head')
+    store.queueReviewFindingThreadSync('review', at)
+    const sync = store.claimReviewFindingThreadSync('threads', at, 60_000)!
+    const body = reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef)
+    store.completeReviewFindingThreadSync(sync, at, [{ fingerprint: finding.details.fingerprint, commentId: 101, body, resolved: false }])
+    expect(store.requestLoggedFindingPickup({ ...request, inline: true, commentId: 101, before: body })).toBe(true)
+    const healthy = repositoryMapping({ github: 'harlan-zw/healthy', ownership: 'maintained' })
+    store.syncRepositories([{ ...mapping, enabled: mode !== 'disabled', priority: 10 }, healthy], at)
+    store.setRepositoryWritesEnabled(healthy.github, true)
+    const observed = store.recordObservation({ externalId: 'healthy', observedAt: at, source: 'poll', subject: { ...pullRequest, repository: healthy.github } })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected healthy observation.')
+    const review = store.claimNextAdversarialReviewTask('healthy-review', at, 60_000)!
+    const gates = { merge: { _tag: 'Passed' as const, evidence: [] }, review: { _tag: 'Failed' as const, reason: 'A material finding remains.', evidence: [] }, ci: { _tag: 'Passed' as const, evidence: [] } }
+    store.recordReviewRun({ id: 'healthy-review', repository: healthy.github, pullRequestNumber: pullRequest.number, revisionId: observed.revisionId, headSha: pullRequest.headSha, provider: 'codex', sessionId: 'healthy', model: 'model', agentVersion: 'version', skillDigest: 'c'.repeat(64), startedAt: at, completedAt: at, gates, findings: [{ ...finding, _tag: 'Open', impact: 90, resolution: 'Repair', details: { ...finding.details, regressionTest: 'Preserve split bytes.' } }] })
+    expect(store.queueReviewFixTaskForReview({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at })._tag).toBe('Queued')
+    store.completeWorkerTask({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at, evidence: 'healthy-review' })
+    store.recordReviewPublication({ id: 'healthy-publication', reviewRunId: 'healthy-review', body: 'Review.', at, result: { _tag: 'Published', githubCommentId: 43, url: 'url' } })
+    const blocked: Array<{ repository: string, pullRequestNumber: number }> = []
+    const refreshed = await refreshLoggedFindingThreads(store, async () => err('Repository cannot be read.'), at, undefined, selection => blocked.push(selection))
+    expect(refreshed).toEqual(ok(undefined))
+    expect(store.claimNextReviewFixTask('healthy-repair', at, 60_000, blocked)?.repository).toBe(healthy.github)
+    expect(store.claimNextReviewFixTask('held-repair', at, 60_000, blocked)).toBeNull()
+  })
+
+  it.each(['resolved', 'transient'] as const)('checks the inline conversation after remote publication validation: %s', async (mode) => {
+    const { store, pullRequest, request } = setup([finding], ':memory:', 'head')
+    store.queueReviewFindingThreadSync('review', at)
+    const sync = store.claimReviewFindingThreadSync('threads', at, 60_000)!
+    const body = reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef)
+    store.completeReviewFindingThreadSync(sync, at, [{ fingerprint: finding.details.fingerprint, commentId: 101, body, resolved: false }])
+    store.requestLoggedFindingPickup({ ...request, inline: true, commentId: 101, before: body })
+    const task = store.claimNextReviewFixTask('repair', at, 60_000)!
+    const staged = store.stagePublication({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, publication: { _tag: 'UpdatePullRequest', taskKind: 'review_fix', baseRef: 'main', pullRequestNumber: pullRequest.number, commitSha: 'd'.repeat(40), baseSha: pullRequest.baseSha, expectedHeadSha: pullRequest.headSha, headRef: pullRequest.headRef, artifactRef: 'refs/harlan-github-agent/publications/repair', patchDigest: 'patch', changedFiles: 1 } })
+    expect(staged._tag).toBe('Staged')
+    let validated = false
+    let recovered = false
+    let pushes = 0
+    let remoteHead = pullRequest.headSha
+    const commands: string[] = []
+    const scheduler = createPublicationScheduler({ intervalMilliseconds: 60_000, leaseMilliseconds: 60_000, now: () => new Date(at), onError: (error) => {
+      throw error
+    }, store, workerId: 'publisher', beforeAuthorize: async (command) => {
+      commands.push(command.id)
+      return refreshLoggedFindingThreads(store, async () => {
+        if (mode === 'transient' && validated && !recovered)
+          return err('Temporary GitHub read failure.')
+        return ok([{ threadId: 'thread', fingerprint: finding.details.fingerprint, resolved: mode === 'resolved' && validated, comment: { id: 101, body } }])
+      }, at, command.taskId)
+    }, publisher: {
+      getHeadSha: async () => ok(remoteHead),
+      validateAuthority: async () => {
+        validated = true
+        return ok(undefined)
+      },
+      push: async (command) => {
+        pushes++
+        remoteHead = command.commitSha
+        return ok(undefined)
+      },
+      finalize: async () => ok({ evidence: 'Published.' }),
+    } })
+    await scheduler.runNow()
+    expect(pushes).toBe(0)
+    recovered = true
+    await scheduler.runNow()
+    expect(pushes).toBe(mode === 'transient' ? 1 : 0)
+    if (mode === 'transient') {
+      expect(commands[1]).toBe(commands[0])
+      expect(store.getDashboardSnapshot(at).tasks.find(item => item.id === task.id)?.state._tag).toBe('Completed')
+    }
+    await scheduler.stop()
+  })
   it.each(['head', 'base'] as const)('revokes a pending selection across a %s change and return', (change) => {
     const second = { ...finding, details: { ...finding.details, fingerprint: '9'.repeat(64) } }
     const { store, pullRequest, request } = setup([finding, second], ':memory:', 'head')

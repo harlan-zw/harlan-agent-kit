@@ -11,11 +11,16 @@ export async function refreshLoggedFindingThreads(
   read: (repository: string, number: number) => Promise<Result<ReviewFindingThread[], string>>,
   at: string,
   taskId?: string,
+  hold?: (selection: { repository: string, pullRequestNumber: number }, reason: string) => void,
 ): Promise<Result<void, string>> {
   for (const selection of store.listLoggedFindingThreadSelections(taskId)) {
     const threads = await read(selection.repository, selection.pullRequestNumber)
-    if (threads._tag === 'Err')
-      return threads
+    if (threads._tag === 'Err') {
+      if (hold === undefined)
+        return threads
+      hold(selection, threads.error)
+      continue
+    }
     store.reconcileLoggedFindingThreads(selection.repository, selection.pullRequestNumber, threads.value, at)
   }
   return ok(undefined)

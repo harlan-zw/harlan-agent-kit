@@ -735,10 +735,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     source: workerGithub,
     report: createReviewFindingThreadsReport(store, now),
   }
-  const refreshSelectedThreads = (signal: AbortSignal, taskId?: string) => refreshLoggedFindingThreads(store, (repository, number) => {
+  const refreshSelectedThreads = (signal: AbortSignal, taskId?: string, hold?: (selection: { repository: string, pullRequestNumber: number }, reason: string) => void) => refreshLoggedFindingThreads(store, (repository, number) => {
     const mapping = config.repositories.find(mapping => mapping.github === repository && mapping.enabled)
     return mapping === undefined ? Promise.resolve(err('Repository policy does not authorize this pull request branch.')) : workerGithub.listReviewFindingThreads(mapping, number, signal)
-  }, now().toISOString(), taskId)
+  }, now().toISOString(), taskId, hold)
   const findingThreadSync = createFindingThreadSyncController({
     store,
     readPullRequest: github.getPullRequest,
@@ -1125,13 +1125,8 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         now,
         onError: error => options.logger.error(error),
         store,
-        publisher: {
-          ...publicationRemote,
-          validateAuthority: async (command, signal) => {
-            const refreshed = await refreshSelectedThreads(signal, command.taskId)
-            return refreshed._tag === 'Err' ? refreshed : publicationRemote.validateAuthority(command, signal)
-          },
-        },
+        publisher: publicationRemote,
+        beforeAuthorize: (command, signal) => refreshSelectedThreads(signal, command.taskId),
         workerId: randomUUID(),
       }),
       reviewStatuses: createReviewStatusScheduler({
@@ -1161,11 +1156,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       }),
       repairs: Array.from({ length: profile.maximumActiveAgents }, () => createTaskScheduler({
         canClaim,
-        claim: store.claimNextReviewFixTask,
-        beforeClaim: async (signal) => {
-          const refreshed = await refreshSelectedThreads(AbortSignal.any([signal, AbortSignal.timeout(25_000)]))
-          if (refreshed._tag === 'Err')
-            throw new Error(refreshed.error)
+        claim: async (workerId, _at, leaseMilliseconds, signal) => {
+          const held: Array<{ repository: string, pullRequestNumber: number }> = []
+          await refreshSelectedThreads(AbortSignal.any([signal, AbortSignal.timeout(25_000)]), undefined, (selection, reason) => {
+            held.push(selection)
+            options.logger.error(`${selection.repository}#${selection.pullRequestNumber}: ${reason}`)
+          })
+          return signal.aborted ? null : store.claimNextReviewFixTask(workerId, now().toISOString(), leaseMilliseconds, held)
         },
         intervalMilliseconds: 5_000,
         leaseMilliseconds: 45 * 60_000,
