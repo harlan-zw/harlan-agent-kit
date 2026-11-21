@@ -1833,7 +1833,7 @@ export function createGitPublicationRemote(options: GitPublicationRemoteOptions)
         : `${command.artifactRef}:${ref}`
       const result = await runGit(repository, [
         'push',
-        ...(command._tag === 'UpdatePullRequest' ? [`--force-with-lease=${ref}:${command.expectedHeadSha}`] : []),
+        ...(command._tag === 'UpdatePullRequest' && command.taskKind === 'review_fix' ? [`--force-with-lease=${ref}:${command.expectedHeadSha}`] : []),
         remoteUrl(publicationTargetRepository(command)),
         refspec,
       ], signal, credential.value, options.remoteUrl !== undefined)
