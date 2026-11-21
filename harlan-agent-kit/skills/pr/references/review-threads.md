@@ -4,6 +4,15 @@ Leave no review comment silent. Each review thread and each top-level review com
 
 Run this sweep after every push to the pull request. Run it again before you call the pull request ready or hand it back.
 
+## Work only what matters
+
+The sweep exists so nothing stays silent. It does not exist to implement every suggestion.
+
+- Fix a finding only when it scores above 80/100, or when you can show the defect with a failing command, test, or reproduction.
+- Close everything else with one Follow-up reply, then resolve the thread. This covers findings at 80/100 or below, style, wording, and nitpicks.
+- Never change code or push a commit for a low-value thread.
+- Each fix commit counts toward Step 6's limit of three review-driven pushes.
+
 ## Who may post
 
 - On a repository Harlan owns or maintains, post the self-identified Agent replies below. Resolve the threads they close. No approval is needed.
@@ -56,18 +65,24 @@ A review body from another reviewer needs a response once, even when it is on an
 
 ## 2. Service finding threads
 
-The Service owns each review thread it opened for a Review finding. Its first comment carries a `review-finding:` marker. Two side effects limit what you may do on it while the pull request is open:
+The Service owns each review thread it opened for a Review finding. Its first comment carries a `review-finding:` marker. Two side effects shape what you do on it while the pull request is open:
 
 - A reply from Harlan's account is a finding reply. The Service requests a Review of the current revision for it, and that Review reads the reply as Harlan's words.
   If that revision's Review is `Queued` or `Running`, the request joins it. If that Review has ended, the request starts another one.
 - Resolving a Logged finding thread dismisses its "Ask an agent to verify and fix" control. The Service ignores a later tick and cancels a queued Repair for that finding.
+  For a Follow-up, that is the intended result.
 
-Never resolve a Service finding thread during this sweep. The Service verifies the fix and resolves the thread.
-Keep the thread open even when your push attempts to fix it. Review may report the same finding again.
-Include the fixing commit and thread link in the hand-back while verification is pending.
+The sweep grants no Repair authority. Handle each Service finding by its score:
 
-Reply to a Service finding thread only in one window. It opens when you push the commit that fixes the finding.
-It stays open while the Service Review of that new head is `Queued` or `Running`.
+- **Above 80/100:** use Step 6's disposition and authority checks before editing or pushing. Leave a current-head `Queued`, `Running`, or `Publishing` Repair Task to the Service.
+  After your fix, never resolve the thread. The next Service Review resolves it when the finding clears. If Review reports the finding again, leave the thread open.
+- **Dismissal:** report it through Step 6. Do not repair or request another Review.
+- **False positive or not applicable:** use Step 6's evidence and comment procedure.
+- **80/100 or below (Logged):** never change code. Close it as a Follow-up: reply, then resolve.
+  If a Logged finding has no thread, list it with a link to the Service's marked comment.
+
+Reply to a Service finding thread only in a window, so the reply joins a Review that is already due.
+The window opens when you push. It stays open while the Service Review of that new head is `Queued` or `Running`.
 The first event that `watch-pr` writes names the head the Service sees and that head's Tasks:
 
 ```bash
@@ -76,33 +91,18 @@ harlan-github-agent control watch-pr --repository OWNER/REPO --number NUMBER --u
 ```
 
 Continue only when `headSha` is your pushed SHA and the `adversarial_review` Task is `Queued` or `Running`.
-In that window, post only the Fixed reply from section 3. Leave the thread open for Service verification.
-A Follow-up reply is also allowed in the window. Leave that thread open, because its control holds the follow-up.
-Outside the window, do not reply. Name the commit or the follow-up in the hand-back.
-
-This sweep only reports Service findings. It grants no Repair authority, regardless of impact.
-List each finding and its thread link for Step 6's disposition and Task ownership checks.
-If those checks are unavailable, report the missing Service state and do not edit or push for the finding.
-
-- **Dismissal:** report it through Step 6. Do not repair or request another Review.
-- **Repair:** use Step 6's authority checks before editing or pushing. Leave a current-head `Queued`, `Running`, or `Publishing` Repair Task to the Service.
-- **80/100 or below (Logged):** list it as optional follow-up in the hand-back. Harlan ticks its control or resolves it.
-  If a Logged finding has no thread, list it with a link to the Service's marked comment. A finding outside the diff never has one, and a failed thread sync can leave out others.
-- **Fixed by your push:** reply in the window above and leave the thread open for Service verification.
-  Include the fixing commit and thread link in the hand-back while verification is pending, even after replying.
-  If you missed the window, do not reply. Name the commit in the hand-back.
-- **False positive or not applicable:** use Step 6's evidence and comment procedure.
-
-After an authorized Repair, the next Service Review resolves the thread when the finding clears. Confirm that it did.
-If Review reports the same finding, leave its thread and Repair control open.
+In the window, post the Follow-up replies and resolve those threads. You may also post a Fixed reply on a thread above 80/100. Leave that one open.
+Outside the window, resolve a Logged thread without a reply. A reply would start another Review, and each Review can file new Logged threads.
+The finding's own text already marks it as an optional follow-up.
+In the hand-back, list the Service threads you closed and each fix that waits for Service verification.
 
 ## 3. Every other item
 
-| Response | Reply | Resolve |
-| --- | --- | --- |
-| Fixed | `🤖 Harlan Agent Kit Agent: fixed in [abc1234](https://github.com/OWNER/REPO/commit/FULL_SHA).` | Yes |
-| Answered | `🤖 Harlan Agent Kit Agent: not changed. EVIDENCE.` Give the proof in one or two sentences. | A bot's thread only |
-| Follow-up | `🤖 Harlan Agent Kit Agent: optional follow-up, not changed in this pull request. REASON or ISSUE_LINK.` | A bot's thread only |
+| Response | When | Reply | Resolve |
+| --- | --- | --- | --- |
+| Fixed | Above 80/100, or a defect you can show | `🤖 Harlan Agent Kit Agent: fixed in [abc1234](https://github.com/OWNER/REPO/commit/FULL_SHA).` | Yes |
+| Answered | The comment is wrong or does not apply | `🤖 Harlan Agent Kit Agent: not changed. EVIDENCE.` Give the proof in one or two sentences. | A bot's thread only |
+| Follow-up | Everything else | `🤖 Harlan Agent Kit Agent: optional follow-up, not changed in this pull request.` Add a reason or issue link only when it helps. | A bot's thread only |
 
 Push the fixing commit before the reply names it. Use the short SHA as the link text and the full SHA in the link.
 Leave a human reviewer's thread open after Answered or Follow-up. That reviewer decides whether the answer is enough.
@@ -137,8 +137,8 @@ gh pr comment NUMBER --repo OWNER/REPO --body '🤖 Harlan Agent Kit Agent: ...'
 
 Run the list again. Each unresolved thread must be one of these:
 
-- a Service finding thread that the hand-back lists
-- a thread with an Agent reply from this sweep
+- a Service finding thread above 80/100 that waits for Service verification
+- a thread with an Agent reply from this sweep whose resolve failed and that the hand-back reports
 - a human reviewer's thread that waits for that reviewer
 - on a repository Harlan does not maintain, a thread whose drafted reply waits for Harlan
 

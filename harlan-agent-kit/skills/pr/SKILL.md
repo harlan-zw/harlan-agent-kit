@@ -36,10 +36,10 @@ Running the git and `gh` commands by hand is the failure mode this skill exists 
 - **Never move unknown changes** -- primary checkout changes may belong to another task. Copy only changes this task owns.
 - **`gh pr create` fails silently with bad body** -- always use HEREDOC for the body, never inline quotes.
 - **CI flakes vs real failures** -- if the same check fails twice with different errors, it's flaky. If same error, it's real. Don't retry flakes more than once.
-- **CodeRabbit reviews can be noisy** -- address security/correctness findings, but style suggestions are optional. Don't block the loop on nitpicks. An optional suggestion still gets a Follow-up reply under [review threads](references/review-threads.md).
-- **No review comment stays silent** -- every review thread and top-level review comment gets Fixed, Answered, or Follow-up. Reply to a Service finding thread only right after the push that fixes it, while that head's Review is queued or running. At any other time a reply requests another Review, and resolving a Logged thread dismisses its follow-up control.
-  Never resolve a Service finding thread during the sweep. The Service verifies the fix and resolves it.
-  Include the fixing commit and thread link in the hand-back while verification is pending.
+- **CodeRabbit reviews can be noisy** -- fix security and correctness findings you can show. Style suggestions and nitpicks get one Follow-up reply and are resolved, never worked.
+- **Answer every review comment, work only what matters** -- the [review threads](references/review-threads.md) sweep gives each one Fixed, Answered, or Follow-up.
+  Change code only for a finding above 80/100 or a defect you can show. Close everything else with one Follow-up reply and resolve it.
+  Never resolve a Service finding thread above 80/100 yourself. The Service resolves it when a later Review clears it.
 - **Worktree cleanup** -- if you forget `wt remove`, orphaned worktrees accumulate. Clean up after merge.
 
 ## Data Storage
@@ -306,11 +306,8 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    Report Service finding threads for the disposition and Task ownership checks below. The sweep grants no Repair authority.
    Give each other item one response: Fixed, Answered, or Follow-up. After a fix, reply on its thread with the fixing commit, then resolve it.
 5. Read each scored finding from `/api/reviews?repository=OWNER%2FREPO&pull_request=NUMBER`.
-   Leave findings at 80/100 or below Logged. They do not require a code change.
-   Their Service finding threads stay open as the follow-up control. List each one with its link in the hand-back as an optional follow-up.
-   When your push fixes one, reply in the window that [review threads](references/review-threads.md) describes.
-   Leave its thread open until the Service verifies the fix and resolves it.
-   Include the fixing commit and thread link in the hand-back while verification is pending.
+   Leave findings at 80/100 or below Logged. Never change code for them.
+   Close each one as a Follow-up, as [review threads](references/review-threads.md) describes, and list it in the hand-back.
    Keep authorized Repair work moving until fixed or blocked by an exact boundary.
    If the resolution is `Dismissal`, report the `BLOCKED` outcome and ask Harlan to decide whether to Dismiss the pull request.
    Do not repair or request another Review for a Dismissal finding.
@@ -330,6 +327,7 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    If a finding remains `BLOCKED` after an evidence-backed false positive or not applicable comment, report that outcome and the comment link.
 
 Count review-driven repair pushes by this submitting Agent across the entire pull request.
+A fix for any reviewer's thread counts, not only Service findings.
 After three, stop Agent-authored refinements and report remaining findings above 80/100 to Harlan.
 Do not reset the count because a new head commit starts a new Review. CI repair attempts keep their separate limit below.
 At that limit, do not start another fallback subagent Review.
@@ -368,7 +366,8 @@ After current-head CI and Review pass, check whether only Harlan's merge decisio
 If so, hand the pull request back.
 Record the repository, number, URL, head SHA, branch, and absolute worktree path in the session scratchpad.
 Retain current-head CI and Review evidence, remaining findings, and required delivery stages with that target.
-List each review thread that stays open, with its link. These are Logged Service finding threads, human threads that wait for their reviewer, and drafts that wait for Harlan.
+List each review thread that stays open, with its link. These are Service findings above 80/100 that wait for verification, human threads that wait for their reviewer, and drafts that wait for Harlan.
+List the Follow-up threads you closed.
 Report readiness and the pull request link, then end the turn.
 Preserve unintegrated work. Release this task's live worktree claim while no mutation is active.
 Ownership of later delivery remains with the submitting Agent.
