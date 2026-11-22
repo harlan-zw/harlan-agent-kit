@@ -22,14 +22,8 @@ command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 
 [ -n "$command" ] || exit 0
 
-# A user-level setting can allow one standalone save to Zoho Drafts.
-# Match literal file paths and fixed account and folder arguments.
-draft_path="((/|~/)[a-zA-Z0-9_./-]+\\.eml|'/[a-zA-Z0-9_./ -]+\\.eml')"
-draft_save="^[[:blank:]]*himalaya[[:blank:]]+message[[:blank:]]+save[[:blank:]]+-a[[:blank:]]+harlanzw[[:blank:]]+-f[[:blank:]]+Drafts[[:blank:]]*<[[:blank:]]*${draft_path}[[:blank:]]*$"
-if [[ "$command" =~ $draft_save ]] \
-  && jq -e '.allowZohoDrafts == true' "${XDG_CONFIG_HOME:-$HOME/.config}/harlan-agent-kit/email.json" >/dev/null 2>&1; then
-  exit 0
-fi
+# A global setting cannot prove approval of a specific draft.
+# Keep saves denied across providers until they can verify that approval.
 
 deny() {
   jq -nc --arg reason "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
@@ -39,12 +33,12 @@ deny() {
 
 # Every himalaya call in the command, wherever it sits in a pipeline.
 printf '%s\n' "$command" \
-  | grep -oE '(^|[|&;(][[:space:]]*)himalaya([[:space:]]+[^|&;)]*)?' \
+  | grep -oE '(^|[|&;(])[[:blank:]]*himalaya([[:space:]]+[^|&;)]*)?' \
   | while IFS= read -r call; do
       # Strip the leading separator and the binary name.
       arguments=$(printf '%s' "$call" | sed -E 's/^[^h]*himalaya[[:space:]]*//')
       # Options carry no subcommand, so read the first two bare words.
-      words=$(printf '%s' "$arguments" | tr ' ' '\n' | grep -vE '^-' | grep -v '^$' | head -2 | tr '\n' ' ')
+      words=$(printf '%s' "$arguments" | tr '[:blank:]' '\n' | grep -vE '^-' | grep -v '^$' | head -2 | tr '\n' ' ')
       first=$(printf '%s' "$words" | cut -d' ' -f1)
       second=$(printf '%s' "$words" | cut -d' ' -f2)
 
