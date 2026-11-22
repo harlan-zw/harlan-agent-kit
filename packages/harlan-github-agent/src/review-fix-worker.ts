@@ -53,6 +53,7 @@ export interface ReviewFixWorkerOptions {
   github: Pick<GitHubAgentSource, 'getPullRequestReviewSnapshot' | 'findOpenPullRequestForBranch'> & Partial<Pick<GitHubAgentSource, 'getFailedJobContext'>>
   now: () => Date
   onProgressPublishFailure?: (task: ClaimedReviewFixTask, reason: string) => void
+  syncFindingThreads?: (task: ClaimedReviewFixTask, signal: AbortSignal) => Promise<void>
   runtime: AgentRuntimeSource
   status: Pick<ReviewStatusController, 'publishRepair'>
   store: Pick<JournalStore, 'getReviewFixFindings' | 'getWorkerSession' | 'recordRepairReport' | 'requestReviewRerun' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'updateAgentProgress'>
@@ -262,6 +263,8 @@ export function createReviewFixWorker(options: ReviewFixWorkerOptions): ReviewFi
       const ready = await progress(agentPhase('WorktreeReady', 'Repair worktree ready'))
       if (ready._tag === 'Err')
         return ready
+      if (!merged && task.pickup === undefined && task.request === undefined)
+        await options.syncFindingThreads?.(task, signal)
       const instructionFiles = await listInstructionFiles(prepared.value.path)
       // The slug comes from the primary checkout, never from this worktree.
       const memory = options.claudeHome === undefined

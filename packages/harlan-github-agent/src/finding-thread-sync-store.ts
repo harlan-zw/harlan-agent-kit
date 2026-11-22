@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { InlineFindingReceipt, VerifiedFindingRepair } from './review-finding-threads.ts'
+import type { FindingRepairStatus, InlineFindingReceipt, VerifiedFindingRepair } from './review-finding-threads.ts'
 import type { RepositoryMapping, ReviewFinding } from './types.ts'
 
 export interface FindingThreadSync {
@@ -11,14 +11,21 @@ export interface FindingThreadSync {
   repositoryMapping: RepositoryMapping
   findings: ReviewFinding[]
   verifiedRepairs: VerifiedFindingRepair[]
+  repairStatus: FindingRepairStatus
   workerId: string
   fence: number
+}
+
+export interface FindingThreadSyncTarget {
+  repository: string
+  pullRequestNumber: number
+  headSha: string
 }
 
 export interface FindingThreadSyncStore {
   queueReviewFindingThreadSync: (reviewRunId: string, at: string) => void
   restoreReviewFindingThreadSyncs: (at: string) => number
-  claimReviewFindingThreadSync: (workerId: string, at: string, leaseMilliseconds: number) => FindingThreadSync | null
+  claimReviewFindingThreadSync: (workerId: string, at: string, leaseMilliseconds: number, target?: FindingThreadSyncTarget) => FindingThreadSync | null
   authorizeReviewFindingThreadSync: (command: FindingThreadSync, at: string) => boolean
   completeReviewFindingThreadSync: (command: FindingThreadSync, at: string, inline?: InlineFindingReceipt[]) => boolean
   deferReviewFindingThreadSync: (command: FindingThreadSync, at: string, reason: string) => boolean
@@ -47,7 +54,18 @@ const joins = `
   JOIN review_runs ON review_runs.id = sync.review_run_id
   JOIN subjects ON subjects.id = review_runs.subject_id
   JOIN repositories ON repositories.id = subjects.repository_id
-  JOIN revisions ON revisions.id = subjects.current_revision_id`
+  JOIN revisions ON revisions.id = subjects.current_revision_id
+  LEFT JOIN tasks AS repair ON repair.subject_id = subjects.id AND repair.revision_id = review_runs.revision_id
+    AND repair.kind = 'review_fix'
+    AND NOT EXISTS (SELECT 1 FROM logged_finding_requests WHERE task_id = repair.id)
+    AND NOT EXISTS (SELECT 1 FROM pull_request_change_requests WHERE task_id = repair.id)`
+
+// A Written sync records the last status it showed. A durable Task transition can make it due again.
+const repairStatus = `CASE
+  WHEN json_extract(revisions.payload, '$.state') != 'open' THEN 'Idle'
+  WHEN repair.state_tag IN ('Queued', 'Running', 'Publishing') THEN 'Active'
+  WHEN repair.state_tag IN ('ActionRequired', 'Failed') THEN 'Stopped'
+  ELSE 'Idle' END`
 
 // A new head, target, policy, Review, Stop, or Dismissal revokes the old intent.
 const currentEvidence = `
@@ -83,7 +101,7 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
     AND (SELECT state_tag FROM agent_control WHERE singleton = 1) = 'Running'
     AND NOT EXISTS (SELECT 1 FROM restart_requests WHERE state_tag IN ('Requested', 'Restarting'))
     AND NOT EXISTS (SELECT 1 FROM worker_tasks WHERE subject_id = subjects.id AND state_tag IN ('Queued', 'Running'))
-    AND NOT EXISTS (SELECT 1 FROM tasks WHERE subject_id = subjects.id AND kind = 'review_fix'
+    AND NOT EXISTS (SELECT 1 FROM tasks WHERE subject_id = subjects.id AND kind = 'review_fix' AND tasks.id IS NOT repair.id
       AND state_tag IN ('Queued', 'Running', 'Publishing'))`
   const queueReviewFindingThreadSync = (reviewRunId: string, at: string): void => {
     database.prepare(`INSERT OR IGNORE INTO finding_thread_syncs
@@ -119,27 +137,32 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
         )`).run(at, at)
     return Number(restored.changes)
   }
-  const claimReviewFindingThreadSync: FindingThreadSyncStore['claimReviewFindingThreadSync'] = (workerId, at, leaseMilliseconds) => {
+  const claimReviewFindingThreadSync: FindingThreadSyncStore['claimReviewFindingThreadSync'] = (workerId, at, leaseMilliseconds, target) => {
     database.exec('BEGIN IMMEDIATE')
     try {
       database.prepare(`UPDATE finding_thread_syncs SET state_tag = 'Superseded', worker_id = NULL,
         lease_expires_at = NULL, updated_at = ? WHERE state_tag IN ('Pending', 'Running')
         AND review_run_id NOT IN (SELECT sync.review_run_id FROM finding_thread_syncs AS sync ${joins} WHERE ${currentEvidence})`).run(at)
       const row = database.prepare(`SELECT sync.review_run_id, sync.fence, repositories.github,
-        repositories.policy_json, subjects.github_number, review_runs.head_sha, review_runs.base_ref, review_runs.findings
+        repositories.policy_json, subjects.github_number, review_runs.head_sha, review_runs.base_ref, review_runs.findings,
+        ${repairStatus} AS repair_status
         FROM finding_thread_syncs AS sync ${joins}
         WHERE ((sync.state_tag = 'Pending' AND sync.next_attempt_at <= ?)
-          OR (sync.state_tag = 'Running' AND sync.lease_expires_at <= ?)) AND ${canWrite}
-        ORDER BY sync.next_attempt_at, review_runs.completed_at DESC, sync.review_run_id LIMIT 1`).get(at, at) as {
-            review_run_id: string
-            fence: number
-            github: string
-            policy_json: string
-            github_number: number
-            head_sha: string
-            base_ref: string
-            findings: string
-          } | undefined
+          OR (sync.state_tag = 'Running' AND sync.lease_expires_at <= ?)
+          OR (sync.state_tag = 'Written' AND sync.repair_status != (${repairStatus}))) AND ${canWrite}
+          AND (? IS NULL OR (repositories.github = ? AND subjects.github_number = ? AND review_runs.head_sha = ?))
+        ORDER BY sync.next_attempt_at, review_runs.completed_at DESC, sync.review_run_id LIMIT 1`)
+        .get(at, at, target?.repository ?? null, target?.repository ?? null, target?.pullRequestNumber ?? null, target?.headSha ?? null) as {
+          review_run_id: string
+          fence: number
+          github: string
+          policy_json: string
+          github_number: number
+          head_sha: string
+          base_ref: string
+          findings: string
+          repair_status: FindingRepairStatus
+        } | undefined
       if (row === undefined) {
         database.exec('COMMIT')
         return null
@@ -148,6 +171,8 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
       database.prepare(`UPDATE finding_thread_syncs SET state_tag = 'Running', worker_id = ?, fence = ?,
         lease_expires_at = ?, attempts = attempts + 1, updated_at = ? WHERE review_run_id = ?`)
         .run(workerId, fence, new Date(Date.parse(at) + leaseMilliseconds).toISOString(), at, row.review_run_id)
+      // Follow only published Repair commits on this pull request and target branch.
+      // Use the Review that existed when each automatic Repair staged its commit.
       const verifiedRepairs = database.prepare(`
         WITH RECURSIVE scope AS (
           SELECT subject_id, head_sha, base_ref FROM review_runs WHERE id = ?
@@ -159,19 +184,44 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
           JOIN tasks ON tasks.id = publication.task_id
           JOIN scope ON scope.subject_id = tasks.subject_id AND scope.base_ref = publication.base_ref
           WHERE tasks.kind = 'review_fix' AND publication.state_tag = 'Published' AND publication.pull_request_title IS NULL
-        )
-        SELECT fingerprint, commitSha FROM (
-          SELECT requests.fingerprint, publication.commit_sha AS commitSha,
-            ROW_NUMBER() OVER (PARTITION BY requests.fingerprint ORDER BY publication.published_at DESC, publication.id DESC) AS rank
+        ), candidates AS (
+          SELECT requests.fingerprint, publication.commit_sha, publication.published_at, publication.id
           FROM logged_finding_requests AS requests
           JOIN publication_commands AS publication ON publication.task_id = requests.task_id
           JOIN repaired_heads ON repaired_heads.commit_sha = publication.commit_sha
           JOIN scope ON scope.subject_id = requests.subject_id AND scope.base_ref = publication.base_ref
           WHERE requests.on_head = 1 AND publication.state_tag = 'Published' AND publication.pull_request_title IS NULL
+          UNION ALL
+          SELECT lower(json_extract(finding.value, '$.details.fingerprint')), publication.commit_sha, publication.published_at, publication.id
+          FROM publication_commands AS publication
+          JOIN repaired_heads ON repaired_heads.commit_sha = publication.commit_sha
+          JOIN tasks ON tasks.id = publication.task_id
+          JOIN scope ON scope.subject_id = tasks.subject_id AND scope.base_ref = publication.base_ref
+          JOIN review_runs AS prior ON prior.id = (
+            SELECT run.id FROM review_runs AS run
+            WHERE run.subject_id = tasks.subject_id AND run.kind = 'adversarial_review'
+              AND run.head_sha = publication.expected_head_sha AND run.base_ref = publication.base_ref
+              AND run.completed_at <= COALESCE((
+                SELECT min(created_at) FROM publication_events WHERE command_id = publication.id AND from_tag IS NULL
+              ), publication.published_at)
+            ORDER BY run.completed_at DESC, run.id DESC LIMIT 1
+          )
+          JOIN json_each(prior.findings) AS finding
+          WHERE tasks.kind = 'review_fix' AND publication.state_tag = 'Published' AND publication.pull_request_title IS NULL
+            AND NOT EXISTS (SELECT 1 FROM logged_finding_requests WHERE task_id = tasks.id)
+            AND NOT EXISTS (SELECT 1 FROM pull_request_change_requests WHERE task_id = tasks.id)
+            AND json_extract(finding.value, '$._tag') = 'Open'
+            AND json_extract(finding.value, '$.resolution') IS NOT 'Dismissal'
+            AND json_extract(finding.value, '$.details.fingerprint') IS NOT NULL
+        )
+        SELECT fingerprint, commitSha FROM (
+          SELECT fingerprint, commit_sha AS commitSha,
+            ROW_NUMBER() OVER (PARTITION BY fingerprint ORDER BY published_at DESC, id DESC) AS rank
+          FROM candidates
         ) WHERE rank = 1
       `).all(row.review_run_id) as Array<{ fingerprint: string, commitSha: string }>
       database.exec('COMMIT')
-      return { reviewRunId: row.review_run_id, repository: row.github, pullRequestNumber: row.github_number, headSha: row.head_sha, baseRef: row.base_ref, repositoryMapping: JSON.parse(row.policy_json), findings: JSON.parse(row.findings), verifiedRepairs, workerId, fence }
+      return { reviewRunId: row.review_run_id, repository: row.github, pullRequestNumber: row.github_number, headSha: row.head_sha, baseRef: row.base_ref, repositoryMapping: JSON.parse(row.policy_json), findings: JSON.parse(row.findings), verifiedRepairs, repairStatus: row.repair_status, workerId, fence }
     }
     catch (error) {
       database.exec('ROLLBACK')
@@ -181,13 +231,13 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
   const authorizeReviewFindingThreadSync: FindingThreadSyncStore['authorizeReviewFindingThreadSync'] = (command, at) =>
     database.prepare(`SELECT 1 FROM finding_thread_syncs AS sync ${joins}
       WHERE sync.review_run_id = ? AND sync.state_tag = 'Running' AND sync.worker_id = ?
-        AND sync.fence = ? AND sync.lease_expires_at > ? AND ${canWrite}`)
-      .get(command.reviewRunId, command.workerId, command.fence, at) !== undefined
+        AND sync.fence = ? AND sync.lease_expires_at > ? AND (${repairStatus}) = ? AND ${canWrite}`)
+      .get(command.reviewRunId, command.workerId, command.fence, at, command.repairStatus) !== undefined
   const settle = (command: FindingThreadSync, at: string, state: 'Written' | 'Superseded', inline: InlineFindingReceipt[] = []): boolean =>
     database.prepare(`UPDATE finding_thread_syncs SET state_tag = ?, worker_id = NULL,
-      lease_expires_at = NULL, reason = NULL, updated_at = ?, inline_findings = ?
+      lease_expires_at = NULL, reason = NULL, updated_at = ?, inline_findings = ?, repair_status = ?
       WHERE review_run_id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?`)
-      .run(state, at, JSON.stringify(inline), command.reviewRunId, command.workerId, command.fence)
+      .run(state, at, JSON.stringify(inline), command.repairStatus, command.reviewRunId, command.workerId, command.fence)
       .changes === 1
   return {
     queueReviewFindingThreadSync,
@@ -205,6 +255,7 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
         .changes === 1
     },
     hasPendingReviewFindingThreadSync: repository => database.prepare(`SELECT 1 FROM finding_thread_syncs AS sync ${joins}
-      WHERE repositories.github = ? AND sync.state_tag IN ('Pending', 'Running') AND ${currentEvidence} LIMIT 1`).get(repository) !== undefined,
+      WHERE repositories.github = ? AND (sync.state_tag IN ('Pending', 'Running')
+        OR (sync.state_tag = 'Written' AND sync.repair_status != (${repairStatus}))) AND ${currentEvidence} LIMIT 1`).get(repository) !== undefined,
   }
 }

@@ -1,4 +1,4 @@
-import type { FindingThreadSyncStore } from './finding-thread-sync-store.ts'
+import type { FindingThreadSyncStore, FindingThreadSyncTarget } from './finding-thread-sync-store.ts'
 import type { GitHubSource } from './github.ts'
 import type { InlineFindingReceipt, ReviewFindingThreadMirror, ReviewFindingThreadsOutcome } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
@@ -15,11 +15,11 @@ export function createFindingThreadSyncController(options: {
   controls?: (repository: RepositoryMapping, pull: GitHubPullRequestItem) => boolean
 }) {
   return {
-    async run(signal: AbortSignal): Promise<Array<{ repository: string, number: number, outcome: ReviewFindingThreadsOutcome }>> {
+    async run(signal: AbortSignal, target?: FindingThreadSyncTarget): Promise<Array<{ repository: string, number: number, outcome: ReviewFindingThreadsOutcome }>> {
       const results: Array<{ repository: string, number: number, outcome: ReviewFindingThreadsOutcome }> = []
       options.store.restoreReviewFindingThreadSyncs(options.now().toISOString())
       for (let count = 0; count < 3 && !signal.aborted; count++) {
-        const command = options.store.claimReviewFindingThreadSync(options.workerId, options.now().toISOString(), 2 * 60_000)
+        const command = options.store.claimReviewFindingThreadSync(options.workerId, options.now().toISOString(), 2 * 60_000, target)
         if (command === null)
           break
         let authorityLost = false
@@ -53,6 +53,7 @@ export function createFindingThreadSyncController(options: {
           baseRef: command.baseRef,
           controls: canRepairSelectedFindingOnHead(command.repositoryMapping, pull) && options.controls?.(command.repositoryMapping, pull) === true,
           fixed: command.verifiedRepairs,
+          repairStatus: command.repairStatus,
           recordInline: (receipts) => { inline = receipts },
         })
         results.push({ repository: command.repository, number: command.pullRequestNumber, outcome: receiptSaved ? outcome : { _tag: 'Failed', message: 'The finding thread sync receipt lost its Publication lease.' } })

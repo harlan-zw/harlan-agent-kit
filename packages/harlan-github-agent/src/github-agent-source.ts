@@ -524,7 +524,7 @@ const reviewThreadsQuery = `query($owner: String!, $repo: String!, $number: Int!
 }`
 
 const resolveReviewThreadMutation = `mutation($threadId: ID!) {
-  resolveReviewThread(input: { threadId: $threadId }) { thread { id } }
+  resolveReviewThread(input: { threadId: $threadId }) { thread { id isResolved } }
 }`
 
 interface ReviewThreadsPage {
@@ -1450,8 +1450,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       const authorized = authorize()
       if (authorized._tag === 'Err')
         return authorized
-      return octokit.value.graphql(resolveReviewThreadMutation, { threadId, request: { signal } })
-        .then((): Result<void, string> => ok(undefined))
+      return octokit.value.graphql<{ resolveReviewThread: { thread: { id: string, isResolved: boolean } | null } | null }>(resolveReviewThreadMutation, { threadId, request: { signal } })
+        .then(({ resolveReviewThread }): Result<void, string> => resolveReviewThread?.thread?.id === threadId && resolveReviewThread.thread.isResolved
+          ? ok(undefined)
+          : err('GitHub did not confirm the review thread was resolved.'))
         .catch((error: unknown): Result<void, string> => err(message(error)))
     },
 
