@@ -1185,6 +1185,18 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
             runtime,
             status: reviewStatus,
             store,
+            async syncFindingThreads(task, signal) {
+              const target = { repository: task.repository, pullRequestNumber: task.pullRequestNumber, headSha: task.pullRequest.headSha }
+              const synced = await findingThreadSync.run(AbortSignal.any([signal, AbortSignal.timeout(15_000)]), target)
+                .catch((error: unknown) => {
+                  options.logger.error(`${task.repository}#${task.pullRequestNumber}: finding thread sync failed: ${String(error)}`)
+                  return []
+                })
+              for (const { outcome } of synced) {
+                if (outcome._tag === 'Failed')
+                  options.logger.error(`${task.repository}#${task.pullRequestNumber}: finding thread sync failed: ${outcome.message}`)
+              }
+            },
             validateMapping,
             worktrees: fixWorktrees,
           }),

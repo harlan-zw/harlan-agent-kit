@@ -54,10 +54,13 @@ export interface VerifiedFindingRepair {
   commitSha: string
 }
 
+export type FindingRepairStatus = 'Idle' | 'Active' | 'Stopped'
+
 interface FindingThreadOptions {
   controls?: boolean
   baseRef?: string
   fixed?: readonly VerifiedFindingRepair[]
+  repairStatus?: FindingRepairStatus
   recordInline?: (receipts: InlineFindingReceipt[]) => void
 }
 
@@ -113,6 +116,26 @@ export function reviewFindingThreadFingerprint(body: string): string | null {
 
 type OpenFinding = Extract<ReviewFinding, { _tag: 'Open' }> & { details: NonNullable<Extract<ReviewFinding, { _tag: 'Open' }>['details']> }
 type ThreadFinding = OpenFinding | Extract<ReviewFinding, { _tag: 'Logged' }>
+
+function hasThreadDetails(finding: ReviewFinding): finding is ThreadFinding {
+  return finding._tag === 'Logged' || (finding._tag === 'Open' && finding.details !== undefined)
+}
+
+const repairStatusLine = {
+  Active: 'The Service picked up this finding for Repair.',
+  Stopped: 'Repair needs a decision.',
+} satisfies Record<Exclude<FindingRepairStatus, 'Idle'>, string>
+const repairStatusMarker = '<!-- review-finding-repair-status -->'
+const repairStatusFooter = /\n\n<!-- review-finding-repair-status -->\n[^\n]+$/
+
+function withRepairStatus(body: string, status: FindingRepairStatus): string {
+  const original = body.replace(repairStatusFooter, '')
+  return status === 'Idle' ? original : `${original}\n\n${repairStatusMarker}\n${repairStatusLine[status]}`
+}
+
+function findingRepairStatus(finding: ThreadFinding, status: FindingRepairStatus = 'Idle'): FindingRepairStatus {
+  return finding._tag === 'Open' && finding.resolution !== 'Dismissal' ? status : 'Idle'
+}
 
 function sentence(text: string): string {
   const line = cleanLine(text)
@@ -175,7 +198,7 @@ export interface ReviewFindingThreadPlan {
  * closed. A Logged finding needs evidence of a fix before automatic resolution.
  */
 export function planReviewFindingThreads(headSha: string, findings: ReviewFinding[], threads: ReviewFindingThread[], options: FindingThreadOptions = {}): ReviewFindingThreadPlan {
-  const current = findings.filter((finding): finding is ThreadFinding => finding._tag === 'Logged' || (finding._tag === 'Open' && finding.details !== undefined))
+  const current = findings.filter(hasThreadDetails)
   const currentFingerprints = new Set(current.map(finding => finding.details.fingerprint.toLowerCase()))
   const fixedSummaries = new Set(findings.filter(finding => finding._tag === 'Fixed').map(finding => sentence(finding.summary)))
   const repairs = new Map(options.fixed?.map(repair => [repair.fingerprint, repair.commitSha]))
@@ -193,7 +216,7 @@ export function planReviewFindingThreads(headSha: string, findings: ReviewFindin
       headSha,
       path,
       line: anchor,
-      body: reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef),
+      body: withRepairStatus(reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef), findingRepairStatus(finding, options.repairStatus)),
       ...(finding._tag === 'Logged' ? { lineOnly: true } as const : {}),
     })
   }
@@ -248,20 +271,25 @@ async function syncReviewFindingThreads(
     return { _tag: 'Failed', message: threads.error }
   const plan = planReviewFindingThreads(headSha, findings, threads.value, options)
   const receipts: InlineFindingReceipt[] = []
-  const logged = new Map(findings.filter(finding => finding._tag === 'Logged').map(finding => [finding.details.fingerprint, finding]))
+  const current = new Map(findings.filter(hasThreadDetails).map(finding => [finding.details.fingerprint.toLowerCase(), finding]))
   for (const thread of threads.value) {
-    const finding = logged.get(thread.fingerprint)
+    const finding = current.get(thread.fingerprint)
     if (thread.comment === undefined || finding === undefined)
       continue
     let comment = thread.comment
     if (state === 'open' && !thread.resolved && source.editReviewFindingComment !== undefined) {
-      const body = reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef)
-      const edited = await source.editReviewFindingComment(repository, comment, body, signal, authorize)
-      if (edited._tag === 'Err')
-        return { _tag: 'Failed', message: edited.error }
-      comment = edited.value
+      const body = finding._tag === 'Logged'
+        ? reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef)
+        : withRepairStatus(comment.body, findingRepairStatus(finding, options.repairStatus))
+      if (body !== comment.body) {
+        const edited = await source.editReviewFindingComment(repository, comment, body, signal, authorize)
+        if (edited._tag === 'Err')
+          return { _tag: 'Failed', message: edited.error }
+        comment = edited.value
+      }
     }
-    receipts.push({ fingerprint: thread.fingerprint, commentId: comment.id, body: normalizeLoggedFindingControls(comment.body), resolved: thread.resolved })
+    if (finding._tag === 'Logged')
+      receipts.push({ fingerprint: thread.fingerprint, commentId: comment.id, body: normalizeLoggedFindingControls(comment.body), resolved: thread.resolved })
   }
   let posted = 0
   let outsideDiff = 0
@@ -272,7 +300,7 @@ async function syncReviewFindingThreads(
     if (result.value._tag === 'Posted') {
       posted++
       const fingerprint = reviewFindingThreadFingerprint(comment.body)
-      if (result.value.comment !== undefined && fingerprint !== null && logged.has(fingerprint))
+      if (result.value.comment !== undefined && fingerprint !== null && current.get(fingerprint)?._tag === 'Logged')
         receipts.push({ fingerprint, commentId: result.value.comment.id, body: result.value.comment.body, resolved: false })
     }
     else {
@@ -281,11 +309,13 @@ async function syncReviewFindingThreads(
   }
   for (const { thread, commitSha } of plan.resolve) {
     const comment = thread.comment
-    if (commitSha !== undefined && comment !== undefined && source.editReviewFindingComment !== undefined) {
+    if (commitSha !== undefined) {
+      if (comment === undefined || source.editReviewFindingComment === undefined)
+        return { _tag: 'Failed', message: 'The finding comment is unavailable for the Repair commit link.' }
       const footer = `✅ Addressed in commit [${commitSha.slice(0, 7)}](https://github.com/${repository.github}/commit/${commitSha})`
       if (!comment.body.endsWith(`\n\n${footer}`)) {
         const control = loggedFindingControl(thread.fingerprint)
-        const lines = normalizeLoggedFindingControls(comment.body).split('\n')
+        const lines = normalizeLoggedFindingControls(withRepairStatus(comment.body, 'Idle')).split('\n')
         const body = lines.filter(line => line !== control).join('\n').trimEnd()
         const edited = await source.editReviewFindingComment(repository, comment, `${body}\n\n${footer}`, signal, authorize)
         if (edited._tag === 'Err')

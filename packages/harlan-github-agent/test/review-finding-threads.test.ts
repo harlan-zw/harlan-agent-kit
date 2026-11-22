@@ -42,6 +42,7 @@ function fakeSource(threads: ReviewFindingThread[], outcome: 'Posted' | 'Outside
         posted.push(comment)
         return Promise.resolve(ok({ _tag: outcome }))
       },
+      editReviewFindingComment: async (_repository, comment, body) => ok({ ...comment, body }),
       resolveReviewFindingThread: (_repository, threadId) => {
         resolved.push(threadId)
         return Promise.resolve(ok(undefined))
@@ -173,7 +174,7 @@ The user sees the wrong score in this text:
 })
 
 describe('gitHub review finding threads', () => {
-  it('resolves a finding with repository Contents and Pull requests write access', async () => {
+  it.each([true, false])('checks GitHub confirms resolution: %s', async (isResolved) => {
     const resolved: string[] = []
     const tokens = createRepositoryTokenProvider({
       getInstallation: async () => ({ installationId: 42, repositoryName: 'example' }),
@@ -194,14 +195,14 @@ describe('gitHub review finding threads', () => {
             if (permissions.contents !== 'write' || permissions.pull_requests !== 'write')
               throw new Error('Resource not accessible by integration')
             resolved.push(variables.threadId)
-            return { resolveReviewThread: { thread: { id: variables.threadId } } }
+            return { resolveReviewThread: { thread: { id: variables.threadId, isResolved } } }
           },
         } as unknown as Octokit
       },
     })
 
     expect(await source.resolveReviewFindingThread(repositoryMapping(), 'T1', new AbortController().signal, authorize))
-      .toEqual(ok(undefined))
+      .toEqual(isResolved ? ok(undefined) : err('GitHub did not confirm the review thread was resolved.'))
     expect(resolved).toEqual(['T1'])
   })
 

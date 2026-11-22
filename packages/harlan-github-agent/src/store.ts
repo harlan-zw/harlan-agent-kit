@@ -7573,7 +7573,16 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${deliverySchema} PRAGMA user_version = 106;`)
     version = 106
   }
-  if (version === 106)
+  if (version === 106) {
+    const syncColumns = database.prepare('PRAGMA table_info(finding_thread_syncs)').all()
+    const addRepairStatus = syncColumns.some(column => column.name === 'repair_status')
+      ? ''
+      : `ALTER TABLE finding_thread_syncs ADD COLUMN repair_status TEXT NOT NULL DEFAULT 'Idle'
+        CHECK (repair_status IN ('Idle', 'Active', 'Stopped'));`
+    applyMigration(database, `${addRepairStatus} PRAGMA user_version = 107;`)
+    version = 107
+  }
+  if (version === 107)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }

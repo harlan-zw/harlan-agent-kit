@@ -140,6 +140,10 @@ If the pull request closes unmerged, stop Review.
 
 When the premise is sound and findings above 80 remain, queue one fresh Repair Agent with those exact findings. Never reuse the Review session.
 
+For automatic Repair on an open pull request, the Service shows Repair status on each inline finding comment.
+When a later Review clears the finding, the Service links the Repair commit in that comment, then resolves the thread.
+If the Review still reports the finding, keep the thread open.
+
 For an outside contributor, use the existing Approval. A new external Revision invalidates Approval. The exact controller repair commit continues the workflow.
 
 The Repair Agent writes each failing regression test first. It fixes every actionable finding, then runs focused checks. The controller verifies and publishes the artifact.

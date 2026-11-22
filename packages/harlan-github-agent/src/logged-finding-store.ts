@@ -145,7 +145,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
   }
 
   function inlineFindings(reviewRunId: string): InlineFindingReceipt[] {
-    const row = database.prepare('SELECT inline_findings FROM finding_thread_syncs WHERE review_run_id = ? AND state_tag = \'Written\'')
+    const row = database.prepare('SELECT inline_findings FROM finding_thread_syncs WHERE review_run_id = ?')
       .get(reviewRunId) as { inline_findings: string } | undefined
     return row === undefined ? [] : JSON.parse(row.inline_findings) as InlineFindingReceipt[]
   }

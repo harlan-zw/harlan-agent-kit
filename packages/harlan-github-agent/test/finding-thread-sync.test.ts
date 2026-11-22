@@ -1,3 +1,4 @@
+import type { ReviewFindingComment } from '../src/review-finding-threads.ts'
 import type { ReviewFinding } from '../src/types.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -19,7 +20,7 @@ afterEach(() => {
 const at = '2026-10-14T01:00:00.000Z'
 const later = '2026-10-14T01:05:00.000Z'
 
-function publishedReview(path = ':memory:', findings: ReviewFinding[] = []) {
+function publishedReview(path = ':memory:', findings: ReviewFinding[] = [], repair = false) {
   const store = openJournalStore(path, true)
   stores.push(store)
   const repository = repositoryMapping()
@@ -30,13 +31,15 @@ function publishedReview(path = ':memory:', findings: ReviewFinding[] = []) {
   if (observed._tag !== 'Inserted')
     throw new Error('Expected a new Revision.')
   const task = store.claimNextAdversarialReviewTask('reviewer', at, 60_000)!
-  store.completeWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, evidence: 'run' })
   const gates = {
     merge: { _tag: 'Passed' as const, evidence: [] },
     review: findings.length > 0 ? { _tag: 'Failed' as const, reason: 'Open finding.', evidence: [] } : { _tag: 'Passed' as const, evidence: [] },
     ci: { _tag: 'Passed' as const, evidence: [] },
   }
   store.recordReviewRun({ id: 'run', repository: repository.github, pullRequestNumber: pull.number, revisionId: observed.revisionId, headSha: pull.headSha, provider: 'codex', sessionId: 'session', model: 'model', agentVersion: '1', skillDigest: 'a'.repeat(64), startedAt: at, completedAt: at, gates, confidence: 95, findings })
+  if (repair)
+    expect(store.queueReviewFixTaskForReview({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at })).toMatchObject({ _tag: 'Queued' })
+  store.completeWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, evidence: 'run' })
   const staged = store.stageReviewGateStatus({ reviewRunId: 'run', repository: repository.github, pullRequestNumber: pull.number, revisionId: observed.revisionId, expectedHeadSha: pull.headSha, gates, desiredOutcome: findings.length > 0 ? 'BLOCKED' : 'READY', body: findings.length > 0 ? '### 🤖 BLOCKED' : '### 🤖 READY', at })
   if (staged._tag !== 'Staged')
     throw new Error('Expected a Publication.')
@@ -46,6 +49,85 @@ function publishedReview(path = ':memory:', findings: ReviewFinding[] = []) {
 }
 
 describe('finding thread sync Publication', () => {
+  it.each(['cleared', 'still open', 'stopped'] as const)('updates the finding thread when an automatic Repair is %s', async (outcome) => {
+    const fingerprint = 'a'.repeat(64)
+    const finding: ReviewFinding = { _tag: 'Open', summary: 'A finding.', nextAction: 'Repair it.', resolution: 'Repair', details: { fingerprint, location: { path: 'a.ts', line: 1 }, proof: 'Observed.', regressionTest: null } }
+    const { store, repository, pull } = publishedReview(':memory:', [finding], true)
+    const task = store.claimNextReviewFixTask('repair', at, 60_000)!
+    const owner = { taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at }
+    let current = pull
+    let comment = { id: 101, body: '' }
+    const posts: ReviewFindingComment[] = []
+    const resolved: string[] = []
+    const controller = createFindingThreadSyncController({ store, workerId: 'publisher', now: () => new Date(at), readPullRequest: async () => ok(current), mirror: { report: () => {}, source: {
+      listReviewFindingThreads: async () => ok(comment.body === '' ? [] : [{ threadId: 'thread', fingerprint, resolved: resolved.length > 0, comment }]),
+      postReviewFindingComment: async (_repository, _number, posted, _signal, authorize) => {
+        expect(authorize()).toEqual(ok(undefined))
+        posts.push(posted)
+        comment = { ...comment, body: posted.body }
+        return ok({ _tag: 'Posted', comment })
+      },
+      editReviewFindingComment: async (_repository, previous, body, _signal, authorize) => {
+        expect(authorize()).toEqual(ok(undefined))
+        comment = { ...previous, body }
+        return ok(comment)
+      },
+      resolveReviewFindingThread: async (_repository, id, _signal, authorize) => {
+        expect(authorize()).toEqual(ok(undefined))
+        expect(comment.body).toContain(`https://github.com/${repository.github}/commit/${current.headSha}`)
+        resolved.push(id)
+        return ok(undefined)
+      },
+    } } })
+    const sync = () => controller.run(new AbortController().signal)
+    await controller.run(new AbortController().signal, { repository: repository.github, pullRequestNumber: pull.number, headSha: pull.headSha })
+    expect(posts).toHaveLength(1)
+    expect(comment.body).toContain('The Service picked up this finding for Repair.')
+
+    if (outcome === 'stopped') {
+      expect(store.needsAttentionTask({ ...owner, reason: 'Repair needs a decision.', evidence: 'reproduction' })).toBe(true)
+      await sync()
+      expect(comment.body).toContain('Repair needs a decision')
+      expect(comment.body).not.toContain('The Service picked up this finding for Repair.')
+      expect(resolved).toEqual([])
+      return
+    }
+
+    const commitSha = 'd'.repeat(40)
+    expect(store.stagePublication({ ...owner, publication: {
+      _tag: 'UpdatePullRequest',
+      taskKind: 'review_fix',
+      baseRef: pull.baseRef ?? 'main',
+      pullRequestNumber: pull.number,
+      commitSha,
+      baseSha: pull.baseSha,
+      expectedHeadSha: pull.headSha,
+      headRef: pull.headRef,
+      artifactRef: 'refs/harlan-github-agent/publications/repair',
+      patchDigest: 'patch',
+      changedFiles: 1,
+    } })).toMatchObject({ _tag: 'Staged' })
+    const publication = store.claimNextPublication('push', at, 60_000)!
+    expect(store.completePublication({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at, evidence: 'Pushed the fix.' })).toBe(true)
+    current = { ...pull, headSha: commitSha }
+    const observed = store.recordObservation({ externalId: 'repaired-head', observedAt: at, source: 'poll', subject: current })
+    if (observed._tag !== 'Inserted')
+      throw new Error('Expected the repaired head.')
+    await sync()
+    expect(resolved).toEqual([])
+    const review = store.claimNextAdversarialReviewTask('reviewer', at, 60_000)!
+    const reviewRunId = 'repaired-review'
+    const { gates } = store.listReviewRuns(repository.github, pull.number)[0]!
+    store.recordReviewRun({ id: reviewRunId, repository: repository.github, pullRequestNumber: pull.number, revisionId: observed.revisionId, headSha: commitSha, provider: 'codex', sessionId: 'session', model: 'model', agentVersion: '1', skillDigest: 'a'.repeat(64), startedAt: at, completedAt: at, gates, confidence: 95, findings: outcome === 'cleared' ? [] : [finding] })
+    store.completeWorkerTask({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at, evidence: reviewRunId })
+    store.recordReviewPublication({ id: 'verified-publication', reviewRunId, body: 'Review after the fix.', at, result: { _tag: 'Published', githubCommentId: 42, url: `${pull.url}#issuecomment-42` } })
+    store.queueReviewFindingThreadSync(reviewRunId, at)
+    await sync()
+    expect(resolved).toEqual(outcome === 'cleared' ? ['thread'] : [])
+    expect(comment.body).not.toContain('The Service picked up this finding for Repair.')
+    expect(posts).toHaveLength(1)
+  })
+
   it.each(['live_head', 'write_control'] as const)('writes nothing when %s changes during retry', async (change) => {
     const { store, repository, pull } = publishedReview()
     const writes: string[] = []
