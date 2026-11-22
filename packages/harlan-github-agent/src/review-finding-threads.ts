@@ -3,7 +3,7 @@ import type { Result } from './result.ts'
 import type { RepositoryMapping, ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { loggedFindingBaseMarker, loggedFindingControl, normalizeLoggedFindingControls } from './logged-finding-pickup.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, reviewFindingSeverity } from './review-comment.ts'
 import { cleanLine, cleanText } from './text.ts'
 
 /** One review thread this service opened for one Review finding. */
@@ -142,14 +142,6 @@ function sentence(text: string): string {
   return /[.!?]$/.test(line) ? line : `${line}.`
 }
 
-function findingSeverity(impact: number): string {
-  if (impact >= 91)
-    return 'Critical'
-  if (impact >= 81)
-    return 'Major'
-  return impact >= 40 ? 'Minor' : 'Trivial'
-}
-
 /**
  * Renders one finding as the inline comment a reader sees beside the code.
  *
@@ -158,7 +150,7 @@ function findingSeverity(impact: number): string {
  */
 export function reviewFindingThreadBody(finding: ThreadFinding, headSha?: string, baseRef?: string): string {
   const { impact } = finding
-  const heading = impact === undefined ? 'Finding' : `${findingSeverity(impact)} (${impact}/100)`
+  const heading = impact === undefined ? 'Finding' : `${reviewFindingSeverity(impact)} (${impact}/100)`
   const summary = cleanLine(finding.summary).replace(/\.$/, '')
   const recommendation = cleanText(finding.nextAction ?? '')
   const action = OPTIONAL_ACTION_PREFIX.test(recommendation)

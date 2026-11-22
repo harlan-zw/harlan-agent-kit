@@ -6,6 +6,14 @@ export const AUTOMATED_REVIEW_MARKER = '<!-- harlan-agent-kit:pr-triage -->'
 /** The login the GitHub App posts as. */
 export const AGENT_ACTOR_LOGIN = 'harlan-github-agent[bot]'
 
+export function reviewFindingSeverity(impact: number): string {
+  if (impact >= 91)
+    return 'Critical'
+  if (impact >= 81)
+    return 'Major'
+  return impact >= 40 ? 'Minor' : 'Trivial'
+}
+
 /** Show advice without implying that a Logged finding requires Repair. */
 export function reviewFindingFollowUp(finding: Extract<ReviewFinding, { _tag: 'Logged' }>): string {
   const action = finding.nextAction === undefined
