@@ -30,7 +30,8 @@ Examples:
 
 ## Screenshots
 
-- Capture the real app at the pull request head. Seed data, fixtures, or a dev mock are fine; say so in the alt text. Never attach a mockup.
+- Capture only the real app, run from the pull request head, on a route a user opens. The project's own seed data or fixtures are fine; say so in the alt text.
+- Never invent UI to get a capture. Do not build a mockup, a page, a harness, a story, or a stand-in component for the screenshot, and do not edit the image.
 - Capture the changed region. Show the whole page only when the layout is the change.
 - Capture at 1440 px. Add 390 px when the change affects layout or a phone flow.
 - Add a before image only when the change fixes or replaces an existing view. Capture the same region at the same width.
@@ -42,8 +43,8 @@ Examples:
 
 ## When a capture is not possible
 
-If the app cannot run at the head in the state the change needs, for example behind a sign-in or a third-party callback, say so in one line in the description and attach nothing.
-Never replace a missing screenshot with a diagram or a mockup.
+If the real app cannot show the change at the head, for example behind a sign-in or a third-party callback, skip the screenshot. Say so in one line in the description and attach nothing.
+Never replace a missing screenshot with a diagram, a mockup, or UI built for the capture.
 
 ## Placement
 

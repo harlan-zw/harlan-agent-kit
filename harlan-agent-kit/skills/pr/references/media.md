@@ -4,7 +4,7 @@ This file covers evidence media in a verification comment.
 Images that show the result of a change belong in the description, and [artifacts](artifacts.md) chooses them.
 
 Apply the [verification comment rule](../SKILL.md#verification-comments) before sharing evidence.
-Capture the actual changed surface at the pull request head. Keep mockups and captures of routine checks in the session.
+Capture the actual changed surface in the real app at the pull request head. Never build UI for a capture. Keep captures of routine checks in the session.
 Attach evidence only when it gives a reviewer a concrete reason to change the merge decision.
 Find the existing self-identified Agent verification comment on the pull request before uploading media.
 If one exists, edit that exact comment and preserve evidence that still applies.

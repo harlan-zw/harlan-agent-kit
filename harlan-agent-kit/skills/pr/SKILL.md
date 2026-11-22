@@ -168,10 +168,10 @@ Re-read the remote body before an update. Reconcile concurrent edits before repl
 Before writing the description, decide what the reviewer needs to see. Read [artifacts](references/artifacts.md).
 Ask what the reviewer must see that the diff and the description do not show. Choose from that answer, never from file or module counts.
 
-- A visible result gets screenshots of the real app at the head, never a PR Lens diagram.
+- A visible result gets screenshots of the real app at the head, never a PR Lens diagram. Never invent UI to get a capture.
 - Data or control that crosses modules, services, or stores, with no visible result, may get one PR Lens view. Author it with the [pr-lens skill](../pr-lens/SKILL.md).
 - Everything else gets nothing.
-- If a capture is not possible, say so in one line and attach nothing.
+- If the real app cannot show the change, skip the screenshot. Say so in one line and attach nothing.
 
 Artifacts that show the result go in the description, after the why and before the AI disclosure. Never in a trailing comment.
 

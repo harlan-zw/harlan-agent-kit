@@ -18,6 +18,8 @@ A passing response does one of these:
 
 It fails if the description carries a PR Lens diagram, a Mermaid block, an
 architecture or data-flow sketch, an ASCII mockup of the layout, or a
-placeholder where an image belongs. A bracketed stub such as
+placeholder where an image belongs. It also fails if the response builds a
+page, harness, story, or stand-in component only to capture it: a screenshot
+must come from the real app on its own routes. A bracketed stub such as
 `[screenshot goes here]` or an image link to a file that was never written
 counts as a placeholder.
