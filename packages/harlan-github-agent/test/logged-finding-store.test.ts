@@ -1,9 +1,13 @@
+import { spawnSync } from 'node:child_process'
 import { createHmac } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
 import { DatabaseSync } from 'node:sqlite'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { canResolveThread } from '../../../harlan-agent-kit/skills/pr/scripts/can-resolve-thread.ts'
 import { createFindingThreadSyncController } from '../src/finding-thread-sync.ts'
 import { refreshControllerGates, terminalComment } from '../src/item-agent.ts'
 import { withLoggedFindingControls } from '../src/logged-finding-pickup.ts'
@@ -57,6 +61,108 @@ function setup(findings = [finding], path = ':memory:', target: 'head' | 'after-
 }
 
 describe('durable Logged finding pickup', () => {
+  it.each(['Follow-up', 'Answered'])('leaves a human %s thread unresolved', (response) => {
+    const root = { body: 'Please rename this local variable.', user: { type: 'User' } }
+    expect(canResolveThread(root.body, response, root.user.type)).toBe(false)
+  })
+
+  it.each(['Follow-up', 'Answered'])('permits a bot %s thread to resolve', (response) => {
+    const root = { body: 'Please rename this local variable.', user: { type: 'Bot' } }
+    expect(canResolveThread(root.body, response, root.user.type)).toBe(true)
+  })
+
+  it('permits a fixed human thread to resolve', () => {
+    expect(canResolveThread('Preserve buffered bytes.', 'Fixed', 'User')).toBe(true)
+  })
+
+  it.each([undefined, null, 'User', 'Organization', 'bot'])('requires verified bot identity for Follow-up with actor type %j', (authorType) => {
+    expect(canResolveThread('Please rename this local variable.', 'Follow-up', authorType)).toBe(false)
+  })
+
+  it.each(['', undefined, 'follow-up'])('rejects unknown response %j', (response) => {
+    expect(canResolveThread('Please rename this local variable.', response, 'Bot')).toBe(false)
+  })
+
+  it.each([
+    ['User', 'Follow-up', 1],
+    ['User', 'Answered', 1],
+    ['Bot', 'Follow-up', 0],
+    ['Bot', 'Answered', 0],
+    [null, 'Follow-up', 1],
+  ])('sweeps author %j with one %s reply before checking resolution', (authorType, response, status) => {
+    // Local boundary fixture: record the reply and resolve calls around the real CLI check.
+    const result = spawnSync('bash', ['-c', 'printf "reply\\n" && "$@" && printf "resolve\\n"', 'sweep', process.execPath, '--experimental-strip-types', fileURLToPath(new URL('../../../harlan-agent-kit/skills/pr/scripts/can-resolve-thread.ts', import.meta.url)), response], {
+      input: JSON.stringify({ body: 'Please rename this local variable.', user: { type: authorType } }),
+      encoding: 'utf8',
+    })
+    expect(result.status).toBe(status)
+    expect(result.stdout).toBe(status === 0 ? 'reply\nresolve\n' : 'reply\n')
+  })
+
+  it.each([
+    ['', false],
+    ['  \n', false],
+    ['Please preserve buffered bytes.', true],
+  ])('checks automatic resolution permission for %j', (body, expected) => {
+    expect(canResolveThread(body, 'Fixed', 'Bot')).toBe(expected)
+  })
+
+  it.each([
+    ['', 1],
+    ['Please preserve buffered bytes.', 0],
+    [`<!-- review-finding: ${'f'.repeat(64)} -->\n- [ ] Ask an agent to verify and fix this finding`, 1],
+  ])('enforces automatic resolution permission at the CLI boundary for %j', (body, status) => {
+    const result = spawnSync(process.execPath, ['--experimental-strip-types', fileURLToPath(new URL('../../../harlan-agent-kit/skills/pr/scripts/can-resolve-thread.ts', import.meta.url)), 'Fixed'], {
+      input: JSON.stringify({ body, user: { type: 'Bot' } }),
+      encoding: 'utf8',
+    })
+    expect(result.status).toBe(status)
+  })
+
+  function inlineSweepFixture() {
+    const fixture = setup([finding], ':memory:', 'head')
+    fixture.store.queueReviewFindingThreadSync('review', at)
+    const sync = fixture.store.claimReviewFindingThreadSync('threads', at, 60_000)!
+    const body = reviewFindingThreadBody(finding, fixture.pullRequest.headSha, fixture.pullRequest.baseRef)
+    fixture.store.completeReviewFindingThreadSync(sync, at, [{ fingerprint: finding.details.fingerprint, commentId: 101, body, resolved: false }])
+    const thread = { threadId: 'thread', fingerprint: finding.details.fingerprint, resolved: false, comment: { id: 101, body } }
+    return {
+      ...fixture,
+      thread,
+      select: () => fixture.store.requestLoggedFindingPickup({ ...fixture.request, inline: true, commentId: 101, before: body }),
+      close: () => {
+        if (canResolveThread(body, 'Follow-up', 'Bot'))
+          thread.resolved = true
+        fixture.store.reconcileLoggedFindingThreads(fixture.request.repository, fixture.pullRequest.number, [thread], at)
+      },
+    }
+  }
+
+  it('keeps an inline Repair eligible when selected after the sweep reads the unchecked control', () => {
+    const fixture = inlineSweepFixture()
+    expect(fixture.select()).toBe(true)
+    fixture.close()
+    expect(fixture.thread.resolved).toBe(false)
+    expect(fixture.store.claimNextReviewFixTask('repair', at, 60_000)?.pickup?.finding).toEqual(finding)
+  })
+
+  it('keeps the first inline Repair selection available after the final sweep', () => {
+    const fixture = inlineSweepFixture()
+    fixture.close()
+    expect(fixture.select()).toBe(true)
+    expect(fixture.thread.resolved).toBe(false)
+    expect(fixture.store.claimNextReviewFixTask('repair', at, 60_000)?.pickup?.finding).toEqual(finding)
+  })
+
+  it('keeps a queued Repair open without canonical selection evidence', () => {
+    const fixture = inlineSweepFixture()
+    expect(fixture.select()).toBe(true)
+    // The automatic close step must be safe without reading any canonical status.
+    fixture.close()
+    expect(fixture.thread.resolved).toBe(false)
+    expect(fixture.store.claimNextReviewFixTask('repair', at, 60_000)?.pickup?.finding).toEqual(finding)
+  })
+
   it('revokes a staged selection when a signed Dismiss delivery finishes after the status rewrite', async () => {
     const { store, pullRequest, request } = setup([finding], ':memory:', 'head')
     expect(store.requestLoggedFindingPickup(request)).toBe(true)
