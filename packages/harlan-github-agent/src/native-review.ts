@@ -3,7 +3,7 @@ import type { ReviewPublicationAuthority } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { RepositoryMapping, ReviewDesiredOutcome, ReviewFinding } from './types.ts'
 import { err, ok } from './result.ts'
-import { automatedDisclosure, reviewFindingCodeLink, reviewFindingFollowUp } from './review-comment.ts'
+import { automatedDisclosure, reviewFindingCodeLink, reviewFindingFollowUp, reviewFindingSeverity } from './review-comment.ts'
 import { cleanLine, cleanText } from './text.ts'
 
 export const NATIVE_REVIEW_MARKER = '<!-- harlan-agent-kit:native-review -->'
@@ -47,7 +47,7 @@ Automated Review: ${outcome ?? 'PENDING'}.
     const action = findingText(reviewFindingFollowUp(finding))
     const link = reviewFindingCodeLink(repository, headSha, finding).trimStart()
     const section = `\n\n<details>
-<summary>Logged (${finding.impact}/100) · ${summary}</summary>
+<summary>${reviewFindingSeverity(finding.impact)} (${finding.impact}/100) · ${summary}</summary>
 
 ${proof}
 
