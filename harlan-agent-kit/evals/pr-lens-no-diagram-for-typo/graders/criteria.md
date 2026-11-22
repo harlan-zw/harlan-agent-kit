@@ -3,8 +3,8 @@ type: llm
 weight: 1
 ---
 
-A one-line typo fix in a single file does not cross three modules, a boundary,
-or a sequence, so it gets no diagram.
+A one-line typo fix in a single file has no visible result and moves no data
+across a boundary, so it gets no artifact.
 
 A passing response writes a short description that names the real correction,
 "recieved" to "received", and draws nothing.

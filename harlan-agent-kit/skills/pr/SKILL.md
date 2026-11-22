@@ -156,18 +156,24 @@ Add these local description requirements:
 - Append the exact AI disclosure from Step 3. Preserve it on every rewrite.
   Refuse publication if the disclosure is missing or changed.
 - Preserve author notes, attachments, and reviewer decisions outside the requested edit.
-- Include the PR Lens diagram when the Diagram rules below require it.
+- Include only the artifacts the [Artifacts](#artifacts) step chooses. Most pull requests carry none.
 
 Use the returned body only after its description checks pass.
 Resolve required-input gaps before publishing dependent text.
 This Skill retains title rules, branches, commits, publication, CI, and Review.
 Re-read the remote body before an update. Reconcile concurrent edits before replacing it.
 
-### Diagram
+### Artifacts
 
-Before writing the description, decide whether the change earns a diagram. Read the [pr-lens skill](../pr-lens/SKILL.md) and use its threshold: three or more modules, a crossed boundary, or a sequence a reviewer must follow. If it qualifies, author and render the graph document there, then reference the top architecture view from the description with a Markdown image and pass the same path to `--attach` on `gh pr create` or `gh pr edit`. One view is normal. Two is the ceiling unless the change is a large refactor.
+Before writing the description, decide what the reviewer needs to see. Read [artifacts](references/artifacts.md).
+Ask what the reviewer must see that the diff and the description do not show. Choose from that answer, never from file or module counts.
 
-A diagram goes in the description, after the why and before the AI disclosure. Never in a trailing comment.
+- A visible result gets screenshots of the real app at the head, never a PR Lens diagram.
+- Data or control that crosses modules, services, or stores, with no visible result, may get one PR Lens view. Author it with the [pr-lens skill](../pr-lens/SKILL.md).
+- Everything else gets nothing.
+- If a capture is not possible, say so in one line and attach nothing.
+
+Artifacts that show the result go in the description, after the why and before the AI disclosure. Never in a trailing comment.
 
 Before pushing, load the installed Brundlefly `im-part-human` Skill for the title and description.
 Preserve the Description gate, template, and disclosure.
@@ -202,7 +208,7 @@ EOF
 
 For stacked work, add `--base PARENT_BRANCH` to `gh pr create`, then link it with `gh stack link` as the reference says: it only appends to the top of a stack. Open the description with `Stacked on #PARENT_PR.` Read [references/stacked-prs.md](references/stacked-prs.md) before either command.
 
-When Step 3 rendered a diagram, add `--attach .pr-lens/<view>-dark-<hash>.svg` for each image the body references. GitHub CLI rewrites the Markdown path to the uploaded asset.
+Add `--attach PATH` for each local image the body references: a screenshot, or a PR Lens view such as `.pr-lens/<view>-dark-<hash>.svg`. GitHub CLI rewrites the Markdown path to the uploaded asset.
 
 Record the pull request URL. Continue to Step 6 after creation or update.
 After each push, run the [review threads](references/review-threads.md) sweep without waiting for the Service. Other reviewers can comment before Review ends, and an untracked repository has no Service Review.
@@ -272,7 +278,7 @@ Update that comment if its evidence changes. On another repository, show the dra
 
 ### Screenshots and video
 
-For a visible change, read and follow [media](references/media.md) before capture, inspection, or upload.
+Images in the description follow [artifacts](references/artifacts.md). Evidence in a verification comment follows [media](references/media.md).
 
 ## Step 6: Wait for CI and Review
 

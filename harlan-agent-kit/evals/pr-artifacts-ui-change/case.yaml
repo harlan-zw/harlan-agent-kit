@@ -1,0 +1,15 @@
+schema_version: '1.0'
+name: pr-artifacts-ui-change
+description: A UI change across four components gets screenshots or one honest line, never a PR Lens diagram.
+context:
+  scaffold_script: ./scaffold.sh
+execution:
+  max_turns: 25
+  allowed_tools: [Read, Glob, Grep, Skill, Bash, Write]
+  prompt: |
+    This repo has one uncommitted change. The Site Group picker moves from the
+    page header into the sidebar, and the Bing offers card and its modal now
+    read the selected group. It touches four components across two folders.
+
+    Write the pull request description. Do not push anything and do not open
+    anything, I just want the description text.

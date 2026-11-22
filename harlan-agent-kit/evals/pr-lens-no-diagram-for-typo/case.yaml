@@ -1,6 +1,6 @@
 schema_version: '1.0'
 name: pr-lens-no-diagram-for-typo
-description: A one-file typo fix is below the diagram threshold, so no diagram is drawn.
+description: A one-file typo fix needs no artifact, so no diagram is drawn.
 context:
   scaffold_script: ./scaffold.sh
 execution:

@@ -321,7 +321,7 @@ ${PULL_REQUEST_BODY_LINES}`
  */
 export function pullRequestDiagramLines(reference: PullRequestDiagramReference): string {
   return `Pull request diagram:
-- If the change touches three or more modules, crosses a runtime, service, or store boundary, or has a sequence a reviewer must follow, write a PR Lens graph document to ${PULL_REQUEST_DIAGRAM_PATH} in this worktree. A one-file fix gets none.
+- Only when the change moves data or control across modules, services, or stores and has no visible result, write a PR Lens graph document to ${PULL_REQUEST_DIAGRAM_PATH} in this worktree. A change whose result a person sees in a page or component gets none: a diagram is the wrong picture for it. A one-file fix gets none. Module count alone is never a reason.
 - Read ${reference.guide} before you write it. ${reference.example} is one document that validates.
 - Set provenance.repo to this repository and both shas to the current HEAD. The controller replaces them.
 - Include the unchanged neighbours the change touches, one hero edge, and one architecture view with defaultOpen true. Add one data-flow view only when there is a sequence.

@@ -1,6 +1,6 @@
 ---
 name: pr-lens
-description: "Draw a code change or part of a codebase as an animated architecture or data-flow diagram. Use when opening or updating a pull request that touches more than one module, when asked to diagram, visualise or explain a change or a system, or when a reviewer needs the blast radius before the diff."
+description: "Draw a code change or part of a codebase as an animated architecture or data-flow diagram. Use when a pull request moves data or control across modules, services, or stores and has no visible result, when asked to diagram, visualise or explain a change or a system, or when a reviewer needs the blast radius before the diff. Not for a change whose result a person sees: that gets screenshots."
 argument-hint: "[base ref, PR number, or path to diagram]"
 license: MIT
 ---
@@ -11,13 +11,13 @@ Vendored from [coldteadotai/pr-lens](https://github.com/coldteadotai/pr-lens) `p
 
 ## When to reach for this without being asked
 
-The [pr skill](../pr/SKILL.md) calls this skill in Step 3 for every non-trivial pull request. Use it on your own when:
+The [pr skill](../pr/SKILL.md) decides which artifacts a pull request carries. It calls this skill only when the reviewer must follow data or control across modules, services, or stores, and the change has no visible result. Use it on your own when:
 
-- the change touches three or more modules, or crosses a runtime, service, or store boundary
-- a reviewer would need to hold more than one call chain in their head
-- the pull request body needs to explain a sequence, a retirement, or a new path
+- a reviewer would need to hold more than one call chain in their head across a runtime, service, or store boundary
+- the pull request body needs to explain a sequence, a retirement, or a new path that no screen shows
 
-Skip it for one-file fixes, dependency bumps, formatting, and Markdown-only work. A diagram of a one-line change reads as noise.
+Skip it for a change whose result a person sees, such as a page, component, layout, or style. That change gets screenshots.
+Skip it for one-file fixes, dependency bumps, formatting, and Markdown-only work. Module count alone is never a reason to draw.
 
 Run the CLI from the task worktree. `.pr-lens/` is scratch; never commit it.
 
