@@ -1,8 +1,11 @@
 # Pull request media
 
-Apply the [verification comment rule](../SKILL.md#verification-comments) before sharing media.
-Capture the actual changed surface at the pull request head. Keep mockups and captures of routine checks in the session.
-Attach a real capture only when it gives a reviewer a concrete reason to change the merge decision.
+This file covers evidence media in a verification comment.
+Images that show the result of a change belong in the description, and [artifacts](artifacts.md) chooses them.
+
+Apply the [verification comment rule](../SKILL.md#verification-comments) before sharing evidence.
+Capture the actual changed surface in the real app at the pull request head. Never build UI for a capture. Keep captures of routine checks in the session.
+Attach evidence only when it gives a reviewer a concrete reason to change the merge decision.
 Find the existing self-identified Agent verification comment on the pull request before uploading media.
 If one exists, edit that exact comment and preserve evidence that still applies.
 If you cannot edit it, keep the capture in the session.
@@ -60,5 +63,5 @@ If every upload fails, it posts no comment.
 If a later upload fails, it saves the successful files and exits with an error.
 Check the printed comment URL before retrying. If GitHub saved the comment, retry by editing that comment.
 
-Attach media that shows a changed surface, such as a page, component, CLI frame, or rendered email.
+Evidence shows a changed surface, such as a page, component, CLI frame, or rendered email.
 

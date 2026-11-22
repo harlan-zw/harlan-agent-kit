@@ -190,7 +190,7 @@ Every commit subject follows Conventional Commits: `type(scope): description`.
 ## Workflow
 
 - Ship the smallest thing that solves it. Add structure when it fails.
-- A pull request that crosses three or more modules, a boundary, or a sequence carries a PR Lens diagram in its description. Smaller ones do not. Read the `pr-lens` skill.
+- A pull request carries only artifacts that answer a reviewer question: screenshots for a visible result, a PR Lens diagram for data or control that crosses a boundary with no visible result, and nothing otherwise. Never invent UI for a capture; if the real app cannot show the change, skip the screenshot. The `pr` skill decides. Module count alone never earns a diagram.
 - Production error: fix the category, not the instance.
 - Where a repository has a production deploy workflow, that workflow is the only path to production. Build-time configuration comes from Actions secrets, so a local build can bake the wrong identity into a valid artifact. Use the CLI for inspection and rollback, never for the deploy.
 - Refactors and architecture audits: finish the whole change before stopping (imports updated, old code removed, tests pass).

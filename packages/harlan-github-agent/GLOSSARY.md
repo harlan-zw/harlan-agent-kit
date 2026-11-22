@@ -716,7 +716,7 @@ GitHub's `annotation` is anchored to a file and line on a check run. A Review fi
 
 One PR Lens picture of an Issue work change, drawn from a graph document the Agent authors.
 
-The Agent writes `.pr-lens/graph.json` in its worktree when the change touches three or more modules, crosses a boundary, or has a sequence a reviewer must follow. The controller validates and draws the top view, uploads it as a GitHub user attachment with Harlan's CLI login, and places it in the description above the AI disclosure. A document that does not validate is logged and the pull request opens without a picture.
+The Agent writes `.pr-lens/graph.json` in its worktree only when the change moves data or control across modules, services, or stores and has no visible result. A change whose result shows in a page or component gets none. The controller attaches only this diagram, so such a pull request opens without a picture. The controller validates and draws the top view, uploads it as a GitHub user attachment with Harlan's CLI login, and places it in the description above the AI disclosure. A document that does not validate is logged and the pull request opens without a picture.
 
 Use Pull request diagram. Do not use lens, graph, picture, image, or architecture diagram for the published result. The Agent's input is the graph document.
 
