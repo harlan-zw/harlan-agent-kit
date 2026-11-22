@@ -1,6 +1,8 @@
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it } from 'vitest'
 import { refreshConfiguredWorkerSkills, refreshWorkerSkills } from './worker-skills.ts'
 
@@ -37,6 +39,72 @@ it('refreshes a complete Skill and References while preserving unrelated worker 
   expect(await readFile(join(destination, 'writing/references/clarity.md'), 'utf8')).toBe('Current reference.')
   await expect(readFile(join(destination, 'writing/obsolete.md'))).rejects.toMatchObject({ code: 'ENOENT' })
   for (const path of untouched) expect(await readFile(join(workerHome, path), 'utf8')).toBe(`Preserve ${path}`)
+})
+
+it('replaces a stale pull request summary and keeps the direct path current on later syncs', async () => {
+  const { sourceRoot, workerHome, destination, file } = await fixture()
+  const skill = 'pull-request-summary'
+  const direct = join(workerHome, '.agents/skills', skill)
+  const managed = join(destination, skill)
+  await file(join(direct, 'SKILL.md'), 'Stale direct copy.')
+  await file(join(workerHome, '.agents/skills/custom/SKILL.md'), 'Custom Skill.')
+  for (const version of ['Current Skill.', 'Next Skill.']) {
+    await file(join(sourceRoot, skill, 'SKILL.md'), version)
+    expect(await refreshWorkerSkills({ sourceRoot, workerHome, skills: [skill] })).toMatchObject({ _tag: 'Ok' })
+    expect(await realpath(direct)).toBe(managed)
+    expect(await readFile(join(direct, 'SKILL.md'), 'utf8')).toBe(version)
+  }
+  expect(await readFile(join(workerHome, '.agents/skills/custom/SKILL.md'), 'utf8')).toBe('Custom Skill.')
+})
+
+it('provisions and rebuilds the direct pull request summary path as a link inside the worker home', async () => {
+  const { root, workerHome, destination, file } = await fixture()
+  const sourceHome = join(root, 'source')
+  const skill = 'pull-request-summary'
+  const direct = join(workerHome, '.agents/skills', skill)
+  await file(join(sourceHome, '.agents/skills', skill, 'SKILL.md'), 'Stale host copy.')
+  await file(join(sourceHome, '.agents/skills/custom/SKILL.md'), 'Custom Skill.')
+  const args = [
+    '--experimental-strip-types',
+    fileURLToPath(new URL('./agent-worker.ts', import.meta.url)),
+    '--source-home',
+    sourceHome,
+    '--worker-home',
+    workerHome,
+    '--config',
+    join(root, 'worker.json'),
+    '--codex',
+    process.execPath,
+    '--opencode',
+    process.execPath,
+  ]
+  for (const version of ['Current Skill.', 'Next Skill.']) {
+    await file(join(sourceHome, '.local/share/harlan-agent-kit/skilld/skills', skill, 'SKILL.md'), version)
+    execFileSync(process.execPath, args)
+    expect(isAbsolute(await readlink(direct))).toBe(false)
+    expect(await realpath(direct)).toBe(join(destination, skill))
+    expect(await readFile(join(direct, 'SKILL.md'), 'utf8')).toBe(version)
+  }
+  expect(await readFile(join(workerHome, '.agents/skills/custom/SKILL.md'), 'utf8')).toBe('Custom Skill.')
+})
+
+it('restores the managed and direct copies if publishing the direct link fails', async () => {
+  const { sourceRoot, workerHome, destination, file } = await fixture()
+  const skill = 'pull-request-summary'
+  const direct = join(workerHome, '.agents/skills', skill)
+  const managed = join(destination, skill)
+  await file(join(sourceRoot, skill, 'SKILL.md'), 'New Skill.')
+  await file(join(managed, 'SKILL.md'), 'Previous managed Skill.')
+  await file(join(direct, 'SKILL.md'), 'Previous direct Skill.')
+  const failure = new Error('Cannot publish the direct link.')
+  const move: typeof rename = async (from, to) => {
+    if (to === direct && (await lstat(from)).isSymbolicLink())
+      throw failure
+    await rename(from, to)
+  }
+  await expect(refreshWorkerSkills({ sourceRoot, workerHome, skills: [skill] }, move)).rejects.toBe(failure)
+  expect(await readFile(join(managed, 'SKILL.md'), 'utf8')).toBe('Previous managed Skill.')
+  expect(await readFile(join(direct, 'SKILL.md'), 'utf8')).toBe('Previous direct Skill.')
 })
 
 it('prepares every declared Skill before changing any current copy', async () => {

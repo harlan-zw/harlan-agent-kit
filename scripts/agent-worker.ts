@@ -1,8 +1,9 @@
 #!/usr/bin/env -S node --experimental-strip-types
-import { chmod, cp, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join } from 'node:path'
+import { chmod, cp, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
 import { parseArgs } from 'node:util'
+import { PULL_REQUEST_SUMMARY_SKILL, refreshWorkerSkills, WORKER_DIRECT_SKILLS, WORKER_SKILL_STORE } from './worker-skills.ts'
 
 const { values } = parseArgs({ options: {
   'source-home': { type: 'string' },
@@ -17,10 +18,24 @@ for (const key of ['source-home', 'worker-home', 'config', 'codex', 'opencode'] 
   if (!values[key] || !isAbsolute(values[key]))
     throw new Error(`Provide an absolute --${key} path.`)
 }
-const source = values['source-home']!
-const home = values['worker-home']!
+const source = resolve(values['source-home']!)
+const home = resolve(values['worker-home']!)
 await mkdir(home, { recursive: true, mode: 0o700 })
 await chmod(home, 0o700)
+const managedSkills = join(source, WORKER_SKILL_STORE)
+const managedSummary = join(managedSkills, PULL_REQUEST_SUMMARY_SKILL)
+const directSummary = join(source, WORKER_DIRECT_SKILLS, PULL_REQUEST_SUMMARY_SKILL)
+const summarySource = await lstat(managedSummary).catch((error: NodeJS.ErrnoException) => {
+  // A source home can be provisioned before portable Skills are installed.
+  if (error.code === 'ENOENT')
+    return undefined
+  throw error
+})
+if (summarySource !== undefined) {
+  const result = await refreshWorkerSkills({ sourceRoot: managedSkills, workerHome: home, skills: [PULL_REQUEST_SUMMARY_SKILL] })
+  if (result._tag === 'Err')
+    throw new Error(result.error)
+}
 const paths = [
   '.codex/auth.json',
   '.local/share/opencode/auth.json',
@@ -28,8 +43,8 @@ const paths = [
   '.config/git/hooks',
   '.local/share/harlan-agent-kit/github-bin',
   '.codex/AGENTS.md',
-  '.local/share/harlan-agent-kit/skilld/skills',
-  '.agents/skills',
+  WORKER_SKILL_STORE,
+  WORKER_DIRECT_SKILLS,
   '.local/share/harlan-agent-kit/hooks',
   '.local/share/harlan-agent-kit/.claude-plugin/plugin.json',
   '.config/opencode/plugins/harlan-hooks.ts',
@@ -37,7 +52,12 @@ const paths = [
 for (const path of paths) {
   const destination = join(home, path)
   await mkdir(dirname(destination), { recursive: true, mode: 0o700 })
-  await cp(join(source, path), destination, { recursive: true, dereference: true, preserveTimestamps: true }).catch((error: NodeJS.ErrnoException) => {
+  await cp(join(source, path), destination, {
+    recursive: true,
+    dereference: true,
+    preserveTimestamps: true,
+    filter: path => summarySource === undefined || (path !== managedSummary && path !== directSummary),
+  }).catch((error: NodeJS.ErrnoException) => {
     // A host may use only one provider. Its missing login is not copied.
     if (error.code !== 'ENOENT')
       throw error

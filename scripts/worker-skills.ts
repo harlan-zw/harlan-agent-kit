@@ -1,8 +1,8 @@
 import type { Stats } from 'node:fs'
 import type { Result } from '../packages/harlan-github-agent/src/result.ts'
-import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rename, rm, stat, symlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 import manifest from '../.skills/skilld.json' with { type: 'json' }
@@ -14,7 +14,9 @@ interface WorkerSkillInput {
   skills: readonly string[]
 }
 
-const relativeDestination = '.local/share/harlan-agent-kit/skilld/skills'
+export const WORKER_SKILL_STORE = '.local/share/harlan-agent-kit/skilld/skills'
+export const WORKER_DIRECT_SKILLS = '.agents/skills'
+export const PULL_REQUEST_SUMMARY_SKILL = 'pull-request-summary'
 const within = (path: string, root: string) => path === root || path.startsWith(`${root}/`)
 
 /** Missing optional directories are normal. Other filesystem failures stop preparation. */
@@ -51,7 +53,7 @@ async function makePrivate(path: string): Promise<void> {
   }
 }
 
-/** Refresh declared Skill copies only. Service updates call this after active Agents drain. */
+/** Refresh declared Skill copies and the direct PR summary link after active Agents drain. */
 export async function refreshWorkerSkills(input: WorkerSkillInput, move: typeof rename = rename): Promise<Result<readonly string[], string>> {
   const names = [...new Set(input.skills)]
   if (names.some(name => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)))
@@ -62,13 +64,28 @@ export async function refreshWorkerSkills(input: WorkerSkillInput, move: typeof 
   const workerHome = await realpath(input.workerHome)
   if (workerHome !== resolve(input.workerHome) || within(sourceRoot, workerHome) || within(workerHome, sourceRoot))
     return err('The Skill source and Agent home must use separate ordinary directories.')
-  const destination = join(workerHome, relativeDestination)
-  let current = workerHome
-  for (const name of relativeDestination.split('/')) {
-    current = join(current, name)
-    const info = await metadata(current)
-    if (info !== undefined && (!info.isDirectory() || info.isSymbolicLink()))
-      return err(`The Agent Skill destination must use ordinary directories: ${current}`)
+  const destination = join(workerHome, WORKER_SKILL_STORE)
+  const directPath = names.includes(PULL_REQUEST_SUMMARY_SKILL)
+    ? join(workerHome, WORKER_DIRECT_SKILLS, PULL_REQUEST_SUMMARY_SKILL)
+    : undefined
+  const roots = directPath === undefined ? [WORKER_SKILL_STORE] : [WORKER_SKILL_STORE, WORKER_DIRECT_SKILLS]
+  for (const root of roots) {
+    let current = workerHome
+    for (const name of root.split('/')) {
+      current = join(current, name)
+      const info = await metadata(current)
+      if (info !== undefined && !info.isDirectory())
+        return err(`The Agent Skill destination must use ordinary directories: ${current}`)
+    }
+  }
+  let directLink: { path: string, target: string } | undefined
+  if (directPath !== undefined) {
+    const info = await metadata(directPath)
+    if (info !== undefined && !info.isDirectory() && !info.isSymbolicLink())
+      return err(`The Agent Skill link cannot replace this file: ${directPath}`)
+    const target = relative(dirname(directPath), join(destination, PULL_REQUEST_SUMMARY_SKILL))
+    if (!info?.isSymbolicLink() || await readlink(directPath) !== target)
+      directLink = { path: directPath, target }
   }
   for (const name of names) {
     const source = join(sourceRoot, name)
@@ -85,6 +102,8 @@ export async function refreshWorkerSkills(input: WorkerSkillInput, move: typeof 
       return err(`The Agent Skill destination must use an ordinary directory: ${name}`)
   }
   await mkdir(destination, { recursive: true, mode: 0o700 })
+  if (directLink !== undefined)
+    await mkdir(dirname(directLink.path), { recursive: true, mode: 0o700 })
   const staging = await mkdtemp(join(destination, '.refresh-'))
   const changes: Array<{ path: string, backup: string, previous: boolean, installed: boolean }> = []
   let cleanup = true
@@ -92,19 +111,27 @@ export async function refreshWorkerSkills(input: WorkerSkillInput, move: typeof 
     const prepared = join(staging, 'prepared')
     await mkdir(prepared, { mode: 0o700 })
     await mkdir(join(staging, 'previous'), { mode: 0o700 })
-    // Stage every complete directory before replacing any existing Skill.
+    // Stage every complete directory and the direct link before replacing any existing Skill.
+    const installs: Array<{ path: string, staged: string }> = []
     for (const name of names) {
-      await cp(join(sourceRoot, name), join(prepared, name), { recursive: true, dereference: true })
-      await makePrivate(join(prepared, name))
+      const staged = join(prepared, name)
+      await cp(join(sourceRoot, name), staged, { recursive: true, dereference: true })
+      await makePrivate(staged)
+      installs.push({ path: join(destination, name), staged })
     }
-    for (const name of names) {
-      const change = { path: join(destination, name), backup: join(staging, 'previous', name), previous: false, installed: false }
+    if (directLink !== undefined) {
+      const staged = join(staging, 'direct-link')
+      await symlink(directLink.target, staged)
+      installs.push({ path: directLink.path, staged })
+    }
+    for (const [index, { path, staged }] of installs.entries()) {
+      const change = { path, backup: join(staging, 'previous', String(index)), previous: false, installed: false }
       changes.push(change)
       if (await metadata(change.path) !== undefined) {
         await move(change.path, change.backup)
         change.previous = true
       }
-      await move(join(prepared, name), change.path)
+      await move(staged, change.path)
       change.installed = true
     }
     return ok(names)
