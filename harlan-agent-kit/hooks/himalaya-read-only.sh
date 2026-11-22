@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse (Bash): keeps every agent's email access read only.
+# PreToolUse (Bash): keeps email access read only by default.
 #
 # Hogwild's himalaya configuration carries no send backend, so sending already
 # fails there. IMAP still allows an agent to delete, move, and flag a real
@@ -22,6 +22,9 @@ command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 
 [ -n "$command" ] || exit 0
 
+# A global setting cannot prove approval of a specific draft.
+# Keep saves denied across providers until they can verify that approval.
+
 deny() {
   jq -nc --arg reason "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
   log_hook_hit deny "$1" "$input"
@@ -30,12 +33,12 @@ deny() {
 
 # Every himalaya call in the command, wherever it sits in a pipeline.
 printf '%s\n' "$command" \
-  | grep -oE '(^|[|&;(][[:space:]]*)himalaya([[:space:]]+[^|&;)]*)?' \
+  | grep -oE '(^|[|&;(])[[:blank:]]*himalaya([[:space:]]+[^|&;)]*)?' \
   | while IFS= read -r call; do
       # Strip the leading separator and the binary name.
       arguments=$(printf '%s' "$call" | sed -E 's/^[^h]*himalaya[[:space:]]*//')
       # Options carry no subcommand, so read the first two bare words.
-      words=$(printf '%s' "$arguments" | tr ' ' '\n' | grep -vE '^-' | grep -v '^$' | head -2 | tr '\n' ' ')
+      words=$(printf '%s' "$arguments" | tr '[:blank:]' '\n' | grep -vE '^-' | grep -v '^$' | head -2 | tr '\n' ' ')
       first=$(printf '%s' "$words" | cut -d' ' -f1)
       second=$(printf '%s' "$words" | cut -d' ' -f2)
 
@@ -63,7 +66,7 @@ rm -f /tmp/.himalaya-hook-$$
 
 if [ -n "$blocked" ]; then
   subcommand=${blocked#DENY }
-  deny "Email access is read only. \`himalaya ${subcommand}\` can change or send mail. Read with: envelope list, envelope thread, message read, message export, folder list, attachment download, account list. If you need a change, ask Harlan to make it."
+  deny "Email access is read only by default. \`himalaya ${subcommand}\` can change or send mail. For an authorized Zoho draft, see the email-usage skill. Ask Harlan to make any other change."
 fi
 
 exit 0
