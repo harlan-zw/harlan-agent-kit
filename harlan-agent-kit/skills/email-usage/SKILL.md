@@ -63,6 +63,22 @@ Draft exact text in chat or private scratch files. Include From, To, subject, an
 Never save drafts, move, delete, flag, forward, send, or schedule mail without explicit authorization for that action.
 Before sending as Harlan or Clients, show the exact message and wait for approval.
 Selecting an account or adding an alias does not approve a message.
+
+Harlan can enable Zoho draft saves with this setting in `~/.config/harlan-agent-kit/email.json`.
+
+```json
+{ "allowZohoDrafts": true }
+```
+
+If you have explicit approval to save the draft, run this command on its own.
+
+```sh
+himalaya message save -a harlanzw -f Drafts < ~/scratch/reply.eml
+```
+
+Use a local `.eml` file. Quote an absolute path if it contains spaces.
+The setting only allows new drafts in `harlanzw` → `Drafts`.
+
 If a read-only Hook blocks an authorized action, report the restriction and give Harlan the command.
 Never bypass the Hook through another binary, API, browser, or config change.
 A mailbox configuration request permits the requested local config edit, not sending a test message.

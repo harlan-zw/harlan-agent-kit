@@ -4,6 +4,7 @@ set -uo pipefail
 
 # Hook decisions append to the hit log. Keep test runs out of the real one.
 export XDG_STATE_HOME="$(mktemp -d)"
+export XDG_CONFIG_HOME="$XDG_STATE_HOME/config"
 trap 'rm -rf "$XDG_STATE_HOME"' EXIT
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,6 +43,22 @@ allows 'himalaya attachment download 42'
 allows 'himalaya account list'
 allows 'himalaya --version'
 allows 'himalaya --help'
+
+# Saving a raw draft requires an explicit user setting.
+draft_save='himalaya message save -a harlanzw -f Drafts < ~/scratch/sample.eml'
+denies "$draft_save"
+mail_config="$XDG_CONFIG_HOME/harlan-agent-kit/email.json"
+mkdir -p "$(dirname "$mail_config")"
+printf '%s\n' '{"allowZohoDrafts":"true"}' > "$mail_config"
+denies "$draft_save"
+printf '%s\n' '{"allowZohoDrafts":true}' > "$mail_config"
+allows "$draft_save"
+allows "himalaya message save -a harlanzw -f Drafts < '/tmp/Sample reply.eml'"
+denies 'himalaya message save -a harlanzw -f INBOX < ~/scratch/sample.eml'
+denies 'himalaya message save -a hotmail -f Drafts < ~/scratch/sample.eml'
+denies 'himalaya message save -a harlanzw -f Drafts < ~/scratch/sample.txt'
+denies 'himalaya message save -a harlanzw -f Drafts'
+denies "echo start; $draft_save"
 
 # Sending, and the three IMAP mutations a read only agent must not reach.
 denies 'himalaya message send'

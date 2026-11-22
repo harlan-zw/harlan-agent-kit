@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse (Bash): keeps every agent's email access read only.
+# PreToolUse (Bash): keeps email access read only by default.
 #
 # Hogwild's himalaya configuration carries no send backend, so sending already
 # fails there. IMAP still allows an agent to delete, move, and flag a real
@@ -21,6 +21,15 @@ input=$(cat)
 command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 
 [ -n "$command" ] || exit 0
+
+# A user-level setting can allow one standalone save to Zoho Drafts.
+# Match literal file paths and fixed account and folder arguments.
+draft_path="((/|~/)[a-zA-Z0-9_./-]+\\.eml|'/[a-zA-Z0-9_./ -]+\\.eml')"
+draft_save="^[[:blank:]]*himalaya[[:blank:]]+message[[:blank:]]+save[[:blank:]]+-a[[:blank:]]+harlanzw[[:blank:]]+-f[[:blank:]]+Drafts[[:blank:]]*<[[:blank:]]*${draft_path}[[:blank:]]*$"
+if [[ "$command" =~ $draft_save ]] \
+  && jq -e '.allowZohoDrafts == true' "${XDG_CONFIG_HOME:-$HOME/.config}/harlan-agent-kit/email.json" >/dev/null 2>&1; then
+  exit 0
+fi
 
 deny() {
   jq -nc --arg reason "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$reason}}'
@@ -63,7 +72,7 @@ rm -f /tmp/.himalaya-hook-$$
 
 if [ -n "$blocked" ]; then
   subcommand=${blocked#DENY }
-  deny "Email access is read only. \`himalaya ${subcommand}\` can change or send mail. Read with: envelope list, envelope thread, message read, message export, folder list, attachment download, account list. If you need a change, ask Harlan to make it."
+  deny "Email access is read only by default. \`himalaya ${subcommand}\` can change or send mail. For an authorized Zoho draft, see the email-usage skill. Ask Harlan to make any other change."
 fi
 
 exit 0
