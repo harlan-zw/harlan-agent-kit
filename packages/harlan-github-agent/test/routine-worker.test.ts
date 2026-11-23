@@ -186,12 +186,16 @@ describe('building the scan prompt', () => {
       })
       if (priorRun === null)
         throw new Error('Expected the prior Routine run.')
+      const prior = claimStoredRun(store)
+      if (prior.id !== priorRun.id)
+        throw new Error('Expected the prior Routine run to claim first.')
       store.recordCandidates({
         routineId: 'harlan-zw/example:ci-review',
         runId: priorRun.id,
         candidates: [candidate],
         at: '2026-08-26T07:05:00.000Z',
       })
+      store.completeRoutineRun({ taskId: prior.id, workerId: prior.state.workerId, fence: prior.state.fence, at: '2026-08-26T07:06:00.000Z', evidence: 'prior run' })
       const fresh = { ...candidate, fingerprint: 'scripts/alerts.log#count', title: 'Alert count grew by one' }
       const task = claimStoredRun(store)
       const capture = { prompts: [] as string[] }
@@ -207,6 +211,27 @@ describe('building the scan prompt', () => {
       expect(result.value.evidence).toContain('1 new')
       const known = store.listCandidates('harlan-zw/example:ci-review').find(entry => entry.fingerprint === candidate.fingerprint)
       expect(known?.runId).toBe(priorRun.id)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('counts a retried run\'s own Candidates as new, and each fingerprint once', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'ci-review')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const task = claimStoredRun(store)
+      // The first attempt recorded this Candidate, then the process stopped.
+      store.recordCandidates({ routineId: task.routineId, runId: task.id, candidates: [candidate], at: now().toISOString() })
+      const result = await workerFor(store, scanning({ report: 'One defect, listed twice.', candidates: [candidate, candidate] }))
+        .run(task, new AbortController().signal)
+      expect(result).toMatchObject({ _tag: 'Ok', value: { evidence: expect.stringContaining('| 2 found | 1 new | 0 already known |') } })
+      store.completeRoutineRun({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: now().toISOString(), evidence: 'settled' })
+
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)?.entry)
+        .toMatchObject({ found: 2, fresh: 1, known: 0, fingerprints: [candidate.fingerprint] })
     }
     finally {
       store.close()
@@ -701,6 +726,51 @@ describe('running one scan', () => {
       expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]).toMatchObject({
         candidates: [{ fingerprint: candidate.fingerprint }],
       })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('stages the run log counts and the Candidates it names', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const task = claimStoredRun(store)
+      const oversized = { ...candidate, fingerprint: 'src/big.ts#rewrite', estimatedChangedFiles: 40 }
+      const result = await workerFor(store, scanning({ report: 'One defect found.', verdict: null, candidates: [candidate, oversized] }), 5)
+        .run(task, new AbortController().signal)
+      expect(result).toMatchObject({ _tag: 'Ok' })
+      store.completeRoutineRun({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: now().toISOString(), evidence: 'settled' })
+
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)).toMatchObject({
+        entry: { _tag: 'Scanned', found: 2, fresh: 1, known: 0, outsideScope: 0, oversized: { limit: 5, count: 1 }, fingerprints: [candidate.fingerprint], verdict: null },
+        reported: [{ title: 'Fixture title', issue: { _tag: 'Requested' } }],
+      })
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('writes nothing when Agent feedback has nothing to check', async () => {
+    const store = openJournalStore(':memory:')
+    const repository = 'harlan-zw/harlan-agent-kit'
+    try {
+      store.syncRepositories([repositoryMapping({ github: repository })], now().toISOString())
+      store.setRepositoryWritesEnabled(repository, true)
+      store.syncRoutines({ repository, specSha: 'abc123', entries: [{ name: 'agent-feedback', crons: ['0 7 * * *'], timeZone: 'UTC', mode: 'propose', enabled: true }], at: now().toISOString() })
+      store.openRoutineRun({ routineId: `${repository}:agent-feedback`, scheduledFor: now().toISOString(), specSha: 'abc123', at: now().toISOString() })
+      const capture = { prompts: [] as string[] }
+      const task = claimStoredRun(store)
+      const result = await workerFor(store, scanning({ candidates: [] }, capture))
+        .run(task, new AbortController().signal)
+      store.completeRoutineRun({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: now().toISOString(), evidence: 'settled' })
+
+      expect(result).toMatchObject({ _tag: 'Ok', value: { evidence: expect.stringContaining('0 signals') } })
+      expect(capture.prompts).toEqual([])
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)).toBeNull()
     }
     finally {
       store.close()

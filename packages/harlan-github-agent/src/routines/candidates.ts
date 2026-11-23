@@ -17,7 +17,7 @@ const CANDIDATE_SCHEMA = {
   properties: {
     report: {
       type: 'string',
-      description: 'The published Markdown report. Use an empty string when the Routine needs no report.',
+      description: 'The full Markdown report. The Dashboard keeps it. The public run log prints counts and issues only, never this text. Only the daily check-in publishes it. Use an empty string when the Routine needs no report.',
     },
     verdict: {
       type: ['object', 'null'],

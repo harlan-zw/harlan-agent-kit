@@ -170,6 +170,7 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Routine warning or failure | Action required | Routine result badge |
 | Routine execution | Scan completed | Routine report evidence |
 | Routine coverage detail | Coverage incomplete. | Routine result detail |
+| Routine report failed | Report failed after every attempt. | System pane Routine row, when the run log comment used up its attempts |
 | Routine collapsed attention | More | Shows the remaining Routine actions |
 | Routine expanded attention | Show less | Returns to the first six Routine actions |
 | Timeline name | Timeline | Navigation and document title |

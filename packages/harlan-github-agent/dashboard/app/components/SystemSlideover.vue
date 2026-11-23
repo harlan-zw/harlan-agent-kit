@@ -71,7 +71,9 @@ const routines = computed(() => {
       trackingUrl: routineTrackingUrl(record.routine),
       next: nextRoutineInstant(record.routine, from)?.toISOString() ?? null,
       reportPending: record.latestRun !== undefined
-        && routineReportPending(record.latestRun, writes.get(record.routine.repository) ?? false, record.latestRun.reportState === 'Published'),
+        && routineReportPending(record.latestRun, writes.get(record.routine.repository) ?? false),
+      // A Failed report never retries, so enabling writes cannot send it.
+      reportFailed: record.latestRun?.reportState === 'Failed',
     }
   })
 })
@@ -567,6 +569,9 @@ function activityLine(item: AgentActivityItem): string {
                 Report pending. <NuxtLink to="/watching" class="entity-link">
                   Enable writes in Watching.
                 </NuxtLink>
+              </p>
+              <p v-if="record.reportFailed" class="text-sm status-error">
+                Report failed after every attempt.
               </p>
               <details v-if="record.latestRun && record.latestRun.candidates.length > 0" class="text-sm">
                 <summary class="cursor-pointer text-muted">

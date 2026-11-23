@@ -124,14 +124,16 @@ export function routineTrackingUrl(routine: Routine): string | undefined {
 /**
  * Whether a finished Routine run still owes its tracking-issue report.
  *
- * The report command, not the writes flag alone, says what happened: a run
- * whose report already published must not read as pending, whatever the
- * repository writes do now.
+ * The report command, not the writes flag alone, says what happened. Only a
+ * Pending report can still publish, so only it reads as pending: enabling
+ * writes sends it. A report that used up its attempts stays Failed and never
+ * retries, so the System pane names it separately. A run that staged no
+ * report owes none.
  */
-export function routineReportPending(latestRun: RoutineRun, writesEnabled: boolean, reportPublished: boolean): boolean {
-  if (reportPublished || writesEnabled)
+export function routineReportPending(latestRun: Pick<DashboardRoutineRun, 'state' | 'reportState'>, writesEnabled: boolean): boolean {
+  if (writesEnabled || latestRun.reportState !== 'Pending')
     return false
-  return latestRun.state._tag === 'Completed' || latestRun.state._tag === 'Skipped'
+  return latestRun.state._tag !== 'Queued' && latestRun.state._tag !== 'Running'
 }
 
 /**
