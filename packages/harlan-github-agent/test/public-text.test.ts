@@ -214,6 +214,20 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes every source line of multiline HTML private details before sending a %s', async (writer) => {
+    for (const markup of ['<!-- hidden\nmore hidden\n-->', '<span\ntitle="context"\ndata-x></span>']) {
+      for (const detail of [`/home/har${markup}lan/notes/acquisition.pdf`, `notes.${markup}localhost/acquisition`]) {
+        const input = `Public introduction.\n\nRead ${detail} now.\n\nPublic conclusion.`
+        const store = journal()
+        const guard = createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} })
+        const sent = await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+
+        expect(sent).toBe(`Public introduction.\n\n${removed}\n${removed}\n${removed}\n\nPublic conclusion.`)
+        expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+      }
+    }
+  })
+
   it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes joined filesystem arguments before sending a %s and records one Incident', async (writer) => {
     const store = journal()
     const fixtureDetails = privateDetailsFor({ home: '/home/fixture', storagePath: ':memory:', checkoutRoots: ['/home/fixture/pkg'], workerHomes: ['/home/worker'], serviceOrigins: [] })

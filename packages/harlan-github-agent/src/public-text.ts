@@ -389,7 +389,7 @@ function joinedPaths(text: string): string {
  * raw text, the text as GitHub renders it, and that text without Markdown
  * formatting. Every view keeps the line breaks of `text`.
  */
-function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: PrivateDetailHit }> {
+function detailsInAligned(detect: Detectors, text: string): Array<{ line: number, hit: PrivateDetailHit }> {
   const decoded = aligned(text, decodeAll)
   const identities = aligned(decoded, decodedFindingIdentities)
   const views: Array<[Detector, string]> = [
@@ -417,6 +417,55 @@ function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: 
       starts.push(at + 1)
     return matches.map(({ index, hit }) => ({ line: lineAt(starts, index), hit }))
   })
+}
+
+/** Rendered lines retain the full source span when HTML removes line breaks. */
+function htmlLines(text: string): Array<{ text: string, first: number, last: number }> {
+  const lines: Array<{ text: string, first: number, last: number }> = []
+  let line = 0
+  let current = { text: '', first: 0, last: 0 }
+  const append = (chunk: string) => {
+    const parts = chunk.split('\n')
+    parts.forEach((part, index) => {
+      if (index > 0) {
+        lines.push(current)
+        line++
+        current = { text: '', first: line, last: line }
+      }
+      current.text += part
+      current.last = line
+    })
+  }
+  // Scan openers once. A missing comment closer hides the remaining text.
+  const markup = /<!--|<\/?[a-z][a-z\d-]*(?:\s[^<>]*)?\/?>/gi
+  let from = 0
+  for (let match = markup.exec(text); match !== null; match = markup.exec(text)) {
+    append(text.slice(from, match.index))
+    if (match[0] === '<!--') {
+      const close = text.indexOf('-->', markup.lastIndex)
+      markup.lastIndex = close === -1 ? text.length : close + 3
+    }
+    line += lineBreaks(text.slice(match.index, markup.lastIndex))
+    current.last = line
+    from = markup.lastIndex
+  }
+  append(text.slice(from))
+  lines.push(current)
+  return lines
+}
+
+/** Scan both aligned views and rendered lines whose HTML crosses source lines. */
+function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: PrivateDetailHit }> {
+  const found = detailsInAligned(detect, text)
+  for (const rendered of htmlLines(aligned(text, decodeAll))) {
+    if (rendered.first === rendered.last)
+      continue
+    for (const { hit } of detailsInAligned(detect, rendered.text)) {
+      for (let line = rendered.first; line <= rendered.last; line++)
+        found.push({ line, hit })
+    }
+  }
+  return found
 }
 
 /** The index of the line that holds `offset`, given each line's first offset in order. */

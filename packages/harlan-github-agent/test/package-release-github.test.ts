@@ -640,6 +640,40 @@ it('reads merged pull requests named in the published range for the release note
 
 const removedLine = '_One line removed: it named a private path or host._'
 
+it('refuses an approved draft when guarding the update would change existing release notes', async () => {
+  const tokens = { getToken: async () => ({ _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }
+  const original = '### Bug Fixes\n\n- document ~/notes/example.md\n'
+  let body = original
+  const report = vi.fn()
+  const writes: string[] = []
+  const source = createPackageReleaseSource({
+    publicText: { details: { paths: ['~/notes'], hosts: [] }, report },
+    repository: mapping,
+    actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
+    template: async () => '',
+    assertLease: () => {},
+    review: () => ({ _tag: 'None' }),
+    signal: new AbortController().signal,
+    now: () => new Date(),
+    createClient: clientOptions => new Octokit({ ...clientOptions, retry: { enabled: false }, throttle: { enabled: false }, request: { fetch: async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init)
+      if (request.method === 'GET')
+        return Response.json({ id: 7, body, html_url: 'https://github.com/harlan-zw/example/releases/tag/v1.0.1' })
+      body = (await request.json() as { body: string }).body
+      writes.push(body)
+      return Response.json({ id: 7 })
+    } } }),
+  })
+
+  await expect(source.applyReleaseNote({ tag: 'v1.0.1', text: 'Empty input no longer throws.' })).rejects.toMatchObject({
+    status: 409,
+    message: 'Adding this draft would change existing release notes. A maintainer must decide how to handle those notes.',
+  })
+  expect(body).toBe(original)
+  expect(writes).toEqual([])
+  expect(report).not.toHaveBeenCalled()
+})
+
 it.each([
   ['Empty input no longer throws.', 'Empty input no longer throws.'],
   ['See [notes](https://fixture-user:fixture-password@notes.localhost/docs/acquisition(final)/internal.pdf).', removedLine],
@@ -648,7 +682,8 @@ it.each([
   ['See https://notes.localhost/acquisition(final)internal for details.', removedLine],
 ])('adds a guarded draft above the generated release notes once: %s', async (text, expected) => {
   const tokens = { getToken: async () => ({ _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }
-  let body = '### Bug Fixes\n\n- handle input'
+  const original = '### Bug Fixes\n\n- handle input\n\n'
+  let body = original
   const writes: Array<{ path: string, body: unknown }> = []
   const source = createPackageReleaseSource({
     publicText: { details: { paths: ['~/notes'], hosts: ['notes.localhost'] }, report: () => {} },
@@ -677,7 +712,7 @@ it.each([
   expect(await source.applyReleaseNote({ tag: 'v1.0.1', text })).toBe('https://github.com/harlan-zw/example/releases/tag/v1.0.1')
   expect(writes).toHaveLength(1)
   expect(body.startsWith(`${expected}\n\n> Release notes prepared by [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit).`)).toBe(true)
-  expect(body.endsWith('### Bug Fixes\n\n- handle input')).toBe(true)
+  expect(body.endsWith(original)).toBe(true)
   for (const fragment of ['notes.localhost', 'fixture-', 'acquisition', 'internal', '~/notes'])
     expect(body).not.toContain(fragment)
 })
