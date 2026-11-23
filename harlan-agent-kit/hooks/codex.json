@@ -37,6 +37,12 @@
           },
           {
             "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/cf-d1-routing.sh",
+            "timeout": 10,
+            "statusMessage": "Checking D1 query tool"
+          },
+          {
+            "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/merged-branch-guard.sh",
             "timeout": 10,
             "statusMessage": "Checking for a merged branch"
