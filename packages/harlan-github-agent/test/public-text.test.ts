@@ -47,6 +47,41 @@ function journal() {
   return store
 }
 
+describe('a private detail split across lines', () => {
+  const withheld = '_This text was withheld: it named a private path or host across lines._'
+
+  it.each([
+    '<a\nhref="https://notes.\nlocalhost/example">docs</a>',
+    '<img\nsrc="https://harlan-github-agent.\nlocalhost/x.png">',
+    'Open /home/har\nlan/pkg/example now.',
+  ])('withholds the body when only the joined lines name it: %s', (text) => {
+    const redacted = redactPrivateDetails(text, details)
+
+    expect(redacted.text).toBe(withheld)
+    expect(redacted.text).not.toContain('localhost')
+    expect(redacted.hits.length).toBeGreaterThan(0)
+  })
+
+  it('keeps the parser markers of a withheld body', () => {
+    const source = '<!-- harlan-agent-kit:pr-triage -->\n<!-- reviewed-sha: abc -->\nSee <a\nhref="https://notes.\nlocalhost/example">docs</a>.'
+
+    expect(redactPrivateDetails(source, details).text).toBe(`<!-- harlan-agent-kit:pr-triage -->\n<!-- reviewed-sha: abc -->\n${withheld}`)
+  })
+
+  it('reads a withheld body as the published form of its source', () => {
+    const source = '<!-- harlan-agent-kit:pr-triage -->\nSee <a\nhref="https://notes.\nlocalhost/example">docs</a>.'
+
+    expect(isPublishedForm(redactPrivateDetails(source, details).text, source)).toBe(true)
+    expect(isPublishedForm(`<!-- other -->\n${withheld}`, source)).toBe(false)
+  })
+
+  it('keeps a body whose lines only touch at a public boundary', () => {
+    const text = 'Line one ends here\n/usr/include stays public.'
+
+    expect(redactPrivateDetails(text, details)).toEqual({ text, hits: [] })
+  })
+})
+
 describe('review findings on #754, third round', () => {
   it('removes a private URL together with its credentials', () => {
     const redacted = redactPrivateDetails('Clone https://fixture-user:pa/ss@notes.localhost/x now.', details)

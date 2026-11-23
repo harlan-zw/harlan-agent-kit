@@ -529,14 +529,56 @@ function removedLine(detect: Detectors, line: string): string {
 export function redactPrivateDetails(text: string, details: PrivateDetails): Redaction {
   const detect = detectorsFor(details)
   const found = detailsIn(detect, text)
-  if (found.length === 0)
-    return { text, hits: [] }
   const affected = new Set(found.map(({ line }) => line))
   const hits = [...new Map(found.map(({ line, hit }) => [`${line}:${hit._tag}:${hit.entry}`, hit])).values()]
-  return {
-    text: text.split('\n').map((line, index) => affected.has(index) ? `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}` : line).join('\n'),
-    hits,
-  }
+  const lines = found.length === 0
+    ? text
+    : text.split('\n').map((line, index) => affected.has(index) ? `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}` : line).join('\n')
+  const residue = joinedHits(detect, lines)
+  if (residue.length > 0)
+    return { text: withheldBody(detect, lines), hits: [...hits, ...residue] }
+  return { text: lines, hits }
+}
+
+/** The text that replaces a whole body when a private detail spans its lines. */
+const WITHHELD_BODY = '_This text was withheld: it named a private path or host across lines._'
+
+/** A line that holds only HTML comment markers, which the parsers read. */
+const MARKER_LINE = /^\s*(?:<!--[^\n]*?-->\s*)+$/
+
+/**
+ * Private details that only appear once lines join.
+ *
+ * Per-line views cannot see a host or path split by a source newline, which
+ * HTML attributes and URL parsers ignore. Every such spelling found one review
+ * at a time, so this check runs after line removal on the whole body: joined
+ * by a space, and joined directly.
+ */
+function joinedHits(detect: Detectors, text: string): PrivateDetailHit[] {
+  if (!text.includes('\n'))
+    return []
+  return [text.replaceAll(/\r?\n/g, ' '), text.replaceAll(/\r?\n/g, '')]
+    .flatMap(joined => detailsIn(detect, joined).map(({ hit }) => hit))
+}
+
+/** Keeps the marker lines that name nothing private, then one withheld line. */
+function withheldBody(detect: Detectors, text: string): string {
+  const markers = text.split('\n').filter(line => MARKER_LINE.test(line) && detailsIn(detect, line).length === 0)
+  return [...markers, WITHHELD_BODY].join('\n')
+}
+
+/** Whether `published` is the withheld form of `source`: its marker lines in order, then the withheld line. */
+function isWithheldFormOf(published: string, source: string): boolean {
+  const lines = published.split('\n')
+  if (lines.at(-1) !== WITHHELD_BODY)
+    return false
+  const markers = source.split('\n').filter(line => MARKER_LINE.test(line))
+  let from = 0
+  return lines.slice(0, -1).every((line) => {
+    const at = markers.indexOf(line, from)
+    from = at + 1
+    return at !== -1
+  })
 }
 
 /** Whether `line` is what the guard writes in place of `source`, under any deny list. */
@@ -559,7 +601,7 @@ function isRemovedFormOf(line: string, source: string): boolean {
  * other line must be equal, and the line count must not change.
  */
 export function isPublishedForm(published: string, source: string): boolean {
-  if (published === source)
+  if (published === source || isWithheldFormOf(published, source))
     return true
   const publishedLines = published.split('\n')
   const sourceLines = source.split('\n')
