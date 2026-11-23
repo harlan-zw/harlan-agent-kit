@@ -1,4 +1,5 @@
 import type { JournalStore } from './store.ts'
+import { Buffer } from 'node:buffer'
 import { basename, dirname, isAbsolute, normalize } from 'node:path'
 import { decodeHTML } from 'entities'
 
@@ -276,6 +277,27 @@ function normalise(decoded: string): string {
     .replaceAll(/(?<!:)\/{2,}/g, '/')
 }
 
+/** Resolve filesystem candidates without treating a public URL's path as a local path. */
+function normalizedPaths(text: string): string {
+  return text
+    // Quotes and code spans can hold directory names with spaces or punctuation.
+    .replaceAll(/(["'`])((?:\/|~[\w-]*\/|\$(?:HOME|\{HOME\})\/)[^\r\n]*?)\1/g, (_match, quote: string, path: string) => `${quote}${normalize(path)}${quote}`)
+    .replaceAll(/(?<![\w./:~$-])(?:\/|~[\w-]*\/|\$(?:HOME|\{HOME\})\/)[^\s<>"'`]*/g, path => normalize(path))
+}
+
+/** Finding identities are reversible transport, so detection must also inspect their decoded text. */
+const ENCODED_FINDING = /<!-- review-finding: ([a-f\d]{64}) ([\w-]+) -->/gi
+
+function withoutFindingIdentity(marker: string): string {
+  return marker.replaceAll(ENCODED_FINDING, '<!-- review-finding: $1 -->')
+}
+
+function decodedFindingIdentities(text: string): string {
+  return text.replaceAll(ENCODED_FINDING, (_marker, _fingerprint: string, identity: string) =>
+    // An identity may contain newlines. Keep its whole payload on the marker's line.
+    Buffer.from(identity, 'base64url').toString('utf8').replaceAll(/[\r\n]/g, ' '))
+}
+
 /**
  * Every URL host as a URL parser reads it, from the Service Repair ea3f8596.
  *
@@ -330,11 +352,16 @@ function detectorsFor(details: PrivateDetails): Detectors {
  */
 function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: PrivateDetailHit }> {
   const decoded = aligned(text, decodeAll)
+  const identities = aligned(decoded, decodedFindingIdentities)
   const views: Array<[Detector, string]> = [
     [detect.raw, text],
     [detect.decoded, decoded],
     [detect.decoded, aligned(decoded, normalizedAuthorities)],
     [detect.normalised, aligned(decoded, normalise)],
+    [detect.decoded, aligned(decoded, normalizedPaths)],
+    [detect.normalised, aligned(decoded, text => normalizedPaths(normalise(text)))],
+    [detect.decoded, aligned(identities, decodeAll)],
+    [detect.normalised, aligned(identities, text => normalizedPaths(normalise(decodeAll(text))))],
   ]
   return views.flatMap(([view, viewText]) => {
     const matches = (['Link', 'Path'] as const).flatMap((tag) => {
@@ -367,7 +394,12 @@ function lineAt(starts: readonly number[], offset: number): number {
 /** The line that stands in for `line`, and the markers it keeps. */
 function removedLine(detect: Detectors, line: string): string {
   const structure = LINE_STRUCTURE.exec(line)?.[0] ?? ''
-  const markers = htmlComments(line).filter(marker => detailsIn(detect, marker).length === 0)
+  const markers = htmlComments(line).flatMap((marker) => {
+    if (detailsIn(detect, marker).length === 0)
+      return [marker]
+    const fingerprintOnly = withoutFindingIdentity(marker)
+    return fingerprintOnly !== marker && detailsIn(detect, fingerprintOnly).length === 0 ? [fingerprintOnly] : []
+  })
   return [`${structure}${REMOVED_LINE}`, ...markers].join(' ')
 }
 
@@ -399,7 +431,8 @@ function isRemovedFormOf(line: string, source: string): boolean {
   const rest = line.slice(structure.length + REMOVED_LINE.length)
   const markers = htmlComments(rest)
   const sourceMarkers = htmlComments(source)
-  return markers.reduce((remainder, marker) => remainder.replace(marker, ''), rest).trim() === '' && markers.every(marker => sourceMarkers.includes(marker))
+  return markers.reduce((remainder, marker) => remainder.replace(marker, ''), rest).trim() === ''
+    && markers.every(marker => sourceMarkers.some(source => source === marker || withoutFindingIdentity(source) === marker))
 }
 
 /**

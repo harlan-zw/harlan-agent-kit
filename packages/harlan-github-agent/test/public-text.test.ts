@@ -12,7 +12,7 @@ import { createGitHubIssuePublisher } from '../src/github.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
 import { createPublicTextGuard, encodeEntities, isPublishedForm, privateDetailsFor, publicBody, redactPrivateDetails } from '../src/public-text.ts'
 import { ok } from '../src/result.ts'
-import { mirrorReviewFindingThreads, reviewFindingThreadBody, reviewFindingThreadFingerprint } from '../src/review-finding-threads.ts'
+import { mirrorReviewFindingThreads, reviewFindingThreadBody, reviewFindingThreadFingerprint, reviewFindingThreadMarker } from '../src/review-finding-threads.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -74,6 +74,24 @@ describe('review findings on #754, third round', () => {
 })
 
 describe('redactPrivateDetails', () => {
+  it.each([
+    '/home/harlan/public/../notes/private-evidence.md',
+    '/home/harlan/public/a/../../notes/private-evidence.md',
+    '~/public/../notes/private-evidence.md',
+    '~harlan/public/../notes/private-evidence.md',
+    '$HOME/public/../notes/private-evidence.md',
+    `\${HOME}/public/../notes/private-evidence.md`,
+    '/home/harlan/public/%2e%2e/notes/private-evidence.md',
+    '/home/harlan/public//./../notes/private-evidence.md',
+    '"/home/harlan/public directory/../notes/private-evidence.md"',
+    '/home/harlan/public(copy)/../notes/private-evidence.md',
+  ])('removes a diagnostic path that resolves through parent segments: %s', (path) => {
+    expect(redactPrivateDetails(`Failed to read ${path}`, details)).toEqual({
+      text: removed,
+      hits: [{ _tag: 'Path', entry: path.includes('/home/harlan/') ? '/home/harlan/notes' : `${path.split('/')[0]}/notes` }],
+    })
+  })
+
   it.each([
     'Ran /home/harlan/pkg/harlan-agent-kit.fix-x/packages/a/src/index.ts.',
     'Tilde ~/pkg/example.fix-x/src/a.ts',
@@ -194,6 +212,27 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('guards encoded finding identities and parent paths for %s', async (writer) => {
+    const store = journal()
+    const finding: ReviewFinding = {
+      _tag: 'Logged',
+      impact: 42,
+      summary: 'The cache leaks',
+      nextAction: 'Reset the cache.',
+      details: { fingerprint: 'c'.repeat(64), identity: '/home/harlan/public/../notes/private-evidence.md', location: { path: 'src/cache.ts', line: 3 }, proof: 'Two tests share one cache.' },
+    }
+    const source = reviewFindingThreadBody(finding, reviewHead)
+    const diagnostic = 'Failed to read /home/harlan/public/../notes/private-evidence.md'
+    const input = `${source}\n${writer === 'review' ? encodeEntities(diagnostic) : diagnostic}`
+    const sent = await publicBody(createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} }), { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async body => body)
+
+    expect(reviewFindingThreadMarker(sent)).toMatchObject({ fingerprint: finding.details.fingerprint, identity: null })
+    expect(sent).not.toContain('private-evidence')
+    expect(sent).toContain(removed)
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+    expect(isPublishedForm(sent, input)).toBe(true)
+  })
+
   it.each([
     ['create', true],
     ['update', true],
@@ -605,6 +644,56 @@ ${line}`
 }
 
 describe('a review comment on a line', () => {
+  it.each(['~/notes/private-evidence.md', '/home/harlan/public/../notes/private-evidence.md', 'https://notes.localhost/private-evidence', 'context\n~/notes/private-evidence.md'])('protects an identity on inline creation and later edits: %s', async (identity) => {
+    const store = journal()
+    const written: string[] = []
+    const write = async (input: { body: string }) => {
+      written.push(input.body)
+      return { data: { id: 101, body: input.body } }
+    }
+    const client = { rest: { pulls: {
+      createReviewComment: write,
+      updateReviewComment: write,
+      getReviewComment: async () => ({ data: { id: 101, body: written[0], user: { login: 'harlan-github-agent[bot]' } } }),
+    } } } as unknown as Octokit
+    const source = agentSource(client, store)
+    const finding: ReviewFinding = {
+      _tag: 'Logged',
+      impact: 42,
+      summary: 'The cache leaks',
+      nextAction: 'Reset the cache.',
+      details: { fingerprint: 'c'.repeat(64), identity, location: { path: 'src/cache.ts', line: 3 }, proof: 'Two tests share one cache.' },
+    }
+    const body = reviewFindingThreadBody(finding, reviewHead)
+    const signal = new AbortController().signal
+
+    expect(await source.postReviewFindingComment(repositoryMapping(), 24, { headSha: reviewHead, path: 'src/cache.ts', line: 3, body }, signal, () => ok(undefined))).toEqual(ok(expect.objectContaining({ _tag: 'Posted' })))
+    expect(await source.editReviewFindingComment!(repositoryMapping(), { id: 101, body: written[0]! }, `${body}\nPublic update.`, signal, () => ok(undefined), 24)).toEqual(ok(expect.objectContaining({ id: 101 })))
+
+    expect(written).toHaveLength(2)
+    for (const sent of written) {
+      expect(reviewFindingThreadMarker(sent)).toMatchObject({ fingerprint: finding.details.fingerprint, identity: null, logged: true })
+      expect(sent).not.toContain('private-evidence')
+      expect(sent).not.toContain(identity)
+    }
+    expect(written[1]).toContain('Public update.')
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', occurrences: 1 })])
+  })
+
+  it('preserves a public identity and does not report a private detail', () => {
+    const finding: ReviewFinding = {
+      _tag: 'Logged',
+      impact: 42,
+      summary: 'The cache leaks',
+      nextAction: 'Reset the cache.',
+      details: { fingerprint: 'c'.repeat(64), identity: 'cache-leak', location: { path: 'src/cache.ts', line: 3 }, proof: 'Two tests share one cache.' },
+    }
+    const body = reviewFindingThreadBody(finding)
+
+    expect(redactPrivateDetails(body, details)).toEqual({ text: body, hits: [] })
+    expect(reviewFindingThreadMarker(body)?.identity).toBe('cache-leak')
+  })
+
   it('stays the Service thread for its finding after its heading line was removed', async () => {
     const guard = { details, report: () => {} }
     const threads: ReviewFindingThread[] = []
