@@ -274,7 +274,7 @@ The dot says who holds the work. ⚪ means the agent has it. 🟢 means READY. �
 Write outcome words in sentence case: Ready, Pending, Blocked, Queued, Reviewing, Repair, Stuck, Review skipped, Approval needed, Merged, Closed.
 Never restate what GitHub's merge box shows, such as CI status or a merge conflict. Name a failed gate only when it is the only reason for Blocked.
 Say what only the Review knows: `Checked … Not checked: …`, what Repair fixed, the issues to fix, and the follow-ups.
-Fold follow-ups. List each with its score, title, location, proof, and fix. Count Logged findings below 40/100 and never list them or thread them.
+Fold follow-ups and group them by Finding scope. List each with its score, title, location, proof, and fix. Count Logged findings below 40/100 and never list them or thread them.
 When a follow-up's thread opens beside the code, keep its row and link the thread in place of the control. A thread whose finding drops below 40/100 loses its control.
 A fixed thread shows its fixing commit above its struck title and drops the merge label. A follow-up a rerun promotes to an issue rewrites its thread as an issue that blocks merge.
 
@@ -346,15 +346,45 @@ When required CI fails on the current base of an owned repository, dispatch a se
 
 Post a Logged Review finding beside its line in the pull request diff.
 Keep every listed finding in the canonical comment. A finding with an accepted line links its thread there instead of offering a control.
-On an eligible open pull request, offer a Repair checkbox with signed webhooks.
 Subscribe to Issue comment and Pull request review comment deliveries.
-Use Resolve conversation to dismiss an inline finding. The canonical comment offers Dismiss for findings without an accepted line.
+Use Resolve conversation to dismiss an inline finding. The canonical comment offers Dismiss beside a Repair checkbox for findings without an accepted line.
 Accept only Harlan's isolated checkbox edit on the published comment. Bind it to the head commit, base branch, and finding identity.
+
+### Fix before merge
+
+The controller computes each Logged finding's Finding scope when it records the Review run. Never ask an Agent for it.
+Read the exact `base...head` comparison the Review covered. A finding is `change` when its line is an added line in the head diff. It is `existing` when its file or line is outside the added lines.
+Leave the scope unknown when the line is missing, the file is removed or unreadable, the path is a renamed file's old path, or the comparison is unavailable or cut.
+Store the scope on the finding. A run recorded without one reads as unknown, so old runs keep rendering.
+
+Group the follow-up fold by scope: In this change, Already in the real base branch, and Not matched to the diff.
+Print a group's tick sentence only beside a control. Offer controls only with signed webhooks.
+Route each tick on an open pull request by scope:
+
+| Finding scope | Tick on an open pull request |
+| --- | --- |
+| `change`, and Repair may write the head | Repair fixes it on this branch before merge. |
+| `change`, and Repair may not write the head | File it as an issue. |
+| `existing` | File it as an issue. |
+| Unknown | File it as an issue. Never route an unknown scope to Repair. |
+
+Accept a Repair checkbox only when its finding still routes to Repair. Accept an issue checkbox on any open pull request that offers controls.
 Persist each selection before waking Repair. Reject stale selections and duplicate work.
 Run scoped Repair on the current pull request branch. Require a failing regression test before editing.
 Preserve pending selections across a confirmed scoped Repair push on the same branch. A contributor push or retarget revokes their authority.
 Resolve the Agent's finding thread after a published fix and a fresh Review that clears the finding. Keep disputed or failed work visible.
-After merge, selections made for the default branch still run separately and open linked pull requests for confirmed fixes.
+
+Stage each issue request with its title and body from the stored finding before any GitHub write.
+Give the issue the finding title, the proof, the fix, the code link at the reviewed head, a link back to the pull request, and the automated footer.
+Label it `harlan-agent-follow-up`, so observation keeps the App-authored issue and Issue triage reads it without an Approval.
+Deduplicate one finding's issue by pull request and fingerprint. Before each create, find an open issue by the fingerprint marker, because a lost reply may have filed it.
+Retry a refused create. Stop after a permanent refusal or five attempts. Show the issue link, or the refusal, beside the finding.
+
+After merge, offer one `File these as one issue` checkbox on the Merged comment. Never offer a checkbox per finding.
+It files every unfixed follow-up as one issue: listed, with no Repair selection, issue, or Dismissal, and no resolved thread.
+Deduplicate that issue by pull request and head. Show its link in place of the checkbox.
+Offer it only when the latest Review covered the merged head.
+A selection made before merge for the default branch still runs after merge and opens a linked pull request for a confirmed fix. No new tick creates one.
 
 ## Package releases
 

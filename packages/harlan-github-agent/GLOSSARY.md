@@ -72,6 +72,8 @@ did not cover it.
 | Running label | `harlan-agent-running` label | GitHub | One per Item with a Running Task other than Review or Repair | none |
 | Review finding | `review_runs.findings` | Adversarial review | N per Review run | issue |
 | Logged finding | `review_runs.findings`, `_tag = Logged` | Adversarial review | N per Review run, impact 80 or below | follow-up |
+| Finding scope | `details.scope` on a Logged finding | Controller | One per Logged finding, or none when unknown | In this change, Already in the base branch |
+| Follow-up issue | `follow_up_issues` | Controller | One per pull request and finding, or one per merged head | issue |
 | Status line | first visible line of every comment | Controller | One per comment | none |
 | Stuck | canonical comment Status line | Controller | One comment state | Stuck |
 | Auto merge | `harlan-agent-auto-merge` label | GitHub | One per pull request | auto-merge |
@@ -725,6 +727,24 @@ One Review finding at impact 80 or below. It never blocks Review or starts autom
 Comments call it a follow-up. They fold follow-ups under the verdict and list each one with its score, title, location, proof, and fix. A follow-up below 40/100 is counted and never listed or threaded.
 
 Use follow-up in comments and Logged finding in code and the Journal. Do not use nit, suggestion, or optional follow-up.
+
+A tick on a follow-up routes by its Finding scope: Repair on this branch before merge, or a Follow-up issue. Do not use after-merge follow-up pull request; a new tick never opens one.
+
+### Finding scope
+
+Where one Logged finding sits in the diff the Review covered. `change` means a line this pull request added or changed. `existing` means code already on the base branch.
+
+The controller computes it from the exact base and head comparison when it records the Review run. An Agent never supplies it. Unknown means the diff could not place the line, and every run recorded before Finding scope existed reads as unknown.
+
+Comments group follow-ups as In this change, Already in the base branch by its real name, and Not matched to the diff. An unknown scope never routes a tick to Repair.
+
+Do not call it the Auto merge scope, which is a repository policy.
+
+### Follow-up issue
+
+The issue a follow-up tick files, labelled `harlan-agent-follow-up`. Issue triage picks it up without an Approval, because Harlan's tick asked for it.
+
+One finding gets at most one per pull request, matched by its fingerprint. On a merged pull request, one `File these as one issue` tick files one issue for every unfixed follow-up of the reviewed head.
 
 ### Status line
 

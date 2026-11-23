@@ -182,6 +182,16 @@ A pull request gets 3 Repair rounds per contributor commit. A contributor push s
 
 If Repair stops, the canonical review comment changes to `BLOCKED`. It lists every finding and next action.
 
+A Logged finding at impact 80 or below never blocks merge. The canonical comment folds it as a follow-up.
+The controller reads the reviewed diff and groups follow-ups: In this change, Already in the base branch, and Not matched to the diff.
+With signed webhooks, each follow-up gets one checkbox. A tick routes by who owns the fix:
+
+- In this change, on a head Repair may write: Repair fixes it on this branch before merge.
+- Every other follow-up: the service files one issue, labelled `harlan-agent-follow-up`, and Issue triage picks it up.
+
+A second tick never files a second issue. The comment shows the issue link beside the follow-up.
+After merge, the Merged comment offers one `File these as one issue` checkbox for every unfixed follow-up. It never opens a pull request per finding.
+
 History stores each completed Review duration and Agent provider token usage. Older runs show usage as unavailable.
 
 If default branch CI already fails, Repair leaves the reviewed pull request unchanged. One Baseline repair Agent fixes that exact default branch commit in a separate pull request.
