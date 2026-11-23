@@ -51,7 +51,7 @@ The one NuxtSEO write allowed is the post-deploy `page scan` in step 5.
 Use controller ownership bodies for private issue and pull request checks. Never obtain worker credentials or bypass the public wrapper.
 Read each body's coverage tag. A truncated list or body does not establish complete duplicate checks.
 Missing closed history blocks checks for matching prior fixes or regressions.
-It does not block a verified new cause after duplicate checks against open work pass.
+Evidence limits never block a Candidate for a verified new cause. Name the unchecked scope in its claim.
 Report coverage for open work and closed fixes separately. Poor measurements alone still do not establish a repository cause.
 
 ### What files an issue

@@ -111,13 +111,19 @@ const candidate = {
 }
 
 describe('building the scan prompt', () => {
-  it.each(['seo-review', 'vitals-review', 'ci-review'] as const)('requests the appropriate private evidence for %s', async (name) => {
+  it.each(['seo-review', 'vitals-review', 'daily-checkin', 'ci-review'] as const)('requests the appropriate private evidence for %s', async (name) => {
     const store = openJournalStore(':memory:')
     try {
       seed(store, name)
       const capture = { prompts: [] as string[] }
       const scopes: Array<string | undefined> = []
-      const provider = scanning(name === 'vitals-review' ? { report: 'No findings.', fieldFindings: [], labFindings: [] } : { report: 'No findings.', candidates: [] }, capture)
+      const answers = {
+        'seo-review': { report: 'No findings.', candidates: [] },
+        'vitals-review': { report: 'No findings.', fieldFindings: [], labFindings: [] },
+        'daily-checkin': { report: 'No findings.', candidates: [], verdict: { severity: 'GREEN', coverage: 'complete' } },
+        'ci-review': { report: 'No findings.', candidates: [] },
+      }
+      const provider = scanning(answers[name], capture)
       const worker = createRoutineScanWorker({
         github: { getIssue: async (_repository, number) => ok(issueItem({ number })) },
         now,
@@ -125,6 +131,7 @@ describe('building the scan prompt', () => {
         logger: { error: () => undefined, info: () => undefined },
         runtime: () => ({ profile: CODEX_AGENT_PROFILE, provider }),
         workspaces: { prepareRoutine: async () => ok({ path: '/tmp/routine', baseSha: 'abc123', headSha: 'abc123', defaultBranchSha: 'abc123' }) },
+        writeCheckinEvidence: async () => undefined,
         githubEvidence: { collect: async (_mapping, _signal, _jobs, _branch, evidenceScope) => {
           scopes.push(evidenceScope)
           return collectRoutineGitHubEvidence({ repository: 'harlan-zw/example', now, ...(evidenceScope === undefined ? {} : { evidenceScope }), read: async path => path.includes('/issues?')
