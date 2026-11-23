@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { candidateIssueBody, candidateIssueTitle } from '../src/candidate-issue-controller.ts'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { createGitHubIssuePublisher } from '../src/github.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
@@ -175,13 +176,6 @@ describe('redactPrivateDetails', () => {
 
     expect(redactPrivateDetails('See ~/notes/a.md.\nSee /root/scratch/b.log.', rootHome).text).toBe(`${removed}\n${removed}`)
   })
-
-  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a', '&#96;', '//', '~/notes/a ', '\n', 'a\n', '~/notes/a\n'])('redacts 65,536 characters of %j in linear time', (unit) => {
-    const text = unit.repeat(Math.ceil(65_536 / unit.length)).slice(0, 65_536)
-    const started = performance.now()
-    redactPrivateDetails(text, details)
-    expect(performance.now() - started).toBeLessThan(100)
-  })
 })
 
 describe('isPublishedForm', () => {
@@ -201,6 +195,136 @@ describe('isPublishedForm', () => {
 
 describe('the publish boundary', () => {
   it.each([
+    ['create', true],
+    ['update', true],
+    ['create', false],
+    ['update', false],
+  ] as const)('guards a private title with a public body on %s, accepted: %s', async (operation, accepted) => {
+    const store = journal()
+    const sent: Array<{ title: string, body: string }> = []
+    const write = async (input: { title: string, body: string }) => {
+      sent.push({ title: input.title, body: input.body })
+      if (!accepted)
+        throw new Error('Fixture refuses the write.')
+      return { data: { number: 24, html_url: 'https://github.com/harlan-zw/example/issues/24' } }
+    }
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { create: write, update: write } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ log: () => {}, details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+    const input = { repository: repositoryMapping(), title: 'See https://%6eotes%2elocalhost:443', body: 'Public evidence.' }
+
+    const result = operation === 'create' ? await publisher.createIssue(input) : await publisher.updateIssue({ ...input, issueNumber: 24 })
+
+    expect(result._tag).toBe(accepted ? 'Ok' : 'Err')
+    expect(sent).toEqual([{ title: removed, body: input.body }])
+    expect(store.listIncidents()).toEqual(accepted
+      ? [expect.objectContaining({ kind: 'private_detail', occurrences: 1, message: expect.stringContaining('notes.localhost') })]
+      : [])
+  })
+
+  it.each([
+    '[reference](https://%70rivate%2eexample:443)',
+    '[reference](//%70rivate%2eexample:8443)',
+    '[reference](https://user:password@%70rivate%2eexample:443)',
+    '[reference](https://private。example:443)',
+    '[reference](https://%70rivate%2eexample:443 "title")',
+    '[reference](<https://%70rivate%2eexample:443>)',
+    '[reference]: https://%70rivate%2eexample:443',
+  ])('removes encoded hosts with ports through a publisher: %s', async (input) => {
+    const store = journal()
+    const sent: string[] = []
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { createComment: async (request: { body: string }) => {
+        sent.push(request.body)
+        return { data: { id: 7 } }
+      } } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ log: () => {}, details: { paths: [], hosts: ['private.example'] }, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+    const publicLine = '[public](https://example.com:443/%70rivate%2eexample)'
+
+    expect(await publisher.createComment({ repository: repositoryMapping(), issueNumber: 24, body: `${input}\n${publicLine}` })).toEqual(ok({ id: 7 }))
+    expect(sent).toEqual([`${removed}\n${publicLine}`])
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ message: expect.stringContaining('private.example') })])
+  })
+
+  it.each(['create', 'update'] as const)('guards a Candidate claim in both title and body on issue %s', async (operation) => {
+    const store = journal()
+    const sent: Array<{ title: string, body: string }> = []
+    const write = async (input: { title: string, body: string }) => {
+      sent.push({ title: input.title, body: input.body })
+      return { data: { number: 24, html_url: 'https://github.com/harlan-zw/example/issues/24' } }
+    }
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { create: write, update: write } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ log: () => {}, details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+    const candidate = {
+      id: 'candidate-1',
+      routineId: 'routine-1',
+      runId: 'run-1',
+      fingerprint: 'fixture',
+      title: ' ',
+      claim: 'Read ~/notes/private-evidence.md',
+      target: 'src/cache.ts',
+      verification: 'pnpm test',
+      estimatedChangedFiles: 1,
+      result: { _tag: 'Proposed', pullRequest: null } as const,
+      createdAt: '2026-11-22T06:05:00.000Z',
+      updatedAt: '2026-11-22T06:05:00.000Z',
+    }
+    const input = {
+      repository: repositoryMapping(),
+      title: candidateIssueTitle(candidate),
+      body: candidateIssueBody(candidate, { repository: 'harlan-zw/example', name: 'pr-triage', scheduledFor: '2026-11-22T06:00:00.000Z' }),
+    }
+
+    const result = operation === 'create' ? await publisher.createIssue(input) : await publisher.updateIssue({ ...input, issueNumber: 24 })
+
+    expect(result._tag).toBe('Ok')
+    expect(sent).toEqual([{
+      title: removed,
+      body: input.body.replace(candidate.claim, removed),
+    }])
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', occurrences: 1 })])
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes normalized Markdown hosts before sending a %s', async (writer) => {
+    const privateLines = [
+      String.raw`[evidence](https://notes\.localhost/fixture.md)`,
+      String.raw`[evidence](//notes\.localhost/fixture.md)`,
+      String.raw`[ref]: <https://sub.notes\.localhost/fixture.md>`,
+      '_notes.localhost_',
+      '__harlan-github-agent.localhost__',
+      '___hogwild.tail1234.ts.net___',
+      '[evidence](https://%6eotes%2elocalhost/fixture.md)',
+      '[evidence](https://%6eotes%2elocalhost:443)',
+      '[evidence](//%6eotes%2elocalhost:8443)',
+      '[evidence](https://notes。localhost/fixture.md)',
+      String.raw`[evidence](https://fixture-user:fixture-password@notes\.localhost/fixture.md)`,
+      String.raw`<!-- evidence: https://notes\.localhost/fixture.md -->`,
+    ]
+    const publicLines = [
+      String.raw`[public](https://example.com/notes\.localhost/fixture.md)`,
+      String.raw`[public](https://notes\.localhost.example.com/fixture.md)`,
+      '[public](https://%6eotes%2elocalhost.example.com:443)',
+      '[public](https://example.com:443/%6eotes%2elocalhost)',
+      '_notes.localhost.example.com_',
+    ]
+    const input = [...privateLines, ...publicLines].join('\n')
+    const sent: string[] = []
+
+    await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async (body) => {
+      sent.push(body)
+    })
+
+    expect(sent).toEqual([[...privateLines.map(() => removed), ...publicLines].join('\n')])
+  })
+
+  it.each([
     '__~/notes/fixture.md__',
     '_$HOME/scratch/fixture.log_',
     '__/home/agent/fixture.log__',
@@ -214,31 +338,13 @@ describe('the publish boundary', () => {
         sent.push(request.body)
         return { data: { id: 7 } }
       } } } }) as unknown as Octokit,
-      publicText: createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      publicText: createPublicTextGuard({ log: () => {}, details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
       tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
     })
 
     expect(await publisher.createComment({ repository: repositoryMapping(), issueNumber: 24, body: input })).toEqual(ok({ id: 7 }))
 
     expect(sent).toEqual([removed])
-    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
-  })
-
-  it('removes a private path from a filed issue title, as from its body', async () => {
-    const store = journal()
-    const sent: Array<{ title: string, body: string }> = []
-    const publisher = createGitHubIssuePublisher({
-      createClient: () => ({ rest: { issues: { create: async (request: { title: string, body: string }) => {
-        sent.push({ title: request.title, body: request.body })
-        return { data: { number: 31, html_url: 'https://github.com/harlan-zw/example/issues/31' } }
-      } } } }) as unknown as Octokit,
-      publicText: createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
-      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
-    })
-
-    expect(await publisher.createIssue({ repository: repositoryMapping(), title: 'The cache at ~/notes/fixture.md leaks', body: 'Public proof.' })).toEqual(ok({ number: 31, url: 'https://github.com/harlan-zw/example/issues/31' }))
-
-    expect(sent).toEqual([{ title: removed, body: 'Public proof.' }])
     expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
   })
 
@@ -250,7 +356,7 @@ describe('the publish boundary', () => {
         sent.push(request.body)
         return { data: { id: 7 } }
       } } } }) as unknown as Octokit,
-      publicText: createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      publicText: createPublicTextGuard({ log: () => {}, details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
       tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
     })
 
@@ -329,7 +435,7 @@ describe('the publish boundary', () => {
 
   it('records no Incident for a write GitHub rejects', async () => {
     const store = journal()
-    const guard = createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z') })
+    const guard = createPublicTextGuard({ log: () => {}, details, store, now: () => new Date('2026-11-22T06:05:00.000Z') })
 
     await expect(publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'review comment' }, 'See ~/notes/a.md.')
       .send(() => Promise.reject(new Error('Validation Failed')))).rejects.toThrow('Validation Failed')
@@ -344,7 +450,7 @@ describe('the publish boundary', () => {
         sent.push(input.body)
         return { data: { id: 7 } }
       } } } }) as unknown as Octokit,
-      publicText: createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      publicText: createPublicTextGuard({ log: () => {}, details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
       tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
     })
     const paths = ['pkg', 'sites'].flatMap(root => ['/home/harlan', '~', '$HOME'].map(home => `${home}/${root}/example-worktree`))
@@ -478,7 +584,7 @@ function agentSource(client: Octokit, store: ReturnType<typeof journal>, sourceD
     actorLogin: () => 'harlan-github-agent[bot]',
     createClient: () => client,
     ownAppId: 98114,
-    publicText: createPublicTextGuard({ details: sourceDetails, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+    publicText: createPublicTextGuard({ log: () => {}, details: sourceDetails, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
     tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
   })
 }
@@ -584,7 +690,7 @@ describe('review findings on #754, fourth round', () => {
       } },
     } as unknown as Octokit
 
-    await agentSource(client, store, restarted).editReviewFindingComment!(repositoryMapping(), { id: 101, body: published }, `${thread}\n\n✅ Addressed in commit [abc1234](https://github.com/harlan-zw/example/commit/abc1234)`, new AbortController().signal, () => ok(undefined))
+    await agentSource(client, store, restarted).editReviewFindingComment!(repositoryMapping(), { id: 101, body: published }, `${thread}\n\n✅ Addressed in commit [abc1234](https://github.com/harlan-zw/example/commit/abc1234)`, new AbortController().signal, () => ok(undefined), 24)
 
     expect(written).toHaveLength(1)
     expect(written[0]).toContain(removed)
@@ -612,13 +718,6 @@ describe('review findings on #754, fourth round', () => {
 
     expect(redactPrivateDetails('Cache at /worker-data/cache.', topLevel).text).toBe(removed)
     expect(redactPrivateDetails('Files in /home/other and /tmp/x stay.', topLevel).text).toBe('Files in /home/other and /tmp/x stay.')
-  })
-
-  it.each(['](https://notes.localhost/a', '[x](https://notes.localhost/a)', '](https://notes.localhost/a)\n'])('redacts 65,536 characters of repeated private links %j in linear time', (unit) => {
-    const text = unit.repeat(Math.ceil(65_536 / unit.length)).slice(0, 65_536)
-    const started = performance.now()
-    redactPrivateDetails(text, details)
-    expect(performance.now() - started).toBeLessThan(100)
   })
 })
 
@@ -655,11 +754,11 @@ describe('ported from the Service Repair 73c25d86', () => {
     const directory = mkdtempSync(join(tmpdir(), 'private-details-'))
     const path = join(directory, 'journal.sqlite')
     const first = openJournalStore(path)
-    createPublicTextGuard({ details, store: first, now: () => new Date() })
+    createPublicTextGuard({ log: () => {}, details, store: first, now: () => new Date() })
     first.close()
     const second = openJournalStore(path)
     try {
-      const guard = createPublicTextGuard({ details: { paths: [], hosts: ['other.example'] }, store: second, now: () => new Date() })
+      const guard = createPublicTextGuard({ log: () => {}, details: { paths: [], hosts: ['other.example'] }, store: second, now: () => new Date() })
       const sent: string[] = []
       await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer }, 'https://hogwild.tail1234.ts.net/evidence\n~/notes/private.pdf').send(async (body) => {
         sent.push(body)
@@ -720,5 +819,150 @@ describe('ported from the Service Repair 73c25d86', () => {
       sent.push(body)
     })
     expect(sent).toEqual([`${removed}\n${removed}\n).`])
+  })
+})
+
+describe('spellings GitHub renders, review findings on #754, final round', () => {
+  it.each([
+    ['emphasis inside a path', 'Open ~/**notes**/fixture.md now.'],
+    ['underscore emphasis around a path', 'Open __~/notes/fixture.md__ now.'],
+    ['a bold path', 'Open **~/notes/fixture.md** now.'],
+    ['strikethrough around a path', 'Open ~~~/notes/fixture.md~~ now.'],
+    ['an inline tag inside a path', 'Open ~/<b>notes</b>/fixture.md now.'],
+    ['backticks inside a path', 'Open ~/`notes`/fixture.md now.'],
+    ['an entity-encoded host in a link destination', 'Read [notes](https://notes&#46;localhost/report.md) now.'],
+    ['a named entity in a host', 'Read https://notes&period;localhost/report.md now.'],
+    ['a hex entity in a path', 'Open &#x7E;/notes/fixture.md now.'],
+    ['a named entity slash in a path', 'Open &sol;home&sol;agent&sol;cache now.'],
+    ['a percent-encoded path', 'Open %7E/notes/fixture.md now.'],
+    ['a percent-encoded slash in a path', 'Open %2Fhome%2Fagent%2Fcache now.'],
+    ['a percent-encoded host', 'Read https://notes%2Elocalhost/report.md now.'],
+    ['a zero-width character inside a host', 'Read https://notes\u200B.localhost/report.md now.'],
+    ['an encoded zero-width character inside a host', 'Read https://notes&#8203;.localhost/report.md now.'],
+    ['a backslash escape inside a path', 'Open \\~/notes\\/fixture.md now.'],
+    // The braced variable is the spelling under test, not a template.
+    // eslint-disable-next-line no-template-curly-in-string
+    ['a braced home variable', 'Open ${HOME}/scratch/run.log now.'],
+    ['a tilde with the user name', 'Open ~harlan/scratch/run.log now.'],
+    ['an upper-case host', 'Read https://NOTES.LOCALHOST/report.md now.'],
+  ])('removes the line for %s', (_name, line) => {
+    const redacted = redactPrivateDetails(line, details)
+
+    expect(redacted.text).toBe(removed)
+    expect(redacted.hits).not.toHaveLength(0)
+  })
+
+  it.each([
+    'Set the key in ~/.config/opencode/opencode.json.',
+    'The sibling /home/agent_x/cache stays.',
+    'Paths like ~/scratchpad stay.',
+    'The host notes.localhost.example.com stays.',
+    'Encode 100% of the input with &amp; escapes.',
+  ])('keeps a public line after normalising it: %s', (line) => {
+    expect(redactPrivateDetails(line, details)).toEqual({ text: line, hits: [] })
+  })
+
+  it('keeps line numbers when an entity decodes to a line break', () => {
+    expect(redactPrivateDetails('First &#10; line\nOpen ~/notes/a.md\nLast line', details).text)
+      .toBe(`First &#10; line\n${removed}\nLast line`)
+  })
+
+  it('keeps the accepted write when the Incident cannot be recorded', async () => {
+    const logged: string[] = []
+    const guard = createPublicTextGuard({
+      details,
+      store: { recordIncident: () => { throw new Error('database is locked') }, retainPrivateDetails: value => value },
+      now: () => new Date('2026-11-22T06:05:00.000Z'),
+      log: message => logged.push(message),
+    })
+
+    expect(await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'comment' }, 'See ~/notes/a.md.').send(async () => 'written')).toBe('written')
+    expect(logged).toEqual([expect.stringContaining('database is locked')])
+  })
+
+  it('names the issue number GitHub returns, and removes a private title', async () => {
+    const store = journal()
+    const created: Array<{ title: string, body: string }> = []
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { create: async (input: { title: string, body: string }) => {
+        created.push(input)
+        return { data: { number: 812, html_url: 'https://github.com/harlan-zw/example/issues/812' } }
+      } } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z'), log: () => {} }),
+      tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+
+    expect(await publisher.createIssue({ repository: repositoryMapping(), title: 'Fix the cache in ~/pkg/example/src', body: 'The cache in ~/pkg/example/src leaks.' })).toEqual(ok({ number: 812, url: 'https://github.com/harlan-zw/example/issues/812' }))
+    expect(created).toEqual([expect.objectContaining({ title: removed, body: removed })])
+    expect(store.listIncidents().map(incident => incident.message)).toEqual([expect.stringContaining('harlan-zw/example#812')])
+  })
+})
+
+describe('rendered views stay aligned and complete', () => {
+  it('keeps every view aligned with the source when a tag spans two lines', () => {
+    expect(redactPrivateDetails('if a <b\n> quoted\nOpen ~/**notes**/a.md', details).text).toBe(`if a <b\n> quoted\n${removed}`)
+  })
+
+  it.each(['__/srv/agent_home/cache__', '_/srv/agent_home_', '/srv/**agent_home**/cache'])('removes a root that holds a formatting character: %s', (line) => {
+    const withUnderscore = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: ['/srv/agent_home'], serviceOrigins: [] })
+
+    expect(redactPrivateDetails(line, withUnderscore).text).toBe(removed)
+  })
+
+  it.each([
+    ['an entity-shaped suffix that never decodes', 'Open ~/notes&x; now.'],
+    ['an isolate control inside a host', 'Read https://notes⁦.localhost now.'],
+    ['a variation selector inside a path', 'Open ~/no️tes/a.md now.'],
+    ['link brackets inside a path', 'Open ~/[notes](https://example.com)/a.md now.'],
+    ['a tag with long attributes inside a path', `Open ~/<span title="${'x'.repeat(300)}">notes</span>/a.md now.`],
+    ['a percent-encoded zero-width character in a host', 'Read https://notes%E2%80%8B.localhost now.'],
+    ['a dot segment in a path', 'Open ~/./notes/a.md now.'],
+    ['a doubled slash in a path', 'Open /home/harlan//pkg/example now.'],
+    ['shell quoting around a home variable', 'Open "$HOME"/notes/a.md now.'],
+    ['full-width letters in a host', 'Read https://ｎｏｔｅｓ.localhost now.'],
+    ['an ideographic full stop in a host', 'Read https://notes。localhost now.'],
+  ])('removes the line for %s', (_name, line) => {
+    expect(redactPrivateDetails(line, details).text).toBe(removed)
+  })
+
+  it('removes the line for an inline HTML comment inside a path, and keeps the comment as a marker', () => {
+    expect(redactPrivateDetails('Open ~/no<!-- -->tes/a.md now.', details).text).toBe(`${removed} <!-- -->`)
+  })
+})
+
+/** The fastest of five runs, in milliseconds, so one slow run on a busy runner cannot decide. */
+function fastest(run: () => void): number {
+  let best = Number.POSITIVE_INFINITY
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const started = performance.now()
+    run()
+    best = Math.min(best, performance.now() - started)
+  }
+  return best
+}
+
+/**
+ * Asserts that redaction scales linearly, whatever the runner's speed.
+ *
+ * Four times the input costs about 4 times the work when linear and 16 times
+ * when quadratic, so a ratio below 10 separates them. The absolute ceiling is
+ * only a hang guard.
+ */
+function expectLinear(build: (size: number) => string): void {
+  const small = build(16_384)
+  const large = build(65_536)
+  const smallTime = fastest(() => redactPrivateDetails(small, details))
+  const largeTime = fastest(() => redactPrivateDetails(large, details))
+  expect(largeTime).toBeLessThan(2_000)
+  expect(largeTime / Math.max(smallTime, 1)).toBeLessThan(10)
+}
+
+describe('redaction time', () => {
+  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a', '&#96;', '//', '~/notes/a ', '\n', 'a\n', '~/notes/a\n', '](https://notes.localhost/a', '[x](https://notes.localhost/a)', '](https://notes.localhost/a)\n'])('scales linearly on repeated %j', (unit) => {
+    expectLinear(size => unit.repeat(Math.ceil(size / unit.length)).slice(0, size))
+  })
+
+  it.each(['<!--', '&#8203;', '%2F', '\\~', '&sol;', '<b ', '[[', '((', '%E2%80%8B', '<!-- '])('scales linearly on a private line followed by repeated %j', (unit) => {
+    expectLinear(size => `~/notes/a ${unit.repeat(Math.ceil(size / unit.length))}`.slice(0, size))
   })
 })
