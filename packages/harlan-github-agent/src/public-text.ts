@@ -173,7 +173,7 @@ function detector(details: PrivateDetails): Detector {
     // User information before an at sign is part of the line, so it goes with it.
     link: hosts.length === 0
       ? null
-      : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-]))(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})${HOST_END}`, 'gi'),
+      : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-])_{0,3})(?<entry>(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')}))${HOST_END}`, 'gi'),
   }
 }
 
@@ -185,12 +185,25 @@ function entryFor(detect: Detector, hit: PrivateDetailHit['_tag'], matched: stri
   return detect.details.hosts.find(entry => host === entry || host.endsWith(`.${entry}`)) ?? host
 }
 
-/** Decode once for detection. Keep the original line for publication and Markdown structure. */
+/** Normalize URL hosts without interpreting a public URL's path as its authority. */
+function normalizedAuthorities(text: string): string {
+  return text.replaceAll(/(?:[a-z][a-z\d+.-]{0,15}:)?\/\/[^\s<>"`]+/gi, (destination) => {
+    // HTTP host parsing resolves percent escapes and Unicode domain separators for every scheme.
+    const url = URL.parse(destination.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, 'http://'))
+    // Invalid URLs still pass through the literal detector.
+    return url === null ? destination : `//${url.hostname}${url.pathname}${url.search}${url.hash}`
+  })
+}
+
+/** Normalize detection views. Keep the original line for publication and Markdown structure. */
 function lineHits(detect: Detector, line: string): PrivateDetailHit[] {
-  const text = decodeHTMLStrict(line)
+  // Markdown unescapes ASCII punctuation before decoding character references.
+  const text = decodeHTMLStrict(line.replaceAll(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, '$1'))
   return (['Link', 'Path'] as const).flatMap((tag) => {
     const pattern = tag === 'Link' ? detect.link : detect.path
-    return pattern === null ? [] : [...text.matchAll(pattern)].map(found => ({ _tag: tag, entry: entryFor(detect, tag, found.groups?.entry ?? found[0]) }))
+    const views = tag === 'Link' ? [text, normalizedAuthorities(text)] : [text]
+    const entries = pattern === null ? [] : views.flatMap(view => [...view.matchAll(pattern)].map(found => entryFor(detect, tag, found.groups?.entry ?? found[0])))
+    return [...new Set(entries)].map(entry => ({ _tag: tag, entry }))
   })
 }
 

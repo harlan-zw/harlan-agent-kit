@@ -200,6 +200,34 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes normalized Markdown hosts before sending a %s', async (writer) => {
+    const privateLines = [
+      String.raw`[evidence](https://notes\.localhost/fixture.md)`,
+      String.raw`[evidence](//notes\.localhost/fixture.md)`,
+      String.raw`[ref]: <https://sub.notes\.localhost/fixture.md>`,
+      '_notes.localhost_',
+      '__harlan-github-agent.localhost__',
+      '___hogwild.tail1234.ts.net___',
+      '[evidence](https://%6eotes%2elocalhost/fixture.md)',
+      '[evidence](https://notes。localhost/fixture.md)',
+      String.raw`[evidence](https://fixture-user:fixture-password@notes\.localhost/fixture.md)`,
+      String.raw`<!-- evidence: https://notes\.localhost/fixture.md -->`,
+    ]
+    const publicLines = [
+      String.raw`[public](https://example.com/notes\.localhost/fixture.md)`,
+      String.raw`[public](https://notes\.localhost.example.com/fixture.md)`,
+      '_notes.localhost.example.com_',
+    ]
+    const input = [...privateLines, ...publicLines].join('\n')
+    const sent: string[] = []
+
+    await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async (body) => {
+      sent.push(body)
+    })
+
+    expect(sent).toEqual([[...privateLines.map(() => removed), ...publicLines].join('\n')])
+  })
+
   it.each([
     '__~/notes/fixture.md__',
     '_$HOME/scratch/fixture.log_',
