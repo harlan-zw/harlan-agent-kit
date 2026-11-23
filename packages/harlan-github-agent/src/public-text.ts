@@ -150,9 +150,10 @@ function escape(value: string): string {
 /**
  * Where an entry ends. A full stop that ends the sentence counts, so
  * `~/scratch.` matches, while `~/scratchpad` and `~/scratch.txt` do not.
- * An entity right after an entry leaves the decision to the decoded view.
  */
-const ENTRY_END = String.raw`(?![\w-]|\.[\w-]|&#?\w+;)`
+const ENTRY_END = String.raw`(?![\w-]|\.[\w-])`
+/** In the raw view, an entity right after an entry leaves the decision to the decoded view. */
+const RAW_ENTRY_END = String.raw`(?![\w-]|\.[\w-]|&#?\w+;)`
 /** Where a host ends. A host name holds no underscore, so `__host__` emphasis still matches. */
 const HOST_END = String.raw`(?![a-z\d-]|\.[a-z\d-])`
 /**
@@ -162,62 +163,117 @@ const HOST_END = String.raw`(?![a-z\d-]|\.[a-z\d-])`
  */
 const AUTHORITY = String.raw`(?:(?<![\w.+-])[a-z][a-z\d+.-]{0,15}:)?(?<![\w./-])//`
 
+/** Markdown emphasis, strikethrough, code span, and quote characters. They render as nothing, or as plain punctuation. */
+const FORMATTING = /~~|[*_`"']/g
+
 interface Detector {
-  details: PrivateDetails
-  /** Entries longest first, so a nested root names itself. */
-  paths: string[]
+  /** Each spelling the patterns match, to the deny list entry it stands for. */
+  entries: Map<string, string>
+  hosts: Map<string, string>
   path: RegExp | null
   link: RegExp | null
 }
 
 /**
+ * One detector per view. The normalised view lost its formatting characters,
+ * so it matches entries that lost theirs too: `/srv/agent_home` there reads
+ * `/srv/agenthome`.
+ *
  * Every pattern starts from a literal deny list entry, and every repetition is
  * bounded, so one scan does bounded work per character of the body.
  */
-function detector(details: PrivateDetails): Detector {
-  const paths = [...details.paths].sort((left, right) => right.length - left.length)
-  const hosts = [...details.hosts].sort((left, right) => right.length - left.length).map(escape)
+function detector(details: PrivateDetails, spell: (entry: string) => string, end: string): Detector {
+  const entries = new Map(details.paths.map(entry => [spell(entry), entry]))
+  const hosts = new Map(details.hosts.map(host => [spell(host).toLowerCase(), host]))
+  const longestFirst = (values: Iterable<string>) => [...values].filter(Boolean).sort((left, right) => right.length - left.length).map(escape)
+  const paths = longestFirst(entries.keys())
+  const names = longestFirst(hosts.keys())
   return {
-    details,
-    paths,
-    path: paths.length === 0
-      ? null
-      : new RegExp(String.raw`(?<![\w.~$-])(?:${paths.map(escape).join('|')})${ENTRY_END}`, 'g'),
+    entries,
+    hosts,
+    path: paths.length === 0 ? null : new RegExp(String.raw`(?<![\w.~$-])(?:${paths.join('|')})${end}`, 'g'),
     // User information before an at sign is part of the line, so it goes with it.
-    link: hosts.length === 0
-      ? null
-      : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-]))(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})${HOST_END}`, 'gi'),
+    link: names.length === 0 ? null : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-]))(?:[\w-]{1,63}\.){0,8}(?:${names.join('|')})${HOST_END}`, 'gi'),
   }
 }
 
 function entryFor(detect: Detector, hit: PrivateDetailHit['_tag'], matched: string): string {
   if (hit === 'Path')
-    return detect.paths.find(entry => matched === entry) ?? matched
+    return detect.entries.get(matched) ?? matched
   const host = matched.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, '').toLowerCase()
-  return detect.details.hosts.find(entry => host === entry || host.endsWith(`.${entry}`)) ?? host
+  const entry = [...detect.hosts.keys()].find(name => host === name || host.endsWith(`.${name}`))
+  return entry === undefined ? host : detect.hosts.get(entry) ?? host
 }
 
-/** Characters GitHub renders as nothing, such as U+200B ZERO WIDTH SPACE. */
-const INVISIBLE = /[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g
-/** A percent escape of a printable ASCII character. A line break is never decoded. */
-const PERCENT_ESCAPE = /%([2-7][\da-f])/gi
+/** Characters GitHub renders as nothing: every format character, such as U+200B, and the variation selectors. */
+const INVISIBLE = /[\p{Cf}\p{Variation_Selector}]/gu
+/** A run of percent escapes, decoded as UTF-8 so an encoded zero-width character shows. */
+const PERCENT_RUN = /(?:%[\da-f]{2})+/gi
 /** A Markdown backslash escape of ASCII punctuation. */
 const BACKSLASH_ESCAPE = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g
-/** An inline HTML tag, such as `<b>` or `</code>`. Its text renders, the tag does not. */
-const INLINE_TAG = /<\/?[a-z][a-z\d-]{0,20}(?:\s[^<>\n]{0,200})?\/?>/gi
-/** Markdown emphasis, strikethrough, and code span delimiters. */
-const FORMATTING = /~~|[*_`]/g
+/** Dots a browser reads as the full stop between host labels. */
+const HOST_DOTS = /[。．｡]/g
 
-/** Entities, percent escapes, and backslash escapes decoded, a few rounds deep, and invisible characters gone. */
+function decodePercentRun(run: string): string {
+  try {
+    return decodeURIComponent(run)
+  }
+  catch {
+    // A run that is not valid UTF-8 decodes byte by byte, printable ASCII only.
+    return run.replaceAll(/%([2-7][\da-f])/gi, (_escape, code: string) => String.fromCharCode(Number.parseInt(code, 16)))
+  }
+}
+
+/** Entities, percent escapes, and backslash escapes decoded, a few rounds deep, compatibility forms folded, and invisible characters gone. */
 function decodeAll(text: string): string {
   let current = text.replaceAll(INVISIBLE, '')
   for (let round = 0; round < 3; round++) {
-    const next = decodeHTML(current).replaceAll(PERCENT_ESCAPE, (_escape, code: string) => String.fromCharCode(Number.parseInt(code, 16))).replaceAll(INVISIBLE, '')
+    const next = decodeHTML(current).replaceAll(PERCENT_RUN, run => decodePercentRun(run).replaceAll(/[\r\n]/g, ' ')).replaceAll(INVISIBLE, '')
     if (next === current)
       break
     current = next
   }
-  return current.replaceAll(BACKSLASH_ESCAPE, '$1')
+  return current.replaceAll(BACKSLASH_ESCAPE, '$1').normalize('NFKC').replaceAll(HOST_DOTS, '.').replaceAll(INVISIBLE, '')
+}
+
+/** An inline HTML tag, such as `<b>` or `</code>`. Its text renders, the tag does not. It never spans a line. */
+const INLINE_TAG = /<\/?[a-z][a-z\d-]*(?:[ \t][^<>\n]*)?\/?>/gi
+/** A Markdown link or image. Its label renders, its destination does not. */
+const MARKDOWN_LINK = /!?\[([^[\]\n]*)\]\([^()\n]*\)/g
+
+/**
+ * Removes HTML comments that open and close on one line.
+ *
+ * One forward scan: when the nearest closer sits past the end of the line,
+ * every opener on that line is unclosed, so the scan jumps to the next line.
+ */
+function withoutInlineComments(text: string): string {
+  let output = ''
+  let from = 0
+  for (;;) {
+    const open = text.indexOf('<!--', from)
+    const close = open === -1 ? -1 : text.indexOf('-->', open + 4)
+    if (close === -1)
+      return output + text.slice(from)
+    const lineEnd = text.indexOf('\n', open)
+    if (lineEnd !== -1 && lineEnd < close) {
+      output += text.slice(from, lineEnd + 1)
+      from = lineEnd + 1
+      continue
+    }
+    output += text.slice(from, open)
+    from = close + 3
+  }
+}
+
+/** The decoded text without what renders as nothing: comments, tags, link destinations, formatting, dot segments, and doubled slashes. */
+function normalise(decoded: string): string {
+  return withoutInlineComments(decoded)
+    .replaceAll(MARKDOWN_LINK, '$1')
+    .replaceAll(INLINE_TAG, '')
+    .replaceAll(FORMATTING, '')
+    .replaceAll(/\/\.(?=\/)/g, '')
+    .replaceAll(/(?<!:)\/{2,}/g, '/')
 }
 
 function lineBreaks(text: string): number {
@@ -228,32 +284,50 @@ function lineBreaks(text: string): number {
 }
 
 /**
- * The views of one body the guard matches: the raw text, the text decoded as
- * GitHub renders it, and that text without Markdown formatting.
- *
- * No view adds or removes a line break, so every view's lines stay aligned
- * with the source. An entity that decodes to a line break becomes a space.
+ * Applies `transform` without adding or removing a line break, so the result
+ * stays line-aligned with `text`. A break the transform makes becomes a space.
  */
-function views(text: string): string[] {
-  const whole = decodeAll(text)
-  const decoded = lineBreaks(whole) === lineBreaks(text)
+function aligned(text: string, transform: (text: string) => string): string {
+  const whole = transform(text)
+  return lineBreaks(whole) === lineBreaks(text)
     ? whole
-    : text.split('\n').map(line => decodeAll(line).replaceAll(/[\r\n]/g, ' ')).join('\n')
-  return [text, decoded, decoded.replaceAll(INLINE_TAG, '').replaceAll(FORMATTING, '')]
+    : text.split('\n').map(line => transform(line).replaceAll(/[\r\n]/g, ' ')).join('\n')
 }
 
-/** Every private detail in one view, with the index of the line that holds it. */
-function detailsIn(detect: Detector, view: string): Array<{ line: number, hit: PrivateDetailHit }> {
-  const found = (['Link', 'Path'] as const).flatMap((tag) => {
-    const pattern = tag === 'Link' ? detect.link : detect.path
-    return pattern === null ? [] : [...view.matchAll(pattern)].map(match => ({ index: match.index ?? 0, hit: { _tag: tag, entry: entryFor(detect, tag, match[0]) } }))
+interface Detectors {
+  raw: Detector
+  decoded: Detector
+  normalised: Detector
+}
+
+function detectorsFor(details: PrivateDetails): Detectors {
+  return {
+    raw: detector(details, entry => entry, RAW_ENTRY_END),
+    decoded: detector(details, entry => entry, ENTRY_END),
+    normalised: detector(details, entry => entry.replaceAll(FORMATTING, ''), ENTRY_END),
+  }
+}
+
+/**
+ * Every private detail in `text`, with the index of its line. It matches the
+ * raw text, the text as GitHub renders it, and that text without Markdown
+ * formatting. Every view keeps the line breaks of `text`.
+ */
+function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: PrivateDetailHit }> {
+  const decoded = aligned(text, decodeAll)
+  const views: Array<[Detector, string]> = [[detect.raw, text], [detect.decoded, decoded], [detect.normalised, aligned(decoded, normalise)]]
+  return views.flatMap(([view, viewText]) => {
+    const matches = (['Link', 'Path'] as const).flatMap((tag) => {
+      const pattern = tag === 'Link' ? view.link : view.path
+      return pattern === null ? [] : [...viewText.matchAll(pattern)].map(match => ({ index: match.index ?? 0, hit: { _tag: tag, entry: entryFor(view, tag, match[0]) } }))
+    })
+    if (matches.length === 0)
+      return []
+    const starts = [0]
+    for (let at = viewText.indexOf('\n'); at !== -1; at = viewText.indexOf('\n', at + 1))
+      starts.push(at + 1)
+    return matches.map(({ index, hit }) => ({ line: lineAt(starts, index), hit }))
   })
-  if (found.length === 0)
-    return []
-  const starts = [0]
-  for (let index = view.indexOf('\n'); index !== -1; index = view.indexOf('\n', index + 1))
-    starts.push(index + 1)
-  return found.map(({ index, hit }) => ({ line: lineAt(starts, index), hit }))
 }
 
 /** The index of the line that holds `offset`, given each line's first offset in order. */
@@ -271,9 +345,9 @@ function lineAt(starts: readonly number[], offset: number): number {
 }
 
 /** The line that stands in for `line`, and the markers it keeps. */
-function removedLine(detect: Detector, line: string): string {
+function removedLine(detect: Detectors, line: string): string {
   const structure = LINE_STRUCTURE.exec(line)?.[0] ?? ''
-  const markers = htmlComments(line).filter(marker => views(marker).every(view => detailsIn(detect, view).length === 0))
+  const markers = htmlComments(line).filter(marker => detailsIn(detect, marker).length === 0)
   return [`${structure}${REMOVED_LINE}`, ...markers].join(' ')
 }
 
@@ -285,8 +359,8 @@ function removedLine(detect: Detector, line: string): string {
  * match costs one line and an Incident. A partial leak is never possible.
  */
 export function redactPrivateDetails(text: string, details: PrivateDetails): Redaction {
-  const detect = detector(details)
-  const found = views(text).flatMap(view => detailsIn(detect, view))
+  const detect = detectorsFor(details)
+  const found = detailsIn(detect, text)
   if (found.length === 0)
     return { text, hits: [] }
   const affected = new Set(found.map(({ line }) => line))

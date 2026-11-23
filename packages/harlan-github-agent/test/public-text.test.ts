@@ -175,13 +175,6 @@ describe('redactPrivateDetails', () => {
 
     expect(redactPrivateDetails('See ~/notes/a.md.\nSee /root/scratch/b.log.', rootHome).text).toBe(`${removed}\n${removed}`)
   })
-
-  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a', '&#96;', '//', '~/notes/a ', '\n', 'a\n', '~/notes/a\n'])('redacts 65,536 characters of %j in linear time', (unit) => {
-    const text = unit.repeat(Math.ceil(65_536 / unit.length)).slice(0, 65_536)
-    const started = performance.now()
-    redactPrivateDetails(text, details)
-    expect(performance.now() - started).toBeLessThan(100)
-  })
 })
 
 describe('isPublishedForm', () => {
@@ -601,13 +594,6 @@ describe('review findings on #754, fourth round', () => {
     expect(redactPrivateDetails('Cache at /worker-data/cache.', topLevel).text).toBe(removed)
     expect(redactPrivateDetails('Files in /home/other and /tmp/x stay.', topLevel).text).toBe('Files in /home/other and /tmp/x stay.')
   })
-
-  it.each(['](https://notes.localhost/a', '[x](https://notes.localhost/a)', '](https://notes.localhost/a)\n'])('redacts 65,536 characters of repeated private links %j in linear time', (unit) => {
-    const text = unit.repeat(Math.ceil(65_536 / unit.length)).slice(0, 65_536)
-    const started = performance.now()
-    redactPrivateDetails(text, details)
-    expect(performance.now() - started).toBeLessThan(100)
-  })
 })
 
 describe('ported from the Service Repair 73c25d86', () => {
@@ -756,13 +742,6 @@ describe('spellings GitHub renders, review findings on #754, final round', () =>
       .toBe(`First &#10; line\n${removed}\nLast line`)
   })
 
-  it.each(['<!--', '&#8203;', '%2F', '\\~', '&sol;'])('redacts 65,536 characters of %j in linear time', (unit) => {
-    const text = `~/notes/a ${unit.repeat(Math.ceil(65_536 / unit.length))}`.slice(0, 65_536)
-    const started = performance.now()
-    redactPrivateDetails(text, details)
-    expect(performance.now() - started).toBeLessThan(100)
-  })
-
   it('keeps the accepted write when the Incident cannot be recorded', async () => {
     const logged: string[] = []
     const guard = createPublicTextGuard({
@@ -791,5 +770,74 @@ describe('spellings GitHub renders, review findings on #754, final round', () =>
     expect(await publisher.createIssue({ repository: repositoryMapping(), title: 'Fix the cache in ~/pkg/example/src', body: 'The cache in ~/pkg/example/src leaks.' })).toEqual(ok({ number: 812, url: 'https://github.com/harlan-zw/example/issues/812' }))
     expect(created).toEqual([expect.objectContaining({ title: removed, body: removed })])
     expect(store.listIncidents().map(incident => incident.message)).toEqual([expect.stringContaining('harlan-zw/example#812')])
+  })
+})
+
+describe('rendered views stay aligned and complete', () => {
+  it('keeps every view aligned with the source when a tag spans two lines', () => {
+    expect(redactPrivateDetails('if a <b\n> quoted\nOpen ~/**notes**/a.md', details).text).toBe(`if a <b\n> quoted\n${removed}`)
+  })
+
+  it.each(['__/srv/agent_home/cache__', '_/srv/agent_home_', '/srv/**agent_home**/cache'])('removes a root that holds a formatting character: %s', (line) => {
+    const withUnderscore = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: ['/srv/agent_home'], serviceOrigins: [] })
+
+    expect(redactPrivateDetails(line, withUnderscore).text).toBe(removed)
+  })
+
+  it.each([
+    ['an entity-shaped suffix that never decodes', 'Open ~/notes&x; now.'],
+    ['an isolate control inside a host', 'Read https://notes⁦.localhost now.'],
+    ['a variation selector inside a path', 'Open ~/no️tes/a.md now.'],
+    ['link brackets inside a path', 'Open ~/[notes](https://example.com)/a.md now.'],
+    ['a tag with long attributes inside a path', `Open ~/<span title="${'x'.repeat(300)}">notes</span>/a.md now.`],
+    ['a percent-encoded zero-width character in a host', 'Read https://notes%E2%80%8B.localhost now.'],
+    ['a dot segment in a path', 'Open ~/./notes/a.md now.'],
+    ['a doubled slash in a path', 'Open /home/harlan//pkg/example now.'],
+    ['shell quoting around a home variable', 'Open "$HOME"/notes/a.md now.'],
+    ['full-width letters in a host', 'Read https://ｎｏｔｅｓ.localhost now.'],
+    ['an ideographic full stop in a host', 'Read https://notes。localhost now.'],
+  ])('removes the line for %s', (_name, line) => {
+    expect(redactPrivateDetails(line, details).text).toBe(removed)
+  })
+
+  it('removes the line for an inline HTML comment inside a path, and keeps the comment as a marker', () => {
+    expect(redactPrivateDetails('Open ~/no<!-- -->tes/a.md now.', details).text).toBe(`${removed} <!-- -->`)
+  })
+})
+
+/** The fastest of five runs, in milliseconds, so one slow run on a busy runner cannot decide. */
+function fastest(run: () => void): number {
+  let best = Number.POSITIVE_INFINITY
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const started = performance.now()
+    run()
+    best = Math.min(best, performance.now() - started)
+  }
+  return best
+}
+
+/**
+ * Asserts that redaction scales linearly, whatever the runner's speed.
+ *
+ * Four times the input costs about 4 times the work when linear and 16 times
+ * when quadratic, so a ratio below 10 separates them. The absolute ceiling is
+ * only a hang guard.
+ */
+function expectLinear(build: (size: number) => string): void {
+  const small = build(16_384)
+  const large = build(65_536)
+  const smallTime = fastest(() => redactPrivateDetails(small, details))
+  const largeTime = fastest(() => redactPrivateDetails(large, details))
+  expect(largeTime).toBeLessThan(2_000)
+  expect(largeTime / Math.max(smallTime, 1)).toBeLessThan(10)
+}
+
+describe('redaction time', () => {
+  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a', '&#96;', '//', '~/notes/a ', '\n', 'a\n', '~/notes/a\n', '](https://notes.localhost/a', '[x](https://notes.localhost/a)', '](https://notes.localhost/a)\n'])('scales linearly on repeated %j', (unit) => {
+    expectLinear(size => unit.repeat(Math.ceil(size / unit.length)).slice(0, size))
+  })
+
+  it.each(['<!--', '&#8203;', '%2F', '\\~', '&sol;', '<b ', '[[', '((', '%E2%80%8B', '<!-- '])('scales linearly on a private line followed by repeated %j', (unit) => {
+    expectLinear(size => `~/notes/a ${unit.repeat(Math.ceil(size / unit.length))}`.slice(0, size))
   })
 })
