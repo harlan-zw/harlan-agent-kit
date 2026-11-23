@@ -482,19 +482,28 @@ function layoutOf(text: string): Layout {
   const isBreak: boolean[] = []
   const code: Region[] = []
   let offset = 0
-  let fence: { char: string, length: number, depth: number, start: number } | null = null
+  let fence: { char: string, length: number, depth: number, indent: number, start: number } | null = null
   for (const line of lines) {
     starts.push(offset)
     contentStarts.push(offset + (CONTENT_START.exec(line)?.[0].length ?? 0))
     const container = CONTAINER.exec(line)?.[0] ?? ''
     const depth = container.split('>').length - 1
     const rest = line.slice(container.length)
-    const marker = FENCE.exec(rest)
+    // Consume list markers only outside code. Inside code they are literal.
+    let content = rest
+    if (fence === null) {
+      for (let item = /^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/.exec(content); item !== null; item = /^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/.exec(content))
+        content = content.slice(item[0].length)
+    }
+    const indent = rest.length - content.length
+    // Leaving a list container ends its code block, even without a closer.
+    const indentation = rest.match(/^[ \t]*/)?.[0].length ?? 0
     // A fence inside a blockquote ends with the blockquote.
-    if (fence !== null && depth < fence.depth) {
+    if (fence !== null && (depth < fence.depth || (rest.trim() !== '' && indentation < fence.indent))) {
       code.push({ start: fence.start, end: offset })
       fence = null
     }
+    const marker = FENCE.exec(content)
     if (fence !== null) {
       fenced.push(true)
       isBreak.push(true)
@@ -504,7 +513,7 @@ function layoutOf(text: string): Layout {
       }
     }
     else if (marker?.[1] !== undefined && !(marker[1].startsWith('`') && marker[2]?.includes('`'))) {
-      fence = { char: marker[1].charAt(0), length: marker[1].length, depth, start: offset }
+      fence = { char: marker[1].charAt(0), length: marker[1].length, depth, indent, start: offset }
       fenced.push(true)
       isBreak.push(true)
     }
@@ -646,23 +655,107 @@ const SOFT_BREAK = String.raw`\r?\n(?![ \t>]*(?:\r?\n|$))`
 const LINK_GAP = String.raw`[ \t]*(?:${SOFT_BREAK}[ \t>]*)?`
 /** A destination never starts with `>`, so it cannot trade characters with the blockquote markers before it. */
 const LINK_DESTINATION = String.raw`(?:<[^<>\r\n]*>|(?:[^\s()<>]|\([^\s()]*\))(?:[^\s()<]|\([^\s()]*\))*)`
-const LINK_TITLE = String.raw`(?:"(?:[^"\r\n]|${SOFT_BREAK})*"|'(?:[^'\r\n]|${SOFT_BREAK})*'|\((?:[^()\r\n]|${SOFT_BREAK})*\))`
-const LINK_TAIL = String.raw`${LINK_DESTINATION}(?:${LINK_GAP}${LINK_TITLE})?`
-/**
- * An inline link or image, from `](` to its closing parenthesis. Its title
- * may wrap, and its destination may start on the next line. A label without
- * nested brackets widens it to the `[`, and that label may wrap too.
- */
-const INLINE_LINK = new RegExp(String.raw`(?:\[(?:[^[\]\r\n]|${SOFT_BREAK})*)?\]\(${LINK_GAP}(?:${LINK_TAIL}${LINK_GAP})?\)`, 'g')
+const LINK_TITLE = String.raw`"(?:[^"\r\n]|${SOFT_BREAK})*"|'(?:[^'\r\n]|${SOFT_BREAK})*'|\((?:[^()\r\n]|${SOFT_BREAK})*\)`
+const LINK_TAIL = String.raw`${LINK_DESTINATION}(?:${LINK_GAP}(?:${LINK_TITLE}))?`
+const INLINE_GAP = new RegExp(LINK_GAP, 'y')
+const INLINE_TITLE = new RegExp(LINK_TITLE, 'y')
+
+/** Read a balanced destination, then its optional title and closing parenthesis. */
+function inlineLinkEnd(text: string, start: number, parentheses: ReadonlyMap<number, number>): number | undefined {
+  const gap = (at: number) => {
+    INLINE_GAP.lastIndex = at
+    return at + (INLINE_GAP.exec(text)?.[0].length ?? 0)
+  }
+  let at = gap(start)
+  if (text[at] === '<') {
+    at++
+    while (at < text.length && !/[<>\r\n]/.test(text[at]!)) {
+      at += text[at] === '\\' ? 2 : 1
+    }
+    if (text[at] !== '>')
+      return undefined
+    at++
+  }
+  else {
+    while (at < text.length) {
+      const char = text[at]!
+      if (char === '\\') {
+        at += 2
+        continue
+      }
+      if (/[\s<>)]/.test(char))
+        break
+      if (char === '(') {
+        const close = parentheses.get(at)
+        if (close === undefined)
+          return undefined
+        at = close
+      }
+      at++
+    }
+  }
+  const afterGap = gap(at)
+  if (afterGap > at) {
+    INLINE_TITLE.lastIndex = afterGap
+    const title = INLINE_TITLE.exec(text)
+    at = title === null ? afterGap : gap(afterGap + title[0].length)
+  }
+  return text[at] === ')' ? at + 1 : undefined
+}
+
+/** Keep label nesting and destination nesting independent, including linked images. */
+function inlineLinks(text: string): Region[] {
+  // Resolve nested destinations once. Repeated unmatched openers stay linear.
+  const parentheses = new Map<number, number>()
+  const open: number[] = []
+  for (let at = 0; at < text.length; at++) {
+    const char = text[at]!
+    if (char === '\\') {
+      at++
+      continue
+    }
+    if (/[\s<>]/.test(char))
+      open.length = 0
+    if (char === '(')
+      open.push(at)
+    if (char === ')') {
+      const start = open.pop()
+      if (start !== undefined)
+        parentheses.set(start, at)
+    }
+  }
+  const labels: number[] = []
+  const links: Region[] = []
+  for (let at = 0; at < text.length; at++) {
+    if (text[at] === '\\') {
+      at++
+      continue
+    }
+    if (text[at] === '[')
+      labels.push(at)
+    if (text[at] !== ']')
+      continue
+    const start = labels.pop()
+    if (start === undefined || text[at + 1] !== '(')
+      continue
+    const end = inlineLinkEnd(text, at + 2, parentheses)
+    if (end !== undefined) {
+      links.push({ start, end })
+      at = end - 1
+    }
+  }
+  return links
+}
 /** A link reference definition. Its destination and title may each start on the next line. */
 const LINK_DEFINITION = new RegExp(String.raw`^[ \t]*(?:>[ \t]*)*\[[^[\]\r\n]+\]:${LINK_GAP}${LINK_TAIL}`, 'gm')
 
 /** Links and code spans that wrap onto another line, outside code and within one paragraph. */
 function wrappedConstructs(text: string, layout: Layout): LineSpan[] {
-  const links = [...text.matchAll(INLINE_LINK), ...text.matchAll(LINK_DEFINITION)].flatMap((match) => {
-    const first = lineAt(layout.starts, match.index)
-    const last = lineAt(layout.starts, match.index + match[0].length - 1)
-    return last === first || crossesBlock(layout, first, last) || codeAt(layout, match.index) !== undefined ? [] : [{ first, last }]
+  const regions = [...inlineLinks(text), ...text.matchAll(LINK_DEFINITION).map(match => ({ start: match.index, end: match.index + match[0].length }))]
+  const links = regions.flatMap(({ start, end }) => {
+    const first = lineAt(layout.starts, start)
+    const last = lineAt(layout.starts, end - 1)
+    return last === first || crossesBlock(layout, first, last) || codeAt(layout, start) !== undefined ? [] : [{ first, last }]
   })
   return [...links, ...layout.wrappedCode]
 }

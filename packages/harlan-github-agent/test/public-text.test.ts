@@ -1201,6 +1201,26 @@ describe('rendered views stay aligned and complete', () => {
 })
 
 describe('review findings on #754, follow-ups', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes nested wrapped links at the %s boundary', async (writer) => {
+    for (const link of [
+      '[private acquisition\n[plan]](https://notes.localhost/a.pdf)',
+      '[report](https://notes.localhost/a(b(c)).pdf "private\nacquisition title")',
+    ]) {
+      const source = `Public before.\n\n${link}\n\nPublic after.`
+      const expected = `Public before.\n\n${link.split('\n').map(() => removed).join('\n')}\n\nPublic after.`
+      const sent = await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(source) : source).send(async body => body)
+      expect(sent).toBe(expected)
+    }
+  })
+
+  it.each(['-', '1.', '> -', '- -'])('keeps literal code and removes a following wrapped private link after a %s list fence', (marker) => {
+    const indent = marker.replace(/[^>]/g, ' ')
+    const source = `${marker} \`\`\`html\n${indent} ~/notes/a.md <!--\n${indent} Public literal -->\n${indent} \`\`\`\n\n[report](https://notes.localhost/a.pdf "private\nacquisition title")\n\nPublic after.`
+    const privatePrefix = marker.includes('>') ? '> ' : `${indent} `
+    const expected = `${marker} \`\`\`html\n${privatePrefix}${removed}\n${indent} Public literal -->\n${indent} \`\`\`\n\n${removed}\n${removed}\n\nPublic after.`
+    expect(redactPrivateDetails(source, details).text).toBe(expected)
+  })
+
   const withheld = '_This text was withheld: it named a private path or host across lines._'
   const signal = new AbortController().signal
   const control = `  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${'f'.repeat(64)} -->`
