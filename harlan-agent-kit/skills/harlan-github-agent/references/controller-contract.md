@@ -274,7 +274,9 @@ The dot says who holds the work. ⚪ means the agent has it. 🟢 means READY. �
 Write outcome words in sentence case: Ready, Pending, Blocked, Queued, Reviewing, Repair, Stuck, Review skipped, Approval needed, Merged, Closed.
 Never restate what GitHub's merge box shows, such as CI status or a merge conflict. Name a failed gate only when it is the only reason for Blocked.
 Say what only the Review knows: `Checked … Not checked: …`, what Repair fixed, the issues to fix, and the follow-ups.
-Fold follow-ups. Count Logged findings below 40/100 and never list them or thread them.
+Fold follow-ups. List each with its score, title, location, and fix. Count Logged findings below 40/100 and never list them or thread them.
+When a follow-up's thread opens beside the code, keep its row and link the thread in place of the control. A thread whose finding drops below 40/100 loses its control.
+A fixed thread shows its fixing commit above its struck title and drops the merge label.
 
 End every comment with one `<sub>` footer. It names the bot, says it is not Harlan's, and links the AI policy.
 A verdict also says a person merges and lists the accepted commands in code spans.
@@ -289,7 +291,8 @@ Treat GitHub as the durable workflow record. Record each Review gate and the exa
 Treat the latest confirmed write to the canonical comment as its current state. This applies across every controller Publication path.
 
 If GitHub merges a pull request, publish Merged with the issues and follow-ups not fixed, or one line when none remain. The verdict it replaces offers commands a merged pull request refuses.
-If GitHub closes a pull request unmerged, leave a verdict standing and replace any other state with Closed.
+Say the merge was reviewed only when a Review verdict answered the merged commit. If a later commit merged, name the reviewed commit instead.
+If GitHub closes a pull request unmerged, leave a verdict standing without its commands, and replace any other state with Closed. Settle the Review check run with the standing verdict.
 Clear every Agent status label in both cases.
 
 Before trusting a locally inferred close, read that exact pull request from GitHub. Store comment and label cleanup separately from the Task that last owned the comment. Resume incomplete cleanup after restart.
@@ -342,7 +345,7 @@ When required CI fails on the current base of an owned repository, dispatch a se
 ## Selected Review findings
 
 Post a Logged Review finding beside its line in the pull request diff.
-Keep findings without an accepted line in the canonical comment.
+Keep every listed finding in the canonical comment. A finding with an accepted line links its thread there instead of offering a control.
 On an eligible open pull request, offer a Repair checkbox with signed webhooks.
 Subscribe to Issue comment and Pull request review comment deliveries.
 Use Resolve conversation to dismiss an inline finding. The canonical comment offers Dismiss for findings without an accepted line.
