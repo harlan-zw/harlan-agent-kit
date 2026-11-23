@@ -251,8 +251,8 @@ function decodeAll(text: string): string {
   return current.replaceAll(BACKSLASH_ESCAPE, '$1').normalize('NFKC').replaceAll(HOST_DOTS, '.').replaceAll(INVISIBLE, '')
 }
 
-/** An inline HTML tag, such as `<b>` or `</code>`. Its text renders, the tag does not. It never spans a line. */
-const INLINE_TAG = /<\/?[a-z][a-z\d-]*(?:[ \t][^<>\n]*)?\/?>/gi
+/** HTML quotes can contain angle brackets and line breaks. Only an unquoted `>` ends a tag. */
+const HTML_TAG = /<\/?[a-z][a-z\d-]*(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi
 /** A Markdown link or image. Its label renders, its destination does not. */
 const MARKDOWN_LINK = /!?\[([^[\]\n]*)\]\([^()\n]*\)/g
 
@@ -285,7 +285,7 @@ function withoutInlineComments(text: string): string {
 function normalise(decoded: string): string {
   return withoutInlineComments(decoded)
     .replaceAll(MARKDOWN_LINK, '$1')
-    .replaceAll(INLINE_TAG, '')
+    .replaceAll(HTML_TAG, '')
     .replaceAll(FORMATTING, '')
     .replaceAll(/\/\.(?=\/)/g, '')
     .replaceAll(/(?<!:)\/{2,}/g, '/')
@@ -352,7 +352,7 @@ interface Detectors {
   raw: Detector
   decoded: Detector
   normalised: Detector
-  /** Matches an entry glued to anything before it, in text with every URL removed. */
+  /** Matches an entry glued to anything before it, in text with public URLs removed. */
   joined: Detector
 }
 
@@ -365,22 +365,26 @@ function detectorsFor(details: PrivateDetails): Detectors {
   }
 }
 
-/** A URL with a scheme. Its path is public, whatever it spells. */
+/** A URL with a scheme. File URLs carry filesystem paths; other URL paths stay public. */
 const URL_TOKEN = /[a-z][a-z\d+.-]{0,15}:\/\/[^\s<>"'`]*/gi
 /** A path start anywhere: after a flag, `=`, `,`, or `:` as well as after a space. */
 const JOINED_PATH = /(?:\/|~[\w-]*\/|\$(?:HOME|\{HOME\})\/)[^\s<>"'`,:;=]*/g
 
 /**
- * The text a shell or compiler would read, with every URL removed.
+ * The text a shell or compiler would read, with public URLs removed.
  *
  * Option parsers glue a path to anything: `-I/x`, `CFLAGS=-I/x`, `-Wp,-I/x`,
  * `PATH=/a:/x`. Requiring a token boundary before an entry missed each new
- * spelling, so this view requires none. Public URLs are removed first, so a
- * URL whose path spells an entry stays public.
+ * spelling, so this view requires none. File URL paths remain candidates.
+ * Public URLs are removed first, so their paths stay public.
  */
 function joinedPaths(text: string): string {
   return text
-    .replaceAll(URL_TOKEN, ' ')
+    .replaceAll(URL_TOKEN, (url) => {
+      // A file authority must not hide the absolute filesystem path after it.
+      const file = /^file:\/\/[^/]*(\/.*)$/i.exec(url)
+      return file?.[1] ?? ' '
+    })
     .replaceAll(JOINED_PATH, path => normalize(path))
 }
 
@@ -437,7 +441,7 @@ function htmlLines(text: string): Array<{ text: string, first: number, last: num
     })
   }
   // Scan openers once. A missing comment closer hides the remaining text.
-  const markup = /<!--|<\/?[a-z][a-z\d-]*(?:\s[^<>]*)?\/?>/gi
+  const markup = new RegExp(`<!--|${HTML_TAG.source}`, 'gi')
   let from = 0
   for (let match = markup.exec(text); match !== null; match = markup.exec(text)) {
     append(text.slice(from, match.index))

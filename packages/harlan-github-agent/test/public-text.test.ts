@@ -214,6 +214,35 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes source lines joined by HTML with quoted angle brackets before sending a %s', async (writer) => {
+    for (const markup of ['<span\ntitle="a > b"></span>', '<span title=\'a < b\'\ndata-x></span>', '<span title="a >\nb < c"></span>']) {
+      for (const detail of [`/home/har${markup}lan/notes/acquisition.pdf`, `notes.${markup}localhost/acquisition`]) {
+        const store = journal()
+        const input = `Public introduction.\nRead ${detail} now.\nPublic conclusion.`
+        const guard = createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} })
+
+        const sent = await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+
+        expect(sent).toBe(`Public introduction.\n${removed}\n${removed}\nPublic conclusion.`)
+        expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+      }
+    }
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes local file URI diagnostics and keeps public HTTPS examples before sending a %s', async (writer) => {
+    for (const uri of ['file://localhost/home/harlan/notes/acquisition.pdf', 'file://LOCALHOST/home/harlan/notes/acquisition.pdf', 'file:///home/harlan/notes/acquisition.pdf', 'file://localhost/home/harlan/public/../notes/acquisition.pdf', 'file://localhost/%68ome/harlan/notes/acquisition.pdf']) {
+      const store = journal()
+      const example = 'Read https://example.com/home/harlan/notes/acquisition.pdf for syntax.'
+      const input = `Failed to read ${uri}\n${example}`
+      const guard = createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} })
+
+      const sent = await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+
+      expect(sent).toBe(`${removed}\n${example}`)
+      expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+    }
+  })
+
   it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes every source line of multiline HTML private details before sending a %s', async (writer) => {
     for (const markup of ['<!-- hidden\nmore hidden\n-->', '<span\ntitle="context"\ndata-x></span>']) {
       for (const detail of [`/home/har${markup}lan/notes/acquisition.pdf`, `notes.${markup}localhost/acquisition`]) {
