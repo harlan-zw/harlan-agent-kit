@@ -43,6 +43,8 @@ Running the git and `gh` commands by hand is the failure mode this skill exists 
   Leave human Answered and Follow-up threads open for the reviewer. Keep every Service finding thread open during automatic sweeps.
   Never resolve a Service finding thread above 80/100 yourself. The Service resolves it when a later Review clears it.
   Never resolve a Logged thread whose Repair was selected. Resolving it cancels that Repair.
+- **Public words follow the [comment voice](../../references/comment-voice.md) contract.** Every comment this Skill posts follows all of it, including thread replies and verification comments.
+  The description follows only its Never publish rule: no paths from your own run, raw tool errors, or tokens. `pull-request-summary` still owns the description rubric.
 - **Worktree cleanup** -- if you forget `wt remove`, orphaned worktrees accumulate. Clean up after merge.
 
 ## Data Storage

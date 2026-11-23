@@ -1313,6 +1313,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     canPublish: () => rateLimits.read().length === 0,
     github: createGitHubIssuePublisher({ publicText, tokens: routedTokens }),
     now,
+    // The dashboard origins name the Service's own hosts. A run log never links them.
+    privateHosts: [config.server.allowedOrigin, ...config.server.browserOrigins ?? []]
+      .flatMap(origin => URL.canParse(origin) ? [new URL(origin).hostname] : []),
     store,
     workerId: randomUUID(),
   })

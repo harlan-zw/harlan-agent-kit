@@ -53,7 +53,7 @@ If a section does not fit, move detail into the archive report. Never drop a fin
 <details><summary>Evidence</summary>
 
 Exit <code> | coverage <complete or incomplete> | deployment `<short sha>` | baseline <timestamp>
-Archive: `<path>`
+Archive: `<archive file name>`
 
 </details>
 ```
@@ -64,7 +64,9 @@ Archive: `<path>`
 2. Give a passing check one table row. Write no prose for it.
 3. Put only changes in the open body. Collapse unchanged work and count it.
 4. Report what a prompt item found. Never report how it collected.
-5. Keep paths, tokens, credential file names, and request counts inside `<details>`.
+5. Keep repository paths, request counts, and the archive file name inside `<details>`.
+   Publish no credential file names.
+   Follow the [comment voice](../../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 6. Write no confidence score. Write no untested-path line.
 7. Never narrate your own process. A wrong first guess belongs in the archive report.
 8. Sentry gets one table row, plus a line for each new issue. Full dispositions go in the ledger.
@@ -108,7 +110,7 @@ Nothing.
 <details><summary>Evidence</summary>
 
 Exit 0 | coverage complete | deployment `6454d402` | baseline 2026-09-15T07:35Z
-Archive: `~/.local/state/daily-checkin/harlan-zw/unhead.unjs.io/2026-09-15T20-54-43-277Z.json`
+Archive: `2026-09-15T20-54-43-277Z.json`
 
 </details>
 ```

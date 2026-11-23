@@ -71,6 +71,14 @@ it('changes automated attribution while preserving evidence, markers, and comman
   expect(githubAccountBody(evidence + disclosure)).toBe(evidence + disclosure)
 })
 
+it('names the account in a run log entry footer', () => {
+  const footer = '<sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated Routine report, not Harlan. [AI policy](https://harlanzw.com/blog/ai-in-open-source).</sub>'
+  const quoted = `\`\`\`text\n${footer}\n\`\`\``
+
+  expect(githubAccountBody(`### ⚪ ci-review · Nov 22, 23:00 UTC\n\n${quoted}\n\n${footer}`, account))
+    .toBe(`### ⚪ ci-review · Nov 22, 23:00 UTC\n\n${quoted}\n\n<sub>[Brundlefly](https://github.com/harlan-zw/brundlefly) posted this automated Routine report. [AI policy](https://harlanzw.com/blog/ai-in-open-source).</sub>`)
+})
+
 it('recognises both original and branded Routine logs for the configured repository', () => {
   const input = { repository, title: 'ci-review: run log for harlan-zw/brundlefly', labels: ['routine:ci-review'] }
   expect(isRoutineTrackingIssue({ ...input, body: trackingIssueBody('ci-review'), account })).toBe(true)

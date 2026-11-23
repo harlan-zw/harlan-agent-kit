@@ -91,7 +91,7 @@ function seedRoutineState(path: string): void {
         routineId: run.routineId,
         routineName: 'pr-triage',
         run: { id: run.id, scheduledFor: run.scheduledFor },
-        report: { _tag: 'Completed', evidence: 'One Candidate found.' },
+        report: { _tag: 'Scanned', evidence: 'One Candidate found.', tally: { found: 0, fresh: 0, known: 0, outsideScope: 0, oversized: null, fingerprints: [] } },
       }),
       at: '2026-08-28T08:05:30.000Z',
     })

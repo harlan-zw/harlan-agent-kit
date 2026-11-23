@@ -6,7 +6,7 @@ Every scan checks the fixes this Routine already produced.
 
 Use controller evidence first for a private repository. Never obtain worker credentials or bypass the public wrapper.
 If closed routine issues are absent, mark fix follow-up incomplete. Do not declare a fix outcome or regression.
-This gap does not block a separately verified new cause after its duplicate checks against open work pass.
+This gap never blocks a Candidate for a separately verified new cause.
 
 ```bash
 gh issue list --label routine:vitals-review --state closed --limit 30 \

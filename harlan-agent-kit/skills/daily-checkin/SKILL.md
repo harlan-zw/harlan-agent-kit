@@ -75,7 +75,8 @@ The module owns collection, pagination, and coverage. Sites need no prompt for g
 - Read and privately archive issue details needed to identify the culprit, impact, recurrence, and permalink.
 - Inspect release, URL, browser, affected users, and event times before classifying a finding.
 - Use the shared `sentry-checkin` Skill's triage and repair criteria. Preserve the site's configured expected-error policy.
-- Give every unresolved issue a disposition. Link existing work before proposing a repair.
+- Give every unresolved issue a disposition. Link existing work the evidence shows.
+- Return a Candidate for each verified repository cause. Evidence limits name the unchecked scope; they never block it.
 - Require fresh evidence after a verified deployment before reporting recovery. Counts alone never prove resolution.
 - Keep this check-in read only. Return repository repairs as Candidates and Sentry mutations as proposed operator actions.
 
@@ -109,6 +110,7 @@ Retain the last 30 days of paired archives and reports. Never delete `state.json
 
 Keep production access read only. Do not commit, push, deploy, mutate databases, or change Sentry state.
 The controller owns issue publication. Return the published report in `report`.
+GitHub shows the report and each Candidate. Follow the [comment voice](../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 State the run's conclusion in `verdict`, as `severity` and `coverage`.
 The issue title reads that field. Never leave the title to the report prose.
 Return only concrete code or repository repairs as Candidates.

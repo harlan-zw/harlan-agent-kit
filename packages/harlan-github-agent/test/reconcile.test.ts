@@ -446,7 +446,7 @@ describe('gitHub reconciliation', () => {
         routineId: routine.id,
         routineName: routine.name,
         run: { id: run.id, scheduledFor: run.scheduledFor },
-        report: { _tag: 'Completed', evidence: 'No open Sentry issues.' },
+        report: { _tag: 'Scanned', evidence: 'No open Sentry issues.', tally: { found: 0, fresh: 0, known: 0, outsideScope: 0, oversized: null, fingerprints: [] } },
       }),
       at: '2026-09-18T07:00:02.000Z',
     })
