@@ -577,6 +577,44 @@ describe('publishStoppedReviews', () => {
     expect(checkRuns).toEqual([{ headSha: 'abc123', conclusion: 'neutral', title: '⚪ Review skipped · the pull request is not ready for review' }])
   })
 
+  it.each([
+    ['its own head', 'abc123', { conclusion: 'success', title: '🟢 Ready · 94/100' }],
+    ['an earlier head', 'fed987', { conclusion: 'neutral', title: '⚪ Closed · no further reviews' }],
+  ])('settles a closed pull request\'s check run as success only for a Ready verdict on %s', async (_case, verdictHead, expected) => {
+    const verdict = [
+      '<!-- harlan-agent-kit:pr-triage -->',
+      `<!-- reviewed-sha: ${verdictHead} -->`,
+      `<!-- workflow-state: {"_tag":"Review","headSha":"${verdictHead}","baseSha":"base123","outcome":"READY","gates":{"merge":"Passed","review":"Passed","ci":"Passed"}} -->`,
+      '🟢 **Ready** · `94/100`',
+    ].join('\n')
+    const checkRuns: Array<{ headSha: string, conclusion: string, title: string }> = []
+    await publishStoppedReviews({
+      github: {
+        ...githubStatus,
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+        upsertReviewCheckRun: (_repository, headSha, update) => {
+          checkRuns.push(update._tag === 'Completed'
+            ? { headSha, conclusion: update.conclusion, title: update.title }
+            : { headSha, conclusion: 'running', title: update.title })
+          return Promise.resolve(ok(undefined))
+        },
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
+      repositories: [repositoryMapping()],
+      store: {
+        ...reviewClosureStore,
+        recordDeletedReviewComment: () => true,
+        // The stopped Task reviewed abc123. The newest canonical write may answer another head.
+        listStoppedReviews: () => [{ ...stopped, disposition: { _tag: 'Closed' }, publishedBody: verdict }],
+        recordStoppedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(checkRuns).toEqual([{ headSha: 'abc123', ...expected }])
+  })
+
   it('completes the Review check run even when a person deleted the comment', async () => {
     const checkRuns: Array<{ headSha: string, conclusion: string }> = []
     await publishStoppedReviews({

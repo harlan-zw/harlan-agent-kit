@@ -65,8 +65,9 @@ async function completeStoppedReviewCheckRun(
 ): Promise<void> {
   // A verdict that stands after a close keeps its own conclusion, so a READY
   // check run that never completed reads READY, not neutral.
+  const mirrored = checkRunBody(review, body, at)
   const update: ReviewCheckRunUpdate | null = reviewCheckRunUpdate(
-    { taskKind: review.taskKind, phase: 'terminal', desiredOutcome: canonicalCommentOutcome(body) === 'READY' ? 'READY' : 'SKIPPED', body },
+    { taskKind: review.taskKind, phase: 'terminal', desiredOutcome: canonicalCommentOutcome(mirrored) === 'READY' ? 'READY' : 'SKIPPED', body: mirrored },
     at,
   )
   if (update === null)
@@ -107,6 +108,20 @@ function causeDetail(cause: string | null): { detail: string | null, rest: strin
 function showsVerdict(body: string): boolean {
   const outcome = canonicalCommentOutcome(body)
   return outcome === 'READY' || outcome === 'PENDING' || outcome === 'BLOCKED' || outcome === 'SKIPPED'
+}
+
+/**
+ * The body the stopped Task's check run mirrors.
+ *
+ * A close leaves the newest verdict standing, and that verdict can answer an
+ * earlier head than the Task that stopped. The check run belongs to the
+ * stopped Task's head, so it takes a verdict only when the verdict names that
+ * exact head. Any other head reads Closed, and its check run concludes neutral.
+ */
+function checkRunBody(review: StoppedReview, body: string, at: string): string {
+  if (!showsVerdict(body) || canonicalCommentHead(body)?.toLowerCase() === review.headSha.toLowerCase())
+    return body
+  return stoppedReviewComment({ ...review, publishedBody: '' }, at, { _tag: 'Closed' })
 }
 
 /**
