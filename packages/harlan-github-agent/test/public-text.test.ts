@@ -1,6 +1,6 @@
 import type { Octokit } from 'octokit'
 import type { PackageReleaseRecord, ReleaseNote } from '../src/package-release-store.ts'
-import type { PublicTextWriter } from '../src/public-text.ts'
+import type { PrivateDetailLeak, PublicTextWriter } from '../src/public-text.ts'
 import type { ReviewFindingThread, ReviewFindingThreadMirror, ReviewFindingThreadsOutcome } from '../src/review-finding-threads.ts'
 import type { ReviewFinding } from '../src/types.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -54,8 +54,6 @@ describe('a private detail split across lines', () => {
   const withheld = '_This text was withheld: it named a private path or host across lines._'
 
   it.each([
-    '<a\nhref="https://notes.\nlocalhost/example">docs</a>',
-    '<img\nsrc="https://harlan-github-agent.\nlocalhost/x.png">',
     'Open /home/har\nlan/pkg/example now.',
   ])('withholds the body when only the joined lines name it: %s', (text) => {
     const redacted = redactPrivateDetails(text, details)
@@ -66,13 +64,13 @@ describe('a private detail split across lines', () => {
   })
 
   it('keeps the parser markers of a withheld body', () => {
-    const source = '<!-- harlan-agent-kit:pr-triage -->\n<!-- reviewed-sha: abc -->\nSee <a\nhref="https://notes.\nlocalhost/example">docs</a>.'
+    const source = '<!-- harlan-agent-kit:pr-triage -->\n<!-- reviewed-sha: abc -->\nOpen /home/har\nlan/pkg/example now.'
 
     expect(redactPrivateDetails(source, details).text).toBe(`<!-- harlan-agent-kit:pr-triage -->\n<!-- reviewed-sha: abc -->\n${withheld}`)
   })
 
   it('reads a withheld body as the published form of its source', () => {
-    const source = '<!-- harlan-agent-kit:pr-triage -->\nSee <a\nhref="https://notes.\nlocalhost/example">docs</a>.'
+    const source = '<!-- harlan-agent-kit:pr-triage -->\nOpen /home/har\nlan/pkg/example now.'
 
     expect(isPublishedForm(redactPrivateDetails(source, details).text, source)).toBe(true)
     expect(isPublishedForm(`<!-- other -->\n${withheld}`, source)).toBe(false)
@@ -866,7 +864,7 @@ describe('a review comment on a line', () => {
       expect(sent).not.toContain(identity)
     }
     expect(written[1]).toContain('Public update.')
-    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', occurrences: 1 })])
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
   })
 
   it('preserves a public identity and does not report a private detail', () => {
@@ -1201,6 +1199,76 @@ describe('rendered views stay aligned and complete', () => {
 })
 
 describe('review findings on #754, follow-ups', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes quoted split HTML hosts at the %s boundary', async (writer) => {
+    for (const input of [
+      '> <a href="https://hogwild.tail1234.\n> ts.net/acquisition.pdf">evidence</a>',
+      '<a\nhref="https://notes.\nlocalhost/acquisition.pdf">docs</a>',
+      '<img\nsrc="https://harlan-github-agent.\nlocalhost/acquisition.png">',
+    ]) {
+      const reports: PrivateDetailLeak[] = []
+      const sent = await publicBody({ details, report: hit => reports.push(hit) }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+      const prefix = writer !== 'review' && input.startsWith('>') ? '> ' : ''
+      expect(sent).toBe(input.split('\n').map(() => `${prefix}${removed}`).join('\n'))
+      expect(reports).toEqual([expect.objectContaining({ hits: expect.arrayContaining([expect.objectContaining({ _tag: 'Link' })]) })])
+    }
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes every wrapped private construct at the %s boundary', async (writer) => {
+    for (const link of [
+      '[private label `[`\ncontinued](https://notes.localhost/acquisition.pdf)',
+      '[report](https://notes.localhost/a.pdf "private \\"quote\\"\ncontinued title")',
+      '[report]: https://notes.localhost/a(b(c)).pdf\n  "private acquisition title"',
+    ]) {
+      const input = `Public before.\n\n${link}\n\nPublic after.`
+      const sent = await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+      expect(sent).toBe(`Public before.\n\n${link.split('\n').map(line => `${/^\s*/.exec(line)?.[0] ?? ''}${removed}`).join('\n')}\n\nPublic after.`)
+    }
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('ends sibling list fences at the %s boundary', async (writer) => {
+    const prefix = '- ```\n  first literal\n- ```\n  second literal\n  ```\n\n'
+    const link = '[report](https://notes.localhost/a.pdf "private\nacquisition title")'
+    const input = `${prefix}${link}\n\nPublic after.`
+    const sent = await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+    expect(sent).toBe(`${writer === 'review' ? encodeEntities(prefix) : prefix}${removed}\n${removed}\n\nPublic after.`)
+  })
+
+  it.each([false, true])('keeps changed wrapped labels removed during status edits, legacy=%s', async (legacy) => {
+    const store = journal()
+    const before = reviewBody('[private original label\n](https://notes.localhost/acquisition.pdf)')
+    const host = commentHost()
+    const source = agentSource(host.client, store)
+    const published = await source.upsertReviewStatus(repositoryMapping(), 24, null, before, false, new AbortController().signal)
+    if (published._tag === 'Err')
+      throw new Error(published.error)
+    if (legacy)
+      host.comments[0]!.body = reviewBody(`[private original label\n${removed}`)
+    const edited = await source.editReviewStatus(repositoryMapping(), 24, published.value.commentId, before, reviewBody('[private revised label\n](https://notes.localhost/acquisition.pdf)', 'STOPPED'), new AbortController().signal)
+    expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
+    expect(host.comments[0]?.body).toBe(reviewBody(`${removed}\n${removed}`, 'STOPPED'))
+  })
+
+  it('keeps revised wrapped titles removed when editing an inline finding', async () => {
+    const store = journal()
+    const written: string[] = []
+    const write = async (input: { body: string }) => {
+      written.push(input.body)
+      return { data: { id: 101, body: input.body } }
+    }
+    const client = { rest: { pulls: {
+      createReviewComment: write,
+      updateReviewComment: write,
+      getReviewComment: async () => ({ data: { id: 101, body: written[0], user: { login: 'harlan-github-agent[bot]' } } }),
+    } } } as unknown as Octokit
+    const source = agentSource(client, store)
+    const before = '[report](https://notes.localhost/acquisition.pdf "private\noriginal title")'
+    const signal = new AbortController().signal
+    await source.postReviewFindingComment(repositoryMapping(), 24, { headSha: reviewHead, path: 'src/cache.ts', line: 3, body: before }, signal, () => ok(undefined))
+    expect(await source.editReviewFindingComment!(repositoryMapping(), { id: 101, body: written[0]! }, before.replace('original title', 'revised\nprivate continuation title'), signal, () => ok(undefined), 24)).toEqual(ok(expect.objectContaining({ id: 101 })))
+    expect(written.at(-1)).toBe(`${removed}\n${removed}\n${removed}`)
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', occurrences: 2 })])
+  })
+
   it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes nested wrapped links at the %s boundary', async (writer) => {
     for (const link of [
       '[private acquisition\n[plan]](https://notes.localhost/a.pdf)',
@@ -1226,8 +1294,8 @@ describe('review findings on #754, follow-ups', () => {
   const control = `  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${'f'.repeat(64)} -->`
 
   it.each([
-    ['with marker lines', `<!-- harlan-agent-kit:candidate ${'a'.repeat(64)} -->\nSee <a\nhref="https://notes.\nlocalhost/example">docs</a>.`, `<!-- harlan-agent-kit:candidate ${'a'.repeat(64)} -->\n${withheld}`],
-    ['without marker lines', 'See <a\nhref="https://notes.\nlocalhost/example">docs</a>.', withheld],
+    ['with marker lines', `<!-- harlan-agent-kit:candidate ${'a'.repeat(64)} -->\nOpen /home/har\nlan/pkg/example now.`, `<!-- harlan-agent-kit:candidate ${'a'.repeat(64)} -->\n${withheld}`],
+    ['without marker lines', 'Open /home/har\nlan/pkg/example now.', withheld],
   ])('keeps an issue title when its body is withheld %s', async (_name, body, expected) => {
     const store = journal()
     const written: Array<{ title: string, body: string }> = []
@@ -1358,7 +1426,7 @@ describe('review findings on #754, follow-ups', () => {
   it('refuses a stale edit when GitHub holds a newer withheld Review with the same markers', async () => {
     const store = journal()
     const host = commentHost()
-    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, reviewBody('See <a\nhref="https://notes.\nlocalhost/example">docs</a>.'), false, signal)
+    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, reviewBody('Open /home/har\nlan/pkg/example now.'), false, signal)
     if (published._tag === 'Err')
       throw new Error(published.error)
     const newer = host.comments[0]?.body

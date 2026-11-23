@@ -1245,8 +1245,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .then(async (existing) => {
           const priorPublished = withoutLoggedFindingControls(normalizeReviewControl(existing.data.body ?? ''))
           const priorSource = withoutLoggedFindingControls(normalizeReviewControl(expectedBody))
-          const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'automated review' }, preservePublishedRedactions(priorPublished, priorSource, sourceBody))
-          const body = outgoing.text
+          // Parse intact links before old removal markers can hide their destinations.
+          const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'automated review' }, sourceBody)
+          const body = preservePublishedRedactions(priorPublished, priorSource, outgoing.text)
           if (existing.data.issue_url !== undefined && !existing.data.issue_url.endsWith(`/${pullRequestNumber}`))
             return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another pull request.' as const })
           const legacyActor = repository.githubAccount === undefined ? options.legacyActor : undefined
@@ -1278,7 +1279,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           const authority = authorize?.()
           if (authority?._tag === 'Err')
             return authority
-          await outgoing.send(sent => writer.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body: sent, ...requestOptions }))
+          await outgoing.send(() => writer.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body, ...requestOptions }))
           // The compare and swap above is a client side read then write, so a
           // concurrent writer can land between the two. Reading back is the
           // only way to see that the written body no longer holds.
@@ -1445,8 +1446,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       // The finding thread sync calls this on every pass. `send` reports only
       // the write, never a body GitHub already holds. A line GitHub shows
       // removed stays removed, whatever the deny list says now.
-      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'review comment' }, keepRemovedLines(comment.body, githubAccountBody(bodyText, repository.githubAccount)))
-      const body = outgoing.text
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'review comment' }, githubAccountBody(bodyText, repository.githubAccount))
+      const body = keepRemovedLines(comment.body, outgoing.text)
       if (normalizeLoggedFindingControls(comment.body) === body)
         return ok(comment)
       const octokit = await client(repository.github, 'item_write', signal)
@@ -1460,7 +1461,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         const authority = authorize()
         if (authority._tag === 'Err')
           return authority
-        return outgoing.send(sent => octokit.value.rest.pulls.updateReviewComment({ ...request, body: sent }))
+        return outgoing.send(() => octokit.value.rest.pulls.updateReviewComment({ ...request, body }))
           .then(({ data }) => data.body === body ? ok({ id: data.id, body: data.body }) : err('GitHub did not confirm the finding comment.'))
       }).catch((error: unknown) => err(message(error)))
     },

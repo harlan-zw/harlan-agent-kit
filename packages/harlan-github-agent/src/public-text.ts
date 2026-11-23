@@ -489,6 +489,12 @@ function layoutOf(text: string): Layout {
     const container = CONTAINER.exec(line)?.[0] ?? ''
     const depth = container.split('>').length - 1
     const rest = line.slice(container.length)
+    // Resolve the old container before parsing a new item's opening fence.
+    const indentation = rest.match(/^[ \t]*/)?.[0].length ?? 0
+    if (fence !== null && (depth < fence.depth || (rest.trim() !== '' && indentation < fence.indent))) {
+      code.push({ start: fence.start, end: offset })
+      fence = null
+    }
     // Consume list markers only outside code. Inside code they are literal.
     let content = rest
     if (fence === null) {
@@ -496,13 +502,6 @@ function layoutOf(text: string): Layout {
         content = content.slice(item[0].length)
     }
     const indent = rest.length - content.length
-    // Leaving a list container ends its code block, even without a closer.
-    const indentation = rest.match(/^[ \t]*/)?.[0].length ?? 0
-    // A fence inside a blockquote ends with the blockquote.
-    if (fence !== null && (depth < fence.depth || (rest.trim() !== '' && indentation < fence.indent))) {
-      code.push({ start: fence.start, end: offset })
-      fence = null
-    }
     const marker = FENCE.exec(content)
     if (fence !== null) {
       fenced.push(true)
@@ -637,6 +636,10 @@ function htmlLines(text: string, layout: Layout): Array<{ text: string, first: n
       // Inspect attributes before stripping the tag. A host on one line makes
       // the destination's filename on every following line private too.
       lines.push({ text: match[0], first: line, last: line + lineBreaks(match[0]) })
+      // Markdown removes container prefixes before HTML attribute URLs render.
+      // URL parsing then drops tabs and line breaks, including inside hosts.
+      const attributeView = match[0].replaceAll(/\r?\n[ \t]*(?:>[ \t]?)+/g, '\n')
+      lines.push({ text: decodeAll(attributeView).replaceAll(/[\t\r\n]/g, ''), first: line, last: line + lineBreaks(match[0]) })
     }
     line += lineBreaks(text.slice(start, end))
     current.last = line
@@ -653,15 +656,12 @@ function htmlLines(text: string, layout: Layout): Array<{ text: string, first: n
 const SOFT_BREAK = String.raw`\r?\n(?![ \t>]*(?:\r?\n|$))`
 /** Optional spaces, then at most one line break and the next line's blockquote markers. */
 const LINK_GAP = String.raw`[ \t]*(?:${SOFT_BREAK}[ \t>]*)?`
-/** A destination never starts with `>`, so it cannot trade characters with the blockquote markers before it. */
-const LINK_DESTINATION = String.raw`(?:<[^<>\r\n]*>|(?:[^\s()<>]|\([^\s()]*\))(?:[^\s()<]|\([^\s()]*\))*)`
-const LINK_TITLE = String.raw`"(?:[^"\r\n]|${SOFT_BREAK})*"|'(?:[^'\r\n]|${SOFT_BREAK})*'|\((?:[^()\r\n]|${SOFT_BREAK})*\)`
-const LINK_TAIL = String.raw`${LINK_DESTINATION}(?:${LINK_GAP}(?:${LINK_TITLE}))?`
+const LINK_TITLE = String.raw`"(?:\\[^\r\n]|[^\\"\r\n]|${SOFT_BREAK})*"|'(?:\\[^\r\n]|[^\\'\r\n]|${SOFT_BREAK})*'|\((?:\\[^\r\n]|[^\\()\r\n]|${SOFT_BREAK})*\)`
 const INLINE_GAP = new RegExp(LINK_GAP, 'y')
 const INLINE_TITLE = new RegExp(LINK_TITLE, 'y')
 
-/** Read a balanced destination, then its optional title and closing parenthesis. */
-function inlineLinkEnd(text: string, start: number, parentheses: ReadonlyMap<number, number>): number | undefined {
+/** Read a balanced destination and its optional title, for either link form. */
+function linkTailEnd(text: string, start: number, parentheses: ReadonlyMap<number, number>): number | undefined {
   const gap = (at: number) => {
     INLINE_GAP.lastIndex = at
     return at + (INLINE_GAP.exec(text)?.[0].length ?? 0)
@@ -700,11 +700,11 @@ function inlineLinkEnd(text: string, start: number, parentheses: ReadonlyMap<num
     const title = INLINE_TITLE.exec(text)
     at = title === null ? afterGap : gap(afterGap + title[0].length)
   }
-  return text[at] === ')' ? at + 1 : undefined
+  return at
 }
 
 /** Keep label nesting and destination nesting independent, including linked images. */
-function inlineLinks(text: string): Region[] {
+function markdownLinks(text: string, layout: Layout): Region[] {
   // Resolve nested destinations once. Repeated unmatched openers stay linear.
   const parentheses = new Map<number, number>()
   const open: number[] = []
@@ -727,6 +727,11 @@ function inlineLinks(text: string): Region[] {
   const labels: number[] = []
   const links: Region[] = []
   for (let at = 0; at < text.length; at++) {
+    const code = codeAt(layout, at)
+    if (code !== undefined) {
+      at = code.end - 1
+      continue
+    }
     if (text[at] === '\\') {
       at++
       continue
@@ -738,20 +743,25 @@ function inlineLinks(text: string): Region[] {
     const start = labels.pop()
     if (start === undefined || text[at + 1] !== '(')
       continue
-    const end = inlineLinkEnd(text, at + 2, parentheses)
-    if (end !== undefined) {
-      links.push({ start, end })
-      at = end - 1
+    const end = linkTailEnd(text, at + 2, parentheses)
+    if (end !== undefined && text[end] === ')') {
+      links.push({ start, end: end + 1 })
+      at = end
     }
+  }
+  for (const match of text.matchAll(LINK_DEFINITION)) {
+    const end = linkTailEnd(text, match.index + match[0].length, parentheses)
+    if (end !== undefined)
+      links.push({ start: match.index, end })
   }
   return links
 }
 /** A link reference definition. Its destination and title may each start on the next line. */
-const LINK_DEFINITION = new RegExp(String.raw`^[ \t]*(?:>[ \t]*)*\[[^[\]\r\n]+\]:${LINK_GAP}${LINK_TAIL}`, 'gm')
+const LINK_DEFINITION = /^[ \t]*(?:>[ \t]*)*\[(?:\\[^\r\n]|[^\\[\]\r\n])+\]:/gm
 
 /** Links and code spans that wrap onto another line, outside code and within one paragraph. */
 function wrappedConstructs(text: string, layout: Layout): LineSpan[] {
-  const regions = [...inlineLinks(text), ...text.matchAll(LINK_DEFINITION).map(match => ({ start: match.index, end: match.index + match[0].length }))]
+  const regions = markdownLinks(text, layout)
   const links = regions.flatMap(({ start, end }) => {
     const first = lineAt(layout.starts, start)
     const last = lineAt(layout.starts, end - 1)
