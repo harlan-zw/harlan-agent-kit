@@ -57,6 +57,7 @@
     "advocaat": "workspace:*",
     "citty": "catalog:",
     "consola": "catalog:",
+    "entities": "catalog:",
     "esbuild": "catalog:",
     "ghostty-terminal-bindings": "workspace:*",
     "h3": "catalog:",
