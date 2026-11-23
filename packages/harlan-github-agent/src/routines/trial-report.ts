@@ -9,10 +9,7 @@ const TRIAL_REPORT_TURN = `Write this week's trial report from the controller Se
 Do not read the repository, run commands, or open live databases, credentials, transcripts, or host logs.
 This Routine proposes no change and requests no issue. Return an empty candidates list and a null verdict.
 
-Open \`report\` with one paragraph of plain sentences, under 600 characters, before any heading, table, or list.
-Name each trial's suggested verdict, then each action under "This week for Harlan".
-The public run log shows only that paragraph. The Dashboard keeps the rest.
-Then write \`report\` as short Markdown, one section per trial, in evidence order.
+Write \`report\` as short Markdown, one section per trial, in evidence order.
 For each trial, copy its \`markdown\` lines unchanged. Never recompute, round, or reword a number.
 A rule marked "needs Harlan" is Harlan's call. Never call it met.
 If the evidence contradicts a suggested verdict, keep the verdict and add one sentence that says why.

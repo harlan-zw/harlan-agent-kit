@@ -17,7 +17,7 @@ const CANDIDATE_SCHEMA = {
   properties: {
     report: {
       type: 'string',
-      description: 'The full Markdown report. The Dashboard keeps it. The public run log folds only the prose before the first heading, table, or list, up to 600 characters. Open with the outcome and any coverage gap. Name no local path or host there. Use an empty string when the Routine needs no report.',
+      description: 'The full Markdown report. The Dashboard keeps it. The public run log prints counts and issues only, never this text. Only the daily check-in publishes it. Use an empty string when the Routine needs no report.',
     },
     verdict: {
       type: ['object', 'null'],
@@ -143,7 +143,7 @@ function parseCandidates(input: unknown): Result<RoutineScanResponse, string> {
   if (verdict._tag === 'Err')
     return verdict
   return ok({
-    report: typeof input.report === 'string' && input.report.trim() !== '' ? input.report : '',
+    report: typeof input.report === 'string' ? input.report.trim() : '',
     candidates,
     ...(verdict.value === null ? {} : { verdict: verdict.value }),
   })

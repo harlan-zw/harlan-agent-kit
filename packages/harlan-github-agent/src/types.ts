@@ -976,8 +976,6 @@ export type RunLogEntry
     /** New and known Candidates, in the order the Agent returned them. */
     fingerprints: string[]
     verdict: RoutineVerdict | null
-    /** The report's opening prose, or null when none is safe to publish. */
-    summary: string | null
   }
   /** The controller writes this list from its own Review records. */
   | { _tag: 'ReadyDigest', total: number, list: string }

@@ -1,15 +1,13 @@
-import type { Token } from 'marked'
 import type { GitHubIssuePublisher } from './github.ts'
 import type { Result } from './result.ts'
 import type { CheckinVerdict } from './routines/contract.ts'
 import type { JournalStore } from './store.ts'
 import type { Candidate, ClaimedRoutineReportCommand, GitHubAccount, ReportedCandidate, RoutineName, RoutineReportCommand, RoutineRun, RunLogEntry } from './types.ts'
-import { Lexer } from 'marked'
 import { routineIssueLabel } from './candidate-issue-controller.ts'
 import { githubAccountBody } from './github-account.ts'
 import { err, ok } from './result.ts'
 import { MAXIMUM_REPORT_DETAIL_LENGTH } from './routines/contract.ts'
-import { cleanLine, cleanText } from './text.ts'
+import { cleanLine } from './text.ts'
 
 /** The issue every run of one Routine reports to. */
 export function trackingIssueTitle(name: RoutineName, repository: string): string {
@@ -174,9 +172,6 @@ export function routineReportBody(run: Pick<RoutineRun, 'scheduledFor'>, report:
   return `**${run.scheduledFor}** — ${headline}${detail}${candidateDetails(candidates)}`
 }
 
-/** The summary, paragraph breaks included, never passes this length. */
-const MAXIMUM_SUMMARY_LENGTH = 600
-
 /** Home, absolute, Windows, and file paths. A path needs two segments, so `and/or` and `/etc` pass. */
 const PRIVATE_PATH = /~\/|\$HOME\b|%USERPROFILE%|file:\/\/|(?<![\w.~:/-])\/[\w.@-]+\/|\b[a-z]:\\|\[::1\]|\blocalhost\b/i
 const URL_HOST = /\b[a-z][a-z\d+.-]*:\/\/(?:[^\s@/]+@)?(\[[^\]\s]+\]|[^\s/?#:)\]>'"`]+)/gi
@@ -203,10 +198,11 @@ function isPrivateHost(host: string, privateHosts: readonly string[]): boolean {
 /**
  * Whether one line names a local path or a private host.
  *
- * The run log is public, and an Agent writes its report for the private
- * Dashboard. A link to a single-label host such as `http://hogwild:3210`, a
- * private address, a private-network suffix, or a host the configuration
- * names all count, with or without a scheme.
+ * The run log is public. An Agent-written title or a provider's failure
+ * reason can still name a private detail, so a cell that holds one prints a
+ * neutral fallback. A link to a single-label host such as
+ * `http://hogwild:3210`, a private address, a private-network suffix, or a
+ * host the configuration names all count, with or without a scheme.
  */
 function isPrivateLine(line: string, privateHosts: readonly string[]): boolean {
   if (PRIVATE_PATH.test(line))
@@ -219,71 +215,14 @@ function isPrivateLine(line: string, privateHosts: readonly string[]): boolean {
   return [...line.matchAll(BARE_HOST)].some(match => isPrivateHost(match[1]!, privateHosts))
 }
 
-/** Drops every line that names a private detail, then every paragraph left empty. */
-function publicProse(text: string, privateHosts: readonly string[]): string | null {
-  const paragraphs = text.split(/\n\s*\n/)
-    .map(paragraph => paragraph.split('\n').filter(line => !isPrivateLine(line, privateHosts)).join('\n').trim())
-    .filter(paragraph => paragraph !== '')
-  return paragraphs.length === 0 ? null : paragraphs.join('\n\n')
-}
-
-/** Remove parsed comments without treating code spans as HTML. */
-function withoutComments(token: Token): string {
-  if (token.type === 'html' && token.raw.startsWith('<!--'))
-    return ''
-  if (!('tokens' in token) || !Array.isArray(token.tokens))
-    return token.raw
-  let result = ''
-  let offset = 0
-  for (const child of token.tokens as Token[]) {
-    const index = token.raw.indexOf(child.raw, offset)
-    // If a child has no source range, omit this paragraph rather than expose it.
-    if (index < 0)
-      return ''
-    result += token.raw.slice(offset, index) + withoutComments(child)
-    offset = index + child.raw.length
-  }
-  return result + token.raw.slice(offset)
-}
-
 /**
- * The opening prose of an Agent report, short enough to fold into the log.
+ * The fields one run log entry prints.
  *
- * The Markdown is parsed before any line is filtered, so a removed line cannot
- * move a block boundary. Only top-level paragraphs before the first other
- * block qualify. A heading, table, or list ends the summary, even before prose.
- * A leading title has no exception. Quoted, fenced, and HTML evidence never qualifies.
- * HTML blocks end extraction. Markdown tokens cannot prove that nested HTML has closed.
- * Parsed comments are removed within each paragraph.
- * The original tokens decide boundaries, even when redaction removes all prose.
- * A line that names a private path or host drops out. A paragraph that would
- * pass the limit ends the summary, because a cut sentence can break its Markdown.
+ * No Agent prose is among them. Three Reviews in a row found new ways a
+ * fenced block, indented code, or an evidence section escaped an excerpt of
+ * the report, so the entry carries no excerpt at all. The full report stays
+ * in the private archive.
  */
-function reportSummary(detail: string): string | null {
-  const kept: string[] = []
-  let length = 0
-  let sawParagraph = false
-  for (const token of Lexer.lex(detail)) {
-    if (token.type === 'space')
-      continue
-    if (token.type !== 'paragraph') {
-      if (sawParagraph || token.type !== 'code')
-        break
-      continue
-    }
-    sawParagraph = true
-    const text = publicProse(cleanText(withoutComments(token)).replaceAll(/<\/?details>/gi, ''), [])
-    if (text === null)
-      continue
-    const next = length + (kept.length === 0 ? 0 : 2) + text.length
-    if (next > MAXIMUM_SUMMARY_LENGTH)
-      break
-    kept.push(text)
-    length = next
-  }
-  return kept.length === 0 ? null : kept.join('\n\n')
-}
-
 function runLogEntry(report: RoutineRunReport): RunLogEntry {
   switch (report._tag) {
     case 'Scanned':
@@ -292,7 +231,6 @@ function runLogEntry(report: RoutineRunReport): RunLogEntry {
         ...report.tally,
         fingerprints: [...new Set(report.tally.fingerprints)],
         verdict: report.verdict ?? null,
-        summary: reportSummary(report.detail ?? ''),
       }
     case 'ReadyDigest':
       return { _tag: 'ReadyDigest', total: report.total, list: report.list }
@@ -332,17 +270,16 @@ export function parseRunLogEntry(text: string | null): RunLogEntry | null {
     case 'ReadyDigest':
       return isCount(value.total) && typeof value.list === 'string' ? { _tag: 'ReadyDigest', total: value.total, list: value.list } : null
     case 'Scanned': {
-      const { found, fresh, known, outsideScope, oversized, fingerprints, summary } = value
+      const { found, fresh, known, outsideScope, oversized, fingerprints } = value
       const verdict = parseVerdict(value.verdict)
       const limit = oversized === null
         ? null
         : isRecord(oversized) && isCount(oversized.limit) && isCount(oversized.count) ? { limit: oversized.limit, count: oversized.count } : undefined
       if (!isCount(found) || !isCount(fresh) || !isCount(known) || !isCount(outsideScope) || limit === undefined || verdict === undefined
-        || !Array.isArray(fingerprints) || !fingerprints.every(fingerprint => typeof fingerprint === 'string')
-        || (summary !== null && typeof summary !== 'string')) {
+        || !Array.isArray(fingerprints) || !fingerprints.every(fingerprint => typeof fingerprint === 'string')) {
         return null
       }
-      return { _tag: 'Scanned', found, fresh, known, outsideScope, oversized: limit, fingerprints, verdict, summary }
+      return { _tag: 'Scanned', found, fresh, known, outsideScope, oversized: limit, fingerprints, verdict }
     }
     default:
       return null
@@ -447,7 +384,6 @@ function scannedLines(entry: ScannedEntry, reported: readonly ReportedCandidate[
   const owners = reported.length === 0
     ? []
     : ['', '| Proposal | Owner |', '| :-- | :-- |', ...reported.map(candidate => `| ${publicCell(candidate.title, privateHosts, 'Untitled proposal')} | ${ownerCell(candidate)} |`)]
-  const summary = entry.summary === null ? null : publicProse(entry.summary, privateHosts)
   // A Routine's rules drop work for several causes: scope, a per-run cap, or
   // an open issue that already holds it. The count alone carries no cause.
   const dropped = [
@@ -458,7 +394,8 @@ function scannedLines(entry: ScannedEntry, reported: readonly ReportedCandidate[
     ...counts,
     ...owners,
     ...(dropped.length === 0 ? [] : ['', '<details><summary>Dropped proposals</summary>', '', ...dropped, '', 'The run filed no issue for these proposals.', '', '</details>']),
-    ...(summary === null ? [] : ['', '<details><summary>Summary</summary>', '', summary, '', 'The Dashboard History page keeps the full report.', '', '</details>']),
+    '',
+    'The Dashboard History page keeps the full report.',
   ]
 }
 
@@ -466,11 +403,12 @@ function scannedLines(entry: ScannedEntry, reported: readonly ReportedCandidate[
  * Writes one run's entry in the public run log.
  *
  * A heading carries one dot and the run time. Tables carry the counts and the
- * issue that owns each Candidate. Only fields reach a table; the Agent's prose
- * reaches the log as a folded summary at most. The full report stays private.
+ * issue that owns each Candidate. The controller builds every line from stored
+ * fields. No Agent prose reaches the log; the full report stays private.
  *
- * `privateHosts` names the Service's own hosts from configuration. Any text
- * that names one of them, a local path, or a private network host stays out.
+ * `privateHosts` names the Service's own hosts from configuration. A title or
+ * failure cause that names one of them, a local path, or a private network
+ * host prints a neutral fallback.
  */
 export function runLogEntryComment(command: Pick<ClaimedRoutineReportCommand, 'runId' | 'routineName' | 'scheduledFor' | 'reported'> & { entry: RunLogEntry, privateHosts?: readonly string[] }): string {
   const { entry } = command

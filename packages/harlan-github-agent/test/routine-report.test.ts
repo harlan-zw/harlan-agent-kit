@@ -9,7 +9,6 @@ import { describe, expect, it } from 'vitest'
 import { candidateIssueCommands } from '../src/candidate-issue-controller.ts'
 import { ok } from '../src/result.ts'
 import { createRoutineReportController, isRoutineTrackingIssue, parseRunLogEntry, routineReportBody, routineReportCommand, runLogEntryComment, trackingIssueBody, trackingIssueTitle } from '../src/routine-report-controller.ts'
-import { getRoutine } from '../src/routines/index.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -33,7 +32,6 @@ it('replaces a staged result when a retry finishes with newer evidence', () => {
   const report = store.claimNextRoutineReport('publisher', now().toISOString(), 60_000)
   expect(report?.body).toContain('Final attempt')
   expect(report?.body).not.toContain('First attempt')
-  expect(report?.entry).toMatchObject({ _tag: 'Scanned', summary: 'The scan found no issues.' })
   store.close()
 })
 
@@ -113,7 +111,6 @@ function stage(store: ReturnType<typeof openJournalStore>, report: RoutineRunRep
 
 interface Calls {
   issues: string[]
-  issueBodies?: string[]
   updates?: Array<{ title: string, body: string }>
   comments: Array<{ issueNumber: number, body: string }>
 }
@@ -128,7 +125,6 @@ function publisher(calls: Calls, issueNumber = 42): GitHubIssuePublisher {
     createIssue: async (input) => {
       created = true
       calls.issues.push(input.title)
-      ;(calls.issueBodies ??= []).push(input.body)
       return ok({ number: issueNumber, url: `https://github.com/harlan-zw/example/issues/${issueNumber}` })
     },
     createComment: async (input) => {
@@ -241,7 +237,6 @@ describe('a run log entry', () => {
         oversized: { limit: 5, count: 1 },
         fingerprints: ['pnpm-lock.yaml#transitive'],
         verdict: { severity: 'RED', coverage: 'incomplete' },
-        summary: 'Vulnerable transitive dependencies remain. Six cancelled runs have no job logs.',
       },
       reported: [{ title: 'Vulnerable transitive dependencies after pending updates', result: { _tag: 'Proposed', pullRequest: null }, issue: { _tag: 'Filed', number: 752 } }],
     })).toBe([
@@ -265,13 +260,7 @@ describe('a run log entry', () => {
       '',
       '</details>',
       '',
-      '<details><summary>Summary</summary>',
-      '',
-      'Vulnerable transitive dependencies remain. Six cancelled runs have no job logs.',
-      '',
       'The Dashboard History page keeps the full report.',
-      '',
-      '</details>',
       '',
       footer,
     ].join('\n'))
@@ -281,7 +270,7 @@ describe('a run log entry', () => {
     const body = runLogEntryComment({
       ...ciReview,
       scheduledFor: '2027-01-01T00:05:00.000Z',
-      entry: { _tag: 'Scanned', ...quiet, verdict: null, summary: null },
+      entry: { _tag: 'Scanned', ...quiet, verdict: null },
       reported: [],
     })
 
@@ -293,6 +282,8 @@ describe('a run log entry', () => {
       '| --: | --: | --: |',
       '| 0 | 0 | 0 |',
       '',
+      'The Dashboard History page keeps the full report.',
+      '',
       footer,
     ].join('\n'))
   })
@@ -300,7 +291,7 @@ describe('a run log entry', () => {
   it('marks a run that a person must act on even when it reports no Candidate', () => {
     const body = runLogEntryComment({
       ...ciReview,
-      entry: { _tag: 'Scanned', ...quiet, verdict: { severity: 'AMBER', coverage: 'complete' }, summary: null },
+      entry: { _tag: 'Scanned', ...quiet, verdict: { severity: 'AMBER', coverage: 'complete' } },
       reported: [],
     })
 
@@ -311,7 +302,7 @@ describe('a run log entry', () => {
   it('keeps a quiet verdict white when its coverage is incomplete', () => {
     const body = runLogEntryComment({
       ...ciReview,
-      entry: { _tag: 'Scanned', ...quiet, verdict: { severity: 'GREEN', coverage: 'incomplete' }, summary: null },
+      entry: { _tag: 'Scanned', ...quiet, verdict: { severity: 'GREEN', coverage: 'incomplete' } },
       reported: [],
     })
 
@@ -329,7 +320,7 @@ describe('a run log entry', () => {
   ] as const)('names the owner of a %o Candidate whose issue is %o as %s', (result, issue, owner) => {
     const body = runLogEntryComment({
       ...ciReview,
-      entry: { _tag: 'Scanned', ...quiet, found: 1, known: 1, fingerprints: ['a'], verdict: null, summary: null },
+      entry: { _tag: 'Scanned', ...quiet, found: 1, known: 1, fingerprints: ['a'], verdict: null },
       reported: [{ title: 'A defect', result, issue }],
     })
 
@@ -364,298 +355,51 @@ describe('a run log entry', () => {
   })
 })
 
-describe('the summary a run log entry folds', () => {
-  const summaryOf = (detail: string) => {
-    const { entry } = routineReportCommand({ repository: 'harlan-zw/example', routineId, routineName: 'pr-triage', run: { id: runId, scheduledFor: '2026-08-27T07:00:00.000Z' }, report: scanned('evidence', { detail }) })
-    return entry._tag === 'Scanned' ? entry.summary : undefined
-  }
-
-  it('keeps the opening prose and drops local paths, hosts, and everything after the first heading', () => {
-    const detail = [
-      'Coverage: **incomplete**.',
-      '',
-      '**One urgent Candidate.** Vulnerable dependencies remain.',
-      '[Full report and evidence index](https://notes.localhost/notes/ci-review-2026-11-22).',
-      'Evidence directory: `~/scratch/ci-review-2026-11-22/`.',
-      '',
-      '### Scope',
-      '',
-      'Selected 98 of 241 runs.',
-      '',
-      'x'.repeat(15_000),
-    ].join('\n')
-
-    expect(summaryOf(detail)).toBe('Coverage: **incomplete**.\n\n**One urgent Candidate.** Vulnerable dependencies remain.')
-  })
-
-  it('folds no summary when the opening paragraph is too long to keep whole', () => {
-    expect(summaryOf(`${'A long sentence. '.repeat(50)}\n\nShort.`)).toBeNull()
-    expect(summaryOf('')).toBeNull()
-    expect(summaryOf('| Run | Result |\n| :-- | :-- |\n| 1 | ok |')).toBeNull()
-  })
-
-  it('cannot close the fold it sits in', () => {
-    expect(summaryOf('Done.</details> Nothing else.')).toBe('Done. Nothing else.')
+describe('private details in a cell', () => {
+  const owned = (title: string) => runLogEntryComment({
+    runId,
+    routineName: 'pr-triage',
+    scheduledFor: '2026-08-27T07:00:00.000Z',
+    entry: { _tag: 'Scanned', ...quiet, found: 1, fresh: 1, fingerprints: ['a'], verdict: null },
+    reported: [{ title, result: { _tag: 'Proposed', pullRequest: null }, issue: { _tag: 'NotRequested' } }],
+    privateHosts: ['agent.example.org'],
   })
 
   it.each([
-    ['Checked <!-- private-fixture --> every workflow.', 'Checked  every workflow.'],
-    ['**Checked <!-- private-fixture --> every workflow.**', '**Checked  every workflow.**'],
-    ['[Checked <!-- private-fixture --> every workflow.](https://github.com)', '[Checked  every workflow.](https://github.com)'],
-    ['The literal `<!--` is code.\n\nSecond public paragraph.\n\n## Evidence\n\n<!-- private-fixture -->', 'The literal ` ` is code.\n\nSecond public paragraph.'],
-  ])('removes only parsed comments before cleaning public prose: %s', (detail, expected) => {
-    expect(summaryOf(detail)).toBe(expected)
+    ['a filesystem path', 'Rotate /var/log/agent/run.log'],
+    ['a home path', 'Clean $HOME/scratch/run'],
+    ['a Windows path', 'Clean C:\\Users\\agent\\run'],
+    ['a tailnet host', 'Fix https://hogwild.tail1234.ts.net/history'],
+    ['a single-label host', 'Fix http://hogwild:3210/api'],
+    ['a private address', 'Probe 10.0.4.7 times out'],
+    ['a local host name', 'preview.local fails'],
+    ['a configured host, linked', 'Fix https://agent.example.org/history'],
+    ['a configured host, bare', 'agent.example.org restarts twice'],
+  ])('prints a placeholder for a title that names %s', (_case, title) => {
+    expect(owned(title)).toContain('| Untitled proposal | no issue |')
   })
 
-  it.each([
-    ['a fence with a blank line inside', '```text\nprivate-fixture line\n\nprivate-fixture after the blank line\n```'],
-  ])('keeps %s out of the summary', (_case, opening) => {
-    expect(summaryOf(`${opening}\n\nThe run checked every workflow.`)).toBe('The run checked every workflow.')
+  it('keeps a title with public links and repository paths', () => {
+    expect(owned('Update src/store.ts per nuxt.com docs')).toContain('| Update src/store.ts per nuxt.com docs | no issue |')
   })
 
-  it.each([
-    '<!--\n\nprivate-fixture note\n\n-->',
-    '<details>\n<summary>Logs</summary>\n\nprivate-fixture\n\n</details>',
-    '<div>private-fixture</div>',
-  ])('ends the summary at an HTML block: %s', (block) => {
-    expect(summaryOf(`${block}\n\nLater prose.`)).toBeNull()
-    expect(summaryOf(`Public opening.\n\n${block}\n\nLater prose.`)).toBe('Public opening.')
-  })
-
-  it('keeps a fence left open out of the summary', () => {
-    expect(summaryOf('~~~\nprivate-fixture\n\nprivate-fixture again\n\nThe run checked every workflow.')).toBeNull()
-  })
-
-  it('stops at code that follows the opening prose', () => {
-    expect(summaryOf('The run checked every workflow.\n\n    private-fixture\n\nLater prose.')).toBe('The run checked every workflow.')
-  })
-
-  it('counts paragraph breaks toward the limit', () => {
-    const paragraph = `${'Word '.repeat(59)}ends.`
-
-    expect(paragraph).toHaveLength(300)
-    expect(summaryOf(`${paragraph}\n\n${paragraph}`)).toBe(paragraph)
-    expect(summaryOf(`${paragraph}\n\n${paragraph.slice(2)}`)).toHaveLength(600)
-  })
-
-  it.each([
-    ['a filesystem path', 'The agent wrote logs to /var/log/agent/run.log.'],
-    ['a home path', 'Evidence sits in $HOME/scratch/run.'],
-    ['a Windows path', 'Evidence sits in C:\\Users\\agent\\run.'],
-    ['a tailnet host', 'Open https://hogwild.tail1234.ts.net/history for detail.'],
-    ['a single-label host', 'The Service at http://hogwild:3210/api answered.'],
-    ['a private address', 'The probe hit 10.0.4.7 and timed out.'],
-    ['a local host name', 'The site at preview.local failed.'],
-  ])('drops a line that names %s', (_case, line) => {
-    expect(summaryOf(`${line}\nThe run checked every workflow.`)).toBe('The run checked every workflow.')
-  })
-
-  it('keeps public links and repository paths', () => {
-    const line = 'See https://github.com/harlan-zw/example/issues/4 and src/store.ts, per nuxt.com docs.'
-
-    expect(summaryOf(line)).toBe(line)
-  })
-})
-
-describe('configured private hosts', () => {
-  it('drops a summary line that names a configured host, with or without a link', () => {
-    const body = runLogEntryComment({
-      runId,
-      routineName: 'pr-triage',
-      scheduledFor: '2026-08-27T07:00:00.000Z',
-      entry: { _tag: 'Scanned', ...quiet, verdict: null, summary: 'Open https://agent.example.org/history for detail.\nagent.example.org restarted twice.\nThe run checked every workflow.' },
-      reported: [],
-      privateHosts: ['agent.example.org'],
-    })
-
-    expect(body).toContain('<details><summary>Summary</summary>\n\nThe run checked every workflow.\n\nThe Dashboard')
-    expect(body).not.toContain('agent.example.org')
-  })
-
-  it('folds no summary when every line names a private host', () => {
-    const body = runLogEntryComment({
-      runId,
-      routineName: 'pr-triage',
-      scheduledFor: '2026-08-27T07:00:00.000Z',
-      entry: { _tag: 'Scanned', ...quiet, verdict: null, summary: 'agent.example.org restarted twice.' },
-      reported: [],
-      privateHosts: ['agent.example.org'],
-    })
-
-    expect(body).not.toContain('<summary>Summary</summary>')
-  })
-
-  it('reaches the comment through the controller', async () => {
+  it('keeps a failure cause that names a configured host out of the comment', async () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
-      stage(store, scanned('evidence', { detail: 'Open https://agent.example.org/history.\nThe run checked every workflow.' }))
-      settleRun(store, runId)
+      failRun(store, runId, 'https://agent.example.org/api refused the request.')
       const calls: Calls = { issues: [], comments: [] }
 
       await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter', privateHosts: ['agent.example.org'] })
         .publishPending(new AbortController().signal)
 
-      expect(calls.comments[0]?.body).toContain('The run checked every workflow.')
+      expect(calls.comments[0]?.body).toContain('| Aug 27, 07:00 UTC | The Dashboard History page keeps this cause. | next scheduled run |')
       expect(calls.comments[0]?.body).not.toContain('agent.example.org')
     }
     finally {
       store.close()
     }
   })
-})
-
-it.each([
-  ['an inline comment marker', 'The literal `<!--` is code.\n\n## Evidence\n\n<!-- ordinary comment -->\n\nprivate-fixture paragraph.', 'is code.'],
-  ['a leading thematic break', '---\n\nprivate-fixture paragraph.', null],
-  ['a quote after redacted prose', 'Evidence: /var/log/agent/run.log\n\n> quoted evidence\n\nprivate-fixture paragraph.', null],
-  ['a fence after redacted prose', 'Evidence: /var/log/agent/run.log\n\n```text\nlogs\n```\n\nprivate-fixture paragraph.', null],
-  ['HTML after redacted prose', 'Evidence: /var/log/agent/run.log\n\n<div>logs</div>\n\nprivate-fixture paragraph.', null],
-] as const)('keeps evidence behind %s in the archive across scan parsers and public consumers', async (_name, report, summary) => {
-  for (const name of ['pr-triage', 'dependency-updates', 'vitals-review'] as const) {
-    const parsed = getRoutine(name).parseResponse({ report, candidates: [], outcome: 'complete', updates: [], fieldFindings: [], labFindings: [] })
-    if (parsed._tag === 'Err')
-      throw new Error(parsed.error)
-    const store = openJournalStore(':memory:')
-    try {
-      seed(store)
-      stage(store, scanned('evidence', { detail: parsed.value.report }))
-      settleRun(store, runId)
-      const calls: Calls = { issues: [], comments: [] }
-
-      await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
-        .publishPending(new AbortController().signal)
-
-      expect(calls.comments).toHaveLength(1)
-      expect(calls.comments[0]?.body).not.toContain('private-fixture')
-      if (summary === null)
-        expect(calls.comments[0]?.body).not.toContain('<summary>Summary</summary>')
-      else
-        expect(calls.comments[0]?.body).toContain(summary)
-      expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain(report)
-    }
-    finally {
-      store.close()
-    }
-  }
-})
-
-it.each([
-  ['nested folds', '<details>\n<summary>Outer</summary>\n\n<details>\n<summary>Inner</summary>\n\nInner evidence.\n\n</details>\n\nprivate-fixture between closing tags.\n\n</details>'],
-  ['mixed nested elements', '<div>\n\n<details>\n\nInner evidence.\n\n</details>\n\nprivate-fixture between closing tags.\n\n</div>'],
-  ['nested folds in one HTML token', '<details><details>Inner evidence.</details>\n\nprivate-fixture between closing tags.\n\n</details>'],
-  ['an unclosed outer fold', '<details>\n\n<details>\n\nInner evidence.\n\n</details>\n\nprivate-fixture after the inner fold.'],
-])('keeps %s private across scan parsers, stored entries, and public consumers', async (_name, report) => {
-  for (const name of ['pr-triage', 'dependency-updates', 'vitals-review'] as const) {
-    const parsed = getRoutine(name).parseResponse({ report, candidates: [], outcome: 'complete', updates: [], fieldFindings: [], labFindings: [] })
-    if (parsed._tag === 'Err')
-      throw new Error(parsed.error)
-    const store = openJournalStore(':memory:')
-    try {
-      seed(store)
-      stage(store, scanned('evidence', { detail: parsed.value.report }))
-      settleRun(store, runId)
-      const calls: Calls = { issues: [], comments: [] }
-
-      await createRoutineReportController({
-        github: publisher(calls),
-        now,
-        store: {
-          ...store,
-          claimNextRoutineReport: (...args) => {
-            const command = store.claimNextRoutineReport(...args)
-            if (command !== null) {
-              expect(command.entry).toMatchObject({ _tag: 'Scanned', summary: null })
-              if (command.entry !== null)
-                expect(runLogEntryComment({ ...command, entry: command.entry })).not.toContain('private-fixture')
-            }
-            return command
-          },
-        },
-        workerId: 'reporter',
-      }).publishPending(new AbortController().signal)
-
-      expect(calls.comments).toHaveLength(1)
-      for (const body of [...calls.issues, ...(calls.issueBodies ?? []), ...(calls.updates ?? []).map(update => update.body), ...calls.comments.map(comment => comment.body)])
-        expect(body).not.toContain('private-fixture')
-      expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain(report)
-    }
-    finally {
-      store.close()
-    }
-  }
-})
-
-it.each(['pr-triage', 'dependency-updates', 'vitals-review'] as const)('keeps opening indented evidence private through the %s scan parser and publisher', async (name) => {
-  const report = '    private-fixture first line\n    private-fixture second line\n\nThe run checked every workflow.'
-  const parsed = getRoutine(name).parseResponse({ report, candidates: [], outcome: 'complete', updates: [], fieldFindings: [], labFindings: [] })
-  if (parsed._tag === 'Err')
-    throw new Error(parsed.error)
-  const store = openJournalStore(':memory:')
-  try {
-    seed(store)
-    stage(store, scanned('evidence', { detail: parsed.value.report }))
-    settleRun(store, runId)
-    const calls: Calls = { issues: [], comments: [] }
-
-    await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
-      .publishPending(new AbortController().signal)
-
-    expect(calls.comments[0]?.body).toContain('<details><summary>Summary</summary>\n\nThe run checked every workflow.\n\n')
-    expect(calls.comments[0]?.body).not.toContain('private-fixture')
-    expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain(report)
-  }
-  finally {
-    store.close()
-  }
-})
-
-it.each([
-  '# Evidence',
-  '## Evidence',
-  'Evidence\n========',
-  '- Evidence',
-  '| Evidence |\n| --- |\n| fixture |',
-])('keeps prose after the opening section boundary %s in the archive only', async (opening) => {
-  const report = `${opening}\n\nprivate-fixture paragraph.`
-  const store = openJournalStore(':memory:')
-  try {
-    seed(store)
-    stage(store, scanned('evidence', { detail: report }))
-    settleRun(store, runId)
-    const calls: Calls = { issues: [], comments: [] }
-
-    await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
-      .publishPending(new AbortController().signal)
-
-    expect(calls.comments).toHaveLength(1)
-    expect(calls.comments[0]?.body).not.toContain('private-fixture')
-    expect(calls.comments[0]?.body).not.toContain('<summary>Summary</summary>')
-    expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain(report)
-  }
-  finally {
-    store.close()
-  }
-})
-
-it('publishes only the prose after an opening fence and keeps the fence in the archive', async () => {
-  const store = openJournalStore(':memory:')
-  try {
-    seed(store)
-    stage(store, scanned('evidence', { detail: '```text\nprivate-fixture line\n\nprivate-fixture after the blank line\n```\n\nThe run checked every workflow.' }))
-    settleRun(store, runId)
-    const calls: Calls = { issues: [], comments: [] }
-
-    await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
-      .publishPending(new AbortController().signal)
-
-    expect(calls.comments[0]?.body).toContain('<details><summary>Summary</summary>\n\nThe run checked every workflow.\n\n')
-    expect(calls.comments[0]?.body).not.toContain('private-fixture')
-    expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain('private-fixture after the blank line')
-  }
-  finally {
-    store.close()
-  }
 })
 
 describe('stored run log entries', () => {
@@ -679,80 +423,31 @@ describe('stored run log entries', () => {
 })
 
 describe('publishing the run log', () => {
-  it.each([
-    ['quoted fence', '> ```text\n> PRIVATE_EVIDENCE_FIXTURE\n> ```'],
-    ['nested quoted fence', '> > ~~~text\n> > PRIVATE_EVIDENCE_FIXTURE\n> > ~~~'],
-    ['adjacent heading', '## Evidence\nPRIVATE_EVIDENCE_FIXTURE'],
-    ['adjacent fence', '```text\nPRIVATE_EVIDENCE_FIXTURE\n```'],
-    ['adjacent list', '- PRIVATE_EVIDENCE_FIXTURE'],
-    ['adjacent HTML', '<div>\nPRIVATE_EVIDENCE_FIXTURE\n</div>'],
-  ])('keeps opening prose public and %s evidence only in the archive', async (_name, evidence) => {
+  it('publishes no Agent prose, whatever the report holds, and keeps it all in the archive', async () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
-      stage(store, scanned('pr-triage | 0 found', { detail: `The scan found no issues.\n${evidence}` }))
+      const detail = [
+        'PRIVATE_OPENING The scan read /var/log/agent/run.log.',
+        '',
+        '```text',
+        'PRIVATE_FENCE',
+        '',
+        'PRIVATE_FENCE_AFTER_BLANK',
+        '```',
+        '',
+        '    PRIVATE_INDENTED_CODE',
+        '',
+        '## Evidence',
+        'PRIVATE_EVIDENCE',
+      ].join('\n')
+      stage(store, scanned('pr-triage | 0 found', { detail }))
       settleRun(store, runId)
       const calls: Calls = { issues: [], comments: [] }
-      const results = await createRoutineReportController({
-        github: publisher(calls),
-        now,
-        store: {
-          ...store,
-          claimNextRoutineReport: (...args) => {
-            const command = store.claimNextRoutineReport(...args)
-            if (command !== null)
-              expect(command.body).toContain(evidence)
-            return command
-          },
-        },
-        workerId: 'reporter',
-      }).publishPending(new AbortController().signal)
 
-      expect(results).toEqual([{ _tag: 'Ok', value: { repository: 'harlan-zw/example', issueNumber: 42 } }])
-      expect(calls.comments).toHaveLength(1)
-      expect(calls.comments[0]?.body).toContain('The scan found no issues.')
-      for (const body of [...calls.issues, ...(calls.issueBodies ?? []), ...(calls.updates ?? []).map(update => update.body), ...calls.comments.map(comment => comment.body)]) {
-        expect(body).not.toContain('PRIVATE_EVIDENCE_FIXTURE')
-        expect(body).not.toContain('## Evidence')
-      }
-    }
-    finally {
-      store.close()
-    }
-  })
+      await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+        .publishPending(new AbortController().signal)
 
-  it.each([
-    ['backticks', '```text\nPrivate fixture header.\n\nPRIVATE_REPORT_FIXTURE\n```', 'The scan found no issues.'],
-    ['tildes', '~~~text\nPrivate fixture header.\n\nPRIVATE_REPORT_FIXTURE\n~~~', 'The scan found no issues.'],
-    ['longer fence', '````text\n\n```\n\nPRIVATE_REPORT_FIXTURE\n````', 'The scan found no issues.'],
-    ['different marker', '```text\n\n~~~\n\nPRIVATE_REPORT_FIXTURE\n```', 'The scan found no issues.'],
-    ['unclosed fence', '```text\nPrivate fixture header.\n\nPRIVATE_REPORT_FIXTURE', null],
-    ['adjacent prose', '```text\nPrivate fixture header.\n\nPRIVATE_REPORT_FIXTURE\n```', 'The scan found no issues.', '\n'],
-  ])('keeps %s fenced report content private when publishing a scanned report', async (_name, block, summary, separator = '\n\n') => {
-    const store = openJournalStore(':memory:')
-    try {
-      seed(store)
-      stage(store, scanned('pr-triage | 0 found', { detail: `${block}${separator}The scan found no issues.` }))
-      settleRun(store, runId)
-      const calls: Calls = { issues: [], comments: [] }
-      const results = await createRoutineReportController({
-        github: publisher(calls),
-        now,
-        store: {
-          ...store,
-          claimNextRoutineReport: (...args) => {
-            const command = store.claimNextRoutineReport(...args)
-            if (command !== null) {
-              expect(command.body).toContain(block)
-              expect(command.entry).toMatchObject({ _tag: 'Scanned', summary })
-            }
-            return command
-          },
-        },
-        workerId: 'reporter',
-      }).publishPending(new AbortController().signal)
-
-      expect(results).toEqual([{ _tag: 'Ok', value: { repository: 'harlan-zw/example', issueNumber: 42 } }])
       expect(calls.comments.map(comment => comment.body)).toEqual([[
         `<!-- routine-run: ${runId} -->`,
         '### ⚪ pr-triage · Aug 27, 07:00 UTC',
@@ -760,10 +455,12 @@ describe('publishing the run log', () => {
         '| Found | New | Known |',
         '| --: | --: | --: |',
         '| 0 | 0 | 0 |',
-        ...(summary === null ? [] : ['', '<details><summary>Summary</summary>', '', summary, '', 'The Dashboard History page keeps the full report.', '', '</details>']),
+        '',
+        'The Dashboard History page keeps the full report.',
         '',
         footer,
       ].join('\n')])
+      expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain(detail)
     }
     finally {
       store.close()
@@ -799,13 +496,7 @@ describe('publishing the run log', () => {
         '| :-- | :-- |',
         '| Fixture title | no issue |',
         '',
-        '<details><summary>Summary</summary>',
-        '',
-        'The scheduler can open one run twice.',
-        '',
         'The Dashboard History page keeps the full report.',
-        '',
-        '</details>',
         '',
         footer,
       ].join('\n'))

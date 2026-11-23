@@ -745,7 +745,7 @@ describe('running one scan', () => {
       store.completeRoutineRun({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: now().toISOString(), evidence: 'settled' })
 
       expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)).toMatchObject({
-        entry: { _tag: 'Scanned', found: 2, fresh: 1, known: 0, outsideScope: 0, oversized: { limit: 5, count: 1 }, fingerprints: [candidate.fingerprint], verdict: null, summary: 'One defect found.' },
+        entry: { _tag: 'Scanned', found: 2, fresh: 1, known: 0, outsideScope: 0, oversized: { limit: 5, count: 1 }, fingerprints: [candidate.fingerprint], verdict: null },
         reported: [{ title: 'Fixture title', issue: { _tag: 'Requested' } }],
       })
     }
@@ -1256,13 +1256,6 @@ describe('agent retro scan publication', () => {
 
 describe('trial report scan', () => {
   const repository = 'harlan-zw/harlan-agent-kit'
-
-  it('asks for an opening paragraph that the public run log can carry', () => {
-    const prompt = getRoutine('trial-report').scanPrompt({ name: 'trial-report', repository, mode: 'report', priorCandidates: [] })
-
-    expect(prompt).toContain('Open `report` with one paragraph of plain sentences, under 600 characters, before any heading, table, or list.')
-    expect(prompt).toContain('Name each trial\'s suggested verdict, then each action under "This week for Harlan".')
-  })
 
   it('hands the Agent every trial reading, files no issue, and logs the report', async () => {
     const store = openJournalStore(':memory:')

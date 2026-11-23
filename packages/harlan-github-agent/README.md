@@ -747,10 +747,10 @@ A counts table gives Found, New, and Known. It adds Coverage when the run states
 An owner table names the issue that holds each Candidate the run reported, new or known.
 A Candidate without an Agent-written title reads Untitled proposal. Its claim never reaches the run log.
 Candidates the controller dropped fold under Dropped proposals. The fold counts them but names no cause.
-The opening prose of the Agent report folds under Summary, up to 600 characters. Fences, comments, and HTML elements never count as prose.
-A line that names a local path, a private network host, or a dashboard origin host never reaches the run log.
-The full report stays in the private archive. The Dashboard History page shows it.
 A failed run names its cause. The ready digest prints its list under the heading.
+The controller builds every line from stored fields. No Agent report text reaches the run log.
+The full report stays in the private archive. The Dashboard History page shows it.
+A title or failure cause that names a local path, a private network host, or a dashboard origin host prints a placeholder.
 A skipped run writes nothing, and so does a run with nothing to check. The Dashboard lists both.
 
 ## Adding a Routine

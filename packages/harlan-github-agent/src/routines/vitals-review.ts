@@ -555,8 +555,8 @@ Do not duplicate work already owned by an open issue or pull request.`),
     parseResponse: (input) => {
       if (!isRecord(input) || typeof input.report !== 'string')
         return err('The vitals review Routine answered without its report.')
-      const report = input.report
-      if (report.trim() === '')
+      const report = input.report.trim()
+      if (report === '')
         return err('The vitals review Routine answered without its report.')
       if (report.length > MAXIMUM_REPORT_DETAIL_LENGTH)
         return err(`The vitals review report exceeds ${MAXIMUM_REPORT_DETAIL_LENGTH} characters. Shorten it and name the findings it omits.`)
