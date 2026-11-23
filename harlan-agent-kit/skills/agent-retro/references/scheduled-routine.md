@@ -65,6 +65,7 @@ Name every stalled Routine in the report, even when you propose no Candidate for
 ## Report
 
 Return the controller's JSON schema. Include a Markdown report and a structured verdict.
+GitHub shows the report and each Candidate. Follow the [comment voice](../../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 The report names evidence coverage, confirmed findings, existing work, blockers, and next actors.
 Use `RED` for a confirmed active failure, `AMBER` for warnings, and `GREEN` only for clear sampled evidence.
 Set coverage to `incomplete` whenever any source is unavailable or sampling omits records.

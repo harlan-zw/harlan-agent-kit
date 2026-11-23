@@ -58,6 +58,7 @@ Group repairs that share one cause. Keep every database's disposition visible in
 ## Report
 
 Return `report`, `verdict`, and `candidates` through the controller's JSON response.
+GitHub shows the report and each Candidate. Follow the [comment voice](../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 The report starts with the comparison windows, database coverage, and the next required action.
 List ranked findings with measured cost, source, prior-window change, existing work, and verification.
 List uncovered databases and the exact next read. Keep raw SQL, identifiers, and credentials out of public reports.

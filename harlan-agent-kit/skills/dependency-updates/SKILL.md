@@ -33,8 +33,9 @@ Use recursive JSON output and explicitly include the root workspace.
 Check unused catalog entries separately against registry metadata.
 Use each repository's pinned pnpm version. Do not install a newer package manager merely to run the scan.
 An outdated command may exit nonzero when updates exist. Distinguish that from a registry or authentication failure.
-If registry reads fail, return `outcome: blocked` with the error in `report` and an empty update list.
+If registry reads fail, return `outcome: blocked` with the failed read and its cause in `report`, and an empty update list.
 Otherwise return `outcome: complete`, a report, and the update list.
+GitHub shows the report. Follow the [comment voice](../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 
 Every update includes `manifest`, `name`, `current`, and `latest`.
 Use repository-relative manifest paths and exact versions, without range operators.
