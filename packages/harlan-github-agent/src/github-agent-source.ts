@@ -1091,10 +1091,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           return err('The stored issue triage comment belongs to another GitHub actor.')
         if (existing !== undefined && existing.body === body && existing.html_url !== undefined)
           return ok({ commentId: existing.id, url: existing.html_url })
-        const written = await outgoing.send(sent => existing === undefined
-          ? octokit.value.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body: sent, ...requestOptions })
-          : octokit.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions }))
-        const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
+        const writtenId = await outgoing.send(async sent => (existing === undefined
+          ? await octokit.value.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body: sent, ...requestOptions })
+          : await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions })).data.id)
+        const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: writtenId, ...requestOptions })
         if (
           confirmed.data.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase()
           || confirmed.data.body !== body
@@ -1358,10 +1358,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         const authorization = authorize?.()
         if (authorization?._tag === 'Err')
           return authorization
-        const written = await outgoing.send(sent => existing === undefined
-          ? writer.value.rest.issues.createComment({ owner, repo, issue_number: pullRequestNumber, body: sent, ...requestOptions })
-          : writer.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions }))
-        const confirmed = await writer.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
+        const writtenId = await outgoing.send(async sent => (existing === undefined
+          ? await writer.value.rest.issues.createComment({ owner, repo, issue_number: pullRequestNumber, body: sent, ...requestOptions })
+          : await writer.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions })).data.id)
+        const confirmed = await writer.value.rest.issues.getComment({ owner, repo, comment_id: writtenId, ...requestOptions })
         const writerLogin = adopted && legacyActor !== undefined ? legacyActor.login.toLowerCase() : actor
         if (
           confirmed.data.user?.login.toLowerCase() !== writerLogin
