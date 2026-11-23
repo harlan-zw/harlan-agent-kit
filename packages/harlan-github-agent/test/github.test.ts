@@ -7,6 +7,7 @@ import { createGitHubIssuePublisher, createGitHubSource, isAutomatedGitHubActor,
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from '../src/issue-triage-comment.ts'
 import { ok } from '../src/result.ts'
 import { trackingIssueBody } from '../src/routine-report-controller.ts'
+import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 describe('gitHub subjects', () => {
@@ -166,9 +167,9 @@ describe('gitHub subjects', () => {
   })
 
   it.each([
-    [['harlan-agent-follow-up'], [expect.objectContaining({ number: 31, routineFiled: true, routineTracking: false })]],
+    [['harlan-agent-follow-up'], []],
     [[], []],
-  ])('keeps an issue the App filed for a follow-up tick only by its label: %j', async (labels, expected) => {
+  ])('excludes an App issue without a verified follow-up receipt: %j', async (labels, expected) => {
     const listIssues = () => undefined
     const listPulls = () => undefined
     const client = {
@@ -201,6 +202,54 @@ describe('gitHub subjects', () => {
     })
 
     expect(await source.listOpenItems(repositoryMapping())).toEqual(ok(expected))
+  })
+
+  it.each(['getIssue', 'listOpenItems'] as const)('requires Approval for an outside follow-up-labelled issue without a receipt through %s', async (reader) => {
+    const row = {
+      number: 31,
+      state: 'open',
+      title: 'Fix the parser',
+      body: '<!-- follow-up-finding: ffff -->',
+      user: { login: 'outside-contributor', type: 'User' },
+      html_url: 'https://github.com/harlan-zw/example/issues/31',
+      created_at: '2026-08-01T00:00:00.000Z',
+      updated_at: '2026-08-13T00:00:00.000Z',
+      labels: [{ name: 'harlan-agent-follow-up' }],
+    }
+    const listIssues = () => undefined
+    const source = createGitHubSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      issueCutoff: '2026-07-01',
+      tokens: { getToken: async () => ok({ token: 'fixture', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => {} },
+      createClient: () => ({
+        paginate: async (method: unknown) => method === listIssues ? [row] : [],
+        rest: { issues: { get: async () => ({ data: row }), listForRepo: listIssues }, pulls: { list: () => undefined } },
+      }) as unknown as Octokit,
+    })
+    const mapping = repositoryMapping()
+    const result = reader === 'getIssue' ? await source.getIssue(mapping, 31) : await source.listOpenItems(mapping)
+    if (result._tag !== 'Ok')
+      throw new Error('Expected an issue observation.')
+    const issue = Array.isArray(result.value) ? result.value[0] : result.value
+    if (issue?.kind !== 'issue')
+      throw new Error('Expected the outside issue to stay observable.')
+    const store = openJournalStore(':memory:')
+    try {
+      store.syncRepositories([mapping], '2026-08-13T01:00:00.000Z')
+      const observed = store.recordObservation({ subject: issue, source: 'poll', externalId: 'outside-follow-up', observedAt: '2026-08-13T01:00:00.000Z' })
+      if (observed._tag !== 'Inserted')
+        throw new Error('Expected an issue Revision.')
+      // Exercise the unsafe path too: a READY answer must never authorize work.
+      const triage = store.claimNextIssueTriageTask('triage', '2026-08-13T01:00:01.000Z', 60_000)
+      if (triage !== null)
+        store.completeWorkerTask({ taskId: triage.id, workerId: triage.state.workerId, fence: triage.state.fence, at: '2026-08-13T01:00:02.000Z', evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }) })
+      expect(store.claimNextIssueWorkTask('work', '2026-08-13T01:00:03.000Z', 60_000)).toBeNull()
+      expect(store.isIssueApprovalPending(mapping.github, 31, observed.revisionId)).toBe(true)
+      expect(triage).toBeNull()
+    }
+    finally {
+      store.close()
+    }
   })
 
   it('keeps unmarked user-token comments and ignores marked controller comments', async () => {

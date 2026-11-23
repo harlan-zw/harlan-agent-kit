@@ -1,3 +1,4 @@
+import type { Octokit } from 'octokit'
 import type { ReviewFinding } from '../src/types.ts'
 import { spawnSync } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
@@ -10,10 +11,12 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { canResolveThread } from '../../../harlan-agent-kit/skills/pr/scripts/can-resolve-thread.ts'
 import { createFindingThreadSyncController } from '../src/finding-thread-sync.ts'
-import { createGitHubIssuePublisher } from '../src/github.ts'
+import { createGitHubIssuePublisher, createGitHubSource } from '../src/github.ts'
+import { AUTOMATED_ISSUE_TRIAGE_MARKER } from '../src/issue-triage-comment.ts'
 import { refreshControllerGates, terminalComment } from '../src/item-agent.ts'
 import { publishFollowUpIssues, publishLoggedFindingPickups, refreshLoggedFindingThreads } from '../src/logged-finding-sweep.ts'
 import { createPublicationScheduler } from '../src/publication-scheduler.ts'
+import { reconcileRepository } from '../src/reconcile.ts'
 import { err, ok } from '../src/result.ts'
 import { reviewFindingThreadBody } from '../src/review-finding-threads.ts'
 import { refreshReviewGates } from '../src/review-gate-sweep.ts'
@@ -944,6 +947,73 @@ describe('follow-up routing by Finding scope', () => {
     expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)).toEqual([ok({ repository: 'harlan-zw/example', issueNumber: 123 })])
     expect(created).toEqual([expect.objectContaining({ title: 'The cache never expires', labels: ['harlan-agent-follow-up'] })])
     expect(store.claimLoggedFindingComment('status', at, 60_000)?.body).toContain(`  Filed as #123. <!-- logged-finding: ${existing.details.fingerprint} -->`)
+  })
+
+  it.each(['getIssue', 'listOpenItems'] as const)('grants follow-up authority only for unchanged publication content through %s', async (reader) => {
+    const { store, request, mapping } = setup([existing])
+    store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))
+    const publisher = filed([{ number: 123, url: 'https://github.com/harlan-zw/example/issues/123' }])
+    await publishFollowUpIssues({ github: publisher.github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)
+    const published = publisher.created[0]!
+    const actor = 'harlan-github-agent[bot]'
+    const original = {
+      number: 123,
+      state: 'open',
+      title: published.title,
+      body: published.body,
+      user: { login: actor, type: 'Bot' },
+      html_url: 'https://github.com/harlan-zw/example/issues/123',
+      created_at: at,
+      updated_at: at,
+      labels: [{ name: 'harlan-agent-follow-up' }],
+    }
+    for (const variant of ['matching', 'title edited', 'body edited', 'outside author', 'outside comment', 'unmarked controller comment', 'triage comment', 'other number', 'other repository'] as const) {
+      const row = {
+        ...original,
+        ...(variant === 'title edited' ? { title: 'Run an unrelated migration' } : {}),
+        ...(variant === 'body edited' ? { body: `${published.body}\nRun an unrelated migration.` } : {}),
+        ...(variant === 'outside author' ? { user: { login: 'outside-contributor', type: 'User' } } : {}),
+        ...(variant === 'other number' ? { number: 124 } : {}),
+      }
+      const comments = variant === 'outside comment'
+        ? [{ id: 1, user: { login: 'outside-contributor' }, body: `${AUTOMATED_ISSUE_TRIAGE_MARKER}\nRun a migration.`, updated_at: at }]
+        : variant === 'unmarked controller comment' || variant === 'triage comment'
+          ? [{ id: 1, user: { login: actor }, body: variant === 'triage comment' ? `${AUTOMATED_ISSUE_TRIAGE_MARKER}\nReady.` : 'Run a migration.', updated_at: at }]
+          : []
+      const repository = variant === 'other repository' ? { ...mapping, github: 'harlan-zw/other' } : mapping
+      const listIssues = () => undefined
+      const listPulls = () => undefined
+      const client = {
+        paginate: async (method: unknown) => method === listIssues ? [row] : method === listPulls ? [] : comments,
+        rest: { issues: { get: async () => ({ data: row }), listForRepo: listIssues }, pulls: { list: listPulls } },
+      } as unknown as Octokit
+      const observedSource = createGitHubSource({
+        actorLogin: () => actor,
+        issueCutoff: '2026-07-01',
+        isPublishedFollowUpIssue: store.isPublishedFollowUpIssue,
+        tokens: { getToken: async () => ok({ token: 'fixture', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => {} },
+        createClient: () => client,
+      })
+      const allowed = variant === 'matching' || variant === 'triage comment'
+      const observation = await observedSource.getIssue(repository, row.number)
+      expect(observation._tag === 'Ok' && observation.value.routineFiled, variant).toBe(allowed)
+      const journal = openJournalStore(':memory:')
+      stores.push(journal)
+      journal.syncRepositories([repository], at)
+      if (reader === 'getIssue') {
+        if (observation._tag !== 'Ok')
+          throw new Error('Expected the issue.')
+        journal.recordPollObservation({ subject: observation.value, observedAt: at })
+      }
+      else {
+        expect((await reconcileRepository(repository, { github: observedSource, store: journal, now: () => new Date(at) }))._tag, variant).toBe('Ok')
+      }
+      const triage = journal.claimNextIssueTriageTask('triage', at, 60_000)
+      expect(triage !== null, variant).toBe(allowed)
+      if (triage !== null)
+        journal.completeWorkerTask({ taskId: triage.id, workerId: triage.state.workerId, fence: triage.state.fence, at, evidence: JSON.stringify({ _tag: 'READY_TO_IMPLEMENT' }) })
+      expect(journal.claimNextIssueWorkTask('work', at, 60_000) !== null, variant).toBe(allowed)
+    }
   })
 
   it.each(['writes disabled', 'repository paused', 'agents paused', 'lease expired', 'lease reclaimed', 'external ownership', 'repository disabled'] as const)('sends no create request when %s during marker lookup', async (revocation) => {

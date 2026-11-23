@@ -95,6 +95,8 @@ export interface GitHubSourceOptions {
   issueCutoff: string
   /** The login the controller posts as, which depends on how the repository authenticates. */
   actorLogin: (repository: RepositoryMapping) => string
+  /** Verifies the issue number and current text against a local publication receipt. */
+  isPublishedFollowUpIssue?: (repository: RepositoryMapping, issue: { number: number, title: string, body: string | null }) => boolean
   createClient?: (token: string) => Octokit
   userAgent?: string
 }
@@ -190,13 +192,15 @@ export function isEligibleGitHubSubjectAuthor(
 }
 
 /**
- * True for an issue this service filed: a Routine's Candidate or a follow-up tick.
- *
- * The App authors both, so the author allowlist would hide them. Each carries
- * a label the service set, and Harlan or a Routine asked for each one.
+ * A follow-up label permits discovery. Only a matching receipt permits automatic work.
  */
-function serviceFiledIssue(labels: readonly string[]): boolean {
-  return hasRoutineIssueLabel(labels) || hasFollowUpIssueLabel(labels)
+function serviceFiledIssue(repository: RepositoryMapping, issue: GitHubIssue, comments: GitHubIssueComment[], labels: readonly string[], options: GitHubSourceOptions): boolean {
+  if (!hasFollowUpIssueLabel(labels))
+    return hasRoutineIssueLabel(labels)
+  const actor = options.actorLogin(repository).toLowerCase()
+  return issue.user?.login.toLowerCase() === actor
+    && comments.every(comment => comment.user?.login.toLowerCase() === actor && comment.body?.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
+    && options.isPublishedFollowUpIssue?.(repository, { number: issue.number, title: issue.title, body: issue.body ?? null }) === true
 }
 
 export function isIssueAtOrAfterCutoff(createdAt: string, cutoff: string): boolean {
@@ -451,7 +455,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
           response.data,
           comments,
           labels,
-          serviceFiledIssue(labels),
+          serviceFiledIssue(repository, response.data, comments, labels, options),
           isRoutineTrackingIssue({ repository: repository.github, account: repository.githubAccount, title: response.data.title, body: response.data.body, labels }),
           options.actorLogin(repository),
         ))
@@ -558,10 +562,9 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
         const eligibleIssueRows = issueRows
           .filter(issue => issue.pull_request === undefined)
           .flatMap((issue) => {
-            // An issue a Routine filed carries the routine label, so the
-            // author allowlist never hides it from triage again.
+            // Labels permit discovery before comments and receipts are checked.
             const labels = labelNames(issue.labels)
-            const routineFiled = serviceFiledIssue(labels)
+            const discoverable = hasRoutineIssueLabel(labels) || hasFollowUpIssueLabel(labels)
             const routineTracking = isRoutineTrackingIssue({
               account: repository.githubAccount,
               repository: repository.github,
@@ -572,14 +575,14 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             if (!isEligibleGitHubSubjectAuthor({
               login: issue.user?.login ?? 'ghost',
               type: issue.user?.type,
-            }, { kind: 'issue', routineFiled })) {
+            }, { kind: 'issue', routineFiled: discoverable })) {
               return []
             }
             if (!isIssueAtOrAfterCutoff(issue.created_at, options.issueCutoff))
               return []
-            return [{ issue, labels, routineFiled, routineTracking }]
+            return [{ issue, labels, routineTracking }]
           })
-        const issues: GitHubItem[] = await mapConcurrent(eligibleIssueRows, 4, async ({ issue, labels, routineFiled, routineTracking }) => {
+        const issueSnapshots = await mapConcurrent(eligibleIssueRows, 4, async ({ issue, labels, routineTracking }) => {
           const comments = await octokit.value.paginate(octokit.value.rest.issues.listComments, {
             owner,
             repo,
@@ -587,8 +590,9 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             per_page: 100,
             ...requestOptions,
           })
-          return issueItem(repository, issue, comments, labels, routineFiled, routineTracking, options.actorLogin(repository))
+          return issueItem(repository, issue, comments, labels, serviceFiledIssue(repository, issue, comments, labels, options), routineTracking, options.actorLogin(repository))
         })
+        const issues: GitHubItem[] = issueSnapshots.filter(issue => isEligibleGitHubSubjectAuthor({ login: issue.author }, issue))
 
         const eligiblePullRows = pullRows.filter(pull => isEligibleGitHubSubjectAuthor({
           login: pull.user?.login ?? 'ghost',

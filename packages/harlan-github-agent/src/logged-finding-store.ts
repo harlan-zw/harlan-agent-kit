@@ -112,6 +112,7 @@ export interface LoggedFindingStore {
   completeLoggedFindingComment: (command: LoggedFindingComment, at: string) => boolean
   claimFollowUpIssue: (workerId: string, at: string, leaseMilliseconds: number) => FollowUpIssueCommand | null
   authorizeFollowUpIssue: (command: FollowUpIssueCommand, at: string) => boolean
+  isPublishedFollowUpIssue: (repository: RepositoryMapping, issue: { number: number, title: string, body: string | null }) => boolean
   completeFollowUpIssue: (input: { id: string, workerId: string, fence: number, at: string, issueNumber: number, url: string }) => boolean
   failFollowUpIssue: (input: { id: string, workerId: string, fence: number, at: string, reason: string, status?: number | undefined }) => 'Deferred' | 'Failed' | 'Unchanged'
 }
@@ -312,6 +313,14 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
     .all(taskId ?? null, taskId ?? null) as Array<{ repository: string, pullRequestNumber: number }>
 
   return {
+    isPublishedFollowUpIssue(repository, issue) {
+      const receipts = database.prepare(`SELECT issues.title, issues.body FROM follow_up_issues AS issues
+        JOIN subjects ON subjects.id = issues.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE repositories.github = ? AND issues.github_issue_number = ? AND issues.state_tag = 'Published'`)
+        .all(repository.github, issue.number) as Array<{ title: string, body: string }>
+      return receipts.some(receipt => receipt.title === issue.title && githubAccountBody(receipt.body, repository.githubAccount) === issue.body)
+    },
     holdLoggedFindingSelection(selection, held) {
       const key = JSON.stringify([selection.repository, selection.pullRequestNumber])
       if (held)

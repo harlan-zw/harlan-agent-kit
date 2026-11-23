@@ -695,7 +695,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const tokens = gatedTokens(routedTokens)
   const mediaSource = createGitHubMediaSource({ tokens: routedTokens, fetch: globalThis.fetch })
   const legacyUserTokens = gatedTokens(userTokens)
-  const github = createGitHubSource({ actorLogin, tokens, issueCutoff: config.issueCutoff })
+  const github = createGitHubSource({ actorLogin, tokens, issueCutoff: config.issueCutoff, isPublishedFollowUpIssue: store.isPublishedFollowUpIssue })
   const pullRequestStatuses = createPullRequestStatusController({
     github,
     now,

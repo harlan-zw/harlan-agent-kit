@@ -5,9 +5,8 @@ import { cleanLine, cleanText } from './text.ts'
 /**
  * Marks every issue a follow-up tick files.
  *
- * The App authors these issues, so observation keeps them only by this label,
- * the way it keeps a Routine's. Issue triage then picks them up without an
- * Approval, because Harlan's tick asked for them.
+ * The label permits discovery of App-authored issues.
+ * A matching publication receipt and unchanged content permit work without Approval.
  */
 export const FOLLOW_UP_ISSUE_LABEL = 'harlan-agent-follow-up'
 

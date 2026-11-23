@@ -269,7 +269,7 @@ export interface GitHubIssueItem extends GitHubItemBase {
   contentDigest: string
   /**
    * True when this service filed the issue: a Routine's Candidate proposal,
-   * or a follow-up Harlan ticked on a pull request.
+   * or an unchanged follow-up verified against its publication receipt.
    *
    * An allowlist that lists only human authors would otherwise drop the issue
    * again before triage ever read it, because the agent filed it. The name
