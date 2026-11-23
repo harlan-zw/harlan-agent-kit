@@ -1,6 +1,6 @@
 import type { Octokit } from 'octokit'
 import type { PackageReleaseRecord, ReleaseNote } from '../src/package-release-store.ts'
-import type { PublicTextWriter } from '../src/public-text.ts'
+import type { PrivateDetailLeak, PublicTextWriter } from '../src/public-text.ts'
 import type { ReviewFindingThread, ReviewFindingThreadMirror, ReviewFindingThreadsOutcome } from '../src/review-finding-threads.ts'
 import type { ReviewFinding } from '../src/types.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -54,8 +54,6 @@ describe('a private detail split across lines', () => {
   const withheld = '_This text was withheld: it named a private path or host across lines._'
 
   it.each([
-    '<a\nhref="https://notes.\nlocalhost/example">docs</a>',
-    '<img\nsrc="https://harlan-github-agent.\nlocalhost/x.png">',
     'Open /home/har\nlan/pkg/example now.',
   ])('withholds the body when only the joined lines name it: %s', (text) => {
     const redacted = redactPrivateDetails(text, details)
@@ -66,13 +64,13 @@ describe('a private detail split across lines', () => {
   })
 
   it('keeps the parser markers of a withheld body', () => {
-    const source = '<!-- harlan-agent-kit:pr-triage -->\n<!-- reviewed-sha: abc -->\nSee <a\nhref="https://notes.\nlocalhost/example">docs</a>.'
+    const source = '<!-- harlan-agent-kit:pr-triage -->\n<!-- reviewed-sha: abc -->\nOpen /home/har\nlan/pkg/example now.'
 
     expect(redactPrivateDetails(source, details).text).toBe(`<!-- harlan-agent-kit:pr-triage -->\n<!-- reviewed-sha: abc -->\n${withheld}`)
   })
 
   it('reads a withheld body as the published form of its source', () => {
-    const source = '<!-- harlan-agent-kit:pr-triage -->\nSee <a\nhref="https://notes.\nlocalhost/example">docs</a>.'
+    const source = '<!-- harlan-agent-kit:pr-triage -->\nOpen /home/har\nlan/pkg/example now.'
 
     expect(isPublishedForm(redactPrivateDetails(source, details).text, source)).toBe(true)
     expect(isPublishedForm(`<!-- other -->\n${withheld}`, source)).toBe(false)
@@ -1218,11 +1216,9 @@ describe('review findings on #754, follow-ups', () => {
   const withheld = '_This text was withheld: it named a private path or host across lines._'
 
   it.each([
-    ['a blockquote', '> See <a href="https://notes.\n> localhost/acquisition.pdf">docs</a>.'],
-    ['a nested blockquote', '> > See <a href="https://notes.\n> > localhost/acquisition.pdf">docs</a>.'],
-    ['a list item', '- See <a href="https://notes.\n  localhost/acquisition.pdf">docs</a>.'],
-    ['a numbered list item', '1. See <img src="https://notes.\n   localhost/acquisition.png">'],
     ['a quoted path', '> Open /home/har\n> lan/pkg/example now.'],
+    ['a listed path', '- Open /home/har\n  lan/pkg/example now.'],
+    ['a quoted URL', '> Read https://notes.\n> localhost/acquisition.pdf now.'],
   ])('withholds a body whose private detail splits across the lines of %s', (_name, text) => {
     for (const input of [text, `<!-- harlan-agent-kit:pr-triage -->\n${text}`]) {
       const redacted = redactPrivateDetails(input, details)
@@ -1231,12 +1227,40 @@ describe('review findings on #754, follow-ups', () => {
       expect(redacted.hits).not.toHaveLength(0)
     }
   })
+
+  it.each([
+    ['a blockquote', '> See <a href="https://notes.\n> localhost/acquisition.pdf">docs</a>.'],
+    ['a nested blockquote', '> > See <a href="https://notes.\n> > localhost/acquisition.pdf">docs</a>.'],
+    ['a list item', '- See <a href="https://notes.\n  localhost/acquisition.pdf">docs</a>.'],
+    ['a numbered list item', '1. See <img src="https://notes.\n   localhost/acquisition.png">'],
+    ['a tag with a line per attribute', '<a\nhref="https://notes.\nlocalhost/acquisition.pdf">docs</a>'],
+  ])('removes every line of an HTML link whose private host splits across the lines of %s', (_name, text) => {
+    const structure = /^[ \t]*(?:>[ \t]?)*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?/
+    const redacted = redactPrivateDetails(text, details)
+
+    expect(redacted.text).toBe(text.split('\n').map(line => `${structure.exec(line)?.[0] ?? ''}${removed}`).join('\n'))
+    expect(redacted.hits).toContainEqual({ _tag: 'Link', entry: 'notes.localhost' })
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes quoted split HTML hosts at the %s boundary, from the Service Repair 45bd9228', async (writer) => {
+    for (const input of [
+      '> <a href="https://hogwild.tail1234.\n> ts.net/acquisition.pdf">evidence</a>',
+      '<a\nhref="https://notes.\nlocalhost/acquisition.pdf">docs</a>',
+      '<img\nsrc="https://harlan-github-agent.\nlocalhost/acquisition.png">',
+    ]) {
+      const reports: PrivateDetailLeak[] = []
+      const sent = await publicBody({ details, report: hit => reports.push(hit) }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+      const prefix = writer !== 'review' && input.startsWith('>') ? '> ' : ''
+      expect(sent).toBe(input.split('\n').map(() => `${prefix}${removed}`).join('\n'))
+      expect(reports).toEqual([expect.objectContaining({ hits: expect.arrayContaining([expect.objectContaining({ _tag: 'Link' })]) })])
+    }
+  })
   const signal = new AbortController().signal
   const control = `  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${'f'.repeat(64)} -->`
 
   it.each([
-    ['with marker lines', `<!-- harlan-agent-kit:candidate ${'a'.repeat(64)} -->\nSee <a\nhref="https://notes.\nlocalhost/example">docs</a>.`, `<!-- harlan-agent-kit:candidate ${'a'.repeat(64)} -->\n${withheld}`],
-    ['without marker lines', 'See <a\nhref="https://notes.\nlocalhost/example">docs</a>.', withheld],
+    ['with marker lines', `<!-- harlan-agent-kit:candidate ${'a'.repeat(64)} -->\nOpen /home/har\nlan/pkg/example now.`, `<!-- harlan-agent-kit:candidate ${'a'.repeat(64)} -->\n${withheld}`],
+    ['without marker lines', 'Open /home/har\nlan/pkg/example now.', withheld],
   ])('keeps an issue title when its body is withheld %s', async (_name, body, expected) => {
     const store = journal()
     const written: Array<{ title: string, body: string }> = []
@@ -1335,7 +1359,7 @@ describe('review findings on #754, follow-ups', () => {
   it('refuses a stale edit when GitHub holds a newer withheld Review with the same markers', async () => {
     const store = journal()
     const host = commentHost()
-    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, reviewBody('See <a\nhref="https://notes.\nlocalhost/example">docs</a>.'), false, signal)
+    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, reviewBody('Open /home/har\nlan/pkg/example now.'), false, signal)
     if (published._tag === 'Err')
       throw new Error(published.error)
     const newer = host.comments[0]?.body

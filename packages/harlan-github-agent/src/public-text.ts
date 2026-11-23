@@ -617,6 +617,11 @@ function htmlLines(text: string, layout: Layout): Array<{ text: string, first: n
       // Inspect attributes before stripping the tag. A host on one line makes
       // the destination's filename on every following line private too.
       lines.push({ text: match[0], first: line, last: line + lineBreaks(match[0]) })
+      // From the Service Repair 45bd9228. Markdown removes each continuation
+      // line's container markers and indentation before an attribute URL
+      // renders, and the URL parser then drops tabs and line breaks.
+      const attributes = match[0].split('\n').map((part, index) => index === 0 ? part : withoutContainers(part)).join('\n')
+      lines.push({ text: decodeAll(attributes).replaceAll(/[\t\r\n]/g, ''), first: line, last: line + lineBreaks(match[0]) })
     }
     line += lineBreaks(text.slice(start, end))
     current.last = line
