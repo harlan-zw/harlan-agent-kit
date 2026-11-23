@@ -4,8 +4,10 @@ import type { QueuedReviewStatus, StoppedReview } from '../src/store.ts'
 import type { ReviewFinding, ReviewGates, ReviewGateState } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { createApprovalController } from '../src/approval-controller.ts'
+import { followUpIssue, mergedFollowUpsIssue } from '../src/follow-up-issue.ts'
 import { issueTriageComment } from '../src/issue-triage-comment.ts'
 import { progressComment, terminalComment } from '../src/item-agent.ts'
+import { withLoggedFindingControls } from '../src/logged-finding-pickup.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
 import { packageReleaseStatus } from '../src/package-release-controller.ts'
 import { renderManualMajorRelease } from '../src/package-release.ts'
@@ -356,6 +358,87 @@ describe('a stopped Task and a pull request that left', () => {
       ⚪ **Closed** · no further reviews
 
       <sub><relative-time datetime="2026-11-23T15:03:00.000Z">2026-11-23 15:03 UTC</relative-time> · [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated review, not Harlan's · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>"
+    `)
+  })
+
+  it('renders the follow-up controls an open verdict and a Merged comment offer', () => {
+    const findings = scopedFollowUps.slice(0, 2)
+    const open = terminalComment({ headSha: head, baseSha: base, gates: gates(), findings, confidence: 90, reportedChecks: [], repository, baseRef: 'main', reviewedAt: at })
+    expect(withLoggedFindingControls(open, findings, [], { controls: { _tag: 'Open', repairOnHead: true }, baseRef: 'main' })).toMatchInlineSnapshot(`
+      "<!-- harlan-agent-kit:pr-triage -->
+      <!-- reviewed-sha: 6aa6d8e1520848daef9646d402ea16ee3f9a4221 -->
+      <!-- workflow-state: {"_tag":"Review","headSha":"6aa6d8e1520848daef9646d402ea16ee3f9a4221","baseSha":"70edfe5f32699f7f6042c0bd66e8a68e3b282fc5","outcome":"READY","gates":{"merge":"Passed","review":"Passed","ci":"Passed"}} -->
+      🟢 **Ready** · \`90/100\`
+
+      No issues found in [\`6aa6d8e\`](https://github.com/harlan-zw/example/commit/6aa6d8e1520848daef9646d402ea16ee3f9a4221).
+
+      <details><summary><b>2 follow-ups</b> · none block merge</summary>
+
+      **In this change.** Tick to have Repair fix it here, before merge.
+
+      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport.
+        - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+        - [ ] Dismiss this finding <!-- dismiss-logged-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+
+      **Already in \`main\`.** Tick to file it as an issue.
+
+      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport.
+        - [ ] File this finding as an issue <!-- logged-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+
+      </details>
+
+      <!-- finding-base: bWFpbg -->
+
+      <sub><relative-time datetime="2026-11-23T15:03:00.000Z">2026-11-23 15:03 UTC</relative-time> · [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated review, not Harlan's; a person merges · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>"
+    `)
+    const merged = stoppedReviewComment({ ...stopped, findings }, at, { _tag: 'Merged' })
+    expect(withLoggedFindingControls(merged, findings, [], { controls: { _tag: 'Merged', headSha: head } })).toMatchInlineSnapshot(`
+      "<!-- harlan-agent-kit:pr-triage -->
+      <!-- reviewed-sha: 6aa6d8e1520848daef9646d402ea16ee3f9a4221 -->
+      <!-- workflow-state: {"_tag":"PullRequestMerged","workflowVersion":2,"headSha":"6aa6d8e1520848daef9646d402ea16ee3f9a4221","baseSha":"70edfe5f32699f7f6042c0bd66e8a68e3b282fc5"} -->
+      🟣 **Merged** · 2 follow-ups not fixed
+
+      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport.
+      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport.
+
+      - [ ] File these as one issue <!-- logged-findings: 6aa6d8e1520848daef9646d402ea16ee3f9a4221 -->
+
+      <sub><relative-time datetime="2026-11-23T15:03:00.000Z">2026-11-23 15:03 UTC</relative-time> · [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated review, not Harlan's · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>"
+    `)
+  })
+
+  it('renders the issue one follow-up files and the issue the Merged control files', () => {
+    const [change, existing] = scopedFollowUps
+    expect(followUpIssue({ repository, pullRequestNumber: 740, headSha: head, finding: existing! })).toMatchInlineSnapshot(`
+      {
+        "body": "The Review of #740 found this follow-up in [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208) at [\`6aa6d8e\`](https://github.com/harlan-zw/example/commit/6aa6d8e1520848daef9646d402ea16ee3f9a4221). Impact \`55/100\`.
+
+      When a bar crosses the viewport edge, the query drops it.
+
+      **Fix:** Query for span overlap with the viewport.
+
+      <!-- follow-up-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+
+      <sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated issue, not Harlan's · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>",
+        "marker": "<!-- follow-up-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->",
+        "title": "Zero deliveries for an unmeasured interval",
+      }
+    `)
+    expect(mergedFollowUpsIssue({ repository, pullRequestNumber: 740, headSha: head, findings: [change!, existing!] })).toMatchInlineSnapshot(`
+      {
+        "body": "#740 merged with these follow-ups not fixed. None blocked merge.
+
+      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport.
+      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport.
+
+      The Review read [\`6aa6d8e\`](https://github.com/harlan-zw/example/commit/6aa6d8e1520848daef9646d402ea16ee3f9a4221).
+
+      <!-- merged-follow-ups: 740 6aa6d8e1520848daef9646d402ea16ee3f9a4221 -->
+
+      <sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated issue, not Harlan's · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>",
+        "marker": "<!-- merged-follow-ups: 740 6aa6d8e1520848daef9646d402ea16ee3f9a4221 -->",
+        "title": "Follow-ups from #740",
+      }
     `)
   })
 })

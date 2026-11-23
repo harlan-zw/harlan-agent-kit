@@ -65,6 +65,7 @@ export function followUpIssue(input: { repository: string, pullRequestNumber: nu
       ...(action === '' ? [] : ['', `**Fix:** ${action}`]),
       '',
       marker,
+      '',
       automatedDisclosure({ kind: 'issue' }),
     ].join('\n'),
   }
@@ -84,6 +85,7 @@ export function mergedFollowUpsIssue(input: { repository: string, pullRequestNum
       `The Review read ${commitLink(input.repository, input.headSha)}.`,
       '',
       marker,
+      '',
       automatedDisclosure({ kind: 'issue' }),
     ].join('\n'),
   }
