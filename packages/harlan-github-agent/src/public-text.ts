@@ -464,8 +464,14 @@ function htmlLines(text: string): Array<{ text: string, first: number, last: num
 }
 
 /** Parse HTML before decoding attribute entities, including each encoded transport layer. */
-function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: PrivateDetailHit }> {
-  const found = detailsInAligned(detect, text)
+function detailsIn(detect: Detectors, text: string): { spans: Array<{ first: number, last: number }>, hits: PrivateDetailHit[] } {
+  const spans: Array<{ first: number, last: number }> = []
+  const hits = new Map<string, PrivateDetailHit>()
+  const remember = (hit: PrivateDetailHit) => hits.set(`${hit._tag}:${hit.entry}`, hit)
+  for (const { line, hit } of detailsInAligned(detect, text)) {
+    spans.push({ first: line, last: line })
+    remember(hit)
+  }
   const decoded = aligned(text, decodeAll)
   const sources = new Set([text, aligned(text, decodedFindingIdentities), aligned(decoded, decodedFindingIdentities)])
   const views = new Set([decoded])
@@ -484,13 +490,24 @@ function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: 
   }
   for (const view of views) {
     for (const rendered of htmlLines(view)) {
-      for (const { hit } of detailsInAligned(detect, rendered.text)) {
-        for (let line = rendered.first; line <= rendered.last; line++)
-          found.push({ line, hit })
-      }
+      const found = detailsInAligned(detect, rendered.text)
+      if (found.length > 0)
+        spans.push({ first: rendered.first, last: rendered.last })
+      for (const { hit } of found)
+        remember(hit)
     }
   }
-  return found
+  // Merge before expanding. Repeated matches and views must never multiply source lines.
+  spans.sort((left, right) => left.first - right.first)
+  const merged: typeof spans = []
+  for (const span of spans) {
+    const previous = merged.at(-1)
+    if (previous !== undefined && span.first <= previous.last + 1)
+      previous.last = Math.max(previous.last, span.last)
+    else
+      merged.push(span)
+  }
+  return { spans: merged, hits: [...hits.values()] }
 }
 
 /** The index of the line that holds `offset`, given each line's first offset in order. */
@@ -511,10 +528,10 @@ function lineAt(starts: readonly number[], offset: number): number {
 function removedLine(detect: Detectors, line: string): string {
   const structure = LINE_STRUCTURE.exec(line)?.[0] ?? ''
   const markers = htmlComments(line).flatMap((marker) => {
-    if (detailsIn(detect, marker).length === 0)
+    if (detailsIn(detect, marker).hits.length === 0)
       return [marker]
     const fingerprintOnly = withoutFindingIdentity(marker)
-    return fingerprintOnly !== marker && detailsIn(detect, fingerprintOnly).length === 0 ? [fingerprintOnly] : []
+    return fingerprintOnly !== marker && detailsIn(detect, fingerprintOnly).hits.length === 0 ? [fingerprintOnly] : []
   })
   return [`${structure}${REMOVED_LINE}`, ...markers].join(' ')
 }
@@ -529,14 +546,18 @@ function removedLine(detect: Detectors, line: string): string {
 export function redactPrivateDetails(text: string, details: PrivateDetails): Redaction {
   const detect = detectorsFor(details)
   const found = detailsIn(detect, text)
-  const affected = new Set(found.map(({ line }) => line))
-  const hits = [...new Map(found.map(({ line, hit }) => [`${line}:${hit._tag}:${hit.entry}`, hit])).values()]
-  const lines = found.length === 0
+  const affected = new Set<number>()
+  for (const { first, last } of found.spans) {
+    for (let line = first; line <= last; line++)
+      affected.add(line)
+  }
+  const hits = found.hits
+  const lines = hits.length === 0
     ? text
     : text.split('\n').map((line, index) => affected.has(index) ? `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}` : line).join('\n')
   const residue = joinedHits(detect, lines)
   if (residue.length > 0)
-    return { text: withheldBody(detect, lines), hits: [...hits, ...residue] }
+    return { text: withheldBody(detect, lines), hits: [...new Map([...hits, ...residue].map(hit => [`${hit._tag}:${hit.entry}`, hit])).values()] }
   return { text: lines, hits }
 }
 
@@ -544,7 +565,24 @@ export function redactPrivateDetails(text: string, details: PrivateDetails): Red
 const WITHHELD_BODY = '_This text was withheld: it named a private path or host across lines._'
 
 /** A line that holds only HTML comment markers, which the parsers read. */
-const MARKER_LINE = /^\s*(?:<!--[^\n]*?-->\s*)+$/
+function isMarkerLine(line: string): boolean {
+  let from = 0
+  let comments = 0
+  while (from < line.length) {
+    if (/\s/.test(line.charAt(from))) {
+      from++
+      continue
+    }
+    if (!line.startsWith('<!--', from))
+      return false
+    const close = line.indexOf('-->', from + 4)
+    if (close === -1)
+      return false
+    from = close + 3
+    comments++
+  }
+  return comments > 0
+}
 
 /**
  * Private details that only appear once lines join.
@@ -558,12 +596,12 @@ function joinedHits(detect: Detectors, text: string): PrivateDetailHit[] {
   if (!text.includes('\n'))
     return []
   return [text.replaceAll(/\r?\n/g, ' '), text.replaceAll(/\r?\n/g, '')]
-    .flatMap(joined => detailsIn(detect, joined).map(({ hit }) => hit))
+    .flatMap(joined => detailsIn(detect, joined).hits)
 }
 
 /** Keeps the marker lines that name nothing private, then one withheld line. */
 function withheldBody(detect: Detectors, text: string): string {
-  const markers = text.split('\n').filter(line => MARKER_LINE.test(line) && detailsIn(detect, line).length === 0)
+  const markers = text.split('\n').filter(line => isMarkerLine(line) && detailsIn(detect, line).hits.length === 0)
   return [...markers, WITHHELD_BODY].join('\n')
 }
 
@@ -572,7 +610,7 @@ function isWithheldFormOf(published: string, source: string): boolean {
   const lines = published.split('\n')
   if (lines.at(-1) !== WITHHELD_BODY)
     return false
-  const markers = source.split('\n').filter(line => MARKER_LINE.test(line))
+  const markers = source.split('\n').filter(isMarkerLine)
   let from = 0
   return lines.slice(0, -1).every((line) => {
     const at = markers.indexOf(line, from)
