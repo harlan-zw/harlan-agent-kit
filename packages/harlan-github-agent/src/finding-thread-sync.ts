@@ -54,6 +54,7 @@ export function createFindingThreadSyncController(options: {
           ...(options.controls?.(command.repositoryMapping, pull) === true && canFileFollowUpIssue(command.repositoryMapping)
             ? { controls: { repairOnHead: canRepairSelectedFindingOnHead(command.repositoryMapping, pull) } }
             : {}),
+          owned: new Set(command.ownedFollowUps),
           fixed: command.verifiedRepairs,
           repairStatus: command.repairStatus,
           recordInline: (receipts) => { inline = receipts },

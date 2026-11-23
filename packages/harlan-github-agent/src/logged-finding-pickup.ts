@@ -1,6 +1,7 @@
+import type { ReviewFindingThread } from './review-finding-threads.ts'
 import type { ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
-import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, FOLLOW_UP_GROUP_LABEL, isCanonicalFooter, listedFollowUp, plural } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, FOLLOW_UP_GROUP_LABEL, FOLLOW_UP_ROW_MARKER, FOLLOW_UP_STATUS_LIMIT, isCanonicalFooter, listedFollowUp, plural } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type LoggedReviewFinding = Extract<ReviewFinding, { _tag: 'Logged' }>
@@ -28,10 +29,16 @@ export type LoggedFindingPickup = PickupSource & (
   | { _tag: 'MergedFollowUps' }
 )
 
-/** The progress one follow-up shows in place of its control. */
+/**
+ * The progress one follow-up shows in place of its control.
+ *
+ * `IssueRefused` is an issue GitHub refused for good. It shows the refusal,
+ * but it owns nothing, so the finding stays unfixed for the Merged issue.
+ */
 export type LoggedFindingStatus
   = | { _tag: 'Repair', fingerprint: string, status: string, cancellable: boolean }
     | { _tag: 'Issue', fingerprint: string, status: string }
+    | { _tag: 'IssueRefused', fingerprint: string, status: string }
 
 /**
  * Where a tick sends one follow-up on an open pull request.
@@ -129,13 +136,37 @@ function dismissalControl(fingerprint: string): string {
 }
 
 /**
- * The follow-ups the Merged control would file: listed, and never ticked.
+ * Each follow-up that has an owner, by fingerprint, to the kind of work that owns it.
  *
- * A follow-up with any status already has an owner: a Repair selected before
- * merge, an issue, or a Dismissal.
+ * A Repair selection owns its finding, dismissed or not, and so does an
+ * issue filed or on its way. One finding never gets both kinds of work, and
+ * a finding with an owner gets no control. An issue GitHub refused for good
+ * owns nothing.
+ */
+export function followUpOwners(statuses: readonly LoggedFindingStatus[]): Map<string, 'Repair' | 'Issue'> {
+  return new Map(statuses.flatMap(status => status._tag === 'IssueRefused' ? [] : [[status.fingerprint, status._tag] as const]))
+}
+
+/**
+ * The follow-ups a person dismissed by resolving their thread, by fingerprint.
+ *
+ * Pass the threads as GitHub shows them now. A finding counts only when
+ * every thread it has is resolved, so a reopened thread brings it back.
+ */
+export function resolvedFollowUps(threads: readonly ReviewFindingThread[]): Set<string> {
+  const open = new Set(threads.filter(thread => !thread.resolved).map(thread => thread.fingerprint.toLowerCase()))
+  return new Set(threads.filter(thread => thread.resolved && !open.has(thread.fingerprint.toLowerCase())).map(thread => thread.fingerprint.toLowerCase()))
+}
+
+/**
+ * The follow-ups the Merged control would file: listed, and with no owner.
+ *
+ * An owner is a Repair selected before merge, an issue filed or on its way,
+ * or a Dismissal. An issue GitHub refused for good owns nothing, so the
+ * Merged issue is its fallback.
  */
 export function unfixedFollowUps(findings: readonly ReviewFinding[], statuses: readonly LoggedFindingStatus[]): LoggedReviewFinding[] {
-  const owned = new Set(statuses.map(status => status.fingerprint))
+  const owned = followUpOwners(statuses)
   return findings.filter((finding): finding is LoggedReviewFinding => listedFollowUp(finding)
     && /^[a-f\d]{64}$/.test(finding.details.fingerprint)
     && !owned.has(finding.details.fingerprint))
@@ -151,6 +182,17 @@ export function unfixedFollowUps(findings: readonly ReviewFinding[], statuses: r
 function loggedFindingRow(line: string, finding: LoggedReviewFinding): boolean {
   return (line.startsWith(`- \`${finding.impact}\` `) || (line.startsWith('- ') && line.includes(`Logged (${finding.impact}/100)`)))
     && line.includes(cleanLine(finding.summary))
+}
+
+/**
+ * One status on one line, cut to `FOLLOW_UP_STATUS_LIMIT`.
+ *
+ * A Repair's evidence can be a whole Agent summary. The canonical body keeps
+ * a fixed room per row for its status, so the verdict always fits GitHub's limit.
+ */
+function statusText(status: string): string {
+  const line = status.replace(/\s+/g, ' ').trim()
+  return line.length <= FOLLOW_UP_STATUS_LIMIT ? line : `${line.slice(0, FOLLOW_UP_STATUS_LIMIT - 1).trimEnd()}…`
 }
 
 /** Puts one block above the footer, which stays last. */
@@ -182,6 +224,9 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
   mergedIssue?: string | undefined
 } = {}): string {
   const lines = withoutLoggedFindingControls(body).split('\n')
+  // A row names its finding with a marker. A body stored before the marker
+  // has none, so its rows still match by score and title.
+  const marked = lines.some(line => FOLLOW_UP_ROW_MARKER.test(line))
   const rendered = new Set<string>()
   const open = options.controls?._tag === 'Open' ? options.controls : undefined
   const groupRoutes = new Map<number, FollowUpRoute>()
@@ -193,10 +238,11 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
       group = decorated.length
     else if (line === '</details>')
       group = null
+    const rowFingerprint = FOLLOW_UP_ROW_MARKER.exec(line)?.[1]
     const finding = findings.find((finding): finding is LoggedReviewFinding => finding._tag === 'Logged'
       && /^[a-f\d]{64}$/.test(finding.details.fingerprint)
       && !rendered.has(finding.details.fingerprint)
-      && loggedFindingRow(line, finding))
+      && (marked ? rowFingerprint === finding.details.fingerprint : loggedFindingRow(line, finding)))
     if (finding === undefined) {
       decorated.push(line)
       continue
@@ -206,8 +252,8 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
     const status = statuses.find(status => status.fingerprint === fingerprint)
     if (status !== undefined) {
       decorated.push(line, status._tag === 'Repair'
-        ? `  Repair: ${status.status.replace(/\s+/g, ' ').trim()} <!-- logged-finding: ${fingerprint} -->`
-        : `  ${status.status.replace(/\s+/g, ' ').trim()} <!-- logged-finding: ${fingerprint} -->`)
+        ? `  Repair: ${statusText(status.status)} <!-- logged-finding: ${fingerprint} -->`
+        : `  ${statusText(status.status)} <!-- logged-finding: ${fingerprint} -->`)
       if (open !== undefined && status._tag === 'Repair' && status.cancellable)
         decorated.push(dismissalControl(fingerprint))
       continue

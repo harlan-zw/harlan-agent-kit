@@ -95,10 +95,11 @@ it.each([
   expect(result.results).toEqual([ok({ _tag: 'Published', repository: review.repository, pullRequestNumber: 24 })])
   expect(comments).toHaveLength(1)
   expect(titles).toHaveLength(runIds.length || 1)
-  for (const payload of [...comments, ...titles]) {
+  for (const payload of [...comments, ...titles])
     expect(payload).not.toContain(detail)
-    expect(payload).toContain('_One line removed: it named a private path or host._')
-  }
+  // The removed line is the stop reason. The Stuck Status line and the check title it feeds stay whole.
+  expect(comments[0]).toContain('🟠 **Stuck** · the review stopped\n\n_One line removed: it named a private path or host._')
+  expect(new Set(titles)).toEqual(new Set(['🟠 Stuck · the review stopped']))
 })
 
 function snapshot(overrides: Parameters<typeof pullRequestItem>[0] = {}) {
@@ -201,11 +202,12 @@ describe('stoppedReviewComment', () => {
     expect(body).not.toContain('REPAIR')
   })
 
-  it('keeps the reviewed code link after merge', () => {
+  it('keeps each unfixed issue\'s code link and fix after merge', () => {
     const body = stoppedReviewComment({
       ...stopped,
       findings: [{
         _tag: 'Open',
+        impact: 82,
         summary: 'The queue can drop events.',
         nextAction: 'Preserve pending events.',
         details: {
@@ -214,10 +216,24 @@ describe('stoppedReviewComment', () => {
           proof: 'The queue resets before sending.',
           regressionTest: 'Send two events.',
         },
-      }],
+      }, {
+        _tag: 'Open',
+        summary: 'The draft path is unused.',
+        nextAction: 'Remove it.',
+        resolution: 'Dismissal',
+      }, followUp],
     }, '2026-08-15T04:00:00.000Z', { _tag: 'Merged' })
 
-    expect(body).toContain('🟣 **Merged** · 1 issue not fixed\n\n- The queue can drop events. · [`queue.ts:42`](https://github.com/harlan-zw/example/blob/abc123/src/queue.ts#L42)')
+    expect(body).toContain([
+      '🟣 **Merged** · 3 issues not fixed',
+      '',
+      '1. **The queue can drop events.** `82/100`  ',
+      '   [`queue.ts:42`](https://github.com/harlan-zw/example/blob/abc123/src/queue.ts#L42) · Fix: Preserve pending events.',
+      '2. **The draft path is unused.**  ',
+      '   Dismissal recommended.',
+      '',
+      '- `40` The fallback needs more detail.',
+    ].join('\n'))
   })
 })
 
@@ -575,6 +591,44 @@ describe('publishStoppedReviews', () => {
 
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
     expect(checkRuns).toEqual([{ headSha: 'abc123', conclusion: 'neutral', title: '⚪ Review skipped · the pull request is not ready for review' }])
+  })
+
+  it.each([
+    ['its own head', 'abc123', { conclusion: 'success', title: '🟢 Ready · 94/100' }],
+    ['an earlier head', 'fed987', { conclusion: 'neutral', title: '⚪ Closed · no further reviews' }],
+  ])('settles a closed pull request\'s check run as success only for a Ready verdict on %s', async (_case, verdictHead, expected) => {
+    const verdict = [
+      '<!-- harlan-agent-kit:pr-triage -->',
+      `<!-- reviewed-sha: ${verdictHead} -->`,
+      `<!-- workflow-state: {"_tag":"Review","headSha":"${verdictHead}","baseSha":"base123","outcome":"READY","gates":{"merge":"Passed","review":"Passed","ci":"Passed"}} -->`,
+      '🟢 **Ready** · `94/100`',
+    ].join('\n')
+    const checkRuns: Array<{ headSha: string, conclusion: string, title: string }> = []
+    await publishStoppedReviews({
+      github: {
+        ...githubStatus,
+        getPullRequestReviewSnapshot: () => Promise.resolve(snapshot()),
+        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Edited', commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+        upsertReviewCheckRun: (_repository, headSha, update) => {
+          checkRuns.push(update._tag === 'Completed'
+            ? { headSha, conclusion: update.conclusion, title: update.title }
+            : { headSha, conclusion: 'running', title: update.title })
+          return Promise.resolve(ok(undefined))
+        },
+      },
+      now: () => new Date('2026-08-15T04:00:00.000Z'),
+      reportCheckRun: () => undefined,
+      repositories: [repositoryMapping()],
+      store: {
+        ...reviewClosureStore,
+        recordDeletedReviewComment: () => true,
+        // The stopped Task reviewed abc123. The newest canonical write may answer another head.
+        listStoppedReviews: () => [{ ...stopped, disposition: { _tag: 'Closed' }, publishedBody: verdict }],
+        recordStoppedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(checkRuns).toEqual([{ headSha: 'abc123', ...expected }])
   })
 
   it('completes the Review check run even when a person deleted the comment', async () => {

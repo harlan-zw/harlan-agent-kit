@@ -11,7 +11,7 @@ import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { candidateFingerprintMarker, hasRoutineIssueLabel } from './candidate-issue-controller.ts'
-import { hasFollowUpIssueLabel } from './follow-up-issue.ts'
+import { FOLLOW_UP_ISSUE_LABEL, hasFollowUpIssueLabel } from './follow-up-issue.ts'
 import { githubAccountBody } from './github-account.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
@@ -655,6 +655,16 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
 }
 
 /** Files the issue one Candidate proposes, so the Item pipeline can act on it. */
+/** One issue that carries a hidden marker, with what proves who filed it. */
+export interface MarkedIssue {
+  number: number
+  url: string
+  title: string
+  body: string | null
+  authorLogin: string
+  labels: string[]
+}
+
 export interface GitHubIssuePublisher {
   updateIssue: (input: { repository: RepositoryMapping, issueNumber: number, title: string, body: string }, signal?: AbortSignal) => Promise<Result<void, GitHubReadError>>
   createIssue: (input: {
@@ -678,6 +688,16 @@ export interface GitHubIssuePublisher {
     repository: RepositoryMapping
     marker: string
   }, signal?: AbortSignal) => Promise<Result<{ number: number, url: string } | null, GitHubReadError>>
+  /**
+   * Lists the open follow-up-labelled issues whose body carries one exact hidden marker.
+   *
+   * Anyone can copy a marker into an issue. So each result carries its author,
+   * labels, title, and body, for the caller to prove the controller filed it.
+   */
+  findFollowUpIssues: (input: {
+    repository: RepositoryMapping
+    marker: string
+  }, signal?: AbortSignal) => Promise<Result<MarkedIssue[], GitHubReadError>>
   /** Finds a Routine log or one exact daily check-in, including closed issues. */
   findRoutineTrackingIssue: (input: {
     repository: RepositoryMapping
@@ -744,7 +764,34 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
       })
   }
 
+  const findFollowUpIssues: GitHubIssuePublisher['findFollowUpIssues'] = async (input, signal) => {
+    const { owner, repo } = repositoryParts(input.repository.github)
+    const octokit = await itemWriteClient(input.repository.github, signal)
+    if (octokit._tag === 'Err')
+      return octokit
+    return octokit.value.paginate(octokit.value.rest.issues.listForRepo, {
+      owner,
+      repo,
+      state: 'open',
+      labels: FOLLOW_UP_ISSUE_LABEL,
+      per_page: 100,
+      ...(signal === undefined ? {} : { request: { signal } }),
+    })
+      .then((rows): Result<MarkedIssue[], GitHubReadError> => ok(rows
+        .filter(row => row.state === 'open' && row.pull_request === undefined && typeof row.body === 'string' && row.body.includes(input.marker))
+        .map(row => ({ number: row.number, url: row.html_url, title: row.title, body: row.body ?? null, authorLogin: row.user?.login ?? 'ghost', labels: labelNames(row.labels) }))))
+      .catch((error: unknown): Result<MarkedIssue[], GitHubReadError> => {
+        const status = errorStatus(error)
+        return err({
+          repository: input.repository.github,
+          message: error instanceof Error ? error.message : 'GitHub request failed.',
+          ...(status === undefined ? {} : { status }),
+        })
+      })
+  }
+
   return {
+    findFollowUpIssues,
     async updateIssue(input, signal) {
       const { owner, repo } = repositoryParts(input.repository.github)
       const client = await itemWriteClient(input.repository.github, signal)

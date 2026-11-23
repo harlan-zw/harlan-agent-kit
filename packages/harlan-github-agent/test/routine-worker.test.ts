@@ -1068,6 +1068,7 @@ describe('running one scan', () => {
         },
         findOpenIssueByFingerprint: async () => ok(null),
         findOpenIssueByMarker: async () => ok(null),
+        findFollowUpIssues: async () => ok([]),
         findRoutineTrackingIssue: async () => ok(null),
         findIssueCommentByMarker: async () => ok(null),
       }

@@ -121,6 +121,17 @@ describe('logged finding pickup', () => {
     expect(body).toContain(`logged-finding: ${second.details.fingerprint}`)
   })
 
+  it('binds each control to its own row when two follow-ups share a score and a title', () => {
+    // The fold lists this change first, so the rows run in another order than the findings.
+    const old = { ...logged(60, 'The cache never expires.', 'e', 'existing'), details: { ...existing.details, location: { path: 'src/old.ts', line: 10 } } }
+    const fresh = { ...logged(60, 'The cache never expires.', 'c', 'change'), details: { ...added.details, location: { path: 'src/new.ts', line: 20 } } }
+    const decorated = withLoggedFindingControls(verdict([old, fresh]), [old, fresh], [], { controls: repairHere, baseRef: 'main' })
+    const controlUnder = (path: string) => decorated.split('\n')[decorated.split('\n').findIndex(line => line.includes(`${path}`) && line.startsWith('- `60`')) + 1]
+
+    expect(controlUnder('new.ts')).toBe(`  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fresh.details.fingerprint} -->`)
+    expect(controlUnder('old.ts')).toBe(`  - [ ] File this finding as an issue <!-- logged-finding: ${old.details.fingerprint} -->`)
+  })
+
   it('keeps task status beside the finding and removes its checkbox', () => {
     const body = withLoggedFindingControls(before, [finding], [{ _tag: 'Repair', fingerprint, status: 'Repair pull request: https://github.com/harlan-zw/example/pull/25', cancellable: false }], { controls: repairHere })
     expect(body).toContain('Repair pull request: https://github.com/harlan-zw/example/pull/25')
@@ -171,8 +182,8 @@ describe('logged finding pickup', () => {
     const decorated = withLoggedFindingControls(source, [finding, second, hidden], [], { controls: repairHere, baseRef: 'main', inline: new Map([[second.details.fingerprint, 'https://github.com/harlan-zw/example/pull/24#discussion_r7']]) })
 
     expect(decorated).toContain('<b>2 follow-ups</b> · none block merge')
-    expect(decorated).toContain(`- \`40\` The parser drops buffered bytes. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)<br>A split sequence loses bytes.\n  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fingerprint} -->`)
-    expect(decorated).toContain(`The cache never expires. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)<br>A split sequence loses bytes.\n  [Open the thread beside the code](https://github.com/harlan-zw/example/pull/24#discussion_r7) <!-- logged-finding: ${'e'.repeat(64)} -->`)
+    expect(decorated).toContain(`- \`40\` The parser drops buffered bytes. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)<br>A split sequence loses bytes. <!-- follow-up: ${fingerprint} -->\n  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fingerprint} -->`)
+    expect(decorated).toContain(`The cache never expires. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)<br>A split sequence loses bytes. <!-- follow-up: ${'e'.repeat(64)} -->\n  [Open the thread beside the code](https://github.com/harlan-zw/example/pull/24#discussion_r7) <!-- logged-finding: ${'e'.repeat(64)} -->`)
     expect(decorated.match(/Ask an agent to verify and fix this finding/g)).toHaveLength(1)
     expect(decorated).not.toContain(`logged-finding: ${hidden.details.fingerprint}`)
     expect(decorated).toContain('<sub>1 note below 40/100 not shown.</sub>')

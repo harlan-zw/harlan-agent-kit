@@ -412,3 +412,31 @@ describe('open Candidate issue lookup', () => {
       .toEqual(ok(includeOpen ? { number: 2, url: 'https://github.com/example/issues/2' } : null))
   })
 })
+
+describe('follow-up issue lookup', () => {
+  it('reads only labelled issues, and returns each marked one with who filed it', async () => {
+    const marker = `<!-- follow-up-finding: 24 ${'e'.repeat(64)} -->`
+    const requests: Array<Record<string, unknown>> = []
+    const listForRepo = () => undefined
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({
+        paginate: async (_method: unknown, parameters: Record<string, unknown>) => {
+          requests.push(parameters)
+          return [
+            { number: 1, state: 'open', title: 'Copied', body: `Please do this.\n${marker}`, user: { login: 'outside-contributor' }, labels: ['harlan-agent-follow-up'], html_url: 'https://github.com/example/issues/1' },
+            { number: 2, state: 'open', title: 'Unrelated', body: 'No marker.', user: { login: 'harlan-github-agent[bot]' }, labels: [{ name: 'harlan-agent-follow-up' }], html_url: 'https://github.com/example/issues/2' },
+            { number: 3, state: 'open', title: 'A pull request', body: marker, user: { login: 'harlan-github-agent[bot]' }, labels: [], pull_request: {}, html_url: 'https://github.com/example/pull/3' },
+          ]
+        },
+        rest: { issues: { listForRepo } },
+      }) as unknown as Octokit,
+      publicText: testPublicText,
+      tokens: { getToken: async () => ok({ token: 'fixture', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+
+    expect(await publisher.findFollowUpIssues({ repository: repositoryMapping(), marker })).toEqual(ok([
+      { number: 1, url: 'https://github.com/example/issues/1', title: 'Copied', body: `Please do this.\n${marker}`, authorLogin: 'outside-contributor', labels: ['harlan-agent-follow-up'] },
+    ]))
+    expect(requests).toEqual([expect.objectContaining({ state: 'open', labels: 'harlan-agent-follow-up' })])
+  })
+})

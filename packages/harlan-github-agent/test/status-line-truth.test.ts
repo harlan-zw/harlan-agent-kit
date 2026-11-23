@@ -119,7 +119,7 @@ describe('a follow-up', () => {
     const decorated = withLoggedFindingControls(source, findings, [], { controls: { _tag: 'Open', repairOnHead: true }, baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })
 
     expect(decorated).toContain('<b>1 follow-up</b> · none block merge')
-    expect(decorated).toContain(`<br>Fix: Query for span overlap with the viewport.\n  [Open the thread beside the code](${thread}) <!-- logged-finding: ${'f'.repeat(64)} -->`)
+    expect(decorated).toContain(`<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ${'f'.repeat(64)} -->\n  [Open the thread beside the code](${thread}) <!-- logged-finding: ${'f'.repeat(64)} -->`)
     expect(decorated).not.toContain('Ask an agent to verify and fix this finding')
     expect(withoutLoggedFindingControls(decorated)).toBe(source)
     expect(withLoggedFindingControls(decorated, findings, [], { controls: { _tag: 'Open', repairOnHead: true }, baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })).toBe(decorated)
@@ -169,7 +169,7 @@ describe('a finding thread', () => {
 
 describe('a passed Review of a Repair commit', () => {
   it('names what Repair fixed from the Repair\'s source Review', () => {
-    const body = terminalComment({ headSha: merged, baseSha: 'c'.repeat(40), gates, findings: [], confidence: 90, reportedChecks: [], repository, repairedFrom: { headSha: reviewed, issues: 2 } })
+    const body = terminalComment({ headSha: merged, baseSha: 'c'.repeat(40), gates, findings: [], confidence: 90, reportedChecks: [], repository, repairedFrom: { headSha: reviewed, fingerprints: ['a'.repeat(64), 'b'.repeat(64)] } })
     expect(body).toContain(`🟢 **Ready** · \`90/100\`\n\nRepair fixed 2 issues from \`aaaaaaa\`.`)
   })
 })

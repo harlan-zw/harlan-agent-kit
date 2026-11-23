@@ -6,7 +6,7 @@ import type { RepositoryMapping } from './types.ts'
 import { publicFailureCause, REVIEW_NOT_READY_REASON, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { err, ok } from './result.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, canonicalCommentHead, canonicalCommentOutcome, commitLink, findingLocation, fixedRows, followUpRow, followUpSection, issueRows, listedFollowUp, plural, statusLine, withoutCommands, workflowStateLine } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, canonicalCommentHead, canonicalCommentOutcome, commitLink, fitFollowUpRows, fitNotes, fixedRows, followUpBudget, followUpSection, issueRows, listedFollowUp, plural, statusLine, withoutCommands, workflowStateLine } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type StoppedReviewOutcome
@@ -65,8 +65,9 @@ async function completeStoppedReviewCheckRun(
 ): Promise<void> {
   // A verdict that stands after a close keeps its own conclusion, so a READY
   // check run that never completed reads READY, not neutral.
+  const mirrored = checkRunBody(review, body, at)
   const update: ReviewCheckRunUpdate | null = reviewCheckRunUpdate(
-    { taskKind: review.taskKind, phase: 'terminal', desiredOutcome: canonicalCommentOutcome(body) === 'READY' ? 'READY' : 'SKIPPED', body },
+    { taskKind: review.taskKind, phase: 'terminal', desiredOutcome: canonicalCommentOutcome(mirrored) === 'READY' ? 'READY' : 'SKIPPED', body: mirrored },
     at,
   )
   if (update === null)
@@ -87,15 +88,27 @@ function stopCause(review: StoppedReview): string | null {
   return cause === '' ? null : cause
 }
 
+/** Reasons the controller itself writes, so their words are fixed and name nothing private. */
+const controllerReasons = new Set<string>([REVIEW_NOT_READY_REASON, ...Object.values(REVIEW_REPAIR_REFUSALS)])
+
 /**
  * The cause's first sentence as a Status line detail, and the rest of it.
  *
  * The first line names the cause, so a notification preview says why. A long
  * first sentence stays below the Status line instead.
+ *
+ * Only words the controller wrote reach the Status line: its own reasons, and
+ * a provider failure it mapped to a cause. Any other reason is foreign text
+ * that can name a private path or host, and the publish boundary removes each
+ * line that does. A foreign reason therefore goes below the Status line, so a
+ * removal there leaves the state and the check title it feeds readable.
  */
-function causeDetail(cause: string | null): { detail: string | null, rest: string | null } {
-  if (cause === null)
+function causeDetail(review: StoppedReview): { detail: string | null, rest: string | null } {
+  const cause = stopCause(review)
+  if (cause === null || review.reason === null)
     return { detail: null, rest: null }
+  if (!controllerReasons.has(review.reason) && publicFailureCause(review.reason) === review.reason)
+    return { detail: null, rest: cause }
   const [first = '', ...others] = cause.split(/(?<=[.!?])\s+/)
   if (first.length > 80)
     return { detail: null, rest: cause }
@@ -107,6 +120,20 @@ function causeDetail(cause: string | null): { detail: string | null, rest: strin
 function showsVerdict(body: string): boolean {
   const outcome = canonicalCommentOutcome(body)
   return outcome === 'READY' || outcome === 'PENDING' || outcome === 'BLOCKED' || outcome === 'SKIPPED'
+}
+
+/**
+ * The body the stopped Task's check run mirrors.
+ *
+ * A close leaves the newest verdict standing, and that verdict can answer an
+ * earlier head than the Task that stopped. The check run belongs to the
+ * stopped Task's head, so it takes a verdict only when the verdict names that
+ * exact head. Any other head reads Closed, and its check run concludes neutral.
+ */
+function checkRunBody(review: StoppedReview, body: string, at: string): string {
+  if (!showsVerdict(body) || canonicalCommentHead(body)?.toLowerCase() === review.headSha.toLowerCase())
+    return body
+  return stoppedReviewComment({ ...review, publishedBody: '' }, at, { _tag: 'Closed' })
 }
 
 /**
@@ -161,20 +188,23 @@ export function stoppedReviewComment(
     const left = review.headSha.toLowerCase() === mergedHead
       ? `${counted} not fixed`
       : `${counted} from the review of ${commitLink(review.repository, review.headSha)}`
-    const rows = [
-      ...open.map((finding) => {
-        const location = findingLocation(review.repository, review.headSha, finding)
-        return `- ${finding.impact === undefined ? '' : `\`${finding.impact}\` `}${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}`
-      }),
-      ...followUps.map(finding => followUpRow(review.repository, review.headSha, finding)),
-    ]
-    return [...head, statusLine('done', 'Merged', left), '', ...rows, '', footer].join('\n')
+    // An unfixed issue keeps its fix, as the verdict listed it. After merge this
+    // comment is the only place a finding outside the diff shows one.
+    const above = [...head, statusLine('done', 'Merged', left), '', ...(open.length === 0 ? [] : [...issueRows(review.repository, review.headSha, open), ''])]
+    // The follow-ups take the room the rest leaves, so the comment fits GitHub's limit.
+    const fitted = fitFollowUpRows(review.repository, review.headSha, followUps, followUpBudget([...above, footer]))
+    return [
+      ...above,
+      ...(fitted.rows.length === 0 ? [] : [...fitted.rows.map(({ row }) => row), '']),
+      ...fitNotes(fitted),
+      footer,
+    ].join('\n')
   }
-  const { detail, rest } = causeDetail(cause)
+  const { detail, rest } = causeDetail(review)
   if (review.taskKind === 'review_fix') {
     const open = review.findings.filter(finding => finding._tag === 'Open')
     const fixed = fixedRows(review.findings)
-    return [
+    const above = [
       AUTOMATED_REVIEW_MARKER,
       `<!-- reviewed-sha: ${review.headSha} -->`,
       workflowStateLine({ _tag: 'RepairStopped', headSha: review.headSha }),
@@ -183,9 +213,9 @@ export function stoppedReviewComment(
       ...(cause === null ? [] : [cause, '']),
       ...(open.length === 0 ? [] : [...issueRows(review.repository, review.headSha, open), '']),
       ...(fixed.length === 0 ? [] : [...fixed, '']),
-      ...followUpSection(review.repository, review.headSha, review.findings, review.baseRef ?? undefined),
-      automatedDisclosure({ kind: 'review', at, merge: true }),
-    ].join('\n')
+    ]
+    const footer = automatedDisclosure({ kind: 'review', at, merge: true })
+    return [...above, ...followUpSection(review.repository, review.headSha, review.findings, review.baseRef ?? undefined, followUpBudget([...above, footer])), footer].join('\n')
   }
   // A draft, or a pull request no longer eligible, needs nobody: it reads as a skip.
   // The marker stays ReviewStopped, so no reader takes this head as reviewed.
