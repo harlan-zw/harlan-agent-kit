@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { canResolveThread } from '../../../harlan-agent-kit/skills/pr/scripts/can-resolve-thread.ts'
 import { createFindingThreadSyncController } from '../src/finding-thread-sync.ts'
+import { followUpIssue } from '../src/follow-up-issue.ts'
 import { createGitHubIssuePublisher, createGitHubSource } from '../src/github.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from '../src/issue-triage-comment.ts'
 import { refreshControllerGates, terminalComment } from '../src/item-agent.ts'
@@ -913,7 +914,7 @@ describe('follow-up routing by Finding scope', () => {
     expect(store.requestLoggedFindingPickup(issueTick(request, target.details.fingerprint))).toBe(true)
     expect(store.claimNextReviewFixTask('repair', at, 60_000)).toBeNull()
     const issue = store.claimFollowUpIssue('issues', at, 60_000)
-    expect(issue).toMatchObject({ title: target.summary.replace(/\.$/, ''), marker: `<!-- follow-up-finding: ${target.details.fingerprint} -->`, pullRequestNumber: 24 })
+    expect(issue).toMatchObject({ title: target.summary.replace(/\.$/, ''), marker: `<!-- follow-up-finding: 24 ${target.details.fingerprint} -->`, pullRequestNumber: 24 })
     expect(issue?.body).toContain('The Review of #24 found this follow-up')
     expect(issue?.body).toContain(target.details.proof)
     expect(issue?.body).toContain(`**Fix:** ${target.nextAction}`)
@@ -1089,6 +1090,25 @@ describe('follow-up routing by Finding scope', () => {
     await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)
     expect(created).toEqual([])
     expect(store.claimLoggedFindingComment('status', at, 60_000)?.body).toContain('Filed as #77.')
+  })
+
+  it('never takes the issue another pull request filed for the same finding', async () => {
+    const { store, request } = setup([finding, existing])
+    store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))
+    // Pull request #23 reported the same finding identity and filed its own issue.
+    const other = followUpIssue({ repository: 'harlan-zw/example', pullRequestNumber: 23, headSha: 'c'.repeat(40), finding: existing })
+    const remote = [{ number: 70, url: 'https://github.com/harlan-zw/example/issues/70', title: other.title, body: other.body }]
+    const created: string[] = []
+    const github = {
+      findOpenIssueByMarker: async (input: { marker: string }) => ok(remote.find(issue => issue.body.includes(input.marker)) ?? null),
+      createIssue: async (input: { body: string }) => {
+        created.push(input.body)
+        return ok({ number: 123, url: 'https://github.com/harlan-zw/example/issues/123' })
+      },
+    }
+
+    expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)).toEqual([ok({ repository: 'harlan-zw/example', issueNumber: 123 })])
+    expect(created).toEqual([expect.stringContaining('The Review of #24 found this follow-up')])
   })
 
   it('stops filing once GitHub refuses the issue for good', async () => {

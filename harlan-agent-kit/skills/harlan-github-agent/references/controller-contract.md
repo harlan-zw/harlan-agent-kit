@@ -382,7 +382,7 @@ Resolve the Agent's finding thread after a published fix and a fresh Review that
 Stage each issue request with its title and body from the stored finding before any GitHub write.
 Give the issue the finding title, the proof, the fix, the code link at the reviewed head, a link back to the pull request, and the automated footer.
 Label it `harlan-agent-follow-up`, so observation keeps the App-authored issue and Issue triage reads it without an Approval.
-Deduplicate one finding's issue by pull request and fingerprint. Before each create, find an open issue by the fingerprint marker, because a lost reply may have filed it.
+Deduplicate one finding's issue by pull request and fingerprint. Before each create, find an open issue by the marker that names both, because a lost reply may have filed it. Another pull request with the same finding files its own issue.
 Retry a refused create. Stop after a permanent refusal or five attempts. Show the issue link, or the refusal, beside the finding.
 
 After merge, offer one `File these as one issue` checkbox on the Merged comment. Never offer a checkbox per finding.

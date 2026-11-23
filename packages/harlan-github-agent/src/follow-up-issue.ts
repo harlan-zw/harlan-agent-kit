@@ -18,11 +18,13 @@ export function hasFollowUpIssueLabel(labels: readonly string[]): boolean {
 /**
  * The hidden marker that finds one finding's issue again.
  *
- * It names the finding fingerprint, so a second tick, a retry, or the same
- * finding on another pull request finds the open issue instead of filing again.
+ * It names the pull request and the finding fingerprint, as the Journal
+ * deduplicates them, so a retry after a lost reply finds this pull request's
+ * issue. A fingerprint comes from the finding's identity, which another pull
+ * request can report too, and that pull request files its own issue.
  */
-export function followUpFindingMarker(fingerprint: string): string {
-  return `<!-- follow-up-finding: ${fingerprint} -->`
+export function followUpFindingMarker(pullRequestNumber: number, fingerprint: string): string {
+  return `<!-- follow-up-finding: ${pullRequestNumber} ${fingerprint} -->`
 }
 
 /** The hidden marker for the one issue a Merged comment files for its pull request and head. */
@@ -53,7 +55,7 @@ export function followUpIssue(input: { repository: string, pullRequestNumber: nu
   const { finding } = input
   const location = findingLocation(input.repository, input.headSha, finding)
   const action = findingNextAction(finding.nextAction ?? '')
-  const marker = followUpFindingMarker(finding.details.fingerprint)
+  const marker = followUpFindingMarker(input.pullRequestNumber, finding.details.fingerprint)
   return {
     title: title(finding.summary),
     marker,

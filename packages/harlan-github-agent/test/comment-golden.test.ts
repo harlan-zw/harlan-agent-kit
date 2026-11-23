@@ -417,10 +417,10 @@ describe('a stopped Task and a pull request that left', () => {
 
       **Fix:** Query for span overlap with the viewport.
 
-      <!-- follow-up-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+      <!-- follow-up-finding: 740 ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
 
       <sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated issue, not Harlan's · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>",
-        "marker": "<!-- follow-up-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->",
+        "marker": "<!-- follow-up-finding: 740 ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->",
         "title": "Zero deliveries for an unmeasured interval",
       }
     `)
