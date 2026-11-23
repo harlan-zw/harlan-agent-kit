@@ -1282,6 +1282,14 @@ describe('review findings on #754, follow-ups', () => {
   })
 
   it.each([
+    ['a code span', '`/home/har<span title="&quot; > x"></span>lan/notes/a.pdf`', removed],
+    ['a fenced block', '```\n/home/har<span title="&quot; > x"></span>lan/notes/a.pdf\n```', `\`\`\`\n${removed}\n\`\`\``],
+    ['a code span with a comment', '`/home/har<!-- x -->lan/notes/a.pdf`', `${removed} <!-- x -->`],
+  ])('removes a path that markup on one line splits inside %s', (_name, text, expected) => {
+    expect(redactPrivateDetails(text, details).text).toBe(expected)
+  })
+
+  it.each([
     ['a link title', 'Read [report](https://notes.localhost/reports/ "Q3\nacquisition plan") now.'],
     ['a link label', 'Read [the\nacquisition plan](https://notes.localhost/reports/plan.md) now.'],
     ['an image label', '![chart of\nthe acquisition](https://notes.localhost/a.png) here.'],
@@ -1289,6 +1297,7 @@ describe('review findings on #754, follow-ups', () => {
     ['a destination between line breaks', 'Read [evidence](\nhttps://hogwild.tail1234.ts.net/docs/report(final)/private.pdf\n) first.'],
     ['a code span', 'Open `~/notes/\nacquisition plan.pdf` now.'],
     ['a double-backtick code span', 'Open ``~/notes/\nacquisition `plan`.pdf`` now.'],
+    ['the title of a linked image', 'Read [![chart](https://example.com/c.png)](https://notes.localhost/reports/ "Q3\nacquisition plan") now.'],
   ])('removes every line of a private Markdown construct that wraps in %s', (_name, text) => {
     for (const input of [text, encodeEntities(text), text.replaceAll('\n', '\r\n')]) {
       const redacted = redactPrivateDetails(input, details)

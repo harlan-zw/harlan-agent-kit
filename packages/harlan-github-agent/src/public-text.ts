@@ -578,9 +578,11 @@ function codeAt(layout: Layout, offset: number): Region | undefined {
 /**
  * HTML tags and lines changed by HTML removal retain their full source spans.
  *
- * Markup renders as text inside code, as a comment opener with no closer, and
- * as markup inside a line that would have to cross into another block. Such
- * markup hides nothing and joins no lines, so it never widens a span.
+ * Markup that spans lines renders as text inside code, and inside a line when
+ * it would have to cross into another block. A comment opener with no closer
+ * also renders as text. Such markup joins no lines, so it never widens a span.
+ * Markup on one line is still removed everywhere, so detection keeps seeing a
+ * path or host that it splits.
  */
 function htmlLines(text: string, layout: Layout): Array<{ text: string, first: number, last: number }> {
   const lines: Array<{ text: string, first: number, last: number }> = []
@@ -607,11 +609,6 @@ function htmlLines(text: string, layout: Layout): Array<{ text: string, first: n
   let closer = -2
   for (let match = markup.exec(text); match !== null; match = markup.exec(text)) {
     const start = match.index
-    const code = codeAt(layout, start)
-    if (code !== undefined) {
-      markup.lastIndex = code.end
-      continue
-    }
     const comment = match[0] === '<!--'
     if (comment && closer !== -1 && closer < markup.lastIndex)
       closer = text.indexOf('-->', markup.lastIndex)
@@ -619,8 +616,11 @@ function htmlLines(text: string, layout: Layout): Array<{ text: string, first: n
       continue
     const end = comment ? closer + 3 : markup.lastIndex
     const first = lineAt(layout.starts, start)
+    const last = lineAt(layout.starts, end - 1)
+    if (last > first && codeAt(layout, start) !== undefined)
+      continue
     // Markup that starts a line may open an HTML block, which can span blocks.
-    if (crossesBlock(layout, first, lineAt(layout.starts, end - 1)) && start !== layout.contentStarts[first])
+    if (crossesBlock(layout, first, last) && start !== layout.contentStarts[first])
       continue
     markup.lastIndex = end
     append(text.slice(from, start))
@@ -648,8 +648,12 @@ const LINK_GAP = String.raw`[ \t]*(?:${SOFT_BREAK}[ \t>]*)?`
 const LINK_DESTINATION = String.raw`(?:<[^<>\r\n]*>|(?:[^\s()<>]|\([^\s()]*\))(?:[^\s()<]|\([^\s()]*\))*)`
 const LINK_TITLE = String.raw`(?:"(?:[^"\r\n]|${SOFT_BREAK})*"|'(?:[^'\r\n]|${SOFT_BREAK})*'|\((?:[^()\r\n]|${SOFT_BREAK})*\))`
 const LINK_TAIL = String.raw`${LINK_DESTINATION}(?:${LINK_GAP}${LINK_TITLE})?`
-/** An inline link or image. Its label and title may wrap, and its destination may start on the next line. */
-const INLINE_LINK = new RegExp(String.raw`\[(?:[^[\]\r\n]|${SOFT_BREAK})*\]\(${LINK_GAP}(?:${LINK_TAIL}${LINK_GAP})?\)`, 'g')
+/**
+ * An inline link or image, from `](` to its closing parenthesis. Its title
+ * may wrap, and its destination may start on the next line. A label without
+ * nested brackets widens it to the `[`, and that label may wrap too.
+ */
+const INLINE_LINK = new RegExp(String.raw`(?:\[(?:[^[\]\r\n]|${SOFT_BREAK})*)?\]\(${LINK_GAP}(?:${LINK_TAIL}${LINK_GAP})?\)`, 'g')
 /** A link reference definition. Its destination and title may each start on the next line. */
 const LINK_DEFINITION = new RegExp(String.raw`^[ \t]*(?:>[ \t]*)*\[[^[\]\r\n]+\]:${LINK_GAP}${LINK_TAIL}`, 'gm')
 
@@ -893,7 +897,9 @@ export function isPublishedForm(published: string, source: string): boolean {
  * newer body that differs only on a removed line. Here a removed line stands
  * in only for a line this deny list removes, and a withheld body only for a
  * source it withholds. The Journal keeps every entry a configuration ever
- * named, so a body written under an earlier deny list still matches.
+ * named, so a body written under an earlier deny list still matches. A body
+ * that an earlier version of the guard removed more lines from reads as
+ * changed, so the caller ends that publication instead of writing.
  */
 export function isRedactedFormOf(published: string, source: string, details: PrivateDetails): boolean {
   if (published === source)
