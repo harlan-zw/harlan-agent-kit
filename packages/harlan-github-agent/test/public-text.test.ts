@@ -1,4 +1,5 @@
 import type { Octokit } from 'octokit'
+import type { PackageReleaseRecord, ReleaseNote } from '../src/package-release-store.ts'
 import type { PublicTextWriter } from '../src/public-text.ts'
 import type { ReviewFindingThread, ReviewFindingThreadMirror, ReviewFindingThreadsOutcome } from '../src/review-finding-threads.ts'
 import type { ReviewFinding } from '../src/types.ts'
@@ -10,6 +11,8 @@ import { candidateIssueBody, candidateIssueTitle } from '../src/candidate-issue-
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { createGitHubIssuePublisher } from '../src/github.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
+import { packageReleaseStatus } from '../src/package-release-controller.ts'
+import { releaseNoteApproval } from '../src/package-release.ts'
 import { createPublicTextGuard, encodeEntities, isPublishedForm, privateDetailsFor, publicBody, redactPrivateDetails } from '../src/public-text.ts'
 import { ok } from '../src/result.ts'
 import { mirrorReviewFindingThreads, reviewFindingThreadBody, reviewFindingThreadFingerprint, reviewFindingThreadMarker } from '../src/review-finding-threads.ts'
@@ -987,13 +990,6 @@ describe('review findings on #754, fourth round', () => {
     expect(redactPrivateDetails(line, details).text).toBe(removed)
   })
 
-  it('removes the destination line of a Markdown link that breaks after its parenthesis', () => {
-    const redacted = redactPrivateDetails('Read [x](\nhttps://notes.localhost/docs/a(b)c.md) now.', details)
-
-    expect(redacted.text).toBe(`Read [x](\n${removed}`)
-    expectNoFragment(redacted.text)
-  })
-
   it('protects a dedicated top-level worker home, and never a system directory', () => {
     const topLevel = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: ['/worker-data', '/home', '/tmp'], serviceOrigins: [] })
 
@@ -1009,13 +1005,6 @@ describe('ported from the Service Repair 73c25d86', () => {
     expect(redactPrivateDetails(encodeEntities(input), details).text).toBe(removed)
   })
 
-  it.each(['\n', '\r\n'])('removes the destination line of a Markdown link split by %j', (newline) => {
-    const input = `Read [evidence](${newline}https://hogwild.tail1234.ts.net/docs/report(final)/private.pdf${newline}) first.`
-    const expected = `Read [evidence](${newline}${removed}${newline}) first.`
-    expect(redactPrivateDetails(input, details).text).toBe(expected)
-    expect(redactPrivateDetails(encodeEntities(input), details).text).toBe(`${encodeEntities('Read [evidence](')}${newline}${removed}${newline}) first.`)
-  })
-
   it('can edit a canonical comment after removing a multiline destination', async () => {
     const store = journal()
     const host = commentHost()
@@ -1028,7 +1017,7 @@ describe('ported from the Service Repair 73c25d86', () => {
     const edited = await agentSource(host.client, store).editReviewStatus(repositoryMapping(), 24, published.value.commentId, before, reviewBody(`MERGED\n\n${link}`), new AbortController().signal)
 
     expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
-    expect(host.comments[0]?.body).toBe(reviewBody(`MERGED\n\nRead [evidence](\n${removed}\n).`))
+    expect(host.comments[0]?.body).toBe(reviewBody(`MERGED\n\n${removed}\n${removed}\n${removed}`))
   })
 
   it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('keeps protected details after a Journal restart for %s', async (writer) => {
@@ -1099,7 +1088,7 @@ describe('ported from the Service Repair 73c25d86', () => {
     await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async (body) => {
       sent.push(body)
     })
-    expect(sent).toEqual([`${removed}\n${removed}\n).`])
+    expect(sent).toEqual([`${removed}\n${removed}\n${removed}`])
   })
 })
 
@@ -1211,6 +1200,164 @@ describe('rendered views stay aligned and complete', () => {
   })
 })
 
+describe('review findings on #754, follow-ups', () => {
+  const withheld = '_This text was withheld: it named a private path or host across lines._'
+  const signal = new AbortController().signal
+  const control = `  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${'f'.repeat(64)} -->`
+
+  it.each([
+    ['with marker lines', `<!-- harlan-agent-kit:candidate ${'a'.repeat(64)} -->\nSee <a\nhref="https://notes.\nlocalhost/example">docs</a>.`, `<!-- harlan-agent-kit:candidate ${'a'.repeat(64)} -->\n${withheld}`],
+    ['without marker lines', 'See <a\nhref="https://notes.\nlocalhost/example">docs</a>.', withheld],
+  ])('keeps an issue title when its body is withheld %s', async (_name, body, expected) => {
+    const store = journal()
+    const written: Array<{ title: string, body: string }> = []
+    const write = async (input: { title: string, body: string }) => {
+      written.push({ title: input.title, body: input.body })
+      return { data: { number: 812, html_url: 'https://github.com/harlan-zw/example/issues/812' } }
+    }
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { create: write, update: write } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z'), log: () => {} }),
+      tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+
+    expect(await publisher.createIssue({ repository: repositoryMapping(), title: 'Fix the docs link', body })).toEqual(ok({ number: 812, url: 'https://github.com/harlan-zw/example/issues/812' }))
+    expect(await publisher.updateIssue({ repository: repositoryMapping(), issueNumber: 812, title: 'Fix the docs link', body })).toEqual(ok(undefined))
+    expect(written).toEqual([{ title: 'Fix the docs link', body: expected }, { title: 'Fix the docs link', body: expected }])
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', message: expect.stringContaining('harlan-zw/example#812') })])
+  })
+
+  it.each([
+    ['a tab', 'notes.\tlocalhost'],
+    ['a carriage return', 'notes.\rlocalhost'],
+    ['an encoded tab', 'notes.&#9;localhost'],
+    ['a named tab', 'notes.&Tab;localhost'],
+    ['an encoded line break', 'notes.&#10;localhost'],
+    ['a named line break', 'notes.&NewLine;localhost'],
+  ])('removes an HTML link whose private host holds %s', (_name, host) => {
+    for (const tag of [`<a href="https://${host}/acquisition.pdf">docs</a>`, `<img src='https://${host}/acquisition.pdf'>`, `<a href="ht\ttps:/\t/${host}/acquisition.pdf">docs</a>`]) {
+      for (const line of [`Read ${tag} now.`, encodeEntities(`Read ${tag} now.`)]) {
+        const redacted = redactPrivateDetails(line, details)
+
+        expect(redacted.text).toBe(removed)
+        expect(redacted.hits).toContainEqual({ _tag: 'Link', entry: 'notes.localhost' })
+      }
+    }
+  })
+
+  it('keeps the release draft approval when a draft line names a private path before a comment opener', () => {
+    const record = {
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      commentId: 99,
+      body: '',
+      plan: { _tag: 'Available', bump: 'patch', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', packageName: 'example', headSha: reviewHead, sourceSha: reviewHead, mergeSha: reviewHead },
+      state: { _tag: 'Completed', url: 'https://github.com/harlan-zw/example/releases/tag/v1.0.1' },
+      policy: '',
+    } as unknown as PackageReleaseRecord
+    const body = packageReleaseStatus(record, { state: { _tag: 'Drafted', text: 'Fixed the cache.\nSee ~/scratch/plan.md <!-- todo\nThanks to every contributor.' } } as ReleaseNote)
+    const redacted = redactPrivateDetails(body, details)
+    const ticked = redacted.text.replace(/^- \[ \] Add this draft/m, '- [x] Add this draft')
+
+    expect(redacted.text).toBe(body.replace('> See ~/scratch/plan.md &lt;!-- todo', `> ${removed}`))
+    expect(releaseNoteApproval('issue_comment', {
+      action: 'edited',
+      repository: { full_name: 'harlan-zw/example' },
+      issue: { number: 24, pull_request: {} },
+      sender: { login: 'harlan-zw' },
+      comment: { id: 99, user: { login: 'harlan-github-agent[bot]' }, body: ticked },
+      changes: { body: { from: redacted.text } },
+    })).not.toBeNull()
+  })
+
+  it.each([
+    ['a code span', 'See ~/notes/a.md and `<!--` here.', removed],
+    ['a fenced block', '```html\nSee ~/notes/a.md <!-- here.\n```', `\`\`\`html\n${removed}\n\`\`\``],
+    ['an encoded opener', 'See ~/notes/a.md &lt;!-- here.', removed],
+    ['a comment that never closes', 'See ~/notes/a.md <!-- here.', removed],
+  ])('removes only the private line when a comment opener sits in %s', (_name, first, expected) => {
+    for (const later of ['Public line.', `- Follow-up\n${control}`, '\nA later paragraph. <!-- marker -->']) {
+      expect(redactPrivateDetails(`${first}\n${later}`, details).text).toBe(`${expected}\n${later}`)
+    }
+  })
+
+  it.each([
+    ['a link title', 'Read [report](https://notes.localhost/reports/ "Q3\nacquisition plan") now.'],
+    ['a link label', 'Read [the\nacquisition plan](https://notes.localhost/reports/plan.md) now.'],
+    ['an image label', '![chart of\nthe acquisition](https://notes.localhost/a.png) here.'],
+    ['a destination after its parenthesis', 'Read [x](\nhttps://notes.localhost/docs/a(b)c.md) now.'],
+    ['a destination between line breaks', 'Read [evidence](\nhttps://hogwild.tail1234.ts.net/docs/report(final)/private.pdf\n) first.'],
+    ['a code span', 'Open `~/notes/\nacquisition plan.pdf` now.'],
+    ['a double-backtick code span', 'Open ``~/notes/\nacquisition `plan`.pdf`` now.'],
+  ])('removes every line of a private Markdown construct that wraps in %s', (_name, text) => {
+    for (const input of [text, encodeEntities(text), text.replaceAll('\n', '\r\n')]) {
+      const redacted = redactPrivateDetails(input, details)
+
+      expect(redacted.text.split('\n').map(line => line.replace(/\r$/, ''))).toEqual(input.split('\n').map(() => removed))
+      expectNoFragment(redacted.text)
+    }
+  })
+
+  it('removes every line of a reference definition whose title wraps', () => {
+    const redacted = redactPrivateDetails('Read [doc][ref].\n\n[ref]: https://notes.localhost/a.md\n  "acquisition plan"', details)
+
+    expect(redacted.text).toBe(`Read [doc][ref].\n\n${removed}\n  ${removed}`)
+    expectNoFragment(redacted.text)
+  })
+
+  it.each([
+    ['a blank line', 'Read [report](https://notes.localhost/a.md "Q3\n\nacquisition") now.', `${removed}\n\nacquisition") now.`],
+    ['a list item', 'Open `~/notes/a.md\n- next` item.', `${removed}\n- next\` item.`],
+  ])('keeps a line that %s separates from a private line', (_name, text, expected) => {
+    expect(redactPrivateDetails(text, details).text).toBe(expected)
+  })
+
+  it('refuses a stale edit when GitHub holds a newer Review that differs only on a removed line', async () => {
+    const store = journal()
+    const host = commentHost()
+    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, reviewBody('Notes: ~/notes/review-24.md'), false, signal)
+    if (published._tag === 'Err')
+      throw new Error(published.error)
+    const newer = host.comments[0]?.body
+
+    const edited = await agentSource(host.client, store).editReviewStatus(repositoryMapping(), 24, published.value.commentId, reviewBody('Notes: none.'), reviewBody('Notes: none.', 'STOPPED'), signal)
+
+    expect(edited).toEqual(ok({ _tag: 'Changed' }))
+    expect(host.comments[0]?.body).toBe(newer)
+  })
+
+  it('refuses a stale edit when GitHub holds a newer withheld Review with the same markers', async () => {
+    const store = journal()
+    const host = commentHost()
+    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, reviewBody('See <a\nhref="https://notes.\nlocalhost/example">docs</a>.'), false, signal)
+    if (published._tag === 'Err')
+      throw new Error(published.error)
+    const newer = host.comments[0]?.body
+
+    const edited = await agentSource(host.client, store).editReviewStatus(repositoryMapping(), 24, published.value.commentId, reviewBody('No notes.'), reviewBody('No notes.', 'STOPPED'), signal)
+
+    expect(newer).toContain(withheld)
+    expect(edited).toEqual(ok({ _tag: 'Changed' }))
+    expect(host.comments[0]?.body).toBe(newer)
+  })
+
+  it('edits a Review whose removed line and ticked control GitHub holds', async () => {
+    const store = journal()
+    const host = commentHost()
+    const before = reviewBody(`Notes: ~/notes/review-24.md\n\n- Follow-up\n${control}`)
+    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, before, false, signal)
+    if (published._tag === 'Err')
+      throw new Error(published.error)
+    const comment = host.comments[0]!
+    comment.body = comment.body.replace('- [ ] Ask', '- [x] Ask')
+
+    const edited = await agentSource(host.client, store).editReviewStatus(repositoryMapping(), 24, published.value.commentId, before, reviewBody('Stopped.', 'STOPPED'), signal)
+
+    expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
+    expect(comment.body).toBe(reviewBody('Stopped.', 'STOPPED'))
+  })
+})
+
 /** The fastest of five runs, in milliseconds, so one slow run on a busy runner cannot decide. */
 function fastest(run: () => void): number {
   let best = Number.POSITIVE_INFINITY
@@ -1239,11 +1386,11 @@ function expectLinear(build: (size: number) => string): void {
 }
 
 describe('redaction time', () => {
-  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a', '&#96;', '//', '~/notes/a ', '\n', 'a\n', '~/notes/a\n', '](https://notes.localhost/a', '[x](https://notes.localhost/a)', '](https://notes.localhost/a)\n'])('scales linearly on repeated %j', (unit) => {
+  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a', '&#96;', '//', '~/notes/a ', '\n', 'a\n', '~/notes/a\n', '](https://notes.localhost/a', '[x](https://notes.localhost/a)', '](https://notes.localhost/a)\n', '[x](y "', '[x](y \'', '[x](y (', '[x\n', '](\n', '`` ```\n`', '> ```\n', '```\n<!--\n', '`<!--` ', '<b title="\n- ', '\t', '&#9;'])('scales linearly on repeated %j', (unit) => {
     expectLinear(size => unit.repeat(Math.ceil(size / unit.length)).slice(0, size))
   })
 
-  it.each(['<!--', '&#8203;', '%2F', '\\~', '&sol;', '<b ', '[[', '((', '%E2%80%8B', '<!-- '])('scales linearly on a private line followed by repeated %j', (unit) => {
+  it.each(['<!--', '&#8203;', '%2F', '\\~', '&sol;', '<b ', '[[', '((', '%E2%80%8B', '<!-- ', '<!--\n- ', '`<!--', '[x](y "\n', '`\n', '<a href="https://notes.\tlocalhost/'])('scales linearly on a private line followed by repeated %j', (unit) => {
     expectLinear(size => `~/notes/a ${unit.repeat(Math.ceil(size / unit.length))}`.slice(0, size))
   })
 })

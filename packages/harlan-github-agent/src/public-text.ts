@@ -330,6 +330,17 @@ function normalizedAuthorities(text: string): string {
   })
 }
 
+/**
+ * Each line decoded, without the tabs and line breaks a URL parser drops.
+ *
+ * A browser reads `https://notes.<tab>localhost` in an HTML attribute as the
+ * host `notes.localhost`. This view adds matches only; the other views keep
+ * the whitespace a path or host may need as a boundary.
+ */
+function withoutURLWhitespace(text: string): string {
+  return text.split('\n').map(line => decodeAll(line).replaceAll(/[\t\r\n]/g, '')).join('\n')
+}
+
 function lineBreaks(text: string): number {
   let count = 0
   for (let index = text.indexOf('\n'); index !== -1; index = text.indexOf('\n', index + 1))
@@ -396,10 +407,13 @@ function joinedPaths(text: string): string {
 function detailsInAligned(detect: Detectors, text: string): Array<{ line: number, hit: PrivateDetailHit }> {
   const decoded = aligned(text, decodeAll)
   const identities = aligned(decoded, decodedFindingIdentities)
+  const parsedURLs = withoutURLWhitespace(text)
   const views: Array<[Detector, string]> = [
     [detect.raw, text],
     [detect.decoded, decoded],
     [detect.decoded, aligned(decoded, normalizedAuthorities)],
+    [detect.decoded, parsedURLs],
+    [detect.decoded, normalizedAuthorities(parsedURLs)],
     [detect.normalised, aligned(decoded, normalise)],
     [detect.decoded, aligned(decoded, normalizedPaths)],
     [detect.normalised, aligned(decoded, text => normalizedPaths(normalise(text)))],
@@ -423,8 +437,152 @@ function detailsInAligned(detect: Detectors, text: string): Array<{ line: number
   })
 }
 
-/** HTML tags and lines changed by HTML removal retain their full source spans. */
-function htmlLines(text: string): Array<{ text: string, first: number, last: number }> {
+/** A character range of one view: `start` inclusive, `end` exclusive. */
+interface Region {
+  start: number
+  end: number
+}
+
+/** A run of source lines, both ends inclusive. */
+interface LineSpan {
+  first: number
+  last: number
+}
+
+/**
+ * The Markdown structure that decides how far inline markup reaches in one view.
+ *
+ * Code renders its text as written, so markup inside it hides and joins
+ * nothing. Inline markup ends with its paragraph, so a comment, tag, link, or
+ * code span never reaches past a line that starts another block.
+ */
+interface Layout {
+  starts: number[]
+  /** `breaks[i]` counts the lines up to and including line `i` that no paragraph continues into. */
+  breaks: number[]
+  /** Where each line's content starts, after blockquote markers and up to three spaces. */
+  contentStarts: number[]
+  /** Fenced code blocks and inline code spans, sorted and disjoint. */
+  code: Region[]
+  /** Inline code spans that wrap onto another line. */
+  wrappedCode: LineSpan[]
+}
+
+const CONTAINER = /^(?:[ \t]*>)*/
+const CONTENT_START = /^(?:[ \t]*>)*[ \t]{0,3}/
+const FENCE = /^[ \t]*(`{3,}(?!`)|~{3,}(?!~))(.*)$/
+/** A line that starts a list item, a heading, or a thematic break, which ends any paragraph above it. */
+const BLOCK_START = /^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])(?:\s|$)|#{1,6}(?:\s|$)|([-*_])(?:[ \t]*\1){2,}\s*$)/
+
+function layoutOf(text: string): Layout {
+  const lines = text.split('\n')
+  const starts: number[] = []
+  const contentStarts: number[] = []
+  const fenced: boolean[] = []
+  const isBreak: boolean[] = []
+  const code: Region[] = []
+  let offset = 0
+  let fence: { char: string, length: number, depth: number, start: number } | null = null
+  for (const line of lines) {
+    starts.push(offset)
+    contentStarts.push(offset + (CONTENT_START.exec(line)?.[0].length ?? 0))
+    const container = CONTAINER.exec(line)?.[0] ?? ''
+    const depth = container.split('>').length - 1
+    const rest = line.slice(container.length)
+    const marker = FENCE.exec(rest)
+    // A fence inside a blockquote ends with the blockquote.
+    if (fence !== null && depth < fence.depth) {
+      code.push({ start: fence.start, end: offset })
+      fence = null
+    }
+    if (fence !== null) {
+      fenced.push(true)
+      isBreak.push(true)
+      if (marker?.[1]?.[0] === fence.char && marker[1].length >= fence.length && marker[2]?.trim() === '') {
+        code.push({ start: fence.start, end: offset + line.length })
+        fence = null
+      }
+    }
+    else if (marker?.[1] !== undefined && !(marker[1].startsWith('`') && marker[2]?.includes('`'))) {
+      fence = { char: marker[1].charAt(0), length: marker[1].length, depth, start: offset }
+      fenced.push(true)
+      isBreak.push(true)
+    }
+    else {
+      fenced.push(false)
+      isBreak.push(rest.trim() === '' || BLOCK_START.test(rest))
+    }
+    offset += line.length + 1
+  }
+  if (fence !== null)
+    code.push({ start: fence.start, end: text.length })
+  const breaks: number[] = []
+  isBreak.reduce((count, value, index) => {
+    breaks[index] = count + (value ? 1 : 0)
+    return breaks[index]
+  }, 0)
+  // A backtick run opens a code span that the next run of the same length in
+  // its paragraph closes. A run with no such partner is literal.
+  const runs: Array<{ start: number, end: number, line: number }> = []
+  for (const run of text.matchAll(/`+/g)) {
+    const line = lineAt(starts, run.index)
+    if (!fenced[line])
+      runs.push({ start: run.index, end: run.index + run[0].length, line })
+  }
+  const partner = Array.from<number>({ length: runs.length }).fill(-1)
+  const nearest = new Map<number, number>()
+  for (let index = runs.length - 1; index >= 0; index--) {
+    const run = runs[index]!
+    partner[index] = nearest.get(run.end - run.start) ?? -1
+    nearest.set(run.end - run.start, index)
+  }
+  const wrappedCode: LineSpan[] = []
+  for (let index = 0; index < runs.length;) {
+    const open = runs[index]!
+    const close = runs[partner[index] ?? -1]
+    if (close === undefined || breaks[close.line] !== breaks[open.line]) {
+      index++
+      continue
+    }
+    code.push({ start: open.start, end: close.end })
+    if (close.line > open.line)
+      wrappedCode.push({ first: open.line, last: close.line })
+    index = (partner[index] ?? index) + 1
+  }
+  code.sort((left, right) => left.start - right.start)
+  return { starts, breaks, contentStarts, code, wrappedCode }
+}
+
+/** Whether a paragraph would have to end somewhere between `first` and `last`. */
+function crossesBlock(layout: Layout, first: number, last: number): boolean {
+  return last > first && (layout.breaks[last] ?? 0) > (layout.breaks[first] ?? 0)
+}
+
+/** The code region that holds `offset`, if any. */
+function codeAt(layout: Layout, offset: number): Region | undefined {
+  let low = 0
+  let high = layout.code.length - 1
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2)
+    const region = layout.code[middle]!
+    if (offset < region.start)
+      high = middle - 1
+    else if (offset >= region.end)
+      low = middle + 1
+    else
+      return region
+  }
+  return undefined
+}
+
+/**
+ * HTML tags and lines changed by HTML removal retain their full source spans.
+ *
+ * Markup renders as text inside code, as a comment opener with no closer, and
+ * as markup inside a line that would have to cross into another block. Such
+ * markup hides nothing and joins no lines, so it never widens a span.
+ */
+function htmlLines(text: string, layout: Layout): Array<{ text: string, first: number, last: number }> {
   const lines: Array<{ text: string, first: number, last: number }> = []
   let line = 0
   let current = { text: '', first: 0, last: 0 }
@@ -443,29 +601,90 @@ function htmlLines(text: string): Array<{ text: string, first: number, last: num
       current.last = line
     })
   }
-  // Scan openers once. A missing comment closer hides the remaining text.
   const markup = new RegExp(`<!--|${HTML_TAG.source}`, 'gi')
   let from = 0
+  // The first closer at or after the last search. Reusing it keeps a run of openers linear.
+  let closer = -2
   for (let match = markup.exec(text); match !== null; match = markup.exec(text)) {
-    append(text.slice(from, match.index))
-    if (match[0] === '<!--') {
-      const close = text.indexOf('-->', markup.lastIndex)
-      markup.lastIndex = close === -1 ? text.length : close + 3
+    const start = match.index
+    const code = codeAt(layout, start)
+    if (code !== undefined) {
+      markup.lastIndex = code.end
+      continue
     }
-    else if (match[0].includes('\n')) {
+    const comment = match[0] === '<!--'
+    if (comment && closer !== -1 && closer < markup.lastIndex)
+      closer = text.indexOf('-->', markup.lastIndex)
+    if (comment && closer === -1)
+      continue
+    const end = comment ? closer + 3 : markup.lastIndex
+    const first = lineAt(layout.starts, start)
+    // Markup that starts a line may open an HTML block, which can span blocks.
+    if (crossesBlock(layout, first, lineAt(layout.starts, end - 1)) && start !== layout.contentStarts[first])
+      continue
+    markup.lastIndex = end
+    append(text.slice(from, start))
+    if (!comment && match[0].includes('\n')) {
       // Inspect attributes before stripping the tag. A host on one line makes
       // the destination's filename on every following line private too.
       lines.push({ text: match[0], first: line, last: line + lineBreaks(match[0]) })
     }
-    line += lineBreaks(text.slice(match.index, markup.lastIndex))
+    line += lineBreaks(text.slice(start, end))
     current.last = line
     stripped = true
-    from = markup.lastIndex
+    from = end
   }
   append(text.slice(from))
   if (stripped)
     lines.push(current)
   return lines
+}
+
+/** A line break inside a paragraph: the next line holds more than blockquote markers. */
+const SOFT_BREAK = String.raw`\r?\n(?![ \t>]*(?:\r?\n|$))`
+/** Optional spaces, then at most one line break and the next line's blockquote markers. */
+const LINK_GAP = String.raw`[ \t]*(?:${SOFT_BREAK}[ \t>]*)?`
+/** A destination never starts with `>`, so it cannot trade characters with the blockquote markers before it. */
+const LINK_DESTINATION = String.raw`(?:<[^<>\r\n]*>|(?:[^\s()<>]|\([^\s()]*\))(?:[^\s()<]|\([^\s()]*\))*)`
+const LINK_TITLE = String.raw`(?:"(?:[^"\r\n]|${SOFT_BREAK})*"|'(?:[^'\r\n]|${SOFT_BREAK})*'|\((?:[^()\r\n]|${SOFT_BREAK})*\))`
+const LINK_TAIL = String.raw`${LINK_DESTINATION}(?:${LINK_GAP}${LINK_TITLE})?`
+/** An inline link or image. Its label and title may wrap, and its destination may start on the next line. */
+const INLINE_LINK = new RegExp(String.raw`\[(?:[^[\]\r\n]|${SOFT_BREAK})*\]\(${LINK_GAP}(?:${LINK_TAIL}${LINK_GAP})?\)`, 'g')
+/** A link reference definition. Its destination and title may each start on the next line. */
+const LINK_DEFINITION = new RegExp(String.raw`^[ \t]*(?:>[ \t]*)*\[[^[\]\r\n]+\]:${LINK_GAP}${LINK_TAIL}`, 'gm')
+
+/** Links and code spans that wrap onto another line, outside code and within one paragraph. */
+function wrappedConstructs(text: string, layout: Layout): LineSpan[] {
+  const links = [...text.matchAll(INLINE_LINK), ...text.matchAll(LINK_DEFINITION)].flatMap((match) => {
+    const first = lineAt(layout.starts, match.index)
+    const last = lineAt(layout.starts, match.index + match[0].length - 1)
+    return last === first || crossesBlock(layout, first, last) || codeAt(layout, match.index) !== undefined ? [] : [{ first, last }]
+  })
+  return [...links, ...layout.wrappedCode]
+}
+
+/**
+ * The wrapped links and code spans that share a line with a span.
+ *
+ * A hit on any line of one removes all of its lines. Otherwise a title or a
+ * filename on its next line outlives the host or path that made it private.
+ */
+function constructsTouching(spans: readonly LineSpan[], constructs: readonly LineSpan[], lineCount: number): LineSpan[] {
+  if (spans.length === 0 || constructs.length === 0)
+    return []
+  const depth = Array.from<number>({ length: lineCount + 1 }).fill(0)
+  for (const { first, last } of spans) {
+    depth[first] = (depth[first] ?? 0) + 1
+    depth[last + 1] = (depth[last + 1] ?? 0) - 1
+  }
+  // `marked[i]` counts the lines before `i` that a span covers.
+  const marked = [0]
+  let open = 0
+  for (let line = 0; line < lineCount; line++) {
+    open += depth[line] ?? 0
+    marked.push((marked[line] ?? 0) + (open > 0 ? 1 : 0))
+  }
+  return constructs.filter(({ first, last }) => (marked[last + 1] ?? 0) > (marked[first] ?? 0))
 }
 
 /** Parse HTML before decoding attribute entities, including each encoded transport layer. */
@@ -493,15 +712,19 @@ function detailsIn(detect: Detectors, text: string): { spans: Array<{ first: num
       layer = next
     }
   }
+  const constructs: LineSpan[] = []
   for (const view of views) {
-    for (const rendered of htmlLines(view)) {
+    const layout = layoutOf(view)
+    for (const rendered of htmlLines(view, layout)) {
       const found = detailsInAligned(detect, rendered.text)
       if (found.length > 0)
         spans.push({ first: rendered.first, last: rendered.last })
       for (const { hit } of found)
         remember(hit)
     }
+    constructs.push(...wrappedConstructs(view, layout))
   }
+  spans.push(...constructsTouching(spans, constructs, lineBreaks(text) + 1))
   // Merge before expanding. Repeated matches and views must never multiply source lines.
   spans.sort((left, right) => left.first - right.first)
   const merged: typeof spans = []
@@ -549,21 +772,31 @@ function removedLine(detect: Detectors, line: string): string {
  * match costs one line and an Incident. A partial leak is never possible.
  */
 export function redactPrivateDetails(text: string, details: PrivateDetails): Redaction {
-  const detect = detectorsFor(details)
+  const { text: redacted, hits } = guarded(detectorsFor(details), text)
+  return { text: redacted, hits }
+}
+
+/** A redaction, with the source lines it removed and whether it withheld the body. */
+interface Guarded extends Redaction {
+  removed: ReadonlySet<number>
+  withheld: boolean
+}
+
+function guarded(detect: Detectors, text: string): Guarded {
   const found = detailsIn(detect, text)
-  const affected = new Set<number>()
+  const removed = new Set<number>()
   for (const { first, last } of found.spans) {
     for (let line = first; line <= last; line++)
-      affected.add(line)
+      removed.add(line)
   }
   const hits = found.hits
   const lines = hits.length === 0
     ? text
-    : text.split('\n').map((line, index) => affected.has(index) ? `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}` : line).join('\n')
+    : text.split('\n').map((line, index) => removed.has(index) ? `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}` : line).join('\n')
   const residue = joinedHits(detect, lines)
   if (residue.length > 0)
-    return { text: withheldBody(detect, lines), hits: [...new Map([...hits, ...residue].map(hit => [`${hit._tag}:${hit.entry}`, hit])).values()] }
-  return { text: lines, hits }
+    return { text: withheldBody(detect, lines), hits: [...new Map([...hits, ...residue].map(hit => [`${hit._tag}:${hit.entry}`, hit])).values()], removed, withheld: true }
+  return { text: lines, hits, removed, withheld: false }
 }
 
 /** The text that replaces a whole body when a private detail spans its lines. */
@@ -653,6 +886,29 @@ export function isPublishedForm(published: string, source: string): boolean {
 }
 
 /**
+ * Whether GitHub's `published` body is `source`, or `source` as this deny list redacts it.
+ *
+ * A compare and swap reads it. `isPublishedForm` lets a removed line stand in
+ * for any source line of the same shape, so a stale write could replace a
+ * newer body that differs only on a removed line. Here a removed line stands
+ * in only for a line this deny list removes, and a withheld body only for a
+ * source it withholds. The Journal keeps every entry a configuration ever
+ * named, so a body written under an earlier deny list still matches.
+ */
+export function isRedactedFormOf(published: string, source: string, details: PrivateDetails): boolean {
+  if (published === source)
+    return true
+  const redaction = guarded(detectorsFor(details), source)
+  if (redaction.withheld && isWithheldFormOf(published, source))
+    return true
+  const publishedLines = published.split('\n')
+  const sourceLines = source.split('\n')
+  return publishedLines.length === sourceLines.length
+    && publishedLines.every((line, index) => line === sourceLines[index]
+      || (redaction.removed.has(index) && isRemovedFormOf(line, sourceLines[index] ?? '')))
+}
+
+/**
  * Keeps removed every line GitHub already shows removed, when an edit repeats it.
  *
  * The deny list can change between two writes of one comment. A line the old
@@ -738,19 +994,41 @@ export interface PublicBody {
   send: <T>(write: (body: string) => Promise<T>, itemNumber?: (written: T) => number) => Promise<T>
 }
 
-export function publicBody(guard: PublicTextGuard, target: PublicTextTarget, source: string): PublicBody {
-  const redaction = redactPrivateDetails(source, guard.details)
+/**
+ * Several texts on their way to GitHub in one write, such as a title and a body.
+ *
+ * GitHub renders each field alone, so the guard redacts each alone. A body it
+ * withholds never takes the title's place. `send` reports the hits of every
+ * field once, after GitHub accepts the write.
+ */
+export interface PublicFields<Field extends string> {
+  text: Record<Field, string>
+  send: <T>(write: (fields: Record<Field, string>) => Promise<T>, itemNumber?: (written: T) => number) => Promise<T>
+}
+
+export function publicFields<Field extends string>(guard: PublicTextGuard, target: PublicTextTarget, source: Record<Field, string>): PublicFields<Field> {
+  const redactions = (Object.entries(source) as Array<[Field, string]>).map(([field, text]) => [field, redactPrivateDetails(text, guard.details)] as const)
+  const text = Object.fromEntries(redactions.map(([field, redaction]) => [field, redaction.text])) as Record<Field, string>
+  const hits = [...new Map(redactions.flatMap(([, redaction]) => redaction.hits).map(hit => [`${hit._tag}:${hit.entry}`, hit])).values()]
   let reported = false
   return {
-    text: redaction.text,
+    text,
     send: async (write, itemNumber) => {
-      const written = await write(redaction.text)
-      if (!reported && redaction.hits.length > 0) {
+      const written = await write(text)
+      if (!reported && hits.length > 0) {
         reported = true
-        guard.report({ ...target, itemNumber: target.itemNumber ?? itemNumber?.(written) ?? null, hits: redaction.hits })
+        guard.report({ ...target, itemNumber: target.itemNumber ?? itemNumber?.(written) ?? null, hits })
       }
       return written
     },
+  }
+}
+
+export function publicBody(guard: PublicTextGuard, target: PublicTextTarget, source: string): PublicBody {
+  const fields = publicFields(guard, target, { body: source })
+  return {
+    text: fields.text.body,
+    send: (write, itemNumber) => fields.send(sent => write(sent.body), itemNumber),
   }
 }
 
