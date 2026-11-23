@@ -4,7 +4,7 @@ import type { LoggedFindingStore } from './logged-finding-store.ts'
 import type { Result } from './result.ts'
 import type { ReviewFindingThread } from './review-finding-threads.ts'
 import type { RepositoryMapping } from './types.ts'
-import { FOLLOW_UP_ISSUE_LABEL } from './follow-up-issue.ts'
+import { FOLLOW_UP_ISSUE_LABEL, hasFollowUpIssueLabel, isPublishedFollowUp } from './follow-up-issue.ts'
 import { err, ok } from './result.ts'
 
 /**
@@ -15,10 +15,12 @@ import { err, ok } from './result.ts'
  * which retries a transient one and stops a permanent one for a person.
  */
 export async function publishFollowUpIssues(options: {
-  github: Pick<GitHubIssuePublisher, 'createIssue' | 'findOpenIssueByMarker'>
+  github: Pick<GitHubIssuePublisher, 'createIssue' | 'findFollowUpIssues'>
   store: Pick<LoggedFindingStore, 'claimFollowUpIssue' | 'authorizeFollowUpIssue' | 'completeFollowUpIssue' | 'failFollowUpIssue'>
   now: () => Date
   workerId: string
+  /** The login GitHub shows as the author of an issue this controller files in one repository. */
+  actorLogin: (repository: RepositoryMapping) => string
 }, signal: AbortSignal, limit = 3): Promise<Array<Result<{ repository: string, issueNumber: number }, string>>> {
   const results: Array<Result<{ repository: string, issueNumber: number }, string>> = []
   for (let filed = 0; filed < limit && !signal.aborted; filed++) {
@@ -37,13 +39,19 @@ export async function publishFollowUpIssues(options: {
       options.store.failFollowUpIssue({ id: command.id, workerId: command.workerId, fence: command.fence, at: options.now().toISOString(), reason: result.error.message, status: result.error.status })
       results.push(err(`${command.repository}#${command.pullRequestNumber}: ${result.error.message}`))
     }
-    const existing = await options.github.findOpenIssueByMarker({ repository: command.repositoryMapping, marker: command.marker }, signal)
-    if (existing._tag === 'Err') {
-      settle(existing)
+    const marked = await options.github.findFollowUpIssues({ repository: command.repositoryMapping, marker: command.marker }, signal)
+    if (marked._tag === 'Err') {
+      settle(marked)
       continue
     }
-    if (existing.value !== null) {
-      settle(ok(existing.value))
+    // Anyone can copy the marker into an issue. Only the controller's own
+    // publication, labelled and unchanged, answers this command.
+    const actor = options.actorLogin(command.repositoryMapping).toLowerCase()
+    const existing = marked.value.find(issue => issue.authorLogin.toLowerCase() === actor
+      && hasFollowUpIssueLabel(issue.labels)
+      && isPublishedFollowUp(issue, command, command.repositoryMapping.githubAccount))
+    if (existing !== undefined) {
+      settle(ok(existing))
       continue
     }
     const authorize = () => !signal.aborted && options.store.authorizeFollowUpIssue(command, options.now().toISOString())

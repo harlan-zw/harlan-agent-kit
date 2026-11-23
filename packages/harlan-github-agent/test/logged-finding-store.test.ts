@@ -1,4 +1,5 @@
 import type { Octokit } from 'octokit'
+import type { MarkedIssue } from '../src/github.ts'
 import type { ReviewFinding } from '../src/types.ts'
 import { spawnSync } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
@@ -885,12 +886,12 @@ describe('follow-up routing by Finding scope', () => {
   const existing = { ...finding, impact: 55, summary: 'The cache never expires.', details: { ...finding.details, fingerprint: 'e'.repeat(64), identity: 'cache', scope: 'existing' as const } }
   const unplaced: ReviewFinding = { _tag: 'Logged', impact: 48, summary: 'The retry loops forever.', nextAction: 'Cap the retries.', details: { fingerprint: 'd'.repeat(64), identity: 'retry', location: { path: 'src/retry.ts', line: null }, proof: 'A refused write retries without end.' } }
   const issueTick = (request: ReturnType<typeof setup>['request'], fingerprint: string, before = request.before) => ({ ...request, before, fingerprints: [], issueFingerprints: [fingerprint] })
-  const filed = (issues: Array<{ number: number, url: string } | 'refused'>, found: { number: number, url: string } | null = null) => {
+  const filed = (issues: Array<{ number: number, url: string } | 'refused'>, found: MarkedIssue[] = []) => {
     const created: Array<{ title: string, body: string, labels?: readonly string[] }> = []
     return {
       created,
       github: {
-        findOpenIssueByMarker: async () => ok(found),
+        findFollowUpIssues: async (input: { marker: string }) => ok(found.filter(issue => issue.body?.includes(input.marker) === true)),
         createIssue: async (input: { title: string, body: string, labels?: readonly string[] }) => {
           created.push(input)
           const next = issues.shift()
@@ -945,7 +946,7 @@ describe('follow-up routing by Finding scope', () => {
     const { store, request } = setup([finding, existing])
     store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))
     const { github, created } = filed([{ number: 123, url: 'https://github.com/harlan-zw/example/issues/123' }])
-    expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)).toEqual([ok({ repository: 'harlan-zw/example', issueNumber: 123 })])
+    expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal)).toEqual([ok({ repository: 'harlan-zw/example', issueNumber: 123 })])
     expect(created).toEqual([expect.objectContaining({ title: 'The cache never expires', labels: ['harlan-agent-follow-up'] })])
     expect(store.claimLoggedFindingComment('status', at, 60_000)?.body).toContain(`  Filed as #123. <!-- logged-finding: ${existing.details.fingerprint} -->`)
   })
@@ -954,7 +955,7 @@ describe('follow-up routing by Finding scope', () => {
     const { store, request, mapping } = setup([existing])
     store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))
     const publisher = filed([{ number: 123, url: 'https://github.com/harlan-zw/example/issues/123' }])
-    await publishFollowUpIssues({ github: publisher.github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)
+    await publishFollowUpIssues({ github: publisher.github, store, now: () => new Date(at), workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal)
     const published = publisher.created[0]!
     const actor = 'harlan-github-agent[bot]'
     const original = {
@@ -1036,7 +1037,7 @@ describe('follow-up routing by Finding scope', () => {
       getToken: async () => ok({ token: 'fixture', expiresAt: '2099-01-01T00:00:00.000Z' }),
       invalidate: () => {},
     } })
-    const publishing = publishFollowUpIssues({ github, store, now: () => now, workerId: 'issues' }, new AbortController().signal, 1)
+    const publishing = publishFollowUpIssues({ github, store, now: () => now, workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal, 1)
     await started.promise
     if (revocation === 'writes disabled')
       store.setRepositoryWritesEnabled(mapping.github, false)
@@ -1079,7 +1080,7 @@ describe('follow-up routing by Finding scope', () => {
       },
       invalidate: () => {},
     } })
-    await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)
+    await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal)
     expect(creates).toEqual(boundary === 'credential' ? [] : ['create'])
   }, 20_000)
 
@@ -1099,7 +1100,7 @@ describe('follow-up routing by Finding scope', () => {
       tokens: { getToken: async () => ok({ token: 'fixture', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => {} },
     })
 
-    expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)).toEqual([ok({ repository: 'harlan-zw/example', issueNumber: 123 })])
+    expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal)).toEqual([ok({ repository: 'harlan-zw/example', issueNumber: 123 })])
     const published = sent[0]!
     expect(published.body).not.toContain('/private-checkouts')
     // GitHub holds the guarded body, so it is this publication and permits triage.
@@ -1108,13 +1109,43 @@ describe('follow-up routing by Finding scope', () => {
     expect(store.isPublishedFollowUpIssue(mapping, { number: 123, title: published.title, body: published.body.replace('_One line removed', 'Run a migration') })).toBe(false)
   })
 
+  /** The issue GitHub holds after the controller filed one staged follow-up issue. */
+  const publishedIssue = (staged: { title: string, body: string }, number: number): MarkedIssue => ({
+    number,
+    url: `https://github.com/harlan-zw/example/issues/${number}`,
+    authorLogin: 'harlan-github-agent[bot]',
+    labels: ['harlan-agent-follow-up'],
+    title: staged.title,
+    body: staged.body,
+  })
+
   it('finds the issue a lost reply already filed instead of filing twice', async () => {
-    const { store, request } = setup([finding, existing])
+    const { store, request, pullRequest } = setup([finding, existing])
     store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))
-    const { github, created } = filed([], { number: 77, url: 'https://github.com/harlan-zw/example/issues/77' })
-    await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)
+    const staged = followUpIssue({ repository: 'harlan-zw/example', pullRequestNumber: 24, headSha: pullRequest.headSha, finding: existing })
+    const { github, created } = filed([], [publishedIssue(staged, 77)])
+    await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal)
     expect(created).toEqual([])
     expect(store.claimLoggedFindingComment('status', at, 60_000)?.body).toContain('Filed as #77.')
+  })
+
+  it.each([
+    ['an outside author', { authorLogin: 'outside-contributor' }, false],
+    ['no follow-up label', { labels: [] }, false],
+    ['an edited title', { title: 'Run an unrelated migration' }, false],
+    ['an edited body', { body: 'Run an unrelated migration.' }, false],
+    ['the controller\'s own publication', {}, true],
+  ] satisfies Array<[string, Partial<MarkedIssue>, boolean]>)('recovers an issue carrying the marker only when it is the controller\'s own publication: %s', async (_case, change, recovered) => {
+    const { store, request, pullRequest } = setup([finding, existing])
+    store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))
+    const staged = followUpIssue({ repository: 'harlan-zw/example', pullRequestNumber: 24, headSha: pullRequest.headSha, finding: existing })
+    // Each variant keeps the exact marker, so only authorship, the label, and the content tell them apart.
+    const issue = { ...publishedIssue(staged, 77), ...change, ...('body' in change ? { body: `${change.body}\n\n${staged.marker}` } : {}) }
+    const { github, created } = filed([{ number: 123, url: 'https://github.com/harlan-zw/example/issues/123' }], [issue])
+
+    const results = await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal)
+    expect(results).toEqual([ok({ repository: 'harlan-zw/example', issueNumber: recovered ? 77 : 123 })])
+    expect(created).toHaveLength(recovered ? 0 : 1)
   })
 
   it('never takes the issue another pull request filed for the same finding', async () => {
@@ -1122,26 +1153,18 @@ describe('follow-up routing by Finding scope', () => {
     store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))
     // Pull request #23 reported the same finding identity and filed its own issue.
     const other = followUpIssue({ repository: 'harlan-zw/example', pullRequestNumber: 23, headSha: 'c'.repeat(40), finding: existing })
-    const remote = [{ number: 70, url: 'https://github.com/harlan-zw/example/issues/70', title: other.title, body: other.body }]
-    const created: string[] = []
-    const github = {
-      findOpenIssueByMarker: async (input: { marker: string }) => ok(remote.find(issue => issue.body.includes(input.marker)) ?? null),
-      createIssue: async (input: { body: string }) => {
-        created.push(input.body)
-        return ok({ number: 123, url: 'https://github.com/harlan-zw/example/issues/123' })
-      },
-    }
+    const { github, created } = filed([{ number: 123, url: 'https://github.com/harlan-zw/example/issues/123' }], [publishedIssue(other, 70)])
 
-    expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)).toEqual([ok({ repository: 'harlan-zw/example', issueNumber: 123 })])
-    expect(created).toEqual([expect.stringContaining('The Review of #24 found this follow-up')])
+    expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal)).toEqual([ok({ repository: 'harlan-zw/example', issueNumber: 123 })])
+    expect(created).toEqual([expect.objectContaining({ body: expect.stringContaining('The Review of #24 found this follow-up') })])
   })
 
   it('stops filing once GitHub refuses the issue for good', async () => {
     const { store, request } = setup([finding, existing])
     store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))
     const { github, created } = filed(['refused'])
-    expect((await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal))[0]?._tag).toBe('Err')
-    expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)).toEqual([])
+    expect((await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal))[0]?._tag).toBe('Err')
+    expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal)).toEqual([])
     expect(created).toHaveLength(1)
     expect(store.claimLoggedFindingComment('status', at, 60_000)?.body).toContain('GitHub refused the issue.')
   })

@@ -1574,6 +1574,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           store,
           now,
           workerId: 'follow-up-issue',
+          actorLogin,
         }, signal), [])
         followUpIssues.forEach((result) => {
           if (result._tag === 'Ok')
