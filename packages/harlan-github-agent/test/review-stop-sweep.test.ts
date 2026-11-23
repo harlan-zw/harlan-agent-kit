@@ -95,10 +95,11 @@ it.each([
   expect(result.results).toEqual([ok({ _tag: 'Published', repository: review.repository, pullRequestNumber: 24 })])
   expect(comments).toHaveLength(1)
   expect(titles).toHaveLength(runIds.length || 1)
-  for (const payload of [...comments, ...titles]) {
+  for (const payload of [...comments, ...titles])
     expect(payload).not.toContain(detail)
-    expect(payload).toContain('_One line removed: it named a private path or host._')
-  }
+  // The removed line is the stop reason. The Stuck Status line and the check title it feeds stay whole.
+  expect(comments[0]).toContain('🟠 **Stuck** · the review stopped\n\n_One line removed: it named a private path or host._')
+  expect(new Set(titles)).toEqual(new Set(['🟠 Stuck · the review stopped']))
 })
 
 function snapshot(overrides: Parameters<typeof pullRequestItem>[0] = {}) {

@@ -270,6 +270,7 @@ When a pull request review starts, create its single marked bot comment. Edit it
 ### Canonical comment format
 
 Start every comment with one Status line: a dot, the outcome in bold, and one fact only this comment knows.
+Write only controller words on a state's Status line. Put a stop reason an Agent or a tool wrote on a line below it, so a removed private detail leaves the state readable.
 The dot says who holds the work. ⚪ means the agent has it. 🟢 means READY. 🟠 means Harlan or the author must act. 🟣 means merged or published.
 Write outcome words in sentence case: Ready, Pending, Blocked, Queued, Reviewing, Repair, Stuck, Review skipped, Approval needed, Merged, Closed.
 Never restate what GitHub's merge box shows, such as CI status or a merge conflict. Name a failed gate only when it is the only reason for Blocked.

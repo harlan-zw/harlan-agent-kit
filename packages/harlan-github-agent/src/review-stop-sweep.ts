@@ -88,15 +88,27 @@ function stopCause(review: StoppedReview): string | null {
   return cause === '' ? null : cause
 }
 
+/** Reasons the controller itself writes, so their words are fixed and name nothing private. */
+const controllerReasons = new Set<string>([REVIEW_NOT_READY_REASON, ...Object.values(REVIEW_REPAIR_REFUSALS)])
+
 /**
  * The cause's first sentence as a Status line detail, and the rest of it.
  *
  * The first line names the cause, so a notification preview says why. A long
  * first sentence stays below the Status line instead.
+ *
+ * Only words the controller wrote reach the Status line: its own reasons, and
+ * a provider failure it mapped to a cause. Any other reason is foreign text
+ * that can name a private path or host, and the publish boundary removes each
+ * line that does. A foreign reason therefore goes below the Status line, so a
+ * removal there leaves the state and the check title it feeds readable.
  */
-function causeDetail(cause: string | null): { detail: string | null, rest: string | null } {
-  if (cause === null)
+function causeDetail(review: StoppedReview): { detail: string | null, rest: string | null } {
+  const cause = stopCause(review)
+  if (cause === null || review.reason === null)
     return { detail: null, rest: null }
+  if (!controllerReasons.has(review.reason) && publicFailureCause(review.reason) === review.reason)
+    return { detail: null, rest: cause }
   const [first = '', ...others] = cause.split(/(?<=[.!?])\s+/)
   if (first.length > 80)
     return { detail: null, rest: cause }
@@ -185,7 +197,7 @@ export function stoppedReviewComment(
     ]
     return [...head, statusLine('done', 'Merged', left), '', ...rows, '', footer].join('\n')
   }
-  const { detail, rest } = causeDetail(cause)
+  const { detail, rest } = causeDetail(review)
   if (review.taskKind === 'review_fix') {
     const open = review.findings.filter(finding => finding._tag === 'Open')
     const fixed = fixedRows(review.findings)
