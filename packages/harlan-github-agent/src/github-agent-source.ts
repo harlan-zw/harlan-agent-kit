@@ -27,7 +27,7 @@ import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { collectJobWorkflowContext } from './job-workflow-context.ts'
 import { normalizeLoggedFindingControls, withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
-import { isPublishedForm, preservePublishedRedactions, publicBody } from './public-text.ts'
+import { isPublishedForm, keepRemovedLines, preservePublishedRedactions, publicBody } from './public-text.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
@@ -1093,10 +1093,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           return err('The stored issue triage comment belongs to another GitHub actor.')
         if (existing !== undefined && existing.body === body && existing.html_url !== undefined)
           return ok({ commentId: existing.id, url: existing.html_url })
-        const written = await outgoing.send(sent => existing === undefined
-          ? octokit.value.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body: sent, ...requestOptions })
-          : octokit.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions }))
-        const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
+        const writtenId = await outgoing.send(async sent => (existing === undefined
+          ? await octokit.value.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body: sent, ...requestOptions })
+          : await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions })).data.id)
+        const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: writtenId, ...requestOptions })
         if (
           confirmed.data.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase()
           || confirmed.data.body !== body
@@ -1362,10 +1362,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         const authorization = authorize?.()
         if (authorization?._tag === 'Err')
           return authorization
-        const written = await outgoing.send(sent => existing === undefined
-          ? writer.value.rest.issues.createComment({ owner, repo, issue_number: pullRequestNumber, body: sent, ...requestOptions })
-          : writer.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions }))
-        const confirmed = await writer.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
+        const writtenId = await outgoing.send(async sent => (existing === undefined
+          ? await writer.value.rest.issues.createComment({ owner, repo, issue_number: pullRequestNumber, body: sent, ...requestOptions })
+          : await writer.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions })).data.id)
+        const confirmed = await writer.value.rest.issues.getComment({ owner, repo, comment_id: writtenId, ...requestOptions })
         const writerLogin = adopted && legacyActor !== undefined ? legacyActor.login.toLowerCase() : actor
         if (
           confirmed.data.user?.login.toLowerCase() !== writerLogin
@@ -1442,8 +1442,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
 
     async editReviewFindingComment(repository, comment, bodyText, signal, authorize) {
       // The finding thread sync calls this on every pass. `send` reports only
-      // the write, never a body GitHub already holds.
-      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'review comment' }, githubAccountBody(bodyText, repository.githubAccount))
+      // the write, never a body GitHub already holds. A line GitHub shows
+      // removed stays removed, whatever the deny list says now.
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'review comment' }, keepRemovedLines(comment.body, githubAccountBody(bodyText, repository.githubAccount)))
       const body = outgoing.text
       if (normalizeLoggedFindingControls(comment.body) === body)
         return ok(comment)

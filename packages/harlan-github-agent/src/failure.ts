@@ -371,14 +371,14 @@ const providerSignInPatterns: RegExp[] = [
  * names nothing a maintainer can change. The public comment names its cause
  * instead, and the raw reason stays in the Journal and the Dashboard.
  *
- * Only the owner the provider boundary adds proves where a reason came from.
- * The Transient patterns match loose words, and a Repair Agent's own summary
- * can say "not found" or "rate limit" without any failure behind it. So every
- * other reason passes through, and the publish boundary redacts its private
- * details.
+ * Only the owner the provider boundary puts at the start of a reason proves
+ * where it came from. The Transient patterns match loose words, and a Repair
+ * Agent's own summary can say "not found", "rate limit", or quote a provider
+ * error while it names another blocker. So every other reason passes through,
+ * and the publish boundary removes its private details.
  */
 export function publicFailureCause(reason: string): string {
-  if (!matches(ownedAgentProviderPatterns, reason))
+  if (!/^The (?:codex|opencode) session failed:/.test(reason))
     return reason
   if (matches(providerSignInPatterns, reason))
     return 'The agent lost its sign-in. Harlan must sign it in again.'
