@@ -127,11 +127,13 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       }
 
       // Feedback and trial evidence come from the Journal, so they spend no GitHub read.
+      // Titles alone cannot pass the open-work duplicate check, so repair-proposing Routines get bodies.
+      const ownershipScope = task.name === 'seo-review' || task.name === 'vitals-review' || task.name === 'daily-checkin'
       const githubEvidence = task.name === 'agent-feedback' || task.name === 'trial-report'
         ? null
         : options.githubEvidence === undefined
           ? { _tag: 'Unavailable' as const, reason: 'The controller has no GitHub metadata source.' }
-          : await options.githubEvidence.collect(task.repositoryMapping, signal, task.name === 'ci-review', task.name === 'daily-checkin' ? task.repositoryMapping.defaultBranch : undefined, task.name === 'seo-review' || task.name === 'vitals-review' ? 'ownership' : 'metadata')
+          : await options.githubEvidence.collect(task.repositoryMapping, signal, task.name === 'ci-review', task.name === 'daily-checkin' ? task.repositoryMapping.defaultBranch : undefined, ownershipScope ? 'ownership' : 'metadata')
       const routine = options.store.listRoutines(task.repository).find(candidate => candidate.id === task.routineId)
       if (task.name === 'daily-checkin' && githubEvidence !== null && routine?.when === 'changed' && answersSchedule(routine, task.scheduledFor)) {
         const change = checkinChange({

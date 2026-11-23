@@ -89,7 +89,7 @@ A live check of the URL is cheap and allowed: `curl -sI <url>`.
 Use controller ownership bodies for private issue and pull request checks. Never obtain worker credentials or bypass the public wrapper.
 Read each body's coverage tag. A truncated list or body does not establish complete duplicate checks.
 Missing closed history blocks checks for matching prior fixes or regressions.
-It does not block a verified new cause after duplicate checks against open work pass.
+Evidence limits never block a Candidate for a verified new cause. Name the unchecked scope in its claim.
 Report those coverage gaps separately for each action.
 
 Group actions with one cause into one Candidate. Twenty 404s behind one missing redirect rule are one Candidate.

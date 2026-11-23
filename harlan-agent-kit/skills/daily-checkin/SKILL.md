@@ -75,7 +75,8 @@ The module owns collection, pagination, and coverage. Sites need no prompt for g
 - Read and privately archive issue details needed to identify the culprit, impact, recurrence, and permalink.
 - Inspect release, URL, browser, affected users, and event times before classifying a finding.
 - Use the shared `sentry-checkin` Skill's triage and repair criteria. Preserve the site's configured expected-error policy.
-- Give every unresolved issue a disposition. Link existing work before proposing a repair.
+- Give every unresolved issue a disposition. Link existing work the evidence shows.
+- Return a Candidate for each verified repository cause. Evidence limits name the unchecked scope; they never block it.
 - Require fresh evidence after a verified deployment before reporting recovery. Counts alone never prove resolution.
 - Keep this check-in read only. Return repository repairs as Candidates and Sentry mutations as proposed operator actions.
 
