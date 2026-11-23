@@ -135,15 +135,15 @@ const TOKEN = String.raw`(?:(?!&#(?:96|60|62|91|93);)[^\s'"\`()<>[\]{}|])`
  */
 const TOKEN_END = String.raw`(?![\w-]|\.[\w-]|&#95;)`
 /** Sentence punctuation after a token belongs to the sentence. */
-const TRAILING_PUNCTUATION = /[.,:;!?]+$/
+const TRAILING_PUNCTUATION = /[)\]}'.,:;!?]+$/
 /**
  * A URL authority: any scheme, or none, then `//`. A host after it is the
  * URL's own host and is private. A host after a single slash is a path
  * segment of some other URL, so it stays.
  */
 const AUTHORITY = String.raw`(?:(?<![\w.+-])[a-z][a-z\d+.-]{0,15}:)?(?<![\w./-])//`
-/** User information belongs to the private URL, including its entity-encoded at sign. */
-const USER_INFORMATION = String.raw`(?:[^\s/<>"'\x60]*(?:@|&#64;))?`
+/** Read the authority before classifying its host. User information may contain URL subdelimiters. */
+const URL_AUTHORITY = String.raw`(?:(?:&#\d{2,3};)|[^\s/<>"\x60?#])+`
 
 interface Matchers {
   path: RegExp | null
@@ -168,16 +168,17 @@ function matchers(details: PrivateDetails): Matchers {
     // A bare host that a slash precedes sits inside a public URL's path, so it never starts a match.
     link: hosts.length === 0
       ? null
-      : new RegExp(String.raw`(?:${AUTHORITY}${USER_INFORMATION}|(?<![\w./@-]))(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})(?::\d{1,5})?(?:[/?#]${TOKEN}*)?${TOKEN_END}`, 'gi'),
+      : new RegExp(String.raw`(?:${AUTHORITY}${URL_AUTHORITY}(?:[/?#]${TOKEN}*)?|(?<![\w./@-])(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})(?::\d{1,5})?(?:[/?#]${TOKEN}*)?${TOKEN_END})`, 'gi'),
   }
 }
 
 function entryFor(details: PrivateDetails, hit: PrivateDetailHit['_tag'], token: string): string {
   const text = decodeEntities(token)
   if (hit === 'Link') {
-    const authority = text.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, '').split(/[/?#]/)[0] ?? text
-    const host = authority.slice(authority.lastIndexOf('@') + 1).split(':')[0]!.toLowerCase()
-    return details.hosts.find(entry => host === entry || host.endsWith(`.${entry}`)) ?? host
+    const authority = text.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, '').split(/[/?#]/)[0]!.replace(TRAILING_PUNCTUATION, '')
+    const url = `https://${authority}`
+    const host = URL.canParse(url) ? new URL(url).hostname.toLowerCase() : ''
+    return details.hosts.find(entry => host === entry || host.endsWith(`.${entry}`)) ?? ''
   }
   return longestFirst(details.paths).find(entry => text === entry || text.startsWith(`${entry}/`)) ?? text
 }
@@ -196,11 +197,14 @@ interface Span {
 function linkSpan(text: string, start: number, end: number): Span | null {
   const encoded = text.slice(start - 5, start) === '&#60;'
   const angleLength = encoded ? 5 : text[start - 1] === '<' ? 1 : 0
-  const targetStart = start - angleLength
+  const angleStart = start - angleLength
+  let targetStart = angleStart
+  while (targetStart > 0 && /[\t ]/.test(text[targetStart - 1]!))
+    targetStart--
   const labelClose = text.slice(targetStart - 6, targetStart) === '&#93;(' ? '&#93;(' : ']('
   if (text.slice(targetStart - labelClose.length, targetStart) !== labelClose) {
     const angleClose = encoded ? '&#62;' : '>'
-    return angleLength > 0 && text.startsWith(angleClose, end) ? { start: targetStart, end: end + angleClose.length } : null
+    return angleLength > 0 && text.startsWith(angleClose, end) ? { start: angleStart, end: end + angleClose.length } : null
   }
   const labelEnd = targetStart - labelClose.length
   const labelOpen = labelClose === '](' ? '[' : '&#91;'
@@ -255,12 +259,15 @@ function redactTokens(text: string, pattern: RegExp, tag: PrivateDetailHit['_tag
     const end = start + found[0].length
     if (start < cursor)
       continue
+    const entry = entryFor(details, tag, found[0])
+    if (tag === 'Link' && entry === '')
+      continue
     const link = linkSpan(text, start, end)
     if (link !== null && link.start >= cursor) {
       output += `${text.slice(cursor, link.start)}${placeholder}`
       cursor = link.end
       pattern.lastIndex = Math.max(pattern.lastIndex, link.end)
-      hits.push({ _tag: tag, entry: entryFor(details, tag, found[0]) })
+      hits.push({ _tag: tag, entry })
       continue
     }
     // An entity's closing semicolon belongs to the token, not to the sentence.
@@ -328,25 +335,41 @@ const MAXIMUM_COMPARED_PLACEHOLDERS = 200
  * configuration change still matches the Journal text that produced it. Each
  * placeholder stands for some text on one line. Equal text always matches.
  */
-export function isPublishedForm(published: string, source: string): boolean {
+function publishedRedactions(published: string, source: string): Array<{ source: string, placeholder: string }> | null {
   if (published === source)
-    return true
+    return []
   const segments = published.split(new RegExp(PLACEHOLDER_PATTERN.source, 'g'))
+  const placeholders = [...published.matchAll(new RegExp(PLACEHOLDER_PATTERN.source, 'g'))]
   if (segments.length === 1 || segments.length > MAXIMUM_COMPARED_PLACEHOLDERS + 1)
-    return false
+    return null
   const first = segments[0]!
   const last = segments.at(-1)!
   if (!source.startsWith(first))
-    return false
+    return null
   let position = first.length
-  for (const segment of segments.slice(1, -1)) {
+  const redactions: Array<{ source: string, placeholder: string }> = []
+  for (const [offset, segment] of segments.slice(1, -1).entries()) {
     const index = source.indexOf(segment, position + 1)
     if (index === -1 || source.slice(position, index).includes('\n'))
-      return false
+      return null
+    redactions.push({ source: source.slice(position, index), placeholder: placeholders[offset]![0] })
     position = index + segment.length
   }
   const tail = source.length - last.length
-  return tail > position && source.endsWith(last) && !source.slice(position, tail).includes('\n')
+  if (tail <= position || !source.endsWith(last) || source.slice(position, tail).includes('\n'))
+    return null
+  redactions.push({ source: source.slice(position, tail), placeholder: placeholders.at(-1)![0] })
+  return redactions
+}
+
+export function isPublishedForm(published: string, source: string): boolean {
+  return publishedRedactions(published, source) !== null
+}
+
+/** Carry previously hidden source spans into a replacement, regardless of the current deny list. */
+export function preservePublishedRedactions(published: string, source: string, replacement: string): string {
+  const redactions = publishedRedactions(published, source)
+  return (redactions ?? []).sort((left, right) => right.source.length - left.source.length).reduce((text, redaction) => text.replaceAll(redaction.source, redaction.placeholder), replacement)
 }
 
 /** What a published body is, in GitHub's words and the GLOSSARY's. */

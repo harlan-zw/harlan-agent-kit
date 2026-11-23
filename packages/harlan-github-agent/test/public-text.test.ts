@@ -36,6 +36,26 @@ Full notes: https://notes.localhost/notes/ci-review-2026-11-22
 Evidence is in \`~/scratch/ci-review-2026-11-22/\`.`
 
 describe('redactPrivateDetails', () => {
+  it('removes an HTTPS authority with an apostrophe in its password', () => {
+    const input = 'Read https://fixture-user:fixture\'password@notes.localhost/report.md first.'
+    expect(redactPrivateDetails(input, details)).toEqual({ text: 'Read [private link] first.', hits: [{ _tag: 'Link', entry: 'notes.localhost' }] })
+  })
+
+  it.each([
+    ['\'https://fixture-user:fixture\'password@notes.localhost\'', '\'[private link]\''],
+    ['https://fixture-user:fixture(password)@notes.localhost/report.md', '[private link]'],
+    ['https://fixture-user:fixture;password@notes.localhost/report.md', '[private link]'],
+  ])('removes complete credentials at an authority boundary: %s', (input, expected) => {
+    expect(redactPrivateDetails(input, details).text).toBe(expected)
+    expect(redactPrivateDetails(encodeEntities(input), details).text).toBe(expected)
+  })
+
+  it.each([' ', '\t', '  '])('removes a private Markdown destination after whitespace %j', (space) => {
+    const input = `Read [notes](${space}https://notes.localhost/docs/report(final)/draft.pdf) first.`
+    expect(redactPrivateDetails(input, details).text).toBe('Read [private link] first.')
+    expect(redactPrivateDetails(encodeEntities(input), details).text).toBe('Read [private link] first.')
+  })
+
   it.each(['https://', 'ssh://', '//'])('removes private URL user information after %s', (scheme) => {
     const text = `Read [notes](${scheme}fixture-user:fixture-password@notes.localhost/report.md) first.`
     expect(redactPrivateDetails(text, details)).toEqual({ text: 'Read [private link] first.', hits: [{ _tag: 'Link', entry: 'notes.localhost' }] })
@@ -185,7 +205,7 @@ describe('the publish boundary', () => {
     'release comment',
     'GitHub release',
   ])('removes complete private details before sending a %s', (writer) => {
-    const input = 'Read [notes](https://fixture-user:fixture-password@notes.localhost/docs/acquisition(final)/internal.pdf). See `~/notes/acquisition(final)[internal].pdf`.'
+    const input = 'Read [notes]( https://fixture-user:fixture\'password@notes.localhost/docs/acquisition(final)/internal.pdf). See `~/notes/acquisition(final)[internal].pdf`.'
     const source = writer === 'review' ? encodeEntities(input) : input
     const sent: string[] = []
     publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, source)
@@ -387,6 +407,24 @@ ${line}`
 }
 
 describe('review findings on #754', () => {
+  it('keeps a repeated next action private in a MERGED edit after the dashboard hostname changes', async () => {
+    const store = journal()
+    const host = commentHost()
+    const action = 'Read https://hogwild.tail1234.ts.net/items/24/private-evidence for the next action.'
+    const before = reviewBody(action)
+    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, before, false, new AbortController().signal)
+    if (published._tag === 'Err')
+      throw new Error(published.error)
+    expect(host.comments[0]?.body).toContain('Read [private link] for the next action.')
+    const restarted = { paths: [], hosts: ['other.tail1234.ts.net'] }
+    const after = reviewBody(`MERGED\n\n${action}\n${action}`)
+
+    const edited = await agentSource(host.client, store, restarted).editReviewStatus(repositoryMapping(), 24, published.value.commentId, before, after, new AbortController().signal)
+
+    expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
+    expect(host.comments[0]?.body).toBe(reviewBody('MERGED\n\nRead [private link] for the next action.\nRead [private link] for the next action.'))
+  })
+
   it('redacts every spelling of a checkout root under the home directory', async () => {
     const store = journal()
     const sent: string[] = []

@@ -27,7 +27,7 @@ import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { collectJobWorkflowContext } from './job-workflow-context.ts'
 import { normalizeLoggedFindingControls, withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
-import { isPublishedForm, publicBody } from './public-text.ts'
+import { isPublishedForm, preservePublishedRedactions, publicBody } from './public-text.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
@@ -1228,8 +1228,6 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
 
     async editReviewStatus(repository, pullRequestNumber, commentId, expectedBodyText, bodyText, signal, authorize) {
       const sourceBody = githubAccountBody(bodyText, repository.githubAccount)
-      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'automated review' }, sourceBody)
-      const body = outgoing.text
       // The Journal keeps the text before redaction. GitHub holds it redacted
       // under whatever deny list the writer used, or whole when it was written
       // before redaction began. `isPublishedForm` accepts each of those.
@@ -1242,6 +1240,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       const actor = options.actorLogin(repository).toLowerCase()
       return octokit.value.rest.issues.getComment({ owner, repo, comment_id: commentId, ...requestOptions })
         .then(async (existing) => {
+          const priorPublished = withoutLoggedFindingControls(normalizeReviewControl(existing.data.body ?? ''))
+          const priorSource = withoutLoggedFindingControls(normalizeReviewControl(expectedBody))
+          const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'automated review' }, preservePublishedRedactions(priorPublished, priorSource, sourceBody))
+          const body = outgoing.text
           if (existing.data.issue_url !== undefined && !existing.data.issue_url.endsWith(`/${pullRequestNumber}`))
             return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another pull request.' as const })
           const legacyActor = repository.githubAccount === undefined ? options.legacyActor : undefined
@@ -1263,7 +1265,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           && existing.data.html_url !== undefined) {
             return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
           }
-          if (!isPublishedForm(withoutLoggedFindingControls(normalizeReviewControl(existing.data.body ?? '')), withoutLoggedFindingControls(normalizeReviewControl(expectedBody))))
+          if (!isPublishedForm(priorPublished, priorSource))
             return ok({ _tag: 'Changed' as const })
           const writer = legacyOwned && legacyActor !== undefined
             ? await clientWith(legacyActor.tokens, repository.github, 'item_write', signal)
