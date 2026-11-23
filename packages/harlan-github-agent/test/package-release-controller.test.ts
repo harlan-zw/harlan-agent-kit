@@ -405,7 +405,12 @@ describe('release note drafts', () => {
     task.database.close()
   })
 
-  it.each([[404, 'Not Found'], [403, 'Resource not accessible by integration'], [422, 'Validation Failed']])('stops applying after GitHub refuses the edit: %s', async (status, message) => {
+  it.each([
+    [404, 'Not Found'],
+    [403, 'Resource not accessible by integration'],
+    [422, 'Validation Failed'],
+    [409, 'Adding this draft would change existing release notes. A maintainer must decide how to handle those notes.'],
+  ])('stops applying after a refused edit: %s', async (status, message) => {
     const task = setup()
     const body = await drafted(task)
     task.store.approveReleaseNote(approval(body))

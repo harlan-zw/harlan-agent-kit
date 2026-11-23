@@ -455,6 +455,8 @@ Match the raw text and the text as GitHub renders it: entities, percent escapes,
 Replace each line that names a private detail with one fixed line. Never cut out a single token: every partial cut left a fragment behind.
 Keep the removed line's indentation, blockquote, list or checkbox marker, a leading `Repair:`, and its HTML comment markers, so parsers and Markdown structure still hold. Remove every other word. Drop a marker that itself names a private detail.
 A control line whose label held a private detail keeps its marker, and its parser ignores the changed label.
+Match entries glued to any option or assignment, such as `-I`, `CFLAGS=`, `-Wp,`, and `PATH=`, after removing every URL from the text.
+After line removal, check the body with its lines joined. If a private detail appears only across lines, withhold the whole body: keep the marker lines that name nothing private, then one fixed withheld line.
 Record one `private_detail` Incident that names the item and the writer, only after GitHub accepts the redacted body. A no-op, a refused write, or a rejected write records nothing. If the Journal cannot record it, log the failure and keep the accepted write. Only a person resolves it.
 Compare a stored body with GitHub's text line by line, where a removed line stands for its source line, so a configuration change never strands a comment.
 An approved Release note draft passes the guard again when the controller adds it to the GitHub release.
