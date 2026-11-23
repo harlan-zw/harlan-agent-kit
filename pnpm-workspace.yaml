@@ -106,8 +106,8 @@ allowBuilds:
 
 catalog:
   '@antfu/eslint-config': ^9.5.1
-  '@coldtea/pr-lens-renderer': ^0.3.2
-  '@coldtea/pr-lens-schema': ^0.7.0
+  '@coldtea/pr-lens-renderer': ^0.6.3
+  '@coldtea/pr-lens-schema': ^0.10.0
   '@expo-google-fonts/noto-emoji': 0.4.8
   '@fontpkg/unifont': 15.0.1
   '@harlan-zw/jev': ^0.3.0
@@ -117,7 +117,7 @@ catalog:
   '@nuxt/fonts': ^1.0.1
   '@nuxt/icon': ^2.5.1
   '@nuxt/ui': ^4.12.0
-  '@openai/codex-sdk': ^0.163.0
+  '@openai/codex-sdk': ^0.171.0
   '@opencode/plugin': 2.0.27
   '@pierre/diffs': 1.2.0
   '@resvg/resvg-js': ^2.6.2
