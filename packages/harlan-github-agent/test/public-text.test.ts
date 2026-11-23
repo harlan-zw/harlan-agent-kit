@@ -1,11 +1,14 @@
 import type { Octokit } from 'octokit'
 import type { PublicTextWriter } from '../src/public-text.ts'
+import type { ReviewFindingThread, ReviewFindingThreadMirror, ReviewFindingThreadsOutcome } from '../src/review-finding-threads.ts'
+import type { ReviewFinding } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { createGitHubIssuePublisher } from '../src/github.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
 import { createPublicTextGuard, encodeEntities, isPublishedForm, privateDetailsFor, publicBody, redactPrivateDetails } from '../src/public-text.ts'
 import { ok } from '../src/result.ts'
+import { mirrorReviewFindingThreads, reviewFindingThreadFingerprint } from '../src/review-finding-threads.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -90,6 +93,7 @@ describe('redactPrivateDetails', () => {
     'Clone ssh://notes.localhost/x first.',
     'See [x](//notes.localhost/y).',
     'Mail fixture-user@notes.localhost about it.',
+    'Client acquisition handover: see ~/notes/acme.md',
     '<a href="https://notes.localhost/a b">notes</a>',
   ])('removes a line that names a private detail: %s', (line) => {
     const redacted = redactPrivateDetails(line, details)
@@ -119,7 +123,7 @@ describe('redactPrivateDetails', () => {
     const text = 'Two workflows failed on main.\nFull notes: https://notes.localhost/notes/ci-review\n\nThe fix is in main.'
 
     expect(redactPrivateDetails(text, details)).toEqual({
-      text: `Two workflows failed on main.\nFull notes: ${removed}\n\nThe fix is in main.`,
+      text: `Two workflows failed on main.\n${removed}\n\nThe fix is in main.`,
       hits: [{ _tag: 'Link', entry: 'notes.localhost' }],
     })
   })
@@ -169,7 +173,7 @@ describe('redactPrivateDetails', () => {
     expect(redactPrivateDetails('See ~/notes/a.md.\nSee /root/scratch/b.log.', rootHome).text).toBe(`${removed}\n${removed}`)
   })
 
-  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a', '&#96;', '//', '~/notes/a '])('redacts 65,536 characters of %s in linear time', (unit) => {
+  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a', '&#96;', '//', '~/notes/a ', '\n', 'a\n', '~/notes/a\n'])('redacts 65,536 characters of %j in linear time', (unit) => {
     const text = unit.repeat(Math.ceil(65_536 / unit.length)).slice(0, 65_536)
     const started = performance.now()
     redactPrivateDetails(text, details)
@@ -255,7 +259,7 @@ describe('the publish boundary', () => {
     const result = await agentSource(host.client, store).editReviewStatus(repositoryMapping(), 24, 5, leaked, reviewBody('Notes: ~/notes/review-24.md', 'STOPPED'), new AbortController().signal)
 
     expect(result).toEqual(ok(expect.objectContaining({ _tag: 'Edited', commentId: 5 })))
-    expect(host.comments[0]?.body).toBe(reviewBody(`Notes: ${removed}`, 'STOPPED'))
+    expect(host.comments[0]?.body).toBe(reviewBody(removed, 'STOPPED'))
     expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', message: expect.stringContaining('harlan-zw/example#24') })])
   })
 
@@ -384,3 +388,46 @@ function reviewBody(line: string, state = 'READY') {
 
 ${line}`
 }
+
+describe('a review comment on a line', () => {
+  it('stays the Service thread for its finding after its heading line was removed', async () => {
+    const guard = { details, report: () => {} }
+    const threads: ReviewFindingThread[] = []
+    const posted: string[] = []
+    const reports: ReviewFindingThreadsOutcome[] = []
+    const mirror: ReviewFindingThreadMirror = {
+      source: {
+        listReviewFindingThreads: async () => ok(threads),
+        postReviewFindingComment: async (_repository, _number, comment) => {
+          const body = await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'review comment' }, comment.body).send(async sent => sent)
+          posted.push(body)
+          const fingerprint = reviewFindingThreadFingerprint(body)
+          if (fingerprint !== null)
+            threads.push({ threadId: `thread-${threads.length}`, fingerprint, resolved: false, comment: { id: 100 + threads.length, body } })
+          return ok({ _tag: 'Posted', comment: { id: 100 + threads.length, body } })
+        },
+        editReviewFindingComment: async (_repository, comment, bodyText) => {
+          const body = publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'review comment' }, bodyText).text
+          return ok({ ...comment, body })
+        },
+        resolveReviewFindingThread: async () => ok(undefined),
+      },
+      report: (_repository, outcome) => reports.push(outcome),
+    }
+    const finding: ReviewFinding = {
+      _tag: 'Logged',
+      impact: 42,
+      summary: 'The cache at ~/pkg/example/cache leaks between tests',
+      nextAction: 'Reset the cache.',
+      details: { fingerprint: 'c'.repeat(64), identity: 'cache-leak', location: { path: 'src/cache.ts', line: 3 }, proof: 'Two tests share one cache.' },
+    }
+
+    for (let pass = 0; pass < 2; pass++)
+      await mirrorReviewFindingThreads(mirror, repositoryMapping(), 24, reviewHead, [finding], new AbortController().signal, () => ok(undefined), 'open', { controls: true })
+
+    expect(posted).toHaveLength(1)
+    expect(posted[0]).toContain(removed)
+    expectNoFragment(posted[0]!)
+    expect(reports.every(outcome => outcome._tag === 'Written')).toBe(true)
+  })
+})

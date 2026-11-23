@@ -121,11 +121,12 @@ export interface Redaction {
 export const REMOVED_LINE = '_One line removed: it named a private path or host._'
 
 /**
- * What a removed line keeps: indentation, blockquote markers, one list or
- * checkbox marker, and a short label such as `Repair:`. None of these can
- * hold a path or a host, and parsers and Markdown structure rely on them.
+ * What a removed line keeps: indentation, blockquote markers, and one list or
+ * checkbox marker. None of these holds text, and Markdown structure relies on
+ * them. The one word kept is `Repair:`, because the Logged finding status
+ * parser reads it. Any other label is free text and goes with the line.
  */
-const LINE_STRUCTURE = /^[ \t]*(?:>[ \t]?)*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?(?:[A-Z][\w ]{0,30}:[ \t]+)?/
+const LINE_STRUCTURE = /^[ \t]*(?:>[ \t]?)*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?(?:Repair:[ \t]+)?/
 /** Markers that parsers read. A removed line keeps each one that names no private detail. */
 const HTML_COMMENT = /<!--.*?-->/g
 
@@ -189,11 +190,30 @@ function entryFor(detect: Detector, hit: PrivateDetailHit['_tag'], matched: stri
   return detect.details.hosts.find(entry => host === entry || host.endsWith(`.${entry}`)) ?? host
 }
 
-function lineHits(detect: Detector, line: string): PrivateDetailHit[] {
+/** Every private detail in `text`, with its offset. No pattern can match across a line break. */
+function findDetails(detect: Detector, text: string): Array<{ index: number, hit: PrivateDetailHit }> {
   return (['Link', 'Path'] as const).flatMap((tag) => {
     const pattern = tag === 'Link' ? detect.link : detect.path
-    return pattern === null ? [] : [...line.matchAll(pattern)].map(found => ({ _tag: tag, entry: entryFor(detect, tag, found[0]) }))
+    return pattern === null ? [] : [...text.matchAll(pattern)].map(found => ({ index: found.index ?? 0, hit: { _tag: tag, entry: entryFor(detect, tag, found[0]) } }))
   })
+}
+
+function lineHits(detect: Detector, line: string): PrivateDetailHit[] {
+  return findDetails(detect, line).map(({ hit }) => hit)
+}
+
+/** The index of the line that holds `offset`, given each line's first offset in order. */
+function lineAt(starts: readonly number[], offset: number): number {
+  let low = 0
+  let high = starts.length - 1
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2)
+    if ((starts[middle] ?? 0) <= offset)
+      low = middle
+    else
+      high = middle - 1
+  }
+  return low
 }
 
 /** The line that stands in for `line`, and the markers it keeps. */
@@ -212,15 +232,21 @@ function removedLine(detect: Detector, line: string): string {
  */
 export function redactPrivateDetails(text: string, details: PrivateDetails): Redaction {
   const detect = detector(details)
-  const hits: PrivateDetailHit[] = []
-  const lines = text.split('\n').map((line) => {
-    const found = lineHits(detect, line)
-    if (found.length === 0)
-      return line
-    hits.push(...found)
-    return `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}`
-  })
-  return { text: hits.length === 0 ? text : lines.join('\n'), hits }
+  // One scan of the whole body per pattern, so many short lines cost no more than one long one.
+  const found = findDetails(detect, text)
+  if (found.length === 0)
+    return { text, hits: [] }
+  const lines = text.split('\n')
+  const starts: number[] = []
+  lines.reduce((offset, line) => {
+    starts.push(offset)
+    return offset + line.length + 1
+  }, 0)
+  const affected = new Set(found.map(({ index }) => lineAt(starts, index)))
+  return {
+    text: lines.map((line, index) => affected.has(index) ? `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}` : line).join('\n'),
+    hits: found.map(({ hit }) => hit),
+  }
 }
 
 /** Whether `line` is what the guard writes in place of `source`, under any deny list. */
