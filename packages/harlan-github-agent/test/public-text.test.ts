@@ -345,13 +345,13 @@ describe('the publish boundary', () => {
         },
       } },
     } as unknown as Octokit
-    // The one-line native review carries no finding text, so the encoded line arrives in the body the writer receives.
-    const body = nativeReviewBody({
+    // The native review omits finding text, so supply encoded evidence at the writer boundary.
+    const body = `${nativeReviewBody({
       headSha: reviewHead,
       outcome: 'READY',
       commentUrl: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
       findings: [],
-    }).replace('\n\n<sub>', `\n\n${encodeEntities(proof)}\n\n<sub>`)
+    })}\n\n${encodeEntities(proof)}\n`
 
     expect(await agentSource(client, store, withEncodedRoot).upsertNativeReview(repositoryMapping(), 24, reviewHead, body, new AbortController().signal, () => ok(undefined))).toEqual(ok(undefined))
     expect(written[0]).toContain(`\n${removed}\n`)
