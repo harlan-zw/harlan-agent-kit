@@ -1,6 +1,6 @@
 import type { ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
-import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, isCanonicalFooter, plural } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, FOLLOW_UP_GROUP_LABEL, isCanonicalFooter, plural } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type LoggedReviewFinding = Extract<ReviewFinding, { _tag: 'Logged' }>
@@ -63,6 +63,17 @@ function loggedFindingRow(line: string, finding: LoggedReviewFinding): boolean {
     && line.includes(cleanLine(finding.summary))
 }
 
+/** Drops a group label whose rows all moved to their inline threads. */
+function withoutEmptyGroups(content: string): string {
+  const lines = content.split('\n')
+  return lines.filter((line, index) => {
+    if (!FOLLOW_UP_GROUP_LABEL.test(line))
+      return true
+    const next = lines.slice(index + 1).find(candidate => candidate.trim() !== '')
+    return next?.startsWith('- `') === true
+  }).join('\n')
+}
+
 /** Adds one control beside each recorded finding. Task status replaces its control. */
 export function withLoggedFindingControls(body: string, findings: readonly ReviewFinding[], statuses: readonly LoggedFindingStatus[], options: {
   target?: 'head' | 'after-merge' | undefined
@@ -90,9 +101,9 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
       ...(options.target === 'head' ? [dismissalControl(finding.details.fingerprint)] : []),
     ]
   }).join('\n').replace(/<details><summary><b>\d+ follow-ups?<\/b> · none block merge<\/summary>\n([\s\S]*?)<\/details>/g, (_block, content: string) => {
-    // A row moved to its inline thread leaves the fold, so the count follows.
+    // A row moved to its inline thread leaves the fold, so the count and its group follow.
     const count = [...content.matchAll(/^- `\d+` /gm)].length
-    return count === 0 ? '' : `<details><summary><b>${plural(count, 'follow-up')}</b> · none block merge</summary>\n${content}</details>`
+    return count === 0 ? '' : `<details><summary><b>${plural(count, 'follow-up')}</b> · none block merge</summary>\n${withoutEmptyGroups(content)}</details>`
   }).replace(/<details>\n<summary>Logged findings \(\d+\)<\/summary>\n([\s\S]*?)<\/details>/g, (_block, content: string) => {
     const count = [...content.matchAll(/^- \*\*Logged \(/gm)].length
     return count === 0 ? '' : `<details>\n<summary>Logged findings (${count})</summary>\n${content}</details>`

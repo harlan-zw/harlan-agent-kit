@@ -496,6 +496,7 @@ interface StoppedReviewRow {
   github_number: number
   revision_id: string
   head_sha: string
+  base_ref: string | null
   closure_revision_id: string
   current_head_sha: string
   current_base_sha: string
@@ -533,6 +534,8 @@ export interface StoppedReview {
   pullRequestNumber: number
   revisionId: string
   headSha: string
+  /** The target branch the stopped head was reviewed against, which names where existing code lives. */
+  baseRef: string | null
   closureRevisionId: string
   currentHeadSha: string
   currentBaseSha: string
@@ -16053,6 +16056,7 @@ export function openJournalStore(
       subjects.github_number,
       stopped.revision_id,
       json_extract(task_revisions.payload, '$.headSha') AS head_sha,
+      json_extract(task_revisions.payload, '$.baseRef') AS base_ref,
       current_revisions.id AS closure_revision_id,
       json_extract(current_revisions.payload, '$.headSha') AS current_head_sha,
       json_extract(current_revisions.payload, '$.baseSha') AS current_base_sha,
@@ -16147,6 +16151,7 @@ export function openJournalStore(
     pullRequestNumber: row.github_number,
     revisionId: row.revision_id,
     headSha: row.head_sha,
+    baseRef: row.base_ref,
     closureRevisionId: row.closure_revision_id,
     currentHeadSha: row.current_head_sha,
     currentBaseSha: row.current_base_sha,

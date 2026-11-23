@@ -131,19 +131,58 @@ export function followUpRow(repository: string | undefined, headSha: string, fin
   return `- \`${finding.impact}\` ${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}`
 }
 
-/** The folded follow-up list, then a count of the notes below the floor. */
-export function followUpSection(repository: string | undefined, headSha: string, findings: readonly ReviewFinding[]): string[] {
+/**
+ * Who owns one follow-up's fix, by its Finding scope.
+ *
+ * `unknown` covers a line the diff could not place and every run recorded
+ * before Finding scope existed. It never reads as this change.
+ */
+export type FollowUpGroup = 'change' | 'existing' | 'unknown'
+
+const followUpGroups: readonly FollowUpGroup[] = ['change', 'existing', 'unknown']
+
+export function followUpGroup(finding: LoggedFinding): FollowUpGroup {
+  return finding.details.scope ?? 'unknown'
+}
+
+/** The bold label above one group of follow-ups. The real base branch names where existing code lives. */
+export function followUpGroupLabel(group: FollowUpGroup, baseRef?: string): string {
+  switch (group) {
+    case 'change':
+      return '**In this change.**'
+    case 'existing':
+      return baseRef === undefined || baseRef.replaceAll('`', '') === ''
+        ? '**Already in the base branch.**'
+        : `**Already in \`${baseRef.replaceAll('`', '')}\`.**`
+    case 'unknown':
+      return '**Not matched to the diff.**'
+  }
+}
+
+/** Matches a group label at the start of a line, with or without the sentence controls add after it. */
+export const FOLLOW_UP_GROUP_LABEL = /^\*\*(?:In this change|Already in (?:the base branch|`[^`\n]+`)|Not matched to the diff)\.\*\*/
+
+/**
+ * The folded follow-up list, grouped by who owns each fix, then a count of the notes below the floor.
+ *
+ * The labels say where each finding sits. They never say what a tick does:
+ * the controls add that sentence, and only where a control exists.
+ */
+export function followUpSection(repository: string | undefined, headSha: string, findings: readonly ReviewFinding[], baseRef?: string): string[] {
   const logged = findings.filter((finding): finding is LoggedFinding => finding._tag === 'Logged')
   const shown = logged.filter(listedFollowUp)
   const hidden = logged.length - shown.length
+  const groups = followUpGroups.flatMap((group) => {
+    const rows = shown.filter(finding => followUpGroup(finding) === group)
+    return rows.length === 0 ? [] : [followUpGroupLabel(group, baseRef), '', ...rows.map(finding => followUpRow(repository, headSha, finding)), '']
+  })
   return [
     ...(shown.length === 0
       ? []
       : [
           `<details><summary><b>${plural(shown.length, 'follow-up')}</b> · none block merge</summary>`,
           '',
-          ...shown.map(finding => followUpRow(repository, headSha, finding)),
-          '',
+          ...groups,
           '</details>',
           '',
         ]),

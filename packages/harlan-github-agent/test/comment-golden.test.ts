@@ -28,13 +28,13 @@ const evidence = [{ label: 'gate', sha256: 'a'.repeat(64) }]
 const passed: ReviewGateState = { _tag: 'Passed', evidence }
 const gates = (overrides: Partial<ReviewGates> = {}): ReviewGates => ({ merge: passed, review: passed, ci: passed, ...overrides })
 
-function followUp(impact: number, summary: string, line: number): Extract<ReviewFinding, { _tag: 'Logged' }> {
+function followUp(impact: number, summary: string, line: number, scope?: 'change' | 'existing'): Extract<ReviewFinding, { _tag: 'Logged' }> {
   return {
     _tag: 'Logged',
     impact,
     summary,
     nextAction: 'Query for span overlap with the viewport.',
-    details: { fingerprint: String(impact).padStart(64, 'f'), identity: summary, location: { path: 'src/timeline-store.ts', line }, proof: 'When a bar crosses the viewport edge, the query drops it.' },
+    details: { fingerprint: String(impact).padStart(64, 'f'), identity: summary, location: { path: 'src/timeline-store.ts', line }, proof: 'When a bar crosses the viewport edge, the query drops it.', ...(scope === undefined ? {} : { scope }) },
   }
 }
 const issue = {
@@ -46,6 +46,7 @@ const issue = {
   details: { fingerprint: 'b'.repeat(64), identity: 'home-unset', location: { path: 'hooks/himalaya-read-only.sh', line: 30 }, proof: 'With HOME unset, the config path resolves to /.config. The guard reads a missing file as permission.', regressionTest: 'Unset HOME and expect a denial.' },
 } satisfies Extract<ReviewFinding, { _tag: 'Open' }>
 const followUps = [followUp(79, 'Finished bars disappear at a viewport boundary', 83), followUp(55, 'Zero deliveries for an unmeasured interval', 208), followUp(29, 'Duplicate Task bars on wide viewports', 8)]
+const scopedFollowUps = [followUp(79, 'Finished bars disappear at a viewport boundary', 83, 'change'), followUp(55, 'Zero deliveries for an unmeasured interval', 208, 'existing'), followUp(29, 'Duplicate Task bars on wide viewports', 8, 'change')]
 
 describe('review verdict', () => {
   it('renders READY, PENDING, and both BLOCKED shapes', () => {
@@ -61,7 +62,7 @@ describe('review verdict', () => {
       reviewedAt: at,
       ...overrides,
     })
-    expect(verdict({ findings: followUps, checked: 'Timeline reads against dense windows', notChecked: 'the dashboard in a browser', history: { _tag: 'AfterRepair', priorHeadSha: prior, priorOutcome: 'Blocked', findings: 2 } })).toMatchInlineSnapshot(`
+    expect(verdict({ findings: scopedFollowUps, baseRef: 'main', checked: 'Timeline reads against dense windows', notChecked: 'the dashboard in a browser', history: { _tag: 'AfterRepair', priorHeadSha: prior, priorOutcome: 'Blocked', findings: 2 } })).toMatchInlineSnapshot(`
       "<!-- harlan-agent-kit:pr-triage -->
       <!-- reviewed-sha: 6aa6d8e1520848daef9646d402ea16ee3f9a4221 -->
       <!-- workflow-state: {"_tag":"Review","headSha":"6aa6d8e1520848daef9646d402ea16ee3f9a4221","baseSha":"70edfe5f32699f7f6042c0bd66e8a68e3b282fc5","outcome":"READY","gates":{"merge":"Passed","review":"Passed","ci":"Passed"}} -->
@@ -71,7 +72,12 @@ describe('review verdict', () => {
 
       <details><summary><b>2 follow-ups</b> · none block merge</summary>
 
+      **In this change.**
+
       - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)
+
+      **Already in \`main\`.**
+
       - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)
 
       </details>
@@ -104,6 +110,8 @@ describe('review verdict', () => {
          [\`himalaya-read-only.sh:30\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/hooks/himalaya-read-only.sh#L30) · Dismissal recommended.
 
       <details><summary><b>2 follow-ups</b> · none block merge</summary>
+
+      **Not matched to the diff.**
 
       - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)
       - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)
@@ -264,6 +272,7 @@ describe('a stopped Task and a pull request that left', () => {
     pullRequestNumber: 740,
     revisionId: 'revision',
     headSha: head,
+    baseRef: 'main',
     closureRevisionId: 'revision',
     currentHeadSha: head,
     currentBaseSha: base,
@@ -309,6 +318,8 @@ describe('a stopped Task and a pull request that left', () => {
       - ~~Default robots.txt grants AI-input permission~~ fixed
 
       <details><summary><b>2 follow-ups</b> · none block merge</summary>
+
+      **Not matched to the diff.**
 
       - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)
       - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)

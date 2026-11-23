@@ -169,7 +169,7 @@ export function stoppedReviewComment(
       ...(cause === null ? [] : [cause, '']),
       ...(open.length === 0 ? [] : [...issueRows(review.repository, review.headSha, open), '']),
       ...(fixed.length === 0 ? [] : [...fixed, '']),
-      ...followUpSection(review.repository, review.headSha, review.findings),
+      ...followUpSection(review.repository, review.headSha, review.findings, review.baseRef ?? undefined),
       automatedDisclosure({ kind: 'review', at, merge: true }),
     ].join('\n')
   }

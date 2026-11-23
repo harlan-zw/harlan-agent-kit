@@ -122,6 +122,7 @@ export async function refreshReviewGates(
       reportedChecks,
       mergeRisk: review.mergeRisk?.combined,
       repository: review.repository,
+      baseRef: review.baseRef,
       commands,
       reviewedAt: review.completedAt,
       ciCause,

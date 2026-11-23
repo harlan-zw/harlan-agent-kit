@@ -145,6 +145,18 @@ describe('logged finding pickup', () => {
     expect(decorated.split('\n').at(-3)).toBe('Selected findings run on this pull request.')
   })
 
+  it('drops a group label once its only row moves to the inline thread', () => {
+    const existing = { ...finding, impact: 62, summary: 'The cache never expires.', details: { ...finding.details, fingerprint: 'e'.repeat(64), identity: 'cache', scope: 'existing' as const } }
+    const added = { ...finding, details: { ...finding.details, scope: 'change' as const } }
+    const footer = automatedDisclosure({ kind: 'review', merge: true })
+    const source = [AUTOMATED_REVIEW_MARKER, `<!-- reviewed-sha: ${headSha} -->`, '🟢 **Ready**', '', ...followUpSection('harlan-zw/example', headSha, [added, existing], 'main'), footer].join('\n')
+    expect(source).toContain('**Already in `main`.**')
+
+    const decorated = withLoggedFindingControls(source, [added, existing], [], { inline: new Set([existing.details.fingerprint]) })
+    expect(decorated).toContain('<b>1 follow-up</b> · none block merge</summary>\n\n**In this change.**\n\n- `40` ')
+    expect(decorated).not.toContain('Already in')
+  })
+
   it('still strips a published comment that ends with the selection hint', () => {
     expect(before.endsWith('Selected findings run after merge and open separate pull requests.')).toBe(true)
     expect(withoutLoggedFindingControls(before)).toBe(original)

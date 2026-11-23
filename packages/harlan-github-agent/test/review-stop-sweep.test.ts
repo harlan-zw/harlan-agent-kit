@@ -21,6 +21,7 @@ const stopped: StoppedReview = {
   pullRequestNumber: 24,
   revisionId: 'revision-1',
   headSha: 'abc123',
+  baseRef: 'main',
   closureRevisionId: 'revision-1',
   currentHeadSha: 'abc123',
   currentBaseSha: 'base123',

@@ -1153,6 +1153,8 @@ export interface TerminalCommentInput {
   /** Absent for a repository that never asked for Merge risk. */
   mergeRisk?: MergeRisk | undefined
   repository?: string | undefined
+  /** The target branch, which names where existing code lives in the follow-up fold. */
+  baseRef?: string | null | undefined
   /** From `acceptedPullRequestCommands`. */
   commands?: readonly PullRequestCommand[]
   /** When the Review run completed. A stored time, so every re-render writes the same body. */
@@ -1283,7 +1285,7 @@ export function terminalComment(input: TerminalCommentInput): string {
     ...(blocking.length === 0 ? [] : [...issueRows(repository, headSha, blocking), '']),
     ...(fixed.length === 0 ? [] : [...fixedRows(fixed), '']),
     ...(reviewLine === '' ? [] : [reviewLine, '']),
-    ...followUpSection(repository, headSha, findings),
+    ...followUpSection(repository, headSha, findings, input.baseRef ?? undefined),
     ...reported,
     automatedDisclosure({
       kind: 'review',
@@ -1599,6 +1601,7 @@ async function projectReviewRun(
     reportedChecks: refreshed.reportedChecks,
     mergeRisk: run.mergeRisk?.combined,
     repository: task.repository,
+    baseRef: task.pullRequest.baseRef,
     commands,
     reviewedAt: run.completedAt,
     ciCause: refreshed.ciCause,
