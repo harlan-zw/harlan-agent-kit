@@ -112,6 +112,7 @@ function stage(store: ReturnType<typeof openJournalStore>, report: RoutineRunRep
 
 interface Calls {
   issues: string[]
+  issueBodies?: string[]
   updates?: Array<{ title: string, body: string }>
   comments: Array<{ issueNumber: number, body: string }>
 }
@@ -126,6 +127,7 @@ function publisher(calls: Calls, issueNumber = 42): GitHubIssuePublisher {
     createIssue: async (input) => {
       created = true
       calls.issues.push(input.title)
+      ;(calls.issueBodies ??= []).push(input.body)
       return ok({ number: issueNumber, url: `https://github.com/harlan-zw/example/issues/${issueNumber}` })
     },
     createComment: async (input) => {
@@ -419,6 +421,48 @@ describe('stored run log entries', () => {
 })
 
 describe('publishing the run log', () => {
+  it.each([
+    ['quoted fence', '> ```text\n> PRIVATE_EVIDENCE_FIXTURE\n> ```'],
+    ['nested quoted fence', '> > ~~~text\n> > PRIVATE_EVIDENCE_FIXTURE\n> > ~~~'],
+    ['adjacent heading', '## Evidence\nPRIVATE_EVIDENCE_FIXTURE'],
+    ['adjacent fence', '```text\nPRIVATE_EVIDENCE_FIXTURE\n```'],
+    ['adjacent list', '- PRIVATE_EVIDENCE_FIXTURE'],
+    ['adjacent HTML', '<div>\nPRIVATE_EVIDENCE_FIXTURE\n</div>'],
+  ])('keeps opening prose public and %s evidence only in the archive', async (_name, evidence) => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      stage(store, scanned('pr-triage | 0 found', { detail: `The scan found no issues.\n${evidence}` }))
+      settleRun(store, runId)
+      const calls: Calls = { issues: [], comments: [] }
+      const results = await createRoutineReportController({
+        github: publisher(calls),
+        now,
+        store: {
+          ...store,
+          claimNextRoutineReport: (...args) => {
+            const command = store.claimNextRoutineReport(...args)
+            if (command !== null)
+              expect(command.body).toContain(evidence)
+            return command
+          },
+        },
+        workerId: 'reporter',
+      }).publishPending(new AbortController().signal)
+
+      expect(results).toEqual([{ _tag: 'Ok', value: { repository: 'harlan-zw/example', issueNumber: 42 } }])
+      expect(calls.comments).toHaveLength(1)
+      expect(calls.comments[0]?.body).toContain('The scan found no issues.')
+      for (const body of [...calls.issues, ...(calls.issueBodies ?? []), ...(calls.updates ?? []).map(update => update.body), ...calls.comments.map(comment => comment.body)]) {
+        expect(body).not.toContain('PRIVATE_EVIDENCE_FIXTURE')
+        expect(body).not.toContain('## Evidence')
+      }
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it.each([
     ['backticks', '```text\nPrivate fixture header.\n\nPRIVATE_REPORT_FIXTURE\n```', 'The scan found no issues.'],
     ['tildes', '~~~text\nPrivate fixture header.\n\nPRIVATE_REPORT_FIXTURE\n~~~', 'The scan found no issues.'],

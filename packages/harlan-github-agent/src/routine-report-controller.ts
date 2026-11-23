@@ -3,6 +3,7 @@ import type { Result } from './result.ts'
 import type { CheckinVerdict } from './routines/contract.ts'
 import type { JournalStore } from './store.ts'
 import type { Candidate, ClaimedRoutineReportCommand, GitHubAccount, ReportedCandidate, RoutineName, RoutineReportCommand, RoutineRun, RunLogEntry } from './types.ts'
+import { Lexer } from 'marked'
 import { routineIssueLabel } from './candidate-issue-controller.ts'
 import { githubAccountBody } from './github-account.ts'
 import { err, ok } from './result.ts'
@@ -190,38 +191,19 @@ const STRUCTURE = /^(?:#{1,6}\s|[|><]|```|~~~|[-*+]\s|\d+[.)]\s)/
  * summary, because a cut sentence can break its Markdown.
  */
 function reportSummary(detail: string): string | null {
-  const blocks: string[] = []
-  let paragraph: string[] = []
-  let fence: string | null = null
-  const flushParagraph = (): void => {
-    blocks.push(paragraph.join('\n'))
-    paragraph = []
-  }
-  // Read fences before blank lines or local-reference filtering can hide them.
-  for (const line of cleanText(detail).split('\n')) {
-    const marker = line.trimStart().match(/^(?:`{3,}|~{3,})/)?.[0] ?? null
-    if (fence !== null) {
-      if (marker !== null && marker.startsWith(fence) && line.trim() === marker)
-        fence = null
-      continue
-    }
-    if (marker !== null) {
-      flushParagraph()
-      fence = marker
-      blocks.push(fence)
-    }
-    else if (line.trim() === '') {
-      flushParagraph()
-    }
-    else {
-      paragraph.push(line)
-    }
-  }
-  flushParagraph()
   const kept: string[] = []
   let length = 0
-  for (const raw of blocks) {
-    const block = raw.replaceAll(/<\/?details>/gi, '')
+  // Parse before filtering: a removed line must not change Markdown boundaries.
+  // Only top-level paragraphs qualify. Never descend into quoted or fenced evidence.
+  for (const token of Lexer.lex(cleanText(detail))) {
+    if (token.type === 'space')
+      continue
+    if (token.type !== 'paragraph') {
+      if (kept.length > 0)
+        break
+      continue
+    }
+    const block = token.raw.replaceAll(/<\/?details>/gi, '')
     const text = block.split('\n').filter(line => !LOCAL_REFERENCE.test(line)).join('\n').trim()
     if (text === '')
       continue
