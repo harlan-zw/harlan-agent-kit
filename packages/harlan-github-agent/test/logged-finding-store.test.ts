@@ -1198,6 +1198,24 @@ describe('follow-up routing by Finding scope', () => {
     expect(store.claimFollowUpIssue('issues', later, 60_000)).toBeNull()
   })
 
+  it('files a follow-up GitHub refused one at a time in the Merged issue', async () => {
+    const { store, pullRequest, request } = setup([finding, existing])
+    expect(store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))).toBe(true)
+    const { github } = filed(['refused'])
+    expect((await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal))[0]?._tag).toBe('Err')
+    store.recordObservation({ externalId: 'merged', observedAt: at, source: 'poll', subject: { ...pullRequest, state: 'closed', mergedAt: at } })
+
+    const comment = store.claimLoggedFindingComment('status', at, 60_000)!
+    expect(comment.body).toContain(`  GitHub refused the issue. <!-- logged-finding: ${existing.details.fingerprint} -->`)
+    expect(comment.body).toContain(`- [ ] File these as one issue <!-- logged-findings: ${pullRequest.headSha} -->`)
+    expect(store.completeLoggedFindingComment(comment, at)).toBe(true)
+    expect(store.requestLoggedFindingPickup({ ...request, _tag: 'MergedFollowUps', before: comment.body })).toBe(true)
+    const issue = store.claimFollowUpIssue('merged-issue', at, 60_000)
+    expect(issue?.title).toBe('Follow-ups from #24')
+    expect(issue?.body).toContain(existing.summary)
+    expect(issue?.body).toContain(finding.summary)
+  })
+
   it('files every unfixed follow-up as one issue from the Merged comment, once', () => {
     const { store, pullRequest, request } = setup([finding, existing, unplaced])
     expect(store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))).toBe(true)

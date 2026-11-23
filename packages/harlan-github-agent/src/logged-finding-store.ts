@@ -243,7 +243,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
     const issues = (database.prepare(`SELECT dedupe_key AS fingerprint, state_tag, github_issue_number
       FROM follow_up_issues WHERE subject_id = ? AND kind = 'Finding'`)
       .all(subjectId) as Array<{ fingerprint: string, state_tag: string, github_issue_number: number | null }>)
-      .map((row): LoggedFindingStatus => ({ _tag: 'Issue', fingerprint: row.fingerprint, status: issueStatus(row, true) }))
+      .map((row): LoggedFindingStatus => ({ _tag: row.state_tag === 'Failed' ? 'IssueRefused' : 'Issue', fingerprint: row.fingerprint, status: issueStatus(row, true) }))
     const rows = database.prepare(`
       SELECT requests.fingerprint, requests.on_head, requests.dismissed, tasks.state_tag, tasks.progress_label, tasks.reason, tasks.evidence
       FROM logged_finding_requests AS requests LEFT JOIN tasks ON tasks.id = requests.task_id

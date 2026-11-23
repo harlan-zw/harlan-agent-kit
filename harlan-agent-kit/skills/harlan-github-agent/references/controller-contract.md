@@ -390,6 +390,7 @@ Check the current filing policy, Review included, when a pass claims a staged is
 
 After merge, offer one `File these as one issue` checkbox on the Merged comment. Never offer a checkbox per finding.
 It files every unfixed follow-up as one issue: listed, with no Repair selection, issue, or Dismissal, and no resolved thread.
+An issue GitHub refused for good owns nothing, so its finding goes in this issue.
 Deduplicate that issue by pull request and head. Show its link in place of the checkbox.
 Offer it only when the latest Review covered the merged head.
 A selection made before merge for the default branch still runs after merge and opens a linked pull request for a confirmed fix. No new tick creates one.

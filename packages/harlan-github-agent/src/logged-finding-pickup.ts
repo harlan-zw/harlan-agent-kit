@@ -28,10 +28,16 @@ export type LoggedFindingPickup = PickupSource & (
   | { _tag: 'MergedFollowUps' }
 )
 
-/** The progress one follow-up shows in place of its control. */
+/**
+ * The progress one follow-up shows in place of its control.
+ *
+ * `IssueRefused` is an issue GitHub refused for good. It shows the refusal,
+ * but it owns nothing, so the finding stays unfixed for the Merged issue.
+ */
 export type LoggedFindingStatus
   = | { _tag: 'Repair', fingerprint: string, status: string, cancellable: boolean }
     | { _tag: 'Issue', fingerprint: string, status: string }
+    | { _tag: 'IssueRefused', fingerprint: string, status: string }
 
 /**
  * Where a tick sends one follow-up on an open pull request.
@@ -129,13 +135,14 @@ function dismissalControl(fingerprint: string): string {
 }
 
 /**
- * The follow-ups the Merged control would file: listed, and never ticked.
+ * The follow-ups the Merged control would file: listed, and with no owner.
  *
- * A follow-up with any status already has an owner: a Repair selected before
- * merge, an issue, or a Dismissal.
+ * An owner is a Repair selected before merge, an issue filed or on its way,
+ * or a Dismissal. An issue GitHub refused for good owns nothing, so the
+ * Merged issue is its fallback.
  */
 export function unfixedFollowUps(findings: readonly ReviewFinding[], statuses: readonly LoggedFindingStatus[]): LoggedReviewFinding[] {
-  const owned = new Set(statuses.map(status => status.fingerprint))
+  const owned = new Set(statuses.filter(status => status._tag !== 'IssueRefused').map(status => status.fingerprint))
   return findings.filter((finding): finding is LoggedReviewFinding => listedFollowUp(finding)
     && /^[a-f\d]{64}$/.test(finding.details.fingerprint)
     && !owned.has(finding.details.fingerprint))
