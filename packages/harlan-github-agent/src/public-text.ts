@@ -396,14 +396,19 @@ export function privateDetailIncidentMessage(leak: PrivateDetailLeak): string {
   return `The controller removed private details (${entries}) from ${item}. Find the template or agent output that wrote them.`
 }
 
-/** Records each redaction as an Incident on its repository. Only a person resolves it. */
+/**
+ * Records each redaction as an Incident on its repository. Only a person resolves it.
+ *
+ * The Journal keeps every root and host any configuration ever named, so an
+ * entry that leaves the configuration stays private.
+ */
 export function createPublicTextGuard(options: {
   details: PrivateDetails
-  store: Pick<JournalStore, 'recordIncident'>
+  store: Pick<JournalStore, 'recordIncident' | 'retainPrivateDetails'>
   now: () => Date
 }): PublicTextGuard {
   return {
-    details: options.details,
+    details: options.store.retainPrivateDetails(options.details),
     report: (leak) => {
       options.store.recordIncident({
         scope: { _tag: 'Repository', repository: leak.repository },

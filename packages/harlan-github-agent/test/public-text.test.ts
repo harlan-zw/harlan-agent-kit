@@ -2,13 +2,16 @@ import type { Octokit } from 'octokit'
 import type { PublicTextWriter } from '../src/public-text.ts'
 import type { ReviewFindingThread, ReviewFindingThreadMirror, ReviewFindingThreadsOutcome } from '../src/review-finding-threads.ts'
 import type { ReviewFinding } from '../src/types.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { createGitHubIssuePublisher } from '../src/github.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
 import { createPublicTextGuard, encodeEntities, isPublishedForm, privateDetailsFor, publicBody, redactPrivateDetails } from '../src/public-text.ts'
 import { ok } from '../src/result.ts'
-import { mirrorReviewFindingThreads, reviewFindingThreadFingerprint } from '../src/review-finding-threads.ts'
+import { mirrorReviewFindingThreads, reviewFindingThreadBody, reviewFindingThreadFingerprint } from '../src/review-finding-threads.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -516,5 +519,106 @@ describe('review findings on #754, fourth round', () => {
     const started = performance.now()
     redactPrivateDetails(text, details)
     expect(performance.now() - started).toBeLessThan(100)
+  })
+})
+
+describe('ported from the Service Repair 73c25d86', () => {
+  it.each(['**', '__', '*', '_'])('removes a private host-only URL inside %s emphasis', (delimiter) => {
+    const input = `${delimiter}https://hogwild.tail1234.ts.net${delimiter}`
+    expect(redactPrivateDetails(input, details).text).toBe(removed)
+    expect(redactPrivateDetails(encodeEntities(input), details).text).toBe(removed)
+  })
+
+  it.each(['\n', '\r\n'])('removes the destination line of a Markdown link split by %j', (newline) => {
+    const input = `Read [evidence](${newline}https://hogwild.tail1234.ts.net/docs/report(final)/private.pdf${newline}) first.`
+    const expected = `Read [evidence](${newline}${removed}${newline}) first.`
+    expect(redactPrivateDetails(input, details).text).toBe(expected)
+    expect(redactPrivateDetails(encodeEntities(input), details).text).toBe(`${encodeEntities('Read [evidence](')}${newline}${removed}${newline}) first.`)
+  })
+
+  it('can edit a canonical comment after removing a multiline destination', async () => {
+    const store = journal()
+    const host = commentHost()
+    const link = 'Read [evidence](\nhttps://hogwild.tail1234.ts.net/docs/report(final)/private.pdf\n).'
+    const before = reviewBody(link)
+    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, before, false, new AbortController().signal)
+    if (published._tag === 'Err')
+      throw new Error(published.error)
+
+    const edited = await agentSource(host.client, store).editReviewStatus(repositoryMapping(), 24, published.value.commentId, before, reviewBody(`MERGED\n\n${link}`), new AbortController().signal)
+
+    expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
+    expect(host.comments[0]?.body).toBe(reviewBody(`MERGED\n\nRead [evidence](\n${removed}\n).`))
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('keeps protected details after a Journal restart for %s', async (writer) => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-details-'))
+    const path = join(directory, 'journal.sqlite')
+    const first = openJournalStore(path)
+    createPublicTextGuard({ details, store: first, now: () => new Date() })
+    first.close()
+    const second = openJournalStore(path)
+    try {
+      const guard = createPublicTextGuard({ details: { paths: [], hosts: ['other.example'] }, store: second, now: () => new Date() })
+      const sent: string[] = []
+      await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer }, 'https://hogwild.tail1234.ts.net/evidence\n~/notes/private.pdf').send(async (body) => {
+        sent.push(body)
+      })
+      expect(sent).toEqual([`${removed}\n${removed}`])
+    }
+    finally {
+      second.close()
+      rmSync(directory, { recursive: true })
+    }
+  })
+
+  it('keeps a Logged finding private when the same finding syncs after a hostname change', async () => {
+    const store = journal()
+    let comment = { id: 51, body: '' }
+    const client = { rest: { pulls: {
+      createReviewComment: async (input: { body: string }) => {
+        comment = { id: 51, body: input.body }
+        return { data: comment }
+      },
+      getReviewComment: async () => ({ data: { ...comment, user: { login: 'harlan-github-agent[bot]' } } }),
+      updateReviewComment: async (input: { body: string }) => {
+        comment = { ...comment, body: input.body }
+        return { data: comment }
+      },
+    } } } as unknown as Octokit
+    const finding = { _tag: 'Logged' as const, impact: 40, summary: 'Evidence needs attention.', nextAction: 'Read the evidence.', details: { fingerprint: 'f'.repeat(64), identity: 'private-evidence', location: { path: 'src/a.ts', line: 3 }, proof: 'Read [evidence](https://hogwild.tail1234.ts.net/evidence).' } }
+    await agentSource(client, store).postReviewFindingComment(repositoryMapping(), 24, { headSha: reviewHead, path: 'src/a.ts', line: 3, body: reviewFindingThreadBody(finding) }, new AbortController().signal, () => ok(undefined))
+    expect(comment.body).toContain(removed)
+    const restarted = agentSource(client, store, { paths: [], hosts: ['other.example'] })
+
+    const result = await mirrorReviewFindingThreads({ source: { ...restarted, listReviewFindingThreads: async () => ok([{ threadId: 'thread', fingerprint: finding.details.fingerprint, resolved: false, comment }]) }, report: () => {} }, repositoryMapping(), 24, reviewHead, [finding], new AbortController().signal, () => ok(undefined))
+
+    expect(result._tag).toBe('Written')
+    expect(comment.body).toContain(removed)
+    expect(comment.body).not.toContain('hogwild.tail1234.ts.net')
+  })
+
+  it('keeps a destination private when a canonical edit removes Markdown formatting', async () => {
+    const store = journal()
+    const host = commentHost()
+    const url = 'https://hogwild.tail1234.ts.net/evidence'
+    const before = reviewBody(`Read [evidence](${url}).`)
+    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, before, false, new AbortController().signal)
+    if (published._tag === 'Err')
+      throw new Error(published.error)
+
+    const edited = await agentSource(host.client, store, { paths: [], hosts: ['other.example'] }).editReviewStatus(repositoryMapping(), 24, published.value.commentId, before, reviewBody(`MERGED\n\nRead ${url}.`), new AbortController().signal)
+
+    expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
+    expect(host.comments[0]?.body).toBe(reviewBody(`MERGED\n\n${removed}`))
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes emphasized and multiline destinations at the %s boundary', async (writer) => {
+    const input = '**https://hogwild.tail1234.ts.net** Read [evidence](\nhttps://hogwild.tail1234.ts.net/docs/report(final)/private.pdf\n).'
+    const sent: string[] = []
+    await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async (body) => {
+      sent.push(body)
+    })
+    expect(sent).toEqual([`${removed}\n${removed}\n).`])
   })
 })
