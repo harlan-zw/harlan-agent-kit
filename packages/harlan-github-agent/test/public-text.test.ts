@@ -228,6 +228,10 @@ describe('the publish boundary', () => {
       'cc -I~fixture/pkg/example/include input.c',
       'cc -I/home/worker/cache input.c',
       'cc -I%2Fhome%2Ffixture%2Fpkg/example/include input.c',
+      'CFLAGS=-I/home/fixture/pkg/example/include make',
+      'cc -Wp,-I/home/fixture/pkg/example/include input.c',
+      'cc -Wl,-rpath,/home/fixture/pkg/example/lib input.c',
+      'export LD_LIBRARY_PATH=/opt/lib:/home/fixture/pkg/example/lib',
     ]
     const finding: ReviewFinding = {
       _tag: 'Logged',

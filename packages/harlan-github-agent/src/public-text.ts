@@ -193,7 +193,10 @@ interface Detector {
  * Every pattern starts from a literal deny list entry, and every repetition is
  * bounded, so one scan does bounded work per character of the body.
  */
-function detector(details: PrivateDetails, spell: (entry: string) => string, end: string): Detector {
+/** A path entry must start a token: `/srv/agent_home` is not `/home`. */
+const TOKEN_START = String.raw`(?<![\w.~$-])`
+
+function detector(details: PrivateDetails, spell: (entry: string) => string, end: string, start = TOKEN_START): Detector {
   const entries = new Map(details.paths.map(entry => [spell(entry), entry]))
   const hosts = new Map(details.hosts.map(host => [spell(host).toLowerCase(), host]))
   const longestFirst = (values: Iterable<string>) => [...values].filter(Boolean).sort((left, right) => right.length - left.length).map(escape)
@@ -203,7 +206,7 @@ function detector(details: PrivateDetails, spell: (entry: string) => string, end
   return {
     entries,
     hosts,
-    path: paths.length === 0 ? null : new RegExp(String.raw`(?<![\w.~$-])(?:${paths.join('|')})`, 'g'),
+    path: paths.length === 0 ? null : new RegExp(String.raw`${start}(?:${paths.join('|')})`, 'g'),
     // User information before an at sign is part of the line, so it goes with it.
     link: names.length === 0 ? null : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-]))(?:[\w-]{1,63}\.){0,8}(?:${names.join('|')})${HOST_END}`, 'gi'),
   }
@@ -349,6 +352,8 @@ interface Detectors {
   raw: Detector
   decoded: Detector
   normalised: Detector
+  /** Matches an entry glued to anything before it, in text with every URL removed. */
+  joined: Detector
 }
 
 function detectorsFor(details: PrivateDetails): Detectors {
@@ -356,7 +361,27 @@ function detectorsFor(details: PrivateDetails): Detectors {
     raw: detector(details, entry => entry, RAW_ENTRY_END),
     decoded: detector(details, entry => entry, ENTRY_END),
     normalised: detector(details, entry => entry.replaceAll(FORMATTING, ''), ENTRY_END),
+    joined: detector(details, entry => entry, ENTRY_END, ''),
   }
+}
+
+/** A URL with a scheme. Its path is public, whatever it spells. */
+const URL_TOKEN = /[a-z][a-z\d+.-]{0,15}:\/\/[^\s<>"'`]*/gi
+/** A path start anywhere: after a flag, `=`, `,`, or `:` as well as after a space. */
+const JOINED_PATH = /(?:\/|~[\w-]*\/|\$(?:HOME|\{HOME\})\/)[^\s<>"'`,:;=]*/g
+
+/**
+ * The text a shell or compiler would read, with every URL removed.
+ *
+ * Option parsers glue a path to anything: `-I/x`, `CFLAGS=-I/x`, `-Wp,-I/x`,
+ * `PATH=/a:/x`. Requiring a token boundary before an entry missed each new
+ * spelling, so this view requires none. Public URLs are removed first, so a
+ * URL whose path spells an entry stays public.
+ */
+function joinedPaths(text: string): string {
+  return text
+    .replaceAll(URL_TOKEN, ' ')
+    .replaceAll(JOINED_PATH, path => normalize(path))
 }
 
 /**
@@ -376,6 +401,9 @@ function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: 
     [detect.normalised, aligned(decoded, text => normalizedPaths(normalise(text)))],
     [detect.decoded, aligned(identities, decodeAll)],
     [detect.normalised, aligned(identities, text => normalizedPaths(normalise(decodeAll(text))))],
+    [detect.joined, aligned(decoded, joinedPaths)],
+    [detect.joined, aligned(decoded, text => joinedPaths(normalise(text)))],
+    [detect.joined, aligned(identities, text => joinedPaths(decodeAll(text)))],
   ]
   return views.flatMap(([view, viewText]) => {
     const matches = (['Link', 'Path'] as const).flatMap((tag) => {
