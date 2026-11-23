@@ -210,6 +210,30 @@ describe('redactPrivateDetails', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('hides parenthesized private URL suffixes before sending a %s', (writer) => {
+    for (const destination of [
+      'https://notes.localhost/reports/quarterly(final)/appendix.pdf',
+      '<https://notes.localhost/reports/quarterly(final)/appendix.pdf>',
+      'https://notes.localhost/reports/quarterly(a(b)c)',
+      '<https://notes.localhost/reports/quarterly(final)>',
+      '(https://notes.localhost/reports/quarterly(final)/appendix.pdf)',
+    ]) {
+      const input = `Read ${destination}. Public text survives.`
+      const source = writer === 'review' ? encodeEntities(input) : input
+      const sent: string[] = []
+      publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, source).send(body => sent.push(body))
+      const expected = destination.startsWith('(') ? '([private link])' : '[private link]'
+      expect(sent).toEqual([`Read ${expected}. Public text survives.`])
+    }
+  })
+
+  it.each(['', ' (public context)'])('preserves later text after an unclosed private link%s', (suffix) => {
+    const input = `[notes](https://notes.localhost/reports/quarterly(final)/appendix.pdf\nPublic text${suffix}.\n\n\`\`\`\n- [ ] Add this draft to the GitHub release`
+    const sent: string[] = []
+    publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'release comment' }, input).send(body => sent.push(body))
+    expect(sent).toEqual([input.replace('https://notes.localhost/reports/quarterly(final)/appendix.pdf', '[private link]')])
+  })
+
   it.each<PublicTextWriter>([
     'automated review',
     'automated triage',
