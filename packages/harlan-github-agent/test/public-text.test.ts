@@ -214,6 +214,47 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes joined filesystem arguments before sending a %s and records one Incident', async (writer) => {
+    const store = journal()
+    const fixtureDetails = privateDetailsFor({ home: '/home/fixture', storagePath: ':memory:', checkoutRoots: ['/home/fixture/pkg'], workerHomes: ['/home/worker'], serviceOrigins: [] })
+    const diagnostics = [
+      'cc -I/home/fixture/pkg/example/include input.c',
+      'cc -L/home/fixture/pkg/example/lib input.c',
+      'cc -isystem/home/fixture/pkg/example/include input.c',
+      'cc -I/home/fixture/public/../pkg/example/include input.c',
+      'cc -I~/pkg/example/include input.c',
+      'cc -I$HOME/pkg/example/include input.c',
+      `cc -I\${HOME}/pkg/example/include input.c`,
+      'cc -I~fixture/pkg/example/include input.c',
+      'cc -I/home/worker/cache input.c',
+      'cc -I%2Fhome%2Ffixture%2Fpkg/example/include input.c',
+    ]
+    const finding: ReviewFinding = {
+      _tag: 'Logged',
+      impact: 42,
+      summary: 'Compiler diagnostic',
+      nextAction: 'Check the include path.',
+      details: { fingerprint: 'e'.repeat(64), identity: diagnostics[0]!, location: { path: 'src/a.c', line: 3 }, proof: 'Compilation failed.' },
+    }
+    const diagnostic = diagnostics.join('\n')
+    const input = `${writer === 'review' ? encodeEntities(diagnostic) : diagnostic}\n${reviewFindingThreadBody(finding, reviewHead)}`
+    const sent = await publicBody(createPublicTextGuard({ details: fixtureDetails, store, now: () => new Date(), log: () => {} }), { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async body => body)
+
+    expect(sent.split('\n').slice(0, diagnostics.length)).toEqual(diagnostics.map(() => removed))
+    expect(sent).not.toContain('/home/')
+    expect(reviewFindingThreadMarker(sent)).toMatchObject({ fingerprint: finding.details.fingerprint, identity: null })
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', occurrences: 1 })])
+  })
+
+  it.each([
+    'cc -I/usr/include input.c',
+    'Read https://example.com/-I/home/fixture/pkg/include for the syntax.',
+    'Read https://example.com/-I/home/fixture/public/../pkg/include for the syntax.',
+    'cc -I/home/fixture/pkg-other/include input.c',
+  ])('keeps public joined argument examples: %s', (input) => {
+    expect(redactPrivateDetails(input, { paths: ['/home/fixture/pkg'], hosts: [] })).toEqual({ text: input, hits: [] })
+  })
+
   it.each(['~/.codex/private-session.json', '$HOME/.codex/private-session.json', `\${HOME}/.codex/private-session.json`, '~agent/.codex/private-session.json'])('records an Incident when the only private detail is %s', async (path) => {
     const store = journal()
     const guard = createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} })

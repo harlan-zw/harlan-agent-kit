@@ -291,6 +291,9 @@ function normalise(decoded: string): string {
 /** Resolve filesystem candidates without treating a public URL's path as a local path. */
 function normalizedPaths(text: string): string {
   return text
+    // Separate joined option values before resolving paths. Require a token
+    // boundary so an option-shaped segment inside a public URL stays intact.
+    .replaceAll(/(^|[\s"'`(])(-{1,2}[a-z][\w-]*)(?=\/|~[\w-]*\/|\$(?:HOME|\{HOME\})\/)/gi, '$1$2 ')
     // Quotes and code spans can hold directory names with spaces or punctuation.
     .replaceAll(/(["'`])((?:\/|~[\w-]*\/|\$(?:HOME|\{HOME\})\/)[^\r\n]*?)\1/g, (_match, quote: string, path: string) => `${quote}${normalize(path)}${quote}`)
     .replaceAll(/(?<![\w./:~$-])(?:\/|~[\w-]*\/|\$(?:HOME|\{HOME\})\/)[^\s<>"'`]*/g, path => normalize(path))
