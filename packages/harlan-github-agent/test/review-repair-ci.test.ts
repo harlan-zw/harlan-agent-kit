@@ -74,7 +74,7 @@ function setup(findings: ReviewFinding[] = [finding]) {
     id: 'review-publication',
     reviewRunId: 'review-run',
     at: '2026-09-08T04:00:04.000Z',
-    body: terminalComment(pullRequest.headSha, pullRequest.baseSha, gates, findings, undefined, []),
+    body: terminalComment({ headSha: pullRequest.headSha, baseSha: pullRequest.baseSha, gates, findings, confidence: undefined, reportedChecks: [] }),
     result: { _tag: 'Published', githubCommentId: 42, url: `${pullRequest.url}#issuecomment-42` },
   })
   store.close()
@@ -303,7 +303,7 @@ describe('repair after base CI', () => {
     expect(store.recordReviewPublication({
       id: 'explicit-publication',
       reviewRunId: 'explicit-review',
-      body: terminalComment(live.pullRequest.headSha, live.pullRequest.baseSha, earlier.gates, [finding], undefined, []),
+      body: terminalComment({ headSha: live.pullRequest.headSha, baseSha: live.pullRequest.baseSha, gates: earlier.gates, findings: [finding], confidence: undefined, reportedChecks: [] }),
       at: '2026-09-08T04:12:04.000Z',
       result: { _tag: 'Published', githubCommentId: 42, url: live.pullRequest.url },
     })._tag).toBe('Inserted')

@@ -253,25 +253,47 @@ If fresh Review of a Repair commit still records a Repair finding, queue the nex
 
 Allow 3 Repair rounds per contributor commit. A contributor push starts a fresh count. When the rounds are spent, stop with Action required and list every round in the canonical comment. Spent rounds win over every other Repair refusal except a closed pull request. Do not attempt a root architecture rewrite.
 
-If Repair returns Action required or exhausts retries, replace its progress comment with `BLOCKED`. Include every stored finding and its exact next action.
+If Repair returns Action required or exhausts retries, replace its progress comment with Blocked, repair stopped. Include every stored issue and its exact fix.
 
 Record duration and Agent provider token usage for every completed Review run. Store `Unavailable` when the Agent provider reports no usage. Show these values only in History.
 
 Carry Approval to the exact commit published by that approved repair. Do not carry it to any other new head commit.
 
 Publish each completed App-authenticated Review as a native GitHub `COMMENT` review.
-Show Logged findings as expandable optional follow-ups in the review entry.
-Link it to the canonical comment so the bot appears in GitHub's Reviewers sidebar.
+Write one Status line in it: the outcome, the count of issues or follow-ups, and a link to the canonical comment.
+Never repeat the findings there. The review exists so the bot appears in GitHub's Reviewers sidebar.
 Reuse one native review per head commit. Update it when Review runs again.
 Never submit it through Harlan's user token.
 
 When a pull request review starts, create its single marked bot comment. Edit it in place when Review or Repair starts and when it finishes. Keep it steady between them, and show live progress in the Dashboard. While a new head is reviewed, name the outcome of the last Review of an earlier head. Never add separate progress comments.
 
-Treat GitHub as the durable workflow record. Publish each Review gate, the next action, and the exact head and base commits.
+### Canonical comment format
+
+Start every comment with one Status line: a dot, the outcome in bold, and one fact only this comment knows.
+The dot says who holds the work. ⚪ means the agent has it. 🟢 means READY. 🟠 means Harlan or the author must act. 🟣 means merged or published.
+Write outcome words in sentence case: Ready, Pending, Blocked, Queued, Reviewing, Repair, Stuck, Review skipped, Approval needed, Merged, Closed.
+Never restate what GitHub's merge box shows, such as CI status or a merge conflict. Name a failed gate only when it is the only reason for Blocked.
+Say what only the Review knows: `Checked … Not checked: …`, what Repair fixed, the issues to fix, and the follow-ups.
+Fold follow-ups. List each with its score, title, location, proof, and fix. Count Logged findings below 40/100 and never list them or thread them.
+When a follow-up's thread opens beside the code, keep its row and link the thread in place of the control. A thread whose finding drops below 40/100 loses its control.
+A fixed thread shows its fixing commit above its struck title and drops the merge label. A follow-up a rerun promotes to an issue rewrites its thread as an issue that blocks merge.
+
+End every comment with one `<sub>` footer. It names the bot, says it is not Harlan's, and links the AI policy.
+A verdict also says a person merges and lists the accepted commands in code spans.
+Hide the commands while the merge gate fails, because the store refuses them under merge conflicts.
+Give a settled state a stored time as `<relative-time>`. Give a working state no time, so an unchanged state writes an unchanged body.
+
+Write a `workflow-state` marker on every state. Readers take the state from the marker, then from the Status line, then from the old `### 🤖` heading of a comment written before the Status line.
+Only the `Review` and `ReviewSkipped` tags tell a later head that this head was reviewed.
+
+Treat GitHub as the durable workflow record. Record each Review gate and the exact head and base commits in the `workflow-state` marker.
 
 Treat the latest confirmed write to the canonical comment as its current state. This applies across every controller Publication path.
 
-If GitHub closes a pull request, publish `MERGED` or `CLOSED`. Clear every Agent status label.
+If GitHub merges a pull request, publish Merged with the issues and follow-ups not fixed, or one line when none remain. The verdict it replaces offers commands a merged pull request refuses.
+Say the merge was reviewed only when a Review verdict answered the merged commit. If a later commit merged, name the reviewed commit instead.
+If GitHub closes a pull request unmerged, leave a verdict standing without its commands, and replace any other state with Closed. Settle the Review check run with the standing verdict.
+Clear every Agent status label in both cases.
 
 Before trusting a locally inferred close, read that exact pull request from GitHub. Store comment and label cleanup separately from the Task that last owned the comment. Resume incomplete cleanup after restart.
 
@@ -323,7 +345,7 @@ When required CI fails on the current base of an owned repository, dispatch a se
 ## Selected Review findings
 
 Post a Logged Review finding beside its line in the pull request diff.
-Keep findings without an accepted line in the canonical comment.
+Keep every listed finding in the canonical comment. A finding with an accepted line links its thread there instead of offering a control.
 On an eligible open pull request, offer a Repair checkbox with signed webhooks.
 Subscribe to Issue comment and Pull request review comment deliveries.
 Use Resolve conversation to dismiss an inline finding. The canonical comment offers Dismiss for findings without an accepted line.

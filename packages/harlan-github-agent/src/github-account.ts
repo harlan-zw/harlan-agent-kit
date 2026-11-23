@@ -63,6 +63,8 @@ export function createGitHubAccountTokenProvider(options: {
   }
 }
 
+const KIT_LINK = '[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit)'
+
 /** Replace automated attribution only. Evidence and commands retain their original text. */
 export function githubAccountBody(body: string, account?: GitHubAccount): string {
   if (account === undefined)
@@ -80,9 +82,11 @@ export function githubAccountBody(body: string, account?: GitHubAccount): string
     }
     if (fence !== undefined)
       return line
-    // A run log entry signs off in one `<sub>` line instead of a quote.
-    if (line.startsWith('<sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) ')) {
-      return line.replace('[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit)', link)
+    // A Status line comment signs off in one `<sub>` footer, which may open
+    // with a time. A dedicated account speaks for itself, so "not Harlan's" goes.
+    if (line.startsWith('<sub>') && line.endsWith('</sub>') && line.includes(KIT_LINK)) {
+      return line.replace(KIT_LINK, link)
+        .replace(/, not Harlan's(?: commitment)?(?=[;·<\s])/, '')
         .replace(', not Harlan.', '.')
     }
     if (!line.startsWith('> '))

@@ -82,13 +82,13 @@ describe('finding thread sync Publication', () => {
     const sync = () => controller.run(new AbortController().signal)
     await controller.run(new AbortController().signal, { repository: repository.github, pullRequestNumber: pull.number, headSha: pull.headSha })
     expect(posts).toHaveLength(1)
-    expect(comment.body).toContain('The Service picked up this finding for Repair.')
+    expect(comment.body).toContain('⚪ Repair is fixing this.')
 
     if (outcome === 'stopped') {
       expect(store.needsAttentionTask({ ...owner, reason: 'Repair needs a decision.', evidence: 'reproduction' })).toBe(true)
       await sync()
-      expect(comment.body).toContain('Repair needs a decision')
-      expect(comment.body).not.toContain('The Service picked up this finding for Repair.')
+      expect(comment.body).toContain('🟠 Repair stopped. It needs a decision.')
+      expect(comment.body).not.toContain('Repair is fixing this.')
       expect(resolved).toEqual([])
       return
     }

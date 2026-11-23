@@ -22,7 +22,7 @@ Check:
 Do not report style preferences. Record credible defects with an impact score from 0 to 100.
 Score harm if merged unfixed. Consider likelihood, affected users, blast radius, and reversibility.
 Scores from 81 to 100 require action. Scores from 0 to 80 stay Logged without Repair.
-Logged findings are optional follow-ups. Show their proposed next action beside the finding.
+Logged findings are follow-ups. Record their proposed next action with the finding.
 They never block Review or start automatic Repair.
 Do not raise a score to trigger Repair. Visible UI defects can qualify when they harm use.
 Use 81 to 90 for common broken paths or wrong results without a practical workaround.
@@ -105,9 +105,14 @@ Use this marker exactly:
 
 Create the marked comment when review starts. Edit that same comment again when review finishes. Never create a second progress comment.
 
-Before dispatch, find trusted marked comments for the current head commit. Trust the GitHub App and repository owners, members, or collaborators. Ignore marked comments from outside contributors. A terminal comment means the head commit is already reviewed. A `REVIEWING` comment is status only. Local Task ownership decides whether work is active.
+Before dispatch, find trusted marked comments for the current head commit. Trust the GitHub App and repository owners, members, or collaborators. Ignore marked comments from outside contributors. A terminal comment means the head commit is already reviewed. A `Reviewing` comment is status only. Local Task ownership decides whether work is active.
 
-For comments created before the hidden head commit marker, recognize `- Reviewed \`HEAD_SHA\` against`. Write only the current format.
+For comments created before the hidden head commit marker, recognize `- Reviewed \`HEAD_SHA\` against`. Readers also accept the `### 🤖 READY` heading of a comment written before the Status line. Write only the current format.
+
+Every comment starts with one Status line: a dot, the outcome in bold, and one fact only this comment knows.
+⚪ means the agent has the work. 🟢 means READY. 🟠 means Harlan or the author must act. 🟣 means merged or published.
+Write the outcome in sentence case: Ready, Pending, Blocked, Reviewing.
+Every comment ends with one `<sub>` footer that names the bot, says it is not Harlan's, and links the AI policy.
 
 Use this nonterminal shape:
 
@@ -115,50 +120,56 @@ Use this nonterminal shape:
 <!-- harlan-agent-kit:pr-triage -->
 <!-- reviewed-sha: HEAD_SHA -->
 <!-- workflow-state: {"_tag":"Reviewing","headSha":"HEAD_SHA","baseSha":"BASE_SHA"} -->
-### 🤖 REVIEWING
+⚪ **Reviewing** `SHORT_HEAD_SHA` · this comment updates when it finishes
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).
+<sub>Last review of `SHORT_PRIOR_SHA`: OUTCOME, N issues. A new commit replaced it.</sub>
 
-> [!NOTE]
-> The Review of `SHORT_HEAD_SHA` is running. This comment changes when it finishes.
-
-The last Review of `SHORT_PRIOR_SHA` answered OUTCOME on N defects. A new commit replaced it, so this Review answers the new commit.
+<sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated review, not Harlan's · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>
 ```
 
-Keep this body steady while Review runs, so one Review writes one in-progress edit. Include the last line only when the newest Review answered an earlier head. OUTCOME is the verdict the last gate refresh settled. Omit ` on N defects` when no Open finding remains. After a Repair push, end with `A Repair pushed this commit, so this Review answers the Repair.` Keep findings out until verified.
+Keep this body steady while Review runs, so one Review writes one in-progress edit. Include the history line only when the newest Review answered an earlier head. OUTCOME is the verdict the last gate refresh settled, in sentence case. Omit `, N issues` when no Open finding remains. After a Repair push, end it with `Repair pushed this commit.` Keep findings out until verified.
 
 The controller reads the Agent's own `▓▓▓░░ NN% next-step` line and records that text as the phase in the Dashboard. Without one, the controller guesses the phase from the shape of each shell command.
 
-Keep the reviewed SHA in hidden metadata. Render one robot emoji. Put disclosure,
-policy, waiting state, and human ownership in one blockquoted line. The visible
-review body reports actionable findings, Logged findings, and fixes.
+Keep the reviewed SHA in hidden metadata. The visible body reports what the Review checked, the issues to fix, Logged follow-ups, and fixes.
 
 ```markdown
 <!-- harlan-agent-kit:pr-triage -->
 <!-- reviewed-sha: HEAD_SHA -->
-### 🤖 READY · 96/100
+🟢 **Ready** · `96/100`
 
-> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated review. It is not Harlan's personal review or approval. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source). Human merge decision still required.
+Checked WHAT_THE_REVIEW_EXERCISED. Not checked: LARGEST_GAP.
 
+<sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated review, not Harlan's; a person merges · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>
 ```
 
-When Review found issues, show each finding once:
+When Review found issues, the Status line reads `🟠 **Blocked** · N issues to fix before merge`. Show each finding once:
 
 ```markdown
-- **Fixed:** SHORT_DESCRIPTION
-- **Logged (IMPACT/100):** SHORT_DESCRIPTION. Optional follow-up: NEXT_ACTION
-- **Open (IMPACT/100):** SHORT_DESCRIPTION. Next: NEXT_ACTION
-- **Dismissal recommended (IMPACT/100):** SHORT_DESCRIPTION. Next: Dismiss this pull request.
+1. **CONSEQUENCE_TITLE** `IMPACT/100`  
+   `FILE:LINE` · Fix: NEXT_ACTION
+2. **CONSEQUENCE_TITLE** `IMPACT/100`  
+   `FILE:LINE` · Dismissal recommended.
+
+- ~~SHORT_DESCRIPTION~~ fixed
+
+<details><summary><b>N follow-ups</b> · none block merge</summary>
+
+- `IMPACT` CONSEQUENCE_TITLE · `FILE:LINE`
+
+</details>
+
+<sub>N notes below 40/100 not shown.</sub>
 ```
 
-Do not list the reviewed SHA, base state, metadata conformance, commands, passed
-checks, CI counts, review lanes, or other routine evidence in the visible body.
-Preserve that evidence in the review record outside the comment when available.
+Number the issues to fix. Fold the Logged follow-ups. Count Logged findings below 40/100 and never list them.
 
-For `PENDING`, append one short reason to that line. For `BLOCKED`, report the
-blocker as an open issue when it affects the pull request. Quote operational or
-permission blockers. Keep the exact outcome reason and next action. Do not use
-an issue bullet for a clean result.
+Do not list the reviewed SHA, base state, metadata conformance, commands run, passed
+checks, CI counts, merge conflicts, review lanes, or other routine evidence in the visible body.
+GitHub's merge box already shows CI and conflicts. Preserve that evidence in the review record outside the comment when available.
+
+For Pending, the Status line says what the verdict waits for. For Blocked by a failed gate alone, name the gate in two or three words, such as `merge conflict; the review itself passed`. Quote operational or
+permission blockers. Keep the exact outcome reason and next action.
 
 ## Structured Repair handoff
 
@@ -182,18 +193,18 @@ A wrong premise means safe fixes must reverse the intent, remove a safeguard, or
 Findings at 80 or below use `Logged`, regardless of premise. They do not fail the Review gate or queue Repair.
 
 Never mix `Repair` and `Dismissal` findings. For an actionable wrong premise, queue no Repair.
-Publish `BLOCKED` with Action required. Harlan decides whether to Dismiss.
+Publish Blocked with Action required. Harlan decides whether to Dismiss.
 
 ## Deployment extension
 
 When `take-ownership` is active, update the same marked comment after merge. Preserve the review outcome and evidence.
 
-Before merge, replace `Human merge decision still required.` only when explicit merge authority exists.
-Use `Automated merge authorized by explicit user request.` for that state.
+Before merge, replace `a person merges` in the footer only when explicit merge authority exists.
+Use `merge authorized by explicit user request` for that state.
 
-Keep the merge SHA in hidden metadata. Append the deployment outcome, production
-target, smoke evidence, and current ownership state to the blockquoted line. Add
-a visible issue bullet only when deployment found or fixed a material issue.
+Keep the merge SHA in hidden metadata. Add the deployment outcome, production
+target, smoke evidence, and current ownership state as one `<sub>` line above the footer. Add
+a visible issue only when deployment found or fixed a material issue.
 
 Use `Deployment: VERIFIED`, `Deployment: PENDING`, or `Deployment: BLOCKED`. Never claim `VERIFIED` from CI alone.
 

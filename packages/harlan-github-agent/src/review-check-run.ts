@@ -2,6 +2,7 @@ import type { ReviewPublicationAuthority } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { RepositoryMapping, ReviewDesiredOutcome } from './types.ts'
 import { classifyFailure } from './failure.ts'
+import { canonicalCommentHeadline } from './review-comment.ts'
 
 /** The one check run this service reports its Review through. */
 export const REVIEW_CHECK_RUN_NAME = 'harlan-agent-kit / Review'
@@ -100,7 +101,7 @@ export function reviewCheckRunUpdate(command: {
 }, at: string): ReviewCheckRunUpdate | null {
   if (command.taskKind === 'existing_review')
     return null
-  const headline = command.body.match(/^### (.+)$/m)?.[1] ?? 'Review'
+  const headline = canonicalCommentHeadline(command.body) ?? 'Review'
   const title = headline.slice(0, CHECK_OUTPUT_TITLE_LIMIT)
   if (command.phase === 'terminal')
     return { _tag: 'Completed', title, conclusion: command.desiredOutcome === 'READY' ? 'success' : 'neutral', completedAt: at }

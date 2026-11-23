@@ -543,6 +543,16 @@ export interface ReviewRun {
    * existed, and every provider that names no effort.
    */
   reasoningEffort?: CodexReasoningEffort | null
+  /**
+   * What this Review exercised, in one clause the Agent wrote.
+   *
+   * Only the Review knows it, so the canonical comment reads
+   * `Checked … Not checked: …`. Absent or null covers every run recorded
+   * before the field existed, and the comment falls back to a plain line.
+   */
+  checked?: string | null
+  /** The largest part this Review did not exercise. Null when it skipped nothing. */
+  notChecked?: string | null
 }
 
 /**

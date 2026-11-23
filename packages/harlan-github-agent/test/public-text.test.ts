@@ -761,19 +761,13 @@ describe('the publish boundary', () => {
         },
       } },
     } as unknown as Octokit
-    const body = nativeReviewBody({
-      repository: 'harlan-zw/example',
+    // The native review omits finding text, so supply encoded evidence at the writer boundary.
+    const body = `${nativeReviewBody({
       headSha: reviewHead,
       outcome: 'READY',
       commentUrl: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
-      findings: [{
-        _tag: 'Logged',
-        impact: 40,
-        summary: 'The exported file is stale.',
-        nextAction: 'Regenerate it.',
-        details: { fingerprint: 'f'.repeat(64), identity: 'stale-file', location: { path: 'src/a.ts', line: 3 }, proof },
-      }],
-    })
+      findings: [],
+    })}\n\n${encodeEntities(proof)}\n`
 
     expect(await agentSource(client, store, withEncodedRoot).upsertNativeReview(repositoryMapping(), 24, reviewHead, body, new AbortController().signal, () => ok(undefined))).toEqual(ok(undefined))
     expect(written[0]).toContain(`\n${removed}\n`)

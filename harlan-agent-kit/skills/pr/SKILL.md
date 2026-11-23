@@ -307,11 +307,11 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    Read issue comments with `gh api repos/OWNER/REPO/issues/NUMBER/comments --paginate`.
    Match `<!-- harlan-agent-kit:pr-triage -->` and `<!-- reviewed-sha: HEAD_SHA -->`.
    Trust only the GitHub App or a repository owner, member, or collaborator, as the [review contract](../adversarial-review/references/review-contract.md) requires.
-   A `REVIEWING` or `QUEUED` comment means Review has not finished. Older pull requests may still carry `harlan-agent-review-required`, which means the same.
+   A `Reviewing`, `Queued`, or `Repair` Status line means Review has not finished. Comments written before the Status line say `REVIEWING` or `QUEUED`. Older pull requests may still carry `harlan-agent-review-required`, which means the same.
    `harlan-agent-review-skipped` does not satisfy an Agent-submitted pull request. Confirm the Review request was recorded and wait for Review.
    The service may consume the request label before it posts the outcome.
-   If Review is `QUEUED`, or no current-head Task appears, check capacity and elapsed time before waiting again.
-   Respect a trusted `PAUSED`, stopped, or cancelled Review. Do not start another review for that head.
+   If Review is Queued, or no current-head Task appears, check capacity and elapsed time before waiting again.
+   Respect a trusted paused, stopped, or cancelled Review. Do not start another review for that head.
 4. Read every finding in the terminal comment. Then run the [review threads](references/review-threads.md) sweep for the current head.
    It lists every unresolved review thread and every top-level review comment. The REST comment list cannot show which threads are resolved.
    Report Service finding threads for the disposition and Task ownership checks below. The sweep grants no Repair authority.
@@ -322,7 +322,7 @@ The controller owns Review, Repair, and this wait; waiting inside its implementa
    Link unchecked or unknown Repair controls in the hand-back so Harlan can select or explicitly dismiss them.
    A selected Repair stays with the Service. List selected Repairs and fixes awaiting Service verification in the hand-back.
    Keep authorized Repair work moving until fixed or blocked by an exact boundary.
-   If the resolution is `Dismissal`, report the `BLOCKED` outcome and ask Harlan to decide whether to Dismiss the pull request.
+   If the resolution is `Dismissal`, report the BLOCKED outcome and ask Harlan to decide whether to Dismiss the pull request.
    Do not repair or request another Review for a Dismissal finding.
    Act on findings with resolution `Repair`. If the service owns a current-head Repair Task, let it finish before editing.
    This includes `Queued`, `Running`, and `Publishing` Tasks. If its Queue is saturated, hand off to that durable Task.

@@ -10,7 +10,7 @@ import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
 import { REVIEW_CANCEL_CONTROL } from './review-cancel.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
+import { aboveFooter, AUTOMATED_REVIEW_MARKER, automatedDisclosure, commitLink, statusLine, workflowStateLine } from './review-comment.ts'
 
 export interface ReviewStatusController {
   publish: (task: ClaimedAdversarialReviewTask, phase: 'snapshot' | 'review' | 'terminal', body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
@@ -301,7 +301,6 @@ export async function publishClaimedReviewStatus(
       command.pullRequestNumber,
       command.expectedHeadSha,
       nativeReviewBody({
-        repository: command.repository,
         headSha: command.expectedHeadSha,
         outcome: command.desiredOutcome,
         commentUrl: published.value.url,
@@ -333,16 +332,16 @@ export async function publishClaimedReviewStatus(
  * instruction to whoever opened the pull request. Live progress belongs to the
  * Dashboard.
  */
-export function repairProgressComment(task: Pick<ClaimedReviewFixTask, 'pullRequest' | 'rounds'>): string {
+export function repairProgressComment(task: Pick<ClaimedReviewFixTask, 'pullRequest' | 'repository' | 'rounds'>): string {
   return [
     AUTOMATED_REVIEW_MARKER,
     `<!-- reviewed-sha: ${task.pullRequest.headSha} -->`,
-    `### 🤖 REPAIR · ${repairRoundLabel(task.rounds)}`,
+    workflowStateLine({ _tag: 'Repair', headSha: task.pullRequest.headSha }),
+    statusLine('work', 'Repair', repairRoundLabel(task.rounds)),
     '',
-    automatedDisclosure({ kind: 'repair update' }),
+    `Repair is fixing the issues found in ${commitLink(task.repository, task.pullRequest.headSha)}. A new review checks its commit.`,
     '',
-    '> [!NOTE]',
-    `> Repair is fixing the Review findings on \`${task.pullRequest.headSha.slice(0, 12)}\`. If it pushes a commit, a new Review reads that commit.`,
+    automatedDisclosure({ kind: 'repair' }),
   ].join('\n')
 }
 
@@ -354,8 +353,9 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
     replacePriorReview: boolean,
     signal: AbortSignal,
   ): Promise<Result<PublishedReviewStatus, string>> {
+    // The control sits above the footer, so the disclosure stays last.
     if (options.commentControls?.(task.repository) && taskPhase.phase !== 'terminal')
-      body += `\n\n${REVIEW_CANCEL_CONTROL}\n\nLeave unchecked to finish Review after merge.`
+      body = aboveFooter(body, REVIEW_CANCEL_CONTROL)
     const at = options.now().toISOString()
     const staged = options.store.stageReviewStatus({
       ...taskPhase,

@@ -145,7 +145,7 @@ import { RESULT_PHASE_RANK } from './agent-progress.ts'
 import { agentTurnSchema, createAgentTurnStore } from './agent-turn-store.ts'
 import { createBatchStore } from './batch-store.ts'
 import { conflictByHandStep, conflictStopReason } from './conflict-stop.ts'
-import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
+import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_NOT_READY_REASON, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
 import { gitHubRateLimitRetryAt } from './github-rate-limit.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
@@ -160,6 +160,7 @@ import { repairRecoveryProof } from './repair-recovery.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canResolveConflictPullRequestHead, canWorkIssues, conflictWriteBoundary } from './repository-policy.ts'
 import { err, ok } from './result.ts'
+import { canonicalCommentOutcome } from './review-comment.ts'
 import { createReviewProofStore } from './review-proof-store.ts'
 import { foldCandidatesIntoDailyHeading, parseRunLogEntry, routineReportCommand } from './routine-report-controller.ts'
 import { createRoutineYieldStore } from './routine-yield-store.ts'
@@ -640,6 +641,9 @@ export interface ReviewGateRefresh {
    * line. Null covers every run recorded before this existed.
    */
   mergeRisk: MergeRiskRecord | null
+  /** What the Review exercised, so a restated comment keeps its Checked line. Null before the field existed. */
+  checked: string | null
+  notChecked: string | null
   commentId: number
   /** What the canonical comment holds now, so the edit can compare and swap. */
   publishedBody: string
@@ -666,6 +670,8 @@ interface ReviewGateRefreshRow {
   findings: string
   confidence: number | null
   merge_risk: string | null
+  checked: string | null
+  not_checked: string | null
   github_comment_id: number
   published_body: string
 }
@@ -758,6 +764,12 @@ export type QueuedReviewHistory
       priorOutcome: string
       findings: number
     }
+
+/** The Review a Repair answered: its head and the issues it left open. */
+export interface RepairSource {
+  headSha: string
+  issues: number
+}
 
 export interface QueuedReviewStatus {
   taskId: string
@@ -1181,6 +1193,14 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
    * verdict.
    */
   priorReviewHistory: (revisionId: string) => QueuedReviewHistory
+  /**
+   * The Review a published Repair answered, when Repair pushed this head.
+   *
+   * It reads the Repair's own source Review, so it holds after the Review of
+   * this head is recorded, when `priorReviewHistory` already reads FirstReview.
+   * Null for a head no Repair pushed.
+   */
+  repairSource: (revisionId: string) => RepairSource | null
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
   listReviewGateRefreshes: () => ReviewGateRefresh[]
   listStoppedReviews: () => StoppedReview[]
@@ -1532,6 +1552,9 @@ interface ReviewRunRow {
   feedback_updated_at: string | null
   merge_risk: string | null
   reasoning_effort: string | null
+  /** Absent from the dashboard selects, which never render the comment. */
+  checked?: string | null
+  not_checked?: string | null
 }
 
 interface DashboardReviewRunRow extends ReviewRunRow {
@@ -2957,6 +2980,9 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
     mergeRisk: row.merge_risk === null || row.merge_risk === undefined ? null : JSON.parse(row.merge_risk) as MergeRiskRecord,
     // Null covers every run recorded before the Reasoning effort band existed.
     reasoningEffort: reasoningEffortFromRow(row.reasoning_effort),
+    // Null covers every run recorded before the Review named its coverage.
+    checked: row.checked ?? null,
+    notChecked: row.not_checked ?? null,
   }
 }
 
@@ -3209,18 +3235,9 @@ function isProviderCircuitPause(reason: string): boolean {
     || reason.includes('Another Agent Task owns the provider health canary.')
 }
 
+/** The outcome a staged body shows, from its marker, its Status line, or an old heading. */
 function reviewDesiredOutcomeFromBody(body: string): ReviewDesiredOutcome | null {
-  if (body.includes('### 🤖 READY'))
-    return 'READY'
-  if (body.includes('### 🤖 BLOCKED'))
-    return 'BLOCKED'
-  if (body.includes('### 🤖 WAITING'))
-    return 'WAITING'
-  if (body.includes('### 🤖 REVIEW SKIPPED'))
-    return 'SKIPPED'
-  if (body.includes('### 🤖 PENDING'))
-    return 'PENDING'
-  return null
+  return canonicalCommentOutcome(body)
 }
 
 function dashboardQueue(
@@ -5104,7 +5121,7 @@ function planAdversarialReview(
       observedAt,
       alreadyReviewed
         ? REVIEW_ALREADY_RECORDED_REASON
-        : 'The pull request is not ready for review.',
+        : REVIEW_NOT_READY_REASON,
       undefined,
       ownRunLanded ? revisionId : undefined,
     )
@@ -7613,7 +7630,17 @@ function installSchema(database: DatabaseSync): void {
     ); PRAGMA user_version = 109;`)
     version = 109
   }
-  if (version === 109)
+  if (version === 109) {
+    const target = 110
+    // A rewind replays this against a journal that already carries the
+    // columns, and SQLite has no ADD COLUMN IF NOT EXISTS, so ask before adding.
+    const columns = database.prepare('PRAGMA table_info(review_runs)').all() as Array<{ name: string }>
+    const addChecked = columns.some(column => column.name === 'checked') ? '' : 'ALTER TABLE review_runs ADD COLUMN checked TEXT NULL;'
+    const addNotChecked = columns.some(column => column.name === 'not_checked') ? '' : 'ALTER TABLE review_runs ADD COLUMN not_checked TEXT NULL;'
+    applyMigration(database, `${addChecked} ${addNotChecked} PRAGMA user_version = ${target};`)
+    version = target
+  }
+  if (version === 110)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -9831,8 +9858,9 @@ export function openJournalStore(
         INSERT INTO review_runs (
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
-          confidence, findings, content_digest, usage, base_ref, merge_risk, reasoning_effort
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          confidence, findings, content_digest, usage, base_ref, merge_risk, reasoning_effort,
+          checked, not_checked
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -9854,6 +9882,8 @@ export function openJournalStore(
         pullRequest.baseRef ?? null,
         input.mergeRisk === undefined || input.mergeRisk === null ? null : JSON.stringify(input.mergeRisk),
         input.reasoningEffort ?? null,
+        input.checked ?? null,
+        input.notChecked ?? null,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -9970,9 +10000,9 @@ export function openJournalStore(
       // may itself be a settlement, because CI and mergeability can move more
       // than once without a new head commit. The settlement refreshes the
       // controller gates and never re-judges the diff, so it inherits the
-      // parent's Merge risk verdict verbatim.
+      // parent's Merge risk verdict and coverage verbatim.
       const parent = database.prepare(`
-        SELECT merge_risk FROM review_runs
+        SELECT merge_risk, checked, not_checked FROM review_runs
         WHERE id = ? AND subject_id = ? AND revision_id = ? AND head_sha = ?
           AND base_ref = ?
           AND NOT EXISTS (
@@ -9985,7 +10015,7 @@ export function openJournalStore(
         revisionId,
         input.headSha,
         pullRequest.baseRef ?? null,
-      ) as { merge_risk: string | null } | undefined
+      ) as { merge_risk: string | null, checked: string | null, not_checked: string | null } | undefined
       if (parent === undefined) {
         const orphaned = database.prepare('SELECT 1 FROM review_runs WHERE id = ?').get(input.supersedesReviewRunId)
         database.exec('COMMIT')
@@ -9998,8 +10028,8 @@ export function openJournalStore(
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
           confidence, findings, content_digest, usage, supersedes_review_run_id, base_ref,
-          merge_risk, reasoning_effort
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          merge_risk, reasoning_effort, checked, not_checked
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -10022,6 +10052,8 @@ export function openJournalStore(
         pullRequest.baseRef ?? null,
         parent.merge_risk,
         input.reasoningEffort ?? null,
+        parent.checked,
+        parent.not_checked,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -10292,7 +10324,9 @@ export function openJournalStore(
         agent_feedback.reason AS feedback_reason,
         agent_feedback.updated_at AS feedback_updated_at,
         review_runs.merge_risk,
-        review_runs.reasoning_effort
+        review_runs.reasoning_effort,
+        review_runs.checked,
+        review_runs.not_checked
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
       JOIN revisions ON revisions.id = review_runs.revision_id
@@ -15773,6 +15807,23 @@ export function openJournalStore(
         }
   }
 
+  const repairSource: JournalStore['repairSource'] = (revisionId) => {
+    const row = database.prepare(`
+      SELECT review_runs.head_sha, ${priorReviewDefectCountSql} AS issues
+      FROM revisions
+      JOIN publication_commands ON publication_commands.state_tag = 'Published'
+        AND publication_commands.commit_sha = json_extract(revisions.payload, '$.headSha')
+      JOIN tasks AS repair ON repair.id = publication_commands.task_id
+        AND repair.kind = 'review_fix' AND repair.subject_id = revisions.subject_id
+      JOIN review_runs ON review_runs.subject_id = revisions.subject_id
+        AND review_runs.revision_id = repair.revision_id
+      WHERE revisions.id = ?
+      ORDER BY publication_commands.updated_at DESC, review_runs.completed_at DESC, review_runs.id DESC
+      LIMIT 1
+    `).get(revisionId) as { head_sha: string, issues: number } | undefined
+    return row === undefined ? null : { headSha: row.head_sha, issues: row.issues }
+  }
+
   const recordQueuedReviewStatus: JournalStore['recordQueuedReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)
     const taskTable = input.taskKind === 'adversarial_review' ? 'worker_tasks' : 'tasks'
@@ -15867,6 +15918,8 @@ export function openJournalStore(
       ranked.findings,
       COALESCE(projection.confidence, ranked.confidence) AS confidence,
       ranked.merge_risk,
+      ranked.checked,
+      ranked.not_checked,
       published.github_comment_id,
       CASE WHEN finding_comment.source_body = published.body
         AND finding_comment.comment_id = published.github_comment_id
@@ -15976,6 +16029,8 @@ export function openJournalStore(
     findings: JSON.parse(row.findings) as ReviewFinding[],
     confidence: row.confidence ?? undefined,
     mergeRisk: row.merge_risk === null ? null : JSON.parse(row.merge_risk) as MergeRiskRecord,
+    checked: row.checked,
+    notChecked: row.not_checked,
     commentId: row.github_comment_id,
     publishedBody: row.published_body,
   }))
@@ -17857,6 +17912,7 @@ export function openJournalStore(
     listRunningTaskItems,
     listQueuedReviewStatuses,
     priorReviewHistory,
+    repairSource,
     recordReviewApprovalLabelIntent,
     getReviewApprovalLabelIntent,
     clearReviewApprovalLabelIntent,

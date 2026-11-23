@@ -16,7 +16,7 @@ function finding(overrides: Record<string, unknown> = {}) {
 }
 
 function review(verdict: 'sound' | 'wrong', findings: unknown[]) {
-  return JSON.stringify({ premise: { verdict, reason: 'The change keeps its intent.' }, findings, confidence: 80 })
+  return JSON.stringify({ checked: 'the changed files', notChecked: null, premise: { verdict, reason: 'The change keeps its intent.' }, findings, confidence: 80 })
 }
 
 describe('parseReviewResponse', () => {
@@ -71,5 +71,32 @@ describe('parseReviewResponse', () => {
     const result = await parseReviewResponse(review('wrong', []))
 
     expect(result._tag === 'Err' && result.error).toContain('wrong premise needs at least one finding')
+  })
+})
+
+describe('what the Review checked', () => {
+  const answer = (coverage: Record<string, unknown>) => JSON.stringify({ premise: { verdict: 'sound', reason: 'The change keeps its intent.' }, findings: [], confidence: 90, ...coverage })
+
+  it('keeps what the Review exercised and its largest gap, on one line each', async () => {
+    const result = await parseReviewResponse(answer({ checked: 'Timeline reads against\ndense windows', notChecked: 'the dashboard in a browser' }))
+
+    expect(result).toMatchObject({ _tag: 'Ok', value: { checked: 'Timeline reads against dense windows', notChecked: 'the dashboard in a browser' } })
+  })
+
+  it('accepts a Review that skipped nothing', async () => {
+    const result = await parseReviewResponse(answer({ checked: 'every changed file', notChecked: null }))
+
+    expect(result).toMatchObject({ _tag: 'Ok', value: { notChecked: null } })
+  })
+
+  it.each([
+    [{ notChecked: null }, 'checked must be a non-empty string'],
+    [{ checked: ' ', notChecked: null }, 'checked must be a non-empty string'],
+    [{ checked: 'every changed file' }, 'notChecked must be null or a non-empty string'],
+    [{ checked: 'every changed file', notChecked: '' }, 'notChecked must be null or a non-empty string'],
+  ])('names the coverage field a rejected answer breaks: %o', async (coverage, message) => {
+    const result = await parseReviewResponse(answer(coverage))
+
+    expect(result._tag === 'Err' && result.error).toContain(message)
   })
 })

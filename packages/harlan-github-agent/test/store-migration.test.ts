@@ -1056,6 +1056,7 @@ it('converges a sibling journal that carries no issue triage runs', () => {
           relatedIssues: [],
           duplicateIssue: null,
           relatedPullRequests: [],
+          ask: [],
         },
       },
     })

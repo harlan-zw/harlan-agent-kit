@@ -141,7 +141,7 @@ describe('release controller', () => {
     expect(task.store.listPackageReleases(repository.github)[0]?.state._tag).toBe('Completed')
     expect(task.source.prepare).toHaveBeenCalledTimes(1)
     expect(task.source.publish).toHaveBeenCalledTimes(1)
-    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('Published [example@1.0.1]'), 99)
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining('🟣 **Published [`example@1.0.1`]'), 99)
     task.database.close()
   })
   it('does not release a changed range or policy', async () => {
@@ -240,10 +240,10 @@ describe('release note drafts', () => {
     task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes })
     await task.run()
     const body = vi.mocked(task.source.comment).mock.calls.at(-1)![1]
-    expect(body).toContain(`Published [example@1.0.1](${url}).`)
+    expect(body).toContain(`🟣 **Published [\`example@1.0.1\`](${url})**`)
     expect(body).not.toMatch(/^- \[[ xX]\] Release/m)
     expect(body.split('<!-- harlan-agent-kit:package-release -->')).toHaveLength(2)
-    const draft = body.slice(body.indexOf('> `````markdown'), body.indexOf('\n\n- [ ] Add this draft')).split('\n')
+    const draft = body.slice(body.indexOf('> `````markdown'), body.indexOf('\n\n</details>')).split('\n')
     // The draft's longest backtick run is four, so only a five-backtick line closes the block.
     expect(draft[0]).toBe('> `````markdown')
     expect(draft.at(-1)).toBe('> `````')
@@ -343,7 +343,7 @@ describe('release note drafts', () => {
     await task.run()
     expect(task.source.applyReleaseNote).toHaveBeenCalledWith({ tag: 'v1.0.1', text: 'Empty input no longer throws.' })
     expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state).toEqual({ _tag: 'Applied', text: 'Empty input no longer throws.', url })
-    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining(`Added this draft to the [GitHub release](${url}).`), 99)
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining(`Added the release note draft to the [GitHub release](${url}).`), 99)
     expect(vi.mocked(task.source.comment).mock.calls.at(-1)![1]).not.toMatch(/^- \[[ xX]\] Add this draft/m)
     await task.run()
     expect(task.source.applyReleaseNote).toHaveBeenCalledTimes(1)
@@ -421,7 +421,7 @@ describe('release note drafts', () => {
     await task.run()
     expect(task.source.applyReleaseNote).toHaveBeenCalledTimes(1)
     expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state).toEqual({ _tag: 'ApplyFailed', text: 'Empty input no longer throws.', reason: message })
-    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining(`Could not add this draft to the GitHub release: ${message}`), 99)
+    expect(task.source.comment).toHaveBeenLastCalledWith(24, expect.stringContaining(`Could not add the draft to the GitHub release: ${message}`), 99)
     task.database.close()
   })
 

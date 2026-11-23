@@ -160,6 +160,13 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
     return row === undefined ? [] : JSON.parse(row.inline_findings) as InlineFindingReceipt[]
   }
 
+  /** Each finding's thread beside the code, by fingerprint. After merge, only a resolved thread replaces its canonical control. */
+  function inlineThreads(reviewRunId: string, pullRequest: GitHubPullRequestItem, target: 'head' | 'after-merge' | undefined): Map<string, string> {
+    return new Map(inlineFindings(reviewRunId)
+      .filter(receipt => target !== 'after-merge' || receipt.resolved)
+      .map(receipt => [receipt.fingerprint, `${pullRequest.url}#discussion_r${receipt.commentId}`]))
+  }
+
   function statuses(subjectId: number, pullRequest: GitHubPullRequestItem): LoggedFindingStatus[] {
     const rows = database.prepare(`
       SELECT requests.fingerprint, requests.on_head, requests.dismissed, tasks.state_tag, tasks.progress_label, tasks.reason, tasks.evidence
@@ -375,7 +382,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         return body
       const pull = JSON.parse(row.payload) as GitHubPullRequestItem
       const target = pickupTarget(JSON.parse(row.policy_json) as RepositoryMapping, pull)
-      return withLoggedFindingControls(body, JSON.parse(row.findings) as ReviewFinding[], statuses(row.subject_id, pull), { target, baseRef: pull.baseRef ?? undefined, inline: new Set(inlineFindings(reviewRunId).filter(receipt => target !== 'after-merge' || receipt.resolved).map(receipt => receipt.fingerprint)) })
+      return withLoggedFindingControls(body, JSON.parse(row.findings) as ReviewFinding[], statuses(row.subject_id, pull), { target, baseRef: pull.baseRef ?? undefined, inline: inlineThreads(reviewRunId, pull, target) })
     },
     claimLoggedFindingComment(workerId, at, leaseMilliseconds, controls = () => true) {
       for (const candidate of candidates()) {
@@ -387,7 +394,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         const body = withLoggedFindingControls(candidate.body, JSON.parse(candidate.findings) as ReviewFinding[], statuses(candidate.subject_id, pullRequest), {
           target,
           baseRef: pullRequest.baseRef ?? undefined,
-          inline: new Set(inlineFindings(candidate.review_run_id).filter(receipt => target !== 'after-merge' || receipt.resolved).map(receipt => receipt.fingerprint)),
+          inline: inlineThreads(candidate.review_run_id, pullRequest, target),
         })
         if (body === expectedBody)
           continue

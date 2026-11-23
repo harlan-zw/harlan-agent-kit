@@ -74,6 +74,8 @@ describe('subject Workers', () => {
                   pending.push(object.items)
               }
               yield* stubProvider(turnEvents({
+                checked: 'the changed files',
+                notChecked: null,
                 premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
                 findings: [],
                 confidence: 96,
@@ -140,6 +142,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
         recordReviewRun: (input) => {
           attempt = input
           return { _tag: 'Inserted', reviewRunId: input.id }
@@ -179,14 +182,16 @@ describe('subject Workers', () => {
     expect(comments).toHaveLength(5)
     // Every phase publishes one body, so GitHub records one edit for the whole Review.
     expect(new Set(comments.slice(0, 4)).size).toBe(1)
-    expect(comments[0]).toContain('### 🤖 REVIEWING\n')
-    expect(comments[4]).toContain('READY · 96/100')
+    expect(comments[0]).toContain('⚪ **Reviewing** ')
+    expect(comments[4]).toContain('🟢 **Ready** · `96/100`')
     expect(comments.join('\n')).not.toContain('Head commit and CI checked')
     expect(stamped).toEqual(['READY'])
     expect(attempt).toEqual(expect.objectContaining({ model: 'gpt-6.2-sol', confidence: 96 }))
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-6.2-sol', reasoningEffort: 'medium' })])
     expect(capture.requests[0]?.prompt).toContain('Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit')
     expect(capture.requests[0]?.prompt).toContain('Read only the changed hunks plus the symbols they call.')
+    expect(capture.requests[0]?.prompt).toContain('Return checked: one clause that names what this Review exercised.')
+    expect(capture.requests[0]?.prompt).toContain('Never prefix it with "Optional follow-up"')
     expect(capture.requests[0]?.prompt).toContain('Visually inspect every image embedded in the pull request description')
     expect(capture.requests[0]?.prompt).toContain('stays inaccessible after authenticated retrieval')
     expect(capture.requests[0]?.media).toEqual([image])
@@ -255,6 +260,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
         recordReviewRun: () => { throw new Error('A second review must not be recorded.') },
         recordReviewPublication: () => { throw new Error('A second comment must not be recorded.') },
       },
@@ -309,6 +315,8 @@ describe('subject Workers', () => {
     let worktreeVerified = false
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
         findings: [{
           identity: 'buffered-byte-loss',
@@ -376,6 +384,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -425,12 +434,13 @@ describe('subject Workers', () => {
       expect(terminal).toBe('')
     }
     else {
-      expect(terminal).toContain(impact > 80 ? '### 🤖 BLOCKED' : '### 🤖 READY')
+      expect(terminal).toContain(impact > 80 ? '🟠 **Blocked** · 1 issue to fix before merge' : '🟢 **Ready**')
       expect(terminal).toContain('The parser drops data.')
       if (impact <= 80)
-        expect(terminal).toContain('Optional follow-up: Preserve the buffered bytes.')
+        expect(terminal).toContain(`- \`${impact}\` The parser drops data.`)
       else
-        expect(terminal).not.toContain('Optional follow-up')
+        expect(terminal).toContain('Preserve the buffered bytes.')
+      expect(terminal).not.toContain('Optional follow-up')
     }
     expect(worktreeVerified).toBe(true)
   })
@@ -445,6 +455,8 @@ describe('subject Workers', () => {
     let queued = false
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
         findings: [{
           identity: 'buffered-byte-loss',
@@ -512,6 +524,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -557,6 +570,8 @@ describe('subject Workers', () => {
     let attempt: RecordReviewRunInput | undefined
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: {
           verdict: 'wrong',
           reason: 'Safe worktree cleanup requires controller state shared across processes and restarts.',
@@ -624,6 +639,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, _phase, body) => {
@@ -667,6 +683,8 @@ describe('subject Workers', () => {
     let askedForHeadSha: string | undefined
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
         findings: [{
           identity: 'buffered-byte-loss',
@@ -749,6 +767,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -839,6 +858,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -873,7 +893,7 @@ describe('subject Workers', () => {
       resolution: { _tag: 'WaitingForBaselineRepair', taskId: 'baseline-task' },
     }))
     expect(baselineQueued).toBe(true)
-    expect(published).toContain('### 🤖 WAITING')
+    expect(published).toContain('🟠 **Stuck** · the default branch fails CI at ')
     expect(published).toContain('WaitingForBaselineRepair')
     expect(published).toContain(pullRequest.baseSha)
   })
@@ -887,6 +907,8 @@ describe('subject Workers', () => {
     let published = ''
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The change can remain intact.' },
         findings: [],
         confidence: 91,
@@ -939,6 +961,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -980,6 +1003,8 @@ describe('subject Workers', () => {
     let published = ''
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The change can remain intact.' },
         findings: [],
         confidence: 90,
@@ -1033,6 +1058,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -1073,6 +1099,8 @@ describe('subject Workers', () => {
     let published = ''
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The change can remain intact.' },
         findings: [],
         confidence: 88,
@@ -1126,6 +1154,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -1157,7 +1186,7 @@ describe('subject Workers', () => {
 
     expect(result).toEqual(ok({ evidence: expect.any(String), resolution: { _tag: 'Reviewed', reviewRunId: expect.any(String) } }))
     expect(capture.requests).toHaveLength(1)
-    expect(published).toContain('READY · 88/100')
+    expect(published).toContain('🟢 **Ready** · `88/100`')
   })
 
   it.each([
@@ -1269,6 +1298,7 @@ describe('subject Workers', () => {
           relatedIssues: [],
           duplicateIssue: null,
           relatedPullRequests: [],
+          ask: [],
         }),
         usage: { _tag: 'Unavailable' },
       },
@@ -1299,6 +1329,7 @@ describe('subject Workers', () => {
       relatedIssues: [],
       duplicateIssue: null,
       relatedPullRequests: [],
+      ask: [],
     })
   })
 })

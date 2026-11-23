@@ -60,6 +60,9 @@ export interface FailureSignal {
  * and one refused repair used to requeue the review, spend a whole agent turn
  * reading the same policy, and refuse again.
  */
+/** Why a Review stopped when its pull request stopped being eligible for one, a draft for example. */
+export const REVIEW_NOT_READY_REASON = 'The pull request is not ready for review.'
+
 export const REVIEW_REPAIR_REFUSALS = {
   approval: 'This pull request needs Approval before the controller publishes a repair.',
   branch: 'The controller cannot write this pull request branch.',

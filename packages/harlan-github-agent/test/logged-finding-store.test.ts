@@ -53,7 +53,7 @@ function setup(findings = [finding], path = ':memory:', target: 'head' | 'after-
   const gates = { merge: { _tag: 'Passed' as const, evidence: [] }, review: { _tag: 'Passed' as const, evidence: [] }, ci: { _tag: 'Passed' as const, evidence: [] } }
   store.recordReviewRun({ id: 'review', repository: mapping.github, pullRequestNumber: pullRequest.number, revisionId: observation.revisionId, headSha: pullRequest.headSha, provider: 'codex', sessionId: 'session', model: 'model', agentVersion: 'version', skillDigest: 'c'.repeat(64), startedAt: at, completedAt: at, gates, findings })
   store.completeWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, evidence: 'review' })
-  const terminal = terminalComment(pullRequest.headSha, pullRequest.baseSha, gates, findings, 95, [], undefined, mapping.github)
+  const terminal = terminalComment({ headSha: pullRequest.headSha, baseSha: pullRequest.baseSha, gates, findings, confidence: 95, reportedChecks: [], repository: mapping.github })
   const body = target === 'head' ? store.decorateLoggedFindings(terminal, 'review') : withLoggedFindingControls(terminal, findings, [])
   store.recordReviewPublication({ id: 'publication', reviewRunId: 'review', body, at, result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' } })
   const request = { repository: mapping.github, pullRequestNumber: pullRequest.number, headSha: pullRequest.headSha, commentId: 42, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]', fingerprints: [finding.details.fingerprint], before: body, requestId: 'delivery', at }
@@ -402,7 +402,7 @@ describe('durable Logged finding pickup', () => {
     const passed = store.listReviewRuns(mapping.github, pullRequest.number)[0]!.gates
     const refreshed = refreshControllerGates(passed, snapshot, mapping, { reviewStartedAt: at, now: new Date(at) })
     const gates = mode === 'disputed' ? { ...refreshed.gates, ci: { _tag: 'Pending' as const, reason: 'CI is running.', evidence: [] } } : refreshed.gates
-    const initialBody = store.decorateLoggedFindings(terminalComment(pullRequest.headSha, pullRequest.baseSha, gates, [finding], undefined, refreshed.reportedChecks, undefined, mapping.github), 'review')
+    const initialBody = store.decorateLoggedFindings(terminalComment({ headSha: pullRequest.headSha, baseSha: pullRequest.baseSha, gates, findings: [finding], confidence: undefined, reportedChecks: refreshed.reportedChecks, repository: mapping.github }), 'review')
     const staged = store.stageReviewGateStatus({ reviewRunId: 'review', repository: mapping.github, pullRequestNumber: pullRequest.number, revisionId: store.listReviewGateRefreshes()[0]!.revisionId, expectedHeadSha: pullRequest.headSha, gates, body: initialBody, desiredOutcome: mode === 'disputed' ? 'PENDING' : 'READY', at: clock })
     if (staged._tag === 'Rejected')
       throw new Error(staged.reason)
@@ -430,7 +430,7 @@ describe('durable Logged finding pickup', () => {
       if (mode === 'disputed' && index === 0) {
         const next = store.claimNextTerminalReviewStatus('publisher', clock, 60_000)!
         expect(next.body).toContain('Disputed: the finding is false.')
-        expect(next.body).toContain('### 🤖 READY')
+        expect(next.body).toContain('🟢 **Ready**')
         await fixture.source.upsertReviewStatus(mapping, pullRequest.number, 42, next.body, true, new AbortController().signal)
         store.completeReviewStatus({ commandId: next.id, workerId: next.workerId, fence: next.fence, at: clock, commentId: 42, url: `${pullRequest.url}#issuecomment-42` })
       }
@@ -524,7 +524,9 @@ describe('durable Logged finding pickup', () => {
     expect(store.completeReviewFindingThreadSync(sync, at, [inline])).toBe(true)
     const summary = store.claimLoggedFindingComment('publisher', at, 60_000)
     expect(summary?.body).toContain(generic.summary)
-    expect(summary?.body).not.toContain(finding.summary)
+    // The threaded finding keeps its row with a link to the thread, and the thread carries its control.
+    expect(summary?.body).toContain(`[Open the thread beside the code](${pullRequest.url}#discussion_r${inline.commentId}) <!-- logged-finding: ${finding.details.fingerprint} -->`)
+    expect(summary?.body).not.toContain(`- [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${finding.details.fingerprint} -->`)
 
     const click = { ...request, inline: true as const, commentId: inline.commentId, before: inline.body }
     expect(store.requestLoggedFindingPickup({ ...click, commentId: inline.commentId + 1 })).toBe(false)
@@ -788,7 +790,7 @@ describe('durable Logged finding pickup', () => {
     expect(await publishLoggedFindingPickups(options, new AbortController().signal)).toEqual([])
     expect(await publishLoggedFindingPickups(options, new AbortController().signal)).toEqual([])
     expect(writes).toEqual([expect.stringContaining('Queued after merge.')])
-    expect(writes[0]).toContain('### 🤖 READY')
+    expect(writes[0]).toContain('🟢 **Ready**')
   })
   it('keeps a selection across restart and claims it once after merge', () => {
     const directory = mkdtempSync(join(tmpdir(), 'logged-finding-restart-'))

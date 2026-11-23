@@ -116,6 +116,7 @@ export function routedResult(input: {
         relatedIssues: [],
         duplicateIssue: null,
         relatedPullRequests: [],
+        ask: [],
       }
     : {
         _tag: 'WAIT_TO_IMPLEMENT',
@@ -128,6 +129,7 @@ export function routedResult(input: {
         relatedIssues: [],
         duplicateIssue: null,
         relatedPullRequests: [],
+        ask: [],
       }
 }
 

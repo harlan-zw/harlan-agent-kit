@@ -3,10 +3,8 @@ import type { ReviewPublicationAuthority } from './github-agent-source.ts'
 import type { PublicBody } from './public-text.ts'
 import type { Result } from './result.ts'
 import type { RepositoryMapping, ReviewDesiredOutcome, ReviewFinding } from './types.ts'
-import { encodeEntities } from './public-text.ts'
 import { err, ok } from './result.ts'
-import { automatedDisclosure, reviewFindingCodeLink, reviewFindingFollowUp, reviewFindingSeverity } from './review-comment.ts'
-import { cleanLine, cleanText } from './text.ts'
+import { automatedDisclosure, listedFollowUp, plural, statusLine } from './review-comment.ts'
 
 export const NATIVE_REVIEW_MARKER = '<!-- harlan-agent-kit:native-review -->'
 
@@ -20,45 +18,32 @@ export interface NativeReviewMirror {
   report: (repository: string, result: Result<void, string>) => void
 }
 
-export function nativeReviewBody({ repository, headSha, outcome, commentUrl, findings }: {
-  repository: string
+/**
+ * The native COMMENT review: one Status line that links the canonical comment.
+ *
+ * It exists so the bot appears in GitHub's Reviewers sidebar. Its folded
+ * findings used to repeat the canonical comment, so it now carries only the
+ * outcome, the count a reader acts on, and the link.
+ */
+export function nativeReviewBody({ headSha, outcome, commentUrl, findings }: {
   headSha: string
   outcome: ReviewDesiredOutcome | null
   commentUrl: string
   findings: readonly ReviewFinding[]
 }): string {
-  const status = `${NATIVE_REVIEW_MARKER}
-<!-- reviewed-sha: ${headSha} -->
-${automatedDisclosure({ kind: 'review' })}
-
-Automated Review: ${outcome ?? 'PENDING'}.
-
-[Read the Review results](${commentUrl})`
-  const followUps = findings.filter(finding => finding._tag === 'Logged')
-  if (followUps.length === 0)
-    return status
-
-  let body = `${status}\n\n## Optional follow-ups`
-  for (const finding of followUps) {
-    const summary = encodeEntities(cleanLine(finding.summary))
-    const proof = encodeEntities(cleanText(finding.details.proof).replaceAll(/\s+/g, ' '))
-    const action = encodeEntities(reviewFindingFollowUp(finding))
-    const link = reviewFindingCodeLink(repository, headSha, finding).trimStart()
-    const section = `\n\n<details>
-<summary>${reviewFindingSeverity(finding.impact)} (${finding.impact}/100) · ${summary}</summary>
-
-${proof}
-
-${action}
-
-${link}
-
-</details>`
-    if (Buffer.byteLength(body) + Buffer.byteLength(section) > 60_000)
-      return `${body}\n\nSee the Review results for more follow-ups.`
-    body += section
-  }
-  return body
+  const read = `[read the review](${commentUrl})`
+  const blocking = findings.filter(finding => finding._tag === 'Open').length
+  const followUps = findings.filter(listedFollowUp).length
+  const line = outcome === 'READY'
+    ? statusLine('ready', 'Ready', [...(followUps === 0 ? [] : [plural(followUps, 'follow-up')]), read].join(' · '))
+    : outcome === 'BLOCKED'
+      ? statusLine('act', 'Blocked', [...(blocking === 0 ? [] : [`${plural(blocking, 'issue')} to fix before merge`]), read].join(' · '))
+      : outcome === 'SKIPPED'
+        ? statusLine('work', 'Review skipped', read)
+        : outcome === 'WAITING'
+          ? statusLine('act', 'Stuck', read)
+          : statusLine('work', 'Pending', read)
+  return [NATIVE_REVIEW_MARKER, `<!-- reviewed-sha: ${headSha} -->`, line, '', automatedDisclosure({ kind: 'review' })].join('\n')
 }
 
 /** One native COMMENT review per head. Reruns update its body. */

@@ -31,7 +31,7 @@ import { isPublishedForm, keepRemovedLines, preservePublishedRedactions, publicB
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
-import { AGENT_ACTOR_LOGIN, AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
+import { AGENT_ACTOR_LOGIN, AUTOMATED_REVIEW_MARKER, automatedReviewHead, canonicalCommentOutcome, priorAutomatedReviewForHead } from './review-comment.ts'
 import { findingDiscussions, inlineReviewComment, reviewFindingThreadFingerprint } from './review-finding-threads.ts'
 import { jobExecutionContext } from './worker-github-evidence.ts'
 
@@ -888,11 +888,13 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         if (prior._tag !== 'Found' || prior.state !== 'complete' || comment?.html_url !== prior.url)
           return err({ _tag: 'Permanent', message: 'The completed review changed before its label was restored.' })
         const body = comment.body ?? ''
-        const outcome = body.match(/^### 🤖 (READY|BLOCKED|REVIEW SKIPPED)\b/m)?.[1]
-          ?? body.match(/^\*\*(PASS|PENDING|BLOCKED)\b/m)?.[1]
+        const current = canonicalCommentOutcome(body)
+        const outcome = current === 'READY' || current === 'BLOCKED' || current === 'SKIPPED'
+          ? current
+          : body.match(/^\*\*(PASS|PENDING|BLOCKED)\b/m)?.[1]
         const label = outcome === 'PASS' || outcome === 'READY'
           ? 'READY'
-          : outcome === 'REVIEW SKIPPED'
+          : outcome === 'SKIPPED'
             ? 'ADVERSARIAL_REVIEW_SKIPPED'
             : outcome === 'PENDING' || outcome === 'BLOCKED' ? outcome : null
         if (label === null)
@@ -1504,7 +1506,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       // gate, so the second publication sees the first one's check run.
       const gateKey = `${repository.github.toLowerCase()}:${headSha.toLowerCase()}`
       const queued = (checkRunWriteGates.get(gateKey) ?? Promise.resolve())
-        .then(() => writeReviewCheckRun(octokit.value, owner, repo, headSha, update, options.ownAppId, signal, authorize))
+        .then(() => writeReviewCheckRun(octokit.value, owner, repo, headSha, update, options.ownAppId, signal, authorize, options.publicText, repository.github))
       const tail = queued.then(() => undefined, () => undefined)
       checkRunWriteGates.set(gateKey, tail)
       // One publication at a time per head, and the entry leaves when the
@@ -1530,6 +1532,8 @@ async function writeReviewCheckRun(
   ownAppId: number,
   signal: AbortSignal,
   authorize: ReviewPublicationAuthority | undefined,
+  publicText: PublicTextGuard,
+  repository: string,
 ): Promise<Result<void, string>> {
   const requestOptions = { request: { signal } }
   const listed = await octokit.paginate(octokit.rest.checks.listForRef, {
@@ -1555,12 +1559,13 @@ async function writeReviewCheckRun(
     return authorization
   // The name plus the app id is the identity, so a foreign check run that
   // borrows the name never takes this service's write.
-  const output = { title: update.title, summary: 'The review comment on this pull request carries the detail.' }
+  const title = publicBody(publicText, { repository, itemNumber: null, writer: 'automated review' }, update.title)
+  const output = { title: title.text, summary: 'The review comment on this pull request carries the detail.' }
   const payload = update._tag === 'Running'
     ? { status: 'in_progress' as const, output }
     : { status: 'completed' as const, conclusion: update.conclusion, completed_at: update.completedAt, output }
   const newest = listed.value[0]
-  const written = await (newest === undefined
+  const written = await title.send(async () => newest === undefined
     ? octokit.rest.checks.create({
         owner,
         repo,
@@ -1590,7 +1595,7 @@ async function writeReviewCheckRun(
   for (const stray of listed.value.slice(1)) {
     if (stray.status === 'completed')
       continue
-    const closed = await octokit.rest.checks.update({
+    const closed = await title.send(() => octokit.rest.checks.update({
       owner,
       repo,
       check_run_id: stray.id,
@@ -1599,7 +1604,7 @@ async function writeReviewCheckRun(
       completed_at: update.completedAt,
       output,
       ...requestOptions,
-    })
+    }))
       .then((): Result<void, string> => ok(undefined))
       .catch((error: unknown): Result<void, string> => err(message(error)))
     if (closed._tag === 'Err')

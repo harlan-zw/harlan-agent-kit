@@ -82,19 +82,23 @@ describe('a recorded Merge risk verdict stays visible', () => {
     expect(agent).toMatchObject({ mergeRisk: containedRisk })
   })
 
-  it('carries a describeMergeRisk line beside the gate lines in the published body', () => {
-    const body = terminalComment('abc123', 'base123', passedGates(), [], 100, [], containedRisk.combined)
-    expect(body).toContain('- **Merge risk:** Contained')
+  it('prints a Merge risk line only when a person must read the merge', () => {
+    const contained = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: passedGates(), findings: [], confidence: 100, reportedChecks: [], mergeRisk: containedRisk.combined })
+    const reviewable = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: passedGates(), findings: [], confidence: 100, reportedChecks: [], mergeRisk: { _tag: 'Reviewable', reason: 'The diff touches a shared default.' } })
+    expect(contained).not.toContain('Merge risk')
+    expect(reviewable).toContain('Merge risk: **Reviewable**. The diff touches a shared default.')
   })
 })
 
 describe('a fresh Review publishes its Merge risk verdict', () => {
-  it('carries the Merge risk line in the first terminal comment', async () => {
+  it('keeps a Contained verdict out of the first terminal comment', async () => {
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
     const comments: string[] = []
     const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
         findings: [],
         confidence: 96,
@@ -146,6 +150,7 @@ describe('a fresh Review publishes its Merge risk verdict', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
         recordReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
       },
@@ -180,8 +185,8 @@ describe('a fresh Review publishes its Merge risk verdict', () => {
     if (result._tag !== 'Ok')
       throw new Error(result.error)
     const terminal = comments.at(-1)
-    expect(terminal).toContain('READY · 96/100')
-    expect(terminal).toContain('- **Merge risk:** Contained')
+    expect(terminal).toContain('🟢 **Ready** · `96/100`')
+    expect(terminal).not.toContain('Merge risk')
   })
 
   it('computes the floor from the recorded files without reading GitHub', async () => {
@@ -190,6 +195,8 @@ describe('a fresh Review publishes its Merge risk verdict', () => {
     const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
         findings: [],
         confidence: 96,
@@ -241,6 +248,7 @@ describe('a fresh Review publishes its Merge risk verdict', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
         recordReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
         recordReviewPublication: input => ({ _tag: 'Inserted', publicationId: input.id }),
       },
@@ -274,6 +282,6 @@ describe('a fresh Review publishes its Merge risk verdict', () => {
     expect(result._tag).toBe('Ok')
     if (result._tag !== 'Ok')
       throw new Error(result.error)
-    expect(comments.at(-1)).toContain('- **Merge risk:** Contained')
+    expect(comments.at(-1)).toContain('🟢 **Ready**')
   })
 })

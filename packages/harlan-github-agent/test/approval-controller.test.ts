@@ -62,10 +62,11 @@ describe('approval controller', () => {
     })
 
     expect(await controller.reconcile(repositoryMapping(), pullRequestItem({ author: 'contributor' }), 'a'.repeat(64), new AbortController().signal)).toEqual(ok(undefined))
-    expect(body).toContain('[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated status.')
+    expect(body).toContain('🟠 **Approval needed** · outside contributor')
     expect(body).toContain('<!-- reviewed-sha: abc123 -->')
-    expect(body).toContain('`harlan-agent-review` label')
-    expect(body).toContain('head commit `abc123`')
+    expect(body).toContain('<kbd>harlan-agent-review</kbd> label')
+    expect(body).toContain('repair of [`abc123`](https://github.com/harlan-zw/example/commit/abc123) wait for Harlan')
+    expect(body.split('\n').at(-1)).toBe('<sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated status, not Harlan\'s · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>')
   })
 
   it.each([false, true])('offers Approval only when this repository has signed webhook coverage: %s', async (enabled) => {

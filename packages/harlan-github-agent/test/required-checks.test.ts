@@ -9,6 +9,8 @@ import { ok } from '../src/result.ts'
 import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const cleanReview = {
+  checked: 'the changed files',
+  notChecked: null,
   premise: { verdict: 'sound', reason: 'The change can remain intact.' },
   findings: [],
   confidence: 96,
@@ -94,6 +96,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       ...agentTurnLedger,
       updateAgentProgress: () => true,
       priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+      repairSource: () => null,
       recordReviewRun: (run) => {
         runs.push(run)
         return { _tag: 'Inserted', reviewRunId: run.id }

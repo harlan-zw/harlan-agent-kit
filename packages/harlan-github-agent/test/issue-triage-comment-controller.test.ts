@@ -32,6 +32,7 @@ const readyResult = {
   relatedIssues: [],
   duplicateIssue: null,
   relatedPullRequests: [],
+  ask: [],
 } as const
 
 function controllerWithSnapshot(snapshot: IssueTriageSnapshot) {
@@ -150,11 +151,12 @@ describe('issue triage publication', () => {
       relatedIssues: [],
       duplicateIssue: null,
       relatedPullRequests: [],
+      ask: [],
     }, new AbortController().signal)
 
     expect(result).toEqual(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/issues/12#issuecomment-42' }))
     expect(stamped).toEqual(['READY_TO_SPEC'])
-    expect(body).toContain('- **Triage result:** Ready to spec')
+    expect(body).toContain('🟢 **Ready to spec**')
   })
 
   it('publishes after the Running label moved updatedAt', async () => {

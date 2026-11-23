@@ -2761,7 +2761,7 @@ describe('journal store', () => {
     }, new AbortController().signal)
 
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
-    expect(edits).toEqual([{ commentId: 42, body: expect.stringContaining('### 🤖 MERGED') }])
+    expect(edits).toEqual([{ commentId: 42, body: expect.stringContaining('🟣 **Merged**') }])
     expect(closure).toEqual(expect.objectContaining({
       disposition: { _tag: 'Merged' },
       result: expect.objectContaining({ _tag: 'Published', commentId: 42 }),
@@ -2856,7 +2856,7 @@ describe('journal store', () => {
       },
     }, new AbortController().signal)
 
-    expect(edits).toEqual([expect.stringContaining('### 🤖 MERGED')])
+    expect(edits).toEqual([expect.stringContaining('🟣 **Merged**')])
     expect(edits[0]).not.toContain(reviewRunId)
   })
 

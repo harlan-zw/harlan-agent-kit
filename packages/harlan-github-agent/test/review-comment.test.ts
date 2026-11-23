@@ -1,30 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import { progressComment } from '../src/item-agent.ts'
-import { priorAutomatedReviewForHead, reviewFindingFollowUp } from '../src/review-comment.ts'
+import { findingNextAction, priorAutomatedReviewForHead } from '../src/review-comment.ts'
 
 const headSha = '69c7ef6eaf1ec7bb186f27f46fa343d3d38f1f23'
 const baseSha = 'a2bf631b82ed5c386bfa4c384a44720f67182513'
 
 describe('automated review comments', () => {
-  it('keeps full optional advice while removing hidden markers and line breaks', () => {
+  it('keeps full advice while removing hidden markers', () => {
     const action = `Keep the complete instructions. ${'Check the next boundary. '.repeat(20)}`.trim()
-    expect(reviewFindingFollowUp({
-      _tag: 'Logged',
-      impact: 40,
-      summary: 'Improve fallback handling.',
-      nextAction: `<!--\n${action}\n-->`,
-      details: { fingerprint: 'f'.repeat(64), identity: 'fallback', location: { path: 'src/config.ts', line: 1 }, proof: 'The fallback needs more context.' },
-    })).toBe(`Optional follow-up: ${action}`)
+    expect(findingNextAction(`<!--\n${action}\n-->`)).toBe(action)
   })
 
-  it('shows a stored "As an optional follow-up," answer without doubling the prefix', () => {
-    expect(reviewFindingFollowUp({
-      _tag: 'Logged',
-      impact: 40,
-      summary: 'Spans can overlap.',
-      nextAction: 'As an optional follow-up, query for span overlap before inserting.',
-      details: { fingerprint: 'f'.repeat(64), identity: 'span-overlap', location: { path: 'src/spans.ts', line: 1 }, proof: 'Two spans share a range.' },
-    })).toBe('Optional follow-up: query for span overlap before inserting.')
+  it('drops a stored "As an optional follow-up," prefix', () => {
+    expect(findingNextAction('As an optional follow-up, query for span overlap before inserting.')).toBe('query for span overlap before inserting.')
+    expect(findingNextAction('Optional follow-up: Optional follow-up. Add a test.')).toBe('Add a test.')
+    expect(findingNextAction('As an optional follow-up, pnpm test passes again.')).toBe('pnpm test passes again.')
   })
 
   it('recognizes the current format from a trusted maintainer', () => {
@@ -116,17 +106,24 @@ describe('running Review comment', () => {
   const priorHeadSha = 'a83128aac51194195b55e94b7a628e3aee018216'
 
   it('keeps the verdict of the earlier head in view while the new head is reviewed', () => {
-    const body = progressComment(headSha, baseSha, { _tag: 'AfterPush', priorHeadSha, priorOutcome: 'Ready', findings: 0 })
+    const body = progressComment(headSha, baseSha, { _tag: 'AfterPush', priorHeadSha, priorOutcome: 'READY', findings: 0 }, 'harlan-zw/example')
 
-    expect(body).toContain('### 🤖 REVIEWING\n')
-    expect(body).toContain(`> The Review of \`${headSha.slice(0, 12)}\` is running. This comment changes when it finishes.`)
-    expect(body.endsWith(`The last Review of \`${priorHeadSha.slice(0, 12)}\` answered ready. A new commit replaced it, so this Review answers the new commit.`)).toBe(true)
+    expect(body).toBe([
+      '<!-- harlan-agent-kit:pr-triage -->',
+      `<!-- reviewed-sha: ${headSha} -->`,
+      `<!-- workflow-state: {"_tag":"Reviewing","headSha":"${headSha}","baseSha":"${baseSha}"} -->`,
+      `⚪ **Reviewing** [\`${headSha.slice(0, 7)}\`](https://github.com/harlan-zw/example/commit/${headSha}) · this comment updates when it finishes`,
+      '',
+      `<sub>Last review of \`${priorHeadSha.slice(0, 7)}\`: Ready. A new commit replaced it.</sub>`,
+      '',
+      '<sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated review, not Harlan\'s · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>',
+    ].join('\n'))
   })
 
   it('says nothing about an earlier verdict on a first Review', () => {
     const body = progressComment(headSha, baseSha, { _tag: 'FirstReview' })
 
-    expect(body.endsWith('This comment changes when it finishes.')).toBe(true)
+    expect(body).not.toContain('Last review')
   })
 
   it('reads as a running Review, never as the earlier verdict it quotes', () => {

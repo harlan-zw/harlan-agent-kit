@@ -4,11 +4,11 @@ import type { JournalStore, QueuedReviewHistory, QueuedReviewStatus, ReviewAttem
 import type { RepositoryMapping } from './types.ts'
 import { publicFailureCause } from './failure.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, commitLink, outcomeWord, plural, statusLine, workflowStateLine } from './review-comment.ts'
 
 const workLabel: Record<QueuedReviewStatus['taskKind'], string> = {
-  adversarial_review: 'Review',
-  review_fix: 'Repair',
+  adversarial_review: 'review',
+  review_fix: 'repair',
 }
 
 /**
@@ -21,14 +21,13 @@ const workLabel: Record<QueuedReviewStatus['taskKind'], string> = {
 export function queuedReviewHistoryLine(history: QueuedReviewHistory): string | null {
   if (history._tag === 'FirstReview')
     return null
-  const defects = history.findings === 1 ? '1 defect' : `${history.findings} defects`
-  const outcome = history.priorOutcome.toLowerCase()
+  const outcome = outcomeWord(history.priorOutcome)
   const prior = history.findings === 0
-    ? `The last Review of \`${history.priorHeadSha.slice(0, 12)}\` answered ${outcome}.`
-    : `The last Review of \`${history.priorHeadSha.slice(0, 12)}\` answered ${outcome} on ${defects}.`
+    ? `Last review of \`${history.priorHeadSha.slice(0, 7)}\`: ${outcome}.`
+    : `Last review of \`${history.priorHeadSha.slice(0, 7)}\`: ${outcome}, ${plural(history.findings, 'issue')}.`
   return history._tag === 'AfterRepair'
-    ? `${prior} A Repair pushed this commit, so this Review answers the Repair.`
-    : `${prior} A new commit replaced it, so this Review answers the new commit.`
+    ? `${prior} Repair pushed this commit.`
+    : `${prior} A new commit replaced it.`
 }
 
 /** A failure reason on one line, short enough to read in a comment. */
@@ -49,51 +48,66 @@ function utcClock(iso: string): string {
  * on a plain QUEUED, so a Review that failed every thirty minutes for a day
  * read as one that had not started (nuxtseo.com#1796, 2026-10-20).
  */
-export function reviewAttemptLine(attempt: ReviewAttemptState, work: string): string | null {
+export function reviewAttemptLine(attempt: ReviewAttemptState): string | null {
   if (attempt._tag === 'FirstAttempt')
     return null
   // A provider error reads as its cause. The raw reason stays in the Dashboard.
   const reason = oneLineReason(publicFailureCause(attempt.reason))
-  if (attempt._tag === 'Stuck')
-    return `The ${work} stopped and will not run again on its own: ${reason}`
-  const retry = attempt.retry === null ? '' : ` Retry ${attempt.retry.spent} of ${attempt.retry.limit}.`
-  return `The last attempt stopped: ${reason}${retry}`
+  return attempt._tag === 'Stuck' ? reason : `Last attempt: ${reason}`
+}
+
+/** When a retry starts, after the Status line's dot. Either half can be unknown. */
+function retryDetail(attempt: Extract<ReviewAttemptState, { _tag: 'Retrying' }>, work: string): string {
+  const when = attempt.nextAttemptAt === null ? 'when an agent is free' : `at ${utcClock(attempt.nextAttemptAt)}`
+  return attempt.retry === null
+    ? `${work} restarts ${when}`
+    : `retry ${attempt.retry.spent} of ${attempt.retry.limit} ${when}`
 }
 
 /**
  * The canonical comment while its Task waits: in the Queue, on a retry
  * backoff, or on a person.
  *
- * Exact position belongs to the Dashboard. A Queue movement therefore does
- * not create serial GitHub writes across every waiting pull request.
+ * Queued, retrying and paused read as one word, Queued, because nobody acts
+ * on the difference: the detail says which. A Task that will not run again
+ * reads as Stuck, because Harlan must act. Exact position belongs to the
+ * Dashboard, so a Queue movement does not write to every waiting pull request.
+ * Nothing here carries a time, so an unchanged state writes an unchanged body.
  */
 export function queuePositionComment(status: QueuedReviewStatus): string {
   const work = workLabel[status.taskKind]
   const { attempt } = status
-  const heading = attempt._tag === 'Stuck'
-    ? 'STUCK'
-    : status.queue._tag === 'Paused'
-      ? 'PAUSED'
-      : attempt._tag === 'Retrying' ? 'RETRYING' : 'QUEUED'
-  const next = attempt._tag === 'Stuck'
-    ? 'Fix the cause, then push a commit to start a new Review. The Dashboard shows the Incident.'
-    : status.queue._tag === 'Paused'
-      ? `${work} starts when this repository resumes.`
-      : attempt._tag === 'Retrying' && attempt.nextAttemptAt !== null
-        ? `${work} restarts after ${utcClock(attempt.nextAttemptAt)}.`
-        : attempt._tag === 'Retrying'
-          ? `${work} restarts when an Agent is free.`
-          : `${work} starts when an Agent is free.`
+  const footer = automatedDisclosure({ kind: status.taskKind === 'review_fix' ? 'repair' : 'review' })
+  const head = [
+    AUTOMATED_REVIEW_MARKER,
+    `<!-- reviewed-sha: ${status.headSha} -->`,
+    workflowStateLine({ _tag: attempt._tag === 'Stuck' ? 'Stuck' : 'Queued', headSha: status.headSha, taskKind: status.taskKind }),
+  ]
+  const attemptLine = reviewAttemptLine(attempt)
+  if (attempt._tag === 'Stuck') {
+    return [
+      ...head,
+      statusLine('act', 'Stuck', 'needs Harlan'),
+      '',
+      `${attemptLine} Fix the cause, then push a commit. The Dashboard shows the Incident.`,
+      '',
+      footer,
+    ].join('\n')
+  }
+  const detail = status.queue._tag === 'Paused'
+    ? 'this repository is paused'
+    : attempt._tag === 'Retrying'
+      ? retryDetail(attempt, work)
+      : `${work} of ${commitLink(status.repository, status.headSha)} starts when an agent is free`
   const history = queuedReviewHistoryLine(status.history)
-  const attemptLine = reviewAttemptLine(attempt, work)
-  const lines = [history, attemptLine].filter((line): line is string => line !== null)
-  return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${status.headSha} -->
-### 🤖 ${heading}
-
-${automatedDisclosure({ kind: 'review', notes: ['The Dashboard shows the exact Queue position.'] })}
-${lines.length === 0 ? '' : `\n${lines.join('\n\n')}\n`}
-Next: ${next}`
+  const notes = [history, attemptLine].filter((line): line is string => line !== null)
+  return [
+    ...head,
+    statusLine('work', 'Queued', detail),
+    '',
+    ...notes.flatMap(note => [`<sub>${note}</sub>`, '']),
+    footer,
+  ].join('\n')
 }
 
 export interface QueuePositionSweepOptions {

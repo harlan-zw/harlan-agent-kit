@@ -3,7 +3,7 @@ import type { GitHubPullRequestItem, RepositoryMapping } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { acceptedPullRequestCommands } from '../src/repository-policy.ts'
 import { ok } from '../src/result.ts'
-import { pullRequestCommandFooter } from '../src/review-comment.ts'
+import { automatedDisclosure } from '../src/review-comment.ts'
 import { syncOpenReviewRerunRequests } from '../src/review-rerun-controller.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -134,15 +134,17 @@ describe('pull request comment commands', () => {
   })
 
   it('names both commands when the pull request accepts both', () => {
-    expect(pullRequestCommandFooter(['Change', 'Rerun']))
-      .toBe('Comment `@harlan-agent <change to make>` to request a change, or `@harlan-agent rerun` to review this commit again.')
+    expect(automatedDisclosure({ kind: 'review', commands: ['Change', 'Rerun'] }))
+      .toMatch(/ · `@harlan-agent rerun` · `@harlan-agent <change>`<\/sub>$/)
   })
 
   it('names only rerun when the pull request accepts only rerun', () => {
-    expect(pullRequestCommandFooter(['Rerun'])).toBe('Comment `@harlan-agent rerun` to review this commit again.')
+    const footer = automatedDisclosure({ kind: 'review', commands: ['Rerun'] })
+    expect(footer).toMatch(/ · `@harlan-agent rerun`<\/sub>$/)
+    expect(footer).not.toContain('<change>')
   })
 
-  it('writes no line when the pull request accepts no command', () => {
-    expect(pullRequestCommandFooter([])).toBeUndefined()
+  it('names no command when the pull request accepts none', () => {
+    expect(automatedDisclosure({ kind: 'review', commands: [] })).not.toContain('@harlan-agent')
   })
 })

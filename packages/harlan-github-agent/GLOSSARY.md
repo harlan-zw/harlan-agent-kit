@@ -71,6 +71,9 @@ did not cover it.
 | Review outcome | `review_runs.outcome_tag` | Controller | One per Review run | READY, PENDING, or BLOCKED |
 | Running label | `harlan-agent-running` label | GitHub | One per Item with a Running Task other than Review or Repair | none |
 | Review finding | `review_runs.findings` | Adversarial review | N per Review run | issue |
+| Logged finding | `review_runs.findings`, `_tag = Logged` | Adversarial review | N per Review run, impact 80 or below | follow-up |
+| Status line | first visible line of every comment | Controller | One per comment | none |
+| Stuck | canonical comment Status line | Controller | One comment state | Stuck |
 | Auto merge | `harlan-agent-auto-merge` label | GitHub | One per pull request | auto-merge |
 | Publication | `review_publications` | Journal | N to 1 Review run | automated review |
 | Approval | `pull_request_approvals` or `tasks.kind = issue_work` | Controller | N to 1 Revision | approval |
@@ -115,7 +118,8 @@ knows GitHub already knows them.
 
 Collisions
 
-- "issue" means a GitHub Item alone. "Review issue" means a Review finding in review copy.
+- "issue" means a GitHub Item alone. "Review issue" means a Review finding in review copy. A comment that lists issues to fix before merge means Open Review findings.
+- "Stuck" names one canonical comment state alone. Dashboard copy keeps Action required, and an Agent blocker stays an Agent blocker.
 - "queue" unqualified means this service's dashboard Queue. GitHub's feature is always "merge queue".
 - "Auto" names a Selection mode. GitHub's merge feature is always written "auto-merge", hyphenated.
 - "Automatic" names an Agent selection state and is always written in full. "Auto" alone always means the Selection mode. The two decide different things: `Auto` decides which pull requests to act on, `Automatic` decides which Agent provider answers.
@@ -694,6 +698,8 @@ Use `READY`, `PENDING`, or `BLOCKED`. Only `READY` shows confidence.
 
 `PENDING` and `BLOCKED` are GitHub's own words: `PENDING` is a check status and a review state, `blocked` is a mergeable state. Do not use waiting, in progress, or failed.
 
+Comments write the outcome in sentence case on the Status line: Ready, Pending, Blocked. Labels, the Journal, and the dashboard keep the capitals.
+
 ### Running label
 
 One GitHub label, `harlan-agent-running`, that says an Agent holds a Running Task on this issue or pull request now.
@@ -711,6 +717,30 @@ One material issue found during review.
 Use `Fixed` after repair. Use `Open` with the next action while unresolved.
 
 GitHub's `annotation` is anchored to a file and line on a check run. A Review finding is prose, so it is not an annotation. Never use annotation for it.
+
+### Logged finding
+
+One Review finding at impact 80 or below. It never blocks Review or starts automatic Repair.
+
+Comments call it a follow-up. They fold follow-ups under the verdict and list each one with its score, title, location, proof, and fix. A follow-up below 40/100 is counted and never listed or threaded.
+
+Use follow-up in comments and Logged finding in code and the Journal. Do not use nit, suggestion, or optional follow-up.
+
+### Status line
+
+The first visible line of every comment this service writes: a dot, the outcome in bold, and one fact only that comment knows.
+
+The dot says who holds the work. ⚪ means the agent has it. 🟢 means READY. 🟠 means Harlan or the author must act. 🟣 means merged or published.
+
+A notification preview shows this line alone. It never restates what GitHub's merge box shows, such as CI status or a merge conflict, unless a failed gate is the only reason for Blocked.
+
+### Stuck
+
+The canonical comment state for a Task that will not run again until Harlan acts.
+
+A Review whose attempts are spent, a Review that stopped on a provider failure, and a Review that waits on a Baseline repair all read Stuck. The line after it names the cause. The raw provider error stays in the Dashboard.
+
+Use Stuck on the Status line alone. Dashboard copy says Action required, and an Agent blocker keeps its own name.
 
 ### Pull request diagram
 
@@ -785,6 +815,8 @@ An intentional shutdown never creates an Incident. Reaching a Reserve never crea
 `Incident` is GitHub's own word on their status page, where it carries the same meaning.
 
 Use instead of error, problem, outage, or alert in dashboard copy.
+
+A `private_detail` Incident, shown as Private detail, records that the publish boundary removed a local path, a private host, or a raw provider error from a public body before the write.
 
 ### Recovery
 
