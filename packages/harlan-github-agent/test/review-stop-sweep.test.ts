@@ -202,11 +202,12 @@ describe('stoppedReviewComment', () => {
     expect(body).not.toContain('REPAIR')
   })
 
-  it('keeps the reviewed code link after merge', () => {
+  it('keeps each unfixed issue\'s code link and fix after merge', () => {
     const body = stoppedReviewComment({
       ...stopped,
       findings: [{
         _tag: 'Open',
+        impact: 82,
         summary: 'The queue can drop events.',
         nextAction: 'Preserve pending events.',
         details: {
@@ -215,10 +216,24 @@ describe('stoppedReviewComment', () => {
           proof: 'The queue resets before sending.',
           regressionTest: 'Send two events.',
         },
-      }],
+      }, {
+        _tag: 'Open',
+        summary: 'The draft path is unused.',
+        nextAction: 'Remove it.',
+        resolution: 'Dismissal',
+      }, followUp],
     }, '2026-08-15T04:00:00.000Z', { _tag: 'Merged' })
 
-    expect(body).toContain('🟣 **Merged** · 1 issue not fixed\n\n- The queue can drop events. · [`queue.ts:42`](https://github.com/harlan-zw/example/blob/abc123/src/queue.ts#L42)')
+    expect(body).toContain([
+      '🟣 **Merged** · 3 issues not fixed',
+      '',
+      '1. **The queue can drop events.** `82/100`  ',
+      '   [`queue.ts:42`](https://github.com/harlan-zw/example/blob/abc123/src/queue.ts#L42) · Fix: Preserve pending events.',
+      '2. **The draft path is unused.**  ',
+      '   Dismissal recommended.',
+      '',
+      '- `40` The fallback needs more detail.',
+    ].join('\n'))
   })
 })
 

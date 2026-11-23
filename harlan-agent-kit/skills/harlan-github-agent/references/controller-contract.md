@@ -292,6 +292,7 @@ Treat GitHub as the durable workflow record. Record each Review gate and the exa
 Treat the latest confirmed write to the canonical comment as its current state. This applies across every controller Publication path.
 
 If GitHub merges a pull request, publish Merged with the issues and follow-ups not fixed, or one line when none remain. The verdict it replaces offers commands a merged pull request refuses.
+List each unfixed issue as the verdict did, with its location and its fix.
 Say the merge was reviewed only when a Review verdict answered the merged commit. If a later commit merged, name the reviewed commit instead.
 If GitHub closes a pull request unmerged, leave a verdict standing without its commands, and replace any other state with Closed.
 Settle the stopped Task's Review check run with the standing verdict only when that verdict names the Task's head commit. Otherwise settle it as Closed, which concludes neutral.

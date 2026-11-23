@@ -6,7 +6,7 @@ import type { RepositoryMapping } from './types.ts'
 import { publicFailureCause, REVIEW_NOT_READY_REASON, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { err, ok } from './result.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, canonicalCommentHead, canonicalCommentOutcome, commitLink, findingLocation, fixedRows, followUpRow, followUpSection, issueRows, listedFollowUp, plural, statusLine, withoutCommands, workflowStateLine } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, canonicalCommentHead, canonicalCommentOutcome, commitLink, fixedRows, followUpRow, followUpSection, issueRows, listedFollowUp, plural, statusLine, withoutCommands, workflowStateLine } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type StoppedReviewOutcome
@@ -188,14 +188,13 @@ export function stoppedReviewComment(
     const left = review.headSha.toLowerCase() === mergedHead
       ? `${counted} not fixed`
       : `${counted} from the review of ${commitLink(review.repository, review.headSha)}`
+    // An unfixed issue keeps its fix, as the verdict listed it. After merge this
+    // comment is the only place a finding outside the diff shows one.
     const rows = [
-      ...open.map((finding) => {
-        const location = findingLocation(review.repository, review.headSha, finding)
-        return `- ${finding.impact === undefined ? '' : `\`${finding.impact}\` `}${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}`
-      }),
-      ...followUps.map(finding => followUpRow(review.repository, review.headSha, finding)),
+      ...(open.length === 0 ? [] : [...issueRows(review.repository, review.headSha, open), '']),
+      ...(followUps.length === 0 ? [] : [...followUps.map(finding => followUpRow(review.repository, review.headSha, finding)), '']),
     ]
-    return [...head, statusLine('done', 'Merged', left), '', ...rows, '', footer].join('\n')
+    return [...head, statusLine('done', 'Merged', left), '', ...rows, footer].join('\n')
   }
   const { detail, rest } = causeDetail(review)
   if (review.taskKind === 'review_fix') {
