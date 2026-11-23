@@ -1,3 +1,5 @@
+import { cleanLine } from './text.ts'
+
 export const ISSUE_TRIAGE_STATES = [
   'READY_TO_IMPLEMENT',
   'READY_TO_SPEC',
@@ -25,12 +27,21 @@ interface IssueTriageEvidence {
   duplicateIssue: IssueTriageReference | null
   /** Pull requests that explain current or past work on this issue. */
   relatedPullRequests: readonly IssueTriageReference[]
+  /**
+   * For Needs info, the exact items the person who opened the issue must add,
+   * one noun phrase each. Empty for every other route, and for evidence
+   * stored before the list existed.
+   */
+  ask: readonly string[]
 }
 
 /** One routing decision, with the evidence the next Agent receives. */
 export type IssueTriageResult = {
   [State in IssueTriageState]: IssueTriageEvidence & { _tag: State }
 }[IssueTriageState]
+
+/** A Needs info comment asks for a short list. A longer one reads as a form. */
+const MAXIMUM_ASKED_ITEMS = 8
 
 export function isIssueTriageState(value: unknown): value is IssueTriageState {
   return typeof value === 'string' && ISSUE_TRIAGE_STATES.includes(value as IssueTriageState)
@@ -105,6 +116,11 @@ export function parseStoredIssueTriage(evidence: string | null | undefined): Iss
       return null
     relatedPullRequests.push(reference)
   }
+  // Evidence stored before the list existed carries none.
+  const rawAsk = record.ask === undefined ? [] : record.ask
+  if (!Array.isArray(rawAsk) || rawAsk.some(item => typeof item !== 'string'))
+    return null
+  const ask = (rawAsk as string[]).map(item => cleanLine(item)).filter(item => item !== '').slice(0, MAXIMUM_ASKED_ITEMS)
   return {
     _tag: record._tag,
     difficulty: record.difficulty,
@@ -116,5 +132,6 @@ export function parseStoredIssueTriage(evidence: string | null | undefined): Iss
     relatedIssues,
     duplicateIssue,
     relatedPullRequests,
+    ask,
   }
 }

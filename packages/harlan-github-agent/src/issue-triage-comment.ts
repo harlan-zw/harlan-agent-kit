@@ -42,7 +42,8 @@ export function issueTriageComment(input: IssueTriageResult): string {
       '',
       'Add these to move it forward:',
       '',
-      input.nextAction,
+      // Evidence stored before the list existed asks with its next action.
+      ...(input.ask.length === 0 ? [input.nextAction] : input.ask.map(item => `- ${item}`)),
       '',
       footer,
     ].join('\n')

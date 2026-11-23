@@ -60,6 +60,8 @@ function gateRefresh(overrides: Partial<ReviewGateRefresh> = {}): ReviewGateRefr
     findings: [],
     confidence: 88,
     mergeRisk: null,
+    checked: null,
+    notChecked: null,
     gatesUpdatedAt: '2026-08-27T08:20:00.000Z',
     commentId: 42,
     publishedBody: '### 🤖 PENDING',
@@ -903,6 +905,8 @@ describe('refreshReviewGates against the journal store', () => {
       gates,
       confidence: 88,
       findings: [],
+      checked: 'the parser against split chunks',
+      notChecked: 'Windows line endings',
     })).toEqual({ _tag: 'Inserted', reviewRunId: 'run-pending' })
     expect(store.recordReviewPublication({
       id: 'publication-pending',
@@ -968,6 +972,9 @@ describe('refreshReviewGates against the journal store', () => {
       desiredOutcome: 'READY',
       body: expect.stringContaining('🟢 **Ready**'),
     })
+    // The restated comment keeps what the Review checked, read back from the Journal.
+    expect(publication?.body).toContain('Checked the parser against split chunks. Not checked: Windows line endings.')
+    expect(store.listReviewRuns('harlan-zw/example', 24).every(run => run.checked === 'the parser against split chunks')).toBe(true)
   })
 
   it.each(['Dismissal', 'Pause', 'writes', 'policy'] as const)('does not stamp an unchanged Review label when %s revokes authority during the snapshot read', async (change) => {

@@ -92,7 +92,7 @@ function harness(input: {
   const options: ReviewWorkerOptions = {
     runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(
       typeof input.response === 'object' && input.response !== null
-        ? { premise: soundPremise, ...input.response }
+        ? { premise: soundPremise, checked: 'the changed files', notChecked: null, ...input.response }
         : input.response,
     ), provider)),
     github: {
@@ -783,6 +783,8 @@ describe('review resilience', () => {
     const test = harness({
       pullRequest,
       response: {
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'wrong', reason: 'Safe repair would restore the architecture this pull request removes.' },
         findings: [{ ...materialFinding(), regressionTest: null }],
         confidence: 90,

@@ -124,6 +124,8 @@ export async function refreshReviewGates(
       repository: review.repository,
       commands,
       reviewedAt: review.completedAt,
+      checked: review.checked,
+      notChecked: review.notChecked,
       history: options.store.priorReviewHistory(review.revisionId),
     })
     // A red default branch holds this review PENDING until someone repairs

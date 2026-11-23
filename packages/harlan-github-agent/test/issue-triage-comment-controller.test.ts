@@ -32,6 +32,7 @@ const readyResult = {
   relatedIssues: [],
   duplicateIssue: null,
   relatedPullRequests: [],
+  ask: [],
 } as const
 
 function controllerWithSnapshot(snapshot: IssueTriageSnapshot) {
@@ -150,6 +151,7 @@ describe('issue triage publication', () => {
       relatedIssues: [],
       duplicateIssue: null,
       relatedPullRequests: [],
+      ask: [],
     }, new AbortController().signal)
 
     expect(result).toEqual(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/issues/12#issuecomment-42' }))

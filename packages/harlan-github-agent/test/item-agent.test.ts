@@ -74,6 +74,8 @@ describe('subject Workers', () => {
                   pending.push(object.items)
               }
               yield* stubProvider(turnEvents({
+                checked: 'the changed files',
+                notChecked: null,
                 premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
                 findings: [],
                 confidence: 96,
@@ -187,6 +189,8 @@ describe('subject Workers', () => {
     expect(capture.requests).toEqual([expect.objectContaining({ model: 'gpt-6.2-sol', reasoningEffort: 'medium' })])
     expect(capture.requests[0]?.prompt).toContain('Never run a repository-wide test suite, typecheck, build, dev server, site crawl, or Lighthouse audit')
     expect(capture.requests[0]?.prompt).toContain('Read only the changed hunks plus the symbols they call.')
+    expect(capture.requests[0]?.prompt).toContain('Return checked: one clause that names what this Review exercised.')
+    expect(capture.requests[0]?.prompt).toContain('Never prefix it with "Optional follow-up"')
     expect(capture.requests[0]?.prompt).toContain('Visually inspect every image embedded in the pull request description')
     expect(capture.requests[0]?.prompt).toContain('stays inaccessible after authenticated retrieval')
     expect(capture.requests[0]?.media).toEqual([image])
@@ -309,6 +313,8 @@ describe('subject Workers', () => {
     let worktreeVerified = false
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
         findings: [{
           identity: 'buffered-byte-loss',
@@ -446,6 +452,8 @@ describe('subject Workers', () => {
     let queued = false
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
         findings: [{
           identity: 'buffered-byte-loss',
@@ -558,6 +566,8 @@ describe('subject Workers', () => {
     let attempt: RecordReviewRunInput | undefined
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: {
           verdict: 'wrong',
           reason: 'Safe worktree cleanup requires controller state shared across processes and restarts.',
@@ -668,6 +678,8 @@ describe('subject Workers', () => {
     let askedForHeadSha: string | undefined
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The parser change remains valid after a focused fix.' },
         findings: [{
           identity: 'buffered-byte-loss',
@@ -888,6 +900,8 @@ describe('subject Workers', () => {
     let published = ''
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The change can remain intact.' },
         findings: [],
         confidence: 91,
@@ -981,6 +995,8 @@ describe('subject Workers', () => {
     let published = ''
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The change can remain intact.' },
         findings: [],
         confidence: 90,
@@ -1074,6 +1090,8 @@ describe('subject Workers', () => {
     let published = ''
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The change can remain intact.' },
         findings: [],
         confidence: 88,
@@ -1270,6 +1288,7 @@ describe('subject Workers', () => {
           relatedIssues: [],
           duplicateIssue: null,
           relatedPullRequests: [],
+          ask: [],
         }),
         usage: { _tag: 'Unavailable' },
       },
@@ -1300,6 +1319,7 @@ describe('subject Workers', () => {
       relatedIssues: [],
       duplicateIssue: null,
       relatedPullRequests: [],
+      ask: [],
     })
   })
 })

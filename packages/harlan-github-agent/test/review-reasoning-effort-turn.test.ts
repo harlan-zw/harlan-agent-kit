@@ -23,6 +23,8 @@ async function reviewWith(files: PullRequestFile[], profile: AgentProfile = CODE
   const recorded: Array<string | null | undefined> = []
   const worker = createReviewWorker({
     runtime: agentRuntime(profile, stubProvider(turnEvents({
+      checked: 'the changed files',
+      notChecked: null,
       premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
       findings: [],
       confidence: 96,

@@ -504,18 +504,6 @@ export type ReviewGatePublication
   = | { _tag: 'Unpublished' }
     | { _tag: 'Published', publicationId: string }
 
-/**
- * What one Review exercised, and the largest part it did not.
- *
- * The Agent names both, because only the Review knows them. They read as
- * `Checked … Not checked: …` on the canonical comment.
- */
-export interface ReviewCoverage {
-  checked: string
-  /** Null when the Review skipped nothing. */
-  notChecked: string | null
-}
-
 export interface ReviewRun {
   gatePublication: ReviewGatePublication
   /** The target branch whose diff this Review covered. */
@@ -555,6 +543,16 @@ export interface ReviewRun {
    * existed, and every provider that names no effort.
    */
   reasoningEffort?: CodexReasoningEffort | null
+  /**
+   * What this Review exercised, in one clause the Agent wrote.
+   *
+   * Only the Review knows it, so the canonical comment reads
+   * `Checked … Not checked: …`. Absent or null covers every run recorded
+   * before the field existed, and the comment falls back to a plain line.
+   */
+  checked?: string | null
+  /** The largest part this Review did not exercise. Null when it skipped nothing. */
+  notChecked?: string | null
 }
 
 /**

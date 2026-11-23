@@ -636,6 +636,9 @@ export interface ReviewGateRefresh {
    * line. Null covers every run recorded before this existed.
    */
   mergeRisk: MergeRiskRecord | null
+  /** What the Review exercised, so a restated comment keeps its Checked line. Null before the field existed. */
+  checked: string | null
+  notChecked: string | null
   commentId: number
   /** What the canonical comment holds now, so the edit can compare and swap. */
   publishedBody: string
@@ -662,6 +665,8 @@ interface ReviewGateRefreshRow {
   findings: string
   confidence: number | null
   merge_risk: string | null
+  checked: string | null
+  not_checked: string | null
   github_comment_id: number
   published_body: string
 }
@@ -1526,6 +1531,9 @@ interface ReviewRunRow {
   feedback_updated_at: string | null
   merge_risk: string | null
   reasoning_effort: string | null
+  /** Absent from the dashboard selects, which never render the comment. */
+  checked?: string | null
+  not_checked?: string | null
 }
 
 interface DashboardReviewRunRow extends ReviewRunRow {
@@ -2951,6 +2959,9 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
     mergeRisk: row.merge_risk === null || row.merge_risk === undefined ? null : JSON.parse(row.merge_risk) as MergeRiskRecord,
     // Null covers every run recorded before the Reasoning effort band existed.
     reasoningEffort: reasoningEffortFromRow(row.reasoning_effort),
+    // Null covers every run recorded before the Review named its coverage.
+    checked: row.checked ?? null,
+    notChecked: row.not_checked ?? null,
   }
 }
 
@@ -7581,7 +7592,17 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${addRepairStatus} PRAGMA user_version = 107;`)
     version = 107
   }
-  if (version === 107)
+  if (version === 107) {
+    const target = 108
+    // A rewind replays this against a journal that already carries the
+    // columns, and SQLite has no ADD COLUMN IF NOT EXISTS, so ask before adding.
+    const columns = database.prepare('PRAGMA table_info(review_runs)').all() as Array<{ name: string }>
+    const addChecked = columns.some(column => column.name === 'checked') ? '' : 'ALTER TABLE review_runs ADD COLUMN checked TEXT NULL;'
+    const addNotChecked = columns.some(column => column.name === 'not_checked') ? '' : 'ALTER TABLE review_runs ADD COLUMN not_checked TEXT NULL;'
+    applyMigration(database, `${addChecked} ${addNotChecked} PRAGMA user_version = ${target};`)
+    version = target
+  }
+  if (version === 108)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -9798,8 +9819,9 @@ export function openJournalStore(
         INSERT INTO review_runs (
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
-          confidence, findings, content_digest, usage, base_ref, merge_risk, reasoning_effort
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          confidence, findings, content_digest, usage, base_ref, merge_risk, reasoning_effort,
+          checked, not_checked
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -9821,6 +9843,8 @@ export function openJournalStore(
         pullRequest.baseRef ?? null,
         input.mergeRisk === undefined || input.mergeRisk === null ? null : JSON.stringify(input.mergeRisk),
         input.reasoningEffort ?? null,
+        input.checked ?? null,
+        input.notChecked ?? null,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -9937,9 +9961,9 @@ export function openJournalStore(
       // may itself be a settlement, because CI and mergeability can move more
       // than once without a new head commit. The settlement refreshes the
       // controller gates and never re-judges the diff, so it inherits the
-      // parent's Merge risk verdict verbatim.
+      // parent's Merge risk verdict and coverage verbatim.
       const parent = database.prepare(`
-        SELECT merge_risk FROM review_runs
+        SELECT merge_risk, checked, not_checked FROM review_runs
         WHERE id = ? AND subject_id = ? AND revision_id = ? AND head_sha = ?
           AND base_ref = ?
           AND NOT EXISTS (
@@ -9952,7 +9976,7 @@ export function openJournalStore(
         revisionId,
         input.headSha,
         pullRequest.baseRef ?? null,
-      ) as { merge_risk: string | null } | undefined
+      ) as { merge_risk: string | null, checked: string | null, not_checked: string | null } | undefined
       if (parent === undefined) {
         const orphaned = database.prepare('SELECT 1 FROM review_runs WHERE id = ?').get(input.supersedesReviewRunId)
         database.exec('COMMIT')
@@ -9965,8 +9989,8 @@ export function openJournalStore(
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
           confidence, findings, content_digest, usage, supersedes_review_run_id, base_ref,
-          merge_risk, reasoning_effort
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          merge_risk, reasoning_effort, checked, not_checked
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -9989,6 +10013,8 @@ export function openJournalStore(
         pullRequest.baseRef ?? null,
         parent.merge_risk,
         input.reasoningEffort ?? null,
+        parent.checked,
+        parent.not_checked,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -10259,7 +10285,9 @@ export function openJournalStore(
         agent_feedback.reason AS feedback_reason,
         agent_feedback.updated_at AS feedback_updated_at,
         review_runs.merge_risk,
-        review_runs.reasoning_effort
+        review_runs.reasoning_effort,
+        review_runs.checked,
+        review_runs.not_checked
       FROM review_runs
       JOIN subjects ON subjects.id = review_runs.subject_id
       JOIN revisions ON revisions.id = review_runs.revision_id
@@ -15834,6 +15862,8 @@ export function openJournalStore(
       ranked.findings,
       COALESCE(projection.confidence, ranked.confidence) AS confidence,
       ranked.merge_risk,
+      ranked.checked,
+      ranked.not_checked,
       published.github_comment_id,
       CASE WHEN finding_comment.source_body = published.body
         AND finding_comment.comment_id = published.github_comment_id
@@ -15943,6 +15973,8 @@ export function openJournalStore(
     findings: JSON.parse(row.findings) as ReviewFinding[],
     confidence: row.confidence ?? undefined,
     mergeRisk: row.merge_risk === null ? null : JSON.parse(row.merge_risk) as MergeRiskRecord,
+    checked: row.checked,
+    notChecked: row.not_checked,
     commentId: row.github_comment_id,
     publishedBody: row.published_body,
   }))

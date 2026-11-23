@@ -24,7 +24,6 @@ import type {
   GitHubPullRequestItem,
   MergeRiskRecord,
   RepositoryMapping,
-  ReviewCoverage,
   ReviewFinding,
   ReviewGates,
   ReviewGateState,
@@ -57,6 +56,10 @@ import { cleanLine, cleanText } from './text.ts'
 import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
 
 interface ReviewResponse {
+  /** What the Review exercised, as one clause. The canonical comment reads `Checked …`. */
+  checked: string
+  /** The largest part the Review did not exercise, or null when it skipped nothing. */
+  notChecked: string | null
   confidence: number
   findings: Array<{
     identity: string
@@ -160,20 +163,26 @@ Return one evidence-based finding for every material consequence of a wrong prem
 Return every material defect.
 Score each finding's impact from 0 to 100 if the pull request merges unfixed. Weigh user harm, likelihood, blast radius, and reversibility.
 An impact of 81 to 100 calls for Repair or Dismissal. An impact of 0 to 80 is logged without Repair.
-For a Logged finding, describe one optional change in nextAction. Start with the action itself.
-Optional follow-ups never block Review or start automatic Repair.
+A Logged finding never blocks Review or starts automatic Repair.
 Use 81 to 90 for common broken paths or wrong results without a practical workaround.
 Use 91 to 100 for credible data loss, security bypass, or broad outage.
 Use 0 to 80 for limited, recoverable defects.
 Score independently of the effort to fix it. Do not inflate a score to trigger Repair.
 Each finding needs impact, stable identity, exact path and line, proof, summary, and next action. Every field is required, including summary.
-Write the summary as a short title that names the concrete problem. In proof, explain when it happens and what breaks. Write the next action as a direct recommendation to the maintainer.
+Write the summary as the consequence, in 10 words or fewer, in the present tense. A reader decides from the title alone whether to open the finding.
+Write the proof as the condition, then the effect, in one to three sentences. Name the input that triggers it. Use no hedge such as "might" without a stated condition.
+Write nextAction as one imperative sentence that starts with the verb. Never prefix it with "Optional follow-up" or "As an optional follow-up"; the comment adds the label.
+Never restate CI status, check counts, merge conflicts, or review approvals in any field. GitHub's merge box already shows them.
+Never describe your own process, such as "I reviewed" or "I ran". State the result.
 Example finding: {"identity":"buffered-byte-loss","impact":92,"path":"src/parser.ts","line":42,"proof":"When a UTF-8 sequence spans two chunks, the parser loses its first byte. That corrupts the decoded text.","regressionTest":"Split one sequence across two chunks and assert the original string.","summary":"Split UTF-8 sequences lose their first byte","nextAction":"Keep the buffered bytes until the next chunk arrives."}
 Keep the identity stable across line changes.
 For a sound premise, describe one test that fails before Repair and passes after it.
 Return null for regressionTest only when no test can cover the finding, such as a stale comment or documentation.
 For a wrong premise, return null for every regressionTest. The controller will recommend Dismissal.
 Return confidence as an integer from 0 to 100 when every gate you report passes.
+Return checked: one clause that names what this Review exercised. Name inputs, cases, or files. Example: "Timeline reads against overlapping, dense and daylight-saving windows".
+Return notChecked: one clause that names the largest gap, such as "the dashboard in a browser". Return null only when nothing was skipped.
+Never write "looks good", "LGTM", or a score explanation in either field.
 
 Also return mergeRisk: what a wrong merge of this pull request would cost, if nobody read it first.
 This routes the merge only. A person still reads every pull request this does not contain, and Review runs whatever you answer.
@@ -230,7 +239,10 @@ Choose exactly one route:
 - WAIT_TO_IMPLEMENT: duplicate or active work, an unresolved dependency, a platform limit, or poor benefit against maintenance cost makes work premature.
 Difficulty alone never means WAIT_TO_IMPLEMENT. Use READY_TO_SPEC for worthwhile complex work.
 For NEEDS_INFO, make nextAction the smallest concrete questions that unblock triage.
+For NEEDS_INFO, also return ask: the exact items that are missing, one noun phrase each, such as "The ogImage config block". Return [] for every other route.
 For every other route, make nextAction the exact next Agent or human action.
+Write summary to the person who opened the issue, in two sentences or fewer. Write nextAction to the implementing Agent; the comment folds it.
+Never restate CI status or merge state. Never describe your own process; state the result.
 Estimate difficulty and impact from 1 to 5.
 List relatedIssues: open issues in this repository that share a cause and need one fix. Check related open issues once, within the repository's investigation scope.
 Sharing a file alone does not mean issues need one fix. Return an empty array when none are known.
@@ -324,8 +336,10 @@ export function reviewFindingFingerprint(identity: string): string {
 const reviewSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['premise', 'findings', 'confidence', 'mergeRisk'],
+  required: ['premise', 'findings', 'confidence', 'mergeRisk', 'checked', 'notChecked'],
   properties: {
+    checked: { type: 'string' },
+    notChecked: { type: ['string', 'null'] },
     premise: {
       type: 'object',
       additionalProperties: false,
@@ -369,7 +383,7 @@ const reviewSchema = {
 const issueTriageSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['_tag', 'difficulty', 'impact', 'hasReproduction', 'needsCodebaseReview', 'summary', 'nextAction', 'relatedIssues', 'duplicateIssue', 'relatedPullRequests'],
+  required: ['_tag', 'difficulty', 'impact', 'hasReproduction', 'needsCodebaseReview', 'summary', 'nextAction', 'relatedIssues', 'duplicateIssue', 'relatedPullRequests', 'ask'],
   properties: {
     _tag: { type: 'string', enum: ['READY_TO_IMPLEMENT', 'READY_TO_SPEC', 'NEEDS_INFO', 'WAIT_TO_IMPLEMENT'] },
     difficulty: { type: 'integer', minimum: 1, maximum: 5 },
@@ -390,6 +404,7 @@ const issueTriageSchema = {
       maxItems: 3,
       items: { type: 'object', additionalProperties: false, required: ['number', 'reason'], properties: { number: { type: 'integer', minimum: 1 }, reason: { type: 'string' } } },
     },
+    ask: { type: 'array', maxItems: 8, items: { type: 'string' } },
   },
 }
 
@@ -539,7 +554,7 @@ function findingViolation(finding: unknown, index: number): string | undefined {
  * the agent the same answer on every retry, so the two must never disagree.
  */
 function reviewViolation(value: Record<string, unknown>): string | undefined {
-  const allowed = new Set(['premise', 'findings', 'confidence', 'mergeRisk'])
+  const allowed = new Set(['premise', 'findings', 'confidence', 'mergeRisk', 'checked', 'notChecked'])
   const extra = Object.keys(value).find(key => !allowed.has(key))
   if (extra !== undefined)
     return `${extra} is not a schema field.`
@@ -560,6 +575,10 @@ function reviewViolation(value: Record<string, unknown>): string | undefined {
   const confidence = value.confidence
   if (!(typeof confidence === 'number' && Number.isInteger(confidence) && confidence >= 0 && confidence <= 100))
     return 'confidence must be an integer from 0 to 100.'
+  if (typeof value.checked !== 'string' || cleanLine(value.checked).length === 0)
+    return 'checked must be a non-empty string that names what the Review exercised.'
+  if (!(value.notChecked === null || (typeof value.notChecked === 'string' && cleanLine(value.notChecked).length > 0)))
+    return 'notChecked must be null or a non-empty string that names the largest gap.'
   if (Object.hasOwn(value, 'mergeRisk')) {
     const mergeRisk = value.mergeRisk as Record<string, unknown> | null | undefined
     if (typeof mergeRisk !== 'object' || mergeRisk === null)
@@ -598,6 +617,8 @@ export function parseReviewResponse(text: string): Promise<Result<ReviewResponse
         premise: { verdict: response.premise.verdict, reason: cleanLine(response.premise.reason) },
         ...(mergeRisk === undefined ? {} : { mergeRisk: { verdict: mergeRisk.verdict, reason: cleanLine(mergeRisk.reason) } }),
         confidence: response.confidence,
+        checked: cleanLine(response.checked),
+        notChecked: response.notChecked === null ? null : cleanLine(response.notChecked),
         findings: response.findings.map(finding => ({
           identity: normalizedFindingIdentity(finding.identity),
           impact: finding.impact,
@@ -1108,8 +1129,10 @@ export interface TerminalCommentInput {
   commands?: readonly PullRequestCommand[]
   /** When the Review run completed. A stored time, so every re-render writes the same body. */
   reviewedAt?: string | undefined
-  /** What the Review exercised and its largest gap. Null for a run recorded before the fields existed. */
-  coverage?: ReviewCoverage | null | undefined
+  /** What the Review exercised. Null for a run recorded before the field existed. */
+  checked?: string | null | undefined
+  /** The largest part the Review did not exercise. */
+  notChecked?: string | null | undefined
   /** The Review of the previous head, for the Repair delta. */
   history?: QueuedReviewHistory | undefined
 }
@@ -1119,14 +1142,14 @@ function coverageClause(text: string, prefix: RegExp): string {
   return cleanLine(text).replace(prefix, '').replace(/[.;,\s]+$/, '')
 }
 
-/** `Checked … Not checked: …`, the line only the Review knows. Empty for a run without the fields. */
-export function reviewCoverageLine(coverage: ReviewCoverage | null | undefined): string | null {
-  if (coverage === null || coverage === undefined)
+/** `Checked … Not checked: …`, the line only the Review knows. Null for a run without the field. */
+export function reviewCoverageLine(checkedText: string | null | undefined, notCheckedText: string | null | undefined): string | null {
+  if (checkedText === null || checkedText === undefined)
     return null
-  const checked = coverageClause(coverage.checked, /^(?:i\s+)?checked:?\s+/i)
+  const checked = coverageClause(checkedText, /^(?:i\s+)?checked:?\s+/i)
   if (checked === '')
     return null
-  const notChecked = coverage.notChecked === null ? '' : coverageClause(coverage.notChecked, /^not checked:?\s+/i)
+  const notChecked = notCheckedText === null || notCheckedText === undefined ? '' : coverageClause(notCheckedText, /^not checked:?\s+/i)
   return `Checked ${checked}.${notChecked === '' ? '' : ` Not checked: ${notChecked}.`}`
 }
 
@@ -1190,7 +1213,7 @@ export function terminalComment(input: TerminalCommentInput): string {
   const delta = result === 'READY' && history?._tag === 'AfterRepair' && history.findings > 0
     ? `Repair fixed ${plural(history.findings, 'issue')} from \`${history.priorHeadSha.slice(0, 7)}\`.`
     : null
-  const coverage = reviewCoverageLine(input.coverage)
+  const coverage = reviewCoverageLine(input.checked, input.notChecked)
   const reviewLine = [delta, coverage ?? (blocking.length === 0 ? `No issues found in ${commitLink(repository, headSha)}.` : null)]
     .filter((line): line is string => line !== null)
     .join(' ')
@@ -1538,6 +1561,8 @@ async function projectReviewRun(
     repository: task.repository,
     commands,
     reviewedAt: run.completedAt,
+    checked: run.checked,
+    notChecked: run.notChecked,
     history: options.store.priorReviewHistory(task.revisionId),
   })
   const durablePublication = options.status.stageTerminal !== undefined
@@ -1758,6 +1783,8 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         confidence: response.confidence,
         findings,
         mergeRisk,
+        checked: response.checked,
+        notChecked: response.notChecked,
       })
       if (recorded._tag === 'Rejected')
         return err(`The review result could not be saved: ${recorded.reason._tag}.`)
@@ -1803,6 +1830,8 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         outcome: storedOutcome,
         findings,
         mergeRisk,
+        checked: response.checked,
+        notChecked: response.notChecked,
         feedback: null,
         publications: [],
       }, repairPreflight(task.repositoryMapping, frozen.value, await options.preflightRepair(task.repository, signal), repairRounds(options, frozen.value)), signal)

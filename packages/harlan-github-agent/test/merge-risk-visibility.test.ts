@@ -97,6 +97,8 @@ describe('a fresh Review publishes its Merge risk verdict', () => {
     const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
         findings: [],
         confidence: 96,
@@ -192,6 +194,8 @@ describe('a fresh Review publishes its Merge risk verdict', () => {
     const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }
     const worker = createReviewWorker({
       runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the changed files',
+        notChecked: null,
         premise: { verdict: 'sound', reason: 'The change can be repaired without replacing its intent.' },
         findings: [],
         confidence: 96,

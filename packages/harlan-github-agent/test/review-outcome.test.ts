@@ -148,6 +148,19 @@ describe('reviewOutcome', () => {
     expect(sensitive).toContain('🟢 **Ready** · `95/100`\n\nMerge risk: **Sensitive**. A migration changes the journal.')
   })
 
+  it('says what the Review checked and did not, and falls back for a run recorded before the fields', () => {
+    const input = { headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], repository: 'harlan-zw/example' }
+    expect(terminalComment({ ...input, checked: 'Checked timeline reads against dense windows.', notChecked: 'the dashboard in a browser' }))
+      .toContain('🟢 **Ready** · \`95/100\`\n\nChecked timeline reads against dense windows. Not checked: the dashboard in a browser.')
+    expect(terminalComment({ ...input, checked: 'every changed file', notChecked: null })).toContain('Checked every changed file.\n')
+    expect(terminalComment({ ...input, checked: null, notChecked: null })).toContain('No issues found in [\`abc123\`](https://github.com/harlan-zw/example/commit/abc123).')
+  })
+
+  it('names what Repair fixed when this head answers a Repair', () => {
+    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], history: { _tag: 'AfterRepair', priorHeadSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8', priorOutcome: 'Blocked', findings: 2 } })
+    expect(body).toContain('Repair fixed 2 issues from \`eb2933b\`.')
+  })
+
   it('carries the stored review time, so a re-render writes the same body', () => {
     const input = { headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], reviewedAt: '2026-11-23T15:03:00.000Z' }
     expect(terminalComment(input)).toBe(terminalComment(input))
