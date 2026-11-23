@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { ok } from '../src/result.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -49,6 +49,7 @@ function setup() {
     return respond(new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json', 'etag': '"unchanged"' } }))
   })
   const source = createGitHubAgentSource({
+    publicText: testPublicText,
     actorLogin: () => 'harlan-github-agent[bot]',
     ownAppId: 98114,
     tokens: { getToken: async () => ok({ token: 'fixture', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => {} },

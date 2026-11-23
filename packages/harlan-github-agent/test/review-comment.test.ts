@@ -17,6 +17,16 @@ describe('automated review comments', () => {
     })).toBe(`Optional follow-up: ${action}`)
   })
 
+  it('shows a stored "As an optional follow-up," answer without doubling the prefix', () => {
+    expect(reviewFindingFollowUp({
+      _tag: 'Logged',
+      impact: 40,
+      summary: 'Spans can overlap.',
+      nextAction: 'As an optional follow-up, query for span overlap before inserting.',
+      details: { fingerprint: 'f'.repeat(64), identity: 'span-overlap', location: { path: 'src/spans.ts', line: 1 }, proof: 'Two spans share a range.' },
+    })).toBe('Optional follow-up: query for span overlap before inserting.')
+  })
+
   it('recognizes the current format from a trusted maintainer', () => {
     expect(priorAutomatedReviewForHead([{
       authorAssociation: 'OWNER',

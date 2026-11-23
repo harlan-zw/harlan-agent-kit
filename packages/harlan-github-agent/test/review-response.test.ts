@@ -45,6 +45,28 @@ describe('parseReviewResponse', () => {
     expect(result._tag === 'Err' && result.error).toContain(field)
   })
 
+  it.each([
+    'As an optional follow-up, query for span overlap before inserting.',
+    'Optional follow-up: query for span overlap before inserting.',
+    'Optional follow-up. As an optional follow-up, query for span overlap before inserting.',
+  ])('drops the optional follow-up prefix where the answer enters: %s', async (nextAction) => {
+    const result = await parseReviewResponse(review('sound', [finding({ impact: 40, nextAction })]))
+
+    expect(result._tag === 'Ok' && result.value.findings[0]?.nextAction).toBe('query for span overlap before inserting.')
+  })
+
+  it('keeps the casing of a command after the prefix', async () => {
+    const result = await parseReviewResponse(review('sound', [finding({ impact: 40, nextAction: 'As an optional follow-up, pnpm lint --fix the parser.' })]))
+
+    expect(result._tag === 'Ok' && result.value.findings[0]?.nextAction).toBe('pnpm lint --fix the parser.')
+  })
+
+  it('names nextAction when the prefix was the whole answer', async () => {
+    const result = await parseReviewResponse(review('sound', [finding({ impact: 40, nextAction: 'As an optional follow-up,' })]))
+
+    expect(result._tag === 'Err' && result.error).toContain('findings[0].nextAction')
+  })
+
   it('names the rule a wrong premise with no findings breaks', async () => {
     const result = await parseReviewResponse(review('wrong', []))
 

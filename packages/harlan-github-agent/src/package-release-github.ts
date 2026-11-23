@@ -3,12 +3,14 @@ import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubResponseCache } from './github-response-cache.ts'
 import type { PackageReleaseSource } from './package-release-controller.ts'
 import type { PackageReleaseOffer } from './package-release.ts'
+import type { PublicTextGuard } from './public-text.ts'
 import type { GitHubRepositoryAccess, RepositoryMapping, StoredReviewForHead } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { parse } from 'yaml'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { PACKAGE_RELEASE_MARKER, planPackageRelease, planPackageReleaseBeforeMerge, RELEASE_NOTE_DISCLOSURE, RELEASE_NOTE_MARKER, stableVersion } from './package-release.ts'
+import { publicBody } from './public-text.ts'
 
 interface Manifest { name?: string, version: string, private?: boolean, [key: string]: unknown }
 
@@ -63,6 +65,8 @@ export function createPackageReleaseSource(options: {
    * later cannot take over a release that must speak for Harlan.
    */
   actors: { repository: PackageReleaseActor, user: PackageReleaseActor }
+  /** Every body this source writes passes through it. */
+  publicText: PublicTextGuard
   assertLease: () => void
   review: (number: number, sha: string) => StoredReviewForHead
   template: () => Promise<string>
@@ -253,7 +257,9 @@ export function createPackageReleaseSource(options: {
     return planPackageRelease({ ...common, merged: true, sourceIncluded: pull.merge_commit_sha !== null && range.commits.some(commit => commit.sha === pull.merge_commit_sha), sourceSha: sha, mergeSha: pull.merge_commit_sha ?? '' })
   }
 
-  const comment: PackageReleaseSource['comment'] = async (number, body, commentId) => {
+  const comment: PackageReleaseSource['comment'] = async (number, bodyText, commentId) => {
+    const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: number, writer: 'release comment' }, bodyText)
+    const body = outgoing.text
     const api = await client('item_write')
     // Search on recovery too. A lost create response must not post another comment.
     // A deleted comment falls back to the search, so the pass recreates it instead of failing forever.
@@ -271,12 +277,14 @@ export function createPackageReleaseSource(options: {
       && comment.issue_url.endsWith(`/issues/${number}`) && comment.body?.startsWith(PACKAGE_RELEASE_MARKER))
     if (stored !== null && existing === undefined)
       throw new Error('The release comment no longer belongs to this Task.')
+    // The controller stores the body GitHub holds, because a tick on this
+    // comment must match it exactly. The draft text lives with the note.
     if (existing !== undefined) {
       if (existing.body !== body)
-        await api.rest.issues.updateComment({ ...scope, comment_id: existing.id, body })
-      return existing.id
+        await outgoing.send(sent => api.rest.issues.updateComment({ ...scope, comment_id: existing.id, body: sent }))
+      return { id: existing.id, body }
     }
-    return (await api.rest.issues.createComment({ ...scope, issue_number: number, body })).data.id
+    return { id: (await outgoing.send(sent => api.rest.issues.createComment({ ...scope, issue_number: number, body: sent }))).data.id, body }
   }
   return {
     inspect,
@@ -344,7 +352,13 @@ export function createPackageReleaseSource(options: {
       const body = `${template}\n\n${description}\n\n> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).`
       const writer = await client('item_write')
       const existing = (await writer.rest.pulls.list({ ...scope, state: 'all', head: `${owner}:${branch}`, base: repository.defaultBranch })).data
-      const pull = existing[0] ?? (await writer.rest.pulls.create({ ...scope, head: branch, base: repository.defaultBranch, title: `chore(release): prepare ${tag}`, body })).data
+      const pull = existing[0] ?? (await publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'pull request description' }, body).send(sent => writer.rest.pulls.create({
+        ...scope,
+        head: branch,
+        base: repository.defaultBranch,
+        title: `chore(release): prepare ${tag}`,
+        body: sent,
+      }), created => created.data.number)).data
       return { _tag: 'Prepared', pullRequestNumber: pull.number, headSha, branch }
     },
     async merge(record) {
@@ -430,9 +444,15 @@ export function createPackageReleaseSource(options: {
       // The marker makes a retry after a lost response add nothing.
       if (release.body?.includes(RELEASE_NOTE_MARKER))
         return release.html_url
+      const existing = release.body ?? ''
+      const suffix = `\n\n${existing}`
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'GitHub release' }, `${text}\n\n${RELEASE_NOTE_DISCLOSURE}\n${RELEASE_NOTE_MARKER}${suffix}`)
+      // Approval covers the draft only. Refuse a conflict before requesting write access.
+      // The controller settles 409 refusals and shows their reason for a maintainer decision.
+      if (!outgoing.text.endsWith(suffix))
+        throw Object.assign(new Error('Adding this draft would change existing release notes. A maintainer must decide how to handle those notes.'), { status: 409 })
       const writer = await client('contents_write')
-      const body = `${text}\n\n${RELEASE_NOTE_DISCLOSURE}\n${RELEASE_NOTE_MARKER}\n\n${release.body ?? ''}`.trimEnd()
-      await writer.rest.repos.updateRelease({ ...scope, release_id: release.id, body })
+      await outgoing.send(body => writer.rest.repos.updateRelease({ ...scope, release_id: release.id, body }))
       return release.html_url
     },
     async releaseNoteContext(record) {

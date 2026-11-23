@@ -2,10 +2,10 @@ import type { Octokit } from 'octokit'
 import { describe, expect, it } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { ok } from '../src/result.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 function source(client: Octokit) {
-  return createGitHubAgentSource({ actorLogin: () => 'harlan-github-agent[bot]', ownAppId: 98114, createClient: () => client, tokens: {
+  return createGitHubAgentSource({ publicText: testPublicText, actorLogin: () => 'harlan-github-agent[bot]', ownAppId: 98114, createClient: () => client, tokens: {
     getToken: async () => ok({ token: 'token', expiresAt: '2026-10-01T00:00:00.000Z' }),
     invalidate: () => undefined,
   } })

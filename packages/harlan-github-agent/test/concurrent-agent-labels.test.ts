@@ -1,7 +1,7 @@
 import type { Octokit } from 'octokit'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { err, ok } from '../src/result.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const fixture = vi.hoisted(() => {
   const labels = new Map<number, Set<string>>()
@@ -34,6 +34,7 @@ const { createGitHubAgentSource } = await import('../src/github-agent-source.ts'
 
 function source() {
   return createGitHubAgentSource({
+    publicText: testPublicText,
     actorLogin: () => 'harlan-agent[bot]',
     ownAppId: 98114,
     tokens: {

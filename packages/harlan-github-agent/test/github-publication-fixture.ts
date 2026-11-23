@@ -1,6 +1,7 @@
 import type { Octokit } from 'octokit'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { ok } from '../src/result.ts'
+import { testPublicText } from './fixtures.ts'
 
 /** A real source with recorded GitHub requests and changes during its awaited boundaries. */
 export function githubPublicationFixture(options: {
@@ -70,6 +71,7 @@ export function githubPublicationFixture(options: {
     } },
   } as unknown as Octokit
   const source = createGitHubAgentSource({
+    publicText: testPublicText,
     actorLogin: () => 'harlan-github-agent[bot]',
     ownAppId: 98114,
     createClient: () => octokit,

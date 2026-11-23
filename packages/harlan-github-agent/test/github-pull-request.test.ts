@@ -3,13 +3,14 @@ import { describe, expect, it } from 'vitest'
 import { BASELINE_REPAIR_LABEL_SPEC } from '../src/baseline-repair-state.ts'
 import { createGitHubPullRequestPublisher } from '../src/github.ts'
 import { err, ok } from '../src/result.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 describe('gitHub pull request publication', () => {
   it('opens a stacked pull request against another pull request head branch', async () => {
     let created: { base: string, head: string } | undefined
     let listed: { base: string } | undefined
     const publisher = createGitHubPullRequestPublisher({
+      publicText: testPublicText,
       createClient: () => ({
         rest: {
           pulls: {
@@ -46,6 +47,7 @@ describe('gitHub pull request publication', () => {
   it('opens issue work ready for review', async () => {
     let draft: boolean | undefined
     const publisher = createGitHubPullRequestPublisher({
+      publicText: testPublicText,
       createClient: () => ({
         rest: {
           pulls: {
@@ -80,6 +82,7 @@ describe('gitHub pull request publication', () => {
     const createdLabels: string[] = []
     const appliedLabels: string[] = []
     const publisher = createGitHubPullRequestPublisher({
+      publicText: testPublicText,
       createClient: () => ({
         rest: {
           issues: {
@@ -124,6 +127,7 @@ describe('gitHub pull request publication', () => {
     let exists = false
     const pullRequest = { html_url: 'https://github.com/harlan-zw/example/pull/31', number: 31, head: { sha: 'abc123' }, draft: false }
     const publisher = createGitHubPullRequestPublisher({
+      publicText: testPublicText,
       createClient: () => ({ rest: {
         pulls: {
           list: async () => ({ data: exists ? [pullRequest] : [] }),
@@ -168,6 +172,7 @@ describe('gitHub pull request publication', () => {
   ])('does not approve %s', async (_scenario, existing, createdHead) => {
     const labels: string[][] = []
     const publisher = createGitHubPullRequestPublisher({
+      publicText: testPublicText,
       createClient: () => ({ rest: {
         pulls: {
           list: async () => ({ data: existing }),
@@ -210,6 +215,7 @@ describe('pull request diagram attachment', () => {
     getRepository: () => Promise<unknown> = () => Promise.resolve({ data: { id: 7 } }),
   ) {
     return createGitHubPullRequestPublisher({
+      publicText: testPublicText,
       createClient: () => ({
         rest: {
           repos: { get: getRepository },

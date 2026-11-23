@@ -8,7 +8,7 @@ import { createGitHubResponseCache } from '../src/github-response-cache.ts'
 import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseSource } from '../src/package-release-github.ts'
 import { createPackageReleaseStore } from '../src/package-release-store.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const sha = 'a'.repeat(40)
 const mergeSha = 'b'.repeat(40)
@@ -42,6 +42,7 @@ it('stops a release comment retry when Pause arrives during authentication refre
     mayPublish: () => allowed,
     source: assertLease => ({
       ...createPackageReleaseSource({
+        publicText: testPublicText,
         repository: mapping,
         actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
         assertLease,
@@ -103,6 +104,7 @@ it('stops the Octokit request when Pause arrives during credential acquisition',
       now: () => 1000,
       mayPublish: () => allowed,
       source: assertLease => createPackageReleaseSource({
+        publicText: testPublicText,
         repository: mapping,
         actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
         assertLease,
@@ -136,6 +138,7 @@ it('revalidates release candidates across passes and observes changed pull reque
   ]
   const tokens = { getToken: async () => ({ _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }
   const source = () => createPackageReleaseSource({
+    publicText: testPublicText,
     repository: mapping,
     actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
     template: async () => '',
@@ -164,6 +167,7 @@ it('reports release rate limits for the selected account and holds later request
   const tokens = gate.guard({ getToken: async () => ({ _tag: 'Ok', value: { token: 'user-token', expiresAt: '2099-01-01' } }), invalidate: () => {} }, () => ({ _tag: 'User', login: 'harlan-zw' }))
   let requests = 0
   const source = createPackageReleaseSource({
+    publicText: testPublicText,
     repository: { ...mapping, release: { ...mapping.release, credential: { _tag: 'User' } } },
     actors: { repository: { login: 'unused', tokens }, user: { login: 'harlan-zw', tokens } },
     template: async () => '',
@@ -308,7 +312,7 @@ function fixture(repository: RepositoryMapping = mapping, files = [{ filename: '
     Object.defineProperty(response, 'url', { value: req.url })
     return response
   }
-  const source = createPackageReleaseSource({ repository, actors: { repository: { login: 'harlan-github-agent[bot]', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} } }, user: { login: 'harlan-zw', tokens: { getToken: async () => ({ _tag: 'Err', error: { repository: mapping.github, message: 'The user credential is not used here.' } }), invalidate: () => {} } } }, template: async () => '### 📚 Description', assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: clientOptions => new Octokit({ ...clientOptions, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: latestVersion ?? (published ? '1.0.1' : '1.0.0') } }) })
+  const source = createPackageReleaseSource({ publicText: testPublicText, repository, actors: { repository: { login: 'harlan-github-agent[bot]', tokens: { getToken: async () => ({ _tag: 'Ok', value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} } }, user: { login: 'harlan-zw', tokens: { getToken: async () => ({ _tag: 'Err', error: { repository: mapping.github, message: 'The user credential is not used here.' } }), invalidate: () => {} } } }, template: async () => '### 📚 Description', assertLease: () => {}, review: (): StoredReviewForHead => ready ? { _tag: 'Current', run: { outcome: { _tag: 'Ready', confidence: 95 }, baseRef: 'main', gates: { review: { _tag: 'Passed' }, merge: { _tag: 'Passed' }, ci: { _tag: 'Passed' } } } } as StoredReviewForHead : { _tag: 'None' }, signal: new AbortController().signal, now: () => new Date(), createClient: clientOptions => new Octokit({ ...clientOptions, request: { fetch: fetcher }, retry: { enabled: false }, throttle: { enabled: false } }), fetch: async () => Response.json({ 'versions': { '1.0.0': { version: '1.0.0' }, ...(published ? { '1.0.1': { version: '1.0.1' } } : {}) }, 'dist-tags': { latest: latestVersion ?? (published ? '1.0.1' : '1.0.0') } }) })
   return { source, writes, refs, sources, openSource: (title = 'fix: handle input') => {
     sourceOpen = true
     sourceTitle = title
@@ -572,6 +576,7 @@ it('writes a maintained repository release with the user credential even when th
   const appTokens = { getToken: vi.fn(async () => ({ _tag: 'Ok' as const, value: { token: 'app-token', expiresAt: '2099-01-01' } })), invalidate: () => {} }
   const repository = { ...repositoryMapping({ github: 'nuxt-modules/example', ownership: 'maintained', authentication: 'app' }), release: { ...mapping.release, credential: { _tag: 'User' as const } } }
   const source = createPackageReleaseSource({
+    publicText: testPublicText,
     repository,
     actors: {
       repository: { login: 'harlan-github-agent[bot]', tokens: appTokens },
@@ -590,7 +595,7 @@ it('writes a maintained repository release with the user credential even when th
       return response
     } }, retry: { enabled: false }, throttle: { enabled: false } }),
   })
-  expect(await source.comment(24, 'status')).toBe(7)
+  expect(await source.comment(24, 'status')).toEqual({ id: 7, body: 'status' })
   expect(requests).toEqual([
     { method: 'GET', path: '/repos/nuxt-modules/example/issues/24/comments', authorization: 'token user-token' },
     { method: 'POST', path: '/repos/nuxt-modules/example/issues/24/comments', authorization: 'token user-token' },
@@ -608,6 +613,7 @@ it('reads merged pull requests named in the published range for the release note
     23: { number: 23, title: 'chore(release): prepare v1.0.1', body: 'Release.', merged_at: '2026-11-17T00:00:00Z' },
   }
   const source = createPackageReleaseSource({
+    publicText: testPublicText,
     repository: mapping,
     actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
     template: async () => '',
@@ -632,11 +638,57 @@ it('reads merged pull requests named in the published range for the release note
   expect(pullRequests[1]).toEqual({ number: 21, title: 'perf: cache reads', body: '' })
 })
 
-it('adds an approved draft above the generated release notes once', async () => {
+const removedLine = '_One line removed: it named a private path or host._'
+
+it('refuses an approved draft when guarding the update would change existing release notes', async () => {
   const tokens = { getToken: async () => ({ _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }
-  let body = '### Bug Fixes\n\n- handle input'
+  const original = '### Bug Fixes\n\n- document ~/notes/example.md\n'
+  let body = original
+  const report = vi.fn()
+  const writes: string[] = []
+  const source = createPackageReleaseSource({
+    publicText: { details: { paths: ['~/notes'], hosts: [] }, report },
+    repository: mapping,
+    actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
+    template: async () => '',
+    assertLease: () => {},
+    review: () => ({ _tag: 'None' }),
+    signal: new AbortController().signal,
+    now: () => new Date(),
+    createClient: clientOptions => new Octokit({ ...clientOptions, retry: { enabled: false }, throttle: { enabled: false }, request: { fetch: async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init)
+      if (request.method === 'GET')
+        return Response.json({ id: 7, body, html_url: 'https://github.com/harlan-zw/example/releases/tag/v1.0.1' })
+      body = (await request.json() as { body: string }).body
+      writes.push(body)
+      return Response.json({ id: 7 })
+    } } }),
+  })
+
+  await expect(source.applyReleaseNote({ tag: 'v1.0.1', text: 'Empty input no longer throws.' })).rejects.toMatchObject({
+    status: 409,
+    message: 'Adding this draft would change existing release notes. A maintainer must decide how to handle those notes.',
+  })
+  expect(body).toBe(original)
+  expect(writes).toEqual([])
+  expect(report).not.toHaveBeenCalled()
+})
+
+it.each([
+  ['<a href="https://notes.localhost/\nacquisition.pdf">evidence</a>\n\nPublic conclusion.', `${removedLine}\n${removedLine}\n\nPublic conclusion.`],
+  ['~/no<span title="&quot; > context\nmore context"></span>tes/acquisition.pdf', `${removedLine}\n${removedLine}`],
+  ['Empty input no longer throws.', 'Empty input no longer throws.'],
+  ['See [notes](https://fixture-user:fixture-password@notes.localhost/docs/acquisition(final)/internal.pdf).', removedLine],
+  ['See `~/notes/acquisition(final)[internal].pdf`.', removedLine],
+  // An approved draft still passes the guard when it is applied, so no part of a private URL survives.
+  ['See https://notes.localhost/acquisition(final)internal for details.', removedLine],
+])('adds a guarded draft above the generated release notes once: %s', async (text, expected) => {
+  const tokens = { getToken: async () => ({ _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }
+  const original = '### Bug Fixes\n\n- handle input\n\n'
+  let body = original
   const writes: Array<{ path: string, body: unknown }> = []
   const source = createPackageReleaseSource({
+    publicText: { details: { paths: ['~/notes'], hosts: ['notes.localhost'] }, report: () => {} },
     repository: mapping,
     actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
     template: async () => '',
@@ -658,9 +710,11 @@ it('adds an approved draft above the generated release notes once', async () => 
       throw new Error(`Unexpected request ${request.method} ${path}`)
     } } }),
   })
-  expect(await source.applyReleaseNote({ tag: 'v1.0.1', text: 'Empty input no longer throws.' })).toBe('https://github.com/harlan-zw/example/releases/tag/v1.0.1')
-  expect(await source.applyReleaseNote({ tag: 'v1.0.1', text: 'Empty input no longer throws.' })).toBe('https://github.com/harlan-zw/example/releases/tag/v1.0.1')
+  expect(await source.applyReleaseNote({ tag: 'v1.0.1', text })).toBe('https://github.com/harlan-zw/example/releases/tag/v1.0.1')
+  expect(await source.applyReleaseNote({ tag: 'v1.0.1', text })).toBe('https://github.com/harlan-zw/example/releases/tag/v1.0.1')
   expect(writes).toHaveLength(1)
-  expect(body.startsWith('Empty input no longer throws.\n\n> Release notes prepared by [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit).')).toBe(true)
-  expect(body.endsWith('### Bug Fixes\n\n- handle input')).toBe(true)
+  expect(body.startsWith(`${expected}\n\n> Release notes prepared by [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit).`)).toBe(true)
+  expect(body.endsWith(original)).toBe(true)
+  for (const fragment of ['notes.localhost', 'fixture-', 'acquisition', 'internal', '~/notes'])
+    expect(body).not.toContain(fragment)
 })

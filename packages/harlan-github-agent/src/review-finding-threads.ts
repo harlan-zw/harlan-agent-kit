@@ -3,7 +3,7 @@ import type { Result } from './result.ts'
 import type { RepositoryMapping, ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { loggedFindingBaseMarker, loggedFindingControl, normalizeLoggedFindingControls } from './logged-finding-pickup.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, reviewFindingSeverity } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, findingNextAction, reviewFindingSeverity } from './review-comment.ts'
 import { cleanLine, cleanText } from './text.ts'
 
 /** One review thread this service opened for one Review finding. */
@@ -39,7 +39,8 @@ export interface ReviewFindingThreadSource {
   listReviewFindingThreads: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<ReviewFindingThread[], string>>
   postReviewFindingComment: (repository: RepositoryMapping, pullRequestNumber: number, comment: ReviewFindingComment, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<ReviewFindingCommentOutcome, string>>
   resolveReviewFindingThread: (repository: RepositoryMapping, threadId: string, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<void, string>>
-  editReviewFindingComment?: (repository: RepositoryMapping, comment: { id: number, body: string }, body: string, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<{ id: number, body: string }, string>>
+  /** `pullRequestNumber` names the item in a redaction Incident. */
+  editReviewFindingComment?: (repository: RepositoryMapping, comment: { id: number, body: string }, body: string, signal: AbortSignal, authorize: ReviewPublicationAuthority, pullRequestNumber: number) => Promise<Result<{ id: number, body: string }, string>>
 }
 
 export interface InlineFindingReceipt {
@@ -78,7 +79,6 @@ const FINDING_MARKER_PATTERN = /<!-- review-finding: ([a-f\d]{64})(?: ([\w-]+))?
 const FINDING_HEADING_PATTERN = /^\*\*(?:Finding|(?:Trivial|Minor|Major|Critical) \(\d+\/100\)): (.+)\*\*$/
 const LEGACY_FINDING_HEADING_PATTERN = /^\*\*(Open|Logged|Dismissal recommended)(?: \(\d+\/100\))?:\*\* (.+)$/
 const LOGGED_FINDING_MARKER = '<!-- review-finding-disposition: logged -->'
-const OPTIONAL_ACTION_PREFIX = /^(?:(?:optional follow-up[.:]|as an optional follow-up,)\s*)+/i
 
 /** What one finding thread's first comment says about its finding. */
 export interface ReviewFindingThreadMarker {
@@ -152,10 +152,7 @@ export function reviewFindingThreadBody(finding: ThreadFinding, headSha?: string
   const { impact } = finding
   const heading = impact === undefined ? 'Finding' : `${reviewFindingSeverity(impact)} (${impact}/100)`
   const summary = cleanLine(finding.summary).replace(/\.$/, '')
-  const recommendation = cleanText(finding.nextAction ?? '')
-  const action = OPTIONAL_ACTION_PREFIX.test(recommendation)
-    ? recommendation.replace(OPTIONAL_ACTION_PREFIX, '').replace(/^[a-z]/, letter => letter.toUpperCase())
-    : recommendation
+  const action = findingNextAction(finding.nextAction ?? '')
   return [
     AUTOMATED_REVIEW_MARKER,
     // The identity rides base64url encoded, so no finding text can close the HTML comment.
@@ -274,7 +271,7 @@ async function syncReviewFindingThreads(
         ? reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef)
         : withRepairStatus(comment.body, findingRepairStatus(finding, options.repairStatus))
       if (body !== comment.body) {
-        const edited = await source.editReviewFindingComment(repository, comment, body, signal, authorize)
+        const edited = await source.editReviewFindingComment(repository, comment, body, signal, authorize, pullRequestNumber)
         if (edited._tag === 'Err')
           return { _tag: 'Failed', message: edited.error }
         comment = edited.value
@@ -309,7 +306,7 @@ async function syncReviewFindingThreads(
         const control = loggedFindingControl(thread.fingerprint)
         const lines = normalizeLoggedFindingControls(withRepairStatus(comment.body, 'Idle')).split('\n')
         const body = lines.filter(line => line !== control).join('\n').trimEnd()
-        const edited = await source.editReviewFindingComment(repository, comment, `${body}\n\n${footer}`, signal, authorize)
+        const edited = await source.editReviewFindingComment(repository, comment, `${body}\n\n${footer}`, signal, authorize, pullRequestNumber)
         if (edited._tag === 'Err')
           return { _tag: 'Failed', message: edited.error }
       }

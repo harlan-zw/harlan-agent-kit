@@ -1705,6 +1705,12 @@ export type IncidentKind
      * this Incident is the one place the red base reads as work for a person.
      */
     | 'baseline_repair_action_required'
+    /**
+     * A body bound for GitHub carried a private path or link, and the
+     * controller removed it before publishing. Nothing leaked, but a template
+     * or an Agent answer wrote it, so a person finds and fixes that source.
+     */
+    | 'private_detail'
     | 'unknown'
 
 /** What the controller will do about an Incident without being asked. */

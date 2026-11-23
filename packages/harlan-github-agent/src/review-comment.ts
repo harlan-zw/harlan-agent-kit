@@ -14,11 +14,25 @@ export function reviewFindingSeverity(impact: number): string {
   return impact >= 40 ? 'Minor' : 'Trivial'
 }
 
+/** Agents open Logged advice with these, and every surface already says "Optional follow-up". */
+const OPTIONAL_FOLLOW_UP_PREFIX = /^(?:(?:optional follow-up[.:]|as an optional follow-up,)\s*)+/i
+
+/**
+ * One finding's next action, without the optional follow-up wording an Agent adds.
+ *
+ * The parser applies it where an answer enters, and each renderer applies it
+ * again, because findings stored before the parser did still carry the prefix.
+ * The rest keeps its casing: an action can open with a command such as `pnpm`.
+ */
+export function findingNextAction(text: string): string {
+  return cleanText(text).replace(OPTIONAL_FOLLOW_UP_PREFIX, '')
+}
+
 /** Show advice without implying that a Logged finding requires Repair. */
 export function reviewFindingFollowUp(finding: Extract<ReviewFinding, { _tag: 'Logged' }>): string {
   const action = finding.nextAction === undefined
     ? ''
-    : cleanText(finding.nextAction).replaceAll(/\s+/g, ' ').replace(/^(?:optional follow-up[.:]\s*)+/i, '')
+    : findingNextAction(finding.nextAction).replaceAll(/\s+/g, ' ')
   return action === '' ? 'Optional follow-up.' : `Optional follow-up: ${action}`
 }
 

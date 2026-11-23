@@ -1,8 +1,10 @@
 import type { PackageReleaseRecord, PackageReleaseState, PackageReleaseStore, ReleaseNote, ReleaseNotePullRequest } from './package-release-store.ts'
 import type { PackageReleaseOffer, PackageReleasePlan } from './package-release.ts'
 import type { RepositoryMapping } from './types.ts'
+import { publicFailureCause } from './failure.ts'
 import { parseRateLimit } from './github-rate-limit.ts'
 import { PACKAGE_RELEASE_MARKER, RELEASE_NOTE_APPLY_LABEL, renderManualMajorRelease, renderPackageRelease } from './package-release.ts'
+import { isPublishedForm } from './public-text.ts'
 import { canReleasePackages } from './repository-policy.ts'
 import { automatedDisclosure } from './review-comment.ts'
 import { cleanLine } from './text.ts'
@@ -10,7 +12,13 @@ import { cleanLine } from './text.ts'
 export interface PackageReleaseSource {
   candidates: () => Promise<number[]>
   inspect: (number: number) => Promise<PackageReleaseOffer>
-  comment: (number: number, body: string, commentId?: number) => Promise<number>
+  /**
+   * Writes the release comment and returns the body GitHub holds.
+   *
+   * The controller stores that body, because a tick on the comment must match
+   * it exactly, and the publish boundary may have redacted the draft.
+   */
+  comment: (number: number, body: string, commentId?: number) => Promise<{ id: number, body: string }>
   prepare: (record: PackageReleaseRecord & { plan: Extract<PackageReleasePlan, { _tag: 'Available' }> }) => Promise<Extract<PackageReleaseState, { _tag: 'Prepared' | 'Publishing' | 'Blocked' }> | null>
   merge: (record: PackageReleaseRecord & { plan: Extract<PackageReleasePlan, { _tag: 'Available' }>, state: Extract<PackageReleaseState, { _tag: 'Prepared' }> }) => Promise<Extract<PackageReleaseState, { _tag: 'Publishing' | 'Blocked' }> | null>
   publish: (record: PackageReleaseRecord & { plan: Extract<PackageReleasePlan, { _tag: 'Available' }>, state: Extract<PackageReleaseState, { _tag: 'Publishing' }> }) => Promise<string | Extract<PackageReleaseState, { _tag: 'Blocked' }> | null>
@@ -56,9 +64,9 @@ function releaseNoteStatus(note: ReleaseNote | null): string {
     case 'Applied':
       return `\n\nAdded this draft to the [GitHub release](${note.state.url}).\n\n${quoteReleaseNote(note.state.text)}`
     case 'ApplyFailed':
-      return `\n\nCould not add this draft to the GitHub release: ${cleanLine(note.state.reason)}\nCopy it by hand if you still want it.\n\n${quoteReleaseNote(note.state.text)}`
+      return `\n\nCould not add this draft to the GitHub release: ${cleanLine(publicFailureCause(note.state.reason))}\nCopy it by hand if you still want it.\n\n${quoteReleaseNote(note.state.text)}`
     case 'Failed':
-      return `\n\nNo release note draft: ${cleanLine(note.state.reason)}`
+      return `\n\nNo release note draft: ${cleanLine(publicFailureCause(note.state.reason))}`
   }
 }
 
@@ -115,12 +123,12 @@ export async function reconcilePackageReleases(options: {
   }
   const report = async (record: PackageReleaseRecord): Promise<void> => {
     const body = packageReleaseStatus(record, record.state._tag === 'Completed' ? store.getReleaseNote(record.repository, record.plan.version) : null)
-    if (record.body === body)
+    if (isPublishedForm(record.body, body))
       return
     assertLease()
-    const commentId = await source.comment(record.pullRequestNumber, body, record.commentId)
+    const published = await source.comment(record.pullRequestNumber, body, record.commentId)
     assertLease()
-    if (!store.recordPackageReleaseComment(record, body, fence, now(), commentId))
+    if (!store.recordPackageReleaseComment(record, published.body, fence, now(), published.id))
       throw new Error('The release comment receipt changed.')
   }
   try {
@@ -258,9 +266,11 @@ export async function reconcilePackageReleases(options: {
         continue
       }
       const body = renderPackageRelease(plan)
-      const commentId = existing?.body === body ? existing.commentId : await source.comment(number, body, existing?.commentId)
+      const published = existing !== undefined && isPublishedForm(existing.body, body)
+        ? { id: existing.commentId, body: existing.body }
+        : await source.comment(number, body, existing?.commentId)
       assertLease()
-      store.saveReleaseOffer({ repository: repository.github, pullRequestNumber: number, plan, commentId, body, policy })
+      store.saveReleaseOffer({ repository: repository.github, pullRequestNumber: number, plan, commentId: published.id, body: published.body, policy })
     }
     for (const command of commands) {
       assertLease()
@@ -282,12 +292,12 @@ export async function reconcilePackageReleases(options: {
     if (active !== undefined && !signal.aborted && options.mayPublish()) {
       const message = cleanLine(error instanceof Error ? error.message : 'The release request failed.')
       const body = `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nRelease ${active.plan.version} is waiting: ${message}\nRetries keep this version.\n`
-      if (active.body !== body) {
+      if (!isPublishedForm(active.body, body)) {
         await (async () => {
           assertLease()
-          await source.comment(active.pullRequestNumber, body, active.commentId)
+          const published = await source.comment(active.pullRequestNumber, body, active.commentId)
           assertLease()
-          store.recordPackageReleaseComment(active, body, fence, now())
+          store.recordPackageReleaseComment(active, published.body, fence, now(), published.id)
         })().catch((reportError: unknown) => {
           // Pause can stop this notification. The original failure still propagates below.
           if (reportError !== paused)

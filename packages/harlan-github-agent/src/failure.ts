@@ -353,6 +353,37 @@ export function isTransientFailure(signal: FailureSignal): boolean {
   return classifyFailure(signal)._tag === 'Transient'
 }
 
+/** An Agent provider that says its login is gone. Only a person signing in again fixes it. */
+const providerSignInPatterns: RegExp[] = [
+  /\brefresh token\b/i,
+  /\b(?:sign|log) ?in again\b/i,
+  /\bnot (?:signed|logged) in\b/i,
+  /\b(?:access token|credentials?) (?:has |have )?expired\b/i,
+]
+
+/**
+ * The cause of one failure, in words a maintainer reading GitHub can act on.
+ *
+ * An Agent provider error is foreign text: it can carry account state, and it
+ * names nothing a maintainer can change. The public comment names its cause
+ * instead, and the raw reason stays in the Journal and the Dashboard.
+ *
+ * Only the owner the provider boundary puts at the start of a reason proves
+ * where it came from. The Transient patterns match loose words, and a Repair
+ * Agent's own summary can say "not found", "rate limit", or quote a provider
+ * error while it names another blocker. So every other reason passes through,
+ * and the publish boundary removes its private details.
+ */
+export function publicFailureCause(reason: string): string {
+  if (!/^The (?:codex|opencode) session failed:/.test(reason))
+    return reason
+  if (matches(providerSignInPatterns, reason))
+    return 'The agent lost its sign-in. Harlan must sign it in again.'
+  if (matches(providerConfigPatterns, reason))
+    return 'The agent provider refused the configured model.'
+  return 'The agent provider failed before the agent answered.'
+}
+
 /**
  * Whether a refused Publication says its subject moved on.
  *

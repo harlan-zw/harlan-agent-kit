@@ -7,7 +7,7 @@ import { createGitHubIssuePublisher, createGitHubSource, isAutomatedGitHubActor,
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from '../src/issue-triage-comment.ts'
 import { ok } from '../src/result.ts'
 import { trackingIssueBody } from '../src/routine-report-controller.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 describe('gitHub subjects', () => {
   it('reads owner change requests alongside exact rerun commands', async () => {
@@ -314,6 +314,7 @@ describe('open Candidate issue lookup', () => {
       ],
     } as unknown as Octokit
     const publisher = createGitHubIssuePublisher({
+      publicText: testPublicText,
       createClient: () => client,
       tokens: {
         getToken: async () => ok({ token: 'token', expiresAt: '2026-09-16T00:00:00.000Z' }),

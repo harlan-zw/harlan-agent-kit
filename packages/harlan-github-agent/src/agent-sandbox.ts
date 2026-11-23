@@ -224,6 +224,18 @@ export function opencodeSandboxPaths(environment: NodeJS.ProcessEnv): string[] {
   return [...(value.instructions ?? []), ...(value.skills?.paths ?? [])]
 }
 
+/**
+ * Every path an Agent's home has: inside the sandbox, and the host directory bound to it.
+ *
+ * An Agent answer that quotes its own home names a private path, so the
+ * publish boundary redacts both.
+ */
+export async function agentWorkerHomes(environment: NodeJS.ProcessEnv, profilePath?: string): Promise<string[]> {
+  const controllerHome = resolve(environment.HOME ?? '/home/harlan')
+  const profile = configuration(JSON.parse(await readFile(profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json'), 'utf8')))
+  return [workerHome, profile.home]
+}
+
 /** Refuse an update before restarting a host that cannot isolate its Agents. */
 export async function checkAgentWorker(environment: NodeJS.ProcessEnv, profilePath?: string): Promise<void> {
   const controllerHome = resolve(environment.HOME ?? '/home/harlan')

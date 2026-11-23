@@ -2,9 +2,11 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { LoggedFindingPickup, LoggedFindingStatus, LoggedReviewFinding } from './logged-finding-pickup.ts'
 import type { InlineFindingReceipt, ReviewFindingThread } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewFinding } from './types.ts'
+import { publicFailureCause } from './failure.ts'
 import { githubAccountBody } from './github-account.ts'
 import { recordLoggedFindingSignal } from './implicit-signal-store.ts'
 import { normalizeLoggedFindingControls, onHeadPickupHint, withLoggedFindingControls } from './logged-finding-pickup.ts'
+import { isPublishedForm } from './public-text.ts'
 import { canRepairBaseline, canRepairSelectedFindingOnHead } from './repository-policy.ts'
 import { automatedReviewHead } from './review-comment.ts'
 import { reviewFindingThreadBody } from './review-finding-threads.ts'
@@ -131,6 +133,14 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
   cancel: (taskId: string, at: string) => void
 }): LoggedFindingStore {
   const heldSelections = new Map<string, { repository: string, pullRequestNumber: number }>()
+  /**
+   * Whether GitHub's control body is one this body produced.
+   *
+   * The publish boundary may have redacted it, under any deny list, so the
+   * Journal text and GitHub's text compare through `isPublishedForm`.
+   */
+  const heldByGitHub = (body: string, account: RepositoryMapping['githubAccount'], before: string): boolean =>
+    isPublishedForm(before, normalizeLoggedFindingControls(githubAccountBody(body, account)))
   function candidates(): Candidate[] {
     const rows = database.prepare(`${candidatesSql} ${options.writeAuthoritySql}
       AND (SELECT state_tag FROM agent_control WHERE singleton = 1) = 'Running'
@@ -177,7 +187,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
               ? row.progress_label ?? 'Verifying the finding.'
               : row.state_tag === 'Publishing'
                 ? row.on_head === 1 ? 'Publishing the fix.' : 'Opening the repair pull request.'
-                : row.state_tag === 'Queued' ? 'Queued.' : row.reason ?? 'Action required.',
+                : row.state_tag === 'Queued' ? 'Queued.' : row.reason === null ? 'Action required.' : publicFailureCause(row.reason),
     }))
   }
 
@@ -248,18 +258,18 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         WHERE review_run_id = ? AND state_tag IN ('Pending', 'Running')`).get(candidate.review_run_id) !== undefined
         && (JSON.parse(candidate.findings) as ReviewFinding[]).some(finding => finding._tag === 'Logged'
           && finding.details.fingerprint === input.fingerprints[0]
-          && normalizeLoggedFindingControls(githubAccountBody(reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef ?? undefined), mapping.githubAccount)) === before)
+          && heldByGitHub(reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef ?? undefined), mapping.githubAccount, before))
       // A delayed Dismiss addresses the same selection, even after its progress changes.
       // Accept only an exact issued control body from this Review and comment.
       const delayedDismiss = input.inline !== true && input.fingerprints.length === 0 && (input.dismissedFingerprints?.length ?? 0) > 0
-        && (normalizeLoggedFindingControls(githubAccountBody(candidate.body, mapping.githubAccount)) === before
-          || database.prepare(`SELECT 1 FROM logged_finding_control_receipts WHERE review_run_id = ? AND comment_id = ? AND body = ?`)
-            .get(candidate.review_run_id, input.commentId, before) !== undefined)
+        && (heldByGitHub(candidate.body, mapping.githubAccount, before)
+          || (database.prepare(`SELECT body FROM logged_finding_control_receipts WHERE review_run_id = ? AND comment_id = ?`)
+            .all(candidate.review_run_id, input.commentId) as Array<{ body: string }>).some(receipt => isPublishedForm(before, receipt.body)))
       const authorizedComment = input.inline === true
         ? input.fingerprints.length === 1 && (publishingInline || inlineFindings(candidate.review_run_id).some(receipt => !receipt.resolved
           && receipt.commentId === input.commentId && receipt.fingerprint === input.fingerprints[0] && receipt.body === before))
         : candidate.github_comment_id === input.commentId
-          && (normalizeLoggedFindingControls(githubAccountBody(publishedBody(candidate), mapping.githubAccount)) === before || delayedDismiss)
+          && (heldByGitHub(publishedBody(candidate), mapping.githubAccount, before) || delayedDismiss)
       if (!authorizedComment || pullRequest.headSha !== input.headSha || typeof pullRequest.baseRef !== 'string'
         || (onHead ? pickupTarget(mapping, pullRequest) !== 'head' : !canRepairBaseline(mapping))) {
         return false

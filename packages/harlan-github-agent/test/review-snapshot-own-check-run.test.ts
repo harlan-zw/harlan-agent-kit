@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { ok } from '../src/result.ts'
 import { REVIEW_CHECK_RUN_NAME } from '../src/review-check-run.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const baseSha = 'a'.repeat(40)
 const headSha = 'c'.repeat(40)
@@ -61,6 +61,7 @@ describe('review snapshot own check runs', () => {
       },
     } as unknown as Octokit
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       createClient: () => client,
       ownAppId,

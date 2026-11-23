@@ -6,8 +6,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseStore } from '../src/package-release-store.ts'
 import { planPackageReleaseBeforeMerge, releaseNoteApproval, renderPackageRelease } from '../src/package-release.ts'
+import { publicBody } from '../src/public-text.ts'
 import { createWebhookApp } from '../src/webhook.ts'
 import { repositoryMapping } from './fixtures.ts'
+
+/** The line the publish boundary writes in place of a line that names a private detail. */
+const removedLine = '_One line removed: it named a private path or host._'
 
 const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: 'a'.repeat(40), mergeSha: 'b'.repeat(40) }
 const repository = { ...repositoryMapping(), release: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: ['test'], credential: { _tag: 'Repository' as const } } }
@@ -18,7 +22,7 @@ function setup(mayPublish = () => true) {
   const source: PackageReleaseSource = {
     candidates: async () => [24],
     inspect: async () => plan,
-    comment: vi.fn(async () => 99),
+    comment: vi.fn(async (_number: number, body: string) => ({ id: 99, body })),
     prepare: vi.fn<PackageReleaseSource['prepare']>(async () => ({ _tag: 'Prepared', pullRequestNumber: 25, headSha: 'c'.repeat(40), branch: 'release/24-1.0.1' })),
     merge: vi.fn(async () => null),
     publish: vi.fn(async () => null),
@@ -78,9 +82,9 @@ describe('release controller', () => {
     task.source.inspect = async () => {
       throw new Error('Connection lost')
     }
-    task.source.comment = vi.fn(async () => {
+    task.source.comment = vi.fn(async (_number: number, body: string) => {
       allowed = false
-      return 99
+      return { id: 99, body }
     })
     await expect(task.run()).rejects.toThrow('Connection lost')
     expect(task.source.comment).toHaveBeenCalledTimes(1)
@@ -262,6 +266,20 @@ describe('release note drafts', () => {
     task.database.close()
   })
 
+  it('reports a draft that lost its provider sign-in as its cause', async () => {
+    const task = setup()
+    await publish(task)
+    for (const at of ['2026-11-18T00:00:00.000Z', '2026-11-18T00:01:00.000Z', '2026-11-18T00:02:00.000Z']) {
+      const claimed = task.store.claimNextReleaseNote('worker', at, 1_000)!
+      task.store.failReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at, reason: 'The codex session failed: Your refresh token was already used. Please log out and sign in again.' })
+    }
+    await task.run()
+    const body = vi.mocked(task.source.comment).mock.calls.at(-1)![1]
+    expect(body).toContain('No release note draft: The agent lost its sign-in.')
+    expect(body).not.toContain('refresh token')
+    task.database.close()
+  })
+
   it('keeps a failed Published announcement as a pass failure on every pass', async () => {
     const task = setup()
     await task.run()
@@ -285,10 +303,10 @@ describe('release note drafts', () => {
     await publish(task)
     const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
     task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws.' })
-    task.source.comment = vi.fn(async (number: number) => {
+    task.source.comment = vi.fn(async (number: number, body: string) => {
       if (number === 24)
         throw new Error('The release comment no longer belongs to this Task.')
-      return 100
+      return { id: 100, body }
     })
     task.source.candidates = async () => [30]
     task.source.inspect = async number => ({ ...plan, headSha: number === 30 ? 'e'.repeat(40) : plan.headSha })
@@ -332,6 +350,51 @@ describe('release note drafts', () => {
     task.database.close()
   })
 
+  it('applies only the displayed draft after the dashboard hostname changes', async () => {
+    const task = setup()
+    let hosts = ['old-dashboard.example.test']
+    const outgoing = (writer: 'release comment' | 'GitHub release', body: string) => publicBody({ details: { paths: [], hosts }, report: () => {} }, { repository: repository.github, itemNumber: 24, writer }, body)
+    task.source.comment = vi.fn(async (_number: number, body: string) => ({ id: 99, body: outgoing('release comment', body).text }))
+    const releases: string[] = []
+    task.source.applyReleaseNote = vi.fn(async ({ text }) => outgoing('GitHub release', text).send(async (body) => {
+      releases.push(body)
+      return url
+    }))
+    await publish(task)
+    const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
+    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws.\nSee https://old-dashboard.example.test/tasks/24.' })
+    await task.run()
+    const shown = task.store.listPackageReleases(repository.github)[0]!.body
+    expect(shown).toContain(`> ${removedLine}`)
+    expect(shown).not.toContain('old-dashboard')
+    hosts = ['new-dashboard.example.test']
+
+    expect(createPackageReleaseStore(task.database).approveReleaseNote(approval(shown))).toBe(true)
+    await task.run()
+    expect(releases).toEqual([`Empty input no longer throws.\n${removedLine}`])
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state).toEqual({ _tag: 'Applied', text: releases[0], url })
+    task.database.close()
+  })
+
+  it('keeps an unclosed private link draft visible and approvable', async () => {
+    const task = setup()
+    const outgoing = (body: string) => publicBody({ details: { paths: [], hosts: ['notes.localhost'] }, report: () => {} }, { repository: repository.github, itemNumber: 24, writer: 'release comment' }, body)
+    task.source.comment = vi.fn(async (_number: number, body: string) => outgoing(body).send(async sent => ({ id: 99, body: sent })))
+    await publish(task)
+    const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
+    const notes = 'Read [notes](https://notes.localhost/reports/quarterly(final)/appendix.pdf\nPublic text survives.'
+    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes })
+    await task.run()
+    const shown = task.store.listPackageReleases(repository.github)[0]!.body
+    expect(shown).toContain(`> ${removedLine}\n> Public text survives.\n> \`\`\``)
+    expect(shown).not.toContain('notes.localhost')
+    expect(shown).toContain('- [ ] Add this draft to the GitHub release')
+    expect(task.store.approveReleaseNote(approval(shown))).toBe(true)
+    await task.run()
+    expect(task.source.applyReleaseNote).toHaveBeenCalledWith({ tag: 'v1.0.1', text: `${removedLine}\nPublic text survives.` })
+    task.database.close()
+  })
+
   it('refuses an approval of a comment that no longer shows this draft', async () => {
     const task = setup()
     const body = await drafted(task)
@@ -342,7 +405,12 @@ describe('release note drafts', () => {
     task.database.close()
   })
 
-  it.each([[404, 'Not Found'], [403, 'Resource not accessible by integration'], [422, 'Validation Failed']])('stops applying after GitHub refuses the edit: %s', async (status, message) => {
+  it.each([
+    [404, 'Not Found'],
+    [403, 'Resource not accessible by integration'],
+    [422, 'Validation Failed'],
+    [409, 'Adding this draft would change existing release notes. A maintainer must decide how to handle those notes.'],
+  ])('stops applying after a refused edit: %s', async (status, message) => {
     const task = setup()
     const body = await drafted(task)
     task.store.approveReleaseNote(approval(body))

@@ -11,7 +11,7 @@ import { applyReviewApproval, REVIEW_APPROVAL_CONTROL, reviewApproval } from '..
 import { AUTOMATED_REVIEW_MARKER } from '../src/review-comment.ts'
 import { openJournalStore } from '../src/store.ts'
 import { createWebhookApp } from '../src/webhook.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping, testPublicText } from './fixtures.ts'
 
 const at = '2026-10-02T00:00:00.000Z'
 const headSha = 'a'.repeat(40)
@@ -119,6 +119,7 @@ it('starts one Review through a signed click and the existing label Approval pat
   const { store, mapping, subject } = fixture()
   const labels: string[] = []
   const source = createGitHubAgentSource({
+    publicText: testPublicText,
     ownAppId: 98114,
     actorLogin: () => 'harlan-github-agent[bot]',
     tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
@@ -201,6 +202,7 @@ it('finishes earlier checkbox label writes before consuming the label', async ()
   const started = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   const source = createGitHubAgentSource({
+    publicText: testPublicText,
     ownAppId: 98114,
     actorLogin: () => 'harlan-github-agent[bot]',
     tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },

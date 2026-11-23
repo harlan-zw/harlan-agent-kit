@@ -35,9 +35,9 @@ it('records no Incident when Pause stops an in-flight release request', async ()
               return []
             },
             inspect: async () => { throw new Error('Pause must stop inspection.') },
-            comment: async () => {
+            comment: async (_number: number, body: string) => {
               comments++
-              return 99
+              return { id: 99, body }
             },
             prepare: async () => null,
             merge: async () => null,

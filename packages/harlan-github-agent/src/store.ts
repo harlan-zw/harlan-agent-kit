@@ -13,6 +13,7 @@ import type { LoggedFindingStore } from './logged-finding-store.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PaybackStore } from './payback-store.ts'
+import type { PrivateDetails } from './public-text.ts'
 import type { PathRuleShadowReading, PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { PullRequestWatchState } from './pull-request-watch.ts'
 import type { RepairRecoveryTarget } from './repair-recovery.ts'
@@ -502,7 +503,7 @@ interface StoppedReviewRow {
   closure_revision_id: string
   current_head_sha: string
   current_base_sha: string
-  reason: string
+  reason: string | null
   current_state: string
   current_merged_at: string | null
   github_comment_id: number
@@ -539,7 +540,14 @@ export interface StoppedReview {
   closureRevisionId: string
   currentHeadSha: string
   currentBaseSha: string
-  reason: string
+  /**
+   * Why the Task stopped, or null when it recorded no reason.
+   *
+   * Never the Task's evidence. A completed Review records its Review run id as
+   * evidence, and a Repair records JSON, so a fallback to evidence once printed
+   * a bare UUID in a MERGED comment (nuxt-seo#719).
+   */
+  reason: string | null
   /**
    * Lets the sweep skip its GitHub read on a closed pull request.
    *
@@ -1132,6 +1140,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   selectAgent: (selection: AgentSelection, at: string) => AgentSelection
   /** The Agent slot count set for each host. A null host follows its default. */
   getAgentSlots: () => AgentSlotSetting
+  /** Retains private roots and hosts across configuration changes and Service restarts. */
+  retainPrivateDetails: (details: PrivateDetails) => PrivateDetails
   /** Sets the Agent slot count for one host. The next turn reads it. */
   setAgentSlots: (input: { host: AgentHost, slots: number | null, at: string }) => AgentSlotSetting
   getWorkerSession: (repository: string, itemNumber: number, role: AgentRole, scopeDigest?: string) => string | null
@@ -7595,7 +7605,15 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${addEntry} PRAGMA user_version = 108;`)
     version = 108
   }
-  if (version === 108)
+  if (version === 108) {
+    applyMigration(database, `CREATE TABLE IF NOT EXISTS private_details (
+      kind TEXT NOT NULL CHECK (kind IN ('Path', 'Link')),
+      entry TEXT NOT NULL,
+      PRIMARY KEY (kind, entry)
+    ); PRAGMA user_version = 109;`)
+    version = 109
+  }
+  if (version === 109)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -16039,7 +16057,7 @@ export function openJournalStore(
       current_revisions.id AS closure_revision_id,
       json_extract(current_revisions.payload, '$.headSha') AS current_head_sha,
       json_extract(current_revisions.payload, '$.baseSha') AS current_base_sha,
-      COALESCE(stopped.reason, stopped.evidence, 'The automated review stopped.') AS reason,
+      stopped.reason,
       json_extract(current_revisions.payload, '$.state') AS current_state,
       json_extract(current_revisions.payload, '$.mergedAt') AS current_merged_at,
       CASE
@@ -17972,6 +17990,18 @@ export function openJournalStore(
     recordObservation,
     recordPollObservation,
     recordIncident,
+    retainPrivateDetails: (details) => {
+      const insert = database.prepare('INSERT OR IGNORE INTO private_details (kind, entry) VALUES (?, ?)')
+      for (const path of details.paths)
+        insert.run('Path', path)
+      for (const host of details.hosts)
+        insert.run('Link', host)
+      const rows = database.prepare('SELECT kind, entry FROM private_details ORDER BY entry').all() as Array<{ kind: 'Path' | 'Link', entry: string }>
+      return {
+        paths: rows.filter(row => row.kind === 'Path').map(row => row.entry),
+        hosts: rows.filter(row => row.kind === 'Link').map(row => row.entry),
+      }
+    },
     resolveIncident,
     resolveIncidents,
     resolveRunnerLostIncident,
