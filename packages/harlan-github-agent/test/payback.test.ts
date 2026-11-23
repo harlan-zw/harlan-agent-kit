@@ -331,9 +331,32 @@ describe('payback implicit signals', () => {
     })
 
     const signals = (role: string) => report.kinds.find(kind => kind.work._tag === 'Role' && kind.work.role === role)?.signals
-    expect(signals('issue_work')).toEqual({ humanCommit: 1, closedUnmerged: 1, mergedUntouched: 1, loggedFindingPickedUp: 0 })
-    expect(signals('adversarial_review')).toEqual({ humanCommit: 1, closedUnmerged: 0, mergedUntouched: 1, loggedFindingPickedUp: 1 })
-    expect(signals('conflict_resolution')).toEqual({ humanCommit: 0, closedUnmerged: 0, mergedUntouched: 0, loggedFindingPickedUp: 0 })
+    expect(signals('issue_work')).toEqual({ humanCommit: 1, closedUnmerged: 1, mergedUntouched: 1, loggedFindingPickedUp: 0, reverted: 0 })
+    expect(signals('adversarial_review')).toEqual({ humanCommit: 1, closedUnmerged: 0, mergedUntouched: 1, loggedFindingPickedUp: 1, reverted: 0 })
+    expect(signals('conflict_resolution')).toEqual({ humanCommit: 0, closedUnmerged: 0, mergedUntouched: 0, loggedFindingPickedUp: 0, reverted: 0 })
+    expect(report.kinds.map(kind => kind.verdict)).toEqual(without.kinds.map(kind => kind.verdict))
+  })
+
+  it('counts a revert for Review on any pull request it reviewed, and for the work that opened it', () => {
+    const turns = [turn({ taskId: 'a', role: 'issue_work' }), turn({ taskId: 'r', role: 'adversarial_review' })]
+    const tasks = [task('a')]
+    const without = buildPayback({ turns, tasks, routineRuns: [], signals: [], pricing })
+    const report = buildPayback({
+      turns,
+      tasks,
+      routineRuns: [],
+      signals: [
+        { kind: 'Reverted', openedBy: 'issue_work', reviewed: true },
+        // A defect that escaped Review counts whoever opened the pull request.
+        { kind: 'Reverted', openedBy: null, reviewed: true },
+        { kind: 'Reverted', openedBy: null, reviewed: false },
+      ],
+      pricing,
+    })
+
+    const signals = (role: string) => report.kinds.find(kind => kind.work._tag === 'Role' && kind.work.role === role)?.signals
+    expect(signals('issue_work')?.reverted).toBe(1)
+    expect(signals('adversarial_review')?.reverted).toBe(2)
     expect(report.kinds.map(kind => kind.verdict)).toEqual(without.kinds.map(kind => kind.verdict))
   })
 })

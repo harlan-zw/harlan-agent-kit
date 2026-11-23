@@ -641,7 +641,7 @@ Work whose outcome the Journal does not record reads Measure first. So does work
 Dollars come from the dated rates in `payback.rates`. Break-even minutes also need `payback.hourly_value`.
 Each kind gets one verdict: Keep, Tune, Cut, or Measure first. A verdict recommends a change; Harlan decides it.
 Cut needs spend of at least 15 minutes of Harlan's time in the range. Cheaper work with nothing to show reads Keep.
-Each kind also counts the Implicit signals in the range, on pull requests the service opened. A signal counts for the work that opened the pull request, and for Review when it names a Review run.
+Each kind also counts the Implicit signals in the range, on pull requests the service opened. A signal counts for the work that opened the pull request, and for Review when it names a Review run. A revert also counts for Review on a pull request a person opened, because it is a defect Review missed.
 
 Do not use ROI, value score, impact score, cost-benefit, efficiency, or worth.
 
@@ -666,16 +666,20 @@ Use Agent feedback. Do not use rating, vote, or reaction.
 
 One action a person took on GitHub on agent work. The service reads it from state it already observes, so it needs no click.
 
-The service records each one once. There are four kinds:
+The service records each one once. There are five kinds:
 
 - Human commit: a head the service did not publish replaced the head of a READY Review run.
 - Closed unmerged: a person closed the pull request without a merge.
 - Merged untouched: the pull request merged, and the service published every head after the first.
 - Logged finding pickup: a person asked an agent to fix one Logged Review finding.
+- Reverted: a later merged pull request in the same repository reverted this merged pull request.
 
 Only pull requests the service opened or reviewed get one.
-A contributor's pull request gets no human commit, close, or merge signal. A Logged finding pickup still counts there.
+A contributor's pull request gets no human commit, close, or merge signal. A Logged finding pickup and a revert still count there.
 Only a close or merge that GitHub confirmed counts.
+A revert names its pull request in one of three ways: the `Reverts OWNER/REPOSITORY#N` line from GitHub's Revert button, a title that starts with revert and names one pull request, or the `This reverts commit SHA` line from `git revert`.
+The service sees a revert only when it observed the reverting pull request while it was open.
+A revert counts against a Review run only when that run answered the merged head.
 The service never reads the commit author. Sessions on the service host commit as the GitHub App.
 So a head with no Publication command counts as a human commit. A person's rebase or base branch merge counts too.
 On a pull request Harlan opened, a human commit is often planned work. The agent-feedback Routine reads human commits and closes only on pull requests the service opened.

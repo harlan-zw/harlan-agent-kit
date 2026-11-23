@@ -257,6 +257,11 @@ If Repair returns Action required or exhausts retries, replace its progress comm
 
 Record duration and Agent provider token usage for every completed Review run. Store `Unavailable` when the Agent provider reports no usage. Show these values only in History.
 
+When GitHub confirms a merge, check whether it reverts an earlier merged pull request in the same repository.
+If the service opened or reviewed that pull request, record one `Reverted` Implicit signal on it.
+Name a Review run only when it answered the merged head. Write nothing to GitHub.
+The weekly trial report counts reviewed merges and the READY ones a revert reached within 30 days.
+
 Carry Approval to the exact commit published by that approved repair. Do not carry it to any other new head commit.
 
 Publish each completed App-authenticated Review as a native GitHub `COMMENT` review.

@@ -7,7 +7,7 @@ export interface PaybackStore {
   listPaybackTasks: (range: { from: string, to: string }) => PaybackTaskFact[]
   /** Each Routine run that spent an Agent turn in the range, and what its Candidates became. */
   listPaybackRoutineRuns: (range: { from: string, to: string }) => PaybackRoutineRunFact[]
-  /** Each Implicit signal that occurred in the range. Payback counts only those the service opened. */
+  /** Each Implicit signal that occurred in the range. Payback counts those the service opened, and reverts Review answered. */
   listPaybackSignals: (range: { from: string, to: string }) => PaybackSignalFact[]
 }
 

@@ -506,3 +506,64 @@ describe('retro follow-through trial', () => {
     expect(reading.keep.map(rule => rule._tag)).toEqual(['NotYetMeasurable'])
   })
 })
+
+describe('review revert trial', () => {
+  const revertTrial: Trial = {
+    _tag: 'Measured',
+    id: 'review-reverts',
+    title: '8. Reverts after Review',
+    start: { _tag: 'On', at: start },
+    weeks: 8,
+    ...trialText,
+    onMiss: { _tag: 'Revise', what: 'The adversarial-review Skill' },
+    measure: { _tag: 'ReviewReverts', revertDays: 30, maximumReadyRevertedShare: 0.05 },
+  }
+  const passed = { _tag: 'Passed' as const, evidence: [] }
+
+  /** Observes one pull request, optionally reviews its head, then confirms its merge. */
+  function merge(store: Store, number: number, mergedAt: string, outcome: 'Ready' | 'Blocked' | 'None', overrides: Parameters<typeof pullRequestItem>[0] = {}): void {
+    const headSha = `head-${number}`
+    const open = store.recordPollObservation({ observedAt: mergedAt, subject: pullRequestItem({ number, headSha, mergeState: 'clean', updatedAt: mergedAt, ...overrides }) })
+    if (open._tag !== 'Inserted')
+      throw new Error(`Expected pull request ${number}.`)
+    if (outcome !== 'None') {
+      store.recordReviewRun({ id: `review-${number}`, repository: 'harlan-zw/example', pullRequestNumber: number, revisionId: open.revisionId, headSha, provider: 'codex', sessionId: `session-${number}`, model: 'gpt-6.1-sol', agentVersion: '1', skillDigest: 'f'.repeat(64), startedAt: mergedAt, completedAt: mergedAt, confidence: 95, findings: [], gates: outcome === 'Ready' ? { merge: passed, review: passed, ci: passed } : { merge: passed, ci: passed, review: { _tag: 'Failed', reason: 'An Open Review finding.', evidence: [] } } })
+    }
+    const closed = store.recordPollObservation({ observedAt: mergedAt, subject: pullRequestItem({ number, headSha, mergeState: 'clean', state: 'closed', mergedAt, updatedAt: mergedAt, ...overrides }) })
+    if (closed._tag !== 'Inserted' || !store.recordVerifiedPullRequestClosure({ repository: 'harlan-zw/example', pullRequestNumber: number, revisionId: closed.revisionId, headSha, baseSha: 'base123', disposition: { _tag: 'Merged' }, at: mergedAt }))
+      throw new Error(`Expected a confirmed merge of ${number}.`)
+  }
+
+  it('counts reviewed merges and the READY ones a later merge reverted', () => {
+    const store = createStore(['harlan-zw/example'])
+    merge(store, 24, '2026-11-19T00:00:00.000Z', 'Ready')
+    merge(store, 25, '2026-11-20T00:00:00.000Z', 'Blocked')
+    merge(store, 26, '2026-11-20T01:00:00.000Z', 'None')
+    merge(store, 30, '2026-11-21T00:00:00.000Z', 'None', { title: 'Revert "Fix the broken thing"', body: 'Reverts harlan-zw/example#24' })
+
+    const [reading] = collectTrialReportEvidence(store, new Date('2026-11-25T00:00:00.000Z'), [revertTrial]).trials
+    if (reading?._tag !== 'Measured' || reading.metrics?._tag !== 'ReviewReverts')
+      throw new Error('Expected a measured revert trial.')
+
+    expect(reading.metrics.rows).toEqual([
+      { openedBy: 'Service', merged: 0, ready: 0, reverted: 0, readyReverted: 0, readyJudged: 0 },
+      { openedBy: 'Person', merged: 2, ready: 1, reverted: 1, readyReverted: 1, readyJudged: 1 },
+    ])
+    expect(reading.metrics.reverted).toEqual([{ pullRequest: 'harlan-zw/example#24', url: 'https://github.com/harlan-zw/example/pull/24', outcome: 'Ready', revertedBy: 30 }])
+    expect(reading.keep).toEqual([{ _tag: 'NotMet', detail: expect.stringContaining('1 of 1 judged READY merge') }])
+    expect(reading.kill).toEqual([])
+    expect(reading.markdown).toContain('reverted by #30')
+  })
+
+  it('reports no share until a READY merge has had its revert days', () => {
+    const store = createStore(['harlan-zw/example'])
+    merge(store, 24, '2026-11-19T00:00:00.000Z', 'Ready')
+
+    const [reading] = collectTrialReportEvidence(store, new Date('2026-11-25T00:00:00.000Z'), [revertTrial]).trials
+    if (reading?._tag !== 'Measured')
+      throw new Error('Expected a measured revert trial.')
+
+    expect(reading.keep.map(rule => rule._tag)).toEqual(['NotYetMeasurable'])
+    expect(reading.markdown).not.toContain('0%')
+  })
+})

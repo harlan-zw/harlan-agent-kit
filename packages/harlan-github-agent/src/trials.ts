@@ -57,6 +57,13 @@ export type TrialMeasure
     /** The share of judged Candidates that must merge in time. */
     minimumMergedShare: number
   }
+  | {
+    _tag: 'ReviewReverts'
+    /** Days after a merge in which a revert counts against its Review. */
+    revertDays: number
+    /** The largest share of judged READY merges that a revert may reach. */
+    maximumReadyRevertedShare: number
+  }
 
 /** Open pull requests whose current head is READY with passing CI, at one instant. */
 export interface ReadyWait {
@@ -172,5 +179,18 @@ export const TRIALS: readonly Trial[] = [
     before: '7 Candidates from 12 October to 13 November. All 7 became issues and all 7 merged.',
     onMiss: { _tag: 'Revise', what: 'The `agent-retro` prompt' },
     measure: { _tag: 'RetroFollowThrough', mergeDays: 14, minimumMergedShare: 0.5 },
+  },
+  {
+    _tag: 'Measured',
+    id: 'review-reverts',
+    title: '8. Reverts after Review',
+    start: { _tag: 'On', at: '2026-11-25T00:00:00+11:00' },
+    weeks: 8,
+    metric: 'Merged pull requests whose merged head has a Review run, and how many a later merged pull request reverted within 30 days. Pull requests the service opened and pull requests a person opened are counted apart. Only a revert that names its pull request or merge commit counts.',
+    keepRule: 'At most 5% of judged READY merges are reverted within 30 days.',
+    killRule: 'None. This trial only measures, so a miss means Review needs work.',
+    before: 'No revert was recorded. In the 120 days to 24 November, default branch history across the trusted checkouts shows 14 commits that undo earlier work. 4 went through a pull request, and 2 of those name the pull request they revert. Expect about one countable revert every two months, so a met keep rule says little on its own.',
+    onMiss: { _tag: 'Revise', what: 'The `adversarial-review` Skill' },
+    measure: { _tag: 'ReviewReverts', revertDays: 30, maximumReadyRevertedShare: 0.05 },
   },
 ]

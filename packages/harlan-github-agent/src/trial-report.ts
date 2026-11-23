@@ -1,7 +1,7 @@
 import type { JournalStore } from './store.ts'
-import type { ReadyPullRequest, ReviewGateName, TrialIssueRoute, TrialRange, TrialRetroCandidate, TrialReviewedHead, TrialRoutineRun } from './trial-store.ts'
+import type { ReadyPullRequest, ReviewGateName, TrialIssueRoute, TrialRange, TrialRetroCandidate, TrialReviewedHead, TrialReviewedMerge, TrialRoutineRun } from './trial-store.ts'
 import type { ReadyWait, Trial, TrialMeasure, TrialMiss } from './trials.ts'
-import type { Routine } from './types.ts'
+import type { ReviewOutcome, Routine } from './types.ts'
 import { TRIALS } from './trials.ts'
 
 const dayMilliseconds = 24 * 60 * 60 * 1000
@@ -108,6 +108,27 @@ export interface RetroWeek {
   open: number
 }
 
+/** Reviewed merges of one origin, and how many a revert reached in time. */
+export interface ReviewRevertRow {
+  /** Service: a service publication opened the pull request. Person: anyone else did. */
+  openedBy: 'Service' | 'Person'
+  merged: number
+  ready: number
+  /** Reverted within the trial's revert days. */
+  reverted: number
+  readyReverted: number
+  /** READY merges that were reverted in time or whose revert days have passed. */
+  readyJudged: number
+}
+
+/** One reviewed merge a later merge reverted in time. Titles are left out, because a repository can be private. */
+export interface RevertedMerge {
+  pullRequest: string
+  url: string
+  outcome: ReviewOutcome['_tag']
+  revertedBy: number
+}
+
 export interface RetroToDate {
   window: TrialWindow
   candidates: number
@@ -159,6 +180,13 @@ export type TrialMetrics
     weeks: RetroWeek[]
     toDate: RetroToDate
   }
+  | {
+    _tag: 'ReviewReverts'
+    revertDays: number
+    /** The service row first, then the person row. */
+    rows: ReviewRevertRow[]
+    reverted: RevertedMerge[]
+  }
 
 export type TrialReading
   = | { _tag: 'Parked', id: string, title: string, reason: string, markdown: string }
@@ -184,7 +212,7 @@ export interface TrialReportEvidence {
   trials: TrialReading[]
 }
 
-export type TrialReportSource = Pick<JournalStore, 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt' | 'listReadyPullRequests' | 'listTrialRetroCandidates'>
+export type TrialReportSource = Pick<JournalStore, 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt' | 'listReadyPullRequests' | 'listTrialRetroCandidates' | 'listTrialReviewedMerges'>
 
 function iso(milliseconds: number): string {
   return new Date(milliseconds).toISOString()
@@ -544,6 +572,54 @@ export function readRetroTrial(input: {
   return { metrics: { _tag: 'RetroFollowThrough', mergeDays: measure.mergeDays, weeks, toDate }, keep, kill: [] }
 }
 
+/**
+ * Reads the revert trial from the reviewed merges of the trial so far. Pure.
+ *
+ * A merge is judged once a revert reached it in time or its revert days have
+ * passed, so a recent merge never reads as a clean one.
+ */
+export function readReviewRevertTrial(input: {
+  measure: Extract<TrialMeasure, { _tag: 'ReviewReverts' }>
+  merges: readonly TrialReviewedMerge[]
+  now: Date
+}): { metrics: Extract<TrialMetrics, { _tag: 'ReviewReverts' }>, keep: RuleReading[], kill: RuleReading[] } {
+  const { measure } = input
+  const allowed = measure.revertDays * dayMilliseconds
+  const now = input.now.getTime()
+  const read = input.merges.map((merge) => {
+    const merged = Date.parse(merge.mergedAt)
+    const reverted = merge.revertedAt !== null && Date.parse(merge.revertedAt) - merged <= allowed
+    return { merge, ready: merge.outcome === 'Ready', reverted, judged: reverted || merged + allowed <= now }
+  })
+  const rows: ReviewRevertRow[] = (['Service', 'Person'] as const).map((openedBy) => {
+    const mine = read.filter(entry => entry.merge.serviceOpened === (openedBy === 'Service'))
+    const ready = mine.filter(entry => entry.ready)
+    return {
+      openedBy,
+      merged: mine.length,
+      ready: ready.length,
+      reverted: mine.filter(entry => entry.reverted).length,
+      readyReverted: ready.filter(entry => entry.reverted).length,
+      readyJudged: ready.filter(entry => entry.judged).length,
+    }
+  })
+  const reverted: RevertedMerge[] = read.flatMap(entry => entry.reverted && entry.merge.revertedBy !== null
+    ? [{ pullRequest: `${entry.merge.repository}#${entry.merge.pullRequestNumber}`, url: entry.merge.url, outcome: entry.merge.outcome, revertedBy: entry.merge.revertedBy }]
+    : [])
+  const readyReverted = rows.reduce((sum, row) => sum + row.readyReverted, 0)
+  const readyJudged = rows.reduce((sum, row) => sum + row.readyJudged, 0)
+  const readyMerged = rows.reduce((sum, row) => sum + row.ready, 0)
+  const revertedShare = share(readyReverted, readyJudged)
+  const judged = `${readyReverted} of ${plural(readyJudged, 'judged READY merge')} reverted within ${measure.revertDays} days.`
+  const keep: RuleReading[] = [revertedShare === null
+    ? { _tag: 'NotYetMeasurable', detail: readyMerged === 0 ? 'No READY merge since the trial started.' : `No READY merge has had ${measure.revertDays} days yet.` }
+    : revertedShare <= measure.maximumReadyRevertedShare
+      ? { _tag: 'Met', detail: judged }
+      : { _tag: 'NotMet', detail: `${judged} Keep allows ${percent(measure.maximumReadyRevertedShare)}, so Review needs work.` }]
+  // Measurement only: nothing about this trial can end it.
+  return { metrics: { _tag: 'ReviewReverts', revertDays: measure.revertDays, rows, reverted }, keep, kill: [] }
+}
+
 /** Keep, kill, revise, or continue, from the state and the rule readings. Pure. */
 export function suggestVerdict(state: TrialState, keep: readonly RuleReading[], kill: readonly RuleReading[], onMiss: TrialMiss): TrialSuggestion {
   if (state._tag === 'NotStarted')
@@ -665,6 +741,21 @@ function metricLines(metrics: TrialMetrics): string[] {
         `Trial to date: ${total.mergedInTime} of ${plural(total.judged, 'judged Candidate')} merged within ${metrics.mergeDays} days (${percent(total.mergedShare)}). ${plural(total.open, 'Candidate')} still ${total.open === 1 ? 'has' : 'have'} time.`,
       ]
     }
+    case 'ReviewReverts': {
+      const label = { Service: 'The service', Person: 'A person' } as const
+      return [
+        `| Opened by | Reviewed merges | READY | Reverted within ${metrics.revertDays} days | READY and reverted | READY and judged |`,
+        '| --- | ---: | ---: | ---: | ---: | ---: |',
+        ...metrics.rows.map(row => `| ${label[row.openedBy]} | ${row.merged} | ${row.ready} | ${row.reverted} | ${row.readyReverted} | ${row.readyJudged} |`),
+        ...metrics.reverted.length === 0
+          ? []
+          : [
+              '',
+              'Reverted pull requests:',
+              ...metrics.reverted.map(merge => `- [${merge.pullRequest}](${merge.url}), Review outcome ${merge.outcome.toUpperCase()}, reverted by #${merge.revertedBy}`),
+            ],
+      ]
+    }
   }
 }
 
@@ -747,6 +838,10 @@ function readMeasuredTrial(store: TrialReportSource, trial: MeasuredTrial, now: 
     }
     case 'RetroFollowThrough': {
       const read = readRetroTrial({ measure, candidates: store.listTrialRetroCandidates(toDate), now, toDate })
+      return finish(read.metrics, read.keep, read.kill)
+    }
+    case 'ReviewReverts': {
+      const read = readReviewRevertTrial({ measure, merges: store.listTrialReviewedMerges(toDate), now })
       return finish(read.metrics, read.keep, read.kill)
     }
   }

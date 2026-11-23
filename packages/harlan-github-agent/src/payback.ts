@@ -164,6 +164,7 @@ export interface PaybackSignals {
   closedUnmerged: number
   mergedUntouched: number
   loggedFindingPickedUp: number
+  reverted: number
 }
 
 const SIGNAL_FIELD: Record<ImplicitSignalKind, keyof PaybackSignals> = {
@@ -171,18 +172,22 @@ const SIGNAL_FIELD: Record<ImplicitSignalKind, keyof PaybackSignals> = {
   ClosedUnmerged: 'closedUnmerged',
   MergedUntouched: 'mergedUntouched',
   LoggedFindingPickedUp: 'loggedFindingPickedUp',
+  Reverted: 'reverted',
 }
 
 /**
  * Only pull requests the service opened count. On Harlan's own pull requests a later commit is mostly planned work.
+ * A revert is the exception for Review: it is a defect Review missed, whoever opened the pull request.
  * A signal counts for the work that opened its pull request, and for Review when it names a Review run.
  */
 function signalsFor(work: PaybackWork, facts: readonly PaybackSignalFact[]): PaybackSignals {
-  const counts: PaybackSignals = { humanCommit: 0, closedUnmerged: 0, mergedUntouched: 0, loggedFindingPickedUp: 0 }
+  const counts: PaybackSignals = { humanCommit: 0, closedUnmerged: 0, mergedUntouched: 0, loggedFindingPickedUp: 0, reverted: 0 }
   if (work._tag !== 'Role')
     return counts
   for (const fact of facts) {
-    if (fact.openedBy !== null && (fact.openedBy === work.role || (fact.reviewed && work.role === 'adversarial_review')))
+    const opened = fact.openedBy !== null && fact.openedBy === work.role
+    const reviewed = fact.reviewed && work.role === 'adversarial_review' && (fact.openedBy !== null || fact.kind === 'Reverted')
+    if (opened || reviewed)
       counts[SIGNAL_FIELD[fact.kind]] += 1
   }
   return counts
@@ -223,7 +228,7 @@ export interface PaybackKind {
   /** Minutes of Harlan's time each useful outcome must save to pay for itself. */
   breakEvenMinutes: number | null
   verdict: PaybackVerdict
-  /** Implicit signals in the range, on pull requests the service opened. Routine rows are always zero. */
+  /** Implicit signals in the range, on pull requests the service opened, and reverts of any pull request Review answered. Routine rows are always zero. */
   signals: PaybackSignals
 }
 

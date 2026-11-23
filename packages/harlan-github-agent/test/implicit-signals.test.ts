@@ -312,6 +312,95 @@ describe('logged finding picked up', () => {
   })
 })
 
+describe('revert of a merged pull request', () => {
+  const REVERTED = { kinds: ['Reverted'], limitPerKind: 10, origin: 'Any' } as const
+  const mergeCommit = 'c'.repeat(40)
+
+  /** Pull request 24 merges at minute 3 after one Review of its head. */
+  function mergedTarget(store: Store, overrides: Partial<GitHubPullRequestItem> = {}): void {
+    review(store, 'review-24', 2, observe(store, 1, { number: 24, headSha: 'head-24', ...overrides }))
+    if (!close(store, 3, { number: 24, headSha: 'head-24', mergedAt: at(3), mergeCommitSha: mergeCommit, ...overrides }))
+      throw new Error('Expected a confirmed merge.')
+  }
+
+  /** Pull request 30 opens at minute 4 and closes at the given minute. */
+  function revert(store: Store, minute: number, overrides: Partial<GitHubPullRequestItem>): void {
+    const pullRequest = { number: 30, headSha: 'head-30', title: 'Revert "Fix the broken thing"', body: 'Reverts harlan-zw/example#24', ...overrides }
+    observe(store, 4, { ...pullRequest, mergedAt: null })
+    if (!close(store, minute, pullRequest))
+      throw new Error('Expected a confirmed close.')
+  }
+
+  it('records one signal on the reviewed pull request that a merged revert names', () => {
+    const store = setup()
+    mergedTarget(store)
+    revert(store, 5, { mergedAt: at(5) })
+
+    expect(store.listImplicitSignals(REVERTED)).toEqual([expect.objectContaining({
+      _tag: 'Reverted',
+      pullRequestNumber: 24,
+      headSha: 'head-24',
+      revertedBy: 30,
+      occurredAt: at(5),
+      openedBy: null,
+      reviewRun: expect.objectContaining({ id: 'review-24', headSha: 'head-24' }),
+    })])
+  })
+
+  it('finds the pull request from the merge commit that a git revert names', () => {
+    const store = setup()
+    mergedTarget(store)
+    revert(store, 5, { mergedAt: at(5), title: 'fix: revert the broken thing', body: `This reverts commit ${mergeCommit}.` })
+
+    expect(store.listImplicitSignals(REVERTED).map(signal => signal.pullRequestNumber)).toEqual([24])
+  })
+
+  it('records the signal once when a second revert or a repeat confirmation names the same pull request', () => {
+    const store = setup()
+    mergedTarget(store)
+    revert(store, 5, { mergedAt: at(5) })
+    revert(store, 6, { number: 31, headSha: 'head-31', mergedAt: at(6) })
+    expect(close(store, 7, { number: 30, headSha: 'head-30', title: 'Revert "Fix the broken thing"', body: 'Reverts harlan-zw/example#24', mergedAt: at(5) })).toBe(true)
+
+    expect(store.listImplicitSignals(REVERTED)).toEqual([expect.objectContaining({ revertedBy: 30, occurredAt: at(5) })])
+  })
+
+  it('names no Review run when no run answered the merged head', () => {
+    const store = setup()
+    review(store, 'review-24', 2, observe(store, 1, { number: 24, headSha: 'head-a' }))
+    observe(store, 2, { number: 24, headSha: 'head-24' })
+    expect(close(store, 3, { number: 24, headSha: 'head-24', mergedAt: at(3) })).toBe(true)
+    revert(store, 5, { mergedAt: at(5) })
+
+    expect(store.listImplicitSignals(REVERTED)).toEqual([expect.objectContaining({ pullRequestNumber: 24, reviewRun: null })])
+  })
+
+  it.each([
+    ['the revert closed without a merge', (store: Store) => {
+      mergedTarget(store)
+      revert(store, 5, { mergedAt: null })
+    }],
+    ['the named pull request is still open', (store: Store) => {
+      review(store, 'review-24', 2, observe(store, 1, { number: 24, headSha: 'head-24' }))
+      revert(store, 5, { mergedAt: at(5) })
+    }],
+    ['the revert names itself', (store: Store) => {
+      mergedTarget(store)
+      revert(store, 5, { mergedAt: at(5), body: 'Reverts harlan-zw/example#30' })
+    }],
+    ['the service never reviewed or opened the named pull request', (store: Store) => {
+      observe(store, 1, { number: 24, headSha: 'head-24' })
+      expect(close(store, 3, { number: 24, headSha: 'head-24', mergedAt: at(3) })).toBe(true)
+      revert(store, 5, { mergedAt: at(5) })
+    }],
+  ])('records nothing when %s', (_case, arrange) => {
+    const store = setup()
+    arrange(store)
+
+    expect(store.listImplicitSignals(REVERTED)).toEqual([])
+  })
+})
+
 describe('listImplicitSignals', () => {
   it('returns the newest signals of each requested kind, newest first', () => {
     const store = setup()
