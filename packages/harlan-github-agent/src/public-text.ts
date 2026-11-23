@@ -187,11 +187,11 @@ function entryFor(detect: Detector, hit: PrivateDetailHit['_tag'], matched: stri
 
 /** Normalize URL hosts without interpreting a public URL's path as its authority. */
 function normalizedAuthorities(text: string): string {
-  return text.replaceAll(/(?:[a-z][a-z\d+.-]{0,15}:)?\/\/[^\s<>"`]+/gi, (destination) => {
-    // HTTP host parsing resolves percent escapes and Unicode domain separators for every scheme.
-    const url = URL.parse(destination.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, 'http://'))
-    // Invalid URLs still pass through the literal detector.
-    return url === null ? destination : `//${url.hostname}${url.pathname}${url.search}${url.hash}`
+  return text.replaceAll(/((?:[a-z][a-z\d+.-]{0,15}:)?\/\/(?:[^\s/?#<>"`]*@)?)([^\s@:/?#<>"`()[\]]+)/gi, (authority, prefix: string, hostname: string) => {
+    // Parse the host alone. Ports and Markdown delimiters cannot invalidate its normalization.
+    const url = URL.parse(`http://${hostname}`)
+    // Invalid hosts still pass through the literal detector.
+    return url === null ? authority : `${prefix}${url.hostname}`
   })
 }
 
