@@ -16,7 +16,7 @@ import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
 import { VITALS_COMPARISON_GUEST_SCRIPT, VITALS_EVIDENCE_GUEST_DIRECTORY, vitalsComparisonScript } from './vitals-comparison-runtime.ts'
 import { resolveBrowserSetupRuntime } from './worker-browser-runtime.ts'
-import { isPnpmPackagePath, resolvePnpmPackage, resolveWorkerHostTools } from './worker-host-tools.ts'
+import { isPnpmPackagePath, resolvePnpmPackage, resolvePnpmRuntimePackages, resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
 import { resolveWorkerNuxtseo, workerNuxtseoEnvironment, workerNuxtseoRoutine } from './worker-nuxtseo.ts'
 import { resolveWorkerPackage } from './worker-package.ts'
@@ -189,7 +189,9 @@ async function currentWorkerConfiguration(home: string, profilePath: string) {
   const pnpmPackage = await resolvePnpmPackage(home, profile.tools)
   if (pnpmPackage !== undefined)
     profile.readOnlyPaths = [...new Set(profile.readOnlyPaths.map(path => isPnpmPackagePath(path) ? pnpmPackage : path))]
-  return { profile, hostTools }
+  // A pnpm upgrade can move the runtime that a mounted pnpm shim runs. Find it again for each turn.
+  const runtimePackages = await resolvePnpmRuntimePackages(profile.tools)
+  return { profile, hostTools, runtimePackages }
 }
 
 function within(path: string, root: string): boolean {
@@ -239,8 +241,8 @@ export async function agentWorkerHomes(environment: NodeJS.ProcessEnv, profilePa
 /** Refuse an update before restarting a host that cannot isolate its Agents. */
 export async function checkAgentWorker(environment: NodeJS.ProcessEnv, profilePath?: string): Promise<void> {
   const controllerHome = resolve(environment.HOME ?? '/home/harlan')
-  const { profile } = await currentWorkerConfiguration(controllerHome, profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json'))
-  for (const path of [profile.home, ...profile.tools, ...profile.readOnlyPaths, profile.codex, profile.opencode])
+  const { profile, runtimePackages } = await currentWorkerConfiguration(controllerHome, profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json'))
+  for (const path of [profile.home, ...profile.tools, ...profile.readOnlyPaths, ...runtimePackages, profile.codex, profile.opencode])
     await permittedPath(path, controllerHome)
   for (const path of [profile.codex, profile.opencode]) {
     const metadata = await stat(path)
@@ -277,7 +279,7 @@ export async function prepareAgentSandbox(input: {
 }): Promise<AgentSandbox> {
   const controllerHome = resolve(input.environment.HOME ?? '/home/harlan')
   const profilePath = input.profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json')
-  const { profile, hostTools } = await currentWorkerConfiguration(controllerHome, profilePath)
+  const { profile, hostTools, runtimePackages } = await currentWorkerConfiguration(controllerHome, profilePath)
   const readOnly = input.readOnly === true || input.reviewHome !== undefined
   const isolatedHome = await permittedPath(input.reviewHome ?? profile.home, controllerHome)
   if (within(controllerHome, isolatedHome) || isolatedHome === '/home' || isolatedHome === '/')
@@ -386,6 +388,9 @@ export async function prepareAgentSandbox(input: {
       if (profile.readOnlyPaths.includes(path))
         skillRoots.push({ path: join(canonical, 'skills'), agentPath: join(path, 'skills') })
     }
+    // A pnpm shim names its runtime through a hashed alias. Mount the package at that exact path.
+    for (const path of runtimePackages)
+      args.push('--ro-bind', await permittedPath(path, controllerHome), path)
     const skillCatalogPath = input.reviewHome === undefined && input.networkMode !== 'opencode-client'
       ? AGENT_SKILL_CATALOG_PATH
       : undefined

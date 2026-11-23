@@ -605,6 +605,65 @@ it('follows a pnpm upgrade to its current package instead of refusing the next d
   await expect(checkAgentWorker({ HOME: home }, profile)).resolves.toBeUndefined()
 })
 
+/** A pnpm global runtime install, reached through a hashed alias, as pnpm's native shims run it. */
+async function pnpmRuntimeFixture(home: string, runtimeTarget?: string) {
+  const pnpmHome = join(home, '.local/share/pnpm')
+  const shims = join(pnpmHome, 'bin')
+  const runtime = runtimeTarget ?? join(pnpmHome, 'store/v11/links/@/node/1.0.0/fixture/node_modules/node')
+  const install = join(pnpmHome, 'global/v11/fixture-runtime')
+  await Promise.all([mkdir(shims, { recursive: true }), mkdir(join(install, 'node_modules'), { recursive: true }), mkdir(join(runtime, 'bin'), { recursive: true })])
+  await writeFile(join(install, 'package.json'), JSON.stringify({ engines: { runtime: { name: 'node', version: '1.0.0', onFail: 'download' } } }))
+  await writeFile(join(runtime, 'bin/node'), '#!/bin/sh\necho "managed runtime $*"\n', { mode: 0o755 })
+  await symlink(runtime, join(install, 'node_modules/node'))
+  await symlink('fixture-runtime', join(pnpmHome, 'global/v11/fixture-alias'))
+  await writeFile(join(shims, '.pnpm-shim-v1-node-target'), join(pnpmHome, 'global/v11/fixture-alias/node_modules/node/bin/node'))
+  // pnpm's native shim reads its sibling target file, then runs that exact path.
+  await writeFile(join(shims, 'node'), '#!/bin/sh\nread -r target < "$(dirname "$0")/.pnpm-shim-v1-node-target"\nexec "$target" "$@"\n', { mode: 0o755 })
+  return shims
+}
+
+it('runs the pnpm managed Node runtime that the mounted node shim targets', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-pnpm-runtime-'))
+  const home = join(root, 'controller')
+  const primary = join(root, 'primary')
+  try {
+    await Promise.all([mkdir(home), mkdir(primary), mkdir(join(root, 'worker'))])
+    const shims = await pnpmRuntimeFixture(home)
+    const profile = join(root, 'worker.json')
+    await writeFile(profile, JSON.stringify({ home: join(root, 'worker'), codex: '/usr/bin/true', opencode: '/usr/bin/true', tools: [shims], readOnlyPaths: [] }))
+    await execute('git', ['init', primary])
+    await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
+    const wtConfig = join(root, 'wt.toml')
+    await writeFile(wtConfig, '[list]\njson-schema = 2\n')
+    await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'runtime', '--base', 'HEAD', '--yes'])
+    const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
+    const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'runtime').worktree.path as string
+
+    const result = await runAgentSandboxCommand({ workspace, command: 'node', args: ['--version'], signal: AbortSignal.timeout(10_000), environment: { HOME: home }, profilePath: profile })
+
+    expect(result).toMatchObject({ exitCode: 0, stdout: 'managed runtime --version\n' })
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)
+
+it('refuses a pnpm runtime that resolves into controller credentials', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-pnpm-runtime-credentials-'))
+  const home = join(root, 'controller')
+  try {
+    await mkdir(join(root, 'worker'), { recursive: true })
+    const shims = await pnpmRuntimeFixture(home, join(home, '.ssh/node'))
+    const profile = join(root, 'worker.json')
+    await writeFile(profile, JSON.stringify({ home: join(root, 'worker'), codex: '/usr/bin/true', opencode: '/usr/bin/true', tools: [shims], readOnlyPaths: [] }))
+
+    await expect(checkAgentWorker({ HOME: home }, profile)).rejects.toThrow('exposes controller credentials')
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 it('refuses a missing worker configuration instead of launching outside isolation', async () => {
   await expect(prepareAgentSandbox({ workspace: '/tmp', environment: {}, profilePath: '/does-not-exist/worker.json', provider: 'opencode' })).rejects.toThrow()
 })
