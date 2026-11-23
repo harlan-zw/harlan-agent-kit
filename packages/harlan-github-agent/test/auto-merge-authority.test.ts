@@ -1,11 +1,13 @@
 import type { Octokit } from 'octokit'
 import type { AutoMergeControllerOptions, AutoMergeEvent } from '../src/auto-merge-controller.ts'
+import type { PullRequestFile } from '../src/merge-risk.ts'
+import type { Result } from '../src/result.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewGates } from '../src/types.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createGitHubPullRequestMerger } from '../src/github.ts'
 import { createAutoMergeController, openJournalStore } from '../src/index.ts'
-import { ok } from '../src/result.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { err, ok } from '../src/result.ts'
+import { changedFile, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: ReturnType<typeof openJournalStore>[] = []
 afterEach(() => stores.splice(0).forEach(store => store.close()))
@@ -17,14 +19,27 @@ const gates: ReviewGates = {
   ci: { _tag: 'Passed', evidence: [] },
 }
 
-function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
+interface ChangedFiles {
+  /** Recorded with the observed Revision, as Pull request triage records them. */
+  recorded?: PullRequestFile[]
+  /** What GitHub lists for the pull request. */
+  listed?: Result<PullRequestFile[], string>
+}
+
+function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, changedFiles: ChangedFiles = {}) {
   const store = openJournalStore(':memory:', true)
   stores.push(store)
   const repository = repositoryMapping(every ? { autoMerge: { _tag: 'Every', minimumConfidence: 90 } } : {})
   const pullRequest = pullRequestItem({ autoMerge: !every, mergeState: 'clean', baseRef: boundary === 'retarget' ? 'fix/parent' : 'main' })
   store.syncRepositories([repository], started)
   store.setRepositoryWritesEnabled(repository.github, true)
-  const observation = store.recordObservation({ externalId: 'initial', observedAt: started, source: 'poll', subject: pullRequest })
+  const observation = store.recordObservation({
+    externalId: 'initial',
+    observedAt: started,
+    source: 'poll',
+    subject: pullRequest,
+    ...(changedFiles.recorded === undefined ? {} : { pullRequestFiles: changedFiles.recorded }),
+  })
   if (observation._tag !== 'Inserted')
     throw new Error('Expected the pull request Revision.')
   const task = store.claimNextAdversarialReviewTask('reviewer', started, 60_000)!
@@ -73,6 +88,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
   let duringRead = () => {}
   let finalRead = false
   let reads = 0
+  let fileReads = 0
   const current = {
     node_id: 'PR_node_1',
     state: 'open',
@@ -84,6 +100,12 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
     labels: every ? [] : [{ name: 'harlan-agent-auto-merge' }],
   }
   const options: AutoMergeControllerOptions = {
+    github: {
+      listPullRequestFiles: async () => {
+        fileReads++
+        return changedFiles.listed ?? ok([changedFile('src/index.ts')])
+      },
+    },
     policy: { _tag: 'Enabled', minimumConfidence: 90, method: 'squash' },
     store,
     report: event => events.push(event),
@@ -140,6 +162,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false) {
     policy,
     recordReview,
     publish,
+    fileReads: () => fileReads,
     run(change = () => {}, duringFinalRead = false) {
       duringRead = change
       finalRead = duringFinalRead
@@ -239,4 +262,55 @@ it('refuses to retarget when the parent branch advances during its merge lookup'
     test.current.base.sha = 'unmerged-parent'
   })
   expect(test.mutations).toEqual([])
+})
+
+describe('reading the changed files of the reviewed head', () => {
+  it('refuses a Protected path that GitHub lists for the head', async () => {
+    const test = harness('enable', false, { listed: ok([changedFile('src/index.ts'), changedFile('.github/workflows/ci.yml')]) })
+    await test.run()
+    expect(test.mutations).toEqual([])
+    expect(test.events).toEqual([])
+  })
+
+  it('refuses a Protected path in a repository scoped to every pull request', async () => {
+    const test = harness('fallback', true, { listed: ok([changedFile('CODEOWNERS')]) })
+    await test.run()
+    expect(test.mutations).toEqual([])
+  })
+
+  it('refuses when GitHub cannot list the changed files', async () => {
+    const test = harness('enable', false, { listed: err('GitHub returned 502.') })
+    await test.run()
+    expect(test.mutations).toEqual([])
+  })
+
+  it('uses the files recorded for the reviewed Revision without a GitHub read', async () => {
+    const test = harness('enable', false, { recorded: [changedFile('src/index.ts')], listed: err('GitHub must not be read.') })
+    await test.run()
+    expect(test.mutations).toEqual(['enable'])
+    expect(test.fileReads()).toBe(0)
+  })
+
+  it('refuses a Protected path recorded for the reviewed Revision', async () => {
+    const test = harness('enable', false, { recorded: [changedFile('.gitmodules')] })
+    await test.run()
+    expect(test.mutations).toEqual([])
+  })
+
+  it('reads GitHub once for a head it keeps reconciling', async () => {
+    const test = harness('enable')
+    const controller = createAutoMergeController(test.options)
+    await controller.reconcile(test.repository, test.pullRequest, new AbortController().signal)
+    await controller.reconcile(test.repository, test.pullRequest, new AbortController().signal)
+    expect(test.mutations).toEqual(['enable', 'enable'])
+    expect(test.fileReads()).toBe(1)
+  })
+
+  it('spends no GitHub read on a head without a published READY Review', async () => {
+    const test = harness('enable')
+    test.store.recordReviewPublication({ id: 'pending', reviewRunId: 'review', at: changed, body: 'PENDING', result: { _tag: 'Published', githubCommentId: 42, url: test.pullRequest.url } })
+    await test.run()
+    expect(test.mutations).toEqual([])
+    expect(test.fileReads()).toBe(0)
+  })
 })

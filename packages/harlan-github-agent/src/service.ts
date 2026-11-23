@@ -998,6 +998,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         store,
       }),
       autoMerge: createAutoMergeController({
+        github: workerGithub,
         merger: createGitHubPullRequestMerger({ tokens }),
         policy: config.autoMerge,
         report: (event) => {

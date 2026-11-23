@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAutoMergeController, openJournalStore } from '../src/index.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { changedFilesSource, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const cleanups: Array<() => void> = []
 afterEach(() => cleanups.splice(0).reverse().forEach(cleanup => cleanup()))
@@ -50,6 +50,7 @@ describe('review target branch authority', () => {
       store.setRepositoryWritesEnabled(repository.github, false)
     const retargets: string[] = []
     const controller = createAutoMergeController({
+      github: changedFilesSource(),
       policy: { _tag: 'Enabled', minimumConfidence: 100, method: 'squash' },
       store,
       report: () => undefined,
@@ -106,6 +107,7 @@ describe('review target branch authority', () => {
     cleanups.push(() => restarted.close())
     const merges: string[] = []
     const controller = createAutoMergeController({
+      github: changedFilesSource(),
       policy: { _tag: 'Enabled', minimumConfidence: 100, method: 'squash' },
       store: restarted,
       report: () => {},
@@ -185,6 +187,7 @@ describe('review target branch authority', () => {
     cleanups.push(() => upgraded.close())
     const merges: string[] = []
     const controller = createAutoMergeController({
+      github: changedFilesSource(),
       policy: { _tag: 'Enabled', minimumConfidence: 100, method: 'squash' },
       store: upgraded,
       report: () => {},

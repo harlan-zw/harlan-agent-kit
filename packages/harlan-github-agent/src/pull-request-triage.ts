@@ -54,7 +54,14 @@ const SKIP_CONFIDENCE_FLOOR = 0.7
 const PROSE_FILE_PATTERN = /(?:^|\/)(?:[^/]+\.(?:md|mdx|txt)|LICENSE[^/]*|CHANGELOG[^/]*)$/i
 const PROSE_DIRECTORY_PATTERN = /^docs\//
 /** Agent instructions are behaviour, so they leave the prose set even when they end in `.md`. */
-const BEHAVIOUR_PATTERN = /(?:^|\/)(?:SKILL\.md|AGENTS\.md|CLAUDE\.md|GLOSSARY\.md)$|(?:^|\/)(?:\.github|\.claude|\.codex[^/]*|agent-context)\//
+const BEHAVIOUR_PATTERN = /(?:^|\/)(?:SKILL\.md|AGENTS\.md|CLAUDE\.md|GLOSSARY\.md|REVIEW\.md)$|(?:^|\/)(?:\.github|\.claude|\.codex[^/]*|agent-context)\//
+/**
+ * Files GitHub or git read as repository policy. GitHub reads `CODEOWNERS` at
+ * the root, in `docs/`, and in `.github/`, which the instruction set already
+ * covers. git reads `.gitattributes` in any directory and `.gitmodules` at the
+ * root only.
+ */
+const REPOSITORY_POLICY_PATTERN = /^(?:docs\/)?CODEOWNERS$|(?:^|\/)\.gitattributes$|^\.gitmodules$/
 
 /**
  * Whether an agent reads this file as instructions.
@@ -66,8 +73,19 @@ export function isInstructionPath(path: string): boolean {
   return BEHAVIOUR_PATTERN.test(path)
 }
 
+/**
+ * Whether Auto merge must never merge a change to this file.
+ *
+ * It covers agent instructions, CI workflows, and repository policy files. A
+ * wrong change to one alters what every later agent, check run, or merge
+ * enforces, so no label and no Merge risk verdict lets it merge unread.
+ */
+export function isProtectedPath(path: string): boolean {
+  return isInstructionPath(path) || REPOSITORY_POLICY_PATTERN.test(path)
+}
+
 export function isProsePath(path: string): boolean {
-  if (isInstructionPath(path))
+  if (isProtectedPath(path))
     return false
   return PROSE_FILE_PATTERN.test(path) || PROSE_DIRECTORY_PATTERN.test(path)
 }

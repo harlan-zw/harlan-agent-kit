@@ -18,11 +18,29 @@ Add it for a change with no judgement in it:
 
 Never add it for a change a reviewer must judge: source behaviour, public API, configuration, CI workflow, authentication, authorization, payments, data migrations, deletes, or user-visible copy.
 
-Markdown an agent reads as instructions is source behaviour. That covers Skills, `agent-context/`, `CLAUDE.md`, `AGENTS.md`, `GLOSSARY.md`, and `.github` issue or pull request templates. A change there alters what every agent does in every repository, so Harlan merges it.
+Markdown an agent reads as instructions is source behaviour. That covers Skills, `agent-context/`, `CLAUDE.md`, `AGENTS.md`, `GLOSSARY.md`, `REVIEW.md`, and `.github` issue or pull request templates. A change there alters what every agent does in every repository, so Harlan merges it. The service enforces this: see [Protected paths](#protected-paths).
 
 When unsure, leave it off. A missing label costs one human merge. A wrong label ships an unreviewed change.
 
 Remove the label when a pull request grows past the change it was added for.
+
+## Protected paths
+
+Auto merge never merges a pull request that changes a Protected path. This holds in every scope: `labelled`, `every`, and `contained`. The label never overrides it. A `Contained` Merge risk never overrides it either.
+
+The Protected paths are fixed in code. A repository cannot change them.
+
+- `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, `GLOSSARY.md`, and `REVIEW.md`, in any directory
+- every file under `.github/`, `.claude/`, `.codex*/`, or `agent-context/`, in any directory. This covers CI workflows and `.github/CODEOWNERS`.
+- `CODEOWNERS` at the root or in `docs/`
+- `.gitattributes`, in any directory
+- `.gitmodules` at the root
+
+An edit, an add, a delete, and a rename away from a Protected path all count.
+
+Before the handover, the service reads the changed files of the exact head commit. It uses the list recorded for the reviewed Revision. If none is recorded, it asks GitHub. If the list is unavailable or empty, the pull request waits for Harlan. GitHub lists at most 3000 files, so a list of 3000 may be incomplete, and that pull request waits for Harlan too.
+
+GitHub's file list carries no file mode. So the service cannot see a symlink or a submodule pointer bump outside these paths. A change to `.gitmodules` still catches a submodule that is added or removed.
 
 ## Dependency updates
 
@@ -51,9 +69,9 @@ A repository on `auto_merge.pull_requests: contained` does not need the label fo
 
 Two independent answers produce it and the more dangerous wins, so `Contained` needs both. The controller computes a floor from the changed paths and counts. The Review Agent claims the rest from the diff, which is the only part that sees blast radius.
 
-A file an agent reads as instructions is always `Sensitive`, and a repository cannot widen its own path list to cover one.
+A Protected path is always `Sensitive`, and a repository cannot widen its own path list to cover one.
 
-This changes what the label is for, on those repositories. The label used to be the only way a pull request merged itself. It is now an override a person applies when they have read the change and disagree with the verdict. The controller also applies it to a clean dependency update, as [Dependency updates](#dependency-updates) describes. Set `merge_risk.label_overrides_risk: false` to stop even that beating a `Sensitive` verdict.
+This changes what the label is for, on those repositories. The label used to be the only way a pull request merged itself. It is now an override a person applies when they have read the change and disagree with the verdict. The controller also applies it to a clean dependency update, as [Dependency updates](#dependency-updates) describes. Set `merge_risk.label_overrides_risk: false` to stop even that beating a `Sensitive` verdict. The label never beats a [Protected path](#protected-paths), whatever this setting says.
 
 Merge risk routes the merge and never the Review. Every tracked pull request is still reviewed.
 
@@ -94,6 +112,7 @@ condition holds:
 4. Automated review returned `READY` for the exact current head commit.
 5. Review confidence meets the configured minimum: the repository's own with `pull_requests: every`, else `auto_merge.minimum_confidence`.
 6. The pull request is open, is not a draft, and GitHub reports it mergeable.
+7. The exact head commit changes no [Protected path](#protected-paths), and the service read its complete file list.
 
 The handover pins the reviewed head commit as `expectedHeadOid`, so GitHub
 cancels its own auto-merge when a new commit lands. A review can never merge a

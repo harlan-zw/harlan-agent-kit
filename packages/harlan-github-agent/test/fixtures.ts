@@ -1,9 +1,28 @@
 import type { AgentRuntimeSource } from '../src/agent-profile.ts'
 import type { AgentEvent, AgentProvider, AgentProviderName, AgentTurnRequest } from '../src/agent-provider.ts'
+import type { HeadChangedFiles } from '../src/auto-merge.ts'
+import type { GitHubAgentSource } from '../src/github-agent-source.ts'
+import type { PullRequestFile } from '../src/merge-risk.ts'
 import type { PublicTextGuard } from '../src/public-text.ts'
 import type { AgentProfile, DashboardSnapshot, GitHubIssueItem, GitHubPullRequestItem, RepositoryMapping } from '../src/types.ts'
 import type { GitHubOwnershipEvidence } from '../src/worker-github-evidence.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { ok } from '../src/result.ts'
+
+/** One modified file, the shape GitHub's pull request file list returns. */
+export function changedFile(path: string, overrides: Partial<PullRequestFile> = {}): PullRequestFile {
+  return { additions: 1, deletions: 0, path, previousFilename: null, status: 'modified', ...overrides }
+}
+
+/** The changed files Auto merge read for one head commit. The default is one ordinary source file. */
+export function headChangedFiles(files: PullRequestFile[] = [changedFile('src/index.ts')], headSha = 'abc123'): HeadChangedFiles {
+  return { _tag: 'Read', headSha, files }
+}
+
+/** A GitHub source that lists the same changed files for every pull request. */
+export function changedFilesSource(files: PullRequestFile[] = [changedFile('src/index.ts')]): Pick<GitHubAgentSource, 'listPullRequestFiles'> {
+  return { listPullRequestFiles: async () => ok(files) }
+}
 
 /** A guard with nothing to redact, for tests about something other than private details. */
 export const testPublicText: PublicTextGuard = {

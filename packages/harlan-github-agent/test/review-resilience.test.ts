@@ -11,7 +11,7 @@ import { err, ok } from '../src/result.ts'
 import { refreshReviewGates } from '../src/review-gate-sweep.ts'
 import { createReviewStatusController } from '../src/review-status-controller.ts'
 import { openJournalStore } from '../src/store.ts'
-import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, changedFilesSource, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const soundPremise = { verdict: 'sound' as const, reason: 'The change can be repaired without replacing its intent.' }
 
@@ -215,6 +215,7 @@ describe('review resilience', () => {
     const signal = new AbortController().signal
     const merges: string[] = []
     const autoMerge = createAutoMergeController({
+      github: changedFilesSource(),
       policy: { _tag: 'Enabled', minimumConfidence: 90, method: 'squash' },
       store,
       report: () => {},

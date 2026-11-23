@@ -1,8 +1,8 @@
-import type { AutoMergePolicy } from '../src/auto-merge.ts'
+import type { AutoMergePolicy, HeadChangedFiles } from '../src/auto-merge.ts'
 import type { ReviewFinding, ReviewGates, ReviewGateState, ReviewOutcome, ReviewPublication, ReviewRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { AUTO_MERGE_LABEL, autoMergeCandidate, autoMergeDecision, hasAutoMergeLabel } from '../src/auto-merge.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { changedFile, headChangedFiles, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const passed: ReviewGateState = { _tag: 'Passed', evidence: [] }
 
@@ -50,12 +50,14 @@ const enabled: AutoMergePolicy = { _tag: 'Enabled', minimumConfidence: 100, meth
 
 function decide(input: {
   attempts?: ReviewRun[]
+  changedFiles?: HeadChangedFiles
   policy?: AutoMergePolicy
   pullRequest?: Parameters<typeof pullRequestItem>[0]
   repository?: Parameters<typeof repositoryMapping>[0]
 } = {}) {
   return autoMergeDecision({
     attempts: input.attempts ?? [attempt()],
+    changedFiles: input.changedFiles ?? headChangedFiles(),
     policy: input.policy ?? enabled,
     pullRequest: pullRequestItem({ autoMerge: true, mergeState: 'clean', ...input.pullRequest }),
     repository: repositoryMapping(input.repository),
@@ -217,5 +219,70 @@ describe('auto merge scoped to every pull request', () => {
     expect(autoMergeCandidate(repositoryMapping(), pullRequestItem({ autoMerge: false }))).toBe(false)
     expect(autoMergeCandidate(repositoryMapping(), pullRequestItem({ autoMerge: true }))).toBe(true)
     expect(autoMergeCandidate(repositoryMapping(every), pullRequestItem({ autoMerge: false }))).toBe(true)
+  })
+})
+
+describe('auto merge and Protected paths', () => {
+  const ordinary = changedFile('src/index.ts')
+
+  it('merges an ordinary source change', () => {
+    expect(decide({ changedFiles: headChangedFiles([ordinary, changedFile('test/index.test.ts')]) })._tag).toBe('Merge')
+  })
+
+  it.each([
+    ['a workflow', '.github/workflows/ci.yml'],
+    ['code owners', 'CODEOWNERS'],
+    ['git attributes', 'packages/engine/.gitattributes'],
+    ['submodules', '.gitmodules'],
+    ['Review instructions', 'REVIEW.md'],
+    ['agent instructions', 'packages/engine/CLAUDE.md'],
+  ])('holds a labelled pull request that changes %s', (_name, path) => {
+    expect(decide({ changedFiles: headChangedFiles([ordinary, changedFile(path)]) })).toEqual({
+      _tag: 'Hold',
+      reason: `${path} is a Protected path. Auto merge never merges it.`,
+    })
+  })
+
+  it('holds a Protected path in a repository scoped to every pull request', () => {
+    expect(decide({
+      changedFiles: headChangedFiles([changedFile('.github/workflows/release.yml')]),
+      pullRequest: { autoMerge: false },
+      repository: { autoMerge: { _tag: 'Every', minimumConfidence: 80 } },
+    })._tag).toBe('Hold')
+  })
+
+  it('holds a rename away from a Protected path', () => {
+    const moved = changedFile('ci.yml.bak', { previousFilename: '.github/workflows/ci.yml', status: 'renamed' })
+    expect(decide({ changedFiles: headChangedFiles([moved]) })).toEqual({
+      _tag: 'Hold',
+      reason: '.github/workflows/ci.yml is a Protected path. Auto merge never merges it.',
+    })
+  })
+
+  it('holds when the changed files could not be read', () => {
+    expect(decide({ changedFiles: { _tag: 'Unavailable', reason: 'GitHub returned 502.' } })).toEqual({
+      _tag: 'Hold',
+      reason: 'The changed files of the head commit are unavailable: GitHub returned 502.',
+    })
+  })
+
+  it('holds when the changed files belong to another head commit', () => {
+    expect(decide({ changedFiles: headChangedFiles([ordinary], 'older') })).toEqual({
+      _tag: 'Hold',
+      reason: 'The changed files were read for another head commit.',
+    })
+  })
+
+  it('holds when GitHub lists no changed file', () => {
+    expect(decide({ changedFiles: headChangedFiles([]) })._tag).toBe('Hold')
+  })
+
+  it('holds a list that GitHub may have cut', () => {
+    // GitHub lists at most 3000 files, so a Protected path could sit past the end.
+    const files = Array.from({ length: 3000 }, (_, index) => changedFile(`src/file-${index}.ts`))
+    expect(decide({ changedFiles: headChangedFiles(files) })).toEqual({
+      _tag: 'Hold',
+      reason: 'GitHub lists at most 3000 changed files, so the list may be incomplete.',
+    })
   })
 })
