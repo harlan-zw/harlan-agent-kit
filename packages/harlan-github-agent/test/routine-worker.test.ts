@@ -186,12 +186,16 @@ describe('building the scan prompt', () => {
       })
       if (priorRun === null)
         throw new Error('Expected the prior Routine run.')
+      const prior = claimStoredRun(store)
+      if (prior.id !== priorRun.id)
+        throw new Error('Expected the prior Routine run to claim first.')
       store.recordCandidates({
         routineId: 'harlan-zw/example:ci-review',
         runId: priorRun.id,
         candidates: [candidate],
         at: '2026-08-26T07:05:00.000Z',
       })
+      store.completeRoutineRun({ taskId: prior.id, workerId: prior.state.workerId, fence: prior.state.fence, at: '2026-08-26T07:06:00.000Z', evidence: 'prior run' })
       const fresh = { ...candidate, fingerprint: 'scripts/alerts.log#count', title: 'Alert count grew by one' }
       const task = claimStoredRun(store)
       const capture = { prompts: [] as string[] }
@@ -207,6 +211,27 @@ describe('building the scan prompt', () => {
       expect(result.value.evidence).toContain('1 new')
       const known = store.listCandidates('harlan-zw/example:ci-review').find(entry => entry.fingerprint === candidate.fingerprint)
       expect(known?.runId).toBe(priorRun.id)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('counts a retried run\'s own Candidates as new, and each fingerprint once', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store, 'ci-review')
+      store.setRepositoryWritesEnabled('harlan-zw/example', true)
+      const task = claimStoredRun(store)
+      // The first attempt recorded this Candidate, then the process stopped.
+      store.recordCandidates({ routineId: task.routineId, runId: task.id, candidates: [candidate], at: now().toISOString() })
+      const result = await workerFor(store, scanning({ report: 'One defect, listed twice.', candidates: [candidate, candidate] }))
+        .run(task, new AbortController().signal)
+      expect(result).toMatchObject({ _tag: 'Ok', value: { evidence: expect.stringContaining('| 2 found | 1 new | 0 already known |') } })
+      store.completeRoutineRun({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: now().toISOString(), evidence: 'settled' })
+
+      expect(store.claimNextRoutineReport('controller-1', now().toISOString(), 60_000)?.entry)
+        .toMatchObject({ found: 2, fresh: 1, known: 0, fingerprints: [candidate.fingerprint] })
     }
     finally {
       store.close()
@@ -1231,6 +1256,13 @@ describe('agent retro scan publication', () => {
 
 describe('trial report scan', () => {
   const repository = 'harlan-zw/harlan-agent-kit'
+
+  it('asks for an opening paragraph that the public run log can carry', () => {
+    const prompt = getRoutine('trial-report').scanPrompt({ name: 'trial-report', repository, mode: 'report', priorCandidates: [] })
+
+    expect(prompt).toContain('Open `report` with one paragraph of plain sentences, under 600 characters, before any heading, table, or list.')
+    expect(prompt).toContain('Name each trial\'s suggested verdict, then each action under "This week for Harlan".')
+  })
 
   it('hands the Agent every trial reading, files no issue, and logs the report', async () => {
     const store = openJournalStore(':memory:')

@@ -257,7 +257,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       // against merged fixes at 0.48 area under the curve, and its floor
       // dropped one merged fix and no noise. Most noise is a duplicate, which
       // one proposal alone cannot show.
-      const fresh = options.store.recordCandidates({
+      options.store.recordCandidates({
         routineId: task.routineId,
         runId: task.id,
         candidates: withinSize,
@@ -280,14 +280,19 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
         : 0
 
       // The run log names every Candidate this run reported, new or known, so
-      // it can show the issue that owns each one.
+      // it can show the issue that owns each one. New means this run recorded
+      // it: a retry finds its first attempt's rows already stored, and must
+      // not call them known. Each fingerprint counts once.
+      const ownFingerprints = new Set(runCandidates.map(candidate => candidate.fingerprint))
+      const fingerprints = [...new Set(withinSize.map(candidate => candidate.fingerprint))]
+      const fresh = fingerprints.filter(fingerprint => ownFingerprints.has(fingerprint)).length
       const tally = {
         found: response.candidates.length,
-        fresh: fresh.length,
-        known: withinSize.length - fresh.length,
+        fresh,
+        known: fingerprints.length - fresh,
         outsideScope,
         oversized: maximumChangedFiles === null ? null : { limit: maximumChangedFiles, count: oversized },
-        fingerprints: withinSize.map(candidate => candidate.fingerprint),
+        fingerprints,
       }
       const evidence = [
         `${task.name} on ${task.repository}`,
