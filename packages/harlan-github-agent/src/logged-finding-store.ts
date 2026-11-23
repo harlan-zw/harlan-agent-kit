@@ -4,7 +4,7 @@ import type { FollowUpControls, LoggedFindingPickup, LoggedFindingStatus, Logged
 import type { InlineFindingReceipt, ReviewFindingThread } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewFinding } from './types.ts'
 import { mayRetryFailure, publicFailureCause } from './failure.ts'
-import { followUpIssue, mergedFollowUpsIssue } from './follow-up-issue.ts'
+import { followUpIssue, isPublishedFollowUp, mergedFollowUpsIssue } from './follow-up-issue.ts'
 import { githubAccountBody } from './github-account.ts'
 import { recordLoggedFindingSignal } from './implicit-signal-store.ts'
 import { followUpRoute, normalizeLoggedFindingControls, unfixedFollowUps, withLoggedFindingControls } from './logged-finding-pickup.ts'
@@ -319,7 +319,8 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         JOIN repositories ON repositories.id = subjects.repository_id
         WHERE repositories.github = ? AND issues.github_issue_number = ? AND issues.state_tag = 'Published'`)
         .all(repository.github, issue.number) as Array<{ title: string, body: string }>
-      return receipts.some(receipt => receipt.title === issue.title && githubAccountBody(receipt.body, repository.githubAccount) === issue.body)
+      // GitHub holds the body the publish boundary sent, which may have lines removed.
+      return receipts.some(receipt => isPublishedFollowUp(issue, receipt, repository.githubAccount))
     },
     holdLoggedFindingSelection(selection, held) {
       const key = JSON.stringify([selection.repository, selection.pullRequestNumber])

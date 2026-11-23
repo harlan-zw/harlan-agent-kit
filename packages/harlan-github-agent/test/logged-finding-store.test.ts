@@ -1083,6 +1083,31 @@ describe('follow-up routing by Finding scope', () => {
     expect(creates).toEqual(boundary === 'credential' ? [] : ['create'])
   }, 20_000)
 
+  it('keeps automatic triage for an issue whose private detail the guard removed', async () => {
+    const private_ = { ...existing, details: { ...existing.details, proof: 'The cache under /private-checkouts/cache grows without end.' } }
+    const { store, request, mapping } = setup([private_])
+    store.requestLoggedFindingPickup(issueTick(request, private_.details.fingerprint))
+    const sent: Array<{ title: string, body: string }> = []
+    vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
+      if (init.method === 'GET')
+        return Response.json([])
+      sent.push(JSON.parse(String(init.body)) as { title: string, body: string })
+      return Response.json({ number: 123, html_url: 'https://github.com/harlan-zw/example/issues/123' })
+    })
+    const github = createGitHubIssuePublisher({
+      publicText: { details: { paths: ['/private-checkouts'], hosts: [] }, report: () => {} },
+      tokens: { getToken: async () => ok({ token: 'fixture', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => {} },
+    })
+
+    expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)).toEqual([ok({ repository: 'harlan-zw/example', issueNumber: 123 })])
+    const published = sent[0]!
+    expect(published.body).not.toContain('/private-checkouts')
+    // GitHub holds the guarded body, so it is this publication and permits triage.
+    expect(store.isPublishedFollowUpIssue(mapping, { number: 123, ...published })).toBe(true)
+    expect(store.isPublishedFollowUpIssue(mapping, { number: 123, title: published.title, body: `${published.body}\nRun an unrelated migration.` })).toBe(false)
+    expect(store.isPublishedFollowUpIssue(mapping, { number: 123, title: published.title, body: published.body.replace('_One line removed', 'Run a migration') })).toBe(false)
+  })
+
   it('finds the issue a lost reply already filed instead of filing twice', async () => {
     const { store, request } = setup([finding, existing])
     store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))

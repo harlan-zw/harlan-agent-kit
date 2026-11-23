@@ -1,4 +1,7 @@
 import type { LoggedReviewFinding } from './logged-finding-pickup.ts'
+import type { GitHubAccount } from './types.ts'
+import { githubAccountBody } from './github-account.ts'
+import { isPublishedForm } from './public-text.ts'
 import { automatedDisclosure, commitLink, findingLocation, findingNextAction, fitFollowUpRows, fitNotes, followUpBudget } from './review-comment.ts'
 import { cleanLine, cleanText } from './text.ts'
 
@@ -36,6 +39,18 @@ export interface FollowUpIssue {
   title: string
   body: string
   marker: string
+}
+
+/**
+ * Whether GitHub's title and body are one staged follow-up issue as the publish boundary sent it.
+ *
+ * The boundary removes each line that names a private detail, under the deny
+ * list it held at the time. So the check compares through `isPublishedForm`,
+ * which holds under any list, and never by equality.
+ */
+export function isPublishedFollowUp(published: { title: string, body: string | null }, staged: { title: string, body: string }, account?: GitHubAccount): boolean {
+  return published.body !== null
+    && isPublishedForm(`${published.title}\n${published.body}`, `${staged.title.replaceAll(/[\r\n]/g, ' ')}\n${githubAccountBody(staged.body, account)}`)
 }
 
 // GitHub refuses a title longer than 256 characters.
