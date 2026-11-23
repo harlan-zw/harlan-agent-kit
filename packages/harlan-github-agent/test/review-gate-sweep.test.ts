@@ -237,7 +237,7 @@ function harness(options: {
     repositories: [repositoryMapping()],
     store: {
       listReviewGateRefreshes: () => [options.review ?? gateRefresh()],
-      priorReviewHistory: () => ({ _tag: 'FirstReview' }),
+      repairSource: () => null,
       repairRoundPlan: () => options.rounds ?? { _tag: 'Allowed', number: 1 },
       queueReviewFixForGate: ({ at: _at, ...input }) => {
         recorded.fixQueued.push(input)

@@ -163,7 +163,7 @@ describe('reviewOutcome', () => {
   })
 
   it('names what Repair fixed when this head answers a Repair', () => {
-    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], history: { _tag: 'AfterRepair', priorHeadSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8', priorOutcome: 'Blocked', findings: 2 } })
+    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], repairedFrom: { headSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8', issues: 2 } })
     expect(body).toContain('Repair fixed 2 issues from \`eb2933b\`.')
   })
 

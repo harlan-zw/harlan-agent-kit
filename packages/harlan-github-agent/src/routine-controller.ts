@@ -2,7 +2,6 @@ import type { GitHubSource } from './github.ts'
 import type { JournalStore } from './store.ts'
 import type { RepositoryMapping, Routine, RoutineRun } from './types.ts'
 import { candidateIssueCommands } from './candidate-issue-controller.ts'
-import { routineReportCommand } from './routine-report-controller.ts'
 import { dueRoutine, parseCron } from './routine-schedule.ts'
 import { parseRoutineSpec } from './routine-spec.ts'
 
@@ -176,7 +175,7 @@ export interface RoutinePlanDependencies {
   now: () => Date
   /** The current Repository mappings. A Routine of any other repository opens no run. */
   repositories: readonly Pick<RepositoryMapping, 'github' | 'enabled'>[]
-  store: Pick<JournalStore, 'listRoutines' | 'openRoutineRun' | 'skipRoutineRun' | 'stageRoutineReport'>
+  store: Pick<JournalStore, 'listRoutines' | 'openRoutineRun' | 'skipRoutineRun'>
 }
 
 export interface RoutinePlan {
@@ -257,18 +256,8 @@ export function planRoutineRuns(dependencies: RoutinePlanDependencies): RoutineP
       opened.push(run)
       continue
     }
-    // A skipped run reports too. A check-in that did not happen is exactly the
-    // thing a person needs told, and it leaves no other trace.
-    dependencies.store.stageRoutineReport({
-      command: routineReportCommand({
-        repository: routine.repository,
-        routineId: routine.id,
-        routineName: routine.name,
-        run: { id: run.id, scheduledFor: run.scheduledFor },
-        report: { _tag: 'Skipped', reason: due.missed },
-      }),
-      at: now.toISOString(),
-    })
+    // A skipped run did nothing, so it writes nothing to GitHub. The run itself
+    // stays in the Journal, and the Dashboard lists it with its reason.
     skipped.push(run)
   }
 

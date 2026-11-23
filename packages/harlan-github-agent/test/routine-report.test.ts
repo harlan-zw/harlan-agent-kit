@@ -1,20 +1,33 @@
 import type { GitHubIssuePublisher } from '../src/github.ts'
+import type { RoutineRunReport, RoutineScanTally } from '../src/routine-report-controller.ts'
 import type { Candidate, RoutineName } from '../src/types.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
+import { candidateIssueCommands } from '../src/candidate-issue-controller.ts'
 import { ok } from '../src/result.ts'
-import { createRoutineReportController, isRoutineTrackingIssue, routineReportBody, routineReportCommand, trackingIssueBody, trackingIssueTitle } from '../src/routine-report-controller.ts'
+import { createRoutineReportController, isRoutineTrackingIssue, parseRunLogEntry, routineReportBody, routineReportCommand, runLogEntryComment, trackingIssueBody, trackingIssueTitle } from '../src/routine-report-controller.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
 const now = () => new Date('2026-08-27T07:10:00.000Z')
 const routineId = 'harlan-zw/example:pr-triage'
 const runId = `${routineId}:2026-08-27T07:00:00.000Z`
+const footer = '<sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated Routine report, not Harlan. [AI policy](https://harlanzw.com/blog/ai-in-open-source).</sub>'
+
+const quiet: RoutineScanTally = { found: 0, fresh: 0, known: 0, outsideScope: 0, oversized: null, fingerprints: [] }
+
+function scanned(evidence: string, rest: Partial<Extract<RoutineRunReport, { _tag: 'Scanned' }>> = {}): RoutineRunReport {
+  return { _tag: 'Scanned', evidence, tally: quiet, ...rest }
+}
 
 it('replaces a staged result when a retry finishes with newer evidence', () => {
   const store = openJournalStore(':memory:')
   seed(store)
-  stage(store, { _tag: 'Completed', evidence: 'First attempt', detail: 'Provider was unavailable.' })
-  stage(store, { _tag: 'Completed', evidence: 'Final attempt', detail: 'The scan found no issues.' })
+  stage(store, scanned('First attempt', { detail: 'Provider was unavailable.' }))
+  stage(store, scanned('Final attempt', { detail: 'The scan found no issues.' }))
   settleRun(store, runId)
   const report = store.claimNextRoutineReport('publisher', now().toISOString(), 60_000)
   expect(report?.body).toContain('Final attempt')
@@ -30,6 +43,7 @@ it('publishes the final failure when a retried scan staged an earlier report', (
   const report = store.claimNextRoutineReport('publisher', now().toISOString(), 60_000)
   expect(report?.body).toContain('GitHub requests reached their rate limit.')
   expect(report?.body).not.toContain('Weekly/Monthly Limit Exhausted')
+  expect(report?.entry).toEqual({ _tag: 'Failed', reason: 'GitHub requests reached their rate limit.' })
   store.close()
 })
 
@@ -82,13 +96,13 @@ function failRun(store: ReturnType<typeof openJournalStore>, runId: string, reas
   }
 }
 
-function stage(store: ReturnType<typeof openJournalStore>, report: Parameters<typeof routineReportCommand>[0]['report']): boolean {
+function stage(store: ReturnType<typeof openJournalStore>, report: RoutineRunReport, run = { id: runId, scheduledFor: '2026-08-27T07:00:00.000Z' }): boolean {
   return store.stageRoutineReport({
     command: routineReportCommand({
       repository: 'harlan-zw/example',
       routineId,
       routineName: 'pr-triage',
-      run: { id: runId, scheduledFor: '2026-08-27T07:00:00.000Z' },
+      run,
       report,
     }),
     at: now().toISOString(),
@@ -124,28 +138,29 @@ function publisher(calls: Calls, issueNumber = 42): GitHubIssuePublisher {
   }
 }
 
-describe('writing what one run did', () => {
+function proposal(fingerprint: string, title: string) {
+  return {
+    fingerprint,
+    title,
+    target: 'src/store.ts',
+    claim: `The claim behind ${title}.`,
+    verification: 'pnpm vitest run test/routine-controller.test.ts',
+    estimatedChangedFiles: 2,
+  }
+}
+
+describe('the private archive of one run', () => {
   it('says what a completed run found', () => {
     const body = routineReportBody(
       { scheduledFor: '2026-08-27T07:00:00.000Z' },
-      { _tag: 'Completed', evidence: 'pr-triage | 0 found | 0 new' },
+      scanned('pr-triage | 0 found | 0 new'),
     )
 
     expect(body).toContain('2026-08-27T07:00:00.000Z')
     expect(body).toContain('0 found')
   })
 
-  it('says why a run was skipped, because a skip leaves no other trace', () => {
-    const body = routineReportBody(
-      { scheduledFor: '2026-08-25T07:00:00.000Z' },
-      { _tag: 'Skipped', reason: 'This run was due more than 6 hours ago, so it was skipped.' },
-    )
-
-    expect(body).toContain('Skipped')
-    expect(body).toContain('more than 6 hours ago')
-  })
-
-  it('includes every saved result so a report does not hide what was found', () => {
+  it('includes every saved result so the archive does not hide what was found', () => {
     const found: Candidate[] = [{
       id: `${runId}:src/store.ts#openRoutineRun`,
       routineId,
@@ -162,7 +177,7 @@ describe('writing what one run did', () => {
     }]
     const body = routineReportBody(
       { scheduledFor: '2026-08-27T07:00:00.000Z' },
-      { _tag: 'Completed', evidence: 'pr-triage | 1 found | 1 new' },
+      scanned('pr-triage | 1 found | 1 new'),
       found,
     )
 
@@ -170,7 +185,9 @@ describe('writing what one run did', () => {
     expect(body).toContain('src/store.ts')
     expect(body).toContain('pnpm vitest run test/routine-controller.test.ts')
   })
+})
 
+describe('the tracking issue', () => {
   it('names the tracking issue after the routine and its repository', () => {
     expect(trackingIssueTitle('sentry-checkin', 'harlan-zw/example'))
       .toBe('sentry-checkin: run log for harlan-zw/example')
@@ -191,27 +208,275 @@ describe('writing what one run did', () => {
       labels,
     })).toBe(false)
   })
+
+  it('keeps recognising a run log opened while skipped runs still reported', () => {
+    expect(isRoutineTrackingIssue({
+      repository: 'harlan-zw/example',
+      title: trackingIssueTitle('sentry-checkin', 'harlan-zw/example'),
+      body: 'Every run of the `sentry-checkin` routine reports here, including the runs that found nothing and the runs that were skipped.\n\nClose a proposal\'s own issue to reject it. Closing this one stops the log, not the routine.\n\n> The Harlan Agent Kit opened this issue automatically. It is not Harlan\'s own report.',
+      labels: ['routine:sentry-checkin'],
+    })).toBe(true)
+  })
 })
 
-describe('publishing the run log', () => {
-  it('opens the tracking issue on the first run and comments on it', async () => {
+describe('a run log entry', () => {
+  const ciReview = {
+    runId: 'harlan-zw/harlan-agent-kit:ci-review:2026-11-22T23:00:00.000Z',
+    routineName: 'ci-review' as const,
+    scheduledFor: '2026-11-22T23:00:00.000Z',
+  }
+
+  it('writes a heading, a counts table, an owner table, and folds', () => {
+    expect(runLogEntryComment({
+      ...ciReview,
+      entry: {
+        _tag: 'Scanned',
+        found: 3,
+        fresh: 0,
+        known: 1,
+        outsideScope: 1,
+        oversized: { limit: 5, count: 1 },
+        fingerprints: ['pnpm-lock.yaml#transitive'],
+        verdict: { severity: 'RED', coverage: 'incomplete' },
+      },
+      reported: [{ title: 'Vulnerable transitive dependencies after pending updates', result: { _tag: 'Proposed', pullRequest: null }, issue: { _tag: 'Filed', number: 752 } }],
+    })).toBe([
+      '<!-- routine-run: harlan-zw/harlan-agent-kit:ci-review:2026-11-22T23:00:00.000Z -->',
+      '### 🟠 ci-review · Nov 22, 23:00 UTC',
+      '',
+      '| Found | New | Known | Coverage |',
+      '| --: | --: | --: | :-- |',
+      '| 3 | 0 | 1 | incomplete |',
+      '',
+      '| Proposal | Owner |',
+      '| :-- | :-- |',
+      '| Vulnerable transitive dependencies after pending updates | #752 |',
+      '',
+      '<details><summary>Dropped proposals</summary>',
+      '',
+      '- This Routine\'s rules left out 1 proposal.',
+      '- 1 proposal would change more than 5 files.',
+      '',
+      'The run filed no issue for these proposals.',
+      '',
+      '</details>',
+      '',
+      'The Dashboard History page keeps the full report.',
+      '',
+      footer,
+    ].join('\n'))
+  })
+
+  it('writes a quiet run with a white dot, its counts, and no owner table', () => {
+    const body = runLogEntryComment({
+      ...ciReview,
+      scheduledFor: '2027-01-01T00:05:00.000Z',
+      entry: { _tag: 'Scanned', ...quiet, verdict: null },
+      reported: [],
+    })
+
+    expect(body).toBe([
+      '<!-- routine-run: harlan-zw/harlan-agent-kit:ci-review:2026-11-22T23:00:00.000Z -->',
+      '### ⚪ ci-review · Jan 1, 00:05 UTC',
+      '',
+      '| Found | New | Known |',
+      '| --: | --: | --: |',
+      '| 0 | 0 | 0 |',
+      '',
+      'The Dashboard History page keeps the full report.',
+      '',
+      footer,
+    ].join('\n'))
+  })
+
+  it('marks a run that a person must act on even when it reports no Candidate', () => {
+    const body = runLogEntryComment({
+      ...ciReview,
+      entry: { _tag: 'Scanned', ...quiet, verdict: { severity: 'AMBER', coverage: 'complete' } },
+      reported: [],
+    })
+
+    expect(body).toContain('### 🟠 ci-review · Nov 22, 23:00 UTC')
+    expect(body).toContain('| 0 | 0 | 0 | complete |')
+  })
+
+  it('keeps a quiet verdict white when its coverage is incomplete', () => {
+    const body = runLogEntryComment({
+      ...ciReview,
+      entry: { _tag: 'Scanned', ...quiet, verdict: { severity: 'GREEN', coverage: 'incomplete' } },
+      reported: [],
+    })
+
+    expect(body).toContain('### ⚪ ci-review')
+  })
+
+  it.each([
+    [{ _tag: 'Proposed', pullRequest: null }, { _tag: 'Requested' }, 'issue queued'],
+    [{ _tag: 'Proposed', pullRequest: null }, { _tag: 'Refused' }, 'filing failed'],
+    [{ _tag: 'Proposed', pullRequest: null }, { _tag: 'NotRequested' }, 'no issue'],
+    [{ _tag: 'Proposed', pullRequest: 31 }, { _tag: 'NotRequested' }, '#31'],
+    [{ _tag: 'Merged', pullRequest: 31 }, { _tag: 'NotRequested' }, '#31'],
+    [{ _tag: 'Rejected', reason: 'Not a defect.' }, { _tag: 'NotRequested' }, 'rejected'],
+    [{ _tag: 'Merged', pullRequest: 31 }, { _tag: 'Filed', number: 12 }, '#12'],
+  ] as const)('names the owner of a %o Candidate whose issue is %o as %s', (result, issue, owner) => {
+    const body = runLogEntryComment({
+      ...ciReview,
+      entry: { _tag: 'Scanned', ...quiet, found: 1, known: 1, fingerprints: ['a'], verdict: null },
+      reported: [{ title: 'A defect', result, issue }],
+    })
+
+    expect(body).toContain(`| A defect | ${owner} |`)
+  })
+
+  it('keeps Agent text from linking, notifying, or splitting a cell', () => {
+    const body = runLogEntryComment({
+      ...ciReview,
+      entry: { _tag: 'Failed', reason: 'Registry 503 | see #12 and harlan-zw/example#3 from @octocat, mail a@b.dev, keep `#4`' },
+      reported: [],
+    })
+
+    expect(body).toBe([
+      '<!-- routine-run: harlan-zw/harlan-agent-kit:ci-review:2026-11-22T23:00:00.000Z -->',
+      '### 🟠 ci-review · failed',
+      '',
+      '| Run | Cause | Next |',
+      '| :-- | :-- | :-- |',
+      '| Nov 22, 23:00 UTC | Registry 503 \\| see `#12` and `harlan-zw/example#3` from `@octocat`, mail a@b.dev, keep `#4` | next scheduled run |',
+      '',
+      footer,
+    ].join('\n'))
+  })
+
+  it('heads the ready digest with a dot only when a pull request waits', () => {
+    const waiting = runLogEntryComment({ ...ciReview, routineName: 'ready-digest', entry: { _tag: 'ReadyDigest', total: 1, list: '1 pull request is READY with passing CI, oldest first.\n\n- `harlan-zw/example#4`: 2 days since READY' }, reported: [] })
+    const none = runLogEntryComment({ ...ciReview, routineName: 'ready-digest', entry: { _tag: 'ReadyDigest', total: 0, list: 'No pull request is READY with passing CI.' }, reported: [] })
+
+    expect(waiting).toContain('### 🟠 ready-digest · Nov 22, 23:00 UTC\n\n1 pull request is READY with passing CI, oldest first.\n\n- `harlan-zw/example#4`: 2 days since READY\n\n<sub>')
+    expect(none).toContain('### ⚪ ready-digest · Nov 22, 23:00 UTC\n\nNo pull request is READY with passing CI.')
+  })
+})
+
+describe('private details in a cell', () => {
+  const owned = (title: string) => runLogEntryComment({
+    runId,
+    routineName: 'pr-triage',
+    scheduledFor: '2026-08-27T07:00:00.000Z',
+    entry: { _tag: 'Scanned', ...quiet, found: 1, fresh: 1, fingerprints: ['a'], verdict: null },
+    reported: [{ title, result: { _tag: 'Proposed', pullRequest: null }, issue: { _tag: 'NotRequested' } }],
+    privateHosts: ['agent.example.org'],
+  })
+
+  it.each([
+    ['a filesystem path', 'Rotate /var/log/agent/run.log'],
+    ['a home path', 'Clean $HOME/scratch/run'],
+    ['a Windows path', 'Clean C:\\Users\\agent\\run'],
+    ['a tailnet host', 'Fix https://hogwild.tail1234.ts.net/history'],
+    ['a single-label host', 'Fix http://hogwild:3210/api'],
+    ['a private address', 'Probe 10.0.4.7 times out'],
+    ['a local host name', 'preview.local fails'],
+    ['a configured host, linked', 'Fix https://agent.example.org/history'],
+    ['a configured host, bare', 'agent.example.org restarts twice'],
+  ])('prints a placeholder for a title that names %s', (_case, title) => {
+    expect(owned(title)).toContain('| Untitled proposal | no issue |')
+  })
+
+  it('keeps a title with public links and repository paths', () => {
+    expect(owned('Update src/store.ts per nuxt.com docs')).toContain('| Update src/store.ts per nuxt.com docs | no issue |')
+  })
+
+  it('keeps a failure cause that names a configured host out of the comment', async () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
-      store.recordCandidates({
-        routineId,
-        runId,
-        candidates: [{
-          fingerprint: 'src/store.ts#openRoutineRun',
-          title: 'Fixture title',
-          target: 'src/store.ts',
-          claim: 'The scheduler can open the same run twice.',
-          verification: 'pnpm vitest run test/routine-controller.test.ts',
-          estimatedChangedFiles: 2,
-        }],
-        at: now().toISOString(),
-      })
-      stage(store, { _tag: 'Completed', evidence: 'pr-triage | 2 found' })
+      failRun(store, runId, 'https://agent.example.org/api refused the request.')
+      const calls: Calls = { issues: [], comments: [] }
+
+      await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter', privateHosts: ['agent.example.org'] })
+        .publishPending(new AbortController().signal)
+
+      expect(calls.comments[0]?.body).toContain('| Aug 27, 07:00 UTC | The Dashboard History page keeps this cause. | next scheduled run |')
+      expect(calls.comments[0]?.body).not.toContain('agent.example.org')
+    }
+    finally {
+      store.close()
+    }
+  })
+})
+
+describe('stored run log entries', () => {
+  it('reads every staged run log entry back unchanged', () => {
+    const reports: RoutineRunReport[] = [
+      scanned('evidence', { tally: { found: 2, fresh: 1, known: 1, outsideScope: 0, oversized: { limit: 5, count: 0 }, fingerprints: ['a', 'b', 'a'] }, detail: 'Two found.', verdict: { severity: 'AMBER', coverage: 'complete' } }),
+      { _tag: 'ReadyDigest', evidence: 'ready-digest | 0', total: 0, list: 'No pull request is READY with passing CI.' },
+      { _tag: 'Failed', reason: 'Collection failed.' },
+    ]
+    for (const report of reports) {
+      const { entry } = routineReportCommand({ repository: 'harlan-zw/example', routineId, routineName: 'pr-triage', run: { id: runId, scheduledFor: '2026-08-27T07:00:00.000Z' }, report })
+      expect(parseRunLogEntry(JSON.stringify(entry))).toEqual(entry)
+    }
+  })
+
+  it('refuses a stored shape this version does not know', () => {
+    expect(parseRunLogEntry(null)).toBeNull()
+    expect(parseRunLogEntry('{"_tag":"Skipped","reason":"late"}')).toBeNull()
+    expect(parseRunLogEntry('{"_tag":"Scanned","found":-1}')).toBeNull()
+  })
+})
+
+describe('publishing the run log', () => {
+  it('publishes no Agent prose, whatever the report holds, and keeps it all in the archive', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      const detail = [
+        'PRIVATE_OPENING The scan read /var/log/agent/run.log.',
+        '',
+        '```text',
+        'PRIVATE_FENCE',
+        '',
+        'PRIVATE_FENCE_AFTER_BLANK',
+        '```',
+        '',
+        '    PRIVATE_INDENTED_CODE',
+        '',
+        '## Evidence',
+        'PRIVATE_EVIDENCE',
+      ].join('\n')
+      stage(store, scanned('pr-triage | 0 found', { detail }))
+      settleRun(store, runId)
+      const calls: Calls = { issues: [], comments: [] }
+
+      await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+        .publishPending(new AbortController().signal)
+
+      expect(calls.comments.map(comment => comment.body)).toEqual([[
+        `<!-- routine-run: ${runId} -->`,
+        '### ⚪ pr-triage · Aug 27, 07:00 UTC',
+        '',
+        '| Found | New | Known |',
+        '| --: | --: | --: |',
+        '| 0 | 0 | 0 |',
+        '',
+        'The Dashboard History page keeps the full report.',
+        '',
+        footer,
+      ].join('\n')])
+      expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain(detail)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('opens the tracking issue on the first run and writes a run log entry, not the report', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.recordCandidates({ routineId, runId, candidates: [proposal('src/store.ts#openRoutineRun', 'Fixture title')], at: now().toISOString() })
+      stage(store, scanned('pr-triage | 1 found', {
+        tally: { found: 1, fresh: 1, known: 0, outsideScope: 0, oversized: { limit: 5, count: 0 }, fingerprints: ['src/store.ts#openRoutineRun'] },
+        detail: `The scheduler can open one run twice.\n\n## Evidence\n\n${'x'.repeat(15_000)}`,
+      }))
       settleRun(store, runId)
       const calls: Calls = { issues: [], comments: [] }
 
@@ -220,8 +485,108 @@ describe('publishing the run log', () => {
 
       expect(results).toEqual([{ _tag: 'Ok', value: { repository: 'harlan-zw/example', issueNumber: 42 } }])
       expect(calls.issues).toEqual(['pr-triage: run log for harlan-zw/example'])
-      expect(calls.comments[0]?.body).toContain('2 found')
-      expect(calls.comments[0]?.body).toContain('The scheduler can open the same run twice.')
+      expect(calls.comments[0]?.body).toBe([
+        `<!-- routine-run: ${runId} -->`,
+        '### 🟠 pr-triage · Aug 27, 07:00 UTC',
+        '',
+        '| Found | New | Known |',
+        '| --: | --: | --: |',
+        '| 1 | 1 | 0 |',
+        '',
+        '| Proposal | Owner |',
+        '| :-- | :-- |',
+        '| Fixture title | no issue |',
+        '',
+        'The Dashboard History page keeps the full report.',
+        '',
+        footer,
+      ].join('\n'))
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('names the issue that owns each new and known Candidate', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      const context = { repository: 'harlan-zw/example', name: 'pr-triage' as const, scheduledFor: '2026-08-27T07:00:00.000Z' }
+      const first = store.recordCandidates({ routineId, runId, candidates: [proposal('src/a.ts#known', 'Known defect')], at: now().toISOString() })
+      store.stageCandidateIssues({ commands: candidateIssueCommands(first, context), at: now().toISOString() })
+      const filing = store.claimNextCandidateIssue('filer', now().toISOString(), 60_000)
+      if (filing === null)
+        throw new Error('Expected a Candidate issue command.')
+      store.completeCandidateIssue({ commandId: filing.id, workerId: filing.workerId, fence: filing.fence, at: now().toISOString(), issueNumber: 77, url: 'https://github.com/harlan-zw/example/issues/77' })
+      stage(store, scanned('first run', { tally: { ...quiet, found: 1, fresh: 1, fingerprints: ['src/a.ts#known'] } }))
+      settleRun(store, runId)
+      const calls: Calls = { issues: [], comments: [] }
+      const controller = createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+      await controller.publishPending(new AbortController().signal)
+
+      const secondRun = `${routineId}:2026-08-28T07:00:00.000Z`
+      store.openRoutineRun({ routineId, scheduledFor: '2026-08-28T07:00:00.000Z', specSha: 'abc123', at: '2026-08-28T07:00:05.000Z' })
+      const second = store.recordCandidates({ routineId, runId: secondRun, candidates: [proposal('src/a.ts#known', 'Known defect'), proposal('src/b.ts#new', 'New | defect for @octocat')], at: now().toISOString() })
+      store.stageCandidateIssues({ commands: candidateIssueCommands(second, { ...context, scheduledFor: '2026-08-28T07:00:00.000Z' }), at: now().toISOString() })
+      stage(store, scanned('second run', { tally: { ...quiet, found: 2, fresh: 1, known: 1, fingerprints: ['src/a.ts#known', 'src/b.ts#new'] } }), { id: secondRun, scheduledFor: '2026-08-28T07:00:00.000Z' })
+      settleRun(store, secondRun)
+      await controller.publishPending(new AbortController().signal)
+
+      expect(calls.comments[1]?.body).toContain([
+        '| Found | New | Known |',
+        '| --: | --: | --: |',
+        '| 2 | 1 | 1 |',
+        '',
+        '| Proposal | Owner |',
+        '| :-- | :-- |',
+        '| Known defect | #77 |',
+        '| New \\| defect for `@octocat` | issue queued |',
+      ].join('\n'))
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('never publishes a claim in place of a missing title', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.recordCandidates({
+        routineId,
+        runId,
+        candidates: [
+          { ...proposal('src/a.ts#blank', ''), claim: 'Private claim A names a report-mode defect.' },
+          { ...proposal('src/b.ts#fallback', 'Private claim B names a report-mode defect.'), claim: 'Private claim B names a report-mode defect.' },
+        ],
+        at: now().toISOString(),
+      })
+      stage(store, scanned('evidence', { tally: { ...quiet, found: 2, fresh: 2, fingerprints: ['src/a.ts#blank', 'src/b.ts#fallback'] } }))
+      settleRun(store, runId)
+      const calls: Calls = { issues: [], comments: [] }
+
+      await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+        .publishPending(new AbortController().signal)
+
+      expect(calls.comments[0]?.body).toContain('| Untitled proposal | no issue |\n| Untitled proposal | no issue |')
+      expect(calls.comments[0]?.body).not.toContain('Private claim')
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('writes a failed run as a run log entry with its cause', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      failRun(store, runId, 'Collection failed on every retry.')
+      const calls: Calls = { issues: [], comments: [] }
+
+      await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+        .publishPending(new AbortController().signal)
+
+      expect(calls.comments[0]?.body).toContain('### 🟠 pr-triage · failed\n\n| Run | Cause | Next |\n| :-- | :-- | :-- |\n| Aug 27, 07:00 UTC | Collection failed on every retry. | next scheduled run |')
     }
     finally {
       store.close()
@@ -232,7 +597,7 @@ describe('publishing the run log', () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
-      stage(store, { _tag: 'Completed', evidence: 'first run' })
+      stage(store, scanned('first run'))
       settleRun(store, runId)
       const calls: Calls = { issues: [], comments: [] }
       const controller = createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
@@ -244,16 +609,7 @@ describe('publishing the run log', () => {
         specSha: 'abc123',
         at: '2026-08-28T07:00:05.000Z',
       })
-      store.stageRoutineReport({
-        command: routineReportCommand({
-          repository: 'harlan-zw/example',
-          routineId,
-          routineName: 'pr-triage',
-          run: { id: `${routineId}:2026-08-28T07:00:00.000Z`, scheduledFor: '2026-08-28T07:00:00.000Z' },
-          report: { _tag: 'Completed', evidence: 'second run' },
-        }),
-        at: '2026-08-28T07:05:00.000Z',
-      })
+      stage(store, scanned('second run'), { id: `${routineId}:2026-08-28T07:00:00.000Z`, scheduledFor: '2026-08-28T07:00:00.000Z' })
       settleRun(store, `${routineId}:2026-08-28T07:00:00.000Z`)
       await controller.publishPending(new AbortController().signal)
 
@@ -271,8 +627,23 @@ describe('publishing the run log', () => {
     try {
       seed(store)
 
-      expect(stage(store, { _tag: 'Completed', evidence: 'first' })).toBe(true)
-      expect(stage(store, { _tag: 'Completed', evidence: 'first' })).toBe(false)
+      expect(stage(store, scanned('first'))).toBe(true)
+      expect(stage(store, scanned('first'))).toBe(false)
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('restages a retry whose counts changed', () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+
+      expect(stage(store, scanned('same evidence'))).toBe(true)
+      expect(stage(store, scanned('same evidence', { tally: { ...quiet, found: 1, outsideScope: 1 } }))).toBe(true)
+      settleRun(store, runId)
+      expect(store.claimNextRoutineReport('reporter', now().toISOString(), 60_000)?.entry).toMatchObject({ found: 1, outsideScope: 1 })
     }
     finally {
       store.close()
@@ -283,7 +654,7 @@ describe('publishing the run log', () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
-      stage(store, { _tag: 'Completed', evidence: 'first run' })
+      stage(store, scanned('first run'))
       settleRun(store, runId)
       const refusing: GitHubIssuePublisher = {
         createIssue: async () => ok({ number: 42, url: 'https://github.com/harlan-zw/example/issues/42' }),
@@ -311,7 +682,7 @@ describe('publishing the run log', () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
-      stage(store, { _tag: 'Completed', evidence: 'first run' })
+      stage(store, scanned('first run'))
       settleRun(store, runId)
       const calls: Calls = { issues: [], comments: [] }
       let held = true
@@ -340,7 +711,7 @@ describe('publishing the run log', () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
-      stage(store, { _tag: 'Completed', evidence: 'first run' })
+      stage(store, scanned('first run'))
       settleRun(store, runId)
       let issue: { number: number, url: string } | null = null
       let comment: { id: number } | null = null
@@ -381,7 +752,7 @@ describe('publishing the run log', () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
-      stage(store, { _tag: 'Completed', evidence: 'first run' })
+      stage(store, scanned('first run'))
       const working = repositoryMapping({ github: 'harlan-zw/working', checkout: '/home/harlan/pkg/working' })
       store.syncRepositories([repositoryMapping(), working], '2026-08-27T07:10:01.000Z')
       store.setRepositoryWritesEnabled(working.github, true)
@@ -406,7 +777,7 @@ describe('publishing the run log', () => {
           routineId: workingRoutineId,
           routineName: 'pr-triage',
           run: workingRun,
-          report: { _tag: 'Completed', evidence: 'second run' },
+          report: scanned('second run'),
         }),
         at: '2026-08-27T07:10:04.000Z',
       })
@@ -446,7 +817,7 @@ describe('publishing the run log', () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
-      stage(store, { _tag: 'Completed', evidence: 'first run' })
+      stage(store, scanned('first run'))
       settleRun(store, runId)
       store.setRepositoryWritesEnabled('harlan-zw/example', false)
       const calls: Calls = { issues: [], comments: [] }
@@ -466,7 +837,7 @@ describe('publishing the run log', () => {
     const store = openJournalStore(':memory:')
     try {
       seed(store)
-      stage(store, { _tag: 'Completed', evidence: 'first run' })
+      stage(store, scanned('first run'))
       settleRun(store, runId)
       expect(store.claimNextRoutineReport('reporter', now().toISOString(), 60_000)).not.toBeNull()
       store.pauseAgents(now().toISOString())
@@ -475,6 +846,36 @@ describe('publishing the run log', () => {
     }
     finally {
       store.close()
+    }
+  })
+
+  it('publishes a report staged before the upgrade as its archive body', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'harlan-agent-entry-'))
+    const path = join(directory, 'state.sqlite')
+    try {
+      const before = openJournalStore(path)
+      seed(before)
+      stage(before, scanned('pr-triage | 0 found', { detail: 'The old report.' }))
+      settleRun(before, runId)
+      before.close()
+      const legacy = new DatabaseSync(path)
+      legacy.exec('ALTER TABLE routine_report_commands DROP COLUMN entry_json; PRAGMA user_version = 107;')
+      legacy.close()
+
+      const store = openJournalStore(path)
+      try {
+        const calls: Calls = { issues: [], comments: [] }
+        await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+          .publishPending(new AbortController().signal)
+
+        expect(calls.comments[0]?.body).toBe(`<!-- routine-run: ${runId} -->\n**2026-08-27T07:00:00.000Z** — pr-triage | 0 found\n\nThe old report.`)
+      }
+      finally {
+        store.close()
+      }
+    }
+    finally {
+      rmSync(directory, { recursive: true, force: true })
     }
   })
 })
@@ -502,7 +903,7 @@ describe('daily check-in issues', () => {
             routineId: dailyId,
             routineName: 'daily-checkin',
             run: { id: `${dailyId}:${scheduledFor}`, scheduledFor },
-            report: { _tag: 'Completed', evidence: '0 new Candidates', detail, verdict },
+            report: scanned('0 new Candidates', { detail, verdict }),
           }),
           at: now().toISOString(),
         })
@@ -537,7 +938,7 @@ describe('daily check-in issues', () => {
           routineId: dailyId,
           routineName: 'daily-checkin',
           run: { id: `${dailyId}:${scheduledFor}`, scheduledFor },
-          report: { _tag: 'Completed', evidence: '0 new Candidates', detail, verdict: { severity: 'GREEN', coverage: 'complete' } },
+          report: scanned('0 new Candidates', { detail, verdict: { severity: 'GREEN', coverage: 'complete' } }),
         }),
         at: now().toISOString(),
       })
@@ -565,7 +966,7 @@ describe('daily check-in issues', () => {
           routineId: dailyId,
           routineName: 'daily-checkin',
           run: { id: `${dailyId}:${scheduledFor}`, scheduledFor },
-          report: { _tag: 'Completed', evidence: '0 new Candidates', detail: 'GREEN. Everything passed.' },
+          report: scanned('0 new Candidates', { detail: 'GREEN. Everything passed.' }),
         }),
         at: now().toISOString(),
       })
@@ -604,7 +1005,7 @@ describe('daily check-in issues', () => {
           routineId: dailyId,
           routineName: 'daily-checkin',
           run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' },
-          report: { _tag: 'Completed', evidence: '1 found', detail: 'GREEN. All checks passed.', verdict: { severity: 'GREEN', coverage: 'complete' } },
+          report: scanned('1 found', { detail: 'GREEN. All checks passed.', verdict: { severity: 'GREEN', coverage: 'complete' } }),
         }),
         at: now().toISOString(),
       })
@@ -636,7 +1037,7 @@ describe('daily check-in issues', () => {
           routineId: dailyId,
           routineName: 'daily-checkin',
           run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' },
-          report: { _tag: 'Completed', evidence: '0 found', detail: 'GREEN. All checks passed.', verdict: { severity: 'GREEN', coverage: 'complete' } },
+          report: scanned('0 found', { detail: 'GREEN. All checks passed.', verdict: { severity: 'GREEN', coverage: 'complete' } }),
         }),
         at: now().toISOString(),
       })
@@ -665,7 +1066,7 @@ describe('daily check-in issues', () => {
           routineId: dailyId,
           routineName: 'daily-checkin',
           run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' },
-          report: { _tag: 'Completed', evidence: '1 found', detail: 'GREEN. All checks passed.', verdict: { severity: 'GREEN', coverage: 'complete' } },
+          report: scanned('1 found', { detail: 'GREEN. All checks passed.', verdict: { severity: 'GREEN', coverage: 'complete' } }),
         }),
         at: now().toISOString(),
       })).toBe(true)
@@ -693,23 +1094,11 @@ describe('daily check-in issues', () => {
   })
 })
 
-it('marks a skipped daily run as blocked', () => {
-  const command = routineReportCommand({
-    repository: 'harlan-zw/example',
-    routineId: 'harlan-zw/example:daily-checkin',
-    routineName: 'daily-checkin',
-    run: { id: 'harlan-zw/example:daily-checkin:2026-08-27T07:00:00.000Z', scheduledFor: '2026-08-27T07:00:00.000Z' },
-    report: { _tag: 'Skipped', reason: 'The scheduled run expired.' },
-  })
-  expect(command.body).toContain('[BLOCKED] Daily check-in: 2026-08-27')
-  expect(command.body).toContain('The scheduled run expired.')
-})
-
 it('reports terminal CI failure after a staged scan crashed', () => {
   const store = openJournalStore(':memory:')
   try {
     seed(store)
-    stage(store, { _tag: 'Completed', evidence: 'Earlier scan looked clear.' })
+    stage(store, scanned('Earlier scan looked clear.'))
     failRun(store, runId, 'Collection failed on every retry.')
     expect(store.claimNextRoutineReport('reporter', now().toISOString(), 60_000)?.body).toContain('Failed. Collection failed on every retry.')
   }
@@ -722,7 +1111,7 @@ it('reuses the persistent issue after GitHub loses its create response', async (
     seed(store, 'daily-checkin')
     const id = 'harlan-zw/example:daily-checkin'
     const dailyRun = `${id}:2026-08-27T07:00:00.000Z`
-    store.stageRoutineReport({ command: routineReportCommand({ repository: 'harlan-zw/example', routineId: id, routineName: 'daily-checkin', run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' }, report: { _tag: 'Completed', evidence: 'Quiet.', verdict: { severity: 'GREEN', coverage: 'complete' } } }), at: now().toISOString() })
+    store.stageRoutineReport({ command: routineReportCommand({ repository: 'harlan-zw/example', routineId: id, routineName: 'daily-checkin', run: { id: dailyRun, scheduledFor: '2026-08-27T07:00:00.000Z' }, report: scanned('Quiet.', { verdict: { severity: 'GREEN', coverage: 'complete' } }) }), at: now().toISOString() })
     settleRun(store, dailyRun)
     const calls: Calls = { issues: [], comments: [] }
     const github = publisher(calls)
@@ -749,7 +1138,7 @@ it('publishes the latest settled daily report when an older report retries', asy
     for (const date of ['2026-08-27', '2026-08-28']) {
       const scheduledFor = `${date}T07:00:00.000Z`
       store.openRoutineRun({ routineId: id, scheduledFor, specSha: 'abc123', at: scheduledFor })
-      store.stageRoutineReport({ command: routineReportCommand({ repository: 'harlan-zw/example', routineId: id, routineName: 'daily-checkin', run: { id: `${id}:${scheduledFor}`, scheduledFor }, report: { _tag: 'Completed', evidence: date, verdict: { severity: 'GREEN', coverage: 'complete' } } }), at: scheduledFor })
+      store.stageRoutineReport({ command: routineReportCommand({ repository: 'harlan-zw/example', routineId: id, routineName: 'daily-checkin', run: { id: `${id}:${scheduledFor}`, scheduledFor }, report: scanned(date, { verdict: { severity: 'GREEN', coverage: 'complete' } }) }), at: scheduledFor })
       settleRun(store, `${id}:${scheduledFor}`)
     }
     const report = store.claimNextRoutineReport('reporter', now().toISOString(), 60_000)

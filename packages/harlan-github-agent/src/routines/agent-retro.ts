@@ -19,7 +19,7 @@ Never read live credentials, databases, raw transcripts, or host logs.
 Return a report and verdict, even when nothing needs repair.
 Mark missing or sampled coverage incomplete. Never invent missing evidence.
 Propose at most two proven defects inside packages/harlan-github-agent/ or harlan-agent-kit/skills/.
-Read the current implementation to confirm each cause. Cite event or Incident IDs and timestamps.
+Read the current implementation to confirm each cause. Cite event or Incident IDs and timestamps, or a stalled Routine yield row.
 Report operational blockers for their next actor. Do not propose policy, permission, merge, model, or budget changes.
 Do not edit, commit, push, publish, restart, or deploy anything.`),
   parseResponse: (input) => {

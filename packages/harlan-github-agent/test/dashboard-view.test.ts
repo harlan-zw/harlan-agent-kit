@@ -1099,23 +1099,30 @@ describe('system pane', () => {
 
 describe('routineReportPending', () => {
   it('stays quiet once the report is published, even with writes off', () => {
-    expect(routineReportPending(routineRun(), false, true)).toBe(false)
-    expect(routineReportPending(routineRun({ state: { _tag: 'Skipped', reason: 'Outside the catch-up window.' } }), false, true)).toBe(false)
+    expect(routineReportPending(routineRun({ reportState: 'Published' }), false)).toBe(false)
   })
 
   it('reports a finished run whose report never published while writes are off', () => {
-    expect(routineReportPending(routineRun(), false, false)).toBe(true)
-    expect(routineReportPending(routineRun({ state: { _tag: 'Skipped', reason: 'Outside the catch-up window.' } }), false, false)).toBe(true)
+    expect(routineReportPending(routineRun({ reportState: 'Pending' }), false)).toBe(true)
+    expect(routineReportPending(routineRun({ state: { _tag: 'Failed', reason: 'Sentry timed out.' }, reportState: 'Pending' }), false)).toBe(true)
   })
 
   it('stays quiet while writes are on, because the controller can still claim the report', () => {
-    expect(routineReportPending(routineRun(), true, false)).toBe(false)
+    expect(routineReportPending(routineRun({ reportState: 'Pending' }), true)).toBe(false)
   })
 
-  it('never reports a run that produces no report', () => {
-    expect(routineReportPending(routineRun({ state: { _tag: 'Failed', reason: 'Sentry timed out.' } }), false, false)).toBe(false)
-    expect(routineReportPending(routineRun({ state: { _tag: 'Queued' } }), false, false)).toBe(false)
-    expect(routineReportPending(routineRun({ state: { _tag: 'Running', workerId: 'worker-1', leaseExpiresAt: '2026-08-28T22:00:00.000Z' } }), false, false)).toBe(false)
+  it('never reports a run that staged no report', () => {
+    expect(routineReportPending(routineRun({ state: { _tag: 'Skipped', reason: 'Outside the catch-up window.' } }), false)).toBe(false)
+    expect(routineReportPending(routineRun(), false)).toBe(false)
+  })
+
+  it('never offers writes for a report that used up its attempts, because enabling writes cannot send it', () => {
+    expect(routineReportPending(routineRun({ reportState: 'Failed' }), false)).toBe(false)
+  })
+
+  it('waits for a retrying run to settle', () => {
+    expect(routineReportPending(routineRun({ state: { _tag: 'Queued' }, reportState: 'Pending' }), false)).toBe(false)
+    expect(routineReportPending(routineRun({ state: { _tag: 'Running', workerId: 'worker-1', leaseExpiresAt: '2026-08-28T22:00:00.000Z' }, reportState: 'Pending' }), false)).toBe(false)
   })
 })
 

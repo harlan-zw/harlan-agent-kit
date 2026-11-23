@@ -117,7 +117,7 @@ describe('review finding threads', () => {
     await expect(sync()).resolves.toEqual({ _tag: 'Failed', message: 'GitHub timed out.' })
     await expect(sync()).resolves.toMatchObject({ _tag: 'Written', resolved: 1 })
     expect(edit).toHaveBeenCalledTimes(1)
-    expect(thread.comment.body).toContain(`🟢 **Fixed in [\`eeeeeee\`](https://github.com/${repository.github}/commit/${commitSha})**\n\n~~A split sequence drops bytes~~ · \`42/100\` · does not block merge`)
+    expect(thread.comment.body).toContain(`🟢 **Fixed in [\`eeeeeee\`](https://github.com/${repository.github}/commit/${commitSha})**\n\n~~A split sequence drops bytes~~ · \`42/100\`\n`)
     expect(reviewFindingThreadMarker(thread.comment.body)).toMatchObject({ fingerprint: lockFingerprint, summary: 'A split sequence drops bytes.', logged: true })
     expect(thread.comment.body).not.toContain('Ask an agent to verify and fix this finding')
   })

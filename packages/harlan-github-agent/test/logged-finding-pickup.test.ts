@@ -164,27 +164,28 @@ describe('logged finding pickup', () => {
     expect(decorated).not.toContain('- [ ]')
   })
 
-  it('adds the control under a follow-up row and recounts the fold when a row moves inline', () => {
+  it('adds the control under a follow-up row and links a row whose thread opened beside the code', () => {
     const second = { ...finding, impact: 62, summary: 'The cache never expires.', details: { ...finding.details, fingerprint: 'e'.repeat(64), identity: 'cache' } }
     const hidden = { ...finding, impact: 12, summary: 'A comment has a typo.', details: { ...finding.details, fingerprint: 'd'.repeat(64), identity: 'typo' } }
     const source = verdict([finding, second, hidden])
-    const decorated = withLoggedFindingControls(source, [finding, second, hidden], [], { controls: repairHere, baseRef: 'main', inline: new Set([second.details.fingerprint]) })
+    const decorated = withLoggedFindingControls(source, [finding, second, hidden], [], { controls: repairHere, baseRef: 'main', inline: new Map([[second.details.fingerprint, 'https://github.com/harlan-zw/example/pull/24#discussion_r7']]) })
 
-    expect(decorated).toContain('<b>1 follow-up</b> · none block merge')
-    expect(decorated).toContain(`- \`40\` The parser drops buffered bytes. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)\n  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fingerprint} -->`)
-    expect(decorated).not.toContain('The cache never expires.')
+    expect(decorated).toContain('<b>2 follow-ups</b> · none block merge')
+    expect(decorated).toContain(`- \`40\` The parser drops buffered bytes. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)<br>A split sequence loses bytes.\n  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fingerprint} -->`)
+    expect(decorated).toContain(`The cache never expires. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)<br>A split sequence loses bytes.\n  [Open the thread beside the code](https://github.com/harlan-zw/example/pull/24#discussion_r7) <!-- logged-finding: ${'e'.repeat(64)} -->`)
+    expect(decorated.match(/Ask an agent to verify and fix this finding/g)).toHaveLength(1)
     expect(decorated).not.toContain(`logged-finding: ${hidden.details.fingerprint}`)
     expect(decorated).toContain('<sub>1 note below 40/100 not shown.</sub>')
     expect(decorated.split('\n').at(-1)).toBe(footer)
   })
 
-  it('drops a group label once its only row moves to the inline thread', () => {
+  it('prints no tick sentence for a group whose only row links its thread', () => {
     const source = verdict([added, existing])
-    expect(source).toContain('**Already in `main`.**')
-
-    const decorated = withLoggedFindingControls(source, [added, existing], [], { inline: new Set([existing.details.fingerprint]) })
-    expect(decorated).toContain('<b>1 follow-up</b> · none block merge</summary>\n\n**In this change.**\n\n- `72` ')
-    expect(decorated).not.toContain('Already in')
+    const decorated = withLoggedFindingControls(source, [added, existing], [], { controls: repairHere, baseRef: 'main', inline: new Map([[existing.details.fingerprint, 'https://github.com/harlan-zw/example/pull/24#discussion_r9']]) })
+    expect(decorated).toContain('**In this change.** Tick to have Repair fix it here, before merge.')
+    expect(decorated).toContain('**Already in `main`.**\n')
+    expect(decorated).not.toContain('File this finding as an issue')
+    expect(withoutLoggedFindingControls(decorated)).toBe(source)
   })
 
   it('still strips published comments that end with an old selection hint', () => {

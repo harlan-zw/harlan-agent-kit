@@ -208,6 +208,31 @@ describe('listQueuedReviewStatuses', () => {
       priorOutcome: 'Blocked',
       findings: 1,
     })
+
+    // Once the Review of the Repair commit is recorded, the newest run answers this head,
+    // so the history reads FirstReview. The Repair's own source Review still names what it fixed.
+    const rereview = store.claimNextAdversarialReviewTask('review-agent-repaired', '2026-08-13T01:06:00.000Z', 600_000)
+    if (rereview === null)
+      throw new Error('Expected the Review of the Repair commit.')
+    store.recordReviewRun({
+      id: 'review-run-repaired',
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 30,
+      revisionId: repaired.revisionId,
+      headSha: repairCommit,
+      provider: 'codex',
+      sessionId: 'queue-position-session-repaired',
+      model: 'gpt-5.6',
+      agentVersion: '1.2.3',
+      skillDigest: 'f'.repeat(64),
+      startedAt: '2026-08-13T01:07:00.000Z',
+      completedAt: '2026-08-13T01:07:00.000Z',
+      gates: { merge: passedReviewGates().merge, review: { _tag: 'Passed', evidence: [] }, ci: passedReviewGates().ci },
+      findings: [],
+    })
+    expect(store.priorReviewHistory(repaired.revisionId)).toEqual({ _tag: 'FirstReview' })
+    expect(store.repairSource(repaired.revisionId)).toEqual({ headSha: 'head30', issues: 1 })
+    expect(store.repairSource(store.listReviewRuns('harlan-zw/example', 30).find(run => run.headSha === 'head30')!.revisionId)).toBeNull()
   })
 
   it('agrees with the claim, so position 1 is the Task the next agent takes', () => {

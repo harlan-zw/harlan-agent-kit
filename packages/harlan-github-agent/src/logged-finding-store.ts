@@ -229,6 +229,13 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
     return row === undefined ? [] : JSON.parse(row.inline_findings) as InlineFindingReceipt[]
   }
 
+  /** Each finding's thread beside the code, by fingerprint. After merge, only a resolved thread, which dismissed its finding, replaces its row's place in the Merged issue. */
+  function inlineThreads(reviewRunId: string, pullRequest: GitHubPullRequestItem, controls: FollowUpControls | undefined): Map<string, string> {
+    return new Map(inlineFindings(reviewRunId)
+      .filter(receipt => controls?._tag !== 'Merged' || receipt.resolved)
+      .map(receipt => [receipt.fingerprint, `${pullRequest.url}#discussion_r${receipt.commentId}`]))
+  }
+
   function statuses(subjectId: number, pullRequest: GitHubPullRequestItem): LoggedFindingStatus[] {
     // A filed issue answers its finding on every later head, so it outranks a Repair row.
     const issues = (database.prepare(`SELECT dedupe_key AS fingerprint, state_tag, github_issue_number
@@ -280,7 +287,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
       controls,
       baseRef: pull.baseRef ?? undefined,
       // A merged pull request keeps an unresolved inline finding in its list, so the Merged issue can carry it.
-      inline: new Set(inlineFindings(reviewRunId).filter(receipt => controls?._tag !== 'Merged' || receipt.resolved).map(receipt => receipt.fingerprint)),
+      inline: inlineThreads(reviewRunId, pull, controls),
       mergedIssue: controls?._tag === 'Merged' ? mergedIssue(subjectId, pull.headSha) : undefined,
     })
   }
@@ -361,7 +368,9 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
 
       if (input._tag === 'MergedFollowUps') {
         // The Merged control files one issue from the stored findings, never from comment text.
-        const rows = unfixedFollowUps(findings, statuses(candidate.subject_id, pullRequest))
+        // A resolved thread dismissed its finding, so the issue leaves it out.
+        const resolved = inlineThreads(candidate.review_run_id, pullRequest, controls)
+        const rows = unfixedFollowUps(findings, statuses(candidate.subject_id, pullRequest)).filter(finding => !resolved.has(finding.details.fingerprint))
         if (controls._tag !== 'Merged' || input.inline === true || candidate.github_comment_id !== input.commentId
           || !heldByGitHub(publishedBody(candidate), mapping.githubAccount, before) || rows.length === 0) {
           return false

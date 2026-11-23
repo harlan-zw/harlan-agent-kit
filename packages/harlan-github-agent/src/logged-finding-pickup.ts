@@ -78,6 +78,8 @@ const rowDecorationPattern = /^ {2}[^\n]* <!-- (?:dismiss-)?logged-finding: [a-f
 /** The Merged control, or its status, above the footer. */
 const mergedDecorationPattern = /\n\n[^\n]* <!-- logged-findings: [a-f\d]{40,64} -->(?=\n|$)/g
 
+const threadLinkText = 'Open the thread beside the code'
+
 const tickSentence: Record<FollowUpRoute, string> = {
   Repair: 'Tick to have Repair fix it here, before merge.',
   Issue: 'Tick to file it as an issue.',
@@ -151,17 +153,6 @@ function loggedFindingRow(line: string, finding: LoggedReviewFinding): boolean {
     && line.includes(cleanLine(finding.summary))
 }
 
-/** Drops a group label whose rows all moved to their inline threads. */
-function withoutEmptyGroups(content: string): string {
-  const lines = content.split('\n')
-  return lines.filter((line, index) => {
-    if (!FOLLOW_UP_GROUP_LABEL.test(line))
-      return true
-    const next = lines.slice(index + 1).find(candidate => candidate.trim() !== '')
-    return next?.startsWith('- `') === true
-  }).join('\n')
-}
-
 /** Puts one block above the footer, which stays last. */
 function aboveFooter(body: string, block: string): string {
   const footer = body.split('\n').at(-1)
@@ -179,7 +170,13 @@ function aboveFooter(body: string, block: string): string {
  */
 export function withLoggedFindingControls(body: string, findings: readonly ReviewFinding[], statuses: readonly LoggedFindingStatus[], options: {
   controls?: FollowUpControls | undefined
-  inline?: ReadonlySet<string>
+  /**
+   * Findings whose thread opened beside the code, by fingerprint, to that thread's URL.
+   *
+   * The row stays, so the fold keeps the count the native review shows, and
+   * the thread link replaces the control: the thread carries its own.
+   */
+  inline?: ReadonlyMap<string, string>
   baseRef?: string | undefined
   /** The Merged issue's status, which replaces its control once ticked. */
   mergedIssue?: string | undefined
@@ -215,9 +212,13 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
         decorated.push(dismissalControl(fingerprint))
       continue
     }
-    if (options.inline?.has(fingerprint))
-      continue
     decorated.push(line)
+    // The thread beside the code carries its own control, so the row links it instead.
+    const thread = options.inline?.get(fingerprint)
+    if (thread !== undefined) {
+      decorated.push(`  [${threadLinkText}](${thread}) <!-- logged-finding: ${fingerprint} -->`)
+      continue
+    }
     if (open === undefined)
       continue
     const route = followUpRoute(finding, open.repairOnHead)
@@ -229,9 +230,9 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
   for (const [index, route] of groupRoutes)
     decorated[index] = `${decorated[index]} ${tickSentence[route]}`
   const settled = decorated.join('\n').replace(/<details><summary><b>\d+ follow-ups?<\/b> · none block merge<\/summary>\n([\s\S]*?)<\/details>/g, (_block, content: string) => {
-    // A row moved to its inline thread leaves the fold, so the count and its group follow.
+    // A row moved to its inline thread leaves the fold, so the count follows.
     const count = [...content.matchAll(/^- `\d+` /gm)].length
-    return count === 0 ? '' : `<details><summary><b>${plural(count, 'follow-up')}</b> · none block merge</summary>\n${withoutEmptyGroups(content)}</details>`
+    return count === 0 ? '' : `<details><summary><b>${plural(count, 'follow-up')}</b> · none block merge</summary>\n${content}</details>`
   }).replace(/<details>\n<summary>Logged findings \(\d+\)<\/summary>\n([\s\S]*?)<\/details>/g, (_block, content: string) => {
     const count = [...content.matchAll(/^- \*\*Logged \(/gm)].length
     return count === 0 ? '' : `<details>\n<summary>Logged findings (${count})</summary>\n${content}</details>`
@@ -240,7 +241,8 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
     const { headSha } = options.controls
     if (options.mergedIssue !== undefined)
       return aboveFooter(settled, `${options.mergedIssue.replace(/\s+/g, ' ').trim()} <!-- logged-findings: ${headSha} -->`)
-    return unfixedFollowUps(findings, statuses).some(finding => rendered.has(finding.details.fingerprint))
+    // A resolved thread dismissed its finding, so only the other rows need the issue.
+    return unfixedFollowUps(findings, statuses).some(finding => rendered.has(finding.details.fingerprint) && options.inline?.has(finding.details.fingerprint) !== true)
       ? aboveFooter(settled, mergedFollowUpsControl(headSha))
       : settled
   }

@@ -33,6 +33,15 @@ echo "$(date -I) REPO TOTAL_ISSUES QUICK_WINS HIGH_PRIORITY" >> "${CLAUDE_PLUGIN
 
 On subsequent runs, read the log and highlight what changed since last triage.
 
+## Text that reaches the issue
+
+This Skill posts nothing. If you write triage text that GitHub shows on an issue, follow the [comment voice](../../references/comment-voice.md#issue-triage) Issue triage rules:
+
+- Write `summary` to the person who opened the issue, in two sentences or fewer.
+- For Needs info, put each missing fact in its own `ask` entry, as a noun phrase.
+
+These rules do not change the batch JSON shape below.
+
 ## Workflow
 
 1. **Determine repo and filters**

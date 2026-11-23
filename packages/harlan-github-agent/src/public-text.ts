@@ -1,5 +1,6 @@
 import type { JournalStore } from './store.ts'
 import { dirname, isAbsolute, normalize } from 'node:path'
+import { decodeHTMLStrict } from 'entities'
 
 /**
  * Private details that no public body may carry.
@@ -44,12 +45,18 @@ export const DASHBOARD_LOCAL_HOST = 'harlan-github-agent.localhost'
 /** Loopback names a finding may describe. They never name a private host on their own. */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 
-/** A root with fewer segments would redact paths that every Linux host shares. */
+/**
+ * Top-level directories every Linux host shares. Denying one would remove
+ * ordinary lines, so a root equal to one of these never counts. A dedicated
+ * top-level root such as `/worker-data` does.
+ */
+const SHARED_ROOTS = new Set(['/bin', '/boot', '/dev', '/etc', '/home', '/lib', '/lib64', '/media', '/mnt', '/opt', '/proc', '/root', '/run', '/sbin', '/snap', '/srv', '/sys', '/tmp', '/usr', '/var'])
+
 function privateRoot(path: string): string | null {
   if (!isAbsolute(path))
     return null
   const root = normalize(path).replace(/\/+$/, '')
-  return root.split('/').filter(Boolean).length >= 2 ? root : null
+  return root === '' || SHARED_ROOTS.has(root) ? null : root
 }
 
 /** Every way a body can spell one root: absolute, and from the home directory when it sits there. */
@@ -84,20 +91,12 @@ export function privateDetailsFor(sources: PrivateDetailSources): PrivateDetails
 /**
  * The characters the native review writes as numeric entities.
  *
- * One list serves the encoder and the matcher, so a private path cannot slip
- * through the publish boundary in its encoded spelling.
+ * Detection decodes all Markdown entities, including characters outside this list.
  */
 const ENTITY_ENCODED_CHARACTERS = '&<>@[]#`*_~'
 
 export function encodeEntities(value: string): string {
   return [...value].map(character => ENTITY_ENCODED_CHARACTERS.includes(character) ? `&#${character.charCodeAt(0)};` : character).join('')
-}
-
-function decodeEntities(value: string): string {
-  return value.replaceAll(/&#(\d{2,3});/g, (entity, code: string) => {
-    const character = String.fromCharCode(Number(code))
-    return ENTITY_ENCODED_CHARACTERS.includes(character) ? character : entity
-  })
 }
 
 /** One private detail a body carried, named by the deny list entry it matched. */
@@ -111,265 +110,181 @@ export interface Redaction {
   hits: PrivateDetailHit[]
 }
 
-export const PRIVATE_PATH_PLACEHOLDER = '[private path]'
-export const PRIVATE_LINK_PLACEHOLDER = '[private link]'
-const PLACEHOLDER_PATTERN = /\[private (?:path|link)\]/
+/**
+ * The text that replaces any line naming a private detail.
+ *
+ * The guard removes whole lines, never single tokens. Every attempt to cut out
+ * only the private token left a fragment behind: a suffix after a parenthesis,
+ * credentials before an at sign, or the tail of a Markdown destination.
+ */
+export const REMOVED_LINE = '_One line removed: it named a private path or host._'
+
+/**
+ * What a removed line keeps: indentation, blockquote markers, and one list or
+ * checkbox marker. None of these holds text, and Markdown structure relies on
+ * them. The one word kept is `Repair:`, because the Logged finding status
+ * parser reads it. Any other label is free text and goes with the line.
+ */
+const LINE_STRUCTURE = /^[ \t]*(?:>[ \t]?)*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?(?:Repair:[ \t]+)?/
+/** Markers that parsers read. A removed line keeps each one that names no private detail. */
+const HTML_COMMENT = /<!--.*?-->/g
 
 function escape(value: string): string {
   return value.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** Matches one literal entry in plain text and in its entity-encoded spelling. */
-function literalPattern(value: string): string {
-  return [...value].map(character => ENTITY_ENCODED_CHARACTERS.includes(character)
-    ? `(?:${escape(character)}|&#${character.charCodeAt(0)};)`
-    : escape(character)).join('')
-}
-
-/** Characters a path or URL token runs over. Whitespace, quotes, and Markdown delimiters end it. */
-const TOKEN = String.raw`(?:(?!&#(?:96|60|62|91|93);)[^\s'"\`()<>[\]{}|])`
 /**
  * Where an entry ends. A full stop that ends the sentence counts, so
  * `~/scratch.` matches, while `~/scratchpad`, `~/scratch.txt`, and an encoded
  * `~/scratch_old` do not.
  */
-const TOKEN_END = String.raw`(?![\w-]|\.[\w-]|&#95;)`
-/** Sentence punctuation after a token belongs to the sentence. */
-const TRAILING_PUNCTUATION = /[)\]}'.,:;!?]+$/
+const ENTRY_END = String.raw`(?![\w-]|\.[\w-])`
+/** Where a host ends. A host name holds no underscore, so `__host__` emphasis still matches. */
+const HOST_END = String.raw`(?![a-z\d-]|\.[a-z\d-])`
 /**
  * A URL authority: any scheme, or none, then `//`. A host after it is the
- * URL's own host and is private. A host after a single slash is a path
+ * URL's own host and is private. A bare host after a single slash is a path
  * segment of some other URL, so it stays.
  */
 const AUTHORITY = String.raw`(?:(?<![\w.+-])[a-z][a-z\d+.-]{0,15}:)?(?<![\w./-])//`
-/** Read the authority before classifying its host. User information may contain URL subdelimiters. */
-const URL_AUTHORITY = String.raw`(?:(?:&#\d{2,3};)|[^\s/<>"\x60?#])+`
 
-interface Matchers {
+interface Detector {
+  details: PrivateDetails
+  /** Entries longest first, so a nested root names itself. */
+  paths: string[]
   path: RegExp | null
   link: RegExp | null
 }
 
-function longestFirst(values: readonly string[]): string[] {
-  return [...values].sort((left, right) => right.length - left.length)
-}
-
 /**
- * Patterns use literal deny list entries. An authority ends at a slash or
- * delimiter, so matching user information scans only that authority.
+ * Every pattern starts from a literal deny list entry, and every repetition is
+ * bounded, so one scan does bounded work per character of the body.
  */
-function matchers(details: PrivateDetails): Matchers {
-  const paths = longestFirst(details.paths).map(literalPattern)
-  const hosts = longestFirst(details.hosts).map(literalPattern)
+function detector(details: PrivateDetails): Detector {
+  const paths = [...details.paths].sort((left, right) => right.length - left.length)
+  const hosts = [...details.hosts].sort((left, right) => right.length - left.length).map(escape)
   return {
+    details,
+    paths,
     path: paths.length === 0
       ? null
-      : new RegExp(String.raw`(?<![\w.~$-])(?:${paths.join('|')})(?:/${TOKEN}*)?${TOKEN_END}`, 'g'),
-    // A bare host that a slash precedes sits inside a public URL's path, so it never starts a match.
+      // Match Markdown delimiters separately, so an underscore in a sibling name still stays public.
+      : new RegExp(String.raw`(?<![\w.~$-])(?<emphasis>_{0,3})(?<entry>${paths.map(escape).join('|')})(?:${ENTRY_END}|(?=\k<emphasis>${ENTRY_END}))`, 'g'),
+    // User information before an at sign is part of the line, so it goes with it.
     link: hosts.length === 0
       ? null
-      : new RegExp(String.raw`(?:${AUTHORITY}${URL_AUTHORITY}(?:[/?#]${TOKEN}*)?|(?<![\w./@-])(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})(?::\d{1,5})?(?:[/?#]${TOKEN}*)?${TOKEN_END})`, 'gi'),
+      : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-]))(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})${HOST_END}`, 'gi'),
   }
 }
 
-function entryFor(details: PrivateDetails, hit: PrivateDetailHit['_tag'], token: string): string {
-  const text = decodeEntities(token)
-  if (hit === 'Link') {
-    const authority = text.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, '').split(/[/?#]/)[0]!.replace(TRAILING_PUNCTUATION, '')
-    const url = `https://${authority}`
-    const host = URL.canParse(url) ? new URL(url).hostname.toLowerCase() : ''
-    return details.hosts.find(entry => host === entry || host.endsWith(`.${entry}`)) ?? ''
-  }
-  return longestFirst(details.paths).find(entry => text === entry || text.startsWith(`${entry}/`)) ?? text
+function entryFor(detect: Detector, hit: PrivateDetailHit['_tag'], matched: string): string {
+  const text = matched
+  if (hit === 'Path')
+    return detect.paths.find(entry => text === entry) ?? text
+  const host = text.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, '').toLowerCase()
+  return detect.details.hosts.find(entry => host === entry || host.endsWith(`.${entry}`)) ?? host
 }
 
-interface Span {
-  start: number
-  end: number
+/** Decode once for detection. Keep the original line for publication and Markdown structure. */
+function lineHits(detect: Detector, line: string): PrivateDetailHit[] {
+  const text = decodeHTMLStrict(line)
+  return (['Link', 'Path'] as const).flatMap((tag) => {
+    const pattern = tag === 'Link' ? detect.link : detect.path
+    return pattern === null ? [] : [...text.matchAll(pattern)].map(found => ({ _tag: tag, entry: entryFor(detect, tag, found.groups?.entry ?? found[0]) }))
+  })
+}
+
+/** The line that stands in for `line`, and the markers it keeps. */
+function removedLine(detect: Detector, line: string): string {
+  const structure = LINE_STRUCTURE.exec(line)?.[0] ?? ''
+  const markers = (line.match(HTML_COMMENT) ?? []).filter(marker => lineHits(detect, marker).length === 0)
+  return [`${structure}${REMOVED_LINE}`, ...markers].join(' ')
 }
 
 /**
- * The whole Markdown link or autolink whose target is the token at `start`.
+ * Replaces every line that names a private detail with `REMOVED_LINE`.
  *
- * Its label alone would read as a broken link, so the link goes as a whole.
- * Every search stays on the token's line. Redaction consumes the scanned span.
- */
-function linkSpan(text: string, start: number, end: number): Span | null {
-  const encoded = text.slice(start - 5, start) === '&#60;'
-  const angleLength = encoded ? 5 : text[start - 1] === '<' ? 1 : 0
-  const angleStart = start - angleLength
-  let targetStart = angleStart
-  while (targetStart > 0 && /[\t ]/.test(text[targetStart - 1]!))
-    targetStart--
-  const labelClose = text.slice(targetStart - 6, targetStart) === '&#93;(' ? '&#93;(' : ']('
-  if (text.slice(targetStart - labelClose.length, targetStart) !== labelClose) {
-    const angleClose = encoded ? '&#62;' : '>'
-    return angleLength > 0 && text.startsWith(angleClose, end) ? { start: angleStart, end: end + angleClose.length } : null
-  }
-  const labelEnd = targetStart - labelClose.length
-  const labelOpen = labelClose === '](' ? '[' : '&#91;'
-  const labelStart = text.lastIndexOf(labelOpen, labelEnd - 1)
-  const label = text.slice(labelStart + labelOpen.length, labelEnd)
-  const startOfSpan = labelStart === -1 || label.includes('\n') || label.includes(labelClose.slice(0, -1))
-    ? targetStart
-    : text[labelStart - 1] === '!' ? labelStart - 1 : labelStart
-  let depth = 1
-  let quote: string | null = null
-  let angle = false
-  for (let index = targetStart; index < text.length; index++) {
-    const character = text[index]!
-    if (character === '\n')
-      return { start: startOfSpan, end: index }
-    if (character === '\\') {
-      index++
-      continue
-    }
-    if (text.startsWith('&#60;', index) || text.startsWith('&#62;', index)) {
-      angle = text.startsWith('&#60;', index)
-      index += 4
-      continue
-    }
-    if (quote !== null) {
-      if (character === quote)
-        quote = null
-      continue
-    }
-    if (character === '<')
-      angle = true
-    else if (character === '>')
-      angle = false
-    else if (!angle && (character === '"' || character === '\'') && /\s/.test(text[index - 1] ?? ''))
-      quote = character
-    else if (!angle && character === '(')
-      depth++
-    else if (!angle && character === ')' && --depth === 0)
-      return { start: startOfSpan, end: index + 1 }
-  }
-  // An unclosed private destination has no safe public suffix on this line.
-  return { start: startOfSpan, end: text.length }
-}
-
-function redactTokens(text: string, pattern: RegExp, tag: PrivateDetailHit['_tag'], details: PrivateDetails, hits: PrivateDetailHit[]): string {
-  const placeholder = tag === 'Link' ? PRIVATE_LINK_PLACEHOLDER : PRIVATE_PATH_PLACEHOLDER
-  let output = ''
-  let cursor = 0
-  pattern.lastIndex = 0
-  for (let found = pattern.exec(text); found !== null; found = pattern.exec(text)) {
-    const start = found.index
-    const end = start + found[0].length
-    if (start < cursor)
-      continue
-    const entry = entryFor(details, tag, found[0])
-    if (tag === 'Link' && entry === '')
-      continue
-    const link = linkSpan(text, start, end)
-    if (link !== null && link.start >= cursor) {
-      output += `${text.slice(cursor, link.start)}${placeholder}`
-      cursor = link.end
-      pattern.lastIndex = Math.max(pattern.lastIndex, link.end)
-      hits.push({ _tag: tag, entry })
-      continue
-    }
-    // An entity's closing semicolon belongs to the token, not to the sentence.
-    const punctuation = /&#\d{2,3};$/.test(found[0]) ? '' : found[0].match(TRAILING_PUNCTUATION)?.[0] ?? ''
-    const token = found[0].slice(0, found[0].length - punctuation.length)
-    output += `${text.slice(cursor, start)}${placeholder}`
-    cursor = start + token.length
-    hits.push({ _tag: tag, entry: entryFor(details, tag, token) })
-  }
-  return output + text.slice(cursor)
-}
-
-/**
- * Quoted and inline code paths may hold spaces, which end a plain token.
- *
- * Inside inline code, a private path runs to the closing backtick. Inside
- * quotes, only content that opens with a private path counts, so a quotation
- * that merely mentions one keeps its other words. The native review encodes
- * a backtick as `&#96;`, so that spelling delimits inline code too. An
- * unquoted path with spaces stays out of reach: nothing marks where it ends.
- */
-function redactDelimitedPaths(text: string, pattern: RegExp, details: PrivateDetails, hits: PrivateDetailHit[]): string {
-  const delimited: Array<{ span: RegExp, delimiter: string, anywhere: boolean }> = [
-    { span: /`([^`\n]{1,4096})`/g, delimiter: '`', anywhere: true },
-    { span: /&#96;((?:(?!&#96;)[^\n]){1,4096})&#96;/g, delimiter: '&#96;', anywhere: true },
-    { span: /"([^"\n]{1,4096})"/g, delimiter: '"', anywhere: false },
-    { span: /\B'([^'\n]{1,4096})'\B/g, delimiter: '\'', anywhere: false },
-  ]
-  return delimited.reduce((current, { span, delimiter, anywhere }) => current.replace(span, (whole, content: string) => {
-    pattern.lastIndex = 0
-    const found = pattern.exec(content)
-    if (found === null || (!anywhere && found.index !== 0))
-      return whole
-    hits.push({ _tag: 'Path', entry: entryFor(details, 'Path', content.slice(found.index).split(/\s/)[0] ?? '') })
-    return `${delimiter}${content.slice(0, found.index)}${PRIVATE_PATH_PLACEHOLDER}${delimiter}`
-  }), text)
-}
-
-/**
- * Replaces every private path and link in one body with a placeholder.
- *
- * Pure, so a writer can compare before it decides to write. A Markdown link to
- * a private target goes as a whole, and a public link keeps every character.
+ * Pure, so a writer can compare before it decides to write. A line that names
+ * nothing private keeps every character, so a public link whose path happens
+ * to contain a private host name stays whole.
  */
 export function redactPrivateDetails(text: string, details: PrivateDetails): Redaction {
-  const match = matchers(details)
+  const detect = detector(details)
   const hits: PrivateDetailHit[] = []
-  let redacted = text
-  if (match.path !== null)
-    redacted = redactDelimitedPaths(redacted, match.path, details, hits)
-  if (match.link !== null)
-    redacted = redactTokens(redacted, match.link, 'Link', details, hits)
-  if (match.path !== null)
-    redacted = redactTokens(redacted, match.path, 'Path', details, hits)
-  return { text: redacted, hits }
+  const lines = text.split('\n').map((line) => {
+    const found = lineHits(detect, line)
+    hits.push(...found)
+    return found.length === 0 ? line : `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}`
+  })
+  return {
+    text: lines.join('\n'),
+    hits,
+  }
 }
 
-/** The most placeholders one published body may carry before a comparison gives up. */
-const MAXIMUM_COMPARED_PLACEHOLDERS = 200
+/** Whether `line` is what the guard writes in place of `source`, under any deny list. */
+function isRemovedFormOf(line: string, source: string): boolean {
+  const structure = LINE_STRUCTURE.exec(source)?.[0] ?? ''
+  if (!line.startsWith(`${structure}${REMOVED_LINE}`))
+    return false
+  const rest = line.slice(structure.length + REMOVED_LINE.length)
+  const markers: string[] = source.match(HTML_COMMENT) ?? []
+  return rest.replaceAll(HTML_COMMENT, '').trim() === '' && (rest.match(HTML_COMMENT) ?? []).every(marker => markers.includes(marker))
+}
 
 /**
- * Whether GitHub's `published` body is `source` after a redaction.
+ * Whether GitHub's `published` body is `source` after the guard removed lines.
  *
  * It holds whatever deny list the writer used, so a comment written before a
- * configuration change still matches the Journal text that produced it. Each
- * placeholder stands for some text on one line. Equal text always matches.
+ * configuration change still matches the Journal text that produced it. Every
+ * other line must be equal, and the line count must not change.
  */
-function publishedRedactions(published: string, source: string): Array<{ source: string, placeholder: string }> | null {
-  if (published === source)
-    return []
-  const segments = published.split(new RegExp(PLACEHOLDER_PATTERN.source, 'g'))
-  const placeholders = [...published.matchAll(new RegExp(PLACEHOLDER_PATTERN.source, 'g'))]
-  if (segments.length === 1 || segments.length > MAXIMUM_COMPARED_PLACEHOLDERS + 1)
-    return null
-  const first = segments[0]!
-  const last = segments.at(-1)!
-  if (!source.startsWith(first))
-    return null
-  let position = first.length
-  const redactions: Array<{ source: string, placeholder: string }> = []
-  for (const [offset, segment] of segments.slice(1, -1).entries()) {
-    const index = source.indexOf(segment, position + 1)
-    if (index === -1 || source.slice(position, index).includes('\n'))
-      return null
-    redactions.push({ source: source.slice(position, index), placeholder: placeholders[offset]![0] })
-    position = index + segment.length
-  }
-  const tail = source.length - last.length
-  if (tail <= position || !source.endsWith(last) || source.slice(position, tail).includes('\n'))
-    return null
-  redactions.push({ source: source.slice(position, tail), placeholder: placeholders.at(-1)![0] })
-  return redactions
-}
-
 export function isPublishedForm(published: string, source: string): boolean {
-  return publishedRedactions(published, source) !== null
+  if (published === source)
+    return true
+  const publishedLines = published.split('\n')
+  const sourceLines = source.split('\n')
+  return publishedLines.length === sourceLines.length
+    && publishedLines.every((line, index) => line === sourceLines[index] || isRemovedFormOf(line, sourceLines[index] ?? ''))
 }
 
-/** Carry previously hidden source spans into a replacement, regardless of the current deny list. */
-export function preservePublishedRedactions(published: string, source: string, replacement: string): string {
-  const redactions = publishedRedactions(published, source)
-  return (redactions ?? []).sort((left, right) => right.source.length - left.source.length).reduce((text, redaction) => text.replaceAll(redaction.source, redaction.placeholder), replacement)
+/**
+ * Keeps removed every line GitHub already shows removed, when an edit repeats it.
+ *
+ * The deny list can change between two writes of one comment. A line the old
+ * list removed must stay removed, even when the current list no longer knows
+ * why, so `next` reuses the exact line GitHub holds for each such source line.
+ */
+export function preservePublishedRedactions(published: string, source: string, next: string): string {
+  const publishedLines = published.split('\n')
+  const sourceLines = source.split('\n')
+  if (publishedLines.length !== sourceLines.length)
+    return next
+  const removed = new Map<string, string>()
+  sourceLines.forEach((line, index) => {
+    const shown = publishedLines[index] ?? line
+    if (shown !== line && isRemovedFormOf(shown, line))
+      removed.set(line, shown)
+  })
+  return removed.size === 0 ? next : next.split('\n').map(line => removed.get(line) ?? line).join('\n')
+}
+
+/**
+ * Keeps removed each line GitHub shows removed, by position.
+ *
+ * For a comment the controller rebuilds whole from the same finding on every
+ * pass, where the Journal keeps no earlier source text. A line in `next` stays
+ * removed when GitHub shows a removed line of the same shape at its position,
+ * so a deny list change cannot publish it again.
+ */
+export function keepRemovedLines(published: string, next: string): string {
+  if (!published.includes(REMOVED_LINE))
+    return next
+  const publishedLines = published.split('\n')
+  return next.split('\n').map((line, index) => {
+    const shown = publishedLines[index]
+    return shown !== undefined && shown !== line && isRemovedFormOf(shown, line) ? shown : line
+  }).join('\n')
 }
 
 /** What a published body is, in GitHub's words and the GLOSSARY's. */
@@ -409,12 +324,13 @@ export interface PublicTextGuard {
  * One body on its way to GitHub.
  *
  * `text` is the redacted body, for every comparison before the write. `send`
- * reports the redaction and then writes, so a report always means a write:
- * a no-op, a lost acknowledgment, or a refused authorization reports nothing.
+ * writes it and reports the redaction once GitHub accepts the write, so a
+ * report always means a published body: a no-op, a refused authorization, or
+ * a write GitHub rejects reports nothing.
  */
 export interface PublicBody {
   text: string
-  send: <T>(write: (body: string) => T) => T
+  send: <T>(write: (body: string) => Promise<T>) => Promise<T>
 }
 
 export function publicBody(guard: PublicTextGuard, target: PublicTextTarget, source: string): PublicBody {
@@ -422,12 +338,13 @@ export function publicBody(guard: PublicTextGuard, target: PublicTextTarget, sou
   let reported = false
   return {
     text: redaction.text,
-    send: (write) => {
+    send: async (write) => {
+      const written = await write(redaction.text)
       if (!reported && redaction.hits.length > 0) {
         reported = true
         guard.report({ ...target, hits: redaction.hits })
       }
-      return write(redaction.text)
+      return written
     },
   }
 }
@@ -444,14 +361,19 @@ export function privateDetailIncidentMessage(leak: PrivateDetailLeak): string {
   return `The controller removed private details (${entries}) from ${item}. Find the template or agent output that wrote them.`
 }
 
-/** Records each redaction as an Incident on its repository. Only a person resolves it. */
+/**
+ * Records each redaction as an Incident on its repository. Only a person resolves it.
+ *
+ * The Journal keeps every root and host any configuration ever named, so an
+ * entry that leaves the configuration stays private.
+ */
 export function createPublicTextGuard(options: {
   details: PrivateDetails
-  store: Pick<JournalStore, 'recordIncident'>
+  store: Pick<JournalStore, 'recordIncident' | 'retainPrivateDetails'>
   now: () => Date
 }): PublicTextGuard {
   return {
-    details: options.details,
+    details: options.store.retainPrivateDetails(options.details),
     report: (leak) => {
       options.store.recordIncident({
         scope: { _tag: 'Repository', repository: leak.repository },

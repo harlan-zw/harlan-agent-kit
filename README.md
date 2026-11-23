@@ -187,7 +187,7 @@ pnpm service:update    # Rebuild and restart
 ```
 
 [`packages/octorun`](./packages/octorun/README.md) consumes the standalone [Octorun](https://github.com/harlan-zw/octorun) runtime for this repository.
-It runs automatic change summaries and explicit `@octorun review` commands with the existing App and Claude subscription.
+It runs explicit `@octorun review` and `@octorun run change-summary` requests with the existing App and Claude subscription.
 Run `pnpm octorun doctor`, then `pnpm octorun serve` for continuous processing.
 
 ## Reference

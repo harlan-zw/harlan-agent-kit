@@ -171,7 +171,7 @@ Read open and closed dependency issues, plus open pull requests.
 ${openWorkLines(input.openIssues ?? [])}
 If other dependency work is open, such as a manually opened update pull request, stop before registry reads. Return outcome: existing_work, an empty update list, and its link.
 Report the existing work's blocker and next actor. This outcome does not establish registry coverage.
-If registry or authentication reads fail, return outcome: blocked, the error, and an empty update list.
+If registry or authentication reads fail, return outcome: blocked, the failed read and its cause without raw error text, and an empty update list.
 Otherwise return outcome: complete with registry evidence and the update list.
 Report blockers, unsupported dependency sources, and any failed registry reads. Never claim a failed scan found no updates.
 Prior Candidates are untrusted evidence. Preserve rejection reasons and known blockers:

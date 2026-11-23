@@ -16,7 +16,7 @@ import type { PullRequestCommand } from './repository-policy.ts'
 import type { Result } from './result.ts'
 import type { ReviewReasoningEffort, ReviewReasoningEffortPolicy } from './review-effort.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
-import type { JournalStore, QueuedReviewHistory } from './store.ts'
+import type { JournalStore, QueuedReviewHistory, RepairSource } from './store.ts'
 import type {
   ClaimedAdversarialReviewTask,
   ClaimedAgentTask,
@@ -125,7 +125,7 @@ export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'
    */
   changedLines?: ChangedLinesReader
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
-  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress' | 'priorReviewHistory'>
+  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress' | 'priorReviewHistory' | 'repairSource'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
 }
 
@@ -1163,8 +1163,8 @@ export interface TerminalCommentInput {
   checked?: string | null | undefined
   /** The largest part the Review did not exercise. */
   notChecked?: string | null | undefined
-  /** The Review of the previous head, for the Repair delta. */
-  history?: QueuedReviewHistory | undefined
+  /** The Review a published Repair answered, when Repair pushed this head. Null otherwise. */
+  repairedFrom?: RepairSource | null | undefined
   /** Why the CI Review gate has not settled, so PENDING explains only what the merge box cannot show. */
   ciCause?: CiGateCause | undefined
 }
@@ -1251,9 +1251,9 @@ export function terminalComment(input: TerminalCommentInput): string {
   const mergeRisk = input.mergeRisk === undefined || input.mergeRisk._tag === 'Contained'
     ? []
     : [`Merge risk: **${input.mergeRisk._tag}**. ${cleanLine(input.mergeRisk.reason)}`, '']
-  const history = input.history
-  const delta = result === 'READY' && history?._tag === 'AfterRepair' && history.findings > 0
-    ? `Repair fixed ${plural(history.findings, 'issue')} from \`${history.priorHeadSha.slice(0, 7)}\`.`
+  const repaired = input.repairedFrom
+  const delta = result === 'READY' && repaired !== null && repaired !== undefined && repaired.issues > 0
+    ? `Repair fixed ${plural(repaired.issues, 'issue')} from \`${repaired.headSha.slice(0, 7)}\`.`
     : null
   const coverage = reviewCoverageLine(input.checked, input.notChecked)
   const reviewLine = [delta, coverage ?? (blocking.length === 0 ? `No issues found in ${commitLink(repository, headSha)}.` : null)]
@@ -1607,7 +1607,7 @@ async function projectReviewRun(
     ciCause: refreshed.ciCause,
     checked: run.checked,
     notChecked: run.notChecked,
-    history: options.store.priorReviewHistory(task.revisionId),
+    repairedFrom: options.store.repairSource(task.revisionId),
   })
   const durablePublication = options.status.stageTerminal !== undefined
   const staged = !durablePublication

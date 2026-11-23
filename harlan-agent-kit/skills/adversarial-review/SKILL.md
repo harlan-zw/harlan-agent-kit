@@ -116,8 +116,10 @@ Record every evidence-backed finding. Never cap the finding count.
 
 Give each finding an impact score, stable identity, exact location, and proof.
 Give every finding a proposed next action. Only findings above 80 receive `Repair` or `Dismissal` resolution.
-Describe findings at 80 or below as optional follow-ups. Show their proposed next action beside the finding.
+Write each title, proof, and next action to the [comment voice](../../references/comment-voice.md#finding) Finding rules.
+Findings at 80 or below are optional follow-ups. Show their proposed next action beside the finding.
 They never block Review or start automatic Repair.
+The status comment adds the optional follow-up label, so never start a next action with it.
 
 Decide the pull request premise once before classifying findings.
 
@@ -174,7 +176,8 @@ Never blame a pull request for a confirmed baseline failure. For a maintained or
 
 ### 8. Freeze the outcome
 
-Return only the premise, scored findings, and confidence. The controller applies the exact `READY`, `PENDING`, or `BLOCKED` gates from the review contract.
+Return only the premise, scored findings, confidence, `checked`, and `notChecked`. The [review contract](references/review-contract.md#review-run-fields) defines the last two.
+The controller applies the exact `READY`, `PENDING`, or `BLOCKED` gates from the review contract.
 
 Refetch the PR immediately before posting. If the head SHA changed, restart the review.
 

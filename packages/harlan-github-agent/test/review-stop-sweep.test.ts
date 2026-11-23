@@ -1,6 +1,8 @@
+import type { Octokit } from 'octokit'
 import type { ReviewCheckRunOutcome } from '../src/review-check-run.ts'
 import type { JournalStore, StoppedReview } from '../src/store.ts'
 import { describe, expect, it } from 'vitest'
+import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { err, ok } from '../src/result.ts'
 import { publishStoppedReviews, stoppedReviewComment } from '../src/review-stop-sweep.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -42,6 +44,62 @@ const stoppedRepair: StoppedReview = {
     { _tag: 'Open', summary: 'Second exact finding.', nextAction: 'Fix the second boundary.', resolution: 'Repair' },
   ],
 }
+
+it.each([
+  ['path', '/private-checkouts/repo', []],
+  ['host', 'https://private-host.test/work', [700, 500]],
+] as const)('keeps stopped Review %s details out of comments and every check payload', async (_kind, detail, runIds) => {
+  const review = { ...stopped, reason: `Cannot access ${detail}` }
+  let remoteBody = review.publishedBody
+  const comments: string[] = []
+  const titles: string[] = []
+  const writeCheck = (input: { output: { title: string } }) => {
+    titles.push(input.output.title)
+    return Promise.resolve({ data: { id: 900 } })
+  }
+  const comment = () => ({ id: review.commentId, body: remoteBody, user: { login: 'agent[bot]' }, html_url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })
+  const client = {
+    paginate: () => Promise.resolve(runIds.map(id => ({ id, name: 'harlan-agent-kit / Review', status: 'in_progress', app: { id: 98114 } }))),
+    rest: {
+      checks: { listForRef: () => undefined, create: writeCheck, update: writeCheck },
+      issues: {
+        getComment: () => Promise.resolve({ data: comment() }),
+        updateComment: (input: { body: string }) => {
+          comments.push(input.body)
+          remoteBody = input.body
+          return Promise.resolve({ data: comment() })
+        },
+      },
+    },
+  } as unknown as Octokit
+  const source = createGitHubAgentSource({
+    actorLogin: () => 'agent[bot]',
+    createClient: () => client,
+    ownAppId: 98114,
+    publicText: { details: { paths: ['/private-checkouts'], hosts: ['private-host.test'] }, report: () => {} },
+    tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+  })
+  const result = await publishStoppedReviews({
+    github: { ...source, clearAgentLabels: githubStatus.clearAgentLabels, getPullRequestReviewSnapshot: async () => snapshot() },
+    now: () => new Date('2026-11-23T00:00:00.000Z'),
+    reportCheckRun: () => {},
+    repositories: [repositoryMapping()],
+    store: {
+      ...reviewClosureStore,
+      listStoppedReviews: () => [review],
+      recordStoppedReviewStatus: () => true,
+      recordDeletedReviewComment: () => true,
+    },
+  }, new AbortController().signal)
+
+  expect(result.results).toEqual([ok({ _tag: 'Published', repository: review.repository, pullRequestNumber: 24 })])
+  expect(comments).toHaveLength(1)
+  expect(titles).toHaveLength(runIds.length || 1)
+  for (const payload of [...comments, ...titles]) {
+    expect(payload).not.toContain(detail)
+    expect(payload).toContain('_One line removed: it named a private path or host._')
+  }
+})
 
 function snapshot(overrides: Parameters<typeof pullRequestItem>[0] = {}) {
   return ok({
@@ -112,6 +170,7 @@ describe('stoppedReviewComment', () => {
   it.each([
     'The helper was not found in the module, so the Repair is unsafe.',
     'The fix would bypass the rate limit guard.',
+    'The earlier run said "The codex session failed: timeout", but the real blocker is the missing migration.',
   ])('keeps a Repair Agent summary that only mentions a failure word: %s', (summary) => {
     const body = stoppedReviewComment({ ...stoppedRepair, reason: summary }, '2026-11-22T04:00:00.000Z')
 

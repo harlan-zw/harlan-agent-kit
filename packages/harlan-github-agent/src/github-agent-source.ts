@@ -27,7 +27,7 @@ import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { collectJobWorkflowContext } from './job-workflow-context.ts'
 import { normalizeLoggedFindingControls, withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
-import { isPublishedForm, preservePublishedRedactions, publicBody } from './public-text.ts'
+import { isPublishedForm, keepRemovedLines, preservePublishedRedactions, publicBody } from './public-text.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
@@ -1093,10 +1093,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           return err('The stored issue triage comment belongs to another GitHub actor.')
         if (existing !== undefined && existing.body === body && existing.html_url !== undefined)
           return ok({ commentId: existing.id, url: existing.html_url })
-        const written = await outgoing.send(sent => existing === undefined
-          ? octokit.value.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body: sent, ...requestOptions })
-          : octokit.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions }))
-        const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
+        const writtenId = await outgoing.send(async sent => (existing === undefined
+          ? await octokit.value.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body: sent, ...requestOptions })
+          : await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions })).data.id)
+        const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: writtenId, ...requestOptions })
         if (
           confirmed.data.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase()
           || confirmed.data.body !== body
@@ -1362,10 +1362,10 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         const authorization = authorize?.()
         if (authorization?._tag === 'Err')
           return authorization
-        const written = await outgoing.send(sent => existing === undefined
-          ? writer.value.rest.issues.createComment({ owner, repo, issue_number: pullRequestNumber, body: sent, ...requestOptions })
-          : writer.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions }))
-        const confirmed = await writer.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
+        const writtenId = await outgoing.send(async sent => (existing === undefined
+          ? await writer.value.rest.issues.createComment({ owner, repo, issue_number: pullRequestNumber, body: sent, ...requestOptions })
+          : await writer.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions })).data.id)
+        const confirmed = await writer.value.rest.issues.getComment({ owner, repo, comment_id: writtenId, ...requestOptions })
         const writerLogin = adopted && legacyActor !== undefined ? legacyActor.login.toLowerCase() : actor
         if (
           confirmed.data.user?.login.toLowerCase() !== writerLogin
@@ -1442,8 +1442,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
 
     async editReviewFindingComment(repository, comment, bodyText, signal, authorize) {
       // The finding thread sync calls this on every pass. `send` reports only
-      // the write, never a body GitHub already holds.
-      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'review comment' }, githubAccountBody(bodyText, repository.githubAccount))
+      // the write, never a body GitHub already holds. A line GitHub shows
+      // removed stays removed, whatever the deny list says now.
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'review comment' }, keepRemovedLines(comment.body, githubAccountBody(bodyText, repository.githubAccount)))
       const body = outgoing.text
       if (normalizeLoggedFindingControls(comment.body) === body)
         return ok(comment)
@@ -1505,7 +1506,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       // gate, so the second publication sees the first one's check run.
       const gateKey = `${repository.github.toLowerCase()}:${headSha.toLowerCase()}`
       const queued = (checkRunWriteGates.get(gateKey) ?? Promise.resolve())
-        .then(() => writeReviewCheckRun(octokit.value, owner, repo, headSha, update, options.ownAppId, signal, authorize))
+        .then(() => writeReviewCheckRun(octokit.value, owner, repo, headSha, update, options.ownAppId, signal, authorize, options.publicText, repository.github))
       const tail = queued.then(() => undefined, () => undefined)
       checkRunWriteGates.set(gateKey, tail)
       // One publication at a time per head, and the entry leaves when the
@@ -1531,6 +1532,8 @@ async function writeReviewCheckRun(
   ownAppId: number,
   signal: AbortSignal,
   authorize: ReviewPublicationAuthority | undefined,
+  publicText: PublicTextGuard,
+  repository: string,
 ): Promise<Result<void, string>> {
   const requestOptions = { request: { signal } }
   const listed = await octokit.paginate(octokit.rest.checks.listForRef, {
@@ -1556,12 +1559,13 @@ async function writeReviewCheckRun(
     return authorization
   // The name plus the app id is the identity, so a foreign check run that
   // borrows the name never takes this service's write.
-  const output = { title: update.title, summary: 'The review comment on this pull request carries the detail.' }
+  const title = publicBody(publicText, { repository, itemNumber: null, writer: 'automated review' }, update.title)
+  const output = { title: title.text, summary: 'The review comment on this pull request carries the detail.' }
   const payload = update._tag === 'Running'
     ? { status: 'in_progress' as const, output }
     : { status: 'completed' as const, conclusion: update.conclusion, completed_at: update.completedAt, output }
   const newest = listed.value[0]
-  const written = await (newest === undefined
+  const written = await title.send(async () => newest === undefined
     ? octokit.rest.checks.create({
         owner,
         repo,
@@ -1591,7 +1595,7 @@ async function writeReviewCheckRun(
   for (const stray of listed.value.slice(1)) {
     if (stray.status === 'completed')
       continue
-    const closed = await octokit.rest.checks.update({
+    const closed = await title.send(() => octokit.rest.checks.update({
       owner,
       repo,
       check_run_id: stray.id,
@@ -1600,7 +1604,7 @@ async function writeReviewCheckRun(
       completed_at: update.completedAt,
       output,
       ...requestOptions,
-    })
+    }))
       .then((): Result<void, string> => ok(undefined))
       .catch((error: unknown): Result<void, string> => err(message(error)))
     if (closed._tag === 'Err')

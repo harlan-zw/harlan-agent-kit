@@ -89,7 +89,7 @@ A live check of the URL is cheap and allowed: `curl -sI <url>`.
 Use controller ownership bodies for private issue and pull request checks. Never obtain worker credentials or bypass the public wrapper.
 Read each body's coverage tag. A truncated list or body does not establish complete duplicate checks.
 Missing closed history blocks checks for matching prior fixes or regressions.
-It does not block a verified new cause after duplicate checks against open work pass.
+Evidence limits never block a Candidate for a verified new cause. Name the unchecked scope in its claim.
 Report those coverage gaps separately for each action.
 
 Group actions with one cause into one Candidate. Twenty 404s behind one missing redirect rule are one Candidate.
@@ -104,6 +104,7 @@ A low click-through rate on a query is a lead, not a defect. Propose a title or 
 ### Return the report
 
 Return the controller's JSON response with `report` and `candidates`.
+GitHub shows the report and each Candidate. Follow the [comment voice](../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 Keep the Markdown report within 20,000 characters.
 
 Start the report with:

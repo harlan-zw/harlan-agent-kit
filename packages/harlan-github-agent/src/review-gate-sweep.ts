@@ -30,7 +30,7 @@ export interface ReviewGateSweepOptions {
   /** Proves the controller may publish Repair commits in this repository. */
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'priorReviewHistory' | 'queueBaselineRepairForGate' | 'queueReviewFixForGate' | 'recordCiRepairFinding' | 'recordIncident' | 'recordReviewPublication' | 'repairRoundPlan' | 'resolveIncidents' | 'stageReviewGateStatus'>
+  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'repairSource' | 'queueBaselineRepairForGate' | 'queueReviewFixForGate' | 'recordCiRepairFinding' | 'recordIncident' | 'recordReviewPublication' | 'repairRoundPlan' | 'resolveIncidents' | 'stageReviewGateStatus'>
 }
 
 /**
@@ -128,7 +128,7 @@ export async function refreshReviewGates(
       ciCause,
       checked: review.checked,
       notChecked: review.notChecked,
-      history: options.store.priorReviewHistory(review.revisionId),
+      repairedFrom: options.store.repairSource(review.revisionId),
     })
     // A red default branch holds this review PENDING until someone repairs
     // it. No review lease exists here, so this is the only place that can

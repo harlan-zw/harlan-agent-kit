@@ -274,7 +274,9 @@ The dot says who holds the work. ⚪ means the agent has it. 🟢 means READY. �
 Write outcome words in sentence case: Ready, Pending, Blocked, Queued, Reviewing, Repair, Stuck, Review skipped, Approval needed, Merged, Closed.
 Never restate what GitHub's merge box shows, such as CI status or a merge conflict. Name a failed gate only when it is the only reason for Blocked.
 Say what only the Review knows: `Checked … Not checked: …`, what Repair fixed, the issues to fix, and the follow-ups.
-Fold follow-ups. Count Logged findings below 40/100 and never list them or thread them.
+Fold follow-ups. List each with its score, title, location, proof, and fix. Count Logged findings below 40/100 and never list them or thread them.
+When a follow-up's thread opens beside the code, keep its row and link the thread in place of the control. A thread whose finding drops below 40/100 loses its control.
+A fixed thread shows its fixing commit above its struck title and drops the merge label. A follow-up a rerun promotes to an issue rewrites its thread as an issue that blocks merge.
 
 End every comment with one `<sub>` footer. It names the bot, says it is not Harlan's, and links the AI policy.
 A verdict also says a person merges and lists the accepted commands in code spans.
@@ -289,7 +291,8 @@ Treat GitHub as the durable workflow record. Record each Review gate and the exa
 Treat the latest confirmed write to the canonical comment as its current state. This applies across every controller Publication path.
 
 If GitHub merges a pull request, publish Merged with the issues and follow-ups not fixed, or one line when none remain. The verdict it replaces offers commands a merged pull request refuses.
-If GitHub closes a pull request unmerged, leave a verdict standing and replace any other state with Closed.
+Say the merge was reviewed only when a Review verdict answered the merged commit. If a later commit merged, name the reviewed commit instead.
+If GitHub closes a pull request unmerged, leave a verdict standing without its commands, and replace any other state with Closed. Settle the Review check run with the standing verdict.
 Clear every Agent status label in both cases.
 
 Before trusting a locally inferred close, read that exact pull request from GitHub. Store comment and label cleanup separately from the Task that last owned the comment. Resume incomplete cleanup after restart.
@@ -342,7 +345,7 @@ When required CI fails on the current base of an owned repository, dispatch a se
 ## Selected Review findings
 
 Post a Logged Review finding beside its line in the pull request diff.
-Keep findings without an accepted line in the canonical comment.
+Keep every listed finding in the canonical comment. A finding with an accepted line links its thread there instead of offering a control.
 On an eligible open pull request, offer a Repair checkbox with signed webhooks.
 Subscribe to Issue comment and Pull request review comment deliveries.
 Use Resolve conversation to dismiss an inline finding. The canonical comment offers Dismiss for findings without an accepted line.
@@ -446,12 +449,15 @@ Self-identify every automated GitHub comment. Keep comments to the minimum requi
 
 Keep private details out of every body the controller writes to GitHub. The writer redacts them where it sends the body, so no template can skip the check.
 Private details come from the configuration and the host: the Journal directory, the trusted checkout roots, the Agent worker home, `~/scratch`, `~/notes`, `notes.localhost`, `harlan-github-agent.localhost`, and the dashboard hosts.
-Match each root in its absolute, `~/`, `$HOME/`, and entity-encoded spellings. Inside inline code or quotes, a private path runs to the closing delimiter.
+Match each root in its absolute, `~/`, `$HOME/`, and entity-encoded spellings, and each host after any scheme, `//`, or user information.
 `localhost`, `~/.config`, other paths under the controller home, and a public link whose path names a private host stay public, because a finding may describe them.
-Replace each match with `[private path]` or `[private link]`. A Markdown link to a private target goes as a whole.
-Record one `private_detail` Incident that names the item and the writer, only when the redacted body is written. A no-op or a refused write records nothing. Only a person resolves it.
-Compare a stored body with GitHub's text as a redaction of it, under any deny list, so a configuration change never strands a comment.
-Show an Agent provider failure in a comment as its cause, such as "The agent lost its sign-in." Keep the raw reason in the Journal and the Dashboard. Other reasons stay as written, because loose words cannot prove where a reason came from.
+Replace each line that names a private detail with one fixed line. Never cut out a single token: every partial cut left a fragment behind.
+Keep the removed line's indentation, blockquote, list or checkbox marker, a leading `Repair:`, and its HTML comment markers, so parsers and Markdown structure still hold. Remove every other word. Drop a marker that itself names a private detail.
+A control line whose label held a private detail keeps its marker, and its parser ignores the changed label.
+Record one `private_detail` Incident that names the item and the writer, only after GitHub accepts the redacted body. A no-op, a refused write, or a rejected write records nothing. Only a person resolves it.
+Compare a stored body with GitHub's text line by line, where a removed line stands for its source line, so a configuration change never strands a comment.
+An approved Release note draft passes the guard again when the controller adds it to the GitHub release.
+Show an Agent provider failure in a comment as its cause, such as "The agent lost its sign-in." Keep the raw reason in the Journal and the Dashboard. Only a reason that starts with the provider's own wrapper counts. Other reasons stay as written.
 
 ## Report
 
