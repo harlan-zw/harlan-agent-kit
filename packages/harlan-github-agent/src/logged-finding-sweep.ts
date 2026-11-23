@@ -1,8 +1,10 @@
 import type { GitHubAgentSource } from './github-agent-source.ts'
-import type { GitHubIssuePublisher } from './github.ts'
+import type { GitHubIssuePublisher, GitHubSource } from './github.ts'
+import type { LoggedFindingPickup } from './logged-finding-pickup.ts'
 import type { LoggedFindingStore } from './logged-finding-store.ts'
 import type { Result } from './result.ts'
-import type { ReviewFindingThread } from './review-finding-threads.ts'
+import type { ReviewFindingThread, ReviewFindingThreadSource } from './review-finding-threads.ts'
+import type { JournalStore } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
 import { FOLLOW_UP_ISSUE_LABEL, hasFollowUpIssueLabel, isPublishedFollowUp } from './follow-up-issue.ts'
 import { err, ok } from './result.ts'
@@ -66,6 +68,38 @@ export async function publishFollowUpIssues(options: {
     settle(result)
   }
   return results
+}
+
+/**
+ * Applies one signed follow-up tick against GitHub's state now, and says whether the store staged it.
+ *
+ * The tick must name the live head, and an open pull request's live target
+ * branch. An inline tick needs its own thread open. A Merged tick reads every
+ * finding thread, because a person can resolve or reopen one after the last sync.
+ */
+export async function applyLoggedFindingPickup(options: {
+  github: Pick<GitHubSource, 'getPullRequest'> & Pick<ReviewFindingThreadSource, 'listReviewFindingThreads'>
+  store: Pick<LoggedFindingStore, 'requestLoggedFindingPickup'> & Pick<JournalStore, 'getOpenPullRequest'>
+  now: () => Date
+}, repository: RepositoryMapping, request: LoggedFindingPickup & { requestId: string }, signal: AbortSignal): Promise<Result<boolean, string>> {
+  const observed = options.store.getOpenPullRequest(repository.github, request.pullRequestNumber)
+  const live = await options.github.getPullRequest(repository, request.pullRequestNumber, signal)
+  if (live._tag === 'Err')
+    return err(live.error.message)
+  if (live.value.headSha !== request.headSha || (live.value.state === 'open' && observed?.baseRef !== live.value.baseRef))
+    return ok(false)
+  const threads = request.inline === true || request._tag === 'MergedFollowUps'
+    ? await options.github.listReviewFindingThreads(repository, request.pullRequestNumber, signal)
+    : null
+  if (threads !== null && threads._tag === 'Err')
+    return threads
+  if (request.inline === true && (threads === null || !threads.value.some(thread => !thread.resolved && thread.comment?.id === request.commentId)))
+    return ok(false)
+  return ok(options.store.requestLoggedFindingPickup({
+    ...request,
+    at: options.now().toISOString(),
+    ...(threads === null ? {} : { threads: threads.value }),
+  }))
 }
 
 /** Refresh conversation authority before claiming work or publishing a fix. */

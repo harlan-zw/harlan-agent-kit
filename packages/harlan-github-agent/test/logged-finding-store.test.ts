@@ -16,7 +16,7 @@ import { followUpIssue } from '../src/follow-up-issue.ts'
 import { createGitHubIssuePublisher, createGitHubSource } from '../src/github.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from '../src/issue-triage-comment.ts'
 import { refreshControllerGates, terminalComment } from '../src/item-agent.ts'
-import { publishFollowUpIssues, publishLoggedFindingPickups, refreshLoggedFindingThreads } from '../src/logged-finding-sweep.ts'
+import { applyLoggedFindingPickup, publishFollowUpIssues, publishLoggedFindingPickups, refreshLoggedFindingThreads } from '../src/logged-finding-sweep.ts'
 import { createPublicationScheduler } from '../src/publication-scheduler.ts'
 import { reconcileRepository } from '../src/reconcile.ts'
 import { err, ok } from '../src/result.ts'
@@ -649,9 +649,60 @@ describe('durable Logged finding pickup', () => {
     expect(summary.body).not.toContain('Ask an agent to verify and fix this finding')
     expect(store.completeLoggedFindingComment(summary, at)).toBe(true)
     expect(store.requestLoggedFindingPickup({ ...request, before: summary.body })).toBe(false)
-    expect(store.requestLoggedFindingPickup({ ...request, _tag: 'MergedFollowUps', before: summary.body })).toBe(true)
+    expect(store.requestLoggedFindingPickup({ ...request, _tag: 'MergedFollowUps', before: summary.body, threads: [{ threadId: 'thread', fingerprint: finding.details.fingerprint, resolved: false, comment: { id: 101, body: repairBody } }] })).toBe(true)
     expect(store.claimNextReviewFixTask('repair', at, 60_000)).toBeNull()
     expect(store.claimFollowUpIssue('issues', at, 60_000)).toMatchObject({ title: 'Follow-ups from #24', body: expect.stringContaining(finding.summary) })
+  })
+
+  it.each([
+    ['resolved after the last sync', false, true, false],
+    ['reopened after the last sync', true, false, true],
+  ] as const)('files the Merged issue from each thread as GitHub shows it now: %s', (_case, synced, live, included) => {
+    const second = { ...finding, summary: 'The cache never expires.', details: { ...finding.details, fingerprint: '9'.repeat(64), identity: 'cache' } }
+    const { store, pullRequest, request } = setup([finding, second], ':memory:', 'head')
+    store.queueReviewFindingThreadSync('review', at)
+    const sync = store.claimReviewFindingThreadSync('threads', at, 60_000)!
+    const body = reviewFindingThreadBody(finding, { headSha: pullRequest.headSha, baseRef: pullRequest.baseRef, repairOnHead: true })
+    expect(store.completeReviewFindingThreadSync(sync, at, [{ fingerprint: finding.details.fingerprint, commentId: 101, body, resolved: synced }])).toBe(true)
+    store.recordObservation({ externalId: 'merged-threads', observedAt: at, source: 'poll', subject: { ...pullRequest, state: 'closed', mergedAt: at } })
+    const summary = store.claimLoggedFindingComment('publisher', at, 60_000)!
+    expect(store.completeLoggedFindingComment(summary, at)).toBe(true)
+    const threads = [{ threadId: 'thread', fingerprint: finding.details.fingerprint, resolved: live, comment: { id: 101, body } }]
+
+    // A Merged tick never files from stored resolution alone.
+    expect(store.requestLoggedFindingPickup({ ...request, _tag: 'MergedFollowUps', before: summary.body })).toBe(false)
+    expect(store.requestLoggedFindingPickup({ ...request, _tag: 'MergedFollowUps', before: summary.body, threads })).toBe(true)
+    const issue = store.claimFollowUpIssue('issues', at, 60_000)
+    expect(issue?.body).toContain(second.summary)
+    expect(issue?.body.includes(finding.summary)).toBe(included)
+  })
+
+  it('reads the live threads for a signed Merged tick before it stages the issue', async () => {
+    const second = { ...finding, summary: 'The cache never expires.', details: { ...finding.details, fingerprint: '9'.repeat(64), identity: 'cache' } }
+    const { store, mapping, pullRequest, request } = setup([finding, second], ':memory:', 'head')
+    store.queueReviewFindingThreadSync('review', at)
+    const sync = store.claimReviewFindingThreadSync('threads', at, 60_000)!
+    const body = reviewFindingThreadBody(finding, { headSha: pullRequest.headSha, baseRef: pullRequest.baseRef, repairOnHead: true })
+    expect(store.completeReviewFindingThreadSync(sync, at, [{ fingerprint: finding.details.fingerprint, commentId: 101, body, resolved: false }])).toBe(true)
+    const merged = { ...pullRequest, state: 'closed' as const, mergedAt: at }
+    store.recordObservation({ externalId: 'merged-apply', observedAt: at, source: 'poll', subject: merged })
+    const summary = store.claimLoggedFindingComment('publisher', at, 60_000)!
+    expect(store.completeLoggedFindingComment(summary, at)).toBe(true)
+    const reads: number[] = []
+    const github = {
+      getPullRequest: async () => ok(merged),
+      // A maintainer resolved the thread after the last sync.
+      listReviewFindingThreads: async (_mapping: unknown, number: number) => {
+        reads.push(number)
+        return ok([{ threadId: 'thread', fingerprint: finding.details.fingerprint, resolved: true, comment: { id: 101, body } }])
+      },
+    }
+
+    expect(await applyLoggedFindingPickup({ github, store, now: () => new Date(at) }, mapping, { ...request, _tag: 'MergedFollowUps', before: summary.body }, new AbortController().signal)).toEqual(ok(true))
+    expect(reads).toEqual([24])
+    const issue = store.claimFollowUpIssue('issues', at, 60_000)
+    expect(issue?.body).toContain(second.summary)
+    expect(issue?.body).not.toContain(finding.summary)
   })
 
   it.each(['pending', 'running', 'publishing', 'authorized'] as const)('revokes an inline selection when its conversation is resolved: %s', async (phase) => {
@@ -1243,7 +1294,7 @@ describe('follow-up routing by Finding scope', () => {
     expect(comment.body).toContain(`  GitHub refused the issue. <!-- logged-finding: ${existing.details.fingerprint} -->`)
     expect(comment.body).toContain(`- [ ] File these as one issue <!-- logged-findings: ${pullRequest.headSha} -->`)
     expect(store.completeLoggedFindingComment(comment, at)).toBe(true)
-    expect(store.requestLoggedFindingPickup({ ...request, _tag: 'MergedFollowUps', before: comment.body })).toBe(true)
+    expect(store.requestLoggedFindingPickup({ ...request, _tag: 'MergedFollowUps', before: comment.body, threads: [] })).toBe(true)
     const issue = store.claimFollowUpIssue('merged-issue', at, 60_000)
     expect(issue?.title).toBe('Follow-ups from #24')
     expect(issue?.body).toContain(existing.summary)
@@ -1267,13 +1318,13 @@ describe('follow-up routing by Finding scope', () => {
     const { store, pullRequest, request } = setup([finding, existing, unplaced])
     expect(store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))).toBe(true)
     expect(store.claimFollowUpIssue('finding-issue', at, 60_000)?.title).toBe('The cache never expires')
-    expect(store.requestLoggedFindingPickup({ ...request, _tag: 'MergedFollowUps' })).toBe(false)
+    expect(store.requestLoggedFindingPickup({ ...request, _tag: 'MergedFollowUps', threads: [] })).toBe(false)
     store.recordObservation({ externalId: 'merged', observedAt: at, source: 'poll', subject: { ...pullRequest, state: 'closed', mergedAt: at } })
     const comment = store.claimLoggedFindingComment('status', at, 60_000)!
     expect(comment.body).toContain(`- [ ] File these as one issue <!-- logged-findings: ${pullRequest.headSha} -->`)
     expect(comment.body).not.toContain('File this finding as an issue')
     expect(store.completeLoggedFindingComment(comment, at)).toBe(true)
-    const merged = { ...request, _tag: 'MergedFollowUps' as const, before: comment.body }
+    const merged = { ...request, _tag: 'MergedFollowUps' as const, before: comment.body, threads: [] }
     expect(store.requestLoggedFindingPickup(merged)).toBe(true)
     expect(store.requestLoggedFindingPickup({ ...merged, requestId: 'redelivery' })).toBe(true)
     const issue = store.claimFollowUpIssue('merged-issue', at, 60_000)

@@ -66,7 +66,7 @@ import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
-import { publishFollowUpIssues, publishLoggedFindingPickups, refreshLoggedFindingThreads } from './logged-finding-sweep.ts'
+import { applyLoggedFindingPickup, publishFollowUpIssues, publishLoggedFindingPickups, refreshLoggedFindingThreads } from './logged-finding-sweep.ts'
 import { createMaintenanceCheckCommand, createMaintenanceScopeProvider } from './maintenance-scope.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
 import { createPackageReleaseSource } from './package-release-github.ts'
@@ -1991,21 +1991,17 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
               const repository = config.repositories.find(mapping => mapping.github.toLowerCase() === request.repository.toLowerCase())
               if (repository === undefined)
                 return ok(undefined)
-              const signal = AbortSignal.timeout(25_000)
-              const observed = store.getOpenPullRequest(repository.github, request.pullRequestNumber)
-              const live = await github.getPullRequest(repository, request.pullRequestNumber, signal)
-              if (live._tag === 'Err')
-                return err(live.error.message)
-              if (live.value.headSha !== request.headSha || (live.value.state === 'open' && observed?.baseRef !== live.value.baseRef))
-                return ok(undefined)
-              if (request.inline) {
-                const threads = await workerGithub.listReviewFindingThreads(repository, request.pullRequestNumber, signal)
-                if (threads._tag === 'Err')
-                  return threads
-                if (!threads.value.some(thread => !thread.resolved && thread.comment?.id === request.commentId))
-                  return ok(undefined)
-              }
-              if (store.requestLoggedFindingPickup({ ...request, at: now().toISOString() }) && config.triggers.includes('github')) {
+              const applied = await applyLoggedFindingPickup({
+                github: {
+                  getPullRequest: (mapping, number, signal) => github.getPullRequest(mapping, number, signal),
+                  listReviewFindingThreads: (mapping, number, signal) => workerGithub.listReviewFindingThreads(mapping, number, signal),
+                },
+                store,
+                now,
+              }, repository, request, AbortSignal.timeout(25_000))
+              if (applied._tag === 'Err')
+                return applied
+              if (applied.value && config.triggers.includes('github')) {
                 for (const scheduler of mutationSchedulers?.repairs ?? [])
                   void scheduler.runNow().catch(error => options.logger.error(error))
               }

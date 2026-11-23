@@ -1,3 +1,4 @@
+import type { ReviewFindingThread } from './review-finding-threads.ts'
 import type { ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, FOLLOW_UP_GROUP_LABEL, FOLLOW_UP_ROW_MARKER, FOLLOW_UP_STATUS_LIMIT, isCanonicalFooter, listedFollowUp, plural } from './review-comment.ts'
@@ -144,6 +145,17 @@ function dismissalControl(fingerprint: string): string {
  */
 export function followUpOwners(statuses: readonly LoggedFindingStatus[]): Map<string, 'Repair' | 'Issue'> {
   return new Map(statuses.flatMap(status => status._tag === 'IssueRefused' ? [] : [[status.fingerprint, status._tag] as const]))
+}
+
+/**
+ * The follow-ups a person dismissed by resolving their thread, by fingerprint.
+ *
+ * Pass the threads as GitHub shows them now. A finding counts only when
+ * every thread it has is resolved, so a reopened thread brings it back.
+ */
+export function resolvedFollowUps(threads: readonly ReviewFindingThread[]): Set<string> {
+  const open = new Set(threads.filter(thread => !thread.resolved).map(thread => thread.fingerprint.toLowerCase()))
+  return new Set(threads.filter(thread => thread.resolved && !open.has(thread.fingerprint.toLowerCase())).map(thread => thread.fingerprint.toLowerCase()))
 }
 
 /**

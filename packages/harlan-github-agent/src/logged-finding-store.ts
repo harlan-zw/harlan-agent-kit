@@ -7,7 +7,7 @@ import { mayRetryFailure, publicFailureCause } from './failure.ts'
 import { followUpIssue, isPublishedFollowUp, mergedFollowUpsIssue } from './follow-up-issue.ts'
 import { githubAccountBody } from './github-account.ts'
 import { recordLoggedFindingSignal } from './implicit-signal-store.ts'
-import { followUpOwners, followUpRoute, normalizeLoggedFindingControls, unfixedFollowUps, withLoggedFindingControls } from './logged-finding-pickup.ts'
+import { followUpOwners, followUpRoute, normalizeLoggedFindingControls, resolvedFollowUps, unfixedFollowUps, withLoggedFindingControls } from './logged-finding-pickup.ts'
 import { isPublishedForm } from './public-text.ts'
 import { canFileFollowUpIssue, canRepairBaseline, canRepairSelectedFindingOnHead } from './repository-policy.ts'
 import { automatedReviewHead } from './review-comment.ts'
@@ -102,7 +102,12 @@ export interface LoggedFindingStore {
   heldLoggedFindingSelections: () => Array<{ repository: string, pullRequestNumber: number }>
   listLoggedFindingThreadSelections: (taskId?: string) => Array<{ repository: string, pullRequestNumber: number }>
   reconcileLoggedFindingThreads: (repository: string, pullRequestNumber: number, threads: readonly ReviewFindingThread[], at: string) => void
-  requestLoggedFindingPickup: (input: LoggedFindingPickup & { requestId: string, at: string }) => boolean
+  /**
+   * Stages one tick, or refuses it. `threads` is every finding thread as
+   * GitHub shows it now. A Merged tick needs it, because a person can resolve
+   * or reopen a thread after the last sync.
+   */
+  requestLoggedFindingPickup: (input: LoggedFindingPickup & { requestId: string, at: string, threads?: readonly ReviewFindingThread[] }) => boolean
   planLoggedFindingPickups: (at: string) => void
   getLoggedFindingForTask: (taskId: string) => LoggedReviewFinding | null
   loggedFindingRepairsHead: (taskId: string) => boolean
@@ -387,8 +392,11 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
 
       if (input._tag === 'MergedFollowUps') {
         // The Merged control files one issue from the stored findings, never from comment text.
-        // A resolved thread dismissed its finding, so the issue leaves it out.
-        const resolved = inlineThreads(candidate.review_run_id, pullRequest, controls)
+        // A resolved thread dismissed its finding, so the issue leaves it out. The
+        // last sync's receipt can be stale, so only the threads GitHub shows now decide.
+        if (input.threads === undefined)
+          return false
+        const resolved = resolvedFollowUps(input.threads)
         const rows = unfixedFollowUps(findings, statuses(candidate.subject_id, pullRequest)).filter(finding => !resolved.has(finding.details.fingerprint))
         if (controls._tag !== 'Merged' || input.inline === true || candidate.github_comment_id !== input.commentId
           || !heldByGitHub(publishedBody(candidate), mapping.githubAccount, before) || rows.length === 0) {
