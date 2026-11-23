@@ -8,7 +8,7 @@ import { AUTOMATED_ISSUE_TRIAGE_MARKER } from '../src/issue-triage-comment.ts'
 import { err, ok } from '../src/result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from '../src/review-comment.ts'
 import { isRoutineTrackingIssue, trackingIssueBody } from '../src/routine-report-controller.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const account: GitHubAccount = {
   login: 'im-brundlefly',
@@ -92,6 +92,7 @@ it('creates an account-owned issue comment after migration and updates it on the
     return { data: comment }
   })
   const source = createGitHubAgentSource({
+    publicText: testPublicText,
     actorLogin: () => account.login,
     ownAppId: 123,
     tokens: { getToken: async () => ok({ token: 'account-token', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined },
@@ -117,6 +118,7 @@ it('creates an account-owned issue comment after migration and updates it on the
 it('uses the account attribution for inline review findings', async () => {
   const createReviewComment = vi.fn(async () => ({ data: { id: 3 } }))
   const source = createGitHubAgentSource({
+    publicText: testPublicText,
     actorLogin: () => account.login,
     ownAppId: 123,
     tokens: { getToken: async () => ok({ token: 'account-token', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined },
@@ -141,6 +143,7 @@ it('refuses owner credentials when a dedicated account edits a legacy review', a
   }
   const updateComment = vi.fn(async () => undefined)
   const source = createGitHubAgentSource({
+    publicText: testPublicText,
     actorLogin: () => account.login,
     ownAppId: 123,
     tokens: { getToken: async () => ok({ token: 'account-token', expiresAt: '2126-01-01T00:00:00Z' }), invalidate: () => undefined },

@@ -2,7 +2,7 @@ import type { Octokit } from 'octokit'
 import { describe, expect, it, vi } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { ok } from '../src/result.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const headSha = '1031dc93dddca88266cb32a085c7b90dcd58ec23'
 const oldBody = `<!-- harlan-agent-kit:pr-triage -->
@@ -38,6 +38,7 @@ function legacySource(initialBody = oldBody) {
     },
   }) as unknown as Octokit
   const source = createGitHubAgentSource({
+    publicText: testPublicText,
     actorLogin: () => 'harlan-github-agent[bot]',
     ownAppId: 98114,
     createClient: token => token === 'user-token' ? client(userUpdate) : client(appUpdate),

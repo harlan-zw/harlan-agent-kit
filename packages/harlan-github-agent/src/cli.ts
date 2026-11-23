@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import type { ControlClient } from './control-client.ts'
 import type { Result } from './result.ts'
+import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
 import { jev } from 'advocaat'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
-import { checkAgentWorker } from './agent-sandbox.ts'
+import { agentWorkerHomes, checkAgentWorker } from './agent-sandbox.ts'
 import { createPairingLink, pairingTarget } from './browser-auth-authorities.ts'
 import { createClassificationSource } from './classification.ts'
 import { forwardLeadingOptions } from './cli-leading-options.ts'
@@ -15,6 +16,7 @@ import { loadClassificationToken, loadConfig } from './config.ts'
 import { createControlClient } from './control-client.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
 import { parseIncidentResolutionRequest } from './incident-resolution.ts'
+import { privateDetailsFor } from './public-text.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
 import { err } from './result.ts'
@@ -686,6 +688,13 @@ const command = defineCommand({
     await checkAgentWorker(process.env)
     const classification = config.classification
     const webhook = config.webhook
+    const privateDetails = privateDetailsFor({
+      home: homedir(),
+      storagePath: config.storage.path,
+      checkoutRoots: config.trustedCheckoutRoots,
+      workerHomes: await agentWorkerHomes(process.env),
+      serviceOrigins: [config.server.allowedOrigin, ...(config.server.browserOrigins ?? [])],
+    })
 
     const serviceUpdate = createGitServiceUpdateSource({
       repositoryRoot: process.cwd(),
@@ -707,6 +716,7 @@ const command = defineCommand({
       githubPrivateKey,
       ...(webhookSecret === null ? {} : { webhookSecret }),
       logger: consola,
+      privateDetails,
       serviceUpdate,
     })
     consola.success(`Dashboard: ${config.server.allowedOrigin}`)

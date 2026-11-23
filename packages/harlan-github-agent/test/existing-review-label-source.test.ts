@@ -2,7 +2,7 @@ import type { Octokit } from 'octokit'
 import { describe, expect, it } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { ok } from '../src/result.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const headSha = 'a'.repeat(40)
 function harness(heading = '### 🤖 READY · 95/100') {
@@ -23,6 +23,7 @@ function harness(heading = '### 🤖 READY · 95/100') {
     },
   } as unknown as Octokit
   const source = createGitHubAgentSource({
+    publicText: testPublicText,
     actorLogin: () => 'harlan-github-agent[bot]',
     ownAppId: 98114,
     createClient: () => client,

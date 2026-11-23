@@ -6,7 +6,7 @@ import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { createRepositoryTokenProvider } from '../src/github-auth.ts'
 import { err, ok } from '../src/result.ts'
 import { mirrorReviewFindingThreads, reviewFindingThreadBody } from '../src/review-finding-threads.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const headSha = '5a885d2507bd5c0f86f027c7054fcda215d444f1'
 const lockFingerprint = 'a'.repeat(64)
@@ -185,6 +185,7 @@ describe('gitHub review finding threads', () => {
       }),
     })
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       tokens,
@@ -218,6 +219,7 @@ describe('gitHub review finding threads', () => {
     }))
     const client = { graphql, rest: { pulls: { createReviewComment } } } as unknown as Octokit
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       createClient: () => client,
       ownAppId: 98114,

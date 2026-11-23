@@ -50,7 +50,7 @@ import { queuedReviewHistoryLine } from './queue-position-sweep.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { acceptedPullRequestCommands, canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, pullRequestCommandFooter, reviewFindingCodeLink, reviewFindingFollowUp } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, findingNextAction, pullRequestCommandFooter, reviewFindingCodeLink, reviewFindingFollowUp } from './review-comment.ts'
 import { applyReviewReasoningEffortBand, DEFAULT_REVIEW_REASONING_EFFORT_POLICY, reviewReasoningEffortBand } from './review-effort.ts'
 import { cleanLine, cleanText, updatedAtLabel } from './text.ts'
 import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
@@ -525,8 +525,8 @@ function findingViolation(finding: unknown, index: number): string | undefined {
     return `${field('regressionTest')} must be null or a non-empty string.`
   if (typeof candidate.summary !== 'string' || cleanLine(candidate.summary).length === 0)
     return `${field('summary')} must be a non-empty string.`
-  if (typeof candidate.nextAction !== 'string' || cleanText(candidate.nextAction).length === 0)
-    return `${field('nextAction')} must be a non-empty string.`
+  if (typeof candidate.nextAction !== 'string' || findingNextAction(candidate.nextAction).length === 0)
+    return `${field('nextAction')} must be a non-empty string that names the action.`
   return undefined
 }
 
@@ -604,7 +604,9 @@ export function parseReviewResponse(text: string): Promise<Result<ReviewResponse
           // Only the summary must fit one line. The other fields reach the
           // Repair Agent whole, so it never re-reads the diff to finish a cut sentence.
           summary: cleanLine(finding.summary),
-          nextAction: cleanText(finding.nextAction),
+          // Every surface already says "Optional follow-up", so an Agent's own
+          // copy of it leaves here and no renderer prints it twice.
+          nextAction: findingNextAction(finding.nextAction),
           path: cleanLine(finding.path),
           proof: cleanText(finding.proof),
           // A wrong premise recommends Dismissal, which writes no test, so a

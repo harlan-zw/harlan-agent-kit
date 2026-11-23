@@ -2,6 +2,7 @@ import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { JournalStore, QueuedReviewHistory, QueuedReviewStatus, ReviewAttemptState, ReviewQueueState } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
+import { publicFailureCause } from './failure.ts'
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
 
@@ -51,7 +52,8 @@ function utcClock(iso: string): string {
 export function reviewAttemptLine(attempt: ReviewAttemptState, work: string): string | null {
   if (attempt._tag === 'FirstAttempt')
     return null
-  const reason = oneLineReason(attempt.reason)
+  // A provider error reads as its cause. The raw reason stays in the Dashboard.
+  const reason = oneLineReason(publicFailureCause(attempt.reason))
   if (attempt._tag === 'Stuck')
     return `The ${work} stopped and will not run again on its own: ${reason}`
   const retry = attempt.retry === null ? '' : ` Retry ${attempt.retry.spent} of ${attempt.retry.limit}.`

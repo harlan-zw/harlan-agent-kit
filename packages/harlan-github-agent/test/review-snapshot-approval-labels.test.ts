@@ -2,7 +2,7 @@ import type { Octokit } from 'octokit'
 import { describe, expect, it } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { ok } from '../src/result.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const baseSha = 'b'.repeat(40)
 
@@ -51,6 +51,7 @@ function client(labels: string[], comments: Array<{ user: { login: string }, bod
 describe('review snapshot approval labels', () => {
   it('reads the manual Review label the poller reads', async () => {
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client(['harlan-agent-review', 'bug']),
@@ -70,7 +71,7 @@ describe('review snapshot approval labels', () => {
 })
 
 it('selects only the pull request author comments for image evidence', async () => {
-  const source = createGitHubAgentSource({ actorLogin: () => 'bot', ownAppId: 98114, createClient: () => client([], [
+  const source = createGitHubAgentSource({ publicText: testPublicText, actorLogin: () => 'bot', ownAppId: 98114, createClient: () => client([], [
     { user: { login: 'harlan-zw' }, body: '![Before](https://github.com/user-attachments/assets/a)' },
     { user: { login: 'another-user' }, body: '![Untrusted image](https://github.com/user-attachments/assets/b)' },
   ]), tokens: { getToken: () => Promise.resolve(ok({ token: 'fixture', expiresAt: '2027-01-01' })), invalidate: () => undefined } })

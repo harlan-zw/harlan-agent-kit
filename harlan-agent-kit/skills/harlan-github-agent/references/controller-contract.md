@@ -425,6 +425,12 @@ Use `take-ownership` to follow the original delivery target and its repair.
 
 Self-identify every automated GitHub comment. Keep comments to the minimum required by the linked contract.
 
+Keep private details out of every body the controller writes to GitHub. The writer redacts them where it sends the body, so no template can skip the check.
+Private details come from the configuration and the host: the Journal directory, the trusted checkout roots, the Agent worker home, `~/scratch`, `~/notes`, `notes.localhost`, and the dashboard hosts.
+`localhost`, `~/.config`, and other paths under the controller home stay public, because a finding may describe them.
+Replace each match with `[private path]` or `[private link]`. Record one `private_detail` Incident that names the item and the writer. Only a person resolves it.
+Show a provider, GitHub, or network failure in a comment as its cause, such as "The agent lost its sign-in." Keep the raw reason in the Journal and the Dashboard.
+
 ## Report
 
 Return service state, active subjects, active tasks, and exact blockers. Do not claim work started unless the journal records it.

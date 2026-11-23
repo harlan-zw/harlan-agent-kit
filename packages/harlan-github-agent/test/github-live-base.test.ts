@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { createGitHubSource } from '../src/github.ts'
 import { ok } from '../src/result.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const historicBaseSha = 'a'.repeat(40)
 const liveBaseSha = 'b'.repeat(40)
@@ -48,6 +48,7 @@ describe('live pull request base', () => {
       },
     } as unknown as Octokit
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,
@@ -138,6 +139,7 @@ describe('live pull request base', () => {
       },
     } as unknown as Octokit
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,
@@ -179,6 +181,7 @@ describe('live pull request base', () => {
       },
     } as unknown as Octokit
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,
@@ -234,6 +237,7 @@ describe('live pull request base', () => {
       },
     } as unknown as Octokit
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,
@@ -286,6 +290,7 @@ describe('live pull request base', () => {
       },
     } as unknown as Octokit
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,
@@ -338,6 +343,7 @@ describe('live pull request base', () => {
       },
     } as unknown as Octokit
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,
@@ -390,6 +396,7 @@ describe('live pull request base', () => {
       },
     } as unknown as Octokit
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,
@@ -444,6 +451,7 @@ describe('live pull request base', () => {
       },
     } as unknown as Octokit
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,
@@ -496,6 +504,7 @@ describe('live pull request base', () => {
       },
     } as unknown as Octokit
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,
@@ -560,7 +569,7 @@ describe('base checks behind a commit that ran no CI', () => {
     Object.assign(client.rest.pulls, { get: () => {
       throw new Error('The triggering pull request is unavailable.')
     } })
-    const source = createGitHubAgentSource({ actorLogin: () => 'harlan-github-agent[bot]', ownAppId: 98114, createClient: () => client, tokens: tokens() })
+    const source = createGitHubAgentSource({ publicText: testPublicText, actorLogin: () => 'harlan-github-agent[bot]', ownAppId: 98114, createClient: () => client, tokens: tokens() })
     const result = await source.getDefaultBranchSnapshot(repositoryMapping(), new AbortController().signal)
     expect(result).toEqual(ok({ baseSha: docsOnlyBaseSha, baseChecks: { _tag: 'Available', checks: [expect.objectContaining({ name: 'test', conclusion: 'failure' })] } }))
     expect(checkedRefs).toEqual([docsOnlyBaseSha, lastCodeBaseSha])
@@ -575,6 +584,7 @@ describe('base checks behind a commit that ran no CI', () => {
       [lastCodeBaseSha]: [{ id: 2, name: 'test', status: 'completed', conclusion: 'success', app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 8 } }],
     }, checkedRefs)
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,
@@ -598,6 +608,7 @@ describe('base checks behind a commit that ran no CI', () => {
       [lastCodeBaseSha]: [{ id: 2, name: 'test', status: 'completed', conclusion: 'failure', app: { id: 15368, slug: 'github-actions' }, check_suite: { id: 8 } }],
     }, [])
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,
@@ -619,6 +630,7 @@ describe('base checks behind a commit that ran no CI', () => {
     const ancestors = Array.from({ length: 10 }, (_, index) => String(index + 1).padStart(2, '0').repeat(20))
     const client = clientReadingHistory({}, checkedRefs, [docsOnlyBaseSha, ...ancestors])
     const source = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       ownAppId: 98114,
       createClient: () => client,

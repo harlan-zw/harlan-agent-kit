@@ -3,7 +3,7 @@ import { expect, it } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { collectJobWorkflowContext } from '../src/job-workflow-context.ts'
 import { err, ok } from '../src/result.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 it('supplies preparation and default working directory absent from the failed log', async () => {
   const accesses: string[] = []
@@ -33,7 +33,7 @@ jobs:
       return { data: { type: 'file', encoding: 'base64', content: Buffer.from(workflow).toString('base64') } }
     } },
   } } as unknown as Octokit
-  const source = createGitHubAgentSource({ actorLogin: () => 'bot', ownAppId: 1, createClient: () => client, tokens: {
+  const source = createGitHubAgentSource({ publicText: testPublicText, actorLogin: () => 'bot', ownAppId: 1, createClient: () => client, tokens: {
     getToken: async (_repository, access) => {
       accesses.push(access)
       return ok({ token: 'token', expiresAt: '2026-10-08T00:00:00Z' })
@@ -107,7 +107,7 @@ it('preserves job logs when workflow metadata is unavailable', async () => {
     downloadJobLogsForWorkflowRun: async () => ({ data: 'Missing generated imports' }),
     getWorkflowRun: async () => { throw new Error('Run metadata denied.') },
   } } } as unknown as Octokit
-  const source = createGitHubAgentSource({ actorLogin: () => 'bot', ownAppId: 1, createClient: () => client, tokens: {
+  const source = createGitHubAgentSource({ publicText: testPublicText, actorLogin: () => 'bot', ownAppId: 1, createClient: () => client, tokens: {
     getToken: async () => ok({ token: 'token', expiresAt: '2026-10-08T00:00:00Z' }),
     invalidate: () => undefined,
   } })

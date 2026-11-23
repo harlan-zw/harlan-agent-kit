@@ -5,7 +5,7 @@ import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { NATIVE_REVIEW_MARKER, nativeReviewBody } from '../src/native-review.ts'
 import { err, ok } from '../src/result.ts'
 import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping, testPublicText } from './fixtures.ts'
 
 const headSha = 'a'.repeat(40)
 const actor = 'harlan-github-agent[bot]'
@@ -16,6 +16,7 @@ function sourceFixture() {
   const reviews: Array<{ id: number, user: { login: string }, state: string, commit_id: string, body: string }> = []
   const writes: Array<Record<string, unknown>> = []
   const source = createGitHubAgentSource({
+    publicText: testPublicText,
     actorLogin: () => actor,
     ownAppId: 98114,
     tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },

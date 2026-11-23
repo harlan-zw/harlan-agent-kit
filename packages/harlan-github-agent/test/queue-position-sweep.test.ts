@@ -87,6 +87,7 @@ describe('the queued review history line', () => {
 
 describe('a comment for a failed attempt', () => {
   const reason = 'The opencode session failed: Unexpected server error.'
+  const cause = 'The agent provider failed before the agent answered.'
 
   it('says the attempt stopped and when it restarts', () => {
     const body = queuePositionComment(queuedRepair({
@@ -95,8 +96,9 @@ describe('a comment for a failed attempt', () => {
     }))
 
     expect(body).toContain('### 🤖 RETRYING')
-    expect(body).toContain(`The last attempt stopped: ${reason} Retry 3 of 12.`)
+    expect(body).toContain(`The last attempt stopped: ${cause} Retry 3 of 12.`)
     expect(body).toContain('Next: Review restarts after 02:37 UTC.')
+    expect(body).not.toContain(reason)
   })
 
   it('says a person has to act once nothing will retry', () => {
@@ -106,8 +108,17 @@ describe('a comment for a failed attempt', () => {
     }))
 
     expect(body).toContain('### 🤖 STUCK')
-    expect(body).toContain(`The Review stopped and will not run again on its own: ${reason}`)
+    expect(body).toContain(`The Review stopped and will not run again on its own: ${cause}`)
     expect(body).toContain('Next: Fix the cause, then push a commit to start a new Review.')
+  })
+
+  it('keeps a reason the controller wrote itself', () => {
+    const body = queuePositionComment(queuedRepair({
+      taskKind: 'adversarial_review',
+      attempt: { _tag: 'Stuck', reason: 'The pull request is still draft, so the review cannot publish its repair.' },
+    }))
+
+    expect(body).toContain('will not run again on its own: The pull request is still draft, so the review cannot publish its repair.')
   })
 
   it('keeps a long reason to one readable line', () => {

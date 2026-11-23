@@ -2768,6 +2768,98 @@ describe('journal store', () => {
     }))
   })
 
+  it('never reads a completed Review run id as the reason a merged comment prints', async () => {
+    const store = createStore()
+    store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    store.recordObservation({
+      externalId: 'merged-review-run-id',
+      observedAt: '2026-08-13T01:00:00.000Z',
+      source: 'poll',
+      subject: pullRequest,
+    })
+    const review = store.claimNextAdversarialReviewTask('review-agent', '2026-08-13T01:01:00.000Z', 600_000)
+    if (review === null)
+      throw new Error('Expected the Review Task.')
+    const staged = store.stageReviewStatus({
+      taskKind: 'adversarial_review',
+      phase: 'terminal',
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:00.000Z',
+      revisionId: review.revisionId,
+      expectedHeadSha: pullRequest.headSha,
+      body: '### 🤖 READY',
+    })
+    if (staged._tag === 'Rejected')
+      throw new Error(staged.reason)
+    const command = store.claimReviewStatus(staged.commandId, 'status-worker', '2026-08-13T01:02:01.000Z', 60_000)
+    if (command === null)
+      throw new Error('Expected the review status command.')
+    store.completeReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-08-13T01:02:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })
+    // A completed Review records its Review run id as evidence, as the Review worker does.
+    const reviewRunId = '1d4a472c-510a-4f31-a16c-a3e9cde817bd'
+    expect(store.completeWorkerTask({
+      taskId: review.id,
+      workerId: review.state.workerId,
+      fence: review.state.fence,
+      at: '2026-08-13T01:02:03.000Z',
+      evidence: reviewRunId,
+    })).toBe(true)
+    const merged = store.recordObservation({
+      externalId: 'merged-review-run-id-closed',
+      observedAt: '2026-08-13T01:07:00.000Z',
+      source: 'poll',
+      subject: { ...pullRequest, state: 'closed', mergedAt: '2026-08-13T01:07:00.000Z', updatedAt: '2026-08-13T01:07:00.000Z' },
+    })
+    if (merged._tag !== 'Inserted')
+      throw new Error('Expected the merged pull request Revision.')
+    expect(store.recordVerifiedPullRequestClosure({
+      repository: 'harlan-zw/example',
+      pullRequestNumber: 24,
+      revisionId: merged.revisionId,
+      headSha: pullRequest.headSha,
+      baseSha: pullRequest.baseSha,
+      disposition: { _tag: 'Merged' },
+      at: '2026-08-13T01:07:00.000Z',
+    })).toBe(true)
+
+    expect(store.listStoppedReviews()).toEqual([expect.objectContaining({ reason: null, disposition: { _tag: 'Merged' } })])
+
+    const edits: string[] = []
+    await publishStoppedReviews({
+      github: {
+        clearAgentLabels: () => Promise.resolve(ok(undefined)),
+        getPullRequestReviewSnapshot: () => { throw new Error('A merged pull request needs no snapshot.') },
+        upsertReviewCheckRun: () => Promise.resolve(ok(undefined)),
+        editReviewStatus: (_repository, _number, commentId, _expectedBody, body) => {
+          edits.push(body)
+          return Promise.resolve(ok({ _tag: 'Edited', commentId, url: `https://github.com/harlan-zw/example/pull/24#issuecomment-${commentId}` }))
+        },
+      },
+      now: () => new Date('2026-08-13T01:08:00.000Z'),
+      reportCheckRun: () => undefined,
+      repositories: [repositoryMapping()],
+      store: {
+        recordReviewClosure: () => true,
+        recordDeletedReviewComment: () => true,
+        listStoppedReviews: () => store.listStoppedReviews(),
+        recordStoppedReviewStatus: () => true,
+      },
+    }, new AbortController().signal)
+
+    expect(edits).toEqual([expect.stringContaining('### 🤖 MERGED')])
+    expect(edits[0]).not.toContain(reviewRunId)
+  })
+
   it('closes the READY status that replaced a PENDING Review', () => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')

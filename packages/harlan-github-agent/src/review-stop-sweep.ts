@@ -3,6 +3,7 @@ import type { Result } from './result.ts'
 import type { ReviewCheckRunReport, ReviewCheckRunUpdate } from './review-check-run.ts'
 import type { JournalStore, StoppedReview, StoppedReviewDisposition } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
+import { publicFailureCause } from './failure.ts'
 import { err, ok } from './result.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, reviewFindingCodeLink, reviewFindingFollowUp } from './review-comment.ts'
@@ -71,11 +72,25 @@ async function completeStoppedReviewCheckRun(
   await mirrorReviewCheckRun({ publisher: options.github, report: options.reportCheckRun }, mapping, review.headSha, update, signal)
 }
 
+/**
+ * Why the Task stopped, as the public comment says it, or null when it recorded nothing.
+ *
+ * A provider error names account state no maintainer can change, so it reads
+ * as its cause. The raw reason stays in the Journal and the Dashboard.
+ */
+function stopCause(review: StoppedReview): string | null {
+  if (review.reason === null)
+    return null
+  const cause = cleanLine(publicFailureCause(review.reason))
+  return cause === '' ? null : cause
+}
+
 export function stoppedReviewComment(
   review: StoppedReview,
   at: string,
   disposition: StoppedReviewDisposition = { _tag: 'Stopped' },
 ): string {
+  const cause = stopCause(review)
   if (disposition._tag !== 'Stopped') {
     const workflow = JSON.stringify({
       _tag: disposition._tag === 'Merged' ? 'PullRequestMerged' : 'PullRequestClosed',
@@ -84,6 +99,7 @@ export function stoppedReviewComment(
       baseSha: review.currentBaseSha,
     })
     const action = disposition._tag === 'Merged' ? 'merged' : 'closed'
+    const causeParagraph = cause === null ? '' : `\n\n${cause}`
     return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${review.currentHeadSha} -->
 <!-- workflow-state: ${workflow} -->
@@ -94,9 +110,7 @@ ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal
 GitHub ${action} this pull request.${disposition._tag === 'Merged'
   ? `
 
-${review.findings.length === 0 ? 'No material findings were recorded.' : review.findings.map(finding => finding._tag === 'Open' ? `- ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} Next: ${finding.resolution === 'Dismissal' ? 'Decide a safe follow-up for the merged change.' : cleanLine(finding.nextAction)}` : finding._tag === 'Logged' ? `- Logged (${finding.impact}/100): ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} ${reviewFindingFollowUp(finding)}` : `- Fixed: ${cleanLine(finding.summary)}`).join('\n')}
-
-${cleanLine(review.reason)}`
+${review.findings.length === 0 ? 'No material findings were recorded.' : review.findings.map(finding => finding._tag === 'Open' ? `- ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} Next: ${finding.resolution === 'Dismissal' ? 'Decide a safe follow-up for the merged change.' : cleanLine(finding.nextAction)}` : finding._tag === 'Logged' ? `- Logged (${finding.impact}/100): ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} ${reviewFindingFollowUp(finding)}` : `- Fixed: ${cleanLine(finding.summary)}`).join('\n')}${causeParagraph}`
   : ' No further automated Review will run.'}`
   }
   if (review.taskKind === 'review_fix') {
@@ -111,7 +125,7 @@ ${cleanLine(review.reason)}`
 
 ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, notes: ['A person still decides the merge.'], updatedAt: updatedAtLabel(at) })}
 
-Repair stopped: ${cleanLine(review.reason)}
+Repair stopped${cause === null ? '.' : `: ${cause}`}
 
 ${findings.join('\n')}`
   }
@@ -121,7 +135,7 @@ ${findings.join('\n')}`
 
 ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, notes: ['A person still decides the merge.'], updatedAt: updatedAtLabel(at) })}
 
-The automated review stopped. Reason: ${cleanLine(review.reason)}
+The automated review stopped.${cause === null ? '' : ` Reason: ${cause}`}
 
 Push a new commit to start a new review. To review this commit again, comment \`@harlan-agent rerun\`.`
 }

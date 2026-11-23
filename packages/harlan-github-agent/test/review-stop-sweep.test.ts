@@ -81,6 +81,36 @@ describe('stoppedReviewComment', () => {
     expect(body).not.toMatch(/[▓░]|\b\d+%/)
   })
 
+  it('names a lost provider sign-in instead of printing the provider error', () => {
+    const providerError = 'The codex session failed: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.'
+    const body = stoppedReviewComment({ ...stopped, reason: providerError }, '2026-11-22T04:00:00.000Z')
+
+    expect(body).toContain('### 🤖 STOPPED')
+    expect(body).toContain('The automated review stopped. Reason: The agent lost its sign-in.')
+    expect(body).not.toContain('refresh token')
+    expect(body).not.toContain('codex session failed')
+  })
+
+  it.each([
+    ['Merged', { _tag: 'Merged' } as const],
+    ['Repair', { _tag: 'Stopped' } as const],
+  ])('maps a provider error on %s work too', (mode, disposition) => {
+    const body = stoppedReviewComment({
+      ...stopped,
+      taskKind: mode === 'Repair' ? 'review_fix' : 'adversarial_review',
+      reason: 'The opencode session failed: Unexpected server error.',
+    }, '2026-11-22T04:00:00.000Z', disposition)
+
+    expect(body).not.toContain('opencode session failed')
+    expect(body).toContain('The agent provider failed before the agent answered.')
+  })
+
+  it('writes no reason line after merge when the Task recorded none', () => {
+    const body = stoppedReviewComment({ ...stopped, reason: null }, '2026-11-22T04:00:00.000Z', { _tag: 'Merged' })
+
+    expect(body.trimEnd().endsWith('No material findings were recorded.')).toBe(true)
+  })
+
   it('replaces Repair progress with BLOCKED and every exact finding', () => {
     const body = stoppedReviewComment(stoppedRepair, '2026-08-15T04:00:00.000Z')
 

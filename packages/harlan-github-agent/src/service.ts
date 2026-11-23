@@ -9,6 +9,7 @@ import type { GitHubUserAccess } from './github-user-access.ts'
 import type { AgentSlotLimits } from './host-capacity.ts'
 import type { AgentSlotCounts } from './host-memory.ts'
 import type { NativeReviewMirror } from './native-review.ts'
+import type { PrivateDetails } from './public-text.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunReport } from './review-check-run.ts'
 import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
@@ -72,6 +73,7 @@ import { runPassStep, runPassStepResult } from './poll-pass.ts'
 import { createIndependentPollers, createPoller } from './poller.ts'
 import { chooseAgentProvider, createProviderCapacitySource } from './provider-capacity.ts'
 import { createCircuitProtectedProvider } from './provider-circuit.ts'
+import { createPublicTextGuard } from './public-text.ts'
 import { createPublicationScheduler } from './publication-scheduler.ts'
 import { findPullRequestDiagramReference } from './pull-request-diagram.ts'
 import { createPullRequestStatusController } from './pull-request-status-controller.ts'
@@ -135,6 +137,8 @@ export interface StartAgentServiceOptions {
   githubPrivateKey: string
   gitIdentity: GitIdentity
   logger: Pick<ConsolaInstance, 'error' | 'info'>
+  /** The paths and hosts no body this service writes to GitHub may carry. */
+  privateDetails: PrivateDetails
   serviceUpdate: ServiceUpdateSource
   now?: () => Date
 }
@@ -483,7 +487,9 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     ...providerProfile,
     maximumActiveAgents: config.agent.maximumActiveAgents ?? providerProfile.maximumActiveAgents,
   }
-  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read, config.agent.reasoningEffort)
+  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read, config.agent.reasoningEffort, options.privateDetails)
+  // Every GitHub writer below takes this guard, so no body reaches GitHub unredacted.
+  const publicText = createPublicTextGuard({ details: options.privateDetails, store, now })
   let releaseWebhookReady = false
   const webhookControls = createWebhookControls({
     ready: () => releaseWebhookReady && userLoginKnown && config.triggers.includes('github'),
@@ -714,6 +720,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     actorLogin,
     legacyActor: { login: userLogin, tokens: legacyUserTokens },
     ownAppId: config.github.appId,
+    publicText,
     tokens,
   })
   const workerGitHubEvidence = createRoutineGitHubEvidenceSource({ tokens: routedTokens, now, jobs: workerGithub })
@@ -772,7 +779,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     const publicationRemote = createGitPublicationRemote({
       github,
       forkWorkflowTokens: gatedTokens(userTokens),
-      pullRequests: createGitHubPullRequestPublisher({ tokens, uploadAsset: createUserAssetUploader({ token: signal => userAccess.token(signal) }) }),
+      pullRequests: createGitHubPullRequestPublisher({ publicText, tokens, uploadAsset: createUserAssetUploader({ token: signal => userAccess.token(signal) }) }),
       root: controllerRoot,
       routineIssueSource: store.getRoutineIssueSource,
       tokens,
@@ -1297,14 +1304,14 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     throw error
   })
   const candidateIssues = createCandidateIssueController({
-    github: createGitHubIssuePublisher({ tokens: routedTokens }),
+    github: createGitHubIssuePublisher({ publicText, tokens: routedTokens }),
     now,
     store,
     workerId: randomUUID(),
   })
   const routineReports = createRoutineReportController({
     canPublish: () => rateLimits.read().length === 0,
-    github: createGitHubIssuePublisher({ tokens: routedTokens }),
+    github: createGitHubIssuePublisher({ publicText, tokens: routedTokens }),
     now,
     store,
     workerId: randomUUID(),
@@ -1507,6 +1514,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
                     repository: { login: actorLogin(repository), tokens },
                     user: { login: userLogin, tokens: legacyUserTokens },
                   },
+                  publicText,
                   signal,
                   now,
                   template: async () => {

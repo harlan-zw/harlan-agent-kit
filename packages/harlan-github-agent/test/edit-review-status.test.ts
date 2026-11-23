@@ -1,7 +1,7 @@
 import type { Octokit } from 'octokit'
 import { describe, expect, it, vi } from 'vitest'
 import { err, ok } from '../src/result.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const hoisted = vi.hoisted(() => {
   const state = {
@@ -50,6 +50,7 @@ const progressBody = '<!-- harlan-agent-progress --> claimed agent progress'
 
 function source() {
   return createGitHubAgentSource({
+    publicText: testPublicText,
     actorLogin: () => 'harlan-agent[bot]',
     ownAppId: 98114,
     tokens: {

@@ -353,6 +353,47 @@ export function isTransientFailure(signal: FailureSignal): boolean {
   return classifyFailure(signal)._tag === 'Transient'
 }
 
+/** An Agent provider that says its login is gone. Only a person signing in again fixes it. */
+const providerSignInPatterns: RegExp[] = [
+  /\brefresh token\b/i,
+  /\b(?:sign|log) ?in again\b/i,
+  /\bnot (?:signed|logged) in\b/i,
+  /\b(?:access token|credentials?) (?:has |have )?expired\b/i,
+]
+
+/**
+ * The cause of one failure, in words a maintainer reading GitHub can act on.
+ *
+ * Provider, GitHub, and network failures arrive as foreign text: raw errors
+ * that can carry account state, hosts, or paths, and that name nothing a
+ * maintainer can change. The public comment names the cause instead. The raw
+ * reason stays in the Journal and the Dashboard. A reason the controller
+ * wrote itself is already public copy, so it passes through unchanged.
+ */
+export function publicFailureCause(reason: string): string {
+  const failure = classifyFailure({ message: reason })
+  switch (failure.kind) {
+    case 'agent_provider':
+      return matches(providerSignInPatterns, reason)
+        ? 'The agent lost its sign-in. Harlan must sign it in again.'
+        : 'The agent provider failed before the agent answered.'
+    case 'provider_config':
+      return 'The agent provider refused the configured model.'
+    case 'github_unavailable':
+      return 'GitHub was unavailable.'
+    case 'github_access':
+      return 'GitHub refused the controller access to this repository.'
+    case 'installation_access':
+      return 'The GitHub App installation lacks a permission this work needs.'
+    case 'rate_limit':
+      return 'GitHub rate limits stopped the work.'
+    case 'network':
+      return 'A network error stopped the work.'
+    default:
+      return reason
+  }
+}
+
 /**
  * Whether a refused Publication says its subject moved on.
  *

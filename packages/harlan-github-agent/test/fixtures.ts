@@ -1,8 +1,17 @@
 import type { AgentRuntimeSource } from '../src/agent-profile.ts'
 import type { AgentEvent, AgentProvider, AgentProviderName, AgentTurnRequest } from '../src/agent-provider.ts'
+import type { PublicTextGuard } from '../src/public-text.ts'
 import type { AgentProfile, DashboardSnapshot, GitHubIssueItem, GitHubPullRequestItem, RepositoryMapping } from '../src/types.ts'
 import type { GitHubOwnershipEvidence } from '../src/worker-github-evidence.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+
+/** A guard with nothing to redact, for tests about something other than private details. */
+export const testPublicText: PublicTextGuard = {
+  details: { paths: [], hosts: [] },
+  report: () => {
+    throw new Error('A test without private details reported a redaction.')
+  },
+}
 
 /** One fixed Agent runtime, for a worker that never switches mid test. */
 export function agentRuntime(profile: AgentProfile, provider: AgentProvider): AgentRuntimeSource {

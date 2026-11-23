@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { err, ok } from '../src/result.ts'
 import { REVIEW_CHECK_RUN_NAME, reviewCheckRunUpdate } from '../src/review-check-run.ts'
-import { repositoryMapping } from './fixtures.ts'
+import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const headSha = '1031dc93dddca88266cb32a085c7b90dcd58ec23'
 const ownAppId = 98114
@@ -25,6 +25,7 @@ function source(existingRuns: unknown[]) {
   return {
     create,
     source: createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       createClient: () => client,
       ownAppId,
@@ -134,6 +135,7 @@ describe('upsert review check run', () => {
       },
     } as unknown as Octokit
     const github = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       createClient: () => client,
       ownAppId,
@@ -192,6 +194,7 @@ describe('upsert review check run', () => {
       },
     } as unknown as Octokit
     const github = createGitHubAgentSource({
+      publicText: testPublicText,
       actorLogin: () => 'harlan-github-agent[bot]',
       createClient: () => client,
       ownAppId,

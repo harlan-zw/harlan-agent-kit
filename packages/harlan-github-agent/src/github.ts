@@ -2,6 +2,7 @@ import type { Octokit } from 'octokit'
 import type { AutoMergeMethod } from './auto-merge.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { UploadUserAsset } from './github-user-assets.ts'
+import type { PublicTextGuard } from './public-text.ts'
 import type { Result } from './result.ts'
 import type { GitHubIssueItem, GitHubItem, GitHubPullRequestItem, PullRequestDiagram, RepositoryMapping, RoutineName } from './types.ts'
 import { Buffer } from 'node:buffer'
@@ -15,6 +16,7 @@ import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
+import { guardPublicText } from './public-text.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
 import { findingDiscussions, inlineReviewComment } from './review-finding-threads.ts'
@@ -112,6 +114,11 @@ export interface GitHubPullRequestPublisherOptions extends Pick<GitHubSourceOpti
   createClient?: (token: string) => Octokit
   /** Uploads one image for a description. Absent means every diagram is skipped with a reason. */
   uploadAsset?: UploadUserAsset
+}
+
+/** A publisher that writes bodies. Every body it writes passes through `publicText`. */
+export interface GitHubBodyPublisherOptions extends GitHubPullRequestPublisherOptions {
+  publicText: PublicTextGuard
 }
 
 const disclosureLine = /^>\s*🤖 AI disclosure:/
@@ -658,7 +665,7 @@ export interface GitHubIssuePublisher {
   }, signal?: AbortSignal) => Promise<Result<{ id: number }, GitHubReadError>>
 }
 
-export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOptions): GitHubIssuePublisher {
+export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions): GitHubIssuePublisher {
   const itemWriteClient = async (repository: string, signal?: AbortSignal) => {
     const credential = await options.tokens.getToken(repository, 'item_write', signal)
     if (credential._tag === 'Err')
@@ -681,7 +688,8 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
       const client = await itemWriteClient(input.repository.github, signal)
       if (client._tag === 'Err')
         return client
-      return client.value.rest.issues.update({ owner, repo, issue_number: input.issueNumber, title: input.title, body: githubAccountBody(input.body, input.repository.githubAccount), ...(signal === undefined ? {} : { request: { signal } }) })
+      const body = guardPublicText(options.publicText, { repository: input.repository.github, itemNumber: input.issueNumber, writer: 'issue' }, githubAccountBody(input.body, input.repository.githubAccount))
+      return client.value.rest.issues.update({ owner, repo, issue_number: input.issueNumber, title: input.title, body, ...(signal === undefined ? {} : { request: { signal } }) })
         .then(() => ok(undefined))
         .catch((error: unknown): Result<void, GitHubReadError> => {
           const status = errorStatus(error)
@@ -698,7 +706,7 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
         owner,
         repo,
         title: input.title,
-        body: githubAccountBody(input.body, input.repository.githubAccount),
+        body: guardPublicText(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'issue' }, githubAccountBody(input.body, input.repository.githubAccount)),
         ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
         ...request,
       })
@@ -721,7 +729,7 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
         owner,
         repo,
         issue_number: input.issueNumber,
-        body: githubAccountBody(input.body, input.repository.githubAccount),
+        body: guardPublicText(options.publicText, { repository: input.repository.github, itemNumber: input.issueNumber, writer: 'comment' }, githubAccountBody(input.body, input.repository.githubAccount)),
         ...(signal === undefined ? {} : { request: { signal } }),
       })
         .then(response => ok({ id: response.data.id }))
@@ -827,7 +835,7 @@ export function createGitHubIssuePublisher(options: GitHubPullRequestPublisherOp
   }
 }
 
-export function createGitHubPullRequestPublisher(options: GitHubPullRequestPublisherOptions): GitHubPullRequestPublisher {
+export function createGitHubPullRequestPublisher(options: GitHubBodyPublisherOptions): GitHubPullRequestPublisher {
   return {
     async ensurePullRequest(input, signal) {
       const { owner, repo } = repositoryParts(input.repository.github)
@@ -926,7 +934,7 @@ export function createGitHubPullRequestPublisher(options: GitHubPullRequestPubli
           head: input.headRef,
           base: input.baseRef,
           title: input.title,
-          body: attached.body,
+          body: guardPublicText(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'pull request description' }, attached.body),
           draft: false,
           ...request,
         }).then(async (created): Promise<Result<PublishedPullRequest, GitHubReadError>> => {
