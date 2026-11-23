@@ -128,6 +128,8 @@ function literalPattern(value: string): string {
 
 /** Characters a path or URL token runs over. Whitespace, quotes, and Markdown delimiters end it. */
 const TOKEN = String.raw`(?:(?!&#(?:96|60|62|91|93);)[^\s'"\`()<>[\]{}|])`
+/** Parentheses can belong to a URL path. Its surrounding syntax determines their boundary. */
+const URL_TOKEN = String.raw`(?:(?!&#(?:96|60|62|91|93);)[^\s'"\`<>[\]{}|])`
 /**
  * Where an entry ends. A full stop that ends the sentence counts, so
  * `~/scratch.` matches, while `~/scratchpad`, `~/scratch.txt`, and an encoded
@@ -170,7 +172,7 @@ function matchers(details: PrivateDetails): Matchers {
     // A bare host that a slash precedes sits inside a public URL's path, so it never starts a match.
     link: hosts.length === 0
       ? null
-      : new RegExp(String.raw`(?:${AUTHORITY}${URL_AUTHORITY}(?:[/?#]${TOKEN}*)?|(?<![\w./@-])(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})(?::\d{1,5})?(?:[/?#]${TOKEN}*)?${TOKEN_END})`, 'gi'),
+      : new RegExp(String.raw`(?:${AUTHORITY}${URL_AUTHORITY}(?:[/?#]${URL_TOKEN}*)?|(?<![\w./@-])(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})(?::\d{1,5})?(?:[/?#]${URL_TOKEN}*)?${TOKEN_END})`, 'gi'),
   }
 }
 
@@ -216,9 +218,8 @@ function linkSpan(text: string, start: number, end: number): Span | null {
     ? targetStart
     : text[labelStart - 1] === '!' ? labelStart - 1 : labelStart
   let depth = 1
-  let quote: string | null = null
   let angle = false
-  for (let index = targetStart; index < text.length; index++) {
+  for (let index = angleStart; index < text.length; index++) {
     const character = text[index]!
     if (character === '\\') {
       index++
@@ -229,24 +230,52 @@ function linkSpan(text: string, start: number, end: number): Span | null {
       index += 4
       continue
     }
-    if (quote !== null) {
-      if (character === quote)
-        quote = null
-      continue
-    }
-    if (character === '<')
+    if (character === '<') {
       angle = true
-    else if (character === '>')
+    }
+    else if (character === '>') {
       angle = false
-    else if (!angle && (character === '"' || character === '\'') && /\s/.test(text[index - 1] ?? ''))
-      quote = character
-    else if (!angle && character === '(')
+    }
+    else if (!angle && /\s/.test(character)) {
+      // Only a title and closing delimiter may follow a destination. Later prose stays public.
+      const suffix = text.slice(index).match(/^\s*(?:(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*)?\)/)
+      return suffix === null ? null : { start: startOfSpan, end: index + suffix[0].length }
+    }
+    else if (!angle && character === '(') {
       depth++
-    else if (!angle && character === ')' && --depth === 0)
+    }
+    else if (!angle && character === ')' && --depth === 0) {
       return { start: startOfSpan, end: index + 1 }
+    }
   }
-  // An unclosed private destination has no safe public suffix.
-  return { start: startOfSpan, end: text.length }
+  // Without a complete Markdown link, redact only the destination token.
+  return null
+}
+
+/** Keep balanced URL parentheses private and leave surrounding sentence punctuation intact. */
+function linkToken(token: string): string {
+  const withoutEmphasis = token.replace(TRAILING_EMPHASIS, '')
+  let extraCloses = 0
+  for (const character of withoutEmphasis) {
+    if (character === '(')
+      extraCloses--
+    else if (character === ')')
+      extraCloses++
+  }
+  let end = withoutEmphasis.length
+  while (end > 0) {
+    const character = withoutEmphasis[end - 1]!
+    if (character === ')') {
+      if (extraCloses <= 0)
+        break
+      extraCloses--
+    }
+    else if (!TRAILING_PUNCTUATION.test(character) || /&#\d{2,3};$/.test(withoutEmphasis.slice(0, end))) {
+      break
+    }
+    end--
+  }
+  return withoutEmphasis.slice(0, end)
 }
 
 function redactTokens(text: string, pattern: RegExp, tag: PrivateDetailHit['_tag'], details: PrivateDetails, hits: PrivateDetailHit[]): string {
@@ -274,7 +303,7 @@ function redactTokens(text: string, pattern: RegExp, tag: PrivateDetailHit['_tag
     const emphasis = tag === 'Link' ? found[0].match(TRAILING_EMPHASIS)?.[0] ?? '' : ''
     const withoutEmphasis = found[0].slice(0, found[0].length - emphasis.length)
     const punctuation = /&#\d{2,3};$/.test(withoutEmphasis) ? '' : withoutEmphasis.match(TRAILING_PUNCTUATION)?.[0] ?? ''
-    const token = withoutEmphasis.slice(0, withoutEmphasis.length - punctuation.length)
+    const token = tag === 'Link' ? linkToken(found[0]) : withoutEmphasis.slice(0, withoutEmphasis.length - punctuation.length)
     output += `${text.slice(cursor, start)}${placeholder}`
     cursor = start + token.length
     hits.push({ _tag: tag, entry: entryFor(details, tag, token) })
