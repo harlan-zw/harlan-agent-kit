@@ -358,7 +358,7 @@ export function createPackageReleaseSource(options: {
         base: repository.defaultBranch,
         title: `chore(release): prepare ${tag}`,
         body: sent,
-      }))).data
+      }), created => created.data.number)).data
       return { _tag: 'Prepared', pullRequestNumber: pull.number, headSha, branch }
     },
     async merge(record) {

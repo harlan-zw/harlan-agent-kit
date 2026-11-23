@@ -39,7 +39,8 @@ export interface ReviewFindingThreadSource {
   listReviewFindingThreads: (repository: RepositoryMapping, pullRequestNumber: number, signal: AbortSignal) => Promise<Result<ReviewFindingThread[], string>>
   postReviewFindingComment: (repository: RepositoryMapping, pullRequestNumber: number, comment: ReviewFindingComment, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<ReviewFindingCommentOutcome, string>>
   resolveReviewFindingThread: (repository: RepositoryMapping, threadId: string, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<void, string>>
-  editReviewFindingComment?: (repository: RepositoryMapping, comment: { id: number, body: string }, body: string, signal: AbortSignal, authorize: ReviewPublicationAuthority) => Promise<Result<{ id: number, body: string }, string>>
+  /** `pullRequestNumber` names the item in a redaction Incident. */
+  editReviewFindingComment?: (repository: RepositoryMapping, comment: { id: number, body: string }, body: string, signal: AbortSignal, authorize: ReviewPublicationAuthority, pullRequestNumber: number) => Promise<Result<{ id: number, body: string }, string>>
 }
 
 export interface InlineFindingReceipt {
@@ -270,7 +271,7 @@ async function syncReviewFindingThreads(
         ? reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef)
         : withRepairStatus(comment.body, findingRepairStatus(finding, options.repairStatus))
       if (body !== comment.body) {
-        const edited = await source.editReviewFindingComment(repository, comment, body, signal, authorize)
+        const edited = await source.editReviewFindingComment(repository, comment, body, signal, authorize, pullRequestNumber)
         if (edited._tag === 'Err')
           return { _tag: 'Failed', message: edited.error }
         comment = edited.value
@@ -305,7 +306,7 @@ async function syncReviewFindingThreads(
         const control = loggedFindingControl(thread.fingerprint)
         const lines = normalizeLoggedFindingControls(withRepairStatus(comment.body, 'Idle')).split('\n')
         const body = lines.filter(line => line !== control).join('\n').trimEnd()
-        const edited = await source.editReviewFindingComment(repository, comment, `${body}\n\n${footer}`, signal, authorize)
+        const edited = await source.editReviewFindingComment(repository, comment, `${body}\n\n${footer}`, signal, authorize, pullRequestNumber)
         if (edited._tag === 'Err')
           return { _tag: 'Failed', message: edited.error }
       }

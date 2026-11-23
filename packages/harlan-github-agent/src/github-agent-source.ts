@@ -1438,11 +1438,11 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       return post(null)
     },
 
-    async editReviewFindingComment(repository, comment, bodyText, signal, authorize) {
+    async editReviewFindingComment(repository, comment, bodyText, signal, authorize, pullRequestNumber) {
       // The finding thread sync calls this on every pass. `send` reports only
       // the write, never a body GitHub already holds. A line GitHub shows
       // removed stays removed, whatever the deny list says now.
-      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'review comment' }, keepRemovedLines(comment.body, githubAccountBody(bodyText, repository.githubAccount)))
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'review comment' }, keepRemovedLines(comment.body, githubAccountBody(bodyText, repository.githubAccount)))
       const body = outgoing.text
       if (normalizeLoggedFindingControls(comment.body) === body)
         return ok(comment)

@@ -425,14 +425,15 @@ Use `take-ownership` to follow the original delivery target and its repair.
 
 Self-identify every automated GitHub comment. Keep comments to the minimum required by the linked contract.
 
-Keep private details out of every body the controller writes to GitHub. The writer redacts them where it sends the body, so no template can skip the check.
-Private details come from the configuration and the host: the Journal directory, the trusted checkout roots, the Agent worker home, `~/scratch`, `~/notes`, `notes.localhost`, `harlan-github-agent.localhost`, and the dashboard hosts.
-Match each root in its absolute, `~/`, `$HOME/`, and entity-encoded spellings, and each host after any scheme, `//`, or user information.
+Keep private details out of every body and title the controller writes to GitHub. The writer redacts them where it sends the text, so no template can skip the check.
+Private details come from the configuration and the host: the Journal directory, the trusted checkout roots, the Agent worker home, `~/scratch`, `~/notes`, `notes.localhost`, `harlan-github-agent.localhost`, and the dashboard hosts. The Journal keeps every entry a configuration ever named.
+Match each root in its absolute, `~/`, `~user/`, `$HOME/`, and `${HOME}/` spellings, and each host after any scheme, `//`, or user information.
+Match the raw text and the text as GitHub renders it: entities, percent escapes, and backslash escapes decoded, invisible characters removed, and then Markdown formatting and inline tags removed.
 `localhost`, `~/.config`, other paths under the controller home, and a public link whose path names a private host stay public, because a finding may describe them.
 Replace each line that names a private detail with one fixed line. Never cut out a single token: every partial cut left a fragment behind.
 Keep the removed line's indentation, blockquote, list or checkbox marker, a leading `Repair:`, and its HTML comment markers, so parsers and Markdown structure still hold. Remove every other word. Drop a marker that itself names a private detail.
 A control line whose label held a private detail keeps its marker, and its parser ignores the changed label.
-Record one `private_detail` Incident that names the item and the writer, only after GitHub accepts the redacted body. A no-op, a refused write, or a rejected write records nothing. Only a person resolves it.
+Record one `private_detail` Incident that names the item and the writer, only after GitHub accepts the redacted body. A no-op, a refused write, or a rejected write records nothing. If the Journal cannot record it, log the failure and keep the accepted write. Only a person resolves it.
 Compare a stored body with GitHub's text line by line, where a removed line stands for its source line, so a configuration change never strands a comment.
 An approved Release note draft passes the guard again when the controller adds it to the GitHub release.
 Show an Agent provider failure in a comment as its cause, such as "The agent lost its sign-in." Keep the raw reason in the Journal and the Dashboard. Only a reason that starts with the provider's own wrapper counts. Other reasons stay as written.

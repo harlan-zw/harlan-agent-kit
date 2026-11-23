@@ -688,13 +688,13 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
       const client = await itemWriteClient(input.repository.github, signal)
       if (client._tag === 'Err')
         return client
-      return publicBody(options.publicText, { repository: input.repository.github, itemNumber: input.issueNumber, writer: 'issue' }, githubAccountBody(input.body, input.repository.githubAccount))
-        .send(body => client.value.rest.issues.update({ owner, repo, issue_number: input.issueNumber, title: input.title, body, ...(signal === undefined ? {} : { request: { signal } }) }))
-        .then(() => ok(undefined))
-        .catch((error: unknown): Result<void, GitHubReadError> => {
-          const status = errorStatus(error)
-          return err({ repository: input.repository.github, message: error instanceof Error ? error.message : 'GitHub refused the report update.', ...(status === undefined ? {} : { status }) })
-        })
+      // A title reaches GitHub too, so it passes the same guard as the body.
+      const target = { repository: input.repository.github, itemNumber: input.issueNumber, writer: 'issue' } as const
+      return publicBody(options.publicText, target, input.title).send(title => publicBody(options.publicText, target, githubAccountBody(input.body, input.repository.githubAccount))
+        .send(body => client.value.rest.issues.update({ owner, repo, issue_number: input.issueNumber, title, body, ...(signal === undefined ? {} : { request: { signal } }) }))).then(() => ok(undefined)).catch((error: unknown): Result<void, GitHubReadError> => {
+        const status = errorStatus(error)
+        return err({ repository: input.repository.github, message: error instanceof Error ? error.message : 'GitHub refused the report update.', ...(status === undefined ? {} : { status }) })
+      })
     },
     async createIssue(input, signal) {
       const { owner, repo } = repositoryParts(input.repository.github)
@@ -702,24 +702,25 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
       if (octokit._tag === 'Err')
         return octokit
       const request = signal === undefined ? {} : { request: { signal } }
-      return publicBody(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'issue' }, githubAccountBody(input.body, input.repository.githubAccount))
+      // A title reaches GitHub too, so it passes the same guard as the body.
+      const target = { repository: input.repository.github, itemNumber: null, writer: 'issue' } as const
+      const issueNumber = (response: { data: { number: number } }) => response.data.number
+      return publicBody(options.publicText, target, input.title).send(title => publicBody(options.publicText, target, githubAccountBody(input.body, input.repository.githubAccount))
         .send(body => octokit.value.rest.issues.create({
           owner,
           repo,
-          title: input.title,
+          title,
           body,
           ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
           ...request,
-        }))
-        .then(response => ok({ number: response.data.number, url: response.data.html_url }))
-        .catch((error: unknown): Result<{ number: number, url: string }, GitHubReadError> => {
-          const status = errorStatus(error)
-          return err({
-            repository: input.repository.github,
-            message: error instanceof Error ? error.message : 'GitHub refused the issue.',
-            ...(status === undefined ? {} : { status }),
-          })
+        }), issueNumber), issueNumber).then(response => ok({ number: response.data.number, url: response.data.html_url })).catch((error: unknown): Result<{ number: number, url: string }, GitHubReadError> => {
+        const status = errorStatus(error)
+        return err({
+          repository: input.repository.github,
+          message: error instanceof Error ? error.message : 'GitHub refused the issue.',
+          ...(status === undefined ? {} : { status }),
         })
+      })
     },
     async createComment(input, signal) {
       const octokit = await itemWriteClient(input.repository.github, signal)
@@ -930,16 +931,18 @@ export function createGitHubPullRequestPublisher(options: GitHubBodyPublisherOpt
           })
         }
         const attached = await attachDiagram()
-        return publicBody(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'pull request description' }, attached.body).send(body => octokit.rest.pulls.create({
+        const target = { repository: input.repository.github, itemNumber: null, writer: 'pull request description' } as const
+        const pullRequestNumber = (response: { data: { number: number } }) => response.data.number
+        return publicBody(options.publicText, target, input.title).send(title => publicBody(options.publicText, target, attached.body).send(body => octokit.rest.pulls.create({
           owner,
           repo,
           head: input.headRef,
           base: input.baseRef,
-          title: input.title,
+          title,
           body,
           draft: false,
           ...request,
-        })).then(async (created): Promise<Result<PublishedPullRequest, GitHubReadError>> => {
+        }), pullRequestNumber), pullRequestNumber).then(async (created): Promise<Result<PublishedPullRequest, GitHubReadError>> => {
           if (created.data.head.sha !== input.expectedHeadSha) {
             return err({
               repository: input.repository.github,
