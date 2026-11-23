@@ -1,4 +1,5 @@
 import type { JournalStore } from './store.ts'
+import { Buffer } from 'node:buffer'
 import { basename, dirname, isAbsolute, normalize } from 'node:path'
 import { decodeHTML } from 'entities'
 
@@ -6,8 +7,8 @@ import { decodeHTML } from 'entities'
  * Private details that no public body may carry.
  *
  * Built once from configuration and the host, never from a blanket pattern.
- * A finding may legitimately describe `localhost`, `~/.config`, or a config
- * path under the controller home, so only these exact roots and hosts count.
+ * A finding may describe `localhost` or an absolute controller configuration
+ * path. Home-relative paths can name worker data, so worker aliases count too.
  */
 export interface PrivateDetails {
   /** Directory prefixes, absolute, `~/`, or `$HOME/`. A path at or under one is private. */
@@ -61,8 +62,10 @@ function privateRoot(path: string): string | null {
 
 /** Every way a body can spell one root: absolute, and from the home directory when it sits there. */
 function spellings(root: string, home: string | null): string[] {
-  if (home === null || !root.startsWith(`${home}/`))
+  if (home === null || (root !== home && !root.startsWith(`${home}/`)))
     return [root]
+  if (root === home)
+    return [root, '~/', `~${basename(home)}/`, '$HOME/', `\${HOME}/`]
   const rest = root.slice(home.length + 1)
   return [root, `~/${rest}`, `~${basename(home)}/${rest}`, `$HOME/${rest}`, `\${HOME}/${rest}`]
 }
@@ -83,7 +86,15 @@ export function privateDetailsFor(sources: PrivateDetailSources): PrivateDetails
     return LOOPBACK_HOSTS.has(host) ? [] : [host]
   })
   return {
-    paths: [...new Set(roots.flatMap(root => spellings(root, home)))],
+    // Workers report paths relative to their own HOME. Protect that entire home,
+    // while controller aliases still cover only its configured private roots.
+    paths: [...new Set([
+      ...roots.flatMap(root => spellings(root, home)),
+      ...sources.workerHomes.flatMap((path) => {
+        const root = privateRoot(path)
+        return root === null ? [] : spellings(root, root)
+      }),
+    ])],
     hosts: [...new Set([NOTES_HOST, DASHBOARD_LOCAL_HOST, ...hosts])],
   }
 }
@@ -182,16 +193,20 @@ interface Detector {
  * Every pattern starts from a literal deny list entry, and every repetition is
  * bounded, so one scan does bounded work per character of the body.
  */
-function detector(details: PrivateDetails, spell: (entry: string) => string, end: string): Detector {
+/** A path entry must start a token: `/srv/agent_home` is not `/home`. */
+const TOKEN_START = String.raw`(?<![\w.~$-])`
+
+function detector(details: PrivateDetails, spell: (entry: string) => string, end: string, start = TOKEN_START): Detector {
   const entries = new Map(details.paths.map(entry => [spell(entry), entry]))
   const hosts = new Map(details.hosts.map(host => [spell(host).toLowerCase(), host]))
   const longestFirst = (values: Iterable<string>) => [...values].filter(Boolean).sort((left, right) => right.length - left.length).map(escape)
-  const paths = longestFirst(entries.keys())
+  // A spelling ending in a slash already marks the directory boundary.
+  const paths = [...entries.keys()].filter(Boolean).sort((left, right) => right.length - left.length).map(path => `${escape(path)}${path.endsWith('/') ? '' : end}`)
   const names = longestFirst(hosts.keys())
   return {
     entries,
     hosts,
-    path: paths.length === 0 ? null : new RegExp(String.raw`(?<![\w.~$-])(?:${paths.join('|')})${end}`, 'g'),
+    path: paths.length === 0 ? null : new RegExp(String.raw`${start}(?:${paths.join('|')})`, 'g'),
     // User information before an at sign is part of the line, so it goes with it.
     link: names.length === 0 ? null : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-]))(?:[\w-]{1,63}\.){0,8}(?:${names.join('|')})${HOST_END}`, 'gi'),
   }
@@ -236,8 +251,8 @@ function decodeAll(text: string): string {
   return current.replaceAll(BACKSLASH_ESCAPE, '$1').normalize('NFKC').replaceAll(HOST_DOTS, '.').replaceAll(INVISIBLE, '')
 }
 
-/** An inline HTML tag, such as `<b>` or `</code>`. Its text renders, the tag does not. It never spans a line. */
-const INLINE_TAG = /<\/?[a-z][a-z\d-]*(?:[ \t][^<>\n]*)?\/?>/gi
+/** HTML quotes can contain angle brackets and line breaks. Only an unquoted `>` ends a tag. */
+const HTML_TAG = /<\/?[a-z][a-z\d-]*(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi
 /** A Markdown link or image. Its label renders, its destination does not. */
 const MARKDOWN_LINK = /!?\[([^[\]\n]*)\]\([^()\n]*\)/g
 
@@ -270,10 +285,34 @@ function withoutInlineComments(text: string): string {
 function normalise(decoded: string): string {
   return withoutInlineComments(decoded)
     .replaceAll(MARKDOWN_LINK, '$1')
-    .replaceAll(INLINE_TAG, '')
+    .replaceAll(HTML_TAG, '')
     .replaceAll(FORMATTING, '')
     .replaceAll(/\/\.(?=\/)/g, '')
     .replaceAll(/(?<!:)\/{2,}/g, '/')
+}
+
+/** Resolve filesystem candidates without treating a public URL's path as a local path. */
+function normalizedPaths(text: string): string {
+  return text
+    // Separate joined option values before resolving paths. Require a token
+    // boundary so an option-shaped segment inside a public URL stays intact.
+    .replaceAll(/(^|[\s"'`(])(-{1,2}[a-z][\w-]*)(?=\/|~[\w-]*\/|\$(?:HOME|\{HOME\})\/)/gi, '$1$2 ')
+    // Quotes and code spans can hold directory names with spaces or punctuation.
+    .replaceAll(/(["'`])((?:\/|~[\w-]*\/|\$(?:HOME|\{HOME\})\/)[^\r\n]*?)\1/g, (_match, quote: string, path: string) => `${quote}${normalize(path)}${quote}`)
+    .replaceAll(/(?<![\w./:~$-])(?:\/|~[\w-]*\/|\$(?:HOME|\{HOME\})\/)[^\s<>"'`]*/g, path => normalize(path))
+}
+
+/** Finding identities are reversible transport, so detection must also inspect their decoded text. */
+const ENCODED_FINDING = /<!-- review-finding: ([a-f\d]{64}) ([\w-]+) -->/gi
+
+function withoutFindingIdentity(marker: string): string {
+  return marker.replaceAll(ENCODED_FINDING, '<!-- review-finding: $1 -->')
+}
+
+function decodedFindingIdentities(text: string): string {
+  return text.replaceAll(ENCODED_FINDING, (_marker, _fingerprint: string, identity: string) =>
+    // An identity may contain newlines. Keep its whole payload on the marker's line.
+    Buffer.from(identity, 'base64url').toString('utf8').replaceAll(/[\r\n]/g, ' '))
 }
 
 /**
@@ -313,6 +352,8 @@ interface Detectors {
   raw: Detector
   decoded: Detector
   normalised: Detector
+  /** Matches an entry glued to anything before it, in text with public URLs removed. */
+  joined: Detector
 }
 
 function detectorsFor(details: PrivateDetails): Detectors {
@@ -320,7 +361,31 @@ function detectorsFor(details: PrivateDetails): Detectors {
     raw: detector(details, entry => entry, RAW_ENTRY_END),
     decoded: detector(details, entry => entry, ENTRY_END),
     normalised: detector(details, entry => entry.replaceAll(FORMATTING, ''), ENTRY_END),
+    joined: detector(details, entry => entry, ENTRY_END, ''),
   }
+}
+
+/** A URL with a scheme. File URLs carry filesystem paths; other URL paths stay public. */
+const URL_TOKEN = /[a-z][a-z\d+.-]{0,15}:\/\/[^\s<>"'`]*/gi
+/** A path start anywhere: after a flag, `=`, `,`, or `:` as well as after a space. */
+const JOINED_PATH = /(?:\/|~[\w-]*\/|\$(?:HOME|\{HOME\})\/)[^\s<>"'`,:;=]*/g
+
+/**
+ * The text a shell or compiler would read, with public URLs removed.
+ *
+ * Option parsers glue a path to anything: `-I/x`, `CFLAGS=-I/x`, `-Wp,-I/x`,
+ * `PATH=/a:/x`. Requiring a token boundary before an entry missed each new
+ * spelling, so this view requires none. File URL paths remain candidates.
+ * Public URLs are removed first, so their paths stay public.
+ */
+function joinedPaths(text: string): string {
+  return text
+    .replaceAll(URL_TOKEN, (url) => {
+      // A file authority must not hide the absolute filesystem path after it.
+      const file = /^file:\/\/[^/]*(\/.*)$/i.exec(url)
+      return file?.[1] ?? ' '
+    })
+    .replaceAll(JOINED_PATH, path => normalize(path))
 }
 
 /**
@@ -328,13 +393,21 @@ function detectorsFor(details: PrivateDetails): Detectors {
  * raw text, the text as GitHub renders it, and that text without Markdown
  * formatting. Every view keeps the line breaks of `text`.
  */
-function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: PrivateDetailHit }> {
+function detailsInAligned(detect: Detectors, text: string): Array<{ line: number, hit: PrivateDetailHit }> {
   const decoded = aligned(text, decodeAll)
+  const identities = aligned(decoded, decodedFindingIdentities)
   const views: Array<[Detector, string]> = [
     [detect.raw, text],
     [detect.decoded, decoded],
     [detect.decoded, aligned(decoded, normalizedAuthorities)],
     [detect.normalised, aligned(decoded, normalise)],
+    [detect.decoded, aligned(decoded, normalizedPaths)],
+    [detect.normalised, aligned(decoded, text => normalizedPaths(normalise(text)))],
+    [detect.decoded, aligned(identities, decodeAll)],
+    [detect.normalised, aligned(identities, text => normalizedPaths(normalise(decodeAll(text))))],
+    [detect.joined, aligned(decoded, joinedPaths)],
+    [detect.joined, aligned(decoded, text => joinedPaths(normalise(text)))],
+    [detect.joined, aligned(identities, text => joinedPaths(decodeAll(text)))],
   ]
   return views.flatMap(([view, viewText]) => {
     const matches = (['Link', 'Path'] as const).flatMap((tag) => {
@@ -348,6 +421,98 @@ function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: 
       starts.push(at + 1)
     return matches.map(({ index, hit }) => ({ line: lineAt(starts, index), hit }))
   })
+}
+
+/** HTML tags and lines changed by HTML removal retain their full source spans. */
+function htmlLines(text: string): Array<{ text: string, first: number, last: number }> {
+  const lines: Array<{ text: string, first: number, last: number }> = []
+  let line = 0
+  let current = { text: '', first: 0, last: 0 }
+  let stripped = false
+  const append = (chunk: string) => {
+    const parts = chunk.split('\n')
+    parts.forEach((part, index) => {
+      if (index > 0) {
+        if (stripped)
+          lines.push(current)
+        stripped = false
+        line++
+        current = { text: '', first: line, last: line }
+      }
+      current.text += part
+      current.last = line
+    })
+  }
+  // Scan openers once. A missing comment closer hides the remaining text.
+  const markup = new RegExp(`<!--|${HTML_TAG.source}`, 'gi')
+  let from = 0
+  for (let match = markup.exec(text); match !== null; match = markup.exec(text)) {
+    append(text.slice(from, match.index))
+    if (match[0] === '<!--') {
+      const close = text.indexOf('-->', markup.lastIndex)
+      markup.lastIndex = close === -1 ? text.length : close + 3
+    }
+    else if (match[0].includes('\n')) {
+      // Inspect attributes before stripping the tag. A host on one line makes
+      // the destination's filename on every following line private too.
+      lines.push({ text: match[0], first: line, last: line + lineBreaks(match[0]) })
+    }
+    line += lineBreaks(text.slice(match.index, markup.lastIndex))
+    current.last = line
+    stripped = true
+    from = markup.lastIndex
+  }
+  append(text.slice(from))
+  if (stripped)
+    lines.push(current)
+  return lines
+}
+
+/** Parse HTML before decoding attribute entities, including each encoded transport layer. */
+function detailsIn(detect: Detectors, text: string): { spans: Array<{ first: number, last: number }>, hits: PrivateDetailHit[] } {
+  const spans: Array<{ first: number, last: number }> = []
+  const hits = new Map<string, PrivateDetailHit>()
+  const remember = (hit: PrivateDetailHit) => hits.set(`${hit._tag}:${hit.entry}`, hit)
+  for (const { line, hit } of detailsInAligned(detect, text)) {
+    spans.push({ first: line, last: line })
+    remember(hit)
+  }
+  const decoded = aligned(text, decodeAll)
+  const sources = new Set([text, aligned(text, decodedFindingIdentities), aligned(decoded, decodedFindingIdentities)])
+  const views = new Set([decoded])
+  // Native reviews encode their payload. Preserve HTML boundaries at every layer.
+  // Decoding all layers first can turn an attribute entity into a closing quote.
+  for (const source of sources) {
+    views.add(source)
+    let layer = source
+    for (let round = 0; round < 3; round++) {
+      const next = aligned(layer, decodeHTML)
+      if (next === layer)
+        break
+      views.add(next)
+      layer = next
+    }
+  }
+  for (const view of views) {
+    for (const rendered of htmlLines(view)) {
+      const found = detailsInAligned(detect, rendered.text)
+      if (found.length > 0)
+        spans.push({ first: rendered.first, last: rendered.last })
+      for (const { hit } of found)
+        remember(hit)
+    }
+  }
+  // Merge before expanding. Repeated matches and views must never multiply source lines.
+  spans.sort((left, right) => left.first - right.first)
+  const merged: typeof spans = []
+  for (const span of spans) {
+    const previous = merged.at(-1)
+    if (previous !== undefined && span.first <= previous.last + 1)
+      previous.last = Math.max(previous.last, span.last)
+    else
+      merged.push(span)
+  }
+  return { spans: merged, hits: [...hits.values()] }
 }
 
 /** The index of the line that holds `offset`, given each line's first offset in order. */
@@ -367,7 +532,12 @@ function lineAt(starts: readonly number[], offset: number): number {
 /** The line that stands in for `line`, and the markers it keeps. */
 function removedLine(detect: Detectors, line: string): string {
   const structure = LINE_STRUCTURE.exec(line)?.[0] ?? ''
-  const markers = htmlComments(line).filter(marker => detailsIn(detect, marker).length === 0)
+  const markers = htmlComments(line).flatMap((marker) => {
+    if (detailsIn(detect, marker).hits.length === 0)
+      return [marker]
+    const fingerprintOnly = withoutFindingIdentity(marker)
+    return fingerprintOnly !== marker && detailsIn(detect, fingerprintOnly).hits.length === 0 ? [fingerprintOnly] : []
+  })
   return [`${structure}${REMOVED_LINE}`, ...markers].join(' ')
 }
 
@@ -381,14 +551,77 @@ function removedLine(detect: Detectors, line: string): string {
 export function redactPrivateDetails(text: string, details: PrivateDetails): Redaction {
   const detect = detectorsFor(details)
   const found = detailsIn(detect, text)
-  if (found.length === 0)
-    return { text, hits: [] }
-  const affected = new Set(found.map(({ line }) => line))
-  const hits = [...new Map(found.map(({ line, hit }) => [`${line}:${hit._tag}:${hit.entry}`, hit])).values()]
-  return {
-    text: text.split('\n').map((line, index) => affected.has(index) ? `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}` : line).join('\n'),
-    hits,
+  const affected = new Set<number>()
+  for (const { first, last } of found.spans) {
+    for (let line = first; line <= last; line++)
+      affected.add(line)
   }
+  const hits = found.hits
+  const lines = hits.length === 0
+    ? text
+    : text.split('\n').map((line, index) => affected.has(index) ? `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}` : line).join('\n')
+  const residue = joinedHits(detect, lines)
+  if (residue.length > 0)
+    return { text: withheldBody(detect, lines), hits: [...new Map([...hits, ...residue].map(hit => [`${hit._tag}:${hit.entry}`, hit])).values()] }
+  return { text: lines, hits }
+}
+
+/** The text that replaces a whole body when a private detail spans its lines. */
+const WITHHELD_BODY = '_This text was withheld: it named a private path or host across lines._'
+
+/** A line that holds only HTML comment markers, which the parsers read. */
+function isMarkerLine(line: string): boolean {
+  let from = 0
+  let comments = 0
+  while (from < line.length) {
+    if (/\s/.test(line.charAt(from))) {
+      from++
+      continue
+    }
+    if (!line.startsWith('<!--', from))
+      return false
+    const close = line.indexOf('-->', from + 4)
+    if (close === -1)
+      return false
+    from = close + 3
+    comments++
+  }
+  return comments > 0
+}
+
+/**
+ * Private details that only appear once lines join.
+ *
+ * Per-line views cannot see a host or path split by a source newline, which
+ * HTML attributes and URL parsers ignore. Every such spelling found one review
+ * at a time, so this check runs after line removal on the whole body: joined
+ * by a space, and joined directly.
+ */
+function joinedHits(detect: Detectors, text: string): PrivateDetailHit[] {
+  if (!text.includes('\n'))
+    return []
+  return [text.replaceAll(/\r?\n/g, ' '), text.replaceAll(/\r?\n/g, '')]
+    .flatMap(joined => detailsIn(detect, joined).hits)
+}
+
+/** Keeps the marker lines that name nothing private, then one withheld line. */
+function withheldBody(detect: Detectors, text: string): string {
+  const markers = text.split('\n').filter(line => isMarkerLine(line) && detailsIn(detect, line).hits.length === 0)
+  return [...markers, WITHHELD_BODY].join('\n')
+}
+
+/** Whether `published` is the withheld form of `source`: its marker lines in order, then the withheld line. */
+function isWithheldFormOf(published: string, source: string): boolean {
+  const lines = published.split('\n')
+  if (lines.at(-1) !== WITHHELD_BODY)
+    return false
+  const markers = source.split('\n').filter(isMarkerLine)
+  let from = 0
+  return lines.slice(0, -1).every((line) => {
+    const at = markers.indexOf(line, from)
+    from = at + 1
+    return at !== -1
+  })
 }
 
 /** Whether `line` is what the guard writes in place of `source`, under any deny list. */
@@ -399,7 +632,8 @@ function isRemovedFormOf(line: string, source: string): boolean {
   const rest = line.slice(structure.length + REMOVED_LINE.length)
   const markers = htmlComments(rest)
   const sourceMarkers = htmlComments(source)
-  return markers.reduce((remainder, marker) => remainder.replace(marker, ''), rest).trim() === '' && markers.every(marker => sourceMarkers.includes(marker))
+  return markers.reduce((remainder, marker) => remainder.replace(marker, ''), rest).trim() === ''
+    && markers.every(marker => sourceMarkers.some(source => source === marker || withoutFindingIdentity(source) === marker))
 }
 
 /**
@@ -410,7 +644,7 @@ function isRemovedFormOf(line: string, source: string): boolean {
  * other line must be equal, and the line count must not change.
  */
 export function isPublishedForm(published: string, source: string): boolean {
-  if (published === source)
+  if (published === source || isWithheldFormOf(published, source))
     return true
   const publishedLines = published.split('\n')
   const sourceLines = source.split('\n')

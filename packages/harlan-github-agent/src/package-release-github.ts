@@ -444,9 +444,15 @@ export function createPackageReleaseSource(options: {
       // The marker makes a retry after a lost response add nothing.
       if (release.body?.includes(RELEASE_NOTE_MARKER))
         return release.html_url
+      const existing = release.body ?? ''
+      const suffix = `\n\n${existing}`
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'GitHub release' }, `${text}\n\n${RELEASE_NOTE_DISCLOSURE}\n${RELEASE_NOTE_MARKER}${suffix}`)
+      // Approval covers the draft only. Refuse a conflict before requesting write access.
+      // The controller settles 409 refusals and shows their reason for a maintainer decision.
+      if (!outgoing.text.endsWith(suffix))
+        throw Object.assign(new Error('Adding this draft would change existing release notes. A maintainer must decide how to handle those notes.'), { status: 409 })
       const writer = await client('contents_write')
-      await publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'GitHub release' }, `${text}\n\n${RELEASE_NOTE_DISCLOSURE}\n${RELEASE_NOTE_MARKER}\n\n${release.body ?? ''}`.trimEnd())
-        .send(body => writer.rest.repos.updateRelease({ ...scope, release_id: release.id, body }))
+      await outgoing.send(body => writer.rest.repos.updateRelease({ ...scope, release_id: release.id, body }))
       return release.html_url
     },
     async releaseNoteContext(record) {

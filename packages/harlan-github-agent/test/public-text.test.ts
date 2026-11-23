@@ -12,7 +12,7 @@ import { createGitHubIssuePublisher } from '../src/github.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
 import { createPublicTextGuard, encodeEntities, isPublishedForm, privateDetailsFor, publicBody, redactPrivateDetails } from '../src/public-text.ts'
 import { ok } from '../src/result.ts'
-import { mirrorReviewFindingThreads, reviewFindingThreadBody, reviewFindingThreadFingerprint } from '../src/review-finding-threads.ts'
+import { mirrorReviewFindingThreads, reviewFindingThreadBody, reviewFindingThreadFingerprint, reviewFindingThreadMarker } from '../src/review-finding-threads.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -47,6 +47,41 @@ function journal() {
   return store
 }
 
+describe('a private detail split across lines', () => {
+  const withheld = '_This text was withheld: it named a private path or host across lines._'
+
+  it.each([
+    '<a\nhref="https://notes.\nlocalhost/example">docs</a>',
+    '<img\nsrc="https://harlan-github-agent.\nlocalhost/x.png">',
+    'Open /home/har\nlan/pkg/example now.',
+  ])('withholds the body when only the joined lines name it: %s', (text) => {
+    const redacted = redactPrivateDetails(text, details)
+
+    expect(redacted.text).toBe(withheld)
+    expect(redacted.text).not.toContain('localhost')
+    expect(redacted.hits.length).toBeGreaterThan(0)
+  })
+
+  it('keeps the parser markers of a withheld body', () => {
+    const source = '<!-- harlan-agent-kit:pr-triage -->\n<!-- reviewed-sha: abc -->\nSee <a\nhref="https://notes.\nlocalhost/example">docs</a>.'
+
+    expect(redactPrivateDetails(source, details).text).toBe(`<!-- harlan-agent-kit:pr-triage -->\n<!-- reviewed-sha: abc -->\n${withheld}`)
+  })
+
+  it('reads a withheld body as the published form of its source', () => {
+    const source = '<!-- harlan-agent-kit:pr-triage -->\nSee <a\nhref="https://notes.\nlocalhost/example">docs</a>.'
+
+    expect(isPublishedForm(redactPrivateDetails(source, details).text, source)).toBe(true)
+    expect(isPublishedForm(`<!-- other -->\n${withheld}`, source)).toBe(false)
+  })
+
+  it('keeps a body whose lines only touch at a public boundary', () => {
+    const text = 'Line one ends here\n/usr/include stays public.'
+
+    expect(redactPrivateDetails(text, details)).toEqual({ text, hits: [] })
+  })
+})
+
 describe('review findings on #754, third round', () => {
   it('removes a private URL together with its credentials', () => {
     const redacted = redactPrivateDetails('Clone https://fixture-user:pa/ss@notes.localhost/x now.', details)
@@ -74,6 +109,25 @@ describe('review findings on #754, third round', () => {
 })
 
 describe('redactPrivateDetails', () => {
+  it.each([
+    '/home/harlan/public/../notes/private-evidence.md',
+    '/home/harlan/public/a/../../notes/private-evidence.md',
+    '~/public/../notes/private-evidence.md',
+    '~harlan/public/../notes/private-evidence.md',
+    '$HOME/public/../notes/private-evidence.md',
+    `\${HOME}/public/../notes/private-evidence.md`,
+    '/home/harlan/public/%2e%2e/notes/private-evidence.md',
+    '/home/harlan/public//./../notes/private-evidence.md',
+    '"/home/harlan/public directory/../notes/private-evidence.md"',
+    '/home/harlan/public(copy)/../notes/private-evidence.md',
+  ])('removes a diagnostic path that resolves through parent segments: %s', (path) => {
+    const controllerDetails = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: [], serviceOrigins: [] })
+    expect(redactPrivateDetails(`Failed to read ${path}`, controllerDetails)).toEqual({
+      text: removed,
+      hits: [{ _tag: 'Path', entry: path.includes('/home/harlan/') ? '/home/harlan/notes' : `${path.split('/')[0]}/notes` }],
+    })
+  })
+
   it.each([
     'Ran /home/harlan/pkg/harlan-agent-kit.fix-x/packages/a/src/index.ts.',
     'Tilde ~/pkg/example.fix-x/src/a.ts',
@@ -108,14 +162,15 @@ describe('redactPrivateDetails', () => {
   })
 
   it.each([
-    'Set the key in ~/.config/opencode/opencode.json.',
+    'Set the key in /home/harlan/.config/opencode/opencode.json.',
     'The dev server answers on http://localhost:3000/api/health.',
     'The example config reads /home/harlan/.config/harlan-github-agent/app.pem.',
     'The preview runs at https://example.localhost.',
-    'Paths like ~/scratchpad stay.',
-    'A file named ~/scratch.txt stays.',
+    'Paths like /home/harlan/scratchpad stay.',
+    'A file named /home/harlan/scratch.txt stays.',
     'The host notes.localhost.example.com stays.',
     'The sibling /home/agent&#95;x/cache stays.',
+    '~~Old text~~ and $HOMELESS/example stay.',
     '[View code](https://github.com/harlan-zw/example/blob/abc123/fixtures/notes.localhost/README.md#L3)',
     'See https://github.com/harlan-zw/example/blob/abc123/fixtures/notes.localhost/README.md.',
     'Harlan\'s note says it\'s fine.',
@@ -151,7 +206,7 @@ describe('redactPrivateDetails', () => {
       .toBe(`${removed} <!-- marker: ok -->`)
   })
 
-  it('derives aliases only for protected roots inside the normalized controller home', () => {
+  it('protects worker aliases while keeping unrelated absolute controller paths public', () => {
     const configured = privateDetailsFor({
       home: '/home/harlan/./',
       storagePath: '/home/harlan/state/../journal/state.sqlite',
@@ -159,7 +214,7 @@ describe('redactPrivateDetails', () => {
       workerHomes: ['/home/harlan/workers/agent', '/home/agent'],
       serviceOrigins: [],
     })
-    const kept = ['~/sites/example', '$HOME/sites/example', '~/checkouts/example', '~/.config/app', '$HOME/.config/app', '~/pkg-extra/example']
+    const kept = ['/home/harlan/sites/example', '/home/harlan/checkouts/example', '/home/harlan/.config/app', '/home/harlan/pkg-extra/example']
 
     expect(redactPrivateDetails(['~/journal/run', '$HOME/journal/run', '~/workers/agent/cache', '$HOME/workers/agent/cache', '~/pkg/worktree', '$HOME/pkg/worktree', ...kept].join('\n'), configured).text)
       .toBe([...Array.from({ length: 6 }).fill(removed), ...kept].join('\n'))
@@ -194,6 +249,178 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes the filename of a multiline private HTML destination before sending a %s', async (writer) => {
+    for (const destination of ['https://notes.localhost/\nacquisition.pdf', 'file:///home/harlan/notes/\nacquisition.pdf']) {
+      for (const tag of [`<a href="${destination}">evidence</a>`, `<img src='${destination}'>`, `<a\ntitle="a &quot; > b" href="${destination}">evidence</a>`]) {
+        const input = `Public introduction.\n${tag}\n\nPublic conclusion.`
+        const source = writer === 'review' ? encodeEntities(input) : input
+        const written: string[] = []
+
+        await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, source).send(async (body) => {
+          written.push(body)
+        })
+
+        expect(written).toEqual([`Public introduction.\n${Array.from({ length: tag.split('\n').length }).fill(removed).join('\n')}\n\nPublic conclusion.`])
+        expectNoFragment(written.join('\n'))
+      }
+    }
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes source lines joined by HTML containing entity-encoded quotes before sending a %s', async (writer) => {
+    for (const markup of ['<span title="&quot; > context\nmore context"></span>', '<span title=\'&#39; > context\nmore context\'></span>', '<span title="&#x22; > context\nmore context"></span>', '<span title="&quot; > context"></span>']) {
+      for (const detail of [`/home/har${markup}lan/notes/acquisition.pdf`, `notes.${markup}localhost/acquisition`]) {
+        const input = `Public introduction.\nRead ${detail} now.\nPublic conclusion.`
+        const store = journal()
+        const guard = createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} })
+
+        const sent = await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+
+        expect(sent).toBe(`Public introduction.\n${Array.from({ length: markup.split('\n').length }).fill(removed).join('\n')}\nPublic conclusion.`)
+        expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+      }
+    }
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes source lines joined by HTML with quoted angle brackets before sending a %s', async (writer) => {
+    for (const markup of ['<span\ntitle="a > b"></span>', '<span title=\'a < b\'\ndata-x></span>', '<span title="a >\nb < c"></span>']) {
+      for (const detail of [`/home/har${markup}lan/notes/acquisition.pdf`, `notes.${markup}localhost/acquisition`]) {
+        const store = journal()
+        const input = `Public introduction.\nRead ${detail} now.\nPublic conclusion.`
+        const guard = createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} })
+
+        const sent = await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+
+        expect(sent).toBe(`Public introduction.\n${removed}\n${removed}\nPublic conclusion.`)
+        expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+      }
+    }
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes local file URI diagnostics and keeps public HTTPS examples before sending a %s', async (writer) => {
+    for (const uri of ['file://localhost/home/harlan/notes/acquisition.pdf', 'file://LOCALHOST/home/harlan/notes/acquisition.pdf', 'file:///home/harlan/notes/acquisition.pdf', 'file://localhost/home/harlan/public/../notes/acquisition.pdf', 'file://localhost/%68ome/harlan/notes/acquisition.pdf']) {
+      const store = journal()
+      const example = 'Read https://example.com/home/harlan/notes/acquisition.pdf for syntax.'
+      const input = `Failed to read ${uri}\n${example}`
+      const guard = createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} })
+
+      const sent = await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+
+      expect(sent).toBe(`${removed}\n${example}`)
+      expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+    }
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes every source line of multiline HTML private details before sending a %s', async (writer) => {
+    for (const markup of ['<!-- hidden\nmore hidden\n-->', '<span\ntitle="context"\ndata-x></span>']) {
+      for (const detail of [`/home/har${markup}lan/notes/acquisition.pdf`, `notes.${markup}localhost/acquisition`]) {
+        const input = `Public introduction.\n\nRead ${detail} now.\n\nPublic conclusion.`
+        const store = journal()
+        const guard = createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} })
+        const sent = await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+
+        expect(sent).toBe(`Public introduction.\n\n${removed}\n${removed}\n${removed}\n\nPublic conclusion.`)
+        expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+      }
+    }
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes joined filesystem arguments before sending a %s and records one Incident', async (writer) => {
+    const store = journal()
+    const fixtureDetails = privateDetailsFor({ home: '/home/fixture', storagePath: ':memory:', checkoutRoots: ['/home/fixture/pkg'], workerHomes: ['/home/worker'], serviceOrigins: [] })
+    const diagnostics = [
+      'cc -I/home/fixture/pkg/example/include input.c',
+      'cc -L/home/fixture/pkg/example/lib input.c',
+      'cc -isystem/home/fixture/pkg/example/include input.c',
+      'cc -I/home/fixture/public/../pkg/example/include input.c',
+      'cc -I~/pkg/example/include input.c',
+      'cc -I$HOME/pkg/example/include input.c',
+      `cc -I\${HOME}/pkg/example/include input.c`,
+      'cc -I~fixture/pkg/example/include input.c',
+      'cc -I/home/worker/cache input.c',
+      'cc -I%2Fhome%2Ffixture%2Fpkg/example/include input.c',
+      'CFLAGS=-I/home/fixture/pkg/example/include make',
+      'cc -Wp,-I/home/fixture/pkg/example/include input.c',
+      'cc -Wl,-rpath,/home/fixture/pkg/example/lib input.c',
+      'export LD_LIBRARY_PATH=/opt/lib:/home/fixture/pkg/example/lib',
+    ]
+    const finding: ReviewFinding = {
+      _tag: 'Logged',
+      impact: 42,
+      summary: 'Compiler diagnostic',
+      nextAction: 'Check the include path.',
+      details: { fingerprint: 'e'.repeat(64), identity: diagnostics[0]!, location: { path: 'src/a.c', line: 3 }, proof: 'Compilation failed.' },
+    }
+    const diagnostic = diagnostics.join('\n')
+    const input = `${writer === 'review' ? encodeEntities(diagnostic) : diagnostic}\n${reviewFindingThreadBody(finding, { headSha: reviewHead, repairOnHead: true })}`
+    const sent = await publicBody(createPublicTextGuard({ details: fixtureDetails, store, now: () => new Date(), log: () => {} }), { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async body => body)
+
+    expect(sent.split('\n').slice(0, diagnostics.length)).toEqual(diagnostics.map(() => removed))
+    expect(sent).not.toContain('/home/')
+    expect(reviewFindingThreadMarker(sent)).toMatchObject({ fingerprint: finding.details.fingerprint, identity: null })
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', occurrences: 1 })])
+  })
+
+  it.each([
+    'cc -I/usr/include input.c',
+    'Read https://example.com/-I/home/fixture/pkg/include for the syntax.',
+    'Read https://example.com/-I/home/fixture/public/../pkg/include for the syntax.',
+    'cc -I/home/fixture/pkg-other/include input.c',
+  ])('keeps public joined argument examples: %s', (input) => {
+    expect(redactPrivateDetails(input, { paths: ['/home/fixture/pkg'], hosts: [] })).toEqual({ text: input, hits: [] })
+  })
+
+  it.each(['~/.codex/private-session.json', '$HOME/.codex/private-session.json', `\${HOME}/.codex/private-session.json`, '~agent/.codex/private-session.json'])('records an Incident when the only private detail is %s', async (path) => {
+    const store = journal()
+    const guard = createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} })
+
+    const sent = await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'comment' }, `Failed to read ${path}`).send(async body => body)
+
+    expect(sent).toBe(removed)
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('redacts worker-home aliases and records an Incident for %s', async (writer) => {
+    const store = journal()
+    const paths = ['/home/agent/.codex/private-session.json', '~/.codex/private-session.json', '$HOME/.codex/private-session.json', `\${HOME}/.codex/private-session.json`, '~agent/.codex/private-session.json']
+    const example = 'Example: /home/harlan/.config/example/config.json'
+    const finding: ReviewFinding = {
+      _tag: 'Logged',
+      impact: 42,
+      summary: 'Worker diagnostic',
+      nextAction: 'Check the diagnostic.',
+      details: { fingerprint: 'd'.repeat(64), identity: paths[1]!, location: { path: 'src/cache.ts', line: 3 }, proof: 'Worker diagnostic.' },
+    }
+    const diagnostic = [...paths.map(path => `Failed to read ${path}`), example].join('\n')
+    const input = `${reviewFindingThreadBody(finding, { headSha: reviewHead, repairOnHead: true })}\n${writer === 'review' ? encodeEntities(diagnostic) : diagnostic}`
+    const sent = await publicBody(createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} }), { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async body => body)
+
+    expect(sent).toContain([...paths.map(() => removed), example].join('\n'))
+    expect(sent).not.toContain('private-session')
+    expect(reviewFindingThreadMarker(sent)).toMatchObject({ fingerprint: finding.details.fingerprint, identity: null })
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('guards encoded finding identities and parent paths for %s', async (writer) => {
+    const store = journal()
+    const finding: ReviewFinding = {
+      _tag: 'Logged',
+      impact: 42,
+      summary: 'The cache leaks',
+      nextAction: 'Reset the cache.',
+      details: { fingerprint: 'c'.repeat(64), identity: '/home/harlan/public/../notes/private-evidence.md', location: { path: 'src/cache.ts', line: 3 }, proof: 'Two tests share one cache.' },
+    }
+    const source = reviewFindingThreadBody(finding, { headSha: reviewHead, repairOnHead: true })
+    const diagnostic = 'Failed to read /home/harlan/public/../notes/private-evidence.md'
+    const input = `${source}\n${writer === 'review' ? encodeEntities(diagnostic) : diagnostic}`
+    const sent = await publicBody(createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} }), { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async body => body)
+
+    expect(reviewFindingThreadMarker(sent)).toMatchObject({ fingerprint: finding.details.fingerprint, identity: null })
+    expect(sent).not.toContain('private-evidence')
+    expect(sent).toContain(removed)
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+    expect(isPublishedForm(sent, input)).toBe(true)
+  })
+
   it.each([
     ['create', true],
     ['update', true],
@@ -268,7 +495,7 @@ describe('the publish boundary', () => {
       runId: 'run-1',
       fingerprint: 'fixture',
       title: ' ',
-      claim: 'Read ~/notes/private-evidence.md',
+      claim: 'Read ~/.codex/private-evidence.md',
       target: 'src/cache.ts',
       verification: 'pnpm test',
       estimatedChangedFiles: 1,
@@ -325,6 +552,8 @@ describe('the publish boundary', () => {
   })
 
   it.each([
+    '<a href="https://notes.localhost/\nacquisition.pdf">evidence</a>',
+    '/home/har<span title="&quot; > context\nmore context"></span>lan/notes/acquisition.pdf',
     '__~/notes/fixture.md__',
     '_$HOME/scratch/fixture.log_',
     '__/home/agent/fixture.log__',
@@ -344,7 +573,7 @@ describe('the publish boundary', () => {
 
     expect(await publisher.createComment({ repository: repositoryMapping(), issueNumber: 24, body: input })).toEqual(ok({ id: 7 }))
 
-    expect(sent).toEqual([removed])
+    expect(sent).toEqual([input.split('\n').map(() => removed).join('\n')])
     expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
   })
 
@@ -371,7 +600,7 @@ describe('the publish boundary', () => {
       '__~/notes/fixture.md__',
       '[evidence](https://notes&#46;localhost/fixture.md)',
       'Public text &amp; punctuation stays.',
-      '__~/notes_old/fixture.md__',
+      '__/home/harlan/notes_old/fixture.md__',
       '_/home/agent_old/fixture.log_',
       '[public](https://example.com/notes&#46;localhost/fixture.md)',
       '[public](https://notes&#46;localhost.example.com/fixture.md)',
@@ -453,11 +682,11 @@ describe('the publish boundary', () => {
       publicText: createPublicTextGuard({ log: () => {}, details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
       tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
     })
-    const paths = ['pkg', 'sites'].flatMap(root => ['/home/harlan', '~', '$HOME'].map(home => `${home}/${root}/example-worktree`))
+    const paths = [...['pkg', 'sites'].flatMap(root => ['/home/harlan', '~', '$HOME'].map(home => `${home}/${root}/example-worktree`)), '~/.codex/private-session.json', '$HOME/.codex/private-session.json']
 
-    expect(await publisher.createComment({ repository: repositoryMapping({ github: 'harlan-zw/harlan-agent-kit' }), issueNumber: 271, body: [...paths, '~/.config'].join('\n') })).toEqual(ok({ id: 7 }))
+    expect(await publisher.createComment({ repository: repositoryMapping({ github: 'harlan-zw/harlan-agent-kit' }), issueNumber: 271, body: [...paths, '/home/harlan/.config'].join('\n') })).toEqual(ok({ id: 7 }))
 
-    expect(sent).toEqual([[...paths.map(() => removed), '~/.config'].join('\n')])
+    expect(sent).toEqual([[...paths.map(() => removed), '/home/harlan/.config'].join('\n')])
     expect(store.listIncidents()).toEqual([expect.objectContaining({
       scope: { _tag: 'Repository', repository: 'harlan-zw/harlan-agent-kit' },
       kind: 'private_detail',
@@ -512,6 +741,8 @@ describe('the publish boundary', () => {
   })
 
   it.each([
+    '<a href="https://notes.localhost/\nacquisition.pdf">evidence</a>',
+    '/home/har<span title="&quot; > context\nmore context"></span>lan/notes/acquisition.pdf',
     'The trace in ~/pkg/cache_trace/run.log shows two locales sharing one key.',
     'The cache at /srv/agent_home/cache is stale.',
     'The file `~/notes/client handover/a.pdf` is stale.',
@@ -599,6 +830,56 @@ ${line}`
 }
 
 describe('a review comment on a line', () => {
+  it.each(['~/notes/private-evidence.md', '/home/harlan/public/../notes/private-evidence.md', 'https://notes.localhost/private-evidence', 'context\n~/notes/private-evidence.md', '/home/har<span title="&quot; > context\nmore context"></span>lan/notes/private-evidence.md'])('protects an identity on inline creation and later edits: %s', async (identity) => {
+    const store = journal()
+    const written: string[] = []
+    const write = async (input: { body: string }) => {
+      written.push(input.body)
+      return { data: { id: 101, body: input.body } }
+    }
+    const client = { rest: { pulls: {
+      createReviewComment: write,
+      updateReviewComment: write,
+      getReviewComment: async () => ({ data: { id: 101, body: written[0], user: { login: 'harlan-github-agent[bot]' } } }),
+    } } } as unknown as Octokit
+    const source = agentSource(client, store)
+    const finding: ReviewFinding = {
+      _tag: 'Logged',
+      impact: 42,
+      summary: 'The cache leaks',
+      nextAction: 'Reset the cache.',
+      details: { fingerprint: 'c'.repeat(64), identity, location: { path: 'src/cache.ts', line: 3 }, proof: 'Two tests share one cache.' },
+    }
+    const body = reviewFindingThreadBody(finding, { headSha: reviewHead, repairOnHead: true })
+    const signal = new AbortController().signal
+
+    expect(await source.postReviewFindingComment(repositoryMapping(), 24, { headSha: reviewHead, path: 'src/cache.ts', line: 3, body }, signal, () => ok(undefined))).toEqual(ok(expect.objectContaining({ _tag: 'Posted' })))
+    expect(await source.editReviewFindingComment!(repositoryMapping(), { id: 101, body: written[0]! }, `${body}\nPublic update.`, signal, () => ok(undefined), 24)).toEqual(ok(expect.objectContaining({ id: 101 })))
+
+    expect(written).toHaveLength(2)
+    for (const sent of written) {
+      expect(reviewFindingThreadMarker(sent)).toMatchObject({ fingerprint: finding.details.fingerprint, identity: null, logged: true })
+      expect(sent).not.toContain('private-evidence')
+      expect(sent).not.toContain(identity)
+    }
+    expect(written[1]).toContain('Public update.')
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', occurrences: 1 })])
+  })
+
+  it('preserves a public identity and does not report a private detail', () => {
+    const finding: ReviewFinding = {
+      _tag: 'Logged',
+      impact: 42,
+      summary: 'The cache leaks',
+      nextAction: 'Reset the cache.',
+      details: { fingerprint: 'c'.repeat(64), identity: 'cache-leak', location: { path: 'src/cache.ts', line: 3 }, proof: 'Two tests share one cache.' },
+    }
+    const body = reviewFindingThreadBody(finding)
+
+    expect(redactPrivateDetails(body, details)).toEqual({ text: body, hits: [] })
+    expect(reviewFindingThreadMarker(body)?.identity).toBe('cache-leak')
+  })
+
   it('stays the Service thread for its finding after its heading line was removed', async () => {
     const guard = { details, report: () => {} }
     const threads: ReviewFindingThread[] = []
@@ -853,9 +1134,9 @@ describe('spellings GitHub renders, review findings on #754, final round', () =>
   })
 
   it.each([
-    'Set the key in ~/.config/opencode/opencode.json.',
+    'Set the key in /home/harlan/.config/opencode/opencode.json.',
     'The sibling /home/agent_x/cache stays.',
-    'Paths like ~/scratchpad stay.',
+    'Paths like /home/harlan/scratchpad stay.',
     'The host notes.localhost.example.com stays.',
     'Encode 100% of the input with &amp; escapes.',
   ])('keeps a public line after normalising it: %s', (line) => {
