@@ -1,6 +1,6 @@
 import type { Octokit } from 'octokit'
 import type { MarkedIssue } from '../src/github.ts'
-import type { ReviewFinding } from '../src/types.ts'
+import type { RepositoryMapping, ReviewFinding } from '../src/types.ts'
 import { spawnSync } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -1167,6 +1167,35 @@ describe('follow-up routing by Finding scope', () => {
     expect(await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues', actorLogin: () => 'harlan-github-agent[bot]' }, new AbortController().signal)).toEqual([])
     expect(created).toHaveLength(1)
     expect(store.claimLoggedFindingComment('status', at, 60_000)?.body).toContain('GitHub refused the issue.')
+  })
+
+  it.each([
+    ['Review is disabled', { pullRequestReview: false }],
+    ['no head prefix is writable', { writablePullRequestHeadPrefixes: [] }],
+  ] satisfies Array<[string, Partial<RepositoryMapping>]>)('files no staged issue once %s, and still files another repository\'s', (_case, revoked) => {
+    const { store, request, mapping } = setup([finding, existing])
+    expect(store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))).toBe(true)
+    // A second repository stages its own tick after this one.
+    const other = repositoryMapping({ github: 'harlan-zw/other', ownership: 'maintained' })
+    store.syncRepositories([mapping, other], at)
+    store.setRepositoryWritesEnabled(other.github, true)
+    const otherPull = pullRequestItem({ repository: other.github, headRepository: other.github, url: 'https://github.com/harlan-zw/other/pull/24', mergeState: 'clean', headSha: 'd'.repeat(40), baseSha: 'b'.repeat(40) })
+    const observation = store.recordObservation({ externalId: 'other-open', observedAt: at, source: 'poll', subject: otherPull })
+    const review = store.claimNextAdversarialReviewTask('reviewer', at, 60_000)
+    if (observation._tag !== 'Inserted' || review === null)
+      throw new Error('Expected a second reviewed pull request.')
+    const gates = { merge: { _tag: 'Passed' as const, evidence: [] }, review: { _tag: 'Passed' as const, evidence: [] }, ci: { _tag: 'Passed' as const, evidence: [] } }
+    store.recordReviewRun({ id: 'other-review', repository: other.github, pullRequestNumber: 24, revisionId: observation.revisionId, headSha: otherPull.headSha, provider: 'codex', sessionId: 'session', model: 'model', agentVersion: 'version', skillDigest: 'c'.repeat(64), startedAt: at, completedAt: at, gates, findings: [existing] })
+    store.completeWorkerTask({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at, evidence: 'other-review' })
+    const otherBody = store.decorateLoggedFindings(terminalComment({ headSha: otherPull.headSha, baseSha: otherPull.baseSha, gates, findings: [existing], confidence: 95, reportedChecks: [], repository: other.github, baseRef: otherPull.baseRef }), 'other-review')
+    store.recordReviewPublication({ id: 'other-publication', reviewRunId: 'other-review', body: otherBody, at, result: { _tag: 'Published', githubCommentId: 43, url: 'https://github.com/harlan-zw/other/pull/24#issuecomment-43' } })
+    const later = new Date(Date.parse(at) + 1_000).toISOString()
+    expect(store.requestLoggedFindingPickup({ ...issueTick(request, existing.details.fingerprint, otherBody), repository: other.github, headSha: otherPull.headSha, commentId: 43, at: later })).toBe(true)
+
+    store.syncRepositories([{ ...mapping, ...revoked }, other], at)
+
+    expect(store.claimFollowUpIssue('issues', later, 60_000)).toMatchObject({ repository: other.github })
+    expect(store.claimFollowUpIssue('issues', later, 60_000)).toBeNull()
   })
 
   it('files every unfixed follow-up as one issue from the Merged comment, once', () => {

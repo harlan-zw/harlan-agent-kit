@@ -386,6 +386,7 @@ Grant that only while GitHub holds the staged title and body as the publish boun
 Deduplicate one finding's issue by pull request and fingerprint. Before each create, find an open issue by the marker that names both, because a lost reply may have filed it. Another pull request with the same finding files its own issue.
 Anyone can copy a marker. Recover a marked issue only when the controller wrote it, it carries the follow-up label, and GitHub holds the staged title and body as published. Otherwise file a new issue.
 Retry a refused create. Stop after a permanent refusal or five attempts. Show the issue link, or the refusal, beside the finding.
+Check the current filing policy, Review included, when a pass claims a staged issue and again before its write. A staged issue waits while the policy refuses it.
 
 After merge, offer one `File these as one issue` checkbox on the Merged comment. Never offer a checkbox per finding.
 It files every unfixed follow-up as one issue: listed, with no Repair selection, issue, or Dismissal, and no resolved thread.

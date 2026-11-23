@@ -601,7 +601,10 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
     claimFollowUpIssue(workerId, at, leaseMilliseconds) {
       database.exec('BEGIN IMMEDIATE')
       try {
-        const row = database.prepare(`
+        // The tick staged this under the policy of its time. Filing waits until
+        // the current policy permits it again, as a paused repository does, and
+        // a waiting row never holds back another repository's.
+        const row = (database.prepare(`
           SELECT issues.id, issues.fence, issues.title, issues.body, issues.marker, subjects.github_number,
             repositories.github AS repository, repositories.policy_json
           FROM follow_up_issues AS issues
@@ -611,8 +614,9 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
             AND repositories.enabled = 1 AND repositories.paused = 0 AND repositories.ownership != 'external'
             ${options.writeAuthoritySql}
             AND (SELECT state_tag FROM agent_control WHERE singleton = 1) = 'Running'
-          ORDER BY issues.requested_at, issues.id LIMIT 1
-        `).get(at) as { id: string, fence: number, title: string, body: string, marker: string, github_number: number, repository: string, policy_json: string } | undefined
+          ORDER BY issues.requested_at, issues.id
+        `).all(at) as Array<{ id: string, fence: number, title: string, body: string, marker: string, github_number: number, repository: string, policy_json: string }>)
+          .find(candidate => canFileFollowUpIssue(JSON.parse(candidate.policy_json) as RepositoryMapping))
         if (row === undefined) {
           database.exec('COMMIT')
           return null
@@ -630,7 +634,9 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
       }
     },
     authorizeFollowUpIssue(command, at) {
-      return database.prepare(`SELECT 1 FROM follow_up_issues AS issues
+      // The stored policy must still equal the claimed one, so the filing rule
+      // holds for the policy current at the write.
+      return canFileFollowUpIssue(command.repositoryMapping) && database.prepare(`SELECT 1 FROM follow_up_issues AS issues
         JOIN subjects ON subjects.id = issues.subject_id
         JOIN repositories ON repositories.id = subjects.repository_id
         WHERE issues.id = ? AND issues.state_tag = 'Running' AND issues.worker_id = ? AND issues.fence = ?
