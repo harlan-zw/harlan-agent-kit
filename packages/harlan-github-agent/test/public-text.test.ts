@@ -76,12 +76,28 @@ describe('redactPrivateDetails', () => {
     expect(redacted.text).toBe('Open [private link] or [private link].')
   })
 
+  it('keeps the local dashboard host private when the configured origin is a Tailscale host', () => {
+    const tailscaleOnly = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: [], serviceOrigins: ['https://hogwild.tail1234.ts.net'] })
+
+    expect(redactPrivateDetails('Open https://harlan-github-agent.localhost/tasks/1.', tailscaleOnly).text).toBe('Open [private link].')
+  })
+
+  it.each([
+    ['See https://notes.localhost.', 'See [private link].'],
+    ['Evidence is in ~/scratch.', 'Evidence is in [private path].'],
+    ['Ran in /home/agent.', 'Ran in [private path].'],
+  ])('removes a private entry that ends a sentence: %s', (text, expected) => {
+    expect(redactPrivateDetails(text, details).text).toBe(expected)
+  })
+
   it.each([
     'Set the key in ~/.config/opencode/opencode.json.',
     'The dev server answers on http://localhost:3000/api/health.',
     'The example config reads /home/harlan/.config/harlan-github-agent/app.pem.',
     'The preview runs at https://example.localhost.',
     'Paths like ~/scratchpad stay.',
+    'A file named ~/scratch.txt stays.',
+    'The host notes.localhost.example.com stays.',
   ])('keeps text a finding may legitimately quote: %s', (text) => {
     expect(redactPrivateDetails(text, details)).toEqual({ text, hits: [] })
   })

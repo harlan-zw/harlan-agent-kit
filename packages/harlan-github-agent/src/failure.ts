@@ -364,34 +364,24 @@ const providerSignInPatterns: RegExp[] = [
 /**
  * The cause of one failure, in words a maintainer reading GitHub can act on.
  *
- * Provider, GitHub, and network failures arrive as foreign text: raw errors
- * that can carry account state, hosts, or paths, and that name nothing a
- * maintainer can change. The public comment names the cause instead. The raw
- * reason stays in the Journal and the Dashboard. A reason the controller
- * wrote itself is already public copy, so it passes through unchanged.
+ * An Agent provider error is foreign text: it can carry account state, and it
+ * names nothing a maintainer can change. The public comment names its cause
+ * instead, and the raw reason stays in the Journal and the Dashboard.
+ *
+ * Only the owner the provider boundary adds proves where a reason came from.
+ * The Transient patterns match loose words, and a Repair Agent's own summary
+ * can say "not found" or "rate limit" without any failure behind it. So every
+ * other reason passes through, and the publish boundary redacts its private
+ * details.
  */
 export function publicFailureCause(reason: string): string {
-  const failure = classifyFailure({ message: reason })
-  switch (failure.kind) {
-    case 'agent_provider':
-      return matches(providerSignInPatterns, reason)
-        ? 'The agent lost its sign-in. Harlan must sign it in again.'
-        : 'The agent provider failed before the agent answered.'
-    case 'provider_config':
-      return 'The agent provider refused the configured model.'
-    case 'github_unavailable':
-      return 'GitHub was unavailable.'
-    case 'github_access':
-      return 'GitHub refused the controller access to this repository.'
-    case 'installation_access':
-      return 'The GitHub App installation lacks a permission this work needs.'
-    case 'rate_limit':
-      return 'GitHub rate limits stopped the work.'
-    case 'network':
-      return 'A network error stopped the work.'
-    default:
-      return reason
-  }
+  if (!matches(ownedAgentProviderPatterns, reason))
+    return reason
+  if (matches(providerSignInPatterns, reason))
+    return 'The agent lost its sign-in. Harlan must sign it in again.'
+  if (matches(providerConfigPatterns, reason))
+    return 'The agent provider refused the configured model.'
+  return 'The agent provider failed before the agent answered.'
 }
 
 /**

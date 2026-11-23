@@ -11,6 +11,7 @@ import process from 'node:process'
 import { parse } from 'yaml'
 import { AGENT_ROLES, REASONING_EFFORTS } from './agent-profile.ts'
 import { parsePackageReleaseConfig } from './package-release-config.ts'
+import { DASHBOARD_LOCAL_HOST } from './public-text.ts'
 import { err, ok } from './result.ts'
 
 export interface ConfigIssue {
@@ -446,7 +447,7 @@ function isDashboardOrigin(value: string): boolean {
   if (!URL.canParse(value))
     return false
   const origin = new URL(value)
-  const allowedHost = origin.hostname === 'harlan-github-agent.localhost'
+  const allowedHost = origin.hostname === DASHBOARD_LOCAL_HOST
     || (origin.hostname.endsWith('.ts.net') && origin.hostname.length > '.ts.net'.length)
   return origin.protocol === 'https:'
     && origin.port === ''

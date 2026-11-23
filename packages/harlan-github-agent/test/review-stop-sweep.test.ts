@@ -105,6 +105,15 @@ describe('stoppedReviewComment', () => {
     expect(body).toContain('The agent provider failed before the agent answered.')
   })
 
+  it.each([
+    'The helper was not found in the module, so the Repair is unsafe.',
+    'The fix would bypass the rate limit guard.',
+  ])('keeps a Repair Agent summary that only mentions a failure word: %s', (summary) => {
+    const body = stoppedReviewComment({ ...stoppedRepair, reason: summary }, '2026-11-22T04:00:00.000Z')
+
+    expect(body).toContain(`Repair stopped: ${summary}`)
+  })
+
   it('writes no reason line after merge when the Task recorded none', () => {
     const body = stoppedReviewComment({ ...stopped, reason: null }, '2026-11-22T04:00:00.000Z', { _tag: 'Merged' })
 

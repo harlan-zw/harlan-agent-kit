@@ -27,7 +27,7 @@ import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { collectJobWorkflowContext } from './job-workflow-context.ts'
 import { normalizeLoggedFindingControls, withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
-import { guardPublicText, redactPrivateDetails } from './public-text.ts'
+import { guardPublicText, redactPrivateDetails, reportRedaction } from './public-text.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
@@ -1435,9 +1435,13 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async editReviewFindingComment(repository, comment, bodyText, signal, authorize) {
-      const body = guardPublicText(options.publicText, { repository: repository.github, itemNumber: null, writer: 'review comment' }, githubAccountBody(bodyText, repository.githubAccount))
+      // The finding thread sync calls this on every pass, so a redaction is
+      // reported only before a real write, never for a body GitHub already holds.
+      const redacted = redactPrivateDetails(githubAccountBody(bodyText, repository.githubAccount), options.publicText.details)
+      const body = redacted.text
       if (normalizeLoggedFindingControls(comment.body) === body)
         return ok(comment)
+      reportRedaction(options.publicText, { repository: repository.github, itemNumber: null, writer: 'review comment' }, redacted)
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit

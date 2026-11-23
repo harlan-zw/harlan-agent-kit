@@ -35,6 +35,12 @@ const PRIVATE_HOME_DIRECTORIES = ['scratch', 'notes'] as const
 /** Harlan's local notes viewer. It is not in the configuration, so it is named here. */
 const NOTES_HOST = 'notes.localhost'
 
+/**
+ * The local dashboard host. Every host runs a dashboard here, so an Agent turn
+ * from another host can name it even when this host's origin is a Tailscale one.
+ */
+export const DASHBOARD_LOCAL_HOST = 'harlan-github-agent.localhost'
+
 /** Loopback names a finding may describe. They never name a private host on their own. */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 
@@ -62,7 +68,7 @@ export function privateDetailsFor(sources: PrivateDetailSources): PrivateDetails
   })
   return {
     paths: [...new Set([...roots, ...PRIVATE_HOME_DIRECTORIES.flatMap(name => [`~/${name}`, `$HOME/${name}`])])],
-    hosts: [...new Set([NOTES_HOST, ...hosts])],
+    hosts: [...new Set([NOTES_HOST, DASHBOARD_LOCAL_HOST, ...hosts])],
   }
 }
 
@@ -91,6 +97,11 @@ function pathAlternative(path: string): string {
 
 /** Characters a path or URL token runs over. Whitespace, quotes, and Markdown delimiters end it. */
 const TOKEN_CHARACTERS = String.raw`[^\s'"\`()<>[\]{}|]`
+/**
+ * Where an entry ends. A full stop that ends the sentence counts, so
+ * `~/scratch.` matches, while `~/scratchpad` and `~/scratch.txt` do not.
+ */
+const TOKEN_END = String.raw`(?![\w-]|\.[\w-])`
 /** Sentence punctuation after a token belongs to the sentence. */
 const TRAILING_PUNCTUATION = /[.,:;!?]+$/
 
@@ -107,10 +118,10 @@ function matchers(details: PrivateDetails): Matchers {
   return {
     path: paths.length === 0
       ? null
-      : new RegExp(String.raw`(?<![\w.~$-])(?:${paths.join('|')})(?:/${TOKEN_CHARACTERS}*)?(?![\w.-])`, 'g'),
+      : new RegExp(String.raw`(?<![\w.~$-])(?:${paths.join('|')})(?:/${TOKEN_CHARACTERS}*)?${TOKEN_END}`, 'g'),
     link: hosts.length === 0
       ? null
-      : new RegExp(String.raw`(?<![\w.-])(?:https?://)?(?:[\w-]+\.)*(?:${hosts.join('|')})(?::\d+)?(?:[/?#]${TOKEN_CHARACTERS}*)?(?![\w.-])`, 'gi'),
+      : new RegExp(String.raw`(?<![\w.-])(?:https?://)?(?:[\w-]+\.)*(?:${hosts.join('|')})(?::\d+)?(?:[/?#]${TOKEN_CHARACTERS}*)?${TOKEN_END}`, 'gi'),
     markdownLink: /!?\[[^\]\n]*\]\(\s*<?([^\s)>]+)>?(?:\s+"[^"\n]*")?\s*\)/g,
     autolink: /<(https?:\/\/[^\s>]+)>/g,
   }
@@ -210,9 +221,20 @@ export interface PublicTextGuard {
  */
 export function guardPublicText(guard: PublicTextGuard, target: PublicTextTarget, text: string): string {
   const redacted = redactPrivateDetails(text, guard.details)
-  if (redacted.hits.length > 0)
-    guard.report({ ...target, hits: redacted.hits })
+  reportRedaction(guard, target, redacted)
   return redacted.text
+}
+
+/**
+ * Reports a redaction a writer computed itself.
+ *
+ * For a writer that a sync calls on every pass: it redacts, returns early when
+ * GitHub already holds that text, and reports only before a real write. An
+ * Incident that a no-op raised again would reopen after Harlan resolved it.
+ */
+export function reportRedaction(guard: PublicTextGuard, target: PublicTextTarget, redaction: Redaction): void {
+  if (redaction.hits.length > 0)
+    guard.report({ ...target, hits: redaction.hits })
 }
 
 export const PRIVATE_DETAIL_OPERATION = 'public_text'

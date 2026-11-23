@@ -135,9 +135,17 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
   privateDetails: PrivateDetails
 }): LoggedFindingStore {
   const heldSelections = new Map<string, { repository: string, pullRequestNumber: number }>()
-  /** The exact text GitHub holds for a body the controller published. */
+  /** The exact text GitHub holds for a body the controller publishes now. */
   const githubForm = (body: string, account: RepositoryMapping['githubAccount']): string =>
     redactPrivateDetails(githubAccountBody(body, account), options.privateDetails).text
+  /**
+   * Whether GitHub's control body is one this body produced.
+   *
+   * A comment written before redaction began still holds the unredacted form,
+   * and its controls stay usable until the controller edits it again.
+   */
+  const heldByGitHub = (body: string, account: RepositoryMapping['githubAccount'], before: string): boolean =>
+    [githubAccountBody(body, account), githubForm(body, account)].some(form => normalizeLoggedFindingControls(form) === before)
   function candidates(): Candidate[] {
     const rows = database.prepare(`${candidatesSql} ${options.writeAuthoritySql}
       AND (SELECT state_tag FROM agent_control WHERE singleton = 1) = 'Running'
@@ -255,18 +263,18 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         WHERE review_run_id = ? AND state_tag IN ('Pending', 'Running')`).get(candidate.review_run_id) !== undefined
         && (JSON.parse(candidate.findings) as ReviewFinding[]).some(finding => finding._tag === 'Logged'
           && finding.details.fingerprint === input.fingerprints[0]
-          && normalizeLoggedFindingControls(githubForm(reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef ?? undefined), mapping.githubAccount)) === before)
+          && heldByGitHub(reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef ?? undefined), mapping.githubAccount, before))
       // A delayed Dismiss addresses the same selection, even after its progress changes.
       // Accept only an exact issued control body from this Review and comment.
       const delayedDismiss = input.inline !== true && input.fingerprints.length === 0 && (input.dismissedFingerprints?.length ?? 0) > 0
-        && (normalizeLoggedFindingControls(githubForm(candidate.body, mapping.githubAccount)) === before
+        && (heldByGitHub(candidate.body, mapping.githubAccount, before)
           || database.prepare(`SELECT 1 FROM logged_finding_control_receipts WHERE review_run_id = ? AND comment_id = ? AND body = ?`)
             .get(candidate.review_run_id, input.commentId, before) !== undefined)
       const authorizedComment = input.inline === true
         ? input.fingerprints.length === 1 && (publishingInline || inlineFindings(candidate.review_run_id).some(receipt => !receipt.resolved
           && receipt.commentId === input.commentId && receipt.fingerprint === input.fingerprints[0] && receipt.body === before))
         : candidate.github_comment_id === input.commentId
-          && (normalizeLoggedFindingControls(githubForm(publishedBody(candidate), mapping.githubAccount)) === before || delayedDismiss)
+          && (heldByGitHub(publishedBody(candidate), mapping.githubAccount, before) || delayedDismiss)
       if (!authorizedComment || pullRequest.headSha !== input.headSha || typeof pullRequest.baseRef !== 'string'
         || (onHead ? pickupTarget(mapping, pullRequest) !== 'head' : !canRepairBaseline(mapping))) {
         return false

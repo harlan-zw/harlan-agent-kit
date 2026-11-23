@@ -426,10 +426,10 @@ Use `take-ownership` to follow the original delivery target and its repair.
 Self-identify every automated GitHub comment. Keep comments to the minimum required by the linked contract.
 
 Keep private details out of every body the controller writes to GitHub. The writer redacts them where it sends the body, so no template can skip the check.
-Private details come from the configuration and the host: the Journal directory, the trusted checkout roots, the Agent worker home, `~/scratch`, `~/notes`, `notes.localhost`, and the dashboard hosts.
+Private details come from the configuration and the host: the Journal directory, the trusted checkout roots, the Agent worker home, `~/scratch`, `~/notes`, `notes.localhost`, `harlan-github-agent.localhost`, and the dashboard hosts.
 `localhost`, `~/.config`, and other paths under the controller home stay public, because a finding may describe them.
 Replace each match with `[private path]` or `[private link]`. Record one `private_detail` Incident that names the item and the writer. Only a person resolves it.
-Show a provider, GitHub, or network failure in a comment as its cause, such as "The agent lost its sign-in." Keep the raw reason in the Journal and the Dashboard.
+Show an Agent provider failure in a comment as its cause, such as "The agent lost its sign-in." Keep the raw reason in the Journal and the Dashboard. Other reasons stay as written, because loose words cannot prove where a reason came from.
 
 ## Report
 
