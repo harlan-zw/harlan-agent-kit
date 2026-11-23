@@ -419,6 +419,55 @@ describe('stored run log entries', () => {
 })
 
 describe('publishing the run log', () => {
+  it.each([
+    ['backticks', '```text\nPrivate fixture header.\n\nPRIVATE_REPORT_FIXTURE\n```', 'The scan found no issues.'],
+    ['tildes', '~~~text\nPrivate fixture header.\n\nPRIVATE_REPORT_FIXTURE\n~~~', 'The scan found no issues.'],
+    ['longer fence', '````text\n\n```\n\nPRIVATE_REPORT_FIXTURE\n````', 'The scan found no issues.'],
+    ['different marker', '```text\n\n~~~\n\nPRIVATE_REPORT_FIXTURE\n```', 'The scan found no issues.'],
+    ['unclosed fence', '```text\nPrivate fixture header.\n\nPRIVATE_REPORT_FIXTURE', null],
+    ['adjacent prose', '```text\nPrivate fixture header.\n\nPRIVATE_REPORT_FIXTURE\n```', 'The scan found no issues.', '\n'],
+  ])('keeps %s fenced report content private when publishing a scanned report', async (_name, block, summary, separator = '\n\n') => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      stage(store, scanned('pr-triage | 0 found', { detail: `${block}${separator}The scan found no issues.` }))
+      settleRun(store, runId)
+      const calls: Calls = { issues: [], comments: [] }
+      const results = await createRoutineReportController({
+        github: publisher(calls),
+        now,
+        store: {
+          ...store,
+          claimNextRoutineReport: (...args) => {
+            const command = store.claimNextRoutineReport(...args)
+            if (command !== null) {
+              expect(command.body).toContain(block)
+              expect(command.entry).toMatchObject({ _tag: 'Scanned', summary })
+            }
+            return command
+          },
+        },
+        workerId: 'reporter',
+      }).publishPending(new AbortController().signal)
+
+      expect(results).toEqual([{ _tag: 'Ok', value: { repository: 'harlan-zw/example', issueNumber: 42 } }])
+      expect(calls.comments.map(comment => comment.body)).toEqual([[
+        `<!-- routine-run: ${runId} -->`,
+        '### ⚪ pr-triage · Aug 27, 07:00 UTC',
+        '',
+        '| Found | New | Known |',
+        '| --: | --: | --: |',
+        '| 0 | 0 | 0 |',
+        ...(summary === null ? [] : ['', '<details><summary>Summary</summary>', '', summary, '', 'The Dashboard History page keeps the full report.', '', '</details>']),
+        '',
+        footer,
+      ].join('\n')])
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('opens the tracking issue on the first run and writes a run log entry, not the report', async () => {
     const store = openJournalStore(':memory:')
     try {

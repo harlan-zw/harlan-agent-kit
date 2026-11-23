@@ -190,9 +190,38 @@ const STRUCTURE = /^(?:#{1,6}\s|[|><]|```|~~~|[-*+]\s|\d+[.)]\s)/
  * summary, because a cut sentence can break its Markdown.
  */
 function reportSummary(detail: string): string | null {
+  const blocks: string[] = []
+  let paragraph: string[] = []
+  let fence: string | null = null
+  const flushParagraph = (): void => {
+    blocks.push(paragraph.join('\n'))
+    paragraph = []
+  }
+  // Read fences before blank lines or local-reference filtering can hide them.
+  for (const line of cleanText(detail).split('\n')) {
+    const marker = line.trimStart().match(/^(?:`{3,}|~{3,})/)?.[0] ?? null
+    if (fence !== null) {
+      if (marker !== null && marker.startsWith(fence) && line.trim() === marker)
+        fence = null
+      continue
+    }
+    if (marker !== null) {
+      flushParagraph()
+      fence = marker
+      blocks.push(fence)
+    }
+    else if (line.trim() === '') {
+      flushParagraph()
+    }
+    else {
+      paragraph.push(line)
+    }
+  }
+  flushParagraph()
   const kept: string[] = []
   let length = 0
-  for (const block of cleanText(detail).replaceAll(/<\/?details>/gi, '').split(/\n\s*\n/)) {
+  for (const raw of blocks) {
+    const block = raw.replaceAll(/<\/?details>/gi, '')
     const text = block.split('\n').filter(line => !LOCAL_REFERENCE.test(line)).join('\n').trim()
     if (text === '')
       continue
