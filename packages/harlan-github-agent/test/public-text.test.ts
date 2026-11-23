@@ -351,7 +351,7 @@ describe('the publish boundary', () => {
       details: { fingerprint: 'e'.repeat(64), identity: diagnostics[0]!, location: { path: 'src/a.c', line: 3 }, proof: 'Compilation failed.' },
     }
     const diagnostic = diagnostics.join('\n')
-    const input = `${writer === 'review' ? encodeEntities(diagnostic) : diagnostic}\n${reviewFindingThreadBody(finding, reviewHead)}`
+    const input = `${writer === 'review' ? encodeEntities(diagnostic) : diagnostic}\n${reviewFindingThreadBody(finding, { headSha: reviewHead, repairOnHead: true })}`
     const sent = await publicBody(createPublicTextGuard({ details: fixtureDetails, store, now: () => new Date(), log: () => {} }), { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async body => body)
 
     expect(sent.split('\n').slice(0, diagnostics.length)).toEqual(diagnostics.map(() => removed))
@@ -391,7 +391,7 @@ describe('the publish boundary', () => {
       details: { fingerprint: 'd'.repeat(64), identity: paths[1]!, location: { path: 'src/cache.ts', line: 3 }, proof: 'Worker diagnostic.' },
     }
     const diagnostic = [...paths.map(path => `Failed to read ${path}`), example].join('\n')
-    const input = `${reviewFindingThreadBody(finding, reviewHead)}\n${writer === 'review' ? encodeEntities(diagnostic) : diagnostic}`
+    const input = `${reviewFindingThreadBody(finding, { headSha: reviewHead, repairOnHead: true })}\n${writer === 'review' ? encodeEntities(diagnostic) : diagnostic}`
     const sent = await publicBody(createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} }), { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async body => body)
 
     expect(sent).toContain([...paths.map(() => removed), example].join('\n'))
@@ -409,7 +409,7 @@ describe('the publish boundary', () => {
       nextAction: 'Reset the cache.',
       details: { fingerprint: 'c'.repeat(64), identity: '/home/harlan/public/../notes/private-evidence.md', location: { path: 'src/cache.ts', line: 3 }, proof: 'Two tests share one cache.' },
     }
-    const source = reviewFindingThreadBody(finding, reviewHead)
+    const source = reviewFindingThreadBody(finding, { headSha: reviewHead, repairOnHead: true })
     const diagnostic = 'Failed to read /home/harlan/public/../notes/private-evidence.md'
     const input = `${source}\n${writer === 'review' ? encodeEntities(diagnostic) : diagnostic}`
     const sent = await publicBody(createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} }), { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async body => body)
@@ -850,7 +850,7 @@ describe('a review comment on a line', () => {
       nextAction: 'Reset the cache.',
       details: { fingerprint: 'c'.repeat(64), identity, location: { path: 'src/cache.ts', line: 3 }, proof: 'Two tests share one cache.' },
     }
-    const body = reviewFindingThreadBody(finding, reviewHead)
+    const body = reviewFindingThreadBody(finding, { headSha: reviewHead, repairOnHead: true })
     const signal = new AbortController().signal
 
     expect(await source.postReviewFindingComment(repositoryMapping(), 24, { headSha: reviewHead, path: 'src/cache.ts', line: 3, body }, signal, () => ok(undefined))).toEqual(ok(expect.objectContaining({ _tag: 'Posted' })))
@@ -913,7 +913,7 @@ describe('a review comment on a line', () => {
     }
 
     for (let pass = 0; pass < 2; pass++)
-      await mirrorReviewFindingThreads(mirror, repositoryMapping(), 24, reviewHead, [finding], new AbortController().signal, () => ok(undefined), 'open', { controls: true })
+      await mirrorReviewFindingThreads(mirror, repositoryMapping(), 24, reviewHead, [finding], new AbortController().signal, () => ok(undefined), 'open', { controls: { repairOnHead: true } })
 
     expect(posted).toHaveLength(1)
     expect(posted[0]).toContain(removed)

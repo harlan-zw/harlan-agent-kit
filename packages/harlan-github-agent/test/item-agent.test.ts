@@ -563,6 +563,112 @@ describe('subject Workers', () => {
     expect(queued).toBe(true)
   })
 
+  it.each(['read', 'unreadable'] as const)('stores the Finding scope the exact reviewed diff gives each follow-up: %s', async (diff) => {
+    const repository = repositoryMapping({ ownership: 'maintained' })
+    const pullRequest = pullRequestItem({ mergeState: 'clean' })
+    let attempt: RecordReviewRunInput | undefined
+    const compared: string[] = []
+    const incidents: string[] = []
+    const logged = (identity: string, line: number) => ({ identity, impact: 50, path: 'src/parser.ts', line, proof: 'A split loses bytes.', regressionTest: null, summary: `Bytes drop at ${line}.`, nextAction: 'Keep them.' })
+    const worker = createReviewWorker({
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        checked: 'the parser',
+        notChecked: null,
+        premise: { verdict: 'sound', reason: 'The change is sound.' },
+        findings: [logged('added', 42), logged('context', 41)],
+        confidence: 90,
+      }))),
+      changedLines: async (_repository, baseSha, headSha) => {
+        compared.push(`${baseSha}...${headSha}`)
+        return diff === 'read'
+          ? ok({ complete: true, files: [{ _tag: 'Changed', path: 'src/parser.ts', previousPath: null, added: new Set([42]) }] })
+          : err('GitHub refused the comparison.')
+      },
+      github: {
+        consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
+        upsertReviewCheckRun: () => Promise.reject(new Error('Unexpected Review check run write.')),
+        ensureApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
+        clearAgentLabels: () => Promise.reject(new Error('Unexpected label clear.')),
+        clearRunningLabel: () => Promise.reject(new Error('Unexpected Running label clear.')),
+        listRunningLabelledItems: () => Promise.reject(new Error('Unexpected Running label read.')),
+        findOpenPullRequestForBranch: () => Promise.reject(new Error('Unexpected pull request lookup.')),
+        getFailedJobContext: () => Promise.reject(new Error('Unexpected job log read.')),
+        stampAgentLabel: () => Promise.resolve(ok(undefined)),
+        getIssueTriageSnapshot: () => Promise.reject(new Error('Unexpected issue request.')),
+        getPullRequestTemplate: () => Promise.resolve(ok({ _tag: 'Missing' })),
+        listPullRequestFiles: () => Promise.resolve(ok([])),
+        getPullRequestReviewSnapshot: () => Promise.resolve(ok({
+          baseChecks: { _tag: 'Available', checks: [] },
+          body: 'Fixes the parser.',
+          checks: { _tag: 'Available', checks: [] },
+          comments: [],
+          priorAutomatedReview: { _tag: 'None' },
+          pullRequest,
+          findingDiscussions: [],
+          requiredChecks: { _tag: 'None' as const },
+          reviews: [],
+        })),
+        upsertIssueTriageComment: () => Promise.reject(new Error('Unexpected issue comment.')),
+        upsertReviewStatus: () => Promise.reject(new Error('The status controller owns comments.')),
+      },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      preflightRepair: () => Promise.resolve(ok(undefined)),
+      store: {
+        recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
+        queueReviewFixTaskForReview: () => { throw new Error('A follow-up never queues Repair.') },
+        repairSource: () => null,
+        getRepairedHeadFindings: () => [],
+        repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
+        getWorkerSession: () => null,
+        storedReviewForHead: () => ({ _tag: 'None' }),
+        getRevisionFiles: () => null,
+        supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
+        recordIncident: (input) => {
+          incidents.push(input.message)
+          return {} as never
+        },
+        queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
+        retireBaselineRepairForReview: () => 0,
+        recordReviewRun: (input) => {
+          attempt = input
+          return { _tag: 'Inserted', reviewRunId: input.id }
+        },
+        recordReviewPublication: () => { throw new Error('The status controller records publications.') },
+        saveWorkerSession: () => undefined,
+        ...agentTurnLedger,
+        updateAgentProgress: () => true,
+        priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+      },
+      status: {
+        publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+      },
+      triageStatus: { publish: () => Promise.reject(new Error('Unexpected issue triage.')) },
+      workspaces: {
+        prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
+        prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+        verifyReview: () => Promise.resolve(ok(undefined)),
+      },
+    })
+
+    await worker.run({
+      id: 'review-task',
+      kind: 'adversarial_review',
+      repository: repository.github,
+      pullRequestNumber: pullRequest.number,
+      revisionId: 'revision-1',
+      state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-08-13T02:00:00.000Z' },
+      updatedAt: '2026-08-13T01:00:00.000Z',
+      repositoryMapping: repository,
+      pullRequest,
+      rerun: { _tag: 'NotRequested' },
+    }, new AbortController().signal)
+
+    expect(compared).toEqual([`${pullRequest.baseSha}...${pullRequest.headSha}`])
+    expect(attempt?.findings.map(finding => finding._tag === 'Logged' ? finding.details.scope : null)).toEqual(diff === 'read' ? ['change', 'existing'] : [undefined, undefined])
+    expect(incidents).toEqual(diff === 'read' ? [] : [expect.stringContaining('every follow-up files an issue')])
+  })
+
   it('stamps a wrong premise for Dismissal without queuing Repair', async () => {
     const repository = repositoryMapping({ ownership: 'maintained' })
     const pullRequest = pullRequestItem({ mergeState: 'clean' })

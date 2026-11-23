@@ -2,6 +2,7 @@ import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PullRequestPurpose } from './baseline-repair-state.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
+import type { FindingScope } from './finding-scope.ts'
 import type { GitHubRateLimitHold } from './github-rate-limit.ts'
 import type { AgentSlotLimits, HostCapacity } from './host-capacity.ts'
 import type { MergeRisk, MergeRiskPolicy } from './merge-risk.ts'
@@ -267,10 +268,12 @@ export interface GitHubIssueItem extends GitHubItemBase {
   /** Title, body, non-controller comments, and human labels at observation time. */
   contentDigest: string
   /**
-   * True when a Routine filed this issue as one Candidate's proposal.
+   * True when this service filed the issue: a Routine's Candidate proposal,
+   * or an unchanged follow-up verified against its publication receipt.
    *
    * An allowlist that lists only human authors would otherwise drop the issue
-   * again before triage ever read it, because the agent filed it.
+   * again before triage ever read it, because the agent filed it. The name
+   * predates follow-up issues and is kept, because stored Revisions carry it.
    */
   routineFiled: boolean
   /** True when this is a Routine run log, including one filed by another controller. */
@@ -423,6 +426,12 @@ export type ReviewFinding
         identity: string
         location: { path: string, line: number | null }
         proof: string
+        /**
+         * Whether this pull request added the finding's line, computed by the
+         * controller from the reviewed diff. Absent means unknown, which
+         * covers every run recorded before it existed.
+         */
+        scope?: FindingScope
       }
     }
     | {

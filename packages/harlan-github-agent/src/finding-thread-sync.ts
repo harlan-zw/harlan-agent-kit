@@ -2,7 +2,7 @@ import type { FindingThreadSyncStore, FindingThreadSyncTarget } from './finding-
 import type { GitHubSource } from './github.ts'
 import type { InlineFindingReceipt, ReviewFindingThreadMirror, ReviewFindingThreadsOutcome } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, RepositoryMapping } from './types.ts'
-import { canRepairSelectedFindingOnHead } from './repository-policy.ts'
+import { canFileFollowUpIssue, canRepairSelectedFindingOnHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { mirrorReviewFindingThreads } from './review-finding-threads.ts'
 
@@ -51,7 +51,9 @@ export function createFindingThreadSyncController(options: {
           return authorityLost ? err('The finding thread sync lost its Publication authority.') : ok(undefined)
         }, pull.state === 'closed' ? 'merged' : 'open', {
           baseRef: command.baseRef,
-          controls: canRepairSelectedFindingOnHead(command.repositoryMapping, pull) && options.controls?.(command.repositoryMapping, pull) === true,
+          ...(options.controls?.(command.repositoryMapping, pull) === true && canFileFollowUpIssue(command.repositoryMapping)
+            ? { controls: { repairOnHead: canRepairSelectedFindingOnHead(command.repositoryMapping, pull) } }
+            : {}),
           fixed: command.verifiedRepairs,
           repairStatus: command.repairStatus,
           recordInline: (receipts) => { inline = receipts },

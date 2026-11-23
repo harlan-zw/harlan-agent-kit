@@ -51,6 +51,17 @@ export function canRepairPullRequestHead(mapping: RepositoryMapping, pullRequest
     && pullRequest.headRef !== mapping.defaultBranch
 }
 
+/**
+ * True when a follow-up tick may file an issue here.
+ *
+ * Filing writes an issue, never a branch, and needs no trusted pull request
+ * author. It keeps the gate every follow-up control had before fix before
+ * merge, so no repository gains controls it never offered.
+ */
+export function canFileFollowUpIssue(mapping: RepositoryMapping): boolean {
+  return canRepairBaseline(mapping)
+}
+
 /** A finding checkbox grants scoped Repair on a trusted author's open branch. */
 export function canRepairSelectedFindingOnHead(mapping: RepositoryMapping, pullRequest: GitHubPullRequestItem): boolean {
   return pullRequest.state === 'open' && !pullRequest.draft && mapping.pullRequestReview

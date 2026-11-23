@@ -49,6 +49,7 @@ import { createFindingThreadSyncController } from './finding-thread-sync.ts'
 import { createGitHubAccountTokenProvider, readGitHubAccountLogin, readGitHubAccountToken } from './github-account.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
+import { createGitHubChangedLines } from './github-changed-lines.ts'
 import { createGitHubMediaSource } from './github-media.ts'
 import { createGitHubPullRequestDiff } from './github-pull-request-diff.ts'
 import { createGitHubRateLimitGate, readAfterGitHubRateLimit } from './github-rate-limit.ts'
@@ -65,7 +66,7 @@ import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
-import { publishLoggedFindingPickups, refreshLoggedFindingThreads } from './logged-finding-sweep.ts'
+import { publishFollowUpIssues, publishLoggedFindingPickups, refreshLoggedFindingThreads } from './logged-finding-sweep.ts'
 import { createMaintenanceCheckCommand, createMaintenanceScopeProvider } from './maintenance-scope.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
 import { createPackageReleaseSource } from './package-release-github.ts'
@@ -694,7 +695,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   const tokens = gatedTokens(routedTokens)
   const mediaSource = createGitHubMediaSource({ tokens: routedTokens, fetch: globalThis.fetch })
   const legacyUserTokens = gatedTokens(userTokens)
-  const github = createGitHubSource({ actorLogin, tokens, issueCutoff: config.issueCutoff })
+  const github = createGitHubSource({ actorLogin, tokens, issueCutoff: config.issueCutoff, isPublishedFollowUpIssue: store.isPublishedFollowUpIssue })
   const pullRequestStatuses = createPullRequestStatusController({
     github,
     now,
@@ -1228,7 +1229,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         worker: withGitHubWritePreflight({
           accesses: ['item_write'],
           source: tokens,
-          worker: createReviewWorker(subjectWorkerOptions),
+          worker: createReviewWorker({ ...subjectWorkerOptions, changedLines: createGitHubChangedLines({ tokens: routedTokens }) }),
         }),
         workerId: randomUUID(),
       })),
@@ -1303,6 +1304,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store.close()
     throw error
   })
+  const followUpIssuePublisher = createGitHubIssuePublisher({ publicText, tokens: routedTokens })
   const candidateIssues = createCandidateIssueController({
     github: createGitHubIssuePublisher({ publicText, tokens: routedTokens }),
     now,
@@ -1566,6 +1568,20 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }
         })
         recordPassIncidents('stopped_review_comment', stopped.results.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+        // File ticked follow-ups first, so the status pass below shows their issue links in the same pass.
+        const followUpIssues = await guarded('Follow-up issues', () => publishFollowUpIssues({
+          github: followUpIssuePublisher,
+          store,
+          now,
+          workerId: 'follow-up-issue',
+        }, signal), [])
+        followUpIssues.forEach((result) => {
+          if (result._tag === 'Ok')
+            options.logger.info(`${result.value.repository}#${result.value.issueNumber}: filed a follow-up issue.`)
+          else
+            options.logger.error(`Follow-up issue: ${result.error}`)
+        })
+        recordPassIncidents('follow_up_issue', followUpIssues.flatMap(result => result._tag === 'Err' ? [result.error] : []))
         const findingErrors = await guarded('Logged finding status', () => publishLoggedFindingPickups({
           github: workerGithub,
           store,

@@ -152,7 +152,7 @@ import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { createImplicitSignalStore, implicitSignalSchema, isAgentPullRequest, recordClosureSignal, recordHeadChangeSignal } from './implicit-signal-store.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
-import { createLoggedFindingStore, loggedFindingSchema } from './logged-finding-store.ts'
+import { createLoggedFindingStore, followUpIssueSchema, loggedFindingSchema } from './logged-finding-store.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
 import { createPaybackStore } from './payback-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON, triageDecider } from './pull-request-triage.ts'
@@ -501,6 +501,7 @@ interface StoppedReviewRow {
   github_number: number
   revision_id: string
   head_sha: string
+  base_ref: string | null
   closure_revision_id: string
   current_head_sha: string
   current_base_sha: string
@@ -538,6 +539,8 @@ export interface StoppedReview {
   pullRequestNumber: number
   revisionId: string
   headSha: string
+  /** The target branch the stopped head was reviewed against, which names where existing code lives. */
+  baseRef: string | null
   closureRevisionId: string
   currentHeadSha: string
   currentBaseSha: string
@@ -7640,7 +7643,23 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${addChecked} ${addNotChecked} PRAGMA user_version = ${target};`)
     version = target
   }
-  if (version === 110)
+  if (version === 110) {
+    // The table is created only if missing, so a rewind or a renumbered replay is safe.
+    // A thread posted before Finding scope offers a Repair control its finding no
+    // longer routes to, so each open head with a follow-up syncs its threads once.
+    applyMigration(database, `${followUpIssueSchema}
+      UPDATE finding_thread_syncs SET state_tag = 'Pending'
+      WHERE state_tag = 'Written' AND review_run_id IN (
+        SELECT review_runs.id FROM review_runs JOIN subjects ON subjects.id = review_runs.subject_id
+        JOIN revisions ON revisions.id = subjects.current_revision_id
+        WHERE review_runs.head_sha = json_extract(revisions.payload, '$.headSha')
+          AND json_extract(revisions.payload, '$.state') = 'open'
+          AND EXISTS (SELECT 1 FROM json_each(review_runs.findings) WHERE json_extract(value, '$._tag') = 'Logged')
+      );
+      PRAGMA user_version = 111;`)
+    version = 111
+  }
+  if (version === 111)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -16109,6 +16128,7 @@ export function openJournalStore(
       subjects.github_number,
       stopped.revision_id,
       json_extract(task_revisions.payload, '$.headSha') AS head_sha,
+      json_extract(task_revisions.payload, '$.baseRef') AS base_ref,
       current_revisions.id AS closure_revision_id,
       json_extract(current_revisions.payload, '$.headSha') AS current_head_sha,
       json_extract(current_revisions.payload, '$.baseSha') AS current_base_sha,
@@ -16203,6 +16223,7 @@ export function openJournalStore(
     pullRequestNumber: row.github_number,
     revisionId: row.revision_id,
     headSha: row.head_sha,
+    baseRef: row.base_ref,
     closureRevisionId: row.closure_revision_id,
     currentHeadSha: row.current_head_sha,
     currentBaseSha: row.current_base_sha,

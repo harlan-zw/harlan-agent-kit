@@ -1,47 +1,123 @@
 import type { ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
-import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, isCanonicalFooter, plural } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, FOLLOW_UP_GROUP_LABEL, isCanonicalFooter, listedFollowUp, plural } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type LoggedReviewFinding = Extract<ReviewFinding, { _tag: 'Logged' }>
 
-export interface LoggedFindingPickup {
+interface PickupSource {
   repository: string
   pullRequestNumber: number
   headSha: string
   commentId: number
   requestedBy: string
   commentAuthor: string
-  fingerprints: string[]
-  dismissedFingerprints?: string[]
   before: string
   inline?: true
 }
 
-export interface LoggedFindingStatus {
-  fingerprint: string
-  status: string
-  cancellable?: boolean
+/**
+ * One isolated tick on a published follow-up control.
+ *
+ * `Findings` names the follow-ups ticked for Repair on the head, for an
+ * issue, or for Dismissal. `MergedFollowUps` is the one control on a Merged
+ * comment that files every unfixed follow-up as one issue.
+ */
+export type LoggedFindingPickup = PickupSource & (
+  | { _tag: 'Findings', fingerprints: string[], issueFingerprints?: string[], dismissedFingerprints?: string[] }
+  | { _tag: 'MergedFollowUps' }
+)
+
+/** The progress one follow-up shows in place of its control. */
+export type LoggedFindingStatus
+  = | { _tag: 'Repair', fingerprint: string, status: string, cancellable: boolean }
+    | { _tag: 'Issue', fingerprint: string, status: string }
+
+/**
+ * Where a tick sends one follow-up on an open pull request.
+ *
+ * `Repair` fixes it on this branch before merge. `Issue` files it, so Issue
+ * triage picks it up and Harlan's review queue does not grow.
+ */
+export type FollowUpRoute = 'Repair' | 'Issue'
+
+/**
+ * Routes one follow-up by who owns its fix.
+ *
+ * Only a finding on a line this change added goes to Repair, and only where
+ * Repair may write this head. Every other finding, an unknown Finding scope
+ * included, becomes an issue.
+ */
+export function followUpRoute(finding: LoggedReviewFinding, repairOnHead: boolean): FollowUpRoute {
+  return finding.details.scope === 'change' && repairOnHead ? 'Repair' : 'Issue'
 }
 
+/**
+ * The follow-up controls one canonical comment offers.
+ *
+ * An open pull request offers one control per follow-up. A merged one offers
+ * a single control that files every unfixed follow-up as one issue.
+ */
+export type FollowUpControls
+  = | { _tag: 'Open', repairOnHead: boolean }
+    | { _tag: 'Merged', headSha: string }
+
+/** The words that told a reader a selection would wait for merge, from comments written before fix before merge. */
 const afterMergePickupHint = 'Selected findings run after merge and open separate pull requests.'
-export const onHeadPickupHint = 'Selected findings run on this pull request.'
+/** The words that told a reader a selection ran on the head, from comments written before the follow-up groups. */
+const onHeadPickupHint = 'Selected findings run on this pull request.'
+const REPAIR_CONTROL = 'Ask an agent to verify and fix this finding'
+const ISSUE_CONTROL = 'File this finding as an issue'
+const MERGED_CONTROL = 'File these as one issue'
 const controlPattern = /^( {0,2})- \[([ xX])\] Ask an agent to verify and fix this finding <!-- logged-finding: ([a-f\d]{64}) -->$/gm
+const issuePattern = /^( {0,2})- \[([ xX])\] File this finding as an issue <!-- logged-finding: ([a-f\d]{64}) -->$/gm
 const dismissalPattern = /^ {2}- \[([ xX])\] Dismiss this finding <!-- dismiss-logged-finding: ([a-f\d]{64}) -->$/gm
+const mergedPattern = /^- \[([ xX])\] File these as one issue <!-- logged-findings: ([a-f\d]{40,64}) -->$/gm
+/** Every line a decoration adds under a follow-up row: a control, a Dismiss control, or a status. */
+const rowDecorationPattern = /^ {2}[^\n]* <!-- (?:dismiss-)?logged-finding: [a-f\d]{64} -->\n?/gm
+/** The Merged control, or its status, above the footer. */
+const mergedDecorationPattern = /\n\n[^\n]* <!-- logged-findings: [a-f\d]{40,64} -->(?=\n|$)/g
+
 const threadLinkText = 'Open the thread beside the code'
-const statusPattern = /^ {2}(?:(?:- \[[ xX]\] Ask an agent to verify and fix this finding|Repair: [^\n]+|\[Open the thread beside the code\]\([^)\n]*\)) <!-- logged-finding: [a-f\d]{64} -->|- \[[ xX]\] Dismiss this finding <!-- dismiss-logged-finding: [a-f\d]{64} -->)\n?/gm
+
+const tickSentence: Record<FollowUpRoute, string> = {
+  Repair: 'Tick to have Repair fix it here, before merge.',
+  Issue: 'Tick to file it as an issue.',
+}
 
 /** Removes controller decorations when another canonical writer compares its source body. */
 export function withoutLoggedFindingControls(body: string): string {
-  return body.replace(statusPattern, '').replace(/^<!-- finding-base: [\w-]+ -->\n/gm, '').replaceAll(`\n\n${afterMergePickupHint}`, '').replaceAll(`\n\n${onHeadPickupHint}`, '').split('\n').filter(line => line !== afterMergePickupHint && line !== onHeadPickupHint).join('\n').trimEnd()
+  return body
+    .replace(rowDecorationPattern, '')
+    .replace(mergedDecorationPattern, '')
+    .replace(/^<!-- finding-base: [\w-]+ -->\n(?=Selected findings run)/gm, '')
+    .replaceAll(`\n\n${afterMergePickupHint}`, '')
+    .replaceAll(`\n\n${onHeadPickupHint}`, '')
+    .replace(/\n\n<!-- finding-base: [\w-]+ -->(?=\n|$)/g, '')
+    .split('\n')
+    .filter(line => line !== afterMergePickupHint && line !== onHeadPickupHint)
+    // A group label carries its tick sentence only while its rows carry controls.
+    .map(line => FOLLOW_UP_GROUP_LABEL.exec(line)?.[0] ?? line)
+    .join('\n')
+    .trimEnd()
 }
 
 export function normalizeLoggedFindingControls(body: string): string {
-  return body.replaceAll('\r\n', '\n').replace(controlPattern, (_line, indent: string, _checked, fingerprint: string) => `${indent}${loggedFindingControl(fingerprint)}`).replace(dismissalPattern, (_line, _checked, fingerprint: string) => dismissalControl(fingerprint))
+  return body.replaceAll('\r\n', '\n')
+    .replace(controlPattern, (_line, indent: string, _checked, fingerprint: string) => `${indent}${loggedFindingControl(fingerprint)}`)
+    .replace(issuePattern, (_line, indent: string, _checked, fingerprint: string) => `${indent}${loggedFindingControl(fingerprint, 'Issue')}`)
+    .replace(dismissalPattern, (_line, _checked, fingerprint: string) => dismissalControl(fingerprint))
+    .replace(mergedPattern, (_line, _checked, headSha: string) => mergedFollowUpsControl(headSha))
 }
 
-export function loggedFindingControl(fingerprint: string): string {
-  return `- [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fingerprint} -->`
+/** The checkbox that sends one follow-up where its route goes. */
+export function loggedFindingControl(fingerprint: string, route: FollowUpRoute = 'Repair'): string {
+  return `- [ ] ${route === 'Repair' ? REPAIR_CONTROL : ISSUE_CONTROL} <!-- logged-finding: ${fingerprint} -->`
+}
+
+/** The one checkbox on a Merged comment that files every unfixed follow-up as one issue. */
+export function mergedFollowUpsControl(headSha: string): string {
+  return `- [ ] ${MERGED_CONTROL} <!-- logged-findings: ${headSha} -->`
 }
 
 export function loggedFindingBaseMarker(baseRef: string): string {
@@ -50,6 +126,19 @@ export function loggedFindingBaseMarker(baseRef: string): string {
 
 function dismissalControl(fingerprint: string): string {
   return `  - [ ] Dismiss this finding <!-- dismiss-logged-finding: ${fingerprint} -->`
+}
+
+/**
+ * The follow-ups the Merged control would file: listed, and never ticked.
+ *
+ * A follow-up with any status already has an owner: a Repair selected before
+ * merge, an issue, or a Dismissal.
+ */
+export function unfixedFollowUps(findings: readonly ReviewFinding[], statuses: readonly LoggedFindingStatus[]): LoggedReviewFinding[] {
+  const owned = new Set(statuses.map(status => status.fingerprint))
+  return findings.filter((finding): finding is LoggedReviewFinding => listedFollowUp(finding)
+    && /^[a-f\d]{64}$/.test(finding.details.fingerprint)
+    && !owned.has(finding.details.fingerprint))
 }
 
 /**
@@ -64,9 +153,23 @@ function loggedFindingRow(line: string, finding: LoggedReviewFinding): boolean {
     && line.includes(cleanLine(finding.summary))
 }
 
-/** Adds one control beside each recorded finding. Task status replaces its control. */
+/** Puts one block above the footer, which stays last. */
+function aboveFooter(body: string, block: string): string {
+  const footer = body.split('\n').at(-1)
+  return footer !== undefined && isCanonicalFooter(footer)
+    ? `${body.slice(0, -footer.length)}${block}\n\n${footer}`
+    : `${body}\n\n${block}`
+}
+
+/**
+ * Adds each follow-up's control or status, and the sentence that says what a tick does.
+ *
+ * A group label gets its sentence only when a row under it got a control.
+ * A merged pull request gets one control for every unfixed follow-up.
+ * `withoutLoggedFindingControls` undoes every decoration exactly.
+ */
 export function withLoggedFindingControls(body: string, findings: readonly ReviewFinding[], statuses: readonly LoggedFindingStatus[], options: {
-  target?: 'head' | 'after-merge' | undefined
+  controls?: FollowUpControls | undefined
   /**
    * Findings whose thread opened beside the code, by fingerprint, to that thread's URL.
    *
@@ -75,29 +178,58 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
    */
   inline?: ReadonlyMap<string, string>
   baseRef?: string | undefined
-} = { target: 'after-merge' }): string {
+  /** The Merged issue's status, which replaces its control once ticked. */
+  mergedIssue?: string | undefined
+} = {}): string {
   const lines = withoutLoggedFindingControls(body).split('\n')
   const rendered = new Set<string>()
-  const decorated = lines.flatMap((line) => {
+  const open = options.controls?._tag === 'Open' ? options.controls : undefined
+  const groupRoutes = new Map<number, FollowUpRoute>()
+  let group: number | null = null
+  let offered = false
+  const decorated: string[] = []
+  for (const line of lines) {
+    if (FOLLOW_UP_GROUP_LABEL.test(line))
+      group = decorated.length
+    else if (line === '</details>')
+      group = null
     const finding = findings.find((finding): finding is LoggedReviewFinding => finding._tag === 'Logged'
       && /^[a-f\d]{64}$/.test(finding.details.fingerprint)
       && !rendered.has(finding.details.fingerprint)
       && loggedFindingRow(line, finding))
-    if (finding === undefined)
-      return [line]
-    rendered.add(finding.details.fingerprint)
-    const status = statuses.find(status => status.fingerprint === finding.details.fingerprint)
-    if (status !== undefined)
-      return [line, `  Repair: ${status.status.replace(/\s+/g, ' ').trim()} <!-- logged-finding: ${finding.details.fingerprint} -->`, ...(options.target === 'head' && status.cancellable ? [dismissalControl(finding.details.fingerprint)] : [])]
-    const thread = options.inline?.get(finding.details.fingerprint)
-    if (thread !== undefined)
-      return [line, `  [${threadLinkText}](${thread}) <!-- logged-finding: ${finding.details.fingerprint} -->`]
-    return [
-      line,
-      ...(options.target === undefined ? [] : [`  ${loggedFindingControl(finding.details.fingerprint)}`]),
-      ...(options.target === 'head' ? [dismissalControl(finding.details.fingerprint)] : []),
-    ]
-  }).join('\n').replace(/<details><summary><b>\d+ follow-ups?<\/b> · none block merge<\/summary>\n([\s\S]*?)<\/details>/g, (_block, content: string) => {
+    if (finding === undefined) {
+      decorated.push(line)
+      continue
+    }
+    const fingerprint = finding.details.fingerprint
+    rendered.add(fingerprint)
+    const status = statuses.find(status => status.fingerprint === fingerprint)
+    if (status !== undefined) {
+      decorated.push(line, status._tag === 'Repair'
+        ? `  Repair: ${status.status.replace(/\s+/g, ' ').trim()} <!-- logged-finding: ${fingerprint} -->`
+        : `  ${status.status.replace(/\s+/g, ' ').trim()} <!-- logged-finding: ${fingerprint} -->`)
+      if (open !== undefined && status._tag === 'Repair' && status.cancellable)
+        decorated.push(dismissalControl(fingerprint))
+      continue
+    }
+    decorated.push(line)
+    // The thread beside the code carries its own control, so the row links it instead.
+    const thread = options.inline?.get(fingerprint)
+    if (thread !== undefined) {
+      decorated.push(`  [${threadLinkText}](${thread}) <!-- logged-finding: ${fingerprint} -->`)
+      continue
+    }
+    if (open === undefined)
+      continue
+    const route = followUpRoute(finding, open.repairOnHead)
+    decorated.push(`  ${loggedFindingControl(fingerprint, route)}`, ...(route === 'Repair' ? [dismissalControl(fingerprint)] : []))
+    offered = true
+    if (group !== null)
+      groupRoutes.set(group, route)
+  }
+  for (const [index, route] of groupRoutes)
+    decorated[index] = `${decorated[index]} ${tickSentence[route]}`
+  const settled = decorated.join('\n').replace(/<details><summary><b>\d+ follow-ups?<\/b> · none block merge<\/summary>\n([\s\S]*?)<\/details>/g, (_block, content: string) => {
     // A row moved to its inline thread leaves the fold, so the count follows.
     const count = [...content.matchAll(/^- `\d+` /gm)].length
     return count === 0 ? '' : `<details><summary><b>${plural(count, 'follow-up')}</b> · none block merge</summary>\n${content}</details>`
@@ -105,16 +237,17 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
     const count = [...content.matchAll(/^- \*\*Logged \(/gm)].length
     return count === 0 ? '' : `<details>\n<summary>Logged findings (${count})</summary>\n${content}</details>`
   }).replace(/\n{3,}/g, '\n\n').trimEnd()
-  if (options.target === undefined || !/ {2}- \[ \] (?:Ask an agent to verify and fix this finding|Dismiss this finding)/.test(decorated))
-    return decorated
-  const pickupHint = options.target === 'head'
-    ? [options.baseRef === undefined ? '' : loggedFindingBaseMarker(options.baseRef), onHeadPickupHint].filter(Boolean).join('\n')
-    : afterMergePickupHint
-  // The footer stays last, so the hint goes above it.
-  const footer = decorated.split('\n').at(-1)
-  return footer !== undefined && isCanonicalFooter(footer)
-    ? `${decorated.slice(0, -footer.length)}${pickupHint}\n\n${footer}`
-    : `${decorated}\n\n${pickupHint}`
+  if (options.controls?._tag === 'Merged') {
+    const { headSha } = options.controls
+    if (options.mergedIssue !== undefined)
+      return aboveFooter(settled, `${options.mergedIssue.replace(/\s+/g, ' ').trim()} <!-- logged-findings: ${headSha} -->`)
+    // A resolved thread dismissed its finding, so only the other rows need the issue.
+    return unfixedFollowUps(findings, statuses).some(finding => rendered.has(finding.details.fingerprint) && options.inline?.has(finding.details.fingerprint) !== true)
+      ? aboveFooter(settled, mergedFollowUpsControl(headSha))
+      : settled
+  }
+  // The base marker binds the issued controls to the target branch they answer.
+  return offered && options.baseRef !== undefined ? aboveFooter(settled, loggedFindingBaseMarker(options.baseRef)) : settled
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -150,9 +283,13 @@ export function loggedFindingPickup(event: string, payload: unknown): LoggedFind
     return null
   }
   const fingerprints = checkedFindings(before, after, controlPattern, 2, 3)
+  const issueFingerprints = checkedFindings(before, after, issuePattern, 2, 3)
   const dismissed = checkedFindings(before, after, dismissalPattern, 1, 2)
-  if (fingerprints === null || dismissed === null || fingerprints.some(fingerprint => dismissed.includes(fingerprint))
-    || (inline && (fingerprints.length !== 1 || dismissed.length !== 0 || comment.in_reply_to_id != null))) {
+  const merged = checkedFindings(before, after, mergedPattern, 1, 2)
+  if (fingerprints === null || issueFingerprints === null || dismissed === null || merged === null
+    || fingerprints.some(fingerprint => dismissed.includes(fingerprint) || issueFingerprints.includes(fingerprint))
+    || (merged.length > 0 && (inline || fingerprints.length + issueFingerprints.length + dismissed.length > 0))
+    || (inline && (fingerprints.length + issueFingerprints.length !== 1 || dismissed.length !== 0 || comment.in_reply_to_id != null))) {
     return null
   }
   const headSha = automatedReviewHead(before)
@@ -160,11 +297,20 @@ export function loggedFindingPickup(event: string, payload: unknown): LoggedFind
   const issue = object(inline ? input.pull_request : input.issue)
   const requestedBy = object(input.sender).login
   const commentAuthor = object(comment.user).login
-  if (fingerprints.length + dismissed.length === 0 || headSha === undefined || typeof repository !== 'string'
+  if (fingerprints.length + issueFingerprints.length + dismissed.length + merged.length === 0 || headSha === undefined || typeof repository !== 'string'
     || typeof issue.number !== 'number' || !Number.isSafeInteger(issue.number) || issue.number <= 0
     || (!inline && issue.pull_request === undefined) || typeof comment.id !== 'number' || !Number.isSafeInteger(comment.id) || comment.id <= 0
     || typeof requestedBy !== 'string' || typeof commentAuthor !== 'string') {
     return null
   }
-  return { repository, pullRequestNumber: issue.number, headSha, commentId: comment.id, requestedBy, commentAuthor, fingerprints, before, ...(inline ? { inline: true } : {}), ...(dismissed.length === 0 ? {} : { dismissedFingerprints: dismissed }) }
+  const source = { repository, pullRequestNumber: issue.number, headSha, commentId: comment.id, requestedBy, commentAuthor, before, ...(inline ? { inline: true as const } : {}) }
+  if (merged.length > 0)
+    return merged.length === 1 && merged[0] === headSha ? { ...source, _tag: 'MergedFollowUps' } : null
+  return {
+    ...source,
+    _tag: 'Findings',
+    fingerprints,
+    ...(issueFingerprints.length === 0 ? {} : { issueFingerprints }),
+    ...(dismissed.length === 0 ? {} : { dismissedFingerprints: dismissed }),
+  }
 }

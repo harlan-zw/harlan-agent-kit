@@ -6,6 +6,7 @@ import type { AgentPhase } from './agent-progress.ts'
 import type { AgentTokenUsage } from './agent-provider.ts'
 import type { CiGateCause } from './ci-gate-pending.ts'
 import type { GitHubAgentSource, GitHubCheck, GitHubChecksSnapshot, IssueTriageSnapshot, PullRequestReviewSnapshot, RequiredChecks } from './github-agent-source.ts'
+import type { ChangedLinesReader } from './github-changed-lines.ts'
 import type { GitHubMediaSource } from './github-media.ts'
 import type { IssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import type { IssueTriageResult } from './issue-triage.ts'
@@ -40,7 +41,8 @@ import { agentProfile } from './agent-profile.ts'
 import { agentPhase } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
-import { REVIEW_REPAIR_REFUSALS } from './failure.ts'
+import { classifyFailure, REVIEW_REPAIR_REFUSALS } from './failure.ts'
+import { withFindingScopes } from './finding-scope.ts'
 import { githubAccountInstructions } from './github-account.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
 import { mediaEvidenceLines, snapshotMedia } from './github-media.ts'
@@ -115,6 +117,13 @@ export interface ItemAgentOptions {
 export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'> {
   /** Logins whose pull request comments count as commands: `github.allowed_owners`. Absent offers no command. */
   allowedAuthors?: readonly string[]
+  /**
+   * Reads the head lines the reviewed diff adds, so each follow-up knows its Finding scope.
+   *
+   * Absent leaves every scope unknown, which is how a test runs. An unknown
+   * scope routes a follow-up to an issue and never to Repair on the head.
+   */
+  changedLines?: ChangedLinesReader
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress' | 'priorReviewHistory' | 'repairSource'>
   workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
@@ -467,6 +476,37 @@ async function reviewChangedFiles(
   if (recorded !== null && recorded.headSha === task.pullRequest.headSha && recorded.files !== null)
     return ok(recorded.files)
   return options.github.listPullRequestFiles(task.repositoryMapping, task.pullRequestNumber, signal)
+}
+
+/**
+ * Stores each follow-up's Finding scope, read from the exact diff the Review covered.
+ *
+ * A Review with no Logged finding reads nothing. A failed read keeps every
+ * scope unknown, so a tick files an issue instead of Repair on the head. It
+ * records an Incident, because an unknown scope looks like an old run and
+ * would otherwise switch Repair before merge off unseen.
+ */
+async function scopeFollowUps(
+  options: ReviewWorkerOptions,
+  task: ClaimedAdversarialReviewTask,
+  findings: ReviewFinding[],
+  signal: AbortSignal,
+): Promise<ReviewFinding[]> {
+  if (options.changedLines === undefined || !findings.some(finding => finding._tag === 'Logged'))
+    return withFindingScopes(findings, null)
+  const diff = await options.changedLines(task.repositoryMapping, task.pullRequest.baseSha, task.pullRequest.headSha, signal)
+  if (diff._tag === 'Err' && !signal.aborted) {
+    options.store.recordIncident({
+      scope: { _tag: 'Task', taskId: task.id, repository: task.repository, itemNumber: task.pullRequestNumber },
+      kind: classifyFailure({ message: diff.error }).kind,
+      severity: 'warning',
+      operation: 'finding_scope',
+      message: `The reviewed diff was unreadable, so every follow-up files an issue: ${diff.error}`,
+      recovery: { _tag: 'OnNextOperation' },
+      at: options.now().toISOString(),
+    })
+  }
+  return withFindingScopes(findings, diff._tag === 'Ok' ? diff.value : null)
 }
 
 function resolveMergeRisk(
@@ -1125,6 +1165,8 @@ export interface TerminalCommentInput {
   /** Absent for a repository that never asked for Merge risk. */
   mergeRisk?: MergeRisk | undefined
   repository?: string | undefined
+  /** The target branch, which names where existing code lives in the follow-up fold. */
+  baseRef?: string | null | undefined
   /** From `acceptedPullRequestCommands`. */
   commands?: readonly PullRequestCommand[]
   /** When the Review run completed. A stored time, so every re-render writes the same body. */
@@ -1255,7 +1297,7 @@ export function terminalComment(input: TerminalCommentInput): string {
     ...(blocking.length === 0 ? [] : [...issueRows(repository, headSha, blocking), '']),
     ...(fixed.length === 0 ? [] : [...fixedRows(fixed), '']),
     ...(reviewLine === '' ? [] : [reviewLine, '']),
-    ...followUpSection(repository, headSha, findings),
+    ...followUpSection(repository, headSha, findings, input.baseRef ?? undefined),
     ...reported,
     automatedDisclosure({
       kind: 'review',
@@ -1571,6 +1613,7 @@ async function projectReviewRun(
     reportedChecks: refreshed.reportedChecks,
     mergeRisk: run.mergeRisk?.combined,
     repository: task.repository,
+    baseRef: task.pullRequest.baseRef,
     commands,
     reviewedAt: run.completedAt,
     ciCause: refreshed.ciCause,
@@ -1770,6 +1813,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
               details: { ...details, regressionTest: finding.regressionTest },
             }
       })
+      const scoped = await scopeFollowUps(options, task, findings, signal)
       // Persist the expensive Agent report before any later GitHub read or
       // write. A retry can now resume at the controller boundary.
       const { gates } = reviewGates(snapshot.value, response, repairsBaseline, { reviewStartedAt: startedAt, now: options.now() })
@@ -1794,7 +1838,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         usage: turn.value.usage,
         gates,
         confidence: response.confidence,
-        findings,
+        findings: scoped,
         mergeRisk,
         checked: response.checked,
         notChecked: response.notChecked,
@@ -1841,7 +1885,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         usage: turn.value.usage,
         gates,
         outcome: storedOutcome,
-        findings,
+        findings: scoped,
         mergeRisk,
         checked: response.checked,
         notChecked: response.notChecked,

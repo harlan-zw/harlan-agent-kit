@@ -23,7 +23,7 @@ function followUp(impact: number, fingerprint = 'f'.repeat(64)): Extract<ReviewF
     impact,
     summary: 'Finished bars disappear at a viewport boundary',
     nextAction: 'Query for span overlap with the viewport.',
-    details: { fingerprint, identity: `bars-${impact}`, location: { path: 'src/timeline-store.ts', line: 83 }, proof: 'When a bar crosses the viewport edge, the query drops it.' },
+    details: { fingerprint, identity: `bars-${impact}`, location: { path: 'src/timeline-store.ts', line: 83 }, proof: 'When a bar crosses the viewport edge, the query drops it.', scope: 'change' },
   }
 }
 const verdict = (head: string, commands = true) => terminalComment({ headSha: head, baseSha: 'c'.repeat(40), gates, findings: [], confidence: 90, reportedChecks: [], repository, commands: commands ? ['Change', 'Rerun'] : [], reviewedAt: '2026-11-23T15:03:00.000Z' })
@@ -35,6 +35,7 @@ function stopped(publishedBody: string, overrides: Partial<StoppedReview> = {}):
     pullRequestNumber: 24,
     revisionId: 'revision',
     headSha: reviewed,
+    baseRef: 'main',
     closureRevisionId: 'revision',
     currentHeadSha: reviewed,
     currentBaseSha: 'c'.repeat(40),
@@ -115,13 +116,13 @@ describe('a follow-up', () => {
     const findings = [followUp(55)]
     const source = terminalComment({ headSha: reviewed, baseSha: 'c'.repeat(40), gates, findings, confidence: 90, reportedChecks: [], repository })
     const thread = `https://github.com/${repository}/pull/24#discussion_r4640421240`
-    const decorated = withLoggedFindingControls(source, findings, [], { target: 'head', baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })
+    const decorated = withLoggedFindingControls(source, findings, [], { controls: { _tag: 'Open', repairOnHead: true }, baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })
 
     expect(decorated).toContain('<b>1 follow-up</b> · none block merge')
     expect(decorated).toContain(`<br>Fix: Query for span overlap with the viewport.\n  [Open the thread beside the code](${thread}) <!-- logged-finding: ${'f'.repeat(64)} -->`)
     expect(decorated).not.toContain('Ask an agent to verify and fix this finding')
     expect(withoutLoggedFindingControls(decorated)).toBe(source)
-    expect(withLoggedFindingControls(decorated, findings, [], { target: 'head', baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })).toBe(decorated)
+    expect(withLoggedFindingControls(decorated, findings, [], { controls: { _tag: 'Open', repairOnHead: true }, baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })).toBe(decorated)
   })
 })
 
@@ -129,7 +130,7 @@ describe('a finding thread', () => {
   it('retires its pickup control once a rerun scores the finding below the floor', async () => {
     const fingerprint = 'e'.repeat(64)
     const edits: string[] = []
-    const thread: ReviewFindingThread = { threadId: 'T1', fingerprint, resolved: false, comment: { id: 1, body: reviewFindingThreadBody(followUp(42, fingerprint), reviewed, 'main') } }
+    const thread: ReviewFindingThread = { threadId: 'T1', fingerprint, resolved: false, comment: { id: 1, body: reviewFindingThreadBody(followUp(42, fingerprint), { headSha: reviewed, baseRef: 'main', repairOnHead: true }) } }
     expect(thread.comment!.body).toContain('Ask an agent to verify and fix this finding')
     const mirror: ReviewFindingThreadMirror = {
       source: {
@@ -143,7 +144,7 @@ describe('a finding thread', () => {
       },
       report: () => undefined,
     }
-    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 24, reviewed, [followUp(39, fingerprint)], new AbortController().signal, () => ok(undefined), 'open', { controls: true, baseRef: 'main' })
+    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 24, reviewed, [followUp(39, fingerprint)], new AbortController().signal, () => ok(undefined), 'open', { controls: { repairOnHead: true }, baseRef: 'main' })
 
     expect(edits).toHaveLength(1)
     expect(edits[0]).not.toContain('Ask an agent to verify and fix this finding')
@@ -158,7 +159,7 @@ describe('a finding thread', () => {
       resolution: 'Repair',
       details: { fingerprint: 'b'.repeat(64), identity: 'home', location: { path: 'hooks/guard.sh', line: 30 }, proof: 'With HOME unset, the guard allows the write.', regressionTest: null },
     }
-    const body = resolvedThreadBody(reviewFindingThreadBody(open as Parameters<typeof reviewFindingThreadBody>[0], reviewed), open.details!.fingerprint, merged, `https://github.com/${repository}/commit/${merged}`)
+    const body = resolvedThreadBody(reviewFindingThreadBody(open as Parameters<typeof reviewFindingThreadBody>[0], { headSha: reviewed, repairOnHead: true }), open.details!.fingerprint, merged, `https://github.com/${repository}/commit/${merged}`)
 
     expect(body).toContain('~~Draft saves skip approval when HOME is unset~~ · `86/100`\n')
     expect(body).not.toContain('blocks merge')
@@ -185,7 +186,7 @@ describe('a promoted finding', () => {
     const fingerprint = 'd'.repeat(64)
     const edits: string[] = []
     const logged = followUp(55, fingerprint)
-    const thread: ReviewFindingThread = { threadId: 'T1', fingerprint, resolved: false, comment: { id: 1, body: reviewFindingThreadBody(logged, reviewed, 'main') } }
+    const thread: ReviewFindingThread = { threadId: 'T1', fingerprint, resolved: false, comment: { id: 1, body: reviewFindingThreadBody(logged, { headSha: reviewed, baseRef: 'main', repairOnHead: true }) } }
     const promoted: Extract<ReviewFinding, { _tag: 'Open' }> = {
       _tag: 'Open',
       impact: 86,
@@ -206,7 +207,7 @@ describe('a promoted finding', () => {
       },
       report: () => undefined,
     }
-    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 24, reviewed, [promoted], new AbortController().signal, () => ok(undefined), 'open', { controls: true, baseRef: 'main', repairStatus: 'Active' })
+    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 24, reviewed, [promoted], new AbortController().signal, () => ok(undefined), 'open', { controls: { repairOnHead: true }, baseRef: 'main', repairStatus: 'Active' })
 
     expect(edits).toHaveLength(1)
     expect(edits[0]).toContain('🟠 **Finished bars disappear at a viewport boundary** · `86/100` · blocks merge')

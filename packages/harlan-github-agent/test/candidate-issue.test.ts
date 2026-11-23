@@ -71,6 +71,7 @@ function publisher(calls: Array<{ title: string, labels?: readonly string[] }>):
   return {
     updateIssue: async () => ok(undefined),
     findOpenIssueByFingerprint: () => Promise.resolve(ok(null)),
+    findOpenIssueByMarker: () => Promise.resolve(ok(null)),
     findRoutineTrackingIssue: () => Promise.resolve(ok(null)),
     findIssueCommentByMarker: () => Promise.resolve(ok(null)),
     createComment: async () => ok({ id: 1 }),
