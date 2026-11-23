@@ -398,6 +398,117 @@ describe('the summary a run log entry folds', () => {
   it('cannot close the fold it sits in', () => {
     expect(summaryOf('Done.</details> Nothing else.')).toBe('Done. Nothing else.')
   })
+
+  it.each([
+    ['a fence with a blank line inside', '```text\nprivate-fixture line\n\nprivate-fixture after the blank line\n```'],
+    ['an HTML comment with a blank line inside', '<!--\n\nprivate-fixture note\n\n-->'],
+    ['a details block with a blank line inside', '<details>\n<summary>Logs</summary>\n\nprivate-fixture\n\n</details>'],
+    ['indented code after a list', '- one item\n\n    private-fixture'],
+  ])('keeps %s out of the summary', (_case, opening) => {
+    expect(summaryOf(`${opening}\n\nThe run checked every workflow.`)).toBe('The run checked every workflow.')
+  })
+
+  it('keeps a fence left open out of the summary', () => {
+    expect(summaryOf('~~~\nprivate-fixture\n\nprivate-fixture again\n\nThe run checked every workflow.')).toBeNull()
+  })
+
+  it('stops at code that follows the opening prose', () => {
+    expect(summaryOf('The run checked every workflow.\n\n    private-fixture\n\nLater prose.')).toBe('The run checked every workflow.')
+  })
+
+  it('counts paragraph breaks toward the limit', () => {
+    const paragraph = `${'Word '.repeat(59)}ends.`
+
+    expect(paragraph).toHaveLength(300)
+    expect(summaryOf(`${paragraph}\n\n${paragraph}`)).toBe(paragraph)
+    expect(summaryOf(`${paragraph}\n\n${paragraph.slice(2)}`)).toHaveLength(600)
+  })
+
+  it.each([
+    ['a filesystem path', 'The agent wrote logs to /var/log/agent/run.log.'],
+    ['a home path', 'Evidence sits in $HOME/scratch/run.'],
+    ['a Windows path', 'Evidence sits in C:\\Users\\agent\\run.'],
+    ['a tailnet host', 'Open https://hogwild.tail1234.ts.net/history for detail.'],
+    ['a single-label host', 'The Service at http://hogwild:3210/api answered.'],
+    ['a private address', 'The probe hit 10.0.4.7 and timed out.'],
+    ['a local host name', 'The site at preview.local failed.'],
+  ])('drops a line that names %s', (_case, line) => {
+    expect(summaryOf(`${line}\nThe run checked every workflow.`)).toBe('The run checked every workflow.')
+  })
+
+  it('keeps public links and repository paths', () => {
+    const line = 'See https://github.com/harlan-zw/example/issues/4 and src/store.ts, per nuxt.com docs.'
+
+    expect(summaryOf(line)).toBe(line)
+  })
+})
+
+describe('configured private hosts', () => {
+  it('drops a summary line that names a configured host, with or without a link', () => {
+    const body = runLogEntryComment({
+      runId,
+      routineName: 'pr-triage',
+      scheduledFor: '2026-08-27T07:00:00.000Z',
+      entry: { _tag: 'Scanned', ...quiet, verdict: null, summary: 'Open https://agent.example.org/history for detail.\nagent.example.org restarted twice.\nThe run checked every workflow.' },
+      reported: [],
+      privateHosts: ['agent.example.org'],
+    })
+
+    expect(body).toContain('<details><summary>Summary</summary>\n\nThe run checked every workflow.\n\nThe Dashboard')
+    expect(body).not.toContain('agent.example.org')
+  })
+
+  it('folds no summary when every line names a private host', () => {
+    const body = runLogEntryComment({
+      runId,
+      routineName: 'pr-triage',
+      scheduledFor: '2026-08-27T07:00:00.000Z',
+      entry: { _tag: 'Scanned', ...quiet, verdict: null, summary: 'agent.example.org restarted twice.' },
+      reported: [],
+      privateHosts: ['agent.example.org'],
+    })
+
+    expect(body).not.toContain('<summary>Summary</summary>')
+  })
+
+  it('reaches the comment through the controller', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      stage(store, scanned('evidence', { detail: 'Open https://agent.example.org/history.\nThe run checked every workflow.' }))
+      settleRun(store, runId)
+      const calls: Calls = { issues: [], comments: [] }
+
+      await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter', privateHosts: ['agent.example.org'] })
+        .publishPending(new AbortController().signal)
+
+      expect(calls.comments[0]?.body).toContain('The run checked every workflow.')
+      expect(calls.comments[0]?.body).not.toContain('agent.example.org')
+    }
+    finally {
+      store.close()
+    }
+  })
+})
+
+it('publishes only the prose after an opening fence and keeps the fence in the archive', async () => {
+  const store = openJournalStore(':memory:')
+  try {
+    seed(store)
+    stage(store, scanned('evidence', { detail: '```text\nprivate-fixture line\n\nprivate-fixture after the blank line\n```\n\nThe run checked every workflow.' }))
+    settleRun(store, runId)
+    const calls: Calls = { issues: [], comments: [] }
+
+    await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+      .publishPending(new AbortController().signal)
+
+    expect(calls.comments[0]?.body).toContain('<details><summary>Summary</summary>\n\nThe run checked every workflow.\n\n')
+    expect(calls.comments[0]?.body).not.toContain('private-fixture')
+    expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain('private-fixture after the blank line')
+  }
+  finally {
+    store.close()
+  }
 })
 
 describe('stored run log entries', () => {
@@ -592,6 +703,34 @@ describe('publishing the run log', () => {
         '| Known defect | #77 |',
         '| New \\| defect for `@octocat` | issue queued |',
       ].join('\n'))
+    }
+    finally {
+      store.close()
+    }
+  })
+
+  it('never publishes a claim in place of a missing title', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      store.recordCandidates({
+        routineId,
+        runId,
+        candidates: [
+          { ...proposal('src/a.ts#blank', ''), claim: 'Private claim A names a report-mode defect.' },
+          { ...proposal('src/b.ts#fallback', 'Private claim B names a report-mode defect.'), claim: 'Private claim B names a report-mode defect.' },
+        ],
+        at: now().toISOString(),
+      })
+      stage(store, scanned('evidence', { tally: { ...quiet, found: 2, fresh: 2, fingerprints: ['src/a.ts#blank', 'src/b.ts#fallback'] } }))
+      settleRun(store, runId)
+      const calls: Calls = { issues: [], comments: [] }
+
+      await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+        .publishPending(new AbortController().signal)
+
+      expect(calls.comments[0]?.body).toContain('| Untitled proposal | no issue |\n| Untitled proposal | no issue |')
+      expect(calls.comments[0]?.body).not.toContain('Private claim')
     }
     finally {
       store.close()

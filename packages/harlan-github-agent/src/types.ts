@@ -992,7 +992,13 @@ export type CandidateIssueState
 
 /** One Candidate a run reported, read again when its run log entry is written. */
 export interface ReportedCandidate {
-  title: string
+  /**
+   * The title the Agent wrote, or null when it wrote none.
+   *
+   * Readers elsewhere fall back to the claim. The run log must not: a
+   * report-mode claim never reaches GitHub.
+   */
+  title: string | null
   result: CandidateResult
   issue: CandidateIssueState
 }

@@ -16820,7 +16820,9 @@ export function openJournalStore(
         : row.issue_state === 'Published' && row.issue_number !== null
           ? { _tag: 'Filed', number: row.issue_number }
           : row.issue_state === 'Failed' ? { _tag: 'Refused' } : { _tag: 'Requested' }
-      return [{ title: readCandidate(row).title, result: readCandidateResult(row), issue }]
+      // A blank title is stored as the claim by the scan parser, and as null by older rows.
+      const title = row.title?.trim() ?? ''
+      return [{ title: title === '' || title === row.claim.trim() ? null : title, result: readCandidateResult(row), issue }]
     })
   }
 

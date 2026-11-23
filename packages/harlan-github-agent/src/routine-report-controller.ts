@@ -173,49 +173,103 @@ export function routineReportBody(run: Pick<RoutineRun, 'scheduledFor'>, report:
   return `**${run.scheduledFor}** — ${headline}${detail}${candidateDetails(candidates)}`
 }
 
-/** The summary stops before the paragraph that would pass this length. */
+/** The summary, paragraph breaks included, never passes this length. */
 const MAXIMUM_SUMMARY_LENGTH = 600
 
-/** A line that names a local path or host never reaches the public log. */
-const LOCAL_REFERENCE = /~\/|\/home\/|\/tmp\/|\/Users\/|localhost|127\.0\.0\.1|\[::1\]|file:\/\//i
+/** Home, absolute, Windows, and file paths. A path needs two segments, so `and/or` and `/etc` pass. */
+const PRIVATE_PATH = /~\/|\$HOME\b|%USERPROFILE%|file:\/\/|(?<![\w.~:/-])\/[\w.@-]+\/|\b[a-z]:\\|\[::1\]|\blocalhost\b/i
+const URL_HOST = /\b[a-z][a-z\d+.-]*:\/\/(?:[^\s@/]+@)?(\[[^\]\s]+\]|[^\s/?#:)\]>'"`]+)/gi
+const BARE_HOST = /(?<![\w.@/-])((?:[a-z\d](?:[a-z\d-]*[a-z\d])?\.)+[a-z][a-z\d-]*)(?![\w-])/gi
+const IPV4 = /(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?!\d)/g
+const ADDRESS = /^\d{1,3}(?:\.\d{1,3}){3}$/
+/** Suffixes that only name hosts on a private network. */
+const PRIVATE_SUFFIXES = ['localhost', 'local', 'internal', 'lan', 'home.arpa', 'ts.net', 'corp', 'intranet'] as const
 
-/** Headings, tables, quotes, fences, HTML, and lists are structure, not a summary. */
-const STRUCTURE = /^(?:#{1,6}\s|[|><]|```|~~~|[-*+]\s|\d+[.)]\s)/
+function isPrivateAddress(address: string): boolean {
+  const [a = -1, b = -1] = address.split('.').map(Number)
+  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
+}
+
+function isPrivateHost(host: string, privateHosts: readonly string[]): boolean {
+  const name = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
+  if (name === '::1' || (ADDRESS.test(name) && isPrivateAddress(name)))
+    return true
+  return [...PRIVATE_SUFFIXES, ...privateHosts.map(entry => entry.toLowerCase())]
+    .some(suffix => name === suffix || name.endsWith(`.${suffix}`))
+}
+
+/**
+ * Whether one line names a local path or a private host.
+ *
+ * The run log is public, and an Agent writes its report for the private
+ * Dashboard. A link to a single-label host such as `http://hogwild:3210`, a
+ * private address, a private-network suffix, or a host the configuration
+ * names all count, with or without a scheme.
+ */
+function isPrivateLine(line: string, privateHosts: readonly string[]): boolean {
+  if (PRIVATE_PATH.test(line))
+    return true
+  const linked = [...line.matchAll(URL_HOST)].map(match => match[1]!)
+  if (linked.some(host => !host.includes('.') || isPrivateHost(host, privateHosts)))
+    return true
+  if ([...line.matchAll(IPV4)].some(match => isPrivateAddress(match[1]!)))
+    return true
+  return [...line.matchAll(BARE_HOST)].some(match => isPrivateHost(match[1]!, privateHosts))
+}
+
+/** Drops every line that names a private detail, then every paragraph left empty. */
+function publicProse(text: string, privateHosts: readonly string[]): string | null {
+  const paragraphs = text.split(/\n\s*\n/)
+    .map(paragraph => paragraph.split('\n').filter(line => !isPrivateLine(line, privateHosts)).join('\n').trim())
+    .filter(paragraph => paragraph !== '')
+  return paragraphs.length === 0 ? null : paragraphs.join('\n\n')
+}
+
+/** An unclosed comment hides the rest of the report, so it runs to the end. */
+const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g
+const HTML_OPEN = /^\s*<([a-z][\w-]*)[\s/>]/i
 
 /**
  * The opening prose of an Agent report, short enough to fold into the log.
  *
- * The Agent writes its report for the Dashboard, so the log keeps only the
- * paragraphs before the first heading, table, or list. A line that names a
- * local path or host drops out. A first paragraph over the limit leaves no
- * summary, because a cut sentence can break its Markdown.
+ * The Markdown is parsed before any line is filtered, so a removed line cannot
+ * move a block boundary. Only top-level paragraphs before the first other
+ * block qualify. Quoted, fenced, listed, and HTML evidence never does.
+ * An element such as `<details>` may hold blank lines, so everything up to its
+ * closing tag is skipped. Comments go first, because the text cleaner would
+ * otherwise turn their inside into visible prose.
+ * A line that names a private path or host drops out. A paragraph that would
+ * pass the limit ends the summary, because a cut sentence can break its Markdown.
  */
 function reportSummary(detail: string): string | null {
   const kept: string[] = []
   let length = 0
-  // Parse before filtering: a removed line must not change Markdown boundaries.
-  // Only top-level paragraphs qualify. Never descend into quoted or fenced evidence.
-  for (const token of Lexer.lex(cleanText(detail))) {
+  let openElement: string | null = null
+  for (const token of Lexer.lex(detail.replaceAll('\r\n', '\n').replaceAll(HTML_COMMENT, ''))) {
+    if (openElement !== null) {
+      if (token.raw.toLowerCase().includes(`</${openElement}>`))
+        openElement = null
+      continue
+    }
     if (token.type === 'space')
       continue
     if (token.type !== 'paragraph') {
+      const element = token.type === 'html' ? token.raw.match(HTML_OPEN)?.[1]?.toLowerCase() : undefined
+      if (element !== undefined && !token.raw.toLowerCase().includes(`</${element}>`))
+        openElement = element
       if (kept.length > 0)
         break
       continue
     }
-    const block = token.raw.replaceAll(/<\/?details>/gi, '')
-    const text = block.split('\n').filter(line => !LOCAL_REFERENCE.test(line)).join('\n').trim()
-    if (text === '')
+    const text = publicProse(cleanText(token.raw).replaceAll(/<\/?details>/gi, ''), [])
+    if (text === null)
       continue
-    if (STRUCTURE.test(text)) {
-      if (kept.length > 0)
-        break
-      continue
-    }
-    if (length + text.length > MAXIMUM_SUMMARY_LENGTH)
+    const next = length + (kept.length === 0 ? 0 : 2) + text.length
+    if (next > MAXIMUM_SUMMARY_LENGTH)
       break
     kept.push(text)
-    length += text.length
+    length = next
   }
   return kept.length === 0 ? null : kept.join('\n\n')
 }
@@ -346,6 +400,11 @@ function tableText(value: string): string {
     .replaceAll('|', '\\|')
 }
 
+/** A cell whose text names a private path or host prints the fallback instead. */
+function publicCell(value: string | null, privateHosts: readonly string[], fallback: string): string {
+  return value === null || cleanLine(value) === '' || isPrivateLine(cleanLine(value), privateHosts) ? fallback : tableText(value)
+}
+
 /** Who holds one Candidate now. A filed issue wins, because it carries the evidence. */
 function ownerCell(candidate: ReportedCandidate): string {
   if (candidate.issue._tag === 'Filed')
@@ -371,13 +430,14 @@ function ownerCell(candidate: ReportedCandidate): string {
   }
 }
 
-function scannedLines(entry: ScannedEntry, reported: readonly ReportedCandidate[]): string[] {
+function scannedLines(entry: ScannedEntry, reported: readonly ReportedCandidate[], privateHosts: readonly string[]): string[] {
   const counts = entry.verdict === null
     ? ['| Found | New | Known |', '| --: | --: | --: |', `| ${entry.found} | ${entry.fresh} | ${entry.known} |`]
     : ['| Found | New | Known | Coverage |', '| --: | --: | --: | :-- |', `| ${entry.found} | ${entry.fresh} | ${entry.known} | ${entry.verdict.coverage} |`]
   const owners = reported.length === 0
     ? []
-    : ['', '| Proposal | Owner |', '| :-- | :-- |', ...reported.map(candidate => `| ${tableText(candidate.title)} | ${ownerCell(candidate)} |`)]
+    : ['', '| Proposal | Owner |', '| :-- | :-- |', ...reported.map(candidate => `| ${publicCell(candidate.title, privateHosts, 'Untitled proposal')} | ${ownerCell(candidate)} |`)]
+  const summary = entry.summary === null ? null : publicProse(entry.summary, privateHosts)
   // A Routine's rules drop work for several causes: scope, a per-run cap, or
   // an open issue that already holds it. The count alone carries no cause.
   const dropped = [
@@ -388,7 +448,7 @@ function scannedLines(entry: ScannedEntry, reported: readonly ReportedCandidate[
     ...counts,
     ...owners,
     ...(dropped.length === 0 ? [] : ['', '<details><summary>Dropped proposals</summary>', '', ...dropped, '', 'The run filed no issue for these proposals.', '', '</details>']),
-    ...(entry.summary === null ? [] : ['', '<details><summary>Summary</summary>', '', entry.summary, '', 'The Dashboard History page keeps the full report.', '', '</details>']),
+    ...(summary === null ? [] : ['', '<details><summary>Summary</summary>', '', summary, '', 'The Dashboard History page keeps the full report.', '', '</details>']),
   ]
 }
 
@@ -398,20 +458,24 @@ function scannedLines(entry: ScannedEntry, reported: readonly ReportedCandidate[
  * A heading carries one dot and the run time. Tables carry the counts and the
  * issue that owns each Candidate. Only fields reach a table; the Agent's prose
  * reaches the log as a folded summary at most. The full report stays private.
+ *
+ * `privateHosts` names the Service's own hosts from configuration. Any text
+ * that names one of them, a local path, or a private network host stays out.
  */
-export function runLogEntryComment(command: Pick<ClaimedRoutineReportCommand, 'runId' | 'routineName' | 'scheduledFor' | 'reported'> & { entry: RunLogEntry }): string {
+export function runLogEntryComment(command: Pick<ClaimedRoutineReportCommand, 'runId' | 'routineName' | 'scheduledFor' | 'reported'> & { entry: RunLogEntry, privateHosts?: readonly string[] }): string {
   const { entry } = command
+  const privateHosts = command.privateHosts ?? []
   const when = utcLabel(command.scheduledFor)
   const lines = (dot: string, heading: string, body: readonly string[]): string =>
     [routineRunMarker(command.runId), `### ${dot} ${command.routineName} · ${heading}`, '', ...body, '', RUN_LOG_FOOTER].join('\n')
   switch (entry._tag) {
     case 'Failed':
-      return lines(DOT.act, 'failed', ['| Run | Cause | Next |', '| :-- | :-- | :-- |', `| ${when} | ${tableText(entry.reason)} | next scheduled run |`])
+      return lines(DOT.act, 'failed', ['| Run | Cause | Next |', '| :-- | :-- | :-- |', `| ${when} | ${publicCell(entry.reason, privateHosts, 'The Dashboard History page keeps this cause.')} | next scheduled run |`])
     case 'ReadyDigest':
       return lines(entry.total > 0 ? DOT.act : DOT.quiet, when, [entry.list])
     case 'Scanned': {
       const act = entry.fingerprints.length > 0 || (entry.verdict !== null && entry.verdict.severity !== 'GREEN')
-      return lines(act ? DOT.act : DOT.quiet, when, scannedLines(entry, command.reported))
+      return lines(act ? DOT.act : DOT.quiet, when, scannedLines(entry, command.reported, privateHosts))
     }
   }
 }
@@ -434,15 +498,17 @@ ${command.body}${candidateDetails(command.candidates)}`
  * A report staged before run log entries had fields carries no entry, so its
  * archive body publishes the way it always did.
  */
-function runComment(command: ClaimedRoutineReportCommand): string {
+function runComment(command: ClaimedRoutineReportCommand, privateHosts: readonly string[]): string {
   return command.entry === null
     ? `${command.body}${candidateDetails(command.candidates)}`
-    : runLogEntryComment({ ...command, entry: command.entry })
+    : runLogEntryComment({ ...command, entry: command.entry, privateHosts })
 }
 
 export interface RoutineReportControllerOptions {
   /** Pending reports wait until the held GitHub quota becomes available. */
   canPublish?: () => boolean
+  /** The Service's own host names from configuration. Run log text never names one. */
+  privateHosts?: readonly string[]
   github: Pick<GitHubIssuePublisher, 'createComment' | 'createIssue' | 'updateIssue' | 'findIssueCommentByMarker' | 'findRoutineTrackingIssue'>
   leaseMilliseconds?: number
   now: () => Date
@@ -585,7 +651,7 @@ export function createRoutineReportController(options: RoutineReportControllerOp
         const commented = await options.github.createComment({
           repository: command.repositoryMapping,
           issueNumber,
-          body: daily ? `${marker}\nHarlan Agent Kit updates the latest report in this issue body. Each run remains in the private archive and Dashboard history.` : runComment(command),
+          body: daily ? `${marker}\nHarlan Agent Kit updates the latest report in this issue body. Each run remains in the private archive and Dashboard history.` : runComment(command, options.privateHosts ?? []),
         }, signal)
         if (commented._tag === 'Err') {
           fail(commented.error.message)
