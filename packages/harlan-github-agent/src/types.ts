@@ -268,10 +268,12 @@ export interface GitHubIssueItem extends GitHubItemBase {
   /** Title, body, non-controller comments, and human labels at observation time. */
   contentDigest: string
   /**
-   * True when a Routine filed this issue as one Candidate's proposal.
+   * True when this service filed the issue: a Routine's Candidate proposal,
+   * or a follow-up Harlan ticked on a pull request.
    *
    * An allowlist that lists only human authors would otherwise drop the issue
-   * again before triage ever read it, because the agent filed it.
+   * again before triage ever read it, because the agent filed it. The name
+   * predates follow-up issues and is kept, because stored Revisions carry it.
    */
   routineFiled: boolean
   /** True when this is a Routine run log, including one filed by another controller. */

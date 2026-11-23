@@ -66,7 +66,7 @@ import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
-import { publishLoggedFindingPickups, refreshLoggedFindingThreads } from './logged-finding-sweep.ts'
+import { publishFollowUpIssues, publishLoggedFindingPickups, refreshLoggedFindingThreads } from './logged-finding-sweep.ts'
 import { createMaintenanceCheckCommand, createMaintenanceScopeProvider } from './maintenance-scope.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
 import { createPackageReleaseSource } from './package-release-github.ts'
@@ -1304,6 +1304,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store.close()
     throw error
   })
+  const followUpIssuePublisher = createGitHubIssuePublisher({ publicText, tokens: routedTokens })
   const candidateIssues = createCandidateIssueController({
     github: createGitHubIssuePublisher({ publicText, tokens: routedTokens }),
     now,
@@ -1564,6 +1565,19 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           }
         })
         recordPassIncidents('stopped_review_comment', stopped.results.flatMap(result => result._tag === 'Err' ? [result.error] : []))
+        // File ticked follow-ups first, so the status pass below shows their issue links in the same pass.
+        const followUpIssues = await guarded('Follow-up issues', () => publishFollowUpIssues({
+          github: followUpIssuePublisher,
+          store,
+          now,
+          workerId: 'follow-up-issue',
+        }, signal), [])
+        followUpIssues.forEach((result) => {
+          if (result._tag === 'Ok')
+            options.logger.info(`${result.value.repository}#${result.value.issueNumber}: filed a follow-up issue.`)
+          else
+            options.logger.error(`Follow-up issue: ${result.error}`)
+        })
         const findingErrors = await guarded('Logged finding status', () => publishLoggedFindingPickups({
           github: workerGithub,
           store,

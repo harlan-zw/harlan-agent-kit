@@ -2,7 +2,7 @@ import type { ReviewPublicationAuthority } from './github-agent-source.ts'
 import type { Result } from './result.ts'
 import type { RepositoryMapping, ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
-import { loggedFindingBaseMarker, loggedFindingControl, normalizeLoggedFindingControls } from './logged-finding-pickup.ts'
+import { followUpRoute, loggedFindingBaseMarker, loggedFindingControl, normalizeLoggedFindingControls } from './logged-finding-pickup.ts'
 import { aboveFooter, AUTOMATED_REVIEW_MARKER, automatedDisclosure, findingNextAction, FOLLOW_UP_FLOOR, statusLine } from './review-comment.ts'
 import { cleanLine, cleanText } from './text.ts'
 
@@ -57,7 +57,13 @@ export interface VerifiedFindingRepair {
 export type FindingRepairStatus = 'Idle' | 'Active' | 'Stopped'
 
 interface FindingThreadOptions {
-  controls?: boolean
+  /**
+   * Offers each follow-up thread its control. Absent offers none.
+   *
+   * `repairOnHead` says whether Repair may write this head, which decides
+   * whether a finding in this change gets the Repair control or the issue one.
+   */
+  controls?: { repairOnHead: boolean }
   baseRef?: string
   fixed?: readonly VerifiedFindingRepair[]
   repairStatus?: FindingRepairStatus
@@ -155,7 +161,7 @@ function sentence(text: string): string {
  * It carries the canonical comment's marker, so the next Review reads it as
  * this service's own words and never as feedback from a person.
  */
-export function reviewFindingThreadBody(finding: ThreadFinding, headSha?: string, baseRef?: string): string {
+export function reviewFindingThreadBody(finding: ThreadFinding, controls?: { headSha: string, baseRef?: string | undefined, repairOnHead: boolean }): string {
   const blocks = finding._tag === 'Open'
   const summary = cleanLine(finding.summary).replace(/\.$/, '')
   const action = findingNextAction(finding.nextAction ?? '')
@@ -174,16 +180,21 @@ export function reviewFindingThreadBody(finding: ThreadFinding, headSha?: string
     cleanText(finding.details.proof),
     ...(action === '' ? [] : ['', `**Fix:** ${action}`]),
     '',
-    ...(headSha === undefined || finding._tag !== 'Logged'
+    ...(controls === undefined || finding._tag !== 'Logged'
       ? []
       : [
-          `<!-- reviewed-sha: ${headSha} -->`,
-          ...(baseRef === undefined ? [] : [loggedFindingBaseMarker(baseRef)]),
-          loggedFindingControl(finding.details.fingerprint),
+          `<!-- reviewed-sha: ${controls.headSha} -->`,
+          ...(controls.baseRef === undefined ? [] : [loggedFindingBaseMarker(controls.baseRef)]),
+          loggedFindingControl(finding.details.fingerprint, followUpRoute(finding, controls.repairOnHead)),
           '',
         ]),
     automatedDisclosure({ kind: 'review' }),
   ].join('\n')
+}
+
+/** The control a thread offers on this head, or none. */
+function threadControls(headSha: string, options: FindingThreadOptions): { headSha: string, baseRef: string | undefined, repairOnHead: boolean } | undefined {
+  return options.controls === undefined ? undefined : { headSha, baseRef: options.baseRef, repairOnHead: options.controls.repairOnHead }
 }
 
 export interface ReviewFindingThreadPlan {
@@ -217,7 +228,7 @@ export function planReviewFindingThreads(headSha: string, findings: ReviewFindin
       headSha,
       path,
       line: anchor,
-      body: withRepairStatus(reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef), findingRepairStatus(finding, options.repairStatus)),
+      body: withRepairStatus(reviewFindingThreadBody(finding, threadControls(headSha, options)), findingRepairStatus(finding, options.repairStatus)),
       ...(finding._tag === 'Logged' ? { lineOnly: true } as const : {}),
     })
   }
@@ -246,8 +257,8 @@ function fixedLine(commitSha: string, url: string): string {
  * there is nothing left to tick.
  */
 export function resolvedThreadBody(body: string, fingerprint: string, commitSha: string, url: string): string {
-  const control = loggedFindingControl(fingerprint)
-  const lines = normalizeLoggedFindingControls(withRepairStatus(body, 'Idle')).split('\n').filter(line => line !== control)
+  const controls = new Set([loggedFindingControl(fingerprint, 'Repair'), loggedFindingControl(fingerprint, 'Issue')])
+  const lines = normalizeLoggedFindingControls(withRepairStatus(body, 'Idle')).split('\n').filter(line => !controls.has(line))
   const heading = lines.findIndex(line => FINDING_STATUS_PATTERN.test(line) || FINDING_HEADING_PATTERN.test(line) || LEGACY_FINDING_HEADING_PATTERN.test(line))
   if (heading === -1)
     return `${lines.join('\n').trimEnd()}\n\n${fixedLine(commitSha, url)}`
@@ -301,7 +312,7 @@ async function syncReviewFindingThreads(
     let comment = thread.comment
     if (state === 'open' && !thread.resolved && source.editReviewFindingComment !== undefined) {
       const body = finding._tag === 'Logged'
-        ? reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef)
+        ? reviewFindingThreadBody(finding, threadControls(headSha, options))
         : withRepairStatus(comment.body, findingRepairStatus(finding, options.repairStatus))
       if (body !== comment.body) {
         const edited = await source.editReviewFindingComment(repository, comment, body, signal, authorize)

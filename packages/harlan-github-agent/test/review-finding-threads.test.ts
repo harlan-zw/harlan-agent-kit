@@ -28,7 +28,7 @@ const logged: Extract<ReviewFinding, { _tag: 'Logged' }> = {
   impact: 42,
   summary: 'A split sequence drops bytes',
   nextAction: 'Preserve buffered bytes.',
-  details: { fingerprint: lockFingerprint, identity: 'split-sequence', location: { path: 'src/parser.ts', line: 32 }, proof: 'The last chunk loses a byte.' },
+  details: { fingerprint: lockFingerprint, identity: 'split-sequence', location: { path: 'src/parser.ts', line: 32 }, proof: 'The last chunk loses a byte.', scope: 'change' },
 }
 
 function fakeSource(threads: ReviewFindingThread[], outcome: 'Posted' | 'OutsideDiff' = 'Posted') {
@@ -57,13 +57,25 @@ describe('review finding threads', () => {
   it('puts an optional finding and its Repair checkbox beside the code', async () => {
     const { mirror, posted } = fakeSource([])
     const finding = { ...logged, nextAction: 'As an optional follow-up, preserve buffered bytes.\n\nKeep both chunks until decoding finishes.' }
-    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 497, headSha, [finding], new AbortController().signal, authorize, 'open', { controls: true })
+    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 497, headSha, [finding], new AbortController().signal, authorize, 'open', { controls: { repairOnHead: true } })
     expect(posted).toEqual([expect.objectContaining({
       path: 'src/parser.ts',
       line: 32,
       body: expect.stringContaining('- [ ] Ask an agent to verify and fix this finding'),
     })])
     expect(posted[0]!.body).toContain('⚪ **A split sequence drops bytes** · `42/100` · does not block merge\n\nThe last chunk loses a byte.\n\n**Fix:** preserve buffered bytes.\n\nKeep both chunks until decoding finishes.')
+  })
+
+  it.each([
+    ['a context line in existing code', { scope: 'existing' as const }, true],
+    ['a line the diff could not place', {}, true],
+    ['a line this change added, on a head Repair cannot write', { scope: 'change' as const }, false],
+  ])('offers the issue control beside %s', async (_case, scope, repairOnHead) => {
+    const { mirror, posted } = fakeSource([])
+    const { scope: _added, ...details } = logged.details
+    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 497, headSha, [{ ...logged, details: { ...details, ...scope } }], new AbortController().signal, authorize, 'open', { controls: { repairOnHead } })
+    expect(posted[0]?.body).toContain(`- [ ] File this finding as an issue <!-- logged-finding: ${lockFingerprint} -->`)
+    expect(posted[0]?.body).not.toContain('Ask an agent to verify and fix this finding')
   })
 
   it.each([
@@ -75,7 +87,7 @@ describe('review finding threads', () => {
       threadId: 'selected',
       fingerprint: lockFingerprint,
       resolved: false,
-      comment: { id: 4_640_421_240, body: reviewFindingThreadBody(logged, headSha) },
+      comment: { id: 4_640_421_240, body: reviewFindingThreadBody(logged, { headSha, repairOnHead: true }) },
     }])
     await mirrorReviewFindingThreads(mirror, repositoryMapping(), 497, headSha, findings, new AbortController().signal, authorize, 'open', { fixed })
     expect(resolved).toEqual(expected)
@@ -88,7 +100,7 @@ describe('review finding threads', () => {
       threadId: 'selected',
       fingerprint: lockFingerprint,
       resolved: false,
-      comment: { id: 4_640_421_240, body: reviewFindingThreadBody(logged, headSha) },
+      comment: { id: 4_640_421_240, body: reviewFindingThreadBody(logged, { headSha, repairOnHead: true }) },
     }
     const { mirror } = fakeSource([thread])
     const edit = vi.fn(async (_repository, _comment, body: string) => {

@@ -192,7 +192,7 @@ export function followUpSection(repository: string | undefined, headSha: string,
 
 export interface AutomatedDisclosure {
   /** What this comment is, as one noun. */
-  kind: 'review' | 'repair' | 'status' | 'triage' | 'release'
+  kind: 'review' | 'repair' | 'status' | 'triage' | 'release' | 'issue'
   /**
    * When this state settled. Only a settled state passes it, and only a stored
    * time, so a re-render of an unchanged state writes an unchanged body.

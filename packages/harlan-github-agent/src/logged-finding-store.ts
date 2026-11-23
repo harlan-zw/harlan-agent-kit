@@ -1,13 +1,15 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { LoggedFindingPickup, LoggedFindingStatus, LoggedReviewFinding } from './logged-finding-pickup.ts'
+import type { FollowUpIssue } from './follow-up-issue.ts'
+import type { FollowUpControls, LoggedFindingPickup, LoggedFindingStatus, LoggedReviewFinding } from './logged-finding-pickup.ts'
 import type { InlineFindingReceipt, ReviewFindingThread } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewFinding } from './types.ts'
-import { publicFailureCause } from './failure.ts'
+import { mayRetryFailure, publicFailureCause } from './failure.ts'
+import { followUpIssue, mergedFollowUpsIssue } from './follow-up-issue.ts'
 import { githubAccountBody } from './github-account.ts'
 import { recordLoggedFindingSignal } from './implicit-signal-store.ts'
-import { normalizeLoggedFindingControls, onHeadPickupHint, withLoggedFindingControls } from './logged-finding-pickup.ts'
+import { followUpRoute, normalizeLoggedFindingControls, unfixedFollowUps, withLoggedFindingControls } from './logged-finding-pickup.ts'
 import { isPublishedForm } from './public-text.ts'
-import { canRepairBaseline, canRepairSelectedFindingOnHead } from './repository-policy.ts'
+import { canFileFollowUpIssue, canRepairBaseline, canRepairSelectedFindingOnHead } from './repository-policy.ts'
 import { automatedReviewHead } from './review-comment.ts'
 import { reviewFindingThreadBody } from './review-finding-threads.ts'
 
@@ -36,6 +38,42 @@ export const loggedFindingSchema = `
   );
 `
 
+/**
+ * One issue a follow-up tick asked for, staged before any GitHub write.
+ *
+ * `Finding` dedupes by pull request and finding fingerprint, so a second tick
+ * on a later head never files twice. `Merged` dedupes by pull request and
+ * head. The title and body are fixed at the tick, from the stored findings.
+ */
+export const followUpIssueSchema = `
+  CREATE TABLE IF NOT EXISTS follow_up_issues (
+    id TEXT PRIMARY KEY,
+    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+    kind TEXT NOT NULL CHECK (kind IN ('Finding', 'Merged')),
+    dedupe_key TEXT NOT NULL,
+    head_sha TEXT NOT NULL,
+    fingerprints TEXT NOT NULL CHECK (json_valid(fingerprints)),
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    marker TEXT NOT NULL,
+    requested_by TEXT NOT NULL,
+    requested_at TEXT NOT NULL,
+    state_tag TEXT NOT NULL DEFAULT 'Pending' CHECK (state_tag IN ('Pending', 'Running', 'Published', 'Failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    reason TEXT,
+    worker_id TEXT,
+    fence INTEGER NOT NULL DEFAULT 0,
+    lease_expires_at TEXT,
+    github_issue_number INTEGER,
+    github_url TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE (subject_id, kind, dedupe_key)
+  );
+`
+
+/** A follow-up issue filing tries this many times before it stops for a person. */
+const followUpIssueAttempts = 5
+
 export interface LoggedFindingComment {
   subjectId: number
   repository: string
@@ -45,6 +83,16 @@ export interface LoggedFindingComment {
   sourceBody: string
   expectedBody: string
   body: string
+  workerId: string
+  fence: number
+}
+
+/** One staged follow-up issue, leased to one publisher. */
+export interface FollowUpIssueCommand extends FollowUpIssue {
+  id: string
+  repository: string
+  repositoryMapping: RepositoryMapping
+  pullRequestNumber: number
   workerId: string
   fence: number
 }
@@ -62,6 +110,9 @@ export interface LoggedFindingStore {
   claimLoggedFindingComment: (workerId: string, at: string, leaseMilliseconds: number, controls?: (repository: string) => boolean) => LoggedFindingComment | null
   authorizeLoggedFindingComment: (command: LoggedFindingComment, at: string) => boolean
   completeLoggedFindingComment: (command: LoggedFindingComment, at: string) => boolean
+  claimFollowUpIssue: (workerId: string, at: string, leaseMilliseconds: number) => FollowUpIssueCommand | null
+  completeFollowUpIssue: (input: { id: string, workerId: string, fence: number, at: string, issueNumber: number, url: string }) => boolean
+  failFollowUpIssue: (input: { id: string, workerId: string, fence: number, at: string, reason: string, status?: number | undefined }) => 'Deferred' | 'Failed' | 'Unchanged'
 }
 
 interface Candidate {
@@ -76,10 +127,28 @@ interface Candidate {
   github_comment_id: number
 }
 
-function pickupTarget(mapping: RepositoryMapping, pull: GitHubPullRequestItem): 'head' | 'after-merge' | undefined {
+/**
+ * The follow-up controls a canonical comment offers now.
+ *
+ * An open pull request routes each tick by Finding scope. A merged one offers
+ * one control for every unfixed follow-up. A pull request closed unmerged
+ * offers none.
+ */
+function followUpControls(mapping: RepositoryMapping, pull: GitHubPullRequestItem): FollowUpControls | undefined {
+  if (!canFileFollowUpIssue(mapping))
+    return undefined
   if (pull.state === 'open')
-    return canRepairSelectedFindingOnHead(mapping, pull) ? 'head' : undefined
-  return pull.mergedAt !== null && canRepairBaseline(mapping) ? 'after-merge' : undefined
+    return { _tag: 'Open', repairOnHead: canRepairSelectedFindingOnHead(mapping, pull) }
+  return pull.mergedAt === null ? undefined : { _tag: 'Merged', headSha: pull.headSha }
+}
+
+/** The status one follow-up issue shows in place of its control. */
+function issueStatus(row: { state_tag: string, github_issue_number: number | null }, one: boolean): string {
+  if (row.state_tag === 'Published' && row.github_issue_number !== null)
+    return `Filed as #${row.github_issue_number}.`
+  if (row.state_tag === 'Failed')
+    return 'GitHub refused the issue.'
+  return one ? 'Filing an issue.' : 'Filing these as one issue.'
 }
 
 /** The newest confirmed canonical write, including closure after merge. */
@@ -161,6 +230,11 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
   }
 
   function statuses(subjectId: number, pullRequest: GitHubPullRequestItem): LoggedFindingStatus[] {
+    // A filed issue answers its finding on every later head, so it outranks a Repair row.
+    const issues = (database.prepare(`SELECT dedupe_key AS fingerprint, state_tag, github_issue_number
+      FROM follow_up_issues WHERE subject_id = ? AND kind = 'Finding'`)
+      .all(subjectId) as Array<{ fingerprint: string, state_tag: string, github_issue_number: number | null }>)
+      .map((row): LoggedFindingStatus => ({ _tag: 'Issue', fingerprint: row.fingerprint, status: issueStatus(row, true) }))
     const rows = database.prepare(`
       SELECT requests.fingerprint, requests.on_head, requests.dismissed, tasks.state_tag, tasks.progress_label, tasks.reason, tasks.evidence
       FROM logged_finding_requests AS requests LEFT JOIN tasks ON tasks.id = requests.task_id
@@ -174,7 +248,8 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
       reason: string | null
       evidence: string | null
     }>
-    return rows.map(row => ({
+    const repairs = rows.filter(row => !issues.some(issue => issue.fingerprint === row.fingerprint)).map((row): LoggedFindingStatus => ({
+      _tag: 'Repair',
       fingerprint: row.fingerprint,
       cancellable: row.on_head === 1 && row.dismissed === 0 && (row.state_tag === null || ['Queued', 'Running', 'Publishing'].includes(row.state_tag)),
       status: row.dismissed === 1
@@ -189,6 +264,34 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
                 ? row.on_head === 1 ? 'Publishing the fix.' : 'Opening the repair pull request.'
                 : row.state_tag === 'Queued' ? 'Queued.' : row.reason === null ? 'Action required.' : publicFailureCause(row.reason),
     }))
+    return [...issues, ...repairs]
+  }
+
+  /** The Merged issue's status for this head, once a person ticked it. */
+  function mergedIssue(subjectId: number, headSha: string): string | undefined {
+    const row = database.prepare(`SELECT state_tag, github_issue_number FROM follow_up_issues
+      WHERE subject_id = ? AND kind = 'Merged' AND dedupe_key = ?`)
+      .get(subjectId, headSha) as { state_tag: string, github_issue_number: number | null } | undefined
+    return row === undefined ? undefined : issueStatus(row, false)
+  }
+
+  function decorate(body: string, findings: ReviewFinding[], subjectId: number, reviewRunId: string, pull: GitHubPullRequestItem, controls: FollowUpControls | undefined): string {
+    return withLoggedFindingControls(body, findings, statuses(subjectId, pull), {
+      controls,
+      baseRef: pull.baseRef ?? undefined,
+      // A merged pull request keeps an unresolved inline finding in its list, so the Merged issue can carry it.
+      inline: new Set(inlineFindings(reviewRunId).filter(receipt => controls?._tag !== 'Merged' || receipt.resolved).map(receipt => receipt.fingerprint)),
+      mergedIssue: controls?._tag === 'Merged' ? mergedIssue(subjectId, pull.headSha) : undefined,
+    })
+  }
+
+  /** Stages one follow-up issue. A second tick on the same finding or head writes nothing. */
+  function stageIssue(input: { subjectId: number, kind: 'Finding' | 'Merged', dedupeKey: string, headSha: string, fingerprints: string[], issue: FollowUpIssue, requestedBy: string, at: string }): void {
+    database.prepare(`INSERT INTO follow_up_issues
+      (id, subject_id, kind, dedupe_key, head_sha, fingerprints, title, body, marker, requested_by, requested_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(subject_id, kind, dedupe_key) DO NOTHING`)
+      .run(options.digest(JSON.stringify(['follow-up-issue', input.subjectId, input.kind, input.dedupeKey])), input.subjectId, input.kind, input.dedupeKey, input.headSha, JSON.stringify(input.fingerprints), input.issue.title, input.issue.body, input.issue.marker, input.requestedBy, input.at, input.at)
   }
 
   const listLoggedFindingThreadSelections: LoggedFindingStore['listLoggedFindingThreadSelections'] = taskId => database.prepare(`SELECT DISTINCT repositories.github AS repository, subjects.github_number AS pullRequestNumber
@@ -250,40 +353,72 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         return false
       const mapping = JSON.parse(candidate.policy_json) as RepositoryMapping
       const pullRequest = JSON.parse(candidate.payload) as GitHubPullRequestItem
+      const findings = JSON.parse(candidate.findings) as ReviewFinding[]
       const before = normalizeLoggedFindingControls(input.before)
-      const onHead = input.inline === true || before.split('\n').includes(onHeadPickupHint)
+      const controls = followUpControls(mapping, pullRequest)
+      if (pullRequest.headSha !== input.headSha || typeof pullRequest.baseRef !== 'string' || controls === undefined)
+        return false
+
+      if (input._tag === 'MergedFollowUps') {
+        // The Merged control files one issue from the stored findings, never from comment text.
+        const rows = unfixedFollowUps(findings, statuses(candidate.subject_id, pullRequest))
+        if (controls._tag !== 'Merged' || input.inline === true || candidate.github_comment_id !== input.commentId
+          || !heldByGitHub(publishedBody(candidate), mapping.githubAccount, before) || rows.length === 0) {
+          return false
+        }
+        stageIssue({
+          subjectId: candidate.subject_id,
+          kind: 'Merged',
+          dedupeKey: pullRequest.headSha,
+          headSha: pullRequest.headSha,
+          fingerprints: rows.map(finding => finding.details.fingerprint),
+          issue: mergedFollowUpsIssue({ repository: candidate.repository, pullRequestNumber: candidate.github_number, headSha: pullRequest.headSha, findings: rows }),
+          requestedBy: input.requestedBy,
+          at: input.at,
+        })
+        return true
+      }
+
+      // A finding tick needs an open pull request. After merge, only the Merged control files.
+      if (controls._tag !== 'Open')
+        return false
+      const repairs = input.fingerprints
+      const issues = input.issueFingerprints ?? []
+      const dismissed = input.dismissedFingerprints ?? []
+      const logged = (fingerprint: string) => findings.find((finding): finding is LoggedReviewFinding => finding._tag === 'Logged' && finding.details.fingerprint === fingerprint)
       // The signed webhook already verifies the comment's actor and pull request.
       // Recognize each exact control while GitHub's write response is still pending.
-      const publishingInline = input.inline === true && database.prepare(`SELECT 1 FROM finding_thread_syncs
+      const inlineFingerprint = [...repairs, ...issues][0]
+      const publishingInline = input.inline === true && inlineFingerprint !== undefined && database.prepare(`SELECT 1 FROM finding_thread_syncs
         WHERE review_run_id = ? AND state_tag IN ('Pending', 'Running')`).get(candidate.review_run_id) !== undefined
-        && (JSON.parse(candidate.findings) as ReviewFinding[]).some(finding => finding._tag === 'Logged'
-          && finding.details.fingerprint === input.fingerprints[0]
-          && heldByGitHub(reviewFindingThreadBody(finding, pullRequest.headSha, pullRequest.baseRef ?? undefined), mapping.githubAccount, before))
+        && findings.some(finding => finding._tag === 'Logged'
+          && finding.details.fingerprint === inlineFingerprint
+          && heldByGitHub(reviewFindingThreadBody(finding, { headSha: pullRequest.headSha, baseRef: pullRequest.baseRef ?? undefined, repairOnHead: controls.repairOnHead }), mapping.githubAccount, before))
       // A delayed Dismiss addresses the same selection, even after its progress changes.
       // Accept only an exact issued control body from this Review and comment.
-      const delayedDismiss = input.inline !== true && input.fingerprints.length === 0 && (input.dismissedFingerprints?.length ?? 0) > 0
+      const delayedDismiss = input.inline !== true && repairs.length + issues.length === 0 && dismissed.length > 0
         && (heldByGitHub(candidate.body, mapping.githubAccount, before)
           || (database.prepare(`SELECT body FROM logged_finding_control_receipts WHERE review_run_id = ? AND comment_id = ?`)
             .all(candidate.review_run_id, input.commentId) as Array<{ body: string }>).some(receipt => isPublishedForm(before, receipt.body)))
       const authorizedComment = input.inline === true
-        ? input.fingerprints.length === 1 && (publishingInline || inlineFindings(candidate.review_run_id).some(receipt => !receipt.resolved
-          && receipt.commentId === input.commentId && receipt.fingerprint === input.fingerprints[0] && receipt.body === before))
+        ? inlineFingerprint !== undefined && repairs.length + issues.length === 1 && (publishingInline || inlineFindings(candidate.review_run_id).some(receipt => !receipt.resolved
+          && receipt.commentId === input.commentId && receipt.fingerprint === inlineFingerprint && receipt.body === before))
         : candidate.github_comment_id === input.commentId
           && (heldByGitHub(publishedBody(candidate), mapping.githubAccount, before) || delayedDismiss)
-      if (!authorizedComment || pullRequest.headSha !== input.headSha || typeof pullRequest.baseRef !== 'string'
-        || (onHead ? pickupTarget(mapping, pullRequest) !== 'head' : !canRepairBaseline(mapping))) {
+      if (!authorizedComment)
+        return false
+      // Only a finding this change added goes to Repair here, and Dismiss sits only beside that control.
+      const repairFindings = repairs.map(logged)
+      const dismissFindings = dismissed.map(logged)
+      const issueFindings = issues.map(logged)
+      if ([...repairFindings, ...dismissFindings, ...issueFindings].includes(undefined)
+        || [...repairFindings, ...dismissFindings].some(finding => finding !== undefined && followUpRoute(finding, controls.repairOnHead) !== 'Repair')
+        || (dismissed.length > 0 && (input.inline === true || dismissed.some(fingerprint => repairs.includes(fingerprint))))) {
         return false
       }
-      const findings = JSON.parse(candidate.findings) as ReviewFinding[]
-      const dismissed = input.dismissedFingerprints ?? []
-      if (dismissed.length > 0 && (!onHead || input.inline || dismissed.some(fingerprint => input.fingerprints.includes(fingerprint))))
-        return false
-      const selected = [...input.fingerprints, ...dismissed].map(fingerprint => findings.find((finding): finding is LoggedReviewFinding => finding._tag === 'Logged' && finding.details.fingerprint === fingerprint))
-      if (selected.includes(undefined))
-        return false
       database.exec('BEGIN IMMEDIATE')
       try {
-        for (const finding of selected) {
+        for (const finding of [...repairFindings, ...dismissFindings]) {
           if (finding === undefined)
             continue
           const fingerprint = finding.details.fingerprint
@@ -301,13 +436,28 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
           }
           database.prepare(`INSERT INTO logged_finding_requests
             (id, subject_id, head_sha, base_ref, fingerprint, finding_json, requested_by, requested_at, on_head, dismissed, inline_comment_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             ON CONFLICT(subject_id, head_sha, base_ref, fingerprint) DO UPDATE SET on_head = excluded.on_head, dismissed = excluded.dismissed,
               inline_comment_id = excluded.inline_comment_id
               WHERE logged_finding_requests.task_id IS NULL AND logged_finding_requests.on_head = 0 AND excluded.on_head = 1
-          `).run(options.digest(JSON.stringify([candidate.subject_id, input.headSha, pullRequest.baseRef, fingerprint])), candidate.subject_id, input.headSha, pullRequest.baseRef, fingerprint, JSON.stringify(finding), input.requestedBy, input.at, Number(onHead), Number(dismiss), input.inline ? input.commentId : null)
+          `).run(options.digest(JSON.stringify([candidate.subject_id, input.headSha, pullRequest.baseRef, fingerprint])), candidate.subject_id, input.headSha, pullRequest.baseRef, fingerprint, JSON.stringify(finding), input.requestedBy, input.at, Number(dismiss), input.inline ? input.commentId : null)
           if (!dismiss)
             recordLoggedFindingSignal(database, { subjectId: candidate.subject_id, headSha: input.headSha, fingerprint, reviewRunId: candidate.review_run_id, at: input.at })
+        }
+        for (const finding of issueFindings) {
+          if (finding === undefined)
+            continue
+          stageIssue({
+            subjectId: candidate.subject_id,
+            kind: 'Finding',
+            dedupeKey: finding.details.fingerprint,
+            headSha: input.headSha,
+            fingerprints: [finding.details.fingerprint],
+            issue: followUpIssue({ repository: candidate.repository, pullRequestNumber: candidate.github_number, headSha: input.headSha, finding }),
+            requestedBy: input.requestedBy,
+            at: input.at,
+          })
+          recordLoggedFindingSignal(database, { subjectId: candidate.subject_id, headSha: input.headSha, fingerprint: finding.details.fingerprint, reviewRunId: candidate.review_run_id, at: input.at })
         }
         database.exec('COMMIT')
         return true
@@ -337,9 +487,15 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
           ORDER BY requests.requested_at, requests.id
         `).all() as unknown as Array<{ id: string, subject_id: number, on_head: number, current_revision_id: string, policy_json: string, payload: string }>
         for (const row of rows) {
-          if (pickupTarget(JSON.parse(row.policy_json) as RepositoryMapping, JSON.parse(row.payload) as GitHubPullRequestItem) !== (row.on_head === 1 ? 'head' : 'after-merge')
-            || database.prepare(`SELECT 1 FROM tasks WHERE subject_id = ? AND kind = 'review_fix'
-              AND state_tag IN ('Queued', 'Running', 'Publishing')`).get(row.subject_id) !== undefined) {
+          const mapping = JSON.parse(row.policy_json) as RepositoryMapping
+          const pull = JSON.parse(row.payload) as GitHubPullRequestItem
+          // A selection made before merge for the default branch still runs after merge.
+          // No tick creates one now: a finding outside this change files an issue instead.
+          const authorized = row.on_head === 1
+            ? canRepairSelectedFindingOnHead(mapping, pull)
+            : pull.mergedAt !== null && canRepairBaseline(mapping)
+          if (!authorized || database.prepare(`SELECT 1 FROM tasks WHERE subject_id = ? AND kind = 'review_fix'
+            AND state_tag IN ('Queued', 'Running', 'Publishing')`).get(row.subject_id) !== undefined) {
             continue
           }
           const taskId = `logged-finding:${row.id}`
@@ -374,21 +530,16 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
       if (row === undefined)
         return body
       const pull = JSON.parse(row.payload) as GitHubPullRequestItem
-      const target = pickupTarget(JSON.parse(row.policy_json) as RepositoryMapping, pull)
-      return withLoggedFindingControls(body, JSON.parse(row.findings) as ReviewFinding[], statuses(row.subject_id, pull), { target, baseRef: pull.baseRef ?? undefined, inline: new Set(inlineFindings(reviewRunId).filter(receipt => target !== 'after-merge' || receipt.resolved).map(receipt => receipt.fingerprint)) })
+      return decorate(body, JSON.parse(row.findings) as ReviewFinding[], row.subject_id, reviewRunId, pull, followUpControls(JSON.parse(row.policy_json) as RepositoryMapping, pull))
     },
     claimLoggedFindingComment(workerId, at, leaseMilliseconds, controls = () => true) {
       for (const candidate of candidates()) {
         const pullRequest = JSON.parse(candidate.payload) as GitHubPullRequestItem
-        if (!canRepairBaseline(JSON.parse(candidate.policy_json) as RepositoryMapping))
+        const mapping = JSON.parse(candidate.policy_json) as RepositoryMapping
+        if (!canFileFollowUpIssue(mapping))
           continue
         const expectedBody = publishedBody(candidate)
-        const target = controls(candidate.repository) ? pickupTarget(JSON.parse(candidate.policy_json) as RepositoryMapping, pullRequest) : undefined
-        const body = withLoggedFindingControls(candidate.body, JSON.parse(candidate.findings) as ReviewFinding[], statuses(candidate.subject_id, pullRequest), {
-          target,
-          baseRef: pullRequest.baseRef ?? undefined,
-          inline: new Set(inlineFindings(candidate.review_run_id).filter(receipt => target !== 'after-merge' || receipt.resolved).map(receipt => receipt.fingerprint)),
-        })
+        const body = decorate(candidate.body, JSON.parse(candidate.findings) as ReviewFinding[], candidate.subject_id, candidate.review_run_id, pullRequest, controls(candidate.repository) ? followUpControls(mapping, pullRequest) : undefined)
         if (body === expectedBody)
           continue
         const row = database.prepare(`INSERT INTO logged_finding_comments
@@ -403,7 +554,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         if (row !== undefined) {
           const receipt = database.prepare('INSERT OR IGNORE INTO logged_finding_control_receipts (review_run_id, comment_id, body) VALUES (?, ?, ?)')
           for (const issued of [expectedBody, body])
-            receipt.run(candidate.review_run_id, candidate.github_comment_id, normalizeLoggedFindingControls(githubAccountBody(issued, (JSON.parse(candidate.policy_json) as RepositoryMapping).githubAccount)))
+            receipt.run(candidate.review_run_id, candidate.github_comment_id, normalizeLoggedFindingControls(githubAccountBody(issued, mapping.githubAccount)))
           return { subjectId: candidate.subject_id, repository: candidate.repository, pullRequestNumber: candidate.github_number, headSha: pullRequest.headSha, commentId: candidate.github_comment_id, sourceBody: candidate.body, expectedBody, body, workerId, fence: row.fence }
         }
       }
@@ -420,6 +571,56 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         WHERE subject_id = ? AND worker_id = ? AND fence = ? AND lease_expires_at > ?`)
         .run(command.subjectId, command.workerId, command.fence, at)
         .changes === 1
+    },
+    claimFollowUpIssue(workerId, at, leaseMilliseconds) {
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        const row = database.prepare(`
+          SELECT issues.id, issues.fence, issues.title, issues.body, issues.marker, subjects.github_number,
+            repositories.github AS repository, repositories.policy_json
+          FROM follow_up_issues AS issues
+          JOIN subjects ON subjects.id = issues.subject_id
+          JOIN repositories ON repositories.id = subjects.repository_id
+          WHERE (issues.state_tag = 'Pending' OR (issues.state_tag = 'Running' AND issues.lease_expires_at <= ?))
+            AND repositories.enabled = 1 AND repositories.paused = 0 AND repositories.ownership != 'external'
+            ${options.writeAuthoritySql}
+            AND (SELECT state_tag FROM agent_control WHERE singleton = 1) = 'Running'
+          ORDER BY issues.requested_at, issues.id LIMIT 1
+        `).get(at) as { id: string, fence: number, title: string, body: string, marker: string, github_number: number, repository: string, policy_json: string } | undefined
+        if (row === undefined) {
+          database.exec('COMMIT')
+          return null
+        }
+        const fence = row.fence + 1
+        database.prepare(`UPDATE follow_up_issues SET state_tag = 'Running', worker_id = ?, fence = ?, lease_expires_at = ?,
+          attempts = attempts + 1, updated_at = ? WHERE id = ?`)
+          .run(workerId, fence, new Date(new Date(at).getTime() + leaseMilliseconds).toISOString(), at, row.id)
+        database.exec('COMMIT')
+        return { id: row.id, repository: row.repository, repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping, pullRequestNumber: row.github_number, title: row.title, body: row.body, marker: row.marker, workerId, fence }
+      }
+      catch (error) {
+        database.exec('ROLLBACK')
+        throw error
+      }
+    },
+    completeFollowUpIssue(input) {
+      return database.prepare(`UPDATE follow_up_issues SET state_tag = 'Published', github_issue_number = ?, github_url = ?, reason = NULL,
+          worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?`)
+        .run(input.issueNumber, input.url, input.at, input.id, input.workerId, input.fence)
+        .changes === 1
+    },
+    failFollowUpIssue(input) {
+      const row = database.prepare(`SELECT attempts FROM follow_up_issues WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?`)
+        .get(input.id, input.workerId, input.fence) as { attempts: number } | undefined
+      if (row === undefined)
+        return 'Unchanged'
+      // A refusal no retry can change stops here, and so does a spent budget.
+      const terminal = !mayRetryFailure({ message: input.reason, status: input.status }) || row.attempts >= followUpIssueAttempts
+      database.prepare(`UPDATE follow_up_issues SET state_tag = ?, reason = ?, worker_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?`)
+        .run(terminal ? 'Failed' : 'Pending', input.reason, input.at, input.id, input.workerId, input.fence)
+      return terminal ? 'Failed' : 'Deferred'
     },
   }
 }

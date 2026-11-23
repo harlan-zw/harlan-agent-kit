@@ -284,7 +284,7 @@ describe('logged finding picked up', () => {
       impact: 40,
       summary: 'The parser drops buffered bytes.',
       nextAction: 'Preserve buffered bytes between chunks.',
-      details: { fingerprint: 'f'.repeat(64), identity: 'buffered bytes', location: { path: 'src/parser.ts', line: 42 }, proof: 'A split sequence loses bytes.' },
+      details: { fingerprint: 'f'.repeat(64), identity: 'buffered bytes', location: { path: 'src/parser.ts', line: 42 }, proof: 'A split sequence loses bytes.', scope: 'change' as const },
     }
     const pullRequest = pullRequestItem({ mergeState: 'clean', headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40) })
     const observation = store.recordObservation({ externalId: 'open', observedAt: at(1), source: 'poll', subject: pullRequest })
@@ -297,7 +297,7 @@ describe('logged finding picked up', () => {
     store.completeWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: at(2), evidence: 'review' })
     const body = store.decorateLoggedFindings(terminalComment({ headSha: pullRequest.headSha, baseSha: pullRequest.baseSha, gates: passed, findings: [finding], confidence: 95, reportedChecks: [], repository: mapping.github }), 'review')
     store.recordReviewPublication({ id: 'publication', reviewRunId: 'review', body, at: at(2), result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' } })
-    const request = { repository: mapping.github, pullRequestNumber: pullRequest.number, headSha: pullRequest.headSha, commentId: 42, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]', fingerprints: [finding.details.fingerprint], before: body, requestId: 'delivery', at: at(3) }
+    const request = { _tag: 'Findings' as const, repository: mapping.github, pullRequestNumber: pullRequest.number, headSha: pullRequest.headSha, commentId: 42, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]', fingerprints: [finding.details.fingerprint], before: body, requestId: 'delivery', at: at(3) }
 
     expect(store.requestLoggedFindingPickup(request)).toBe(true)
     expect(store.requestLoggedFindingPickup({ ...request, requestId: 'redelivery', at: at(4) })).toBe(true)

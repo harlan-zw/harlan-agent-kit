@@ -362,7 +362,7 @@ describe('a stopped Task and a pull request that left', () => {
 
 describe('findings beside the code', () => {
   it('renders an issue, a follow-up with its control, a fixed thread, and the native review', () => {
-    const thread = reviewFindingThreadBody(issue, head, 'main')
+    const thread = reviewFindingThreadBody(issue, { headSha: head, baseRef: 'main', repairOnHead: true })
     expect(thread).toMatchInlineSnapshot(`
       "<!-- harlan-agent-kit:pr-triage -->
       <!-- review-finding: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb aG9tZS11bnNldA -->
@@ -374,7 +374,7 @@ describe('findings beside the code', () => {
 
       <sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated review, not Harlan's · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>"
     `)
-    expect(reviewFindingThreadBody(followUp(42, 'Provisioning fails when Skills sit on a separate mount', 3), head, 'main')).toMatchInlineSnapshot(`
+    expect(reviewFindingThreadBody(followUp(42, 'Provisioning fails when Skills sit on a separate mount', 3, 'change'), { headSha: head, baseRef: 'main', repairOnHead: true })).toMatchInlineSnapshot(`
       "<!-- harlan-agent-kit:pr-triage -->
       <!-- review-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff42 UHJvdmlzaW9uaW5nIGZhaWxzIHdoZW4gU2tpbGxzIHNpdCBvbiBhIHNlcGFyYXRlIG1vdW50 -->
       <!-- review-finding-disposition: logged -->

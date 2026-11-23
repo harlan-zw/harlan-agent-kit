@@ -11,6 +11,7 @@ import { approvalLabels } from './approval-labels.ts'
 import { hasAutoMergeLabel } from './auto-merge.ts'
 import { isControllerOwned, pullRequestPurpose } from './baseline-repair-state.ts'
 import { candidateFingerprintMarker, hasRoutineIssueLabel } from './candidate-issue-controller.ts'
+import { hasFollowUpIssueLabel } from './follow-up-issue.ts'
 import { githubAccountBody } from './github-account.ts'
 import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
@@ -171,6 +172,16 @@ export function isEligibleGitHubSubjectAuthor(
   if (subject.kind === 'issue')
     return subject.routineFiled || !isAutomatedGitHubActor(actor)
   return !isAutomatedGitHubActor(actor, subject.allowedAuthors)
+}
+
+/**
+ * True for an issue this service filed: a Routine's Candidate or a follow-up tick.
+ *
+ * The App authors both, so the author allowlist would hide them. Each carries
+ * a label the service set, and Harlan or a Routine asked for each one.
+ */
+function serviceFiledIssue(labels: readonly string[]): boolean {
+  return hasRoutineIssueLabel(labels) || hasFollowUpIssueLabel(labels)
 }
 
 export function isIssueAtOrAfterCutoff(createdAt: string, cutoff: string): boolean {
@@ -425,7 +436,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
           response.data,
           comments,
           labels,
-          hasRoutineIssueLabel(labels),
+          serviceFiledIssue(labels),
           isRoutineTrackingIssue({ repository: repository.github, account: repository.githubAccount, title: response.data.title, body: response.data.body, labels }),
           options.actorLogin(repository),
         ))
@@ -535,7 +546,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
             // An issue a Routine filed carries the routine label, so the
             // author allowlist never hides it from triage again.
             const labels = labelNames(issue.labels)
-            const routineFiled = hasRoutineIssueLabel(labels)
+            const routineFiled = serviceFiledIssue(labels)
             const routineTracking = isRoutineTrackingIssue({
               account: repository.githubAccount,
               repository: repository.github,
@@ -645,6 +656,11 @@ export interface GitHubIssuePublisher {
     repository: RepositoryMapping
     fingerprint: string
   }, signal?: AbortSignal) => Promise<Result<{ number: number, url: string } | null, GitHubReadError>>
+  /** Finds the open issue whose body carries one exact hidden marker, after a create whose reply was lost. */
+  findOpenIssueByMarker: (input: {
+    repository: RepositoryMapping
+    marker: string
+  }, signal?: AbortSignal) => Promise<Result<{ number: number, url: string } | null, GitHubReadError>>
   /** Finds a Routine log or one exact daily check-in, including closed issues. */
   findRoutineTrackingIssue: (input: {
     repository: RepositoryMapping
@@ -680,6 +696,34 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
         userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0',
       })
     return ok(client)
+  }
+
+  const findOpenIssueByMarker: GitHubIssuePublisher['findOpenIssueByMarker'] = async (input, signal) => {
+    const { owner, repo } = repositoryParts(input.repository.github)
+    const octokit = await itemWriteClient(input.repository.github, signal)
+    if (octokit._tag === 'Err')
+      return octokit
+    const requestOptions = signal === undefined ? {} : { request: { signal } }
+    return octokit.value.paginate(octokit.value.rest.issues.listForRepo, {
+      owner,
+      repo,
+      state: 'open',
+      per_page: 100,
+      ...requestOptions,
+    })
+      .then((rows): Result<{ number: number, url: string } | null, GitHubReadError> => {
+        const row = rows.find(row =>
+          row.state === 'open' && row.pull_request === undefined && typeof row.body === 'string' && row.body.includes(input.marker))
+        return ok(row === undefined ? null : { number: row.number, url: row.html_url })
+      })
+      .catch((error: unknown): Result<{ number: number, url: string } | null, GitHubReadError> => {
+        const status = errorStatus(error)
+        return err({
+          repository: input.repository.github,
+          message: error instanceof Error ? error.message : 'GitHub request failed.',
+          ...(status === undefined ? {} : { status }),
+        })
+      })
   }
 
   return {
@@ -745,34 +789,8 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
         })
     },
 
-    async findOpenIssueByFingerprint(input, signal) {
-      const { owner, repo } = repositoryParts(input.repository.github)
-      const octokit = await itemWriteClient(input.repository.github, signal)
-      if (octokit._tag === 'Err')
-        return octokit
-      const requestOptions = signal === undefined ? {} : { request: { signal } }
-      return octokit.value.paginate(octokit.value.rest.issues.listForRepo, {
-        owner,
-        repo,
-        state: 'open',
-        per_page: 100,
-        ...requestOptions,
-      })
-        .then((rows): Result<{ number: number, url: string } | null, GitHubReadError> => {
-          const marker = candidateFingerprintMarker(input.fingerprint)
-          const row = rows.find(row =>
-            row.state === 'open' && row.pull_request === undefined && typeof row.body === 'string' && row.body.includes(marker))
-          return ok(row === undefined ? null : { number: row.number, url: row.html_url })
-        })
-        .catch((error: unknown): Result<{ number: number, url: string } | null, GitHubReadError> => {
-          const status = errorStatus(error)
-          return err({
-            repository: input.repository.github,
-            message: error instanceof Error ? error.message : 'GitHub request failed.',
-            ...(status === undefined ? {} : { status }),
-          })
-        })
-    },
+    findOpenIssueByFingerprint: async (input, signal) => findOpenIssueByMarker({ repository: input.repository, marker: candidateFingerprintMarker(input.fingerprint) }, signal),
+    findOpenIssueByMarker,
     async findRoutineTrackingIssue(input, signal) {
       const { owner, repo } = repositoryParts(input.repository.github)
       const octokit = await itemWriteClient(input.repository.github, signal)

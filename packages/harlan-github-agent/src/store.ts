@@ -148,7 +148,7 @@ import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
 import { createImplicitSignalStore, implicitSignalSchema, isAgentPullRequest, recordClosureSignal, recordHeadChangeSignal } from './implicit-signal-store.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
-import { createLoggedFindingStore, loggedFindingSchema } from './logged-finding-store.ts'
+import { createLoggedFindingStore, followUpIssueSchema, loggedFindingSchema } from './logged-finding-store.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
 import { createPaybackStore } from './payback-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON, triageDecider } from './pull-request-triage.ts'
@@ -7605,7 +7605,12 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${addChecked} ${addNotChecked} PRAGMA user_version = ${target};`)
     version = target
   }
-  if (version === 108)
+  if (version === 108) {
+    // The table is created only if missing, so a rewind or a renumbered replay is safe.
+    applyMigration(database, `${followUpIssueSchema} PRAGMA user_version = 109;`)
+    version = 109
+  }
+  if (version === 109)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
