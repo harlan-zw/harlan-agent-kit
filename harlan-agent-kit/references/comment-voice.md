@@ -51,7 +51,7 @@ This section owns the words. Each reply starts with `🤖 Harlan Agent Kit Agent
 - **Answered:** the evidence first, in one or two sentences, then `Not changed.`
 - **Follow-up:** say where the work went. Use a fact you can check when you reply:
   - `tracked in #123.` when that issue exists.
-  - `Repair fixes this in this pull request.` only on a Service finding thread whose Repair is selected.
+  - `Repair fixes this in this pull request.` only on a Service finding thread whose Repair is still active.
   - `not changed in this pull request: <reason, in one clause>.` when the work goes nowhere.
     Name the concrete reason, such as the cost or the missing evidence.
 

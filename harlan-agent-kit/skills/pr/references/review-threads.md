@@ -111,7 +111,8 @@ harlan-github-agent control watch-pr --repository OWNER/REPO --number NUMBER --u
 
 Continue only when `headSha` is your pushed SHA and the `adversarial_review` Task is `Queued` or `Running`.
 In the window, you may post a Follow-up or Fixed reply. Leave every Service finding thread open.
-If the list shows `selected` for that thread, the Follow-up reply is `🤖 Harlan Agent Kit Agent: Repair fixes this in this pull request.`
+If the thread's Repair is still active, the Follow-up reply is `🤖 Harlan Agent Kit Agent: Repair fixes this in this pull request.`
+Active means the control is ticked, or the `Repair:` line reads `Queued.`, a step in progress, or `Publishing the fix.`
 Otherwise use a Follow-up form from section 3.
 Outside the window, leave Service threads open without a reply. A reply would start another Review.
 The finding's own text already marks a Logged finding as an optional follow-up.

@@ -65,7 +65,8 @@ Archive: `<archive file name>`
 3. Put only changes in the open body. Collapse unchanged work and count it.
 4. Report what a prompt item found. Never report how it collected.
 5. Keep repository paths, request counts, and the archive file name inside `<details>`.
-   Follow the [comment voice](../../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, no tokens, and no credential file names.
+   Publish no credential file names.
+   Follow the [comment voice](../../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 6. Write no confidence score. Write no untested-path line.
 7. Never narrate your own process. A wrong first guess belongs in the archive report.
 8. Sentry gets one table row, plus a line for each new issue. Full dispositions go in the ledger.
