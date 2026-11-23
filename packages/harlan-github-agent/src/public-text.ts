@@ -423,16 +423,19 @@ function detailsInAligned(detect: Detectors, text: string): Array<{ line: number
   })
 }
 
-/** Rendered lines retain the full source span when HTML removes line breaks. */
+/** Lines changed by HTML removal retain their full source spans. */
 function htmlLines(text: string): Array<{ text: string, first: number, last: number }> {
   const lines: Array<{ text: string, first: number, last: number }> = []
   let line = 0
   let current = { text: '', first: 0, last: 0 }
+  let stripped = false
   const append = (chunk: string) => {
     const parts = chunk.split('\n')
     parts.forEach((part, index) => {
       if (index > 0) {
-        lines.push(current)
+        if (stripped)
+          lines.push(current)
+        stripped = false
         line++
         current = { text: '', first: line, last: line }
       }
@@ -451,22 +454,40 @@ function htmlLines(text: string): Array<{ text: string, first: number, last: num
     }
     line += lineBreaks(text.slice(match.index, markup.lastIndex))
     current.last = line
+    stripped = true
     from = markup.lastIndex
   }
   append(text.slice(from))
-  lines.push(current)
+  if (stripped)
+    lines.push(current)
   return lines
 }
 
-/** Scan both aligned views and rendered lines whose HTML crosses source lines. */
+/** Parse HTML before decoding attribute entities, including each encoded transport layer. */
 function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: PrivateDetailHit }> {
   const found = detailsInAligned(detect, text)
-  for (const rendered of htmlLines(aligned(text, decodeAll))) {
-    if (rendered.first === rendered.last)
-      continue
-    for (const { hit } of detailsInAligned(detect, rendered.text)) {
-      for (let line = rendered.first; line <= rendered.last; line++)
-        found.push({ line, hit })
+  const decoded = aligned(text, decodeAll)
+  const sources = new Set([text, aligned(text, decodedFindingIdentities), aligned(decoded, decodedFindingIdentities)])
+  const views = new Set([decoded])
+  // Native reviews encode their payload. Preserve HTML boundaries at every layer.
+  // Decoding all layers first can turn an attribute entity into a closing quote.
+  for (const source of sources) {
+    views.add(source)
+    let layer = source
+    for (let round = 0; round < 3; round++) {
+      const next = aligned(layer, decodeHTML)
+      if (next === layer)
+        break
+      views.add(next)
+      layer = next
+    }
+  }
+  for (const view of views) {
+    for (const rendered of htmlLines(view)) {
+      for (const { hit } of detailsInAligned(detect, rendered.text)) {
+        for (let line = rendered.first; line <= rendered.last; line++)
+          found.push({ line, hit })
+      }
     }
   }
   return found

@@ -214,6 +214,21 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes source lines joined by HTML containing entity-encoded quotes before sending a %s', async (writer) => {
+    for (const markup of ['<span title="&quot; > context\nmore context"></span>', '<span title=\'&#39; > context\nmore context\'></span>', '<span title="&#x22; > context\nmore context"></span>', '<span title="&quot; > context"></span>']) {
+      for (const detail of [`/home/har${markup}lan/notes/acquisition.pdf`, `notes.${markup}localhost/acquisition`]) {
+        const input = `Public introduction.\nRead ${detail} now.\nPublic conclusion.`
+        const store = journal()
+        const guard = createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} })
+
+        const sent = await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async body => body)
+
+        expect(sent).toBe(`Public introduction.\n${Array.from({ length: markup.split('\n').length }).fill(removed).join('\n')}\nPublic conclusion.`)
+        expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+      }
+    }
+  })
+
   it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes source lines joined by HTML with quoted angle brackets before sending a %s', async (writer) => {
     for (const markup of ['<span\ntitle="a > b"></span>', '<span title=\'a < b\'\ndata-x></span>', '<span title="a >\nb < c"></span>']) {
       for (const detail of [`/home/har${markup}lan/notes/acquisition.pdf`, `notes.${markup}localhost/acquisition`]) {
@@ -485,6 +500,7 @@ describe('the publish boundary', () => {
   })
 
   it.each([
+    '/home/har<span title="&quot; > context\nmore context"></span>lan/notes/acquisition.pdf',
     '__~/notes/fixture.md__',
     '_$HOME/scratch/fixture.log_',
     '__/home/agent/fixture.log__',
@@ -504,7 +520,7 @@ describe('the publish boundary', () => {
 
     expect(await publisher.createComment({ repository: repositoryMapping(), issueNumber: 24, body: input })).toEqual(ok({ id: 7 }))
 
-    expect(sent).toEqual([removed])
+    expect(sent).toEqual([input.split('\n').map(() => removed).join('\n')])
     expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
   })
 
@@ -672,6 +688,7 @@ describe('the publish boundary', () => {
   })
 
   it.each([
+    '/home/har<span title="&quot; > context\nmore context"></span>lan/notes/acquisition.pdf',
     'The trace in ~/pkg/cache_trace/run.log shows two locales sharing one key.',
     'The cache at /srv/agent_home/cache is stale.',
     'The file `~/notes/client handover/a.pdf` is stale.',
@@ -765,7 +782,7 @@ ${line}`
 }
 
 describe('a review comment on a line', () => {
-  it.each(['~/notes/private-evidence.md', '/home/harlan/public/../notes/private-evidence.md', 'https://notes.localhost/private-evidence', 'context\n~/notes/private-evidence.md'])('protects an identity on inline creation and later edits: %s', async (identity) => {
+  it.each(['~/notes/private-evidence.md', '/home/harlan/public/../notes/private-evidence.md', 'https://notes.localhost/private-evidence', 'context\n~/notes/private-evidence.md', '/home/har<span title="&quot; > context\nmore context"></span>lan/notes/private-evidence.md'])('protects an identity on inline creation and later edits: %s', async (identity) => {
     const store = journal()
     const written: string[] = []
     const write = async (input: { body: string }) => {
