@@ -745,8 +745,10 @@ Each comment is one run log entry. Its heading carries one dot and the run time 
 🟠 means a person must act: the run reported a Candidate, stated an AMBER or RED verdict, listed a READY pull request, or failed. ⚪ marks a quiet run.
 A counts table gives Found, New, and Known. It adds Coverage when the run states a verdict.
 An owner table names the issue that holds each Candidate the run reported, new or known.
+A Candidate without an Agent-written title reads Untitled proposal. Its claim never reaches the run log.
 Candidates the controller dropped fold under Dropped proposals. The fold counts them but names no cause.
-The opening prose of the Agent report folds under Summary, up to 600 characters. A line that names a local path or host never reaches it.
+The opening prose of the Agent report folds under Summary, up to 600 characters. Fences, comments, and HTML elements never count as prose.
+A line that names a local path, a private network host, or a dashboard origin host never reaches the run log.
 The full report stays in the private archive. The Dashboard History page shows it.
 A failed run names its cause. The ready digest prints its list under the heading.
 A skipped run writes nothing, and so does a run with nothing to check. The Dashboard lists both.
