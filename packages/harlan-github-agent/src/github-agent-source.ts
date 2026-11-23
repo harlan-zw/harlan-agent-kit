@@ -27,7 +27,7 @@ import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { collectJobWorkflowContext } from './job-workflow-context.ts'
 import { normalizeLoggedFindingControls, withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
-import { isPublishedForm, preservePublishedRedactions, publicBody } from './public-text.ts'
+import { isPublishedForm, keepRemovedLines, preservePublishedRedactions, publicBody } from './public-text.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
@@ -1440,8 +1440,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
 
     async editReviewFindingComment(repository, comment, bodyText, signal, authorize) {
       // The finding thread sync calls this on every pass. `send` reports only
-      // the write, never a body GitHub already holds.
-      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'review comment' }, githubAccountBody(bodyText, repository.githubAccount))
+      // the write, never a body GitHub already holds. A line GitHub shows
+      // removed stays removed, whatever the deny list says now.
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'review comment' }, keepRemovedLines(comment.body, githubAccountBody(bodyText, repository.githubAccount)))
       const body = outgoing.text
       if (normalizeLoggedFindingControls(comment.body) === body)
         return ok(comment)

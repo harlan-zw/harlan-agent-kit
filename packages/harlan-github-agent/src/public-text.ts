@@ -44,12 +44,18 @@ export const DASHBOARD_LOCAL_HOST = 'harlan-github-agent.localhost'
 /** Loopback names a finding may describe. They never name a private host on their own. */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 
-/** A root with fewer segments would redact paths that every Linux host shares. */
+/**
+ * Top-level directories every Linux host shares. Denying one would remove
+ * ordinary lines, so a root equal to one of these never counts. A dedicated
+ * top-level root such as `/worker-data` does.
+ */
+const SHARED_ROOTS = new Set(['/bin', '/boot', '/dev', '/etc', '/home', '/lib', '/lib64', '/media', '/mnt', '/opt', '/proc', '/root', '/run', '/sbin', '/snap', '/srv', '/sys', '/tmp', '/usr', '/var'])
+
 function privateRoot(path: string): string | null {
   if (!isAbsolute(path))
     return null
   const root = normalize(path).replace(/\/+$/, '')
-  return root.split('/').filter(Boolean).length >= 2 ? root : null
+  return root === '' || SHARED_ROOTS.has(root) ? null : root
 }
 
 /** Every way a body can spell one root: absolute, and from the home directory when it sits there. */
@@ -147,6 +153,8 @@ function literalPattern(value: string): string {
  * `~/scratch_old` do not.
  */
 const ENTRY_END = String.raw`(?![\w-]|\.[\w-]|&#95;)`
+/** Where a host ends. A host name holds no underscore, so `__host__` emphasis still matches. */
+const HOST_END = String.raw`(?![a-z\d-]|\.[a-z\d-])`
 /**
  * A URL authority: any scheme, or none, then `//`. A host after it is the
  * URL's own host and is private. A bare host after a single slash is a path
@@ -178,7 +186,7 @@ function detector(details: PrivateDetails): Detector {
     // User information before an at sign is part of the line, so it goes with it.
     link: hosts.length === 0
       ? null
-      : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-]))(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})${ENTRY_END}`, 'gi'),
+      : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-]))(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})${HOST_END}`, 'gi'),
   }
 }
 
@@ -296,6 +304,23 @@ export function preservePublishedRedactions(published: string, source: string, n
   return removed.size === 0 ? next : next.split('\n').map(line => removed.get(line) ?? line).join('\n')
 }
 
+/**
+ * Keeps removed each line GitHub shows removed, by position.
+ *
+ * For a comment the controller rebuilds whole from the same finding on every
+ * pass, where the Journal keeps no earlier source text. A line in `next` stays
+ * removed when GitHub shows a removed line of the same shape at its position,
+ * so a deny list change cannot publish it again.
+ */
+export function keepRemovedLines(published: string, next: string): string {
+  if (!published.includes(REMOVED_LINE))
+    return next
+  const publishedLines = published.split('\n')
+  return next.split('\n').map((line, index) => {
+    const shown = publishedLines[index]
+    return shown !== undefined && shown !== line && isRemovedFormOf(shown, line) ? shown : line
+  }).join('\n')
+}
 
 /** What a published body is, in GitHub's words and the GLOSSARY's. */
 export type PublicTextWriter

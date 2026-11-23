@@ -462,3 +462,59 @@ describe('ported from the Service Repair 0b4efc07', () => {
     expect(redactPrivateDetails(encodeEntities(input), details).text).toBe(removed)
   })
 })
+
+describe('review findings on #754, fourth round', () => {
+  it('keeps a removed line removed when an inline review comment is rebuilt after the deny list changes', async () => {
+    const store = journal()
+    const written: string[] = []
+    const source = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: [], serviceOrigins: ['https://hogwild.tail1234.ts.net'] })
+    const restarted = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: [], serviceOrigins: ['https://other.tail1234.ts.net'] })
+    const thread = '<!-- harlan-agent-kit:pr-triage -->\n**Minor (40/100): The cache leaks**\n\nSee https://hogwild.tail1234.ts.net/items/24 for the trace.\n\nReset the cache.'
+    const published = publicBody({ details: source, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'review comment' }, thread).text
+    const client = {
+      rest: { pulls: {
+        getReviewComment: async () => ({ data: { id: 101, body: published, user: { login: 'harlan-github-agent[bot]' } } }),
+        updateReviewComment: async (input: { body: string }) => {
+          written.push(input.body)
+          return { data: { id: 101, body: input.body } }
+        },
+      } },
+    } as unknown as Octokit
+
+    await agentSource(client, store, restarted).editReviewFindingComment!(repositoryMapping(), { id: 101, body: published }, `${thread}\n\n✅ Addressed in commit [abc1234](https://github.com/harlan-zw/example/commit/abc1234)`, new AbortController().signal, () => ok(undefined))
+
+    expect(written).toHaveLength(1)
+    expect(written[0]).toContain(removed)
+    expectNoFragment(written[0]!)
+  })
+
+  it.each([
+    'Open **https://harlan-github-agent.localhost** now.',
+    'Open **https://harlan-github-agent.localhost/tasks/1** now.',
+    'Open __https://notes.localhost__ now.',
+    'Open ``~/notes/a`b(1).md`` now.',
+  ])('removes a line with emphasis or a double-backtick span: %s', (line) => {
+    expect(redactPrivateDetails(line, details).text).toBe(removed)
+  })
+
+  it('removes the destination line of a Markdown link that breaks after its parenthesis', () => {
+    const redacted = redactPrivateDetails('Read [x](\nhttps://notes.localhost/docs/a(b)c.md) now.', details)
+
+    expect(redacted.text).toBe(`Read [x](\n${removed}`)
+    expectNoFragment(redacted.text)
+  })
+
+  it('protects a dedicated top-level worker home, and never a system directory', () => {
+    const topLevel = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: ['/worker-data', '/home', '/tmp'], serviceOrigins: [] })
+
+    expect(redactPrivateDetails('Cache at /worker-data/cache.', topLevel).text).toBe(removed)
+    expect(redactPrivateDetails('Files in /home/other and /tmp/x stay.', topLevel).text).toBe('Files in /home/other and /tmp/x stay.')
+  })
+
+  it.each(['](https://notes.localhost/a', '[x](https://notes.localhost/a)', '](https://notes.localhost/a)\n'])('redacts 65,536 characters of repeated private links %j in linear time', (unit) => {
+    const text = unit.repeat(Math.ceil(65_536 / unit.length)).slice(0, 65_536)
+    const started = performance.now()
+    redactPrivateDetails(text, details)
+    expect(performance.now() - started).toBeLessThan(100)
+  })
+})
