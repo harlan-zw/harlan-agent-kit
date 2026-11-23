@@ -23,6 +23,9 @@ const REVERT_TITLE = /^(?:revert(?:\([^)]*\))?!?:|(?:[a-z]+(?:\([^)]*\))?!?:\s*)
  * Read the shapes found in default branch history: GitHub's Revert button,
  * `git revert`, and a title that names one pull request. Prose that only
  * mentions a revert never counts, because a wrong match blames a Review run.
+ *
+ * An exact line wins over the title. A `git revert` title quotes the original
+ * subject, and that subject can name an unrelated issue or pull request.
  */
 export function revertTarget(input: { repository: string, title: string, body: string }): RevertTarget | null {
   const button = REVERTS_LINE.exec(input.body)
@@ -32,13 +35,11 @@ export function revertTarget(input: { repository: string, title: string, body: s
       ? { _tag: 'PullRequest', number: Number(button[2]) }
       : null
   }
-  if (REVERT_TITLE.test(input.title)) {
-    const numbers = new Set([...input.title.matchAll(/#(\d+)\b/g)].map(match => Number(match[1])))
-    if (numbers.size === 1)
-      return { _tag: 'PullRequest', number: [...numbers][0]! }
-    if (numbers.size > 1)
-      return null
-  }
   const commit = REVERTS_COMMIT.exec(input.body)
-  return commit === null ? null : { _tag: 'Commit', sha: commit[1]! }
+  if (commit !== null)
+    return { _tag: 'Commit', sha: commit[1]! }
+  if (!REVERT_TITLE.test(input.title))
+    return null
+  const numbers = new Set([...input.title.matchAll(/#(\d+)\b/g)].map(match => Number(match[1])))
+  return numbers.size === 1 ? { _tag: 'PullRequest', number: [...numbers][0]! } : null
 }

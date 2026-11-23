@@ -365,6 +365,23 @@ describe('revert of a merged pull request', () => {
     expect(store.listImplicitSignals(REVERTED)).toEqual([expect.objectContaining({ revertedBy: 30, occurredAt: at(5) })])
   })
 
+  it('records the signal when the reverted merge is confirmed after its revert', () => {
+    const store = setup()
+    // GitHub's read of pull request 24 failed while the revert's merge was confirmed.
+    review(store, 'review-24', 2, observe(store, 1, { number: 24, headSha: 'head-24' }))
+    revert(store, 5, { mergedAt: at(5) })
+    expect(store.listImplicitSignals(REVERTED)).toEqual([])
+
+    expect(close(store, 6, { number: 24, headSha: 'head-24', mergedAt: at(3), mergeCommitSha: mergeCommit })).toBe(true)
+
+    expect(store.listImplicitSignals(REVERTED)).toEqual([expect.objectContaining({
+      pullRequestNumber: 24,
+      revertedBy: 30,
+      occurredAt: at(5),
+      reviewRun: expect.objectContaining({ id: 'review-24' }),
+    })])
+  })
+
   it('names no Review run when no run answered the merged head', () => {
     const store = setup()
     review(store, 'review-24', 2, observe(store, 1, { number: 24, headSha: 'head-a' }))

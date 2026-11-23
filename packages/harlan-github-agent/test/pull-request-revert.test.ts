@@ -12,7 +12,9 @@ describe('revertTarget', () => {
     ['a conventional subject that names the pull request', 'chore: revert the config shim from #714', '', { _tag: 'PullRequest', number: 714 }],
     ['the revert type', 'revert: parser change (#26), it broke the build', '', { _tag: 'PullRequest', number: 26 }],
     ['git revert of a merge commit', 'Revert "Merge pull request #6 from harlan-zw/notice"', '', { _tag: 'PullRequest', number: 6 }],
-    ['git revert of a squash commit', 'Revert "fix: use the native parser (#41)"', `This reverts commit ${sha}.`, { _tag: 'PullRequest', number: 41 }],
+    ['git revert of a squash commit, by its exact commit', 'Revert "fix: use the native parser (#41)"', `This reverts commit ${sha}.`, { _tag: 'Commit', sha }],
+    ['the exact commit over a reference the quoted subject happens to make', 'Revert "fix: parser crash from #12"', `This reverts commit ${sha}.`, { _tag: 'Commit', sha }],
+    ['the title when no commit is named', 'Revert "fix: use the native parser (#41)"', '', { _tag: 'PullRequest', number: 41 }],
     ['git revert with only the commit', 'fix(ci): revert the crawl step that broke every page', `This reverts commit ${sha}.`, { _tag: 'Commit', sha }],
   ])('reads %s', (_case, title, body, expected) => {
     expect(revertTarget({ repository, title, body })).toEqual(expected)

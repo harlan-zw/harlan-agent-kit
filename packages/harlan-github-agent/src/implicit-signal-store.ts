@@ -237,7 +237,39 @@ export function recordLoggedFindingSignal(database: DatabaseSync, input: { subje
 }
 
 /**
- * Records a revert on the pull request it reverted, from a merge GitHub confirmed.
+ * Records reverts around one merge GitHub confirmed, in either order.
+ *
+ * As a revert, the merge marks the pull request it names. As a reverted pull
+ * request, it picks up a revert whose merge was confirmed first: GitHub's read
+ * of this pull request can fail in the poll that confirms its revert, and that
+ * revert is never confirmed again.
+ */
+export function recordRevertSignal(database: DatabaseSync, input: { subjectId: number, pullRequest: GitHubPullRequestItem, at: string }): void {
+  recordRevertOf(database, input)
+  if (input.pullRequest.mergedAt === null)
+    return
+  // LIKE is a cheap prefilter; revertTarget applies the exact rules.
+  const reverts = database.prepare(`
+    SELECT reverts.id, revisions.payload
+    FROM subjects AS merged
+    JOIN subjects AS reverts
+      ON reverts.repository_id = merged.repository_id AND reverts.kind = 'pull_request' AND reverts.id != merged.id
+    JOIN revisions ON revisions.id = reverts.current_revision_id
+    JOIN pull_request_closure_verifications AS verification
+      ON verification.subject_id = reverts.id AND verification.revision_id = revisions.id AND verification.disposition_tag = 'Merged'
+    WHERE merged.id = ?
+      AND json_extract(revisions.payload, '$.mergedAt') >= ?
+      AND (json_extract(revisions.payload, '$.title') LIKE '%revert%' OR json_extract(revisions.payload, '$.body') LIKE '%revert%')
+  `).all(input.subjectId, input.pullRequest.mergedAt) as Array<{ id: number, payload: string }>
+  for (const revert of reverts) {
+    const pullRequest = JSON.parse(revert.payload) as GitHubItem
+    if (pullRequest.kind === 'pull_request')
+      recordRevertOf(database, { subjectId: revert.id, pullRequest, at: input.at })
+  }
+}
+
+/**
+ * Records a revert on the pull request it reverted.
  *
  * The revert must name one earlier merged pull request in the same repository
  * that the service opened or reviewed. Any author may revert it, and any author
@@ -245,7 +277,7 @@ export function recordLoggedFindingSignal(database: DatabaseSync, input: { subje
  * Review missed. The signal names a Review run only when one answered the
  * merged head.
  */
-export function recordRevertSignal(database: DatabaseSync, input: { subjectId: number, pullRequest: GitHubPullRequestItem, at: string }): void {
+function recordRevertOf(database: DatabaseSync, input: { subjectId: number, pullRequest: GitHubPullRequestItem, at: string }): void {
   const { pullRequest } = input
   if (pullRequest.mergedAt === null)
     return
