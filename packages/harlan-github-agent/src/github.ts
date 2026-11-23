@@ -746,15 +746,18 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
       if (octokit._tag === 'Err')
         return octokit
       const request = signal === undefined ? {} : { request: { signal } }
-      return publicBody(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'issue' }, githubAccountBody(input.body, input.repository.githubAccount))
-        .send(body => octokit.value.rest.issues.create({
+      const target = { repository: input.repository.github, itemNumber: null, writer: 'issue' } as const
+      // A title can carry a finding summary, so it crosses the same boundary as the body.
+      const title = publicBody(options.publicText, target, input.title)
+      return publicBody(options.publicText, target, githubAccountBody(input.body, input.repository.githubAccount))
+        .send(body => title.send(title => octokit.value.rest.issues.create({
           owner,
           repo,
-          title: input.title,
+          title,
           body,
           ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
           ...request,
-        }))
+        })))
         .then(response => ok({ number: response.data.number, url: response.data.html_url }))
         .catch((error: unknown): Result<{ number: number, url: string }, GitHubReadError> => {
           const status = errorStatus(error)

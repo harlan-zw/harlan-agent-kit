@@ -224,6 +224,24 @@ describe('the publish boundary', () => {
     expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
   })
 
+  it('removes a private path from a filed issue title, as from its body', async () => {
+    const store = journal()
+    const sent: Array<{ title: string, body: string }> = []
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { create: async (request: { title: string, body: string }) => {
+        sent.push({ title: request.title, body: request.body })
+        return { data: { number: 31, html_url: 'https://github.com/harlan-zw/example/issues/31' } }
+      } } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+
+    expect(await publisher.createIssue({ repository: repositoryMapping(), title: 'The cache at ~/notes/fixture.md leaks', body: 'Public proof.' })).toEqual(ok({ number: 31, url: 'https://github.com/harlan-zw/example/issues/31' }))
+
+    expect(sent).toEqual([{ title: removed, body: 'Public proof.' }])
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+  })
+
   it.each(['&#46;', '&#0000046;', '&#x2e;', '&#X2E;', '&period;'])('removes an entity-encoded private destination before publishing an issue comment: %s', async (dot) => {
     const store = journal()
     const sent: string[] = []
