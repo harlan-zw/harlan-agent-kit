@@ -61,7 +61,8 @@ function spellings(root: string, home: string | null): string[] {
 }
 
 export function privateDetailsFor(sources: PrivateDetailSources): PrivateDetails {
-  const home = privateRoot(sources.home)
+  // The home is a prefix, never a denied root, so a one-segment home such as /root still counts.
+  const home = isAbsolute(sources.home) && normalize(sources.home) !== '/' ? normalize(sources.home).replace(/\/+$/, '') : null
   const roots = [
     dirname(sources.storagePath),
     ...sources.checkoutRoots,
@@ -137,6 +138,12 @@ const TOKEN_END = String.raw`(?![\w-]|\.[\w-]|&#95;)`
 const TRAILING_PUNCTUATION = /[.,:;!?]+$/
 /** How far a Markdown link's label and target may sit from its private token. */
 const MARKDOWN_REACH = 1_000
+/**
+ * A URL authority: any scheme, or none, then `//`. A host after it is the
+ * URL's own host and is private. A host after a single slash is a path
+ * segment of some other URL, so it stays.
+ */
+const AUTHORITY = String.raw`(?:(?<![\w.+-])[a-z][a-z\d+.-]{0,15}:)?(?<![\w./-])//`
 
 interface Matchers {
   path: RegExp | null
@@ -158,17 +165,17 @@ function matchers(details: PrivateDetails): Matchers {
     path: paths.length === 0
       ? null
       : new RegExp(String.raw`(?<![\w.~$-])(?:${paths.join('|')})(?:/${TOKEN}*)?${TOKEN_END}`, 'g'),
-    // A host that a slash precedes sits inside a public URL's path, so it never starts a match.
+    // A bare host that a slash precedes sits inside a public URL's path, so it never starts a match.
     link: hosts.length === 0
       ? null
-      : new RegExp(String.raw`(?<![\w./-])(?:https?://)?(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})(?::\d{1,5})?(?:[/?#]${TOKEN}*)?${TOKEN_END}`, 'gi'),
+      : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-]))(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})(?::\d{1,5})?(?:[/?#]${TOKEN}*)?${TOKEN_END}`, 'gi'),
   }
 }
 
 function entryFor(details: PrivateDetails, hit: PrivateDetailHit['_tag'], token: string): string {
   const text = decodeEntities(token)
   if (hit === 'Link') {
-    const host = text.replace(/^https?:\/\//i, '').split(/[/:?#]/)[0]?.toLowerCase() ?? text
+    const host = text.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, '').split(/[/:?#]/)[0]?.toLowerCase() ?? text
     return details.hosts.find(entry => host === entry || host.endsWith(`.${entry}`)) ?? host
   }
   return longestFirst(details.paths).find(entry => text === entry || text.startsWith(`${entry}/`)) ?? text
@@ -236,22 +243,23 @@ function redactTokens(text: string, pattern: RegExp, tag: PrivateDetailHit['_tag
  *
  * Inside inline code, a private path runs to the closing backtick. Inside
  * quotes, only content that opens with a private path counts, so a quotation
- * that merely mentions one keeps its other words. An unquoted path with spaces
- * stays out of reach: nothing marks where it ends.
+ * that merely mentions one keeps its other words. The native review encodes
+ * a backtick as `&#96;`, so that spelling delimits inline code too. An
+ * unquoted path with spaces stays out of reach: nothing marks where it ends.
  */
 function redactDelimitedPaths(text: string, pattern: RegExp, details: PrivateDetails, hits: PrivateDetailHit[]): string {
-  const delimited: Array<{ span: RegExp, anywhere: boolean }> = [
-    { span: /`([^`\n]{1,4096})`/g, anywhere: true },
-    { span: /"([^"\n]{1,4096})"/g, anywhere: false },
-    { span: /\B'([^'\n]{1,4096})'\B/g, anywhere: false },
+  const delimited: Array<{ span: RegExp, delimiter: string, anywhere: boolean }> = [
+    { span: /`([^`\n]{1,4096})`/g, delimiter: '`', anywhere: true },
+    { span: /&#96;((?:(?!&#96;)[^\n]){1,4096})&#96;/g, delimiter: '&#96;', anywhere: true },
+    { span: /"([^"\n]{1,4096})"/g, delimiter: '"', anywhere: false },
+    { span: /\B'([^'\n]{1,4096})'\B/g, delimiter: '\'', anywhere: false },
   ]
-  return delimited.reduce((current, { span, anywhere }) => current.replace(span, (whole, content: string) => {
+  return delimited.reduce((current, { span, delimiter, anywhere }) => current.replace(span, (whole, content: string) => {
     pattern.lastIndex = 0
     const found = pattern.exec(content)
     if (found === null || (!anywhere && found.index !== 0) || !/\s/.test(content.slice(found.index)))
       return whole
     hits.push({ _tag: 'Path', entry: entryFor(details, 'Path', content.slice(found.index).split(/\s/)[0] ?? '') })
-    const delimiter = whole[0]!
     return `${delimiter}${content.slice(0, found.index)}${PRIVATE_PATH_PLACEHOLDER}${delimiter}`
   }), text)
 }

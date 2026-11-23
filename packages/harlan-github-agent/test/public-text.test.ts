@@ -395,7 +395,54 @@ describe('review findings on #754', () => {
       .toBe('Read [private link] and [private link].')
   })
 
-  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a'])('redacts 65,536 characters of %s in linear time', (unit) => {
+  it.each([
+    ['Open wss://harlan-github-agent.localhost/terminal now.', 'Open [private link] now.'],
+    ['Clone ssh://notes.localhost/x first.', 'Clone [private link] first.'],
+    ['See [x](//notes.localhost/y).', 'See [private link].'],
+  ])('redacts a private host after any scheme or a bare authority: %s', (text, expected) => {
+    expect(redactPrivateDetails(text, details).text).toBe(expected)
+  })
+
+  it('keeps scratch and notes private for a home directory with one segment', () => {
+    const rootHome = privateDetailsFor({ home: '/root', storagePath: ':memory:', checkoutRoots: [], workerHomes: [], serviceOrigins: [] })
+
+    expect(redactPrivateDetails('See ~/notes/a.md and /root/scratch/b.log.', rootHome).text).toBe('See [private path] and [private path].')
+  })
+
+  it('redacts inline code with spaces after the native review encoded its backticks', async () => {
+    const store = journal()
+    const written: string[] = []
+    const client = {
+      paginate: async () => [],
+      rest: { pulls: {
+        listReviews: () => undefined,
+        createReview: async (input: { commit_id: string, body: string }) => {
+          written.push(input.body)
+          return { data: { id: 1, user: { login: 'harlan-github-agent[bot]' }, state: 'COMMENTED', commit_id: input.commit_id, body: input.body } }
+        },
+      } },
+    } as unknown as Octokit
+    const body = nativeReviewBody({
+      repository: 'harlan-zw/example',
+      headSha: reviewHead,
+      outcome: 'READY',
+      commentUrl: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+      findings: [{
+        _tag: 'Logged',
+        impact: 40,
+        summary: 'The exported file is stale.',
+        nextAction: 'Regenerate it.',
+        details: { fingerprint: 'f'.repeat(64), identity: 'stale-handover', location: { path: 'src/a.ts', line: 3 }, proof: 'The file `~/notes/client handover/a.pdf` is stale.' },
+      }],
+    })
+
+    await agentSource(client, store).upsertNativeReview(repositoryMapping(), 24, reviewHead, body, new AbortController().signal, () => ok(undefined))
+
+    expect(written[0]).toContain('The file &#96;[private path]&#96; is stale.')
+    expect(written[0]).not.toContain('handover')
+  })
+
+  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a', '&#96;', '//'])('redacts 65,536 characters of %s in linear time', (unit) => {
     const text = unit.repeat(Math.ceil(65_536 / unit.length)).slice(0, 65_536)
     const started = performance.now()
     redactPrivateDetails(text, details)
