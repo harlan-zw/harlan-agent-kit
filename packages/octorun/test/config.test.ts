@@ -91,7 +91,7 @@ describe('parseKitServiceConfig', () => {
 })
 
 describe('buildKitOctorunConfig', () => {
-  it('keeps automatic summary events and requires explicit review selection', () => {
+  it('requires explicit selection for the change summary and the review', () => {
     const input = options()
     const built = buildKitOctorunConfig(input)
     if (built._tag === 'Err')
@@ -99,9 +99,8 @@ describe('buildKitOctorunConfig', () => {
     const source = built.value.repositories[0]!.workflowSource
     if (source._tag !== 'Inline')
       throw new Error('Expected inline workflows')
-    expect(source.definitions.find(workflow => workflow.id === 'change-summary')?.on)
-      .toEqual(input.presets.summary.on)
-    expect(source.definitions.find(workflow => workflow.id === 'adversarial-review')?.on).toEqual([])
+    expect(source.definitions.map(workflow => [workflow.id, workflow.on])).toEqual([['change-summary', []], ['adversarial-review', []]])
+    expect(input.presets.summary.on).toEqual([{ event: 'pull_request', actions: ['opened', 'synchronize'] }])
     expect(input.presets.review.on).toEqual([{ event: 'pull_request', actions: ['opened', 'synchronize'] }])
     expect(built.value.repositories.map(repository => repository.fullName)).toEqual(['harlan-zw/harlan-agent-kit'])
     expect(built.value.github.privateKeyEnv).toBe('OCTORUN_KIT_GITHUB_PRIVATE_KEY')
