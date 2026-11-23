@@ -249,6 +249,23 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes the filename of a multiline private HTML destination before sending a %s', async (writer) => {
+    for (const destination of ['https://notes.localhost/\nacquisition.pdf', 'file:///home/harlan/notes/\nacquisition.pdf']) {
+      for (const tag of [`<a href="${destination}">evidence</a>`, `<img src='${destination}'>`, `<a\ntitle="a &quot; > b" href="${destination}">evidence</a>`]) {
+        const input = `Public introduction.\n${tag}\n\nPublic conclusion.`
+        const source = writer === 'review' ? encodeEntities(input) : input
+        const written: string[] = []
+
+        await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, source).send(async (body) => {
+          written.push(body)
+        })
+
+        expect(written).toEqual([`Public introduction.\n${Array.from({ length: tag.split('\n').length }).fill(removed).join('\n')}\n\nPublic conclusion.`])
+        expectNoFragment(written.join('\n'))
+      }
+    }
+  })
+
   it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes source lines joined by HTML containing entity-encoded quotes before sending a %s', async (writer) => {
     for (const markup of ['<span title="&quot; > context\nmore context"></span>', '<span title=\'&#39; > context\nmore context\'></span>', '<span title="&#x22; > context\nmore context"></span>', '<span title="&quot; > context"></span>']) {
       for (const detail of [`/home/har${markup}lan/notes/acquisition.pdf`, `notes.${markup}localhost/acquisition`]) {
@@ -535,6 +552,7 @@ describe('the publish boundary', () => {
   })
 
   it.each([
+    '<a href="https://notes.localhost/\nacquisition.pdf">evidence</a>',
     '/home/har<span title="&quot; > context\nmore context"></span>lan/notes/acquisition.pdf',
     '__~/notes/fixture.md__',
     '_$HOME/scratch/fixture.log_',
@@ -723,6 +741,7 @@ describe('the publish boundary', () => {
   })
 
   it.each([
+    '<a href="https://notes.localhost/\nacquisition.pdf">evidence</a>',
     '/home/har<span title="&quot; > context\nmore context"></span>lan/notes/acquisition.pdf',
     'The trace in ~/pkg/cache_trace/run.log shows two locales sharing one key.',
     'The cache at /srv/agent_home/cache is stale.',

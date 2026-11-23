@@ -675,6 +675,7 @@ it('refuses an approved draft when guarding the update would change existing rel
 })
 
 it.each([
+  ['<a href="https://notes.localhost/\nacquisition.pdf">evidence</a>\n\nPublic conclusion.', `${removedLine}\n${removedLine}\n\nPublic conclusion.`],
   ['~/no<span title="&quot; > context\nmore context"></span>tes/acquisition.pdf', `${removedLine}\n${removedLine}`],
   ['Empty input no longer throws.', 'Empty input no longer throws.'],
   ['See [notes](https://fixture-user:fixture-password@notes.localhost/docs/acquisition(final)/internal.pdf).', removedLine],

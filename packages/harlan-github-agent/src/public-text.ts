@@ -423,7 +423,7 @@ function detailsInAligned(detect: Detectors, text: string): Array<{ line: number
   })
 }
 
-/** Lines changed by HTML removal retain their full source spans. */
+/** HTML tags and lines changed by HTML removal retain their full source spans. */
 function htmlLines(text: string): Array<{ text: string, first: number, last: number }> {
   const lines: Array<{ text: string, first: number, last: number }> = []
   let line = 0
@@ -451,6 +451,11 @@ function htmlLines(text: string): Array<{ text: string, first: number, last: num
     if (match[0] === '<!--') {
       const close = text.indexOf('-->', markup.lastIndex)
       markup.lastIndex = close === -1 ? text.length : close + 3
+    }
+    else if (match[0].includes('\n')) {
+      // Inspect attributes before stripping the tag. A host on one line makes
+      // the destination's filename on every following line private too.
+      lines.push({ text: match[0], first: line, last: line + lineBreaks(match[0]) })
     }
     line += lineBreaks(text.slice(match.index, markup.lastIndex))
     current.last = line
