@@ -2,7 +2,7 @@
 
 Review the supplied Service evidence and current repository code. Keep this scan read only.
 The controller supplies Service evidence for the last 7 days and open Incidents.
-A failure is a Workflow event with a reason or a retry.
+A failure is a Workflow event with a reason or a retry, or a stalled Routine.
 Each finding belongs to this repository's Service or Skills, even when another repository exposed it.
 
 ## Evidence
@@ -20,6 +20,12 @@ Each finding belongs to this repository's Service or Skills, even when another r
 - The sample cannot prove a rate or a pattern. Use the groups for patterns and `summary` for rates.
 - State `windowEvents`, `failureEvents`, `failureGroups`, and `omittedFailureGroups` from `coverage`.
 - `coverage.events` is `incomplete` only when more than 150 groups exist. The omitted groups are the smallest.
+- `routineYield` counts every Routine run in the window, with one row per Routine name and mode.
+- Each row in `routineYield.rows` follows `routineYield.columns`. Stalled rows come first.
+- `candidates` counts Candidates the Journal recorded. It keeps first-seen fingerprints only, so a known finding counts once.
+- `noVerdict` counts unchanged runs, failed runs, and runs that returned no verdict. They are neither GREEN nor non-GREEN.
+- `controllerRequests` counts reports that name the controller as next actor. Examples: `Controller:`, `Next action: controller`, `Controller must`.
+- `requests` holds up to three distinct requests, newest first.
 - Never read credentials, the live journal, provider databases, raw transcripts, or host logs.
 - Never start analyst Agents, change host settings, restart, deploy, or write GitHub state.
 
@@ -39,6 +45,22 @@ Targets stay inside `packages/harlan-github-agent/` or `harlan-agent-kit/skills/
 Rank by concrete impact, effort, and confidence. Omit speculative cleanup.
 The controller opens issues, runs Issue triage, implements eligible work, and starts fresh Review.
 Existing merge policy determines whether reviewed fixes wait for Harlan.
+
+## Stalled Routines
+
+A `propose` Routine with 5 or more non-GREEN runs and 0 Candidates in the window is stalled.
+Non-GREEN means AMBER or RED. The controller sets `stalled` on that row.
+A GREEN run with 0 Candidates is a quiet run, not a stall.
+A Routine that returns no verdict is never stalled. Its row still shows runs and Candidates.
+
+Treat each stalled row as a failure group. Cite the Routine name, its counts, and the window.
+Read the row's `requests`. They name what the Routine asked the controller to supply.
+Find the cause in `packages/harlan-github-agent/` or `harlan-agent-kit/skills/`.
+Start with the Routine's scan prompt, its evidence in `routine-worker.ts`, and its Skill.
+Propose a Candidate that lets the Routine propose again. Its verification shows a run that records a Candidate.
+If a stalled row has 0 `controllerRequests`, open issues may already hold each finding.
+If they do, report the stall as waiting and name its next actor.
+Name every stalled Routine in the report, even when you propose no Candidate for it.
 
 ## Report
 

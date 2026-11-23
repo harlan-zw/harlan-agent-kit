@@ -20,6 +20,7 @@ import type { RepairRoundPlan } from './repair-rounds.ts'
 import type { Result } from './result.ts'
 import type { ReviewApproval } from './review-approval.ts'
 import type { ReviewProofStore } from './review-proof-store.ts'
+import type { RoutineYieldStore } from './routine-yield-store.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type { TakeOwnershipStore } from './take-ownership-store.ts'
 import type { TimelineStore } from './timeline-store.ts'
@@ -158,6 +159,7 @@ import { canRepairBaseline, canRepairPullRequestHead, canResolveConflictPullRequ
 import { err, ok } from './result.ts'
 import { createReviewProofStore } from './review-proof-store.ts'
 import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
+import { createRoutineYieldStore } from './routine-yield-store.ts'
 import { buildStats } from './stats.ts'
 import { createTakeOwnershipStore } from './take-ownership-store.ts'
 import { cleanLine } from './text.ts'
@@ -831,7 +833,7 @@ export type StoredIssueTriageRun
     }
     | { _tag: 'Discussion', confidence: number, decidedAt: string }
 
-export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore, TrialStore, ImplicitSignalStore, TimelineStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore, TrialStore, RoutineYieldStore, ImplicitSignalStore, TimelineStore {
   getTask: (taskId: string) => DashboardTask | null
   listTasks: () => DashboardTask[]
   getOpenPullRequest: (repository: string, number: number) => GitHubPullRequestItem | null
@@ -7882,6 +7884,7 @@ export function openJournalStore(
   const agentTurnStore = createAgentTurnStore(database)
   const paybackStore = createPaybackStore(database)
   const trialStore = createTrialStore(database)
+  const routineYieldStore = createRoutineYieldStore(database)
   const implicitSignalStore = createImplicitSignalStore(database)
   const timelineStore = createTimelineStore(database)
   const loggedFindingStore = createLoggedFindingStore(database, {
@@ -17719,6 +17722,7 @@ export function openJournalStore(
     ...agentTurnStore,
     ...paybackStore,
     ...trialStore,
+    ...routineYieldStore,
     ...implicitSignalStore,
     ...timelineStore,
     ...reviewProofStore,

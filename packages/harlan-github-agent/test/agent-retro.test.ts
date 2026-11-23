@@ -41,6 +41,7 @@ describe('agent retro evidence', () => {
       listWorkflowEvents: () => [{ ...event, reason: `Bearer abcdefghijklmnopqrstuvwxyz ${'x'.repeat(1000)}` }],
       summarizeWorkflowEvents: () => [],
       groupWorkflowFailures: () => [group],
+      listRoutineYieldRuns: () => [],
     }, new Date(at))
     expect(result.failureSample[0]).toMatchObject({ id: 1, taskId: 'task-1', reason: expect.stringMatching(/^Bearer \*\*\* x+$/), durationMilliseconds: 60000 })
     expect(result.failureSample[0]?.reason).toHaveLength(400)
@@ -55,6 +56,7 @@ describe('agent retro evidence', () => {
       listWorkflowEvents: () => [],
       summarizeWorkflowEvents: () => [],
       groupWorkflowFailures: () => groups,
+      listRoutineYieldRuns: () => [],
     }, new Date(at))
     expect(result.failureGroups.rows).toHaveLength(150)
     expect(result.coverage).toMatchObject({ events: 'incomplete', failureEvents: 302, failureGroups: 151, omittedFailureGroups: 1 })
