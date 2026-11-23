@@ -1,6 +1,6 @@
 import type { ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
-import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, FOLLOW_UP_GROUP_LABEL, FOLLOW_UP_ROW_MARKER, isCanonicalFooter, listedFollowUp, plural } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, FOLLOW_UP_GROUP_LABEL, FOLLOW_UP_ROW_MARKER, FOLLOW_UP_STATUS_LIMIT, isCanonicalFooter, listedFollowUp, plural } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type LoggedReviewFinding = Extract<ReviewFinding, { _tag: 'Logged' }>
@@ -153,6 +153,17 @@ function loggedFindingRow(line: string, finding: LoggedReviewFinding): boolean {
     && line.includes(cleanLine(finding.summary))
 }
 
+/**
+ * One status on one line, cut to `FOLLOW_UP_STATUS_LIMIT`.
+ *
+ * A Repair's evidence can be a whole Agent summary. The canonical body keeps
+ * a fixed room per row for its status, so the verdict always fits GitHub's limit.
+ */
+function statusText(status: string): string {
+  const line = status.replace(/\s+/g, ' ').trim()
+  return line.length <= FOLLOW_UP_STATUS_LIMIT ? line : `${line.slice(0, FOLLOW_UP_STATUS_LIMIT - 1).trimEnd()}…`
+}
+
 /** Puts one block above the footer, which stays last. */
 function aboveFooter(body: string, block: string): string {
   const footer = body.split('\n').at(-1)
@@ -210,8 +221,8 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
     const status = statuses.find(status => status.fingerprint === fingerprint)
     if (status !== undefined) {
       decorated.push(line, status._tag === 'Repair'
-        ? `  Repair: ${status.status.replace(/\s+/g, ' ').trim()} <!-- logged-finding: ${fingerprint} -->`
-        : `  ${status.status.replace(/\s+/g, ' ').trim()} <!-- logged-finding: ${fingerprint} -->`)
+        ? `  Repair: ${statusText(status.status)} <!-- logged-finding: ${fingerprint} -->`
+        : `  ${statusText(status.status)} <!-- logged-finding: ${fingerprint} -->`)
       if (open !== undefined && status._tag === 'Repair' && status.cancellable)
         decorated.push(dismissalControl(fingerprint))
       continue

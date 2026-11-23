@@ -6,7 +6,7 @@ import type { RepositoryMapping } from './types.ts'
 import { publicFailureCause, REVIEW_NOT_READY_REASON, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { err, ok } from './result.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, canonicalCommentHead, canonicalCommentOutcome, commitLink, fixedRows, followUpRow, followUpSection, issueRows, listedFollowUp, plural, statusLine, withoutCommands, workflowStateLine } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, canonicalCommentHead, canonicalCommentOutcome, commitLink, fitFollowUpRows, fitNotes, fixedRows, followUpBudget, followUpSection, issueRows, listedFollowUp, plural, statusLine, withoutCommands, workflowStateLine } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type StoppedReviewOutcome
@@ -190,17 +190,21 @@ export function stoppedReviewComment(
       : `${counted} from the review of ${commitLink(review.repository, review.headSha)}`
     // An unfixed issue keeps its fix, as the verdict listed it. After merge this
     // comment is the only place a finding outside the diff shows one.
-    const rows = [
-      ...(open.length === 0 ? [] : [...issueRows(review.repository, review.headSha, open), '']),
-      ...(followUps.length === 0 ? [] : [...followUps.map(finding => followUpRow(review.repository, review.headSha, finding)), '']),
-    ]
-    return [...head, statusLine('done', 'Merged', left), '', ...rows, footer].join('\n')
+    const above = [...head, statusLine('done', 'Merged', left), '', ...(open.length === 0 ? [] : [...issueRows(review.repository, review.headSha, open), ''])]
+    // The follow-ups take the room the rest leaves, so the comment fits GitHub's limit.
+    const fitted = fitFollowUpRows(review.repository, review.headSha, followUps, followUpBudget([...above, footer]))
+    return [
+      ...above,
+      ...(fitted.rows.length === 0 ? [] : [...fitted.rows.map(({ row }) => row), '']),
+      ...fitNotes(fitted),
+      footer,
+    ].join('\n')
   }
   const { detail, rest } = causeDetail(review)
   if (review.taskKind === 'review_fix') {
     const open = review.findings.filter(finding => finding._tag === 'Open')
     const fixed = fixedRows(review.findings)
-    return [
+    const above = [
       AUTOMATED_REVIEW_MARKER,
       `<!-- reviewed-sha: ${review.headSha} -->`,
       workflowStateLine({ _tag: 'RepairStopped', headSha: review.headSha }),
@@ -209,9 +213,9 @@ export function stoppedReviewComment(
       ...(cause === null ? [] : [cause, '']),
       ...(open.length === 0 ? [] : [...issueRows(review.repository, review.headSha, open), '']),
       ...(fixed.length === 0 ? [] : [...fixed, '']),
-      ...followUpSection(review.repository, review.headSha, review.findings, review.baseRef ?? undefined),
-      automatedDisclosure({ kind: 'review', at, merge: true }),
-    ].join('\n')
+    ]
+    const footer = automatedDisclosure({ kind: 'review', at, merge: true })
+    return [...above, ...followUpSection(review.repository, review.headSha, review.findings, review.baseRef ?? undefined, followUpBudget([...above, footer])), footer].join('\n')
   }
   // A draft, or a pull request no longer eligible, needs nobody: it reads as a skip.
   // The marker stays ReviewStopped, so no reader takes this head as reviewed.

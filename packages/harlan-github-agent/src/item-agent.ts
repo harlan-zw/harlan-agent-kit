@@ -52,7 +52,7 @@ import { queuedReviewHistoryLine } from './queue-position-sweep.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { acceptedPullRequestCommands, canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, commitLink, findingNextAction, fixedRows, followUpSection, issueRows, plural, statusLine } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, commitLink, findingNextAction, fixedRows, followUpBudget, followUpSection, issueRows, plural, statusLine } from './review-comment.ts'
 import { applyReviewReasoningEffortBand, DEFAULT_REVIEW_REASONING_EFFORT_POLICY, reviewReasoningEffortBand } from './review-effort.ts'
 import { cleanLine, cleanText } from './text.ts'
 import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
@@ -1299,7 +1299,7 @@ export function terminalComment(input: TerminalCommentInput): string {
   const waiting = result === 'PENDING' && gates.ci._tag === 'Pending' && input.ciCause !== undefined && unseenPendingCauses.has(input.ciCause._tag)
     ? gates.ci
     : undefined
-  return [
+  const above = [
     AUTOMATED_REVIEW_MARKER,
     `<!-- reviewed-sha: ${headSha} -->`,
     `<!-- workflow-state: ${workflow} -->`,
@@ -1310,7 +1310,8 @@ export function terminalComment(input: TerminalCommentInput): string {
     ...(blocking.length === 0 ? [] : [...issueRows(repository, headSha, blocking), '']),
     ...(fixed.length === 0 ? [] : [...fixedRows(fixed), '']),
     ...(reviewLine === '' ? [] : [reviewLine, '']),
-    ...followUpSection(repository, headSha, findings, input.baseRef ?? undefined),
+  ]
+  const below = [
     ...reported,
     automatedDisclosure({
       kind: 'review',
@@ -1319,7 +1320,9 @@ export function terminalComment(input: TerminalCommentInput): string {
       ...(result === 'PENDING' || input.reviewedAt === undefined ? {} : { at: input.reviewedAt }),
       commands: gates.merge._tag === 'Passed' ? input.commands ?? [] : [],
     }),
-  ].join('\n')
+  ]
+  // The follow-ups take the room the verdict leaves, so the verdict always fits GitHub's limit.
+  return [...above, ...followUpSection(repository, headSha, findings, input.baseRef ?? undefined, followUpBudget([...above, ...below])), ...below].join('\n')
 }
 
 function saveAgentProgress(options: ItemAgentOptions, task: ClaimedAgentTask, phase: AgentPhase): Result<void, string> {

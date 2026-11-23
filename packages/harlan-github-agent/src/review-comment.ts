@@ -134,6 +134,53 @@ export function followUpRowMarker(fingerprint: string): string {
 /** The fingerprint a follow-up row names, or undefined for a row written before the marker. */
 export const FOLLOW_UP_ROW_MARKER = /<!-- follow-up: ([a-f\d]{64}) -->$/
 
+/** The longest body GitHub accepts for a comment or an issue, in characters. */
+export const GITHUB_BODY_LIMIT = 65_536
+
+/** The longest status a follow-up shows in place of its control. */
+export const FOLLOW_UP_STATUS_LIMIT = 200
+
+/**
+ * The room one listed follow-up keeps for the lines its controls add later.
+ *
+ * `withLoggedFindingControls` adds a control and a Dismiss control, or a
+ * status cut to `FOLLOW_UP_STATUS_LIMIT` and a Dismiss control, under a row.
+ */
+const FOLLOW_UP_DECORATION = 480
+
+/**
+ * The room a canonical body keeps for what the decorator adds outside its rows.
+ *
+ * That is the base marker or the Merged control above the footer, and one
+ * tick sentence beside each group label.
+ */
+export const BODY_DECORATION = 400
+
+/** The fold's own lines around its rows: the summary, the group labels, and the floor note under it. */
+const SECTION_OVERHEAD = 600
+
+/** The room `fitNotes` needs under a cut list. */
+const FIT_NOTES = 200
+
+interface FollowUpParts {
+  head: string
+  proof: string
+  fix: string
+  marker: string
+}
+
+function followUpParts(repository: string | undefined, headSha: string, finding: LoggedFinding): FollowUpParts {
+  const location = findingLocation(repository, headSha, finding)
+  const proof = cleanText(finding.details.proof).replaceAll(/\s+/g, ' ')
+  const fix = finding.nextAction === undefined ? '' : findingNextAction(finding.nextAction).replaceAll(/\s+/g, ' ')
+  return {
+    head: `- \`${finding.impact}\` ${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}`,
+    proof,
+    fix: fix === '' ? '' : `Fix: ${fix}`,
+    marker: /^[a-f\d]{64}$/i.test(finding.details.fingerprint) ? ` ${followUpRowMarker(finding.details.fingerprint)}` : '',
+  }
+}
+
 /**
  * One follow-up row: score, title, and where, then the proof and the fix.
  *
@@ -142,16 +189,78 @@ export const FOLLOW_UP_ROW_MARKER = /<!-- follow-up: ([a-f\d]{64}) -->$/
  * `<br>`, because `withLoggedFindingControls` finds the row by its marker and
  * adds the finding's controls directly under it.
  */
-export function followUpRow(repository: string | undefined, headSha: string, finding: LoggedFinding): string {
-  const location = findingLocation(repository, headSha, finding)
-  const proof = cleanText(finding.details.proof).replaceAll(/\s+/g, ' ')
-  const fix = finding.nextAction === undefined ? '' : findingNextAction(finding.nextAction).replaceAll(/\s+/g, ' ')
-  const marker = /^[a-f\d]{64}$/i.test(finding.details.fingerprint) ? ` ${followUpRowMarker(finding.details.fingerprint)}` : ''
+function joinedRow(parts: FollowUpParts, shown: { fix: boolean, proof: boolean }): string {
   return `${[
-    `- \`${finding.impact}\` ${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}`,
-    ...(proof === '' ? [] : [proof]),
-    ...(fix === '' ? [] : [`Fix: ${fix}`]),
-  ].join('<br>')}${marker}`
+    parts.head,
+    ...(shown.proof && parts.proof !== '' ? [parts.proof] : []),
+    ...(shown.fix && parts.fix !== '' ? [parts.fix] : []),
+  ].join('<br>')}${parts.marker}`
+}
+
+/** Follow-up rows cut to fit a body, and what the cut left out. */
+export interface FittedFollowUps {
+  rows: Array<{ finding: LoggedFinding, row: string }>
+  proofsLeftOut: number
+  unlisted: number
+}
+
+/**
+ * The follow-up rows that fit `budget` characters, each with room for its controls.
+ *
+ * GitHub refuses a body over its limit, and a refused verdict never
+ * publishes. So every listed row keeps its score, title, and location first.
+ * Fixes fill the room that is left, then proofs, each in list order. Only
+ * when the titles alone overflow does the list stop, and it counts the rest.
+ * The budget includes the notes `fitNotes` writes under the list.
+ */
+export function fitFollowUpRows(repository: string | undefined, headSha: string, findings: readonly LoggedFinding[], budget: number, decoration = FOLLOW_UP_DECORATION): FittedFollowUps {
+  let room = budget - FIT_NOTES
+  const listed: Array<{ finding: LoggedFinding, parts: FollowUpParts, fix: boolean, proof: boolean }> = []
+  for (const finding of findings) {
+    const parts = followUpParts(repository, headSha, finding)
+    const cost = joinedRow(parts, { fix: false, proof: false }).length + 1 + decoration
+    if (cost > room)
+      break
+    room -= cost
+    listed.push({ finding, parts, fix: false, proof: false })
+  }
+  for (const entry of listed) {
+    const cost = entry.parts.fix === '' ? 0 : entry.parts.fix.length + '<br>'.length
+    if (cost <= room) {
+      room -= cost
+      entry.fix = true
+    }
+  }
+  let proofsLeftOut = 0
+  for (const entry of listed) {
+    if (entry.parts.proof === '')
+      continue
+    const cost = entry.parts.proof.length + '<br>'.length
+    if (cost > room) {
+      proofsLeftOut += 1
+      continue
+    }
+    room -= cost
+    entry.proof = true
+  }
+  return {
+    rows: listed.map(entry => ({ finding: entry.finding, row: joinedRow(entry.parts, entry) })),
+    proofsLeftOut,
+    unlisted: findings.length - listed.length,
+  }
+}
+
+/** The small print under a cut list, which says what it left out. */
+export function fitNotes(fitted: FittedFollowUps): string[] {
+  return [
+    ...(fitted.unlisted === 0 ? [] : [`<sub>${plural(fitted.unlisted, 'more follow-up', 'more follow-ups')} not listed to fit GitHub's size limit.</sub>`, '']),
+    ...(fitted.proofsLeftOut === 0 ? [] : [`<sub>${plural(fitted.proofsLeftOut, 'proof')} left out to fit GitHub's size limit.</sub>`, '']),
+  ]
+}
+
+/** The room left for follow-ups once a body's other lines are known. */
+export function followUpBudget(lines: readonly string[]): number {
+  return GITHUB_BODY_LIMIT - BODY_DECORATION - lines.join('\n').length - 1
 }
 
 /**
@@ -190,25 +299,32 @@ export const FOLLOW_UP_GROUP_LABEL = /^\*\*(?:In this change|Already in (?:the b
  *
  * The labels say where each finding sits. They never say what a tick does:
  * the controls add that sentence, and only where a control exists.
+ *
+ * `budget` is the room the body leaves for this section, as `followUpBudget`
+ * measures it. The rows shrink to fit it, so the verdict always publishes.
  */
-export function followUpSection(repository: string | undefined, headSha: string, findings: readonly ReviewFinding[], baseRef?: string): string[] {
+export function followUpSection(repository: string | undefined, headSha: string, findings: readonly ReviewFinding[], baseRef?: string, budget = Number.POSITIVE_INFINITY): string[] {
   const logged = findings.filter((finding): finding is LoggedFinding => finding._tag === 'Logged')
   const shown = logged.filter(listedFollowUp)
   const hidden = logged.length - shown.length
+  // Fit the rows in the order the fold lists them, so the room goes to the first groups first.
+  const ordered = followUpGroups.flatMap(group => shown.filter(finding => followUpGroup(finding) === group))
+  const fitted = fitFollowUpRows(repository, headSha, ordered, budget - SECTION_OVERHEAD)
   const groups = followUpGroups.flatMap((group) => {
-    const rows = shown.filter(finding => followUpGroup(finding) === group)
-    return rows.length === 0 ? [] : [followUpGroupLabel(group, baseRef), '', ...rows.map(finding => followUpRow(repository, headSha, finding)), '']
+    const rows = fitted.rows.filter(({ finding }) => followUpGroup(finding) === group)
+    return rows.length === 0 ? [] : [followUpGroupLabel(group, baseRef), '', ...rows.map(({ row }) => row), '']
   })
   return [
-    ...(shown.length === 0
+    ...(fitted.rows.length === 0
       ? []
       : [
-          `<details><summary><b>${plural(shown.length, 'follow-up')}</b> · none block merge</summary>`,
+          `<details><summary><b>${plural(fitted.rows.length, 'follow-up')}</b> · none block merge</summary>`,
           '',
           ...groups,
           '</details>',
           '',
         ]),
+    ...fitNotes(fitted),
     ...(hidden === 0 ? [] : [`<sub>${plural(hidden, 'note')} below ${FOLLOW_UP_FLOOR}/100 not shown.</sub>`, '']),
   ]
 }

@@ -278,6 +278,7 @@ Say what only the Review knows: `Checked … Not checked: …`, what Repair fixe
 Fold follow-ups and group them by Finding scope. List each with its score, title, location, proof, and fix. Count Logged findings below 40/100 and never list them or thread them.
 When a follow-up's thread opens beside the code, keep its row and link the thread in place of the control. A thread whose finding drops below 40/100 loses its control.
 End each follow-up row with a hidden marker that names its finding fingerprint. Bind a control to its row by that marker, never by the row's score or title.
+Fit every canonical comment and Follow-up issue within GitHub's 65536-character body limit, with room for the controls. Keep the Status line, the issues, and each follow-up's score and title. Leave out proofs first, then fixes, then whole rows, and say in small print what was left out.
 A fixed thread shows its fixing commit above its struck title and drops the merge label. A follow-up a rerun promotes to an issue rewrites its thread as an issue that blocks merge.
 
 End every comment with one `<sub>` footer. It names the bot, says it is not Harlan's, and links the AI policy.

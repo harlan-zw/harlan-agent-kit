@@ -1,5 +1,5 @@
 import type { LoggedReviewFinding } from './logged-finding-pickup.ts'
-import { automatedDisclosure, commitLink, findingLocation, findingNextAction, followUpRow } from './review-comment.ts'
+import { automatedDisclosure, commitLink, findingLocation, findingNextAction, fitFollowUpRows, fitNotes, followUpBudget } from './review-comment.ts'
 import { cleanLine, cleanText } from './text.ts'
 
 /**
@@ -73,19 +73,13 @@ export function followUpIssue(input: { repository: string, pullRequestNumber: nu
 /** The one issue the Merged control files for every unfixed follow-up. */
 export function mergedFollowUpsIssue(input: { repository: string, pullRequestNumber: number, headSha: string, findings: readonly LoggedReviewFinding[] }): FollowUpIssue {
   const marker = mergedFollowUpsMarker(input.pullRequestNumber, input.headSha)
+  const above = [`#${input.pullRequestNumber} merged with these follow-ups not fixed. None blocked merge.`, '']
+  const below = ['', `The Review read ${commitLink(input.repository, input.headSha)}.`, '', marker, '', automatedDisclosure({ kind: 'issue' })]
+  // Nothing decorates an issue, so its rows need no room for controls.
+  const fitted = fitFollowUpRows(input.repository, input.headSha, input.findings, followUpBudget([...above, ...below]), 0)
   return {
     title: `Follow-ups from #${input.pullRequestNumber}`,
     marker,
-    body: [
-      `#${input.pullRequestNumber} merged with these follow-ups not fixed. None blocked merge.`,
-      '',
-      ...input.findings.map(finding => followUpRow(input.repository, input.headSha, finding)),
-      '',
-      `The Review read ${commitLink(input.repository, input.headSha)}.`,
-      '',
-      marker,
-      '',
-      automatedDisclosure({ kind: 'issue' }),
-    ].join('\n'),
+    body: [...above, ...fitted.rows.map(({ row }) => row), ...(fitted.unlisted + fitted.proofsLeftOut === 0 ? [] : ['', ...fitNotes(fitted).filter(line => line !== '')]), ...below].join('\n'),
   }
 }
