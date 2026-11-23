@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { RoutineName } from './routines/index.ts'
 import type { ReviewOutcome, RoutineRunState } from './types.ts'
+import { openingWork } from './implicit-signal-store.ts'
 
 /** One window of time, start inclusive and end exclusive, as ISO instants. */
 export interface TrialRange {
@@ -62,6 +63,21 @@ export interface TrialRetroCandidate {
   mergedAt: string | null
 }
 
+/** One merged pull request whose merged head has a Review run, and the revert that names it, if any. */
+export interface TrialReviewedMerge {
+  repository: string
+  pullRequestNumber: number
+  url: string
+  mergedAt: string
+  /** The latest Review outcome on the merged head. */
+  outcome: ReviewOutcome['_tag']
+  /** True when a service publication opened the pull request. */
+  serviceOpened: boolean
+  /** When the reverting pull request merged, or null while none has. */
+  revertedAt: string | null
+  revertedBy: number | null
+}
+
 export interface TrialStore {
   /** Every run of one Routine whose cron instant falls in the range. */
   listTrialRoutineRuns: (input: { routineName: RoutineName, range: TrialRange }) => TrialRoutineRun[]
@@ -75,6 +91,8 @@ export interface TrialStore {
   listReadyPullRequests: () => ReadyPullRequest[]
   /** `agent-retro` Candidates recorded in the range. */
   listTrialRetroCandidates: (range: TrialRange) => TrialRetroCandidate[]
+  /** Pull requests merged in the range whose merged head has a Review run, oldest merge first. */
+  listTrialReviewedMerges: (range: TrialRange) => TrialReviewedMerge[]
 }
 
 /**
@@ -171,6 +189,17 @@ interface RetroCandidateRow {
   merged_at: string | null
 }
 
+interface ReviewedMergeRow {
+  subject_id: number
+  repository: string
+  pull_request_number: number
+  url: string
+  merged_at: string
+  outcome_tag: ReviewOutcome['_tag']
+  reverted_at: string | null
+  reverted_by: number | null
+}
+
 export function createTrialStore(database: DatabaseSync): TrialStore {
   const routineRuns = database.prepare(`
     SELECT routines.repository, routine_runs.scheduled_for, routine_runs.state_tag, routine_runs.evidence,
@@ -248,6 +277,32 @@ export function createTrialStore(database: DatabaseSync): TrialStore {
     ORDER BY first_ready.ready_at, repositories.github, subjects.github_number
   `)
   // Reconciliation marks a Candidate Merged with its pull request; the merge instant lives on that pull request.
+  // Only a Review run that answered the merged head speaks for the merge.
+  const reviewedMerges = database.prepare(`
+    WITH merged AS (
+      SELECT subjects.id AS subject_id, repositories.github AS repository, subjects.github_number AS pull_request_number,
+        json_extract(revisions.payload, '$.url') AS url,
+        json_extract(revisions.payload, '$.mergedAt') AS merged_at,
+        (
+          SELECT COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag)
+          FROM review_runs
+          LEFT JOIN review_gate_projections ON review_gate_projections.review_run_id = review_runs.id
+          WHERE review_runs.subject_id = subjects.id AND review_runs.head_sha = json_extract(revisions.payload, '$.headSha')
+          ORDER BY review_runs.completed_at DESC, review_runs.id DESC
+          LIMIT 1
+        ) AS outcome_tag
+      FROM subjects
+      JOIN repositories ON repositories.id = subjects.repository_id
+      JOIN revisions ON revisions.id = subjects.current_revision_id
+      WHERE subjects.kind = 'pull_request'
+        AND json_extract(revisions.payload, '$.mergedAt') >= ? AND json_extract(revisions.payload, '$.mergedAt') < ?
+    )
+    SELECT merged.*, implicit_signals.occurred_at AS reverted_at, implicit_signals.reverted_by
+    FROM merged
+    LEFT JOIN implicit_signals ON implicit_signals.subject_id = merged.subject_id AND implicit_signals.kind = 'Reverted'
+    WHERE merged.outcome_tag IS NOT NULL
+    ORDER BY merged.merged_at, merged.repository, merged.pull_request_number
+  `)
   const retroCandidates = database.prepare(`
     SELECT routines.repository, candidates.created_at, commands.github_issue_number AS issue_number,
       CASE WHEN candidates.result_tag = 'Merged' THEN json_extract(revisions.payload, '$.mergedAt') END AS merged_at
@@ -307,5 +362,16 @@ export function createTrialStore(database: DatabaseSync): TrialStore {
       .map(row => ({ repository: row.repository, pullRequestNumber: row.pull_request_number, title: row.title, readyAt: row.ready_at })),
     listTrialRetroCandidates: range => (retroCandidates.all(range.from, range.to) as unknown as RetroCandidateRow[])
       .map(row => ({ repository: row.repository, createdAt: row.created_at, issueNumber: row.issue_number, mergedAt: row.merged_at })),
+    listTrialReviewedMerges: range => (reviewedMerges.all(range.from, range.to) as unknown as ReviewedMergeRow[])
+      .map(row => ({
+        repository: row.repository,
+        pullRequestNumber: row.pull_request_number,
+        url: row.url,
+        mergedAt: row.merged_at,
+        outcome: row.outcome_tag,
+        serviceOpened: openingWork(database, row.subject_id) !== null,
+        revertedAt: row.reverted_at,
+        revertedBy: row.reverted_by,
+      })),
   }
 }

@@ -149,7 +149,7 @@ import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS,
 import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
 import { gitHubRateLimitRetryAt } from './github-rate-limit.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
-import { createImplicitSignalStore, implicitSignalSchema, isAgentPullRequest, recordClosureSignal, recordHeadChangeSignal } from './implicit-signal-store.ts'
+import { createImplicitSignalStore, implicitSignalIndexes, implicitSignalSchema, implicitSignalTable, isAgentPullRequest, recordClosureSignal, recordHeadChangeSignal, recordRevertSignal } from './implicit-signal-store.ts'
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { createLoggedFindingStore, followUpIssueSchema, loggedFindingSchema } from './logged-finding-store.ts'
@@ -7665,7 +7665,26 @@ function installSchema(database: DatabaseSync): void {
       PRAGMA user_version = 111;`)
     version = 111
   }
-  if (version === 111)
+  if (version === 111) {
+    // A revert is a fifth Implicit signal kind, and it names the reverting pull
+    // request. SQLite cannot widen a CHECK in place, so the table is rebuilt. A
+    // fresh journal already created it in the new shape at version 100.
+    const columns = (database.prepare('PRAGMA table_info(implicit_signals)').all() as Array<{ name: string }>).map(column => column.name)
+    if (columns.includes('reverted_by')) {
+      applyMigration(database, 'PRAGMA user_version = 112;')
+    }
+    else {
+      applyForeignKeyMigration(database, `${implicitSignalTable('implicit_signals_v112')}
+        INSERT INTO implicit_signals_v112 (id, subject_id, kind, head_sha, fingerprint, review_run_id, opened_by, occurred_at, recorded_at)
+          SELECT id, subject_id, kind, head_sha, fingerprint, review_run_id, opened_by, occurred_at, recorded_at FROM implicit_signals;
+        DROP TABLE implicit_signals;
+        ALTER TABLE implicit_signals_v112 RENAME TO implicit_signals;
+        ${implicitSignalIndexes}
+        PRAGMA user_version = 112;`)
+    }
+    version = 112
+  }
+  if (version === 112)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -16364,6 +16383,8 @@ export function openJournalStore(
       )
       if (isAgentPullRequest(pullRequest, (JSON.parse(row.policy_json) as RepositoryMapping).writablePullRequestAuthors))
         recordClosureSignal(database, { subjectId: row.subject_id, pullRequest, at: input.at })
+      // The rule is about the pull request a revert names, so it holds whoever wrote the revert.
+      recordRevertSignal(database, { subjectId: row.subject_id, pullRequest, at: input.at })
       database.exec('COMMIT')
     }
     catch (error) {

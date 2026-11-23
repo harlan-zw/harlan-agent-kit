@@ -1145,3 +1145,70 @@ it('preserves incident resolution evidence and receipts across reopen and schema
   expect(after.listWorkflowEvents({ stream: 'incident' }).map(event => event.reason)).toEqual([request.evidence])
   after.close()
 })
+
+it('upgrades version 111 Implicit signals so a merged revert records one', () => {
+  const path = join(directory, 'state.sqlite')
+  const at = (minute: number) => new Date(Date.parse('2026-11-24T00:00:00.000Z') + minute * 60_000).toISOString()
+  const passed = { _tag: 'Passed' as const, evidence: [] }
+  const kinds = { kinds: ['HumanCommit', 'ClosedUnmerged', 'MergedUntouched', 'LoggedFindingPickedUp', 'Reverted'] as const, limitPerKind: 10, origin: 'Any' as const }
+  type Store = ReturnType<typeof openJournalStore>
+  const observe = (store: Store, minute: number, overrides: Parameters<typeof pullRequestItem>[0]) => {
+    const subject = pullRequestItem({ mergeState: 'clean', updatedAt: at(minute), ...overrides })
+    const write = store.recordPollObservation({ observedAt: at(minute), subject })
+    if (write._tag !== 'Inserted' && write._tag !== 'Duplicate')
+      throw new Error(`Expected a recorded pull request: ${JSON.stringify(write)}`)
+    return { revisionId: write.revisionId, subject }
+  }
+  const review = (store: Store, minute: number, observed: ReturnType<typeof observe>) => {
+    store.recordReviewRun({ id: `review-${observed.subject.number}-${minute}`, repository: observed.subject.repository, pullRequestNumber: observed.subject.number, revisionId: observed.revisionId, headSha: observed.subject.headSha, provider: 'codex', sessionId: `session-${minute}`, model: 'gpt-6.1-sol', agentVersion: '1', skillDigest: 'f'.repeat(64), startedAt: at(minute), completedAt: at(minute), gates: { merge: passed, review: passed, ci: passed }, findings: [] })
+  }
+  const close = (store: Store, minute: number, overrides: Parameters<typeof pullRequestItem>[0]) => {
+    const observed = observe(store, minute, { state: 'closed', ...overrides })
+    return store.recordVerifiedPullRequestClosure({ repository: observed.subject.repository, pullRequestNumber: observed.subject.number, revisionId: observed.revisionId, headSha: observed.subject.headSha, baseSha: observed.subject.baseSha, disposition: observed.subject.mergedAt === null ? { _tag: 'Closed' } : { _tag: 'Merged' }, at: at(minute) })
+  }
+
+  const before = openJournalStore(path)
+  before.syncRepositories([repositoryMapping()], at(0))
+  review(before, 1, observe(before, 1, { number: 24, headSha: 'head-24' }))
+  close(before, 2, { number: 24, headSha: 'head-24', mergedAt: at(2) })
+  review(before, 3, observe(before, 3, { number: 25, headSha: 'head-25' }))
+  observe(before, 4, { number: 25, headSha: 'next-25' })
+  review(before, 5, observe(before, 5, { number: 26, headSha: 'head-26' }))
+  close(before, 6, { number: 26, headSha: 'head-26' })
+  const kept = before.listImplicitSignals(kinds)
+  before.close()
+  expect(kept.map(signal => signal._tag).sort()).toEqual(['ClosedUnmerged', 'HumanCommit', 'MergedUntouched'])
+
+  // The journal as version 111 left it: four kinds and no reverted_by column.
+  const legacy = new DatabaseSync(path)
+  legacy.exec(`PRAGMA foreign_keys = OFF;
+    CREATE TABLE implicit_signals_v111 (
+      id TEXT PRIMARY KEY,
+      subject_id INTEGER NOT NULL REFERENCES subjects(id),
+      kind TEXT NOT NULL CHECK (kind IN ('HumanCommit', 'ClosedUnmerged', 'MergedUntouched', 'LoggedFindingPickedUp')),
+      head_sha TEXT NOT NULL,
+      fingerprint TEXT,
+      review_run_id TEXT REFERENCES review_runs(id),
+      opened_by TEXT CHECK (opened_by IS NULL OR opened_by IN ('issue_work', 'baseline_repair', 'review_fix', 'conflict_resolution')),
+      occurred_at TEXT NOT NULL,
+      recorded_at TEXT NOT NULL,
+      CHECK ((kind = 'LoggedFindingPickedUp') = (fingerprint IS NOT NULL)),
+      CHECK (kind != 'HumanCommit' OR review_run_id IS NOT NULL)
+    );
+    INSERT INTO implicit_signals_v111 SELECT id, subject_id, kind, head_sha, fingerprint, review_run_id, opened_by, occurred_at, recorded_at FROM implicit_signals;
+    DROP TABLE implicit_signals;
+    ALTER TABLE implicit_signals_v111 RENAME TO implicit_signals;
+    PRAGMA user_version = 111;`)
+  legacy.close()
+
+  const migrated = openJournalStore(path)
+  try {
+    expect(migrated.listImplicitSignals(kinds)).toEqual(kept)
+    observe(migrated, 7, { number: 30, headSha: 'head-30', title: 'Revert "Fix the broken thing"', body: 'Reverts harlan-zw/example#24' })
+    expect(close(migrated, 8, { number: 30, headSha: 'head-30', title: 'Revert "Fix the broken thing"', body: 'Reverts harlan-zw/example#24', mergedAt: at(8) })).toBe(true)
+    expect(migrated.listImplicitSignals({ ...kinds, kinds: ['Reverted'] })).toEqual([expect.objectContaining({ pullRequestNumber: 24, revertedBy: 30 })])
+  }
+  finally {
+    migrated.close()
+  }
+})

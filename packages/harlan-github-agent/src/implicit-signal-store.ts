@@ -1,14 +1,15 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { LoggedReviewFinding } from './logged-finding-pickup.ts'
-import type { GitHubPullRequestItem, ReviewOutcome } from './types.ts'
+import type { GitHubItem, GitHubPullRequestItem, ReviewOutcome } from './types.ts'
 import { createHash } from 'node:crypto'
+import { revertTarget } from './pull-request-revert.ts'
 
 /**
  * What a person did on GitHub to agent work, read from state the service
  * already observes. It records an action, never a judgment, so it is never
  * Agent feedback.
  */
-export type ImplicitSignalKind = 'HumanCommit' | 'ClosedUnmerged' | 'MergedUntouched' | 'LoggedFindingPickedUp'
+export type ImplicitSignalKind = 'HumanCommit' | 'ClosedUnmerged' | 'MergedUntouched' | 'LoggedFindingPickedUp' | 'Reverted'
 
 /** The Agent role whose publication opened a pull request. */
 export type OpeningWork = 'issue_work' | 'baseline_repair' | 'review_fix' | 'conflict_resolution'
@@ -34,6 +35,8 @@ export type ImplicitSignal
   = | ImplicitSignalBase & { _tag: 'HumanCommit', reviewRun: ImplicitSignalReview }
     | ImplicitSignalBase & { _tag: 'ClosedUnmerged' | 'MergedUntouched', reviewRun: ImplicitSignalReview | null }
     | ImplicitSignalBase & { _tag: 'LoggedFindingPickedUp', reviewRun: ImplicitSignalReview | null, finding: LoggedReviewFinding }
+    /** A later merged pull request reverted this one. `reviewRun` is a run that answered the merged head, if one did. */
+    | ImplicitSignalBase & { _tag: 'Reverted', reviewRun: ImplicitSignalReview | null, revertedBy: number }
 
 /** `ServiceOpened` keeps only pull requests a service publication opened. */
 export interface ImplicitSignalQuery {
@@ -47,22 +50,33 @@ export interface ImplicitSignalStore {
   listImplicitSignals: (input: ImplicitSignalQuery) => ImplicitSignal[]
 }
 
-export const implicitSignalSchema = `
-  CREATE TABLE IF NOT EXISTS implicit_signals (
+/** The table under any name, so a migration can rebuild it to widen a CHECK. */
+export function implicitSignalTable(name: string): string {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
     id TEXT PRIMARY KEY,
     subject_id INTEGER NOT NULL REFERENCES subjects(id),
-    kind TEXT NOT NULL CHECK (kind IN ('HumanCommit', 'ClosedUnmerged', 'MergedUntouched', 'LoggedFindingPickedUp')),
+    kind TEXT NOT NULL CHECK (kind IN ('HumanCommit', 'ClosedUnmerged', 'MergedUntouched', 'LoggedFindingPickedUp', 'Reverted')),
     head_sha TEXT NOT NULL,
     fingerprint TEXT,
     review_run_id TEXT REFERENCES review_runs(id),
     opened_by TEXT CHECK (opened_by IS NULL OR opened_by IN ('issue_work', 'baseline_repair', 'review_fix', 'conflict_resolution')),
+    reverted_by INTEGER,
     occurred_at TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     CHECK ((kind = 'LoggedFindingPickedUp') = (fingerprint IS NOT NULL)),
+    CHECK ((kind = 'Reverted') = (reverted_by IS NOT NULL)),
     CHECK (kind != 'HumanCommit' OR review_run_id IS NOT NULL)
-  );
+  );`
+}
+
+export const implicitSignalIndexes = `
   CREATE INDEX IF NOT EXISTS implicit_signals_kind_occurred ON implicit_signals(kind, occurred_at DESC);
   CREATE INDEX IF NOT EXISTS implicit_signals_occurred ON implicit_signals(occurred_at);
+`
+
+export const implicitSignalSchema = `
+  ${implicitSignalTable('implicit_signals')}
+  ${implicitSignalIndexes}
   CREATE INDEX IF NOT EXISTS publication_commands_commit_sha ON publication_commands(commit_sha);
   CREATE INDEX IF NOT EXISTS publication_commands_pull_request ON publication_commands(pull_request_number);
 `
@@ -80,6 +94,7 @@ interface SignalRow {
   fingerprint: string | null
   reviewRunId: string | null
   openedBy: OpeningWork | null
+  revertedBy?: number
   occurredAt: string
   recordedAt: string
 }
@@ -87,9 +102,9 @@ interface SignalRow {
 function insertSignal(database: DatabaseSync, row: SignalRow): void {
   database.prepare(`
     INSERT OR IGNORE INTO implicit_signals
-      (id, subject_id, kind, head_sha, fingerprint, review_run_id, opened_by, occurred_at, recorded_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(row.id, row.subjectId, row.kind, row.headSha, row.fingerprint, row.reviewRunId, row.openedBy, row.occurredAt, row.recordedAt)
+      (id, subject_id, kind, head_sha, fingerprint, review_run_id, opened_by, reverted_by, occurred_at, recorded_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(row.id, row.subjectId, row.kind, row.headSha, row.fingerprint, row.reviewRunId, row.openedBy, row.revertedBy ?? null, row.occurredAt, row.recordedAt)
 }
 
 /** Agent work is a pull request the service opened, or one a trusted author such as Harlan opened. */
@@ -221,6 +236,95 @@ export function recordLoggedFindingSignal(database: DatabaseSync, input: { subje
   })
 }
 
+/**
+ * Records reverts around one merge GitHub confirmed, in either order.
+ *
+ * As a revert, the merge marks the pull request it names. As a reverted pull
+ * request, it picks up a revert whose merge was confirmed first: GitHub's read
+ * of this pull request can fail in the poll that confirms its revert, and that
+ * revert is never confirmed again.
+ */
+export function recordRevertSignal(database: DatabaseSync, input: { subjectId: number, pullRequest: GitHubPullRequestItem, at: string }): void {
+  recordRevertOf(database, input)
+  if (input.pullRequest.mergedAt === null)
+    return
+  // LIKE is a cheap prefilter; revertTarget applies the exact rules.
+  const reverts = database.prepare(`
+    SELECT reverts.id, revisions.payload
+    FROM subjects AS merged
+    JOIN subjects AS reverts
+      ON reverts.repository_id = merged.repository_id AND reverts.kind = 'pull_request' AND reverts.id != merged.id
+    JOIN revisions ON revisions.id = reverts.current_revision_id
+    JOIN pull_request_closure_verifications AS verification
+      ON verification.subject_id = reverts.id AND verification.revision_id = revisions.id AND verification.disposition_tag = 'Merged'
+    WHERE merged.id = ?
+      AND json_extract(revisions.payload, '$.mergedAt') >= ?
+      AND (json_extract(revisions.payload, '$.title') LIKE '%revert%' OR json_extract(revisions.payload, '$.body') LIKE '%revert%')
+  `).all(input.subjectId, input.pullRequest.mergedAt) as Array<{ id: number, payload: string }>
+  for (const revert of reverts) {
+    const pullRequest = JSON.parse(revert.payload) as GitHubItem
+    if (pullRequest.kind === 'pull_request')
+      recordRevertOf(database, { subjectId: revert.id, pullRequest, at: input.at })
+  }
+}
+
+/**
+ * Records a revert on the pull request it reverted.
+ *
+ * The revert must name one earlier merged pull request in the same repository
+ * that the service opened or reviewed. Any author may revert it, and any author
+ * may have opened it, because a READY merge that a person reverts is a defect
+ * Review missed. The signal names a Review run only when one answered the
+ * merged head.
+ */
+function recordRevertOf(database: DatabaseSync, input: { subjectId: number, pullRequest: GitHubPullRequestItem, at: string }): void {
+  const { pullRequest } = input
+  if (pullRequest.mergedAt === null)
+    return
+  const target = revertTarget({ repository: pullRequest.repository, title: pullRequest.title, body: pullRequest.body ?? '' })
+  if (target === null)
+    return
+  const row = database.prepare(`
+    SELECT reverted.id, revisions.payload
+    FROM subjects AS revert
+    JOIN subjects AS reverted
+      ON reverted.repository_id = revert.repository_id AND reverted.kind = 'pull_request' AND reverted.id != revert.id
+    JOIN revisions ON revisions.id = reverted.current_revision_id
+    WHERE revert.id = ? AND (reverted.github_number = ? OR json_extract(revisions.payload, '$.mergeCommitSha') = ?)
+    LIMIT 1
+  `).get(
+    input.subjectId,
+    target._tag === 'PullRequest' ? target.number : null,
+    target._tag === 'Commit' ? target.sha : null,
+  ) as { id: number, payload: string } | undefined
+  if (row === undefined)
+    return
+  const reverted = JSON.parse(row.payload) as GitHubItem
+  if (reverted.kind !== 'pull_request' || reverted.mergedAt === null || reverted.mergedAt > pullRequest.mergedAt)
+    return
+  const openedBy = openingWork(database, row.id)
+  const reviewed = database.prepare('SELECT 1 FROM review_runs WHERE subject_id = ? LIMIT 1').get(row.id) !== undefined
+  if (openedBy === null && !reviewed)
+    return
+  const review = database.prepare(`
+    SELECT id FROM review_runs WHERE subject_id = ? AND head_sha = ?
+    ORDER BY completed_at DESC, id DESC
+    LIMIT 1
+  `).get(row.id, reverted.headSha) as { id: string } | undefined
+  insertSignal(database, {
+    id: signalId(['Reverted', row.id]),
+    subjectId: row.id,
+    kind: 'Reverted',
+    headSha: reverted.headSha,
+    fingerprint: null,
+    reviewRunId: review?.id ?? null,
+    openedBy,
+    revertedBy: pullRequest.number,
+    occurredAt: pullRequest.mergedAt,
+    recordedAt: input.at,
+  })
+}
+
 interface ImplicitSignalListRow {
   kind: ImplicitSignalKind
   repository: string
@@ -234,6 +338,7 @@ interface ImplicitSignalListRow {
   outcome_tag: ReviewOutcome['_tag'] | null
   confidence: number | null
   finding_json: string | null
+  reverted_by: number | null
 }
 
 function reviewOf(row: ImplicitSignalListRow): ImplicitSignalReview | null {
@@ -265,6 +370,9 @@ function signalOf(row: ImplicitSignalListRow): ImplicitSignal | null {
       return { ...base, _tag: row.kind, reviewRun }
     case 'LoggedFindingPickedUp':
       return row.finding_json === null ? null : { ...base, _tag: 'LoggedFindingPickedUp', reviewRun, finding: JSON.parse(row.finding_json) as LoggedReviewFinding }
+    case 'Reverted':
+      // The schema requires the reverting pull request.
+      return row.reverted_by === null ? null : { ...base, _tag: 'Reverted', reviewRun, revertedBy: row.reverted_by }
   }
 }
 
@@ -276,7 +384,7 @@ export function createImplicitSignalStore(database: DatabaseSync): ImplicitSigna
       review_runs.id AS review_run_id, review_runs.head_sha AS review_head_sha,
       COALESCE(review_gate_projections.outcome_tag, review_runs.outcome_tag) AS outcome_tag,
       COALESCE(review_gate_projections.confidence, review_runs.confidence) AS confidence,
-      logged_finding_requests.finding_json
+      logged_finding_requests.finding_json, implicit_signals.reverted_by
     FROM implicit_signals
     JOIN subjects ON subjects.id = implicit_signals.subject_id
     JOIN repositories ON repositories.id = subjects.repository_id
