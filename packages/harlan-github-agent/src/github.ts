@@ -65,7 +65,7 @@ interface GitHubPullRequestComment {
 }
 
 export type GitHubReviewRerunRequest = GitHubPullRequestComment & (
-  | { origin: 'Command' | 'FindingReply' }
+  | { origin: 'Command' | 'FindingReply' | 'Stop' }
   | { origin: 'ChangeRequest', instruction: string }
 )
 
@@ -514,7 +514,7 @@ export function createGitHubSource(options: GitHubSourceOptions): GitHubSource {
           const pullRequestNumber = Number(comment.issue_url.split('/').at(-1))
           return author === undefined || !Number.isSafeInteger(pullRequestNumber) || command === null
             ? []
-            : [{ author, commentId: comment.id, ...(command._tag === 'Change' ? { origin: 'ChangeRequest' as const, instruction: command.instruction } : { origin: 'Command' as const }), pullRequestNumber, updatedAt: comment.updated_at }]
+            : [{ author, commentId: comment.id, ...(command._tag === 'Change' ? { origin: 'ChangeRequest' as const, instruction: command.instruction } : { origin: command._tag === 'Stop' ? 'Stop' as const : 'Command' as const }), pullRequestNumber, updatedAt: comment.updated_at }]
         }),
         // A reply whose thread root fell off this page is missed until the
         // root reappears; the next Review still reads it from its snapshot.

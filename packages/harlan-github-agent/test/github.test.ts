@@ -19,6 +19,7 @@ describe('gitHub subjects', () => {
           { id: 6072523996, body: '@harlan-github-agent can we just changing trailingSlash to false ', user: { login: 'harlan-zw' }, issue_url: 'https://api.github.com/repos/harlan-zw/example/issues/109', updated_at: '2026-10-09T01:41:51Z' },
           { id: 2, body: '@harlan-agent rerun', user: { login: 'harlan-zw' }, issue_url: 'https://api.github.com/repos/harlan-zw/example/issues/109', updated_at: '2026-10-09T01:42:00Z' },
           { id: 3, body: 'Mentioned @harlan-agent fix this', user: { login: 'harlan-zw' }, issue_url: 'https://api.github.com/repos/harlan-zw/example/issues/109', updated_at: '2026-10-09T01:43:00Z' },
+          { id: 4, body: '@harlan-agent stop', user: { login: 'harlan-zw' }, issue_url: 'https://api.github.com/repos/harlan-zw/example/issues/109', updated_at: '2026-10-09T01:44:00Z' },
         ] }) },
         pulls: { listReviewCommentsForRepo: async () => ({ data: [] }) },
       } }) as unknown as Octokit,
@@ -31,6 +32,7 @@ describe('gitHub subjects', () => {
     expect(await source.listReviewRerunRequests(repositoryMapping())).toEqual(ok([
       { author: 'harlan-zw', commentId: 6072523996, origin: 'ChangeRequest', instruction: 'can we just changing trailingSlash to false', pullRequestNumber: 109, updatedAt: '2026-10-09T01:41:51Z' },
       { author: 'harlan-zw', commentId: 2, origin: 'Command', pullRequestNumber: 109, updatedAt: '2026-10-09T01:42:00Z' },
+      { author: 'harlan-zw', commentId: 4, origin: 'Stop', pullRequestNumber: 109, updatedAt: '2026-10-09T01:44:00Z' },
     ]))
   })
 

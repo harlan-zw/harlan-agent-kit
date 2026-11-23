@@ -139,7 +139,7 @@ export function canReleasePackages(mapping: RepositoryMapping): boolean {
 }
 
 /** One pull request comment command, tagged as `parsePullRequestCommand` tags it. */
-export type PullRequestCommand = 'Change' | 'Rerun'
+export type PullRequestCommand = 'Change' | 'Rerun' | 'Stop'
 
 /**
  * The comment commands the controller accepts on this pull request.
@@ -147,8 +147,9 @@ export type PullRequestCommand = 'Change' | 'Rerun'
  * Mirrors the command sync and the store, so the canonical comment never offers
  * a command they refuse. An author needs both `allowedAuthors` and a writable
  * author entry. A change also needs the owner of an owned repository and a
- * writable head branch. Mergeability, Approval, Dismissal, and a stopped Review
- * stay with the store, which reads them from the journal.
+ * writable head branch. A stop needs a repository that is not external, as the
+ * Stop Review checkbox does. Mergeability, Approval, Dismissal, and a stopped
+ * Review stay with the store, which reads them from the journal.
  */
 export function acceptedPullRequestCommands(
   mapping: RepositoryMapping,
@@ -162,7 +163,10 @@ export function acceptedPullRequestCommands(
   if (authors.length === 0)
     return []
   const owner = mapping.github.split('/')[0]!.toLowerCase()
-  return mapping.ownership === 'owned' && authors.includes(owner) && canRepairPullRequestHead(mapping, pullRequest)
-    ? ['Change', 'Rerun']
-    : ['Rerun']
+  const change = mapping.ownership === 'owned' && authors.includes(owner) && canRepairPullRequestHead(mapping, pullRequest)
+  return [
+    ...(change ? ['Change' as const] : []),
+    'Rerun',
+    ...(mapping.ownership === 'external' ? [] : ['Stop' as const]),
+  ]
 }

@@ -885,6 +885,10 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     at: string
   }) => PullRequestApprovalResult
   authorizePublication: (input: { commandId: string, workerId: string, fence: number, at: string }) => boolean
+  /**
+   * Cancels Review and follow-up Repair for the current head, once per request id.
+   * The Stop Review checkbox and the `stop` comment command both use it.
+   */
   cancelReviewForHead: (input: { repository: string, pullRequestNumber: number, headSha: string, requestId: string, requestedBy: string, at: string }) => boolean
   /** Stops Service Review for one head when another Agent takes its Review. */
   stopReviewForHead: (input: { repository: string, pullRequestNumber: number, headSha: string, at: string }) => { _tag: 'Stopped' | 'AlreadyStopped' } | { _tag: 'Rejected', reason: 'ItemNotFound' | 'HeadChanged' | 'Dismissed' | 'ReviewStarted' }
@@ -1039,7 +1043,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   isRoutineTrackingIssue: (github: string, issueNumber: number) => boolean
   /** Pull requests absent from the next open snapshot need one exact final GitHub read. */
   listOpenPullRequestNumbers: (github: string) => number[]
-  listOpenPullRequestRevisions: (github: string) => Array<{ number: number, revisionId: string }>
+  listOpenPullRequestRevisions: (github: string) => Array<{ number: number, revisionId: string, headSha: string }>
   /** Old inferred closures need one exact read before GitHub becomes final truth. */
   listUnverifiedClosedPullRequestNumbers: (github: string, limit?: number) => number[]
   /** Records one exact pull request read without trusting a local closure timestamp. */
@@ -5285,6 +5289,26 @@ function planAdversarialReview(
   }
   if (existing !== undefined)
     return
+  // Stop Review binds to the head commit. A base branch move makes a new
+  // Revision of that head, which must not queue Review again. A rerun of the
+  // head after the stop still wins. One poll can apply both at the same time,
+  // so a rerun counts only while the stop has not cancelled its Task.
+  if (subject.kind === 'pull_request' && database.prepare(`
+    SELECT 1 FROM review_cancel_requests AS cancel
+    WHERE cancel.subject_id = ? AND cancel.head_sha = ?
+      AND NOT EXISTS (
+        SELECT 1 FROM review_rerun_requests
+        JOIN worker_tasks ON worker_tasks.id = review_rerun_requests.task_id
+        JOIN revisions ON revisions.id = worker_tasks.revision_id
+        WHERE worker_tasks.subject_id = cancel.subject_id
+          AND json_extract(revisions.payload, '$.headSha') = cancel.head_sha
+          AND review_rerun_requests.requested_at >= cancel.requested_at
+          AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = worker_tasks.id)
+      )
+    LIMIT 1
+  `).get(subjectId, subject.headSha) !== undefined) {
+    return
+  }
 
   const taskId = unusedWorkerTaskId(database, digest(`${mapping.github}:pull_request:${subject.number}:${revisionId}:adversarial_review`), observedAt)
   database.prepare(`
@@ -9204,7 +9228,8 @@ export function openJournalStore(
   const listOpenPullRequestNumbers: JournalStore['listOpenPullRequestNumbers'] = github => listOpenItemNumbers(github, 'pull_request')
 
   const listOpenPullRequestRevisions: JournalStore['listOpenPullRequestRevisions'] = github => database.prepare(`
-    SELECT subjects.github_number AS number, revisions.id AS revisionId
+    SELECT subjects.github_number AS number, revisions.id AS revisionId,
+      json_extract(revisions.payload, '$.headSha') AS headSha
     FROM subjects
     JOIN repositories ON repositories.id = subjects.repository_id
     JOIN revisions ON revisions.id = subjects.current_revision_id
@@ -9212,7 +9237,7 @@ export function openJournalStore(
       AND subjects.kind = 'pull_request'
       AND json_extract(revisions.payload, '$.state') = 'open'
     ORDER BY subjects.github_number
-  `).all(github) as Array<{ number: number, revisionId: string }>
+  `).all(github) as Array<{ number: number, revisionId: string, headSha: string }>
 
   const isItemDismissed: JournalStore['isItemDismissed'] = (github, kind, itemNumber) => database.prepare(`
     SELECT 1

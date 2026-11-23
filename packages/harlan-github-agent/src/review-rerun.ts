@@ -15,14 +15,26 @@ export function isReviewRerunCommand(body: string): boolean {
     || /^@harlan-github-agent(?:\[bot\])?\s+rerun$/i.test(command)
 }
 
-/** Only a leading, exact Agent handle addresses a command to this Service. */
-export function parsePullRequestCommand(body: string): { _tag: 'Rerun' } | { _tag: 'Change', instruction: string } | null {
+export type ParsedPullRequestCommand
+  = | { _tag: 'Rerun' }
+    | { _tag: 'Stop' }
+    | { _tag: 'Change', instruction: string }
+
+/**
+ * Only a leading, exact Agent handle addresses a command to this Service.
+ *
+ * `stop` alone stops Review and follow-up Repair, as `@claude stop` does for
+ * PR Steward. A longer instruction that starts with "stop" stays a change.
+ */
+export function parsePullRequestCommand(body: string): ParsedPullRequestCommand | null {
   if (isReviewRerunCommand(body))
     return { _tag: 'Rerun' }
   const text = body.trim()
   const match = /^(?:\/harlan-agent|@harlan-agent|@harlan-github-agent(?:\[bot\])?)(?=\s)/i.exec(text)
   const instruction = match === null ? undefined : text.slice(match[0].length).trim()
-  return instruction === undefined || instruction === ''
-    ? null
+  if (instruction === undefined || instruction === '')
+    return null
+  return /^stop$/i.test(instruction)
+    ? { _tag: 'Stop' }
     : { _tag: 'Change', instruction }
 }

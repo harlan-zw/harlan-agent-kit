@@ -627,7 +627,7 @@ describe('refreshReviewGates', () => {
     await unconfigured.run()
 
     expect(owned.recorded.staged[0]?.body.split('\n').at(-1))
-      .toMatch(/ · `@harlan-agent rerun` · `@harlan-agent <change>`<\/sub>$/)
+      .toMatch(/ · `@harlan-agent rerun` · `@harlan-agent stop` · `@harlan-agent <change>`<\/sub>$/)
     expect(unconfigured.recorded.staged[0]?.body).not.toContain('@harlan-agent')
   })
 

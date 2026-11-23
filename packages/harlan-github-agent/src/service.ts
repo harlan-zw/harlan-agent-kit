@@ -1477,8 +1477,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         if (result._tag === 'Err') {
           options.logger.error(`Review rerun command: ${result.error}`)
         }
-        else if (result.value.results.some(item => item._tag === 'Queued')) {
-          options.logger.info(`${result.value.repository}: queued work from a pull request command.`)
+        else {
+          if (result.value.results.some(item => item._tag === 'Queued'))
+            options.logger.info(`${result.value.repository}: queued work from a pull request command.`)
+          result.value.results.forEach((item) => {
+            if (item._tag === 'Stopped')
+              options.logger.info(`${result.value.repository}#${item.pullRequestNumber}: stopped Review and follow-up Repair for ${item.headSha.slice(0, 7)} from a pull request command.`)
+          })
         }
       })
       recordPassIncidents('review_rerun', reruns.flatMap(result => result._tag === 'Err' ? [result.error] : []))

@@ -27,14 +27,14 @@ const cases: CommandCase[] = [
     mapping: repositoryMapping(),
     pullRequest: pullRequestItem({ mergeState: 'clean' }),
     allowedAuthors: allowed,
-    commands: ['Change', 'Rerun'],
+    commands: ['Change', 'Rerun', 'Stop'],
   },
   {
     name: 'a maintained repository',
     mapping: repositoryMapping({ ownership: 'maintained' }),
     pullRequest: pullRequestItem({ mergeState: 'clean' }),
     allowedAuthors: allowed,
-    commands: ['Rerun'],
+    commands: ['Rerun', 'Stop'],
   },
   {
     name: 'an external repository',
@@ -48,21 +48,21 @@ const cases: CommandCase[] = [
     mapping: repositoryMapping(),
     pullRequest: pullRequestItem({ mergeState: 'clean', headRepository: 'contributor/example', maintainerCanModify: false }),
     allowedAuthors: allowed,
-    commands: ['Rerun'],
+    commands: ['Rerun', 'Stop'],
   },
   {
     name: 'a head branch outside the writable prefixes',
     mapping: repositoryMapping(),
     pullRequest: pullRequestItem({ mergeState: 'clean', headRef: 'experiment/broken-thing' }),
     allowedAuthors: allowed,
-    commands: ['Rerun'],
+    commands: ['Rerun', 'Stop'],
   },
   {
     name: 'an owned repository whose owner cannot command it',
     mapping: repositoryMapping({ github: 'acme/example' }),
     pullRequest: pullRequestItem({ mergeState: 'clean', repository: 'acme/example', headRepository: 'acme/example', url: 'https://github.com/acme/example/pull/24' }),
     allowedAuthors: allowed,
-    commands: ['Rerun'],
+    commands: ['Rerun', 'Stop'],
   },
   {
     name: 'no allowed author who may write the repository',
@@ -112,7 +112,7 @@ async function storeAccepts(input: CommandCase, command: PullRequestCommand): Pr
   store.syncRepositories([input.mapping], at)
   const requests = input.allowedAuthors.map((author, index) => command === 'Change'
     ? { author, commentId: index + 1, origin: 'ChangeRequest' as const, instruction: 'Rename the option.', pullRequestNumber: input.pullRequest.number, updatedAt: at }
-    : { author, commentId: index + 1, origin: 'Command' as const, pullRequestNumber: input.pullRequest.number, updatedAt: at })
+    : { author, commentId: index + 1, origin: command === 'Stop' ? 'Stop' as const : 'Command' as const, pullRequestNumber: input.pullRequest.number, updatedAt: at })
   const synced = await syncOpenReviewRerunRequests([input.mapping], {
     github: { listReviewRerunRequests: async () => ok(requests) },
     store,
@@ -131,11 +131,13 @@ describe('pull request comment commands', () => {
     const accepted = acceptedPullRequestCommands(input.mapping, input.pullRequest, input.allowedAuthors)
     expect(await storeAccepts(input, 'Change')).toBe(accepted.includes('Change'))
     expect(await storeAccepts(input, 'Rerun')).toBe(accepted.includes('Rerun'))
+    // A draft has no Review to stop, so its footer offers nothing, but the stop is harmless.
+    expect(await storeAccepts(input, 'Stop')).toBe(accepted.includes('Stop') || input.pullRequest.draft)
   })
 
-  it('names both commands when the pull request accepts both', () => {
-    expect(automatedDisclosure({ kind: 'review', commands: ['Change', 'Rerun'] }))
-      .toMatch(/ · `@harlan-agent rerun` · `@harlan-agent <change>`<\/sub>$/)
+  it('names every command the pull request accepts', () => {
+    expect(automatedDisclosure({ kind: 'review', commands: ['Change', 'Rerun', 'Stop'] }))
+      .toMatch(/ · `@harlan-agent rerun` · `@harlan-agent stop` · `@harlan-agent <change>`<\/sub>$/)
   })
 
   it('names only rerun when the pull request accepts only rerun', () => {
