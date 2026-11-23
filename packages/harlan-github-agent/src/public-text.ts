@@ -1,5 +1,6 @@
 import type { JournalStore } from './store.ts'
 import { dirname, isAbsolute, normalize } from 'node:path'
+import { decodeHTMLStrict } from 'entities'
 
 /**
  * Private details that no public body may carry.
@@ -90,20 +91,12 @@ export function privateDetailsFor(sources: PrivateDetailSources): PrivateDetails
 /**
  * The characters the native review writes as numeric entities.
  *
- * One list serves the encoder and the matcher, so a private path cannot slip
- * through the publish boundary in its encoded spelling.
+ * Detection decodes all Markdown entities, including characters outside this list.
  */
 const ENTITY_ENCODED_CHARACTERS = '&<>@[]#`*_~'
 
 export function encodeEntities(value: string): string {
   return [...value].map(character => ENTITY_ENCODED_CHARACTERS.includes(character) ? `&#${character.charCodeAt(0)};` : character).join('')
-}
-
-function decodeEntities(value: string): string {
-  return value.replaceAll(/&#(\d{2,3});/g, (entity, code: string) => {
-    const character = String.fromCharCode(Number(code))
-    return ENTITY_ENCODED_CHARACTERS.includes(character) ? character : entity
-  })
 }
 
 /** One private detail a body carried, named by the deny list entry it matched. */
@@ -140,19 +133,12 @@ function escape(value: string): string {
   return value.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** Matches one literal entry in plain text and in its entity-encoded spelling. */
-function literalPattern(value: string): string {
-  return [...value].map(character => ENTITY_ENCODED_CHARACTERS.includes(character)
-    ? `(?:${escape(character)}|&#${character.charCodeAt(0)};)`
-    : escape(character)).join('')
-}
-
 /**
  * Where an entry ends. A full stop that ends the sentence counts, so
  * `~/scratch.` matches, while `~/scratchpad`, `~/scratch.txt`, and an encoded
  * `~/scratch_old` do not.
  */
-const ENTRY_END = String.raw`(?![\w-]|\.[\w-]|&#95;)`
+const ENTRY_END = String.raw`(?![\w-]|\.[\w-])`
 /** Where a host ends. A host name holds no underscore, so `__host__` emphasis still matches. */
 const HOST_END = String.raw`(?![a-z\d-]|\.[a-z\d-])`
 /**
@@ -176,13 +162,14 @@ interface Detector {
  */
 function detector(details: PrivateDetails): Detector {
   const paths = [...details.paths].sort((left, right) => right.length - left.length)
-  const hosts = [...details.hosts].sort((left, right) => right.length - left.length).map(literalPattern)
+  const hosts = [...details.hosts].sort((left, right) => right.length - left.length).map(escape)
   return {
     details,
     paths,
     path: paths.length === 0
       ? null
-      : new RegExp(String.raw`(?<![\w.~$-])(?:${paths.map(literalPattern).join('|')})${ENTRY_END}`, 'g'),
+      // Match Markdown delimiters separately, so an underscore in a sibling name still stays public.
+      : new RegExp(String.raw`(?<![\w.~$-])(?<emphasis>_{0,3})(?<entry>${paths.map(escape).join('|')})(?:${ENTRY_END}|(?=\k<emphasis>${ENTRY_END}))`, 'g'),
     // User information before an at sign is part of the line, so it goes with it.
     link: hosts.length === 0
       ? null
@@ -191,37 +178,20 @@ function detector(details: PrivateDetails): Detector {
 }
 
 function entryFor(detect: Detector, hit: PrivateDetailHit['_tag'], matched: string): string {
-  const text = decodeEntities(matched)
+  const text = matched
   if (hit === 'Path')
     return detect.paths.find(entry => text === entry) ?? text
   const host = text.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, '').toLowerCase()
   return detect.details.hosts.find(entry => host === entry || host.endsWith(`.${entry}`)) ?? host
 }
 
-/** Every private detail in `text`, with its offset. No pattern can match across a line break. */
-function findDetails(detect: Detector, text: string): Array<{ index: number, hit: PrivateDetailHit }> {
+/** Decode once for detection. Keep the original line for publication and Markdown structure. */
+function lineHits(detect: Detector, line: string): PrivateDetailHit[] {
+  const text = decodeHTMLStrict(line)
   return (['Link', 'Path'] as const).flatMap((tag) => {
     const pattern = tag === 'Link' ? detect.link : detect.path
-    return pattern === null ? [] : [...text.matchAll(pattern)].map(found => ({ index: found.index ?? 0, hit: { _tag: tag, entry: entryFor(detect, tag, found[0]) } }))
+    return pattern === null ? [] : [...text.matchAll(pattern)].map(found => ({ _tag: tag, entry: entryFor(detect, tag, found.groups?.entry ?? found[0]) }))
   })
-}
-
-function lineHits(detect: Detector, line: string): PrivateDetailHit[] {
-  return findDetails(detect, line).map(({ hit }) => hit)
-}
-
-/** The index of the line that holds `offset`, given each line's first offset in order. */
-function lineAt(starts: readonly number[], offset: number): number {
-  let low = 0
-  let high = starts.length - 1
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2)
-    if ((starts[middle] ?? 0) <= offset)
-      low = middle
-    else
-      high = middle - 1
-  }
-  return low
 }
 
 /** The line that stands in for `line`, and the markers it keeps. */
@@ -240,20 +210,15 @@ function removedLine(detect: Detector, line: string): string {
  */
 export function redactPrivateDetails(text: string, details: PrivateDetails): Redaction {
   const detect = detector(details)
-  // One scan of the whole body per pattern, so many short lines cost no more than one long one.
-  const found = findDetails(detect, text)
-  if (found.length === 0)
-    return { text, hits: [] }
-  const lines = text.split('\n')
-  const starts: number[] = []
-  lines.reduce((offset, line) => {
-    starts.push(offset)
-    return offset + line.length + 1
-  }, 0)
-  const affected = new Set(found.map(({ index }) => lineAt(starts, index)))
+  const hits: PrivateDetailHit[] = []
+  const lines = text.split('\n').map((line) => {
+    const found = lineHits(detect, line)
+    hits.push(...found)
+    return found.length === 0 ? line : `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}`
+  })
   return {
-    text: lines.map((line, index) => affected.has(index) ? `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}` : line).join('\n'),
-    hits: found.map(({ hit }) => hit),
+    text: lines.join('\n'),
+    hits,
   }
 }
 

@@ -129,6 +129,7 @@ catalog:
   '@vueuse/nuxt': ^15.0.0
   citty: ^0.2.2
   consola: ^3.4.2
+  entities: 8.1.0
   esbuild: 0.28.2
   eslint: ^10.13.0
   eslint-plugin-harlanzw: ^0.23.0

@@ -200,6 +200,67 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each([
+    '__~/notes/fixture.md__',
+    '_$HOME/scratch/fixture.log_',
+    '__/home/agent/fixture.log__',
+    '__~/notes__',
+    '_~/scratch_',
+  ])('removes an underscore-emphasized path before publishing an issue comment: %s', async (input) => {
+    const store = journal()
+    const sent: string[] = []
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { createComment: async (request: { body: string }) => {
+        sent.push(request.body)
+        return { data: { id: 7 } }
+      } } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+
+    expect(await publisher.createComment({ repository: repositoryMapping(), issueNumber: 24, body: input })).toEqual(ok({ id: 7 }))
+
+    expect(sent).toEqual([removed])
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+  })
+
+  it.each(['&#46;', '&#0000046;', '&#x2e;', '&#X2E;', '&period;'])('removes an entity-encoded private destination before publishing an issue comment: %s', async (dot) => {
+    const store = journal()
+    const sent: string[] = []
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { createComment: async (request: { body: string }) => {
+        sent.push(request.body)
+        return { data: { id: 7 } }
+      } } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+
+    expect(await publisher.createComment({ repository: repositoryMapping(), issueNumber: 24, body: `Read [evidence](https://notes${dot}localhost/fixture.md) now.` })).toEqual(ok({ id: 7 }))
+
+    expect(sent).toEqual([removed])
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('protects emphasized paths and encoded hosts for %s while preserving public siblings', async (writer) => {
+    const input = [
+      '__~/notes/fixture.md__',
+      '[evidence](https://notes&#46;localhost/fixture.md)',
+      'Public text &amp; punctuation stays.',
+      '__~/notes_old/fixture.md__',
+      '_/home/agent_old/fixture.log_',
+      '[public](https://example.com/notes&#46;localhost/fixture.md)',
+      '[public](https://notes&#46;localhost.example.com/fixture.md)',
+    ]
+    const sent: string[] = []
+
+    await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, input.join('\n')).send(async (body) => {
+      sent.push(body)
+    })
+
+    expect(sent).toEqual([[removed, removed, ...input.slice(2)].join('\n')])
+  })
+
   it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes the whole line around a parenthesized private URL before sending a %s', async (writer) => {
     for (const destination of [
       'https://notes.localhost/reports/quarterly(final)/appendix.pdf',
