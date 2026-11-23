@@ -109,6 +109,7 @@ Retain the last 30 days of paired archives and reports. Never delete `state.json
 
 Keep production access read only. Do not commit, push, deploy, mutate databases, or change Sentry state.
 The controller owns issue publication. Return the published report in `report`.
+GitHub shows the report and each Candidate. Follow the [comment voice](../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 State the run's conclusion in `verdict`, as `severity` and `coverage`.
 The issue title reads that field. Never leave the title to the report prose.
 Return only concrete code or repository repairs as Candidates.

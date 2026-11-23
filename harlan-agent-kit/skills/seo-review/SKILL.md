@@ -104,6 +104,7 @@ A low click-through rate on a query is a lead, not a defect. Propose a title or 
 ### Return the report
 
 Return the controller's JSON response with `report` and `candidates`.
+GitHub shows the report and each Candidate. Follow the [comment voice](../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 Keep the Markdown report within 20,000 characters.
 
 Start the report with:

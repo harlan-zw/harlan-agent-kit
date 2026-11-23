@@ -80,6 +80,8 @@ The controller re-judges every row. It refuses a proposal its own rule does not 
 
 ### Return the report
 
+GitHub shows the report and each finding you file. Follow the [comment voice](../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
+
 Keep the Markdown report within 20,000 characters. Start it with:
 
 - The Site ID and origin, and how you matched them.
