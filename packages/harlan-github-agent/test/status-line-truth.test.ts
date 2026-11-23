@@ -119,7 +119,7 @@ describe('a follow-up', () => {
     const decorated = withLoggedFindingControls(source, findings, [], { controls: { _tag: 'Open', repairOnHead: true }, baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })
 
     expect(decorated).toContain('<b>1 follow-up</b> · none block merge')
-    expect(decorated).toContain(`<br>Fix: Query for span overlap with the viewport.\n  [Open the thread beside the code](${thread}) <!-- logged-finding: ${'f'.repeat(64)} -->`)
+    expect(decorated).toContain(`<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ${'f'.repeat(64)} -->\n  [Open the thread beside the code](${thread}) <!-- logged-finding: ${'f'.repeat(64)} -->`)
     expect(decorated).not.toContain('Ask an agent to verify and fix this finding')
     expect(withoutLoggedFindingControls(decorated)).toBe(source)
     expect(withLoggedFindingControls(decorated, findings, [], { controls: { _tag: 'Open', repairOnHead: true }, baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })).toBe(decorated)

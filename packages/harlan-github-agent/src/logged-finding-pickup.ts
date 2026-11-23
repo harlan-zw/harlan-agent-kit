@@ -1,6 +1,6 @@
 import type { ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
-import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, FOLLOW_UP_GROUP_LABEL, isCanonicalFooter, listedFollowUp, plural } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, FOLLOW_UP_GROUP_LABEL, FOLLOW_UP_ROW_MARKER, isCanonicalFooter, listedFollowUp, plural } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type LoggedReviewFinding = Extract<ReviewFinding, { _tag: 'Logged' }>
@@ -182,6 +182,9 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
   mergedIssue?: string | undefined
 } = {}): string {
   const lines = withoutLoggedFindingControls(body).split('\n')
+  // A row names its finding with a marker. A body stored before the marker
+  // has none, so its rows still match by score and title.
+  const marked = lines.some(line => FOLLOW_UP_ROW_MARKER.test(line))
   const rendered = new Set<string>()
   const open = options.controls?._tag === 'Open' ? options.controls : undefined
   const groupRoutes = new Map<number, FollowUpRoute>()
@@ -193,10 +196,11 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
       group = decorated.length
     else if (line === '</details>')
       group = null
+    const rowFingerprint = FOLLOW_UP_ROW_MARKER.exec(line)?.[1]
     const finding = findings.find((finding): finding is LoggedReviewFinding => finding._tag === 'Logged'
       && /^[a-f\d]{64}$/.test(finding.details.fingerprint)
       && !rendered.has(finding.details.fingerprint)
-      && loggedFindingRow(line, finding))
+      && (marked ? rowFingerprint === finding.details.fingerprint : loggedFindingRow(line, finding)))
     if (finding === undefined) {
       decorated.push(line)
       continue

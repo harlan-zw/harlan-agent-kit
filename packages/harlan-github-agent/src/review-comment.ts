@@ -121,22 +121,37 @@ export function listedFollowUp(finding: ReviewFinding): finding is LoggedFinding
 }
 
 /**
+ * The hidden marker that ends one follow-up row and names its finding.
+ *
+ * Two follow-ups can share a score and a title, and the fold lists its rows
+ * by Finding scope, in another order than the findings. So a control binds to
+ * a row by this marker, never by the row's words.
+ */
+export function followUpRowMarker(fingerprint: string): string {
+  return `<!-- follow-up: ${fingerprint.toLowerCase()} -->`
+}
+
+/** The fingerprint a follow-up row names, or undefined for a row written before the marker. */
+export const FOLLOW_UP_ROW_MARKER = /<!-- follow-up: ([a-f\d]{64}) -->$/
+
+/**
  * One follow-up row: score, title, and where, then the proof and the fix.
  *
  * A finding outside the diff gets no thread beside the code, so this row is
  * the only place its evidence shows. It stays one physical line, joined with
- * `<br>`, because `withLoggedFindingControls` finds the row by its score and
- * summary and adds the finding's controls directly under it.
+ * `<br>`, because `withLoggedFindingControls` finds the row by its marker and
+ * adds the finding's controls directly under it.
  */
 export function followUpRow(repository: string | undefined, headSha: string, finding: LoggedFinding): string {
   const location = findingLocation(repository, headSha, finding)
   const proof = cleanText(finding.details.proof).replaceAll(/\s+/g, ' ')
   const fix = finding.nextAction === undefined ? '' : findingNextAction(finding.nextAction).replaceAll(/\s+/g, ' ')
-  return [
+  const marker = /^[a-f\d]{64}$/i.test(finding.details.fingerprint) ? ` ${followUpRowMarker(finding.details.fingerprint)}` : ''
+  return `${[
     `- \`${finding.impact}\` ${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}`,
     ...(proof === '' ? [] : [proof]),
     ...(fix === '' ? [] : [`Fix: ${fix}`]),
-  ].join('<br>')
+  ].join('<br>')}${marker}`
 }
 
 /**
