@@ -2,6 +2,12 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { PackageReleaseCommand, PackageReleasePlan, PackageReleaseRequest, ReleaseNoteApproval } from './package-release.ts'
 import { createHash } from 'node:crypto'
 
+/** Read the literal draft from the exact comment the maintainer approved. */
+function displayedReleaseNote(body: string): string | null {
+  const quoted = /^> (`{3,})markdown\n((?:> [^\n]*\n|>\n)*?)> \1(?=\n|$)/m.exec(body)?.[2]
+  return quoted === undefined ? null : quoted.trimEnd().split('\n').map(line => line === '>' ? '' : line.slice(2)).join('\n')
+}
+
 export type PackageReleaseState
   = | { _tag: 'Available' }
     | { _tag: 'AwaitingMerge', requestedBy: string }
@@ -258,18 +264,21 @@ export function createPackageReleaseStore(database: DatabaseSync) {
      * A stale comment, a replayed delivery, or a draft in any other state changes nothing.
      */
     approveReleaseNote(input: ReleaseNoteApproval & { requestId: string }): boolean {
+      const text = displayedReleaseNote(input.before)
+      if (text === null)
+        return false
       return transaction(() => {
         const fresh = database.prepare('INSERT OR IGNORE INTO package_release_requests VALUES (?, ?)')
           .run(input.repository, input.requestId)
           .changes === 1
         return fresh && database.prepare(`UPDATE package_release_notes
-          SET state=json_object('_tag', 'Approved', 'text', json_extract(state, '$.text'), 'requestedBy', ?)
+          SET state=json_object('_tag', 'Approved', 'text', ?, 'requestedBy', ?)
           WHERE repository=? AND json_extract(state, '$._tag')='Drafted' AND json_extract(subject, '$.pullRequestNumber')=?
           AND EXISTS (SELECT 1 FROM package_releases AS release WHERE release.repository=package_release_notes.repository
             AND release.pull_request_number=? AND release.comment_id=? AND release.body=?
             AND json_extract(release.plan, '$.version')=package_release_notes.version
             AND json_extract(release.state, '$._tag')='Completed')
-        `).run(input.requestedBy, input.repository, input.pullRequestNumber, input.pullRequestNumber, input.commentId, input.before).changes === 1
+        `).run(text, input.requestedBy, input.repository, input.pullRequestNumber, input.pullRequestNumber, input.commentId, input.before).changes === 1
       })
     },
     /** Records the edited GitHub release while the controller holds the release lease. */

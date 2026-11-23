@@ -127,7 +127,7 @@ function literalPattern(value: string): string {
 }
 
 /** Characters a path or URL token runs over. Whitespace, quotes, and Markdown delimiters end it. */
-const TOKEN = String.raw`[^\s'"\`()<>[\]{}|]`
+const TOKEN = String.raw`(?:(?!&#(?:96|60|62|91|93);)[^\s'"\`()<>[\]{}|])`
 /**
  * Where an entry ends. A full stop that ends the sentence counts, so
  * `~/scratch.` matches, while `~/scratchpad`, `~/scratch.txt`, and an encoded
@@ -136,14 +136,14 @@ const TOKEN = String.raw`[^\s'"\`()<>[\]{}|]`
 const TOKEN_END = String.raw`(?![\w-]|\.[\w-]|&#95;)`
 /** Sentence punctuation after a token belongs to the sentence. */
 const TRAILING_PUNCTUATION = /[.,:;!?]+$/
-/** How far a Markdown link's label and target may sit from its private token. */
-const MARKDOWN_REACH = 1_000
 /**
  * A URL authority: any scheme, or none, then `//`. A host after it is the
  * URL's own host and is private. A host after a single slash is a path
  * segment of some other URL, so it stays.
  */
 const AUTHORITY = String.raw`(?:(?<![\w.+-])[a-z][a-z\d+.-]{0,15}:)?(?<![\w./-])//`
+/** User information belongs to the private URL, including its entity-encoded at sign. */
+const USER_INFORMATION = String.raw`(?:[^\s/<>"'\x60]*(?:@|&#64;))?`
 
 interface Matchers {
   path: RegExp | null
@@ -155,8 +155,8 @@ function longestFirst(values: readonly string[]): string[] {
 }
 
 /**
- * Every pattern is anchored on a literal deny list entry, and each repetition
- * is bounded, so one scan does bounded work per character of the body.
+ * Patterns use literal deny list entries. An authority ends at a slash or
+ * delimiter, so matching user information scans only that authority.
  */
 function matchers(details: PrivateDetails): Matchers {
   const paths = longestFirst(details.paths).map(literalPattern)
@@ -168,14 +168,15 @@ function matchers(details: PrivateDetails): Matchers {
     // A bare host that a slash precedes sits inside a public URL's path, so it never starts a match.
     link: hosts.length === 0
       ? null
-      : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-]))(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})(?::\d{1,5})?(?:[/?#]${TOKEN}*)?${TOKEN_END}`, 'gi'),
+      : new RegExp(String.raw`(?:${AUTHORITY}${USER_INFORMATION}|(?<![\w./@-]))(?:[\w-]{1,63}\.){0,8}(?:${hosts.join('|')})(?::\d{1,5})?(?:[/?#]${TOKEN}*)?${TOKEN_END}`, 'gi'),
   }
 }
 
 function entryFor(details: PrivateDetails, hit: PrivateDetailHit['_tag'], token: string): string {
   const text = decodeEntities(token)
   if (hit === 'Link') {
-    const host = text.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, '').split(/[/:?#]/)[0]?.toLowerCase() ?? text
+    const authority = text.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, '').split(/[/?#]/)[0] ?? text
+    const host = authority.slice(authority.lastIndexOf('@') + 1).split(':')[0]!.toLowerCase()
     return details.hosts.find(entry => host === entry || host.endsWith(`.${entry}`)) ?? host
   }
   return longestFirst(details.paths).find(entry => text === entry || text.startsWith(`${entry}/`)) ?? text
@@ -190,24 +191,58 @@ interface Span {
  * The whole Markdown link or autolink whose target is the token at `start`.
  *
  * Its label alone would read as a broken link, so the link goes as a whole.
- * Every search stays on the token's line and within a fixed reach.
+ * Every search stays on the token's line. Redaction consumes the scanned span.
  */
 function linkSpan(text: string, start: number, end: number): Span | null {
-  const targetStart = text[start - 1] === '<' ? start - 1 : start
-  if (text.slice(targetStart - 2, targetStart) !== '](')
-    return text[start - 1] === '<' && text[end] === '>' ? { start: start - 1, end: end + 1 } : null
-  const labelEnd = targetStart - 2
-  const reach = text.slice(Math.max(0, labelEnd - MARKDOWN_REACH), labelEnd)
-  const lineReach = reach.slice(reach.lastIndexOf('\n') + 1)
-  const labelOffset = lineReach.lastIndexOf('[')
-  if (labelOffset === -1 || lineReach.includes(']', labelOffset + 1))
-    return null
-  const labelStart = labelEnd - lineReach.length + labelOffset
-  const after = text.slice(end, end + MARKDOWN_REACH)
-  const close = after.indexOf(')')
-  if (close === -1 || after.slice(0, close).includes('\n'))
-    return null
-  return { start: text[labelStart - 1] === '!' ? labelStart - 1 : labelStart, end: end + close + 1 }
+  const encoded = text.slice(start - 5, start) === '&#60;'
+  const angleLength = encoded ? 5 : text[start - 1] === '<' ? 1 : 0
+  const targetStart = start - angleLength
+  const labelClose = text.slice(targetStart - 6, targetStart) === '&#93;(' ? '&#93;(' : ']('
+  if (text.slice(targetStart - labelClose.length, targetStart) !== labelClose) {
+    const angleClose = encoded ? '&#62;' : '>'
+    return angleLength > 0 && text.startsWith(angleClose, end) ? { start: targetStart, end: end + angleClose.length } : null
+  }
+  const labelEnd = targetStart - labelClose.length
+  const labelOpen = labelClose === '](' ? '[' : '&#91;'
+  const labelStart = text.lastIndexOf(labelOpen, labelEnd - 1)
+  const label = text.slice(labelStart + labelOpen.length, labelEnd)
+  const startOfSpan = labelStart === -1 || label.includes('\n') || label.includes(labelClose.slice(0, -1))
+    ? targetStart
+    : text[labelStart - 1] === '!' ? labelStart - 1 : labelStart
+  let depth = 1
+  let quote: string | null = null
+  let angle = false
+  for (let index = targetStart; index < text.length; index++) {
+    const character = text[index]!
+    if (character === '\n')
+      return { start: startOfSpan, end: index }
+    if (character === '\\') {
+      index++
+      continue
+    }
+    if (text.startsWith('&#60;', index) || text.startsWith('&#62;', index)) {
+      angle = text.startsWith('&#60;', index)
+      index += 4
+      continue
+    }
+    if (quote !== null) {
+      if (character === quote)
+        quote = null
+      continue
+    }
+    if (character === '<')
+      angle = true
+    else if (character === '>')
+      angle = false
+    else if (!angle && (character === '"' || character === '\'') && /\s/.test(text[index - 1] ?? ''))
+      quote = character
+    else if (!angle && character === '(')
+      depth++
+    else if (!angle && character === ')' && --depth === 0)
+      return { start: startOfSpan, end: index + 1 }
+  }
+  // An unclosed private destination has no safe public suffix on this line.
+  return { start: startOfSpan, end: text.length }
 }
 
 function redactTokens(text: string, pattern: RegExp, tag: PrivateDetailHit['_tag'], details: PrivateDetails, hits: PrivateDetailHit[]): string {
@@ -257,7 +292,7 @@ function redactDelimitedPaths(text: string, pattern: RegExp, details: PrivateDet
   return delimited.reduce((current, { span, delimiter, anywhere }) => current.replace(span, (whole, content: string) => {
     pattern.lastIndex = 0
     const found = pattern.exec(content)
-    if (found === null || (!anywhere && found.index !== 0) || !/\s/.test(content.slice(found.index)))
+    if (found === null || (!anywhere && found.index !== 0))
       return whole
     hits.push({ _tag: 'Path', entry: entryFor(details, 'Path', content.slice(found.index).split(/\s/)[0] ?? '') })
     return `${delimiter}${content.slice(0, found.index)}${PRIVATE_PATH_PLACEHOLDER}${delimiter}`

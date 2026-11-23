@@ -638,12 +638,16 @@ it('reads merged pull requests named in the published range for the release note
   expect(pullRequests[1]).toEqual({ number: 21, title: 'perf: cache reads', body: '' })
 })
 
-it('adds an approved draft above the generated release notes once', async () => {
+it.each([
+  ['Empty input no longer throws.', 'Empty input no longer throws.'],
+  ['See [notes](https://fixture-user:fixture-password@notes.localhost/docs/acquisition(final)/internal.pdf).', 'See [private link].'],
+  ['See `~/notes/acquisition(final)[internal].pdf`.', 'See `[private path]`.'],
+])('adds a guarded draft above the generated release notes once: %s', async (text, expected) => {
   const tokens = { getToken: async () => ({ _tag: 'Ok' as const, value: { token: 'test', expiresAt: '2099-01-01' } }), invalidate: () => {} }
   let body = '### Bug Fixes\n\n- handle input'
   const writes: Array<{ path: string, body: unknown }> = []
   const source = createPackageReleaseSource({
-    publicText: testPublicText,
+    publicText: { details: { paths: ['~/notes'], hosts: ['notes.localhost'] }, report: () => {} },
     repository: mapping,
     actors: { repository: { login: 'harlan-github-agent[bot]', tokens }, user: { login: 'unused', tokens } },
     template: async () => '',
@@ -665,9 +669,9 @@ it('adds an approved draft above the generated release notes once', async () => 
       throw new Error(`Unexpected request ${request.method} ${path}`)
     } } }),
   })
-  expect(await source.applyReleaseNote({ tag: 'v1.0.1', text: 'Empty input no longer throws.' })).toBe('https://github.com/harlan-zw/example/releases/tag/v1.0.1')
-  expect(await source.applyReleaseNote({ tag: 'v1.0.1', text: 'Empty input no longer throws.' })).toBe('https://github.com/harlan-zw/example/releases/tag/v1.0.1')
+  expect(await source.applyReleaseNote({ tag: 'v1.0.1', text })).toBe('https://github.com/harlan-zw/example/releases/tag/v1.0.1')
+  expect(await source.applyReleaseNote({ tag: 'v1.0.1', text })).toBe('https://github.com/harlan-zw/example/releases/tag/v1.0.1')
   expect(writes).toHaveLength(1)
-  expect(body.startsWith('Empty input no longer throws.\n\n> Release notes prepared by [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit).')).toBe(true)
+  expect(body.startsWith(`${expected}\n\n> Release notes prepared by [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit).`)).toBe(true)
   expect(body.endsWith('### Bug Fixes\n\n- handle input')).toBe(true)
 })

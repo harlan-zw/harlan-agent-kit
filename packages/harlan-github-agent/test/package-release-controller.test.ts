@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { reconcilePackageReleases } from '../src/package-release-controller.ts'
 import { createPackageReleaseStore } from '../src/package-release-store.ts'
 import { planPackageReleaseBeforeMerge, releaseNoteApproval, renderPackageRelease } from '../src/package-release.ts'
+import { publicBody } from '../src/public-text.ts'
 import { createWebhookApp } from '../src/webhook.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -346,19 +347,28 @@ describe('release note drafts', () => {
     task.database.close()
   })
 
-  it('accepts an approval of the redacted draft GitHub shows, and applies the original draft', async () => {
+  it('applies only the displayed draft after the dashboard hostname changes', async () => {
     const task = setup()
-    // GitHub holds the body after the publish boundary redacted it.
-    task.source.comment = vi.fn(async (_number: number, body: string) => ({ id: 99, body: body.replaceAll('/home/agent/notes.md', '[private path]') }))
+    let hosts = ['old-dashboard.example.test']
+    const outgoing = (writer: 'release comment' | 'GitHub release', body: string) => publicBody({ details: { paths: [], hosts }, report: () => {} }, { repository: repository.github, itemNumber: 24, writer }, body)
+    task.source.comment = vi.fn(async (_number: number, body: string) => ({ id: 99, body: outgoing('release comment', body).text }))
+    const releases: string[] = []
+    task.source.applyReleaseNote = vi.fn(async ({ text }) => outgoing('GitHub release', text).send((body) => {
+      releases.push(body)
+      return url
+    }))
     await publish(task)
     const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
-    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws. See /home/agent/notes.md.' })
+    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws. See https://old-dashboard.example.test/tasks/24.' })
     await task.run()
-    const shown = vi.mocked(task.source.comment).mock.calls.at(-1)![1].replaceAll('/home/agent/notes.md', '[private path]')
+    const shown = task.store.listPackageReleases(repository.github)[0]!.body
+    expect(shown).toContain('See [private link].')
+    hosts = ['new-dashboard.example.test']
 
-    expect(task.store.approveReleaseNote(approval(shown))).toBe(true)
+    expect(createPackageReleaseStore(task.database).approveReleaseNote(approval(shown))).toBe(true)
     await task.run()
-    expect(task.source.applyReleaseNote).toHaveBeenCalledWith({ tag: 'v1.0.1', text: 'Empty input no longer throws. See /home/agent/notes.md.' })
+    expect(releases).toEqual(['Empty input no longer throws. See [private link].'])
+    expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state).toEqual({ _tag: 'Applied', text: releases[0], url })
     task.database.close()
   })
 

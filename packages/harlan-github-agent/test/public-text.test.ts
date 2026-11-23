@@ -1,9 +1,10 @@
 import type { Octokit } from 'octokit'
+import type { PublicTextWriter } from '../src/public-text.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { createGitHubIssuePublisher } from '../src/github.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
-import { createPublicTextGuard, privateDetailsFor, redactPrivateDetails } from '../src/public-text.ts'
+import { createPublicTextGuard, encodeEntities, privateDetailsFor, publicBody, redactPrivateDetails } from '../src/public-text.ts'
 import { ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
@@ -35,6 +36,42 @@ Full notes: https://notes.localhost/notes/ci-review-2026-11-22
 Evidence is in \`~/scratch/ci-review-2026-11-22/\`.`
 
 describe('redactPrivateDetails', () => {
+  it.each(['https://', 'ssh://', '//'])('removes private URL user information after %s', (scheme) => {
+    const text = `Read [notes](${scheme}fixture-user:fixture-password@notes.localhost/report.md) first.`
+    expect(redactPrivateDetails(text, details)).toEqual({ text: 'Read [private link] first.', hits: [{ _tag: 'Link', entry: 'notes.localhost' }] })
+    expect(redactPrivateDetails(encodeEntities(text), details).text).toBe('Read [private link] first.')
+  })
+
+  it('removes the entire authority when user information contains another at sign', () => {
+    expect(redactPrivateDetails('See <https://fixture-user:p@ss@notes.localhost/report.md>.', details).text)
+      .toBe('See [private link].')
+  })
+
+  it.each(['"', '\'', '`', '&#96;'])('preserves %s around a complete private filename', (delimiter) => {
+    const filename = '~/notes/acquisition(final)[internal].pdf'
+    const path = delimiter === '&#96;' ? encodeEntities(filename) : filename
+    expect(redactPrivateDetails(`See ${delimiter}${path}${delimiter} first.`, details).text)
+      .toBe(`See ${delimiter}[private path]${delimiter} first.`)
+  })
+
+  it('preserves native Review encoding around a simple private path', () => {
+    expect(redactPrivateDetails(encodeEntities('See `~/notes/report.md` first.'), details).text)
+      .toBe('See &#96;[private path]&#96; first.')
+  })
+
+  it.each([
+    '[notes](https://notes.localhost/docs/acquisition(final)/internal.pdf)',
+    '[notes](https://notes.localhost/docs/acquisition(a(b)c)/internal.pdf "Title")',
+    '![notes](https://notes.localhost/docs/acquisition\\(final\\)/internal.pdf)',
+  ])('removes the full private Markdown destination: %s', (link) => {
+    expect(redactPrivateDetails(`Read ${link} first.`, details).text).toBe('Read [private link] first.')
+  })
+
+  it('removes a private Markdown destination beyond the former scan limit', () => {
+    const link = `[notes](https://notes.localhost/docs/${'a'.repeat(1200)}(final)/internal.pdf)`
+    expect(redactPrivateDetails(`Read ${link} first.`, details).text).toBe('Read [private link] first.')
+  })
+
   it('removes the notes link and the scratch path from a Routine report', () => {
     const redacted = redactPrivateDetails(leakedReport, details)
 
@@ -137,6 +174,27 @@ describe('redactPrivateDetails', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each<PublicTextWriter>([
+    'automated review',
+    'automated triage',
+    'review comment',
+    'review',
+    'comment',
+    'issue',
+    'pull request description',
+    'release comment',
+    'GitHub release',
+  ])('removes complete private details before sending a %s', (writer) => {
+    const input = 'Read [notes](https://fixture-user:fixture-password@notes.localhost/docs/acquisition(final)/internal.pdf). See `~/notes/acquisition(final)[internal].pdf`.'
+    const source = writer === 'review' ? encodeEntities(input) : input
+    const sent: string[] = []
+    publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, source)
+      .send(body => sent.push(body))
+    expect(sent).toEqual([writer === 'review'
+      ? 'Read [private link]. See &#96;[private path]&#96;.'
+      : 'Read [private link]. See `[private path]`.'])
+  })
+
   it('redacts absolute and home-relative checkout roots before GitHub receives a comment', async () => {
     const sent: string[] = []
     const publisher = createGitHubIssuePublisher({
@@ -459,7 +517,11 @@ describe('review findings on #754', () => {
     expect(redactPrivateDetails('See ~/notes/a.md and /root/scratch/b.log.', rootHome).text).toBe('See [private path] and [private path].')
   })
 
-  it('redacts inline code with spaces after the native review encoded its backticks', async () => {
+  it.each([
+    '~/notes/client handover/a.pdf',
+    '~/notes/acquisition(final)[internal].pdf',
+    '~/notes/report.md',
+  ])('redacts a complete inline path after native Review encoding: %s', async (path) => {
     const store = journal()
     const written: string[] = []
     const client = {
@@ -482,7 +544,7 @@ describe('review findings on #754', () => {
         impact: 40,
         summary: 'The exported file is stale.',
         nextAction: 'Regenerate it.',
-        details: { fingerprint: 'f'.repeat(64), identity: 'stale-handover', location: { path: 'src/a.ts', line: 3 }, proof: 'The file `~/notes/client handover/a.pdf` is stale.' },
+        details: { fingerprint: 'f'.repeat(64), identity: 'stale-handover', location: { path: 'src/a.ts', line: 3 }, proof: `The file \`${path}\` is stale.` },
       }],
     })
 
