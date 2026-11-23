@@ -183,7 +183,9 @@ export function loggedFindingStatuses(database: DatabaseSync, subjectId: number,
     reason: string | null
     evidence: string | null
   }>
-  const repairs = rows.filter(row => !issues.some(issue => issue.fingerprint === row.fingerprint)).map((row): LoggedFindingStatus => ({
+  // A refused issue owns nothing, so it never hides a Repair that owns the finding.
+  const filed = issues.filter(issue => issue._tag === 'Issue')
+  const repairs = rows.filter(row => !filed.some(issue => issue.fingerprint === row.fingerprint)).map((row): LoggedFindingStatus => ({
     _tag: 'Repair',
     fingerprint: row.fingerprint,
     cancellable: row.on_head === 1 && row.dismissed === 0 && (row.state_tag === null || ['Queued', 'Running', 'Publishing'].includes(row.state_tag)),
@@ -199,7 +201,9 @@ export function loggedFindingStatuses(database: DatabaseSync, subjectId: number,
               ? row.on_head === 1 ? 'Publishing the fix.' : 'Opening the repair pull request.'
               : row.state_tag === 'Queued' ? 'Queued.' : row.reason === null ? 'Action required.' : publicFailureCause(row.reason),
   }))
-  return [...issues, ...repairs]
+  // One status per finding: a Repair shows in place of the refusal it outlived.
+  const refused = issues.filter(issue => issue._tag === 'IssueRefused' && !repairs.some(repair => repair.fingerprint === issue.fingerprint))
+  return [...filed, ...repairs, ...refused]
 }
 
 /** The newest confirmed canonical write, including closure after merge. */

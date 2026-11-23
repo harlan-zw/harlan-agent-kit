@@ -1301,6 +1301,29 @@ describe('follow-up routing by Finding scope', () => {
     expect(issue?.body).toContain(finding.summary)
   })
 
+  it('keeps a finding a Repair owns out of the Merged issue, even after its issue was refused', () => {
+    const path = journalPath()
+    const { store, pullRequest, request } = setup([finding, existing], path)
+    // A Repair selected to run after merge, and an issue GitHub refused, both answer the first finding.
+    const journal = new DatabaseSync(path)
+    const subject = journal.prepare('SELECT id FROM subjects WHERE github_number = ?').get(pullRequest.number) as { id: number }
+    journal.prepare(`INSERT INTO logged_finding_requests (id, subject_id, head_sha, base_ref, fingerprint, finding_json, requested_by, requested_at, on_head, dismissed)
+      VALUES (?, ?, ?, ?, ?, ?, 'harlan-zw', ?, 0, 0)`).run('1'.repeat(64), subject.id, pullRequest.headSha, pullRequest.baseRef!, finding.details.fingerprint, JSON.stringify(finding), at)
+    journal.prepare(`INSERT INTO follow_up_issues (id, subject_id, kind, dedupe_key, head_sha, fingerprints, title, body, marker, requested_by, requested_at, state_tag, updated_at)
+      VALUES (?, ?, 'Finding', ?, ?, ?, 'The parser drops buffered bytes', 'Body.', 'Marker.', 'harlan-zw', ?, 'Failed', ?)`).run('2'.repeat(64), subject.id, finding.details.fingerprint, pullRequest.headSha, JSON.stringify([finding.details.fingerprint]), at, at)
+    journal.close()
+    store.recordObservation({ externalId: 'merged', observedAt: at, source: 'poll', subject: { ...pullRequest, state: 'closed', mergedAt: at } })
+
+    const comment = store.claimLoggedFindingComment('status', at, 60_000)!
+    expect(comment.body).toContain(`  Repair: Queued. <!-- logged-finding: ${finding.details.fingerprint} -->`)
+    expect(comment.body).not.toContain('GitHub refused the issue.')
+    expect(store.completeLoggedFindingComment(comment, at)).toBe(true)
+    expect(store.requestLoggedFindingPickup({ ...request, _tag: 'MergedFollowUps', before: comment.body, threads: [] })).toBe(true)
+    const issue = store.claimFollowUpIssue('merged-issue', at, 60_000)
+    expect(issue?.body).toContain(existing.summary)
+    expect(issue?.body).not.toContain(finding.summary)
+  })
+
   it('rejects a Repair tick for a follow-up an issue already owns', () => {
     const { store, pullRequest, request } = setup([finding])
     // Repair cannot write a contributor branch, so the tick files an issue.
