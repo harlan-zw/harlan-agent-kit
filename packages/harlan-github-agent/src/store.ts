@@ -156,6 +156,7 @@ import { repairRecoveryProof } from './repair-recovery.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canResolveConflictPullRequestHead, canWorkIssues, conflictWriteBoundary } from './repository-policy.ts'
 import { err, ok } from './result.ts'
+import { canonicalCommentOutcome } from './review-comment.ts'
 import { createReviewProofStore } from './review-proof-store.ts'
 import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
 import { buildStats } from './stats.ts'
@@ -3202,18 +3203,9 @@ function isProviderCircuitPause(reason: string): boolean {
     || reason.includes('Another Agent Task owns the provider health canary.')
 }
 
+/** The outcome a staged body shows, from its marker, its Status line, or an old heading. */
 function reviewDesiredOutcomeFromBody(body: string): ReviewDesiredOutcome | null {
-  if (body.includes('### 🤖 READY'))
-    return 'READY'
-  if (body.includes('### 🤖 BLOCKED'))
-    return 'BLOCKED'
-  if (body.includes('### 🤖 WAITING'))
-    return 'WAITING'
-  if (body.includes('### 🤖 REVIEW SKIPPED'))
-    return 'SKIPPED'
-  if (body.includes('### 🤖 PENDING'))
-    return 'PENDING'
-  return null
+  return canonicalCommentOutcome(body)
 }
 
 function dashboardQueue(

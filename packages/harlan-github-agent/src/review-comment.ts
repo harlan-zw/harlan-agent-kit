@@ -6,6 +6,26 @@ export const AUTOMATED_REVIEW_MARKER = '<!-- harlan-agent-kit:pr-triage -->'
 /** The login the GitHub App posts as. */
 export const AGENT_ACTOR_LOGIN = 'harlan-github-agent[bot]'
 
+/**
+ * The states a canonical comment shows besides a Review verdict.
+ *
+ * Each one writes its own `workflow-state` tag, so a reader never parses the
+ * visible words. None of these tags reads as a finished Review: only `Review`
+ * and `ReviewSkipped` tell a later head that this head was reviewed.
+ */
+export type CanonicalWorkState
+  = | { _tag: 'Queued', headSha: string, taskKind: 'adversarial_review' | 'review_fix' }
+    | { _tag: 'Stuck', headSha: string, taskKind: 'adversarial_review' | 'review_fix' }
+    | { _tag: 'Repair', headSha: string }
+    | { _tag: 'ReviewStopped', headSha: string }
+    | { _tag: 'RepairStopped', headSha: string }
+    | { _tag: 'ApprovalRequired', headSha: string }
+
+/** The hidden marker line that names one canonical comment state. */
+export function workflowStateLine(state: CanonicalWorkState): string {
+  return `<!-- workflow-state: ${JSON.stringify(state)} -->`
+}
+
 export function reviewFindingSeverity(impact: number): string {
   if (impact >= 91)
     return 'Critical'
@@ -138,7 +158,8 @@ interface ReviewSkippedWorkflowState {
 
 type AutomatedReviewWorkflowState = ReviewWorkflowState | ReviewSkippedWorkflowState
 
-function automatedReviewWorkflowState(body: string): AutomatedReviewWorkflowState | undefined {
+/** The parsed `workflow-state` marker of one comment, or undefined when it has none or it is malformed. */
+function workflowStateMarker(body: string): Record<string, unknown> & { _tag: string } | undefined {
   const encoded = body.match(/<!-- workflow-state: (\{[^\n]+\}) -->/)?.[1]
   if (encoded === undefined)
     return undefined
@@ -150,16 +171,88 @@ function automatedReviewWorkflowState(body: string): AutomatedReviewWorkflowStat
     // GitHub comment text is untrusted. A malformed marker carries no state.
     return undefined
   }
-  if (typeof value !== 'object' || value === null || !('_tag' in value) || !('headSha' in value) || !('baseSha' in value))
+  if (typeof value !== 'object' || value === null || !('_tag' in value) || typeof value._tag !== 'string')
     return undefined
-  if (typeof value.headSha !== 'string' || typeof value.baseSha !== 'string')
+  return value as Record<string, unknown> & { _tag: string }
+}
+
+/** What a canonical comment says about its head: the Review outcome, or a state with none. */
+export type CanonicalCommentOutcome = 'READY' | 'PENDING' | 'BLOCKED' | 'WAITING' | 'SKIPPED'
+
+/**
+ * The first visible line of every canonical comment: one dot, then the bold outcome.
+ *
+ * A trusted maintainer's comment may carry this line without a marker, so a
+ * reader falls back to it.
+ */
+const STATUS_LINE = /^([⚪🟢🟠🟣]) (\*\*[^*\n]+\*\*.*)$/mu
+/** The heading every comment carried before the Status line. Old comments stay on GitHub and in the Journal. */
+const LEGACY_HEADING = /^### 🤖 (READY|PENDING|BLOCKED|WAITING|REVIEW SKIPPED)\b/m
+
+const statusOutcomes: Record<string, CanonicalCommentOutcome> = {
+  'Ready': 'READY',
+  'Pending': 'PENDING',
+  'Blocked': 'BLOCKED',
+  'Review skipped': 'SKIPPED',
+}
+
+/**
+ * The outcome one canonical comment shows, read without its visible words where it can be.
+ *
+ * The `workflow-state` marker decides when the comment carries one. A body
+ * without one falls back to the Status line, then to the `### 🤖` heading of
+ * a comment written before the Status line existed. Repair stopping reads as
+ * BLOCKED, as its old heading did.
+ */
+export function canonicalCommentOutcome(body: string): CanonicalCommentOutcome | null {
+  const state = workflowStateMarker(body)
+  if (state !== undefined) {
+    switch (state._tag) {
+      case 'Review':
+        return ['READY', 'PENDING', 'BLOCKED'].includes(String(state.outcome)) ? state.outcome as CanonicalCommentOutcome : null
+      case 'ReviewSkipped':
+        return 'SKIPPED'
+      case 'WaitingForBaselineRepair':
+        return 'WAITING'
+      case 'RepairStopped':
+        return 'BLOCKED'
+      default:
+        return null
+    }
+  }
+  const status = body.match(STATUS_LINE)?.[2]?.match(/^\*\*([^*]+)\*\*/)?.[1]
+  if (status !== undefined)
+    return statusOutcomes[status] ?? null
+  const heading = body.match(LEGACY_HEADING)?.[1]
+  return heading === undefined ? null : heading === 'REVIEW SKIPPED' ? 'SKIPPED' : heading as CanonicalCommentOutcome
+}
+
+/**
+ * The first visible line of a canonical comment as plain text, for a check run title.
+ *
+ * Reads the Status line without its Markdown, or the old `### ` heading.
+ */
+export function canonicalCommentHeadline(body: string): string | undefined {
+  const status = body.match(STATUS_LINE)
+  if (status !== null) {
+    const text = status[2]!
+      .replaceAll(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replaceAll(/\*\*|~~|`/g, '')
+    return `${status[1]} ${text}`.trim()
+  }
+  return body.match(/^### (.+)$/m)?.[1]
+}
+
+function automatedReviewWorkflowState(body: string): AutomatedReviewWorkflowState | undefined {
+  const value = workflowStateMarker(body)
+  if (value === undefined || typeof value.headSha !== 'string' || typeof value.baseSha !== 'string')
     return undefined
   if (value._tag === 'ReviewSkipped')
-    return { _tag: value._tag, headSha: value.headSha, baseSha: value.baseSha }
-  if (value._tag !== 'Review' || !('outcome' in value) || !['READY', 'PENDING', 'BLOCKED'].includes(String(value.outcome)))
+    return { _tag: 'ReviewSkipped', headSha: value.headSha, baseSha: value.baseSha }
+  if (value._tag !== 'Review' || !['READY', 'PENDING', 'BLOCKED'].includes(String(value.outcome)))
     return undefined
   return {
-    _tag: value._tag,
+    _tag: 'Review',
     headSha: value.headSha,
     baseSha: value.baseSha,
     outcome: value.outcome as ReviewWorkflowState['outcome'],
@@ -174,7 +267,8 @@ export function automatedReviewHead(body: string): string | undefined {
 }
 
 function reviewState(body: string): 'active' | 'complete' {
-  return /^### 🤖 (?:READY|BLOCKED|REVIEW SKIPPED)\b/m.test(body)
+  const outcome = canonicalCommentOutcome(body)
+  return outcome === 'READY' || outcome === 'BLOCKED' || outcome === 'SKIPPED'
     || /^\*\*(?:PASS|PENDING|BLOCKED)\b/m.test(body)
     ? 'complete'
     : 'active'

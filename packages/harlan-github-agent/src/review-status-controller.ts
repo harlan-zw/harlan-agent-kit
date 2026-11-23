@@ -10,7 +10,7 @@ import { repairRoundLabel } from './repair-rounds.ts'
 import { err, ok } from './result.ts'
 import { REVIEW_CANCEL_CONTROL } from './review-cancel.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, workflowStateLine } from './review-comment.ts'
 
 export interface ReviewStatusController {
   publish: (task: ClaimedAdversarialReviewTask, phase: 'snapshot' | 'review' | 'terminal', body: string, signal: AbortSignal) => Promise<Result<PublishedReviewStatus, string>>
@@ -337,6 +337,7 @@ export function repairProgressComment(task: Pick<ClaimedReviewFixTask, 'pullRequ
   return [
     AUTOMATED_REVIEW_MARKER,
     `<!-- reviewed-sha: ${task.pullRequest.headSha} -->`,
+    workflowStateLine({ _tag: 'Repair', headSha: task.pullRequest.headSha }),
     `### 🤖 REPAIR · ${repairRoundLabel(task.rounds)}`,
     '',
     automatedDisclosure({ kind: 'repair update' }),

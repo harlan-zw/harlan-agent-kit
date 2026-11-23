@@ -31,7 +31,7 @@ import { isPublishedForm, preservePublishedRedactions, publicBody } from './publ
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
-import { AGENT_ACTOR_LOGIN, AUTOMATED_REVIEW_MARKER, automatedReviewHead, priorAutomatedReviewForHead } from './review-comment.ts'
+import { AGENT_ACTOR_LOGIN, AUTOMATED_REVIEW_MARKER, automatedReviewHead, canonicalCommentOutcome, priorAutomatedReviewForHead } from './review-comment.ts'
 import { findingDiscussions, inlineReviewComment, reviewFindingThreadFingerprint } from './review-finding-threads.ts'
 import { jobExecutionContext } from './worker-github-evidence.ts'
 
@@ -888,11 +888,13 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         if (prior._tag !== 'Found' || prior.state !== 'complete' || comment?.html_url !== prior.url)
           return err({ _tag: 'Permanent', message: 'The completed review changed before its label was restored.' })
         const body = comment.body ?? ''
-        const outcome = body.match(/^### 🤖 (READY|BLOCKED|REVIEW SKIPPED)\b/m)?.[1]
-          ?? body.match(/^\*\*(PASS|PENDING|BLOCKED)\b/m)?.[1]
+        const current = canonicalCommentOutcome(body)
+        const outcome = current === 'READY' || current === 'BLOCKED' || current === 'SKIPPED'
+          ? current
+          : body.match(/^\*\*(PASS|PENDING|BLOCKED)\b/m)?.[1]
         const label = outcome === 'PASS' || outcome === 'READY'
           ? 'READY'
-          : outcome === 'REVIEW SKIPPED'
+          : outcome === 'SKIPPED'
             ? 'ADVERSARIAL_REVIEW_SKIPPED'
             : outcome === 'PENDING' || outcome === 'BLOCKED' ? outcome : null
         if (label === null)

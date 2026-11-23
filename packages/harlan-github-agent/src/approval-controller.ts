@@ -5,7 +5,7 @@ import type { GitHubItem, GitHubPullRequestItem, RepositoryMapping } from './typ
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { err, ok } from './result.ts'
 import { REVIEW_APPROVAL_CONTROL } from './review-approval.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, workflowStateLine } from './review-comment.ts'
 
 export interface ApprovalController {
   reconcile: (repository: RepositoryMapping, subject: GitHubItem, revisionId: string, signal: AbortSignal) => Promise<Result<void, string>>
@@ -22,6 +22,7 @@ export interface ApprovalControllerOptions {
 function approvalPrompt(label: string, headSha: string, baseRef: string | undefined, controls: boolean): string {
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${headSha} -->${baseRef === undefined ? '' : `\n<!-- target-branch: ${encodeURIComponent(baseRef)} -->`}
+${workflowStateLine({ _tag: 'ApprovalRequired', headSha })}
 ### 🤖 REVIEW PAUSED
 
 ${automatedDisclosure({ kind: 'status' })}

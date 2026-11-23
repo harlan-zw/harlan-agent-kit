@@ -6,7 +6,7 @@ import type { RepositoryMapping } from './types.ts'
 import { publicFailureCause } from './failure.ts'
 import { err, ok } from './result.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, reviewFindingCodeLink, reviewFindingFollowUp } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, reviewFindingCodeLink, reviewFindingFollowUp, workflowStateLine } from './review-comment.ts'
 import { cleanLine, updatedAtLabel } from './text.ts'
 
 export type StoppedReviewOutcome
@@ -121,6 +121,7 @@ ${review.findings.length === 0 ? 'No material findings were recorded.' : review.
         : `- **Open:** ${cleanLine(finding.summary)}${/[.!?]$/.test(cleanLine(finding.summary)) ? '' : '.'}${reviewFindingCodeLink(review.repository, review.headSha, finding)} Next: ${cleanLine(finding.nextAction)}`)
     return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${review.headSha} -->
+${workflowStateLine({ _tag: 'RepairStopped', headSha: review.headSha })}
 ### 🤖 BLOCKED
 
 ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, notes: ['A person still decides the merge.'], updatedAt: updatedAtLabel(at) })}
@@ -131,6 +132,7 @@ ${findings.join('\n')}`
   }
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${review.headSha} -->
+${workflowStateLine({ _tag: 'ReviewStopped', headSha: review.headSha })}
 ### 🤖 STOPPED
 
 ${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, notes: ['A person still decides the merge.'], updatedAt: updatedAtLabel(at) })}

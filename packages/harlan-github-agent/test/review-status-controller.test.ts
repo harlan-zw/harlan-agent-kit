@@ -128,6 +128,7 @@ describe('review status controller', () => {
     expect(repairProgressComment(task)).toBe([
       '<!-- harlan-agent-kit:pr-triage -->',
       `<!-- reviewed-sha: ${task.pullRequest.headSha} -->`,
+      `<!-- workflow-state: {"_tag":"Repair","headSha":"${task.pullRequest.headSha}"} -->`,
       '### 🤖 REPAIR · round 1 of 3',
       '',
       '> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated repair update. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).',

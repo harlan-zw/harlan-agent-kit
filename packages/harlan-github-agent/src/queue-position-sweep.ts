@@ -4,7 +4,7 @@ import type { JournalStore, QueuedReviewHistory, QueuedReviewStatus, ReviewAttem
 import type { RepositoryMapping } from './types.ts'
 import { publicFailureCause } from './failure.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, workflowStateLine } from './review-comment.ts'
 
 const workLabel: Record<QueuedReviewStatus['taskKind'], string> = {
   adversarial_review: 'Review',
@@ -89,6 +89,7 @@ export function queuePositionComment(status: QueuedReviewStatus): string {
   const lines = [history, attemptLine].filter((line): line is string => line !== null)
   return `${AUTOMATED_REVIEW_MARKER}
 <!-- reviewed-sha: ${status.headSha} -->
+${workflowStateLine({ _tag: attempt._tag === 'Stuck' ? 'Stuck' : 'Queued', headSha: status.headSha, taskKind: status.taskKind })}
 ### 🤖 ${heading}
 
 ${automatedDisclosure({ kind: 'review', notes: ['The Dashboard shows the exact Queue position.'] })}
