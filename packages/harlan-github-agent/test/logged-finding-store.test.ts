@@ -250,6 +250,40 @@ describe('durable Logged finding pickup', () => {
     expect(upgraded.claimReviewFindingThreadSync('threads', at, 60_000)).toMatchObject({ reviewRunId: 'review' })
   })
 
+  it('neither offers nor accepts an issue tick for a follow-up a Repair already owns', async () => {
+    // No Finding scope, so the follow-up routes to an issue. A Repair selected before the upgrade owns it.
+    const unscoped = { ...finding, details: { fingerprint: finding.details.fingerprint, identity: finding.details.identity, location: finding.details.location, proof: finding.details.proof } }
+    const { store, pullRequest, request, body } = setup([unscoped], ':memory:', 'legacy')
+    const issueThread = reviewFindingThreadBody(unscoped, { headSha: pullRequest.headSha, baseRef: pullRequest.baseRef, repairOnHead: true })
+    expect(issueThread).toContain('File this finding as an issue')
+
+    // The upgrade resyncs the open thread. It must not gain an issue control.
+    store.queueReviewFindingThreadSync('review', at)
+    const edits: string[] = []
+    const controller = createFindingThreadSyncController({ store, workerId: 'threads', now: () => new Date(at), readPullRequest: async () => ok(pullRequest), controls: () => true, mirror: { report: () => {}, source: {
+      listReviewFindingThreads: async () => ok([{ threadId: 'thread', fingerprint: unscoped.details.fingerprint, resolved: false, comment: { id: 101, body: 'An earlier thread body.' } }]),
+      postReviewFindingComment: async () => ok({ _tag: 'OutsideDiff' }),
+      resolveReviewFindingThread: async () => ok(undefined),
+      editReviewFindingComment: async (_mapping, comment, next) => {
+        edits.push(next)
+        return ok({ id: comment.id, body: next })
+      },
+    } } })
+    expect(await controller.run(new AbortController().signal)).toMatchObject([{ outcome: { _tag: 'Written' } }])
+    expect(edits).toHaveLength(1)
+    expect(edits[0]).not.toContain('- [ ]')
+
+    // A control issued before the Repair, inline or in the canonical comment, stages no issue.
+    store.queueReviewFindingThreadSync('review', at)
+    const sync = store.claimReviewFindingThreadSync('receipts', at, 60_000)
+    if (sync !== null)
+      store.completeReviewFindingThreadSync(sync, at, [{ fingerprint: unscoped.details.fingerprint, commentId: 101, body: issueThread, resolved: false }])
+    expect(store.requestLoggedFindingPickup({ ...request, inline: true, commentId: 101, before: issueThread, fingerprints: [], issueFingerprints: [unscoped.details.fingerprint] })).toBe(false)
+    expect(body).toContain(`File this finding as an issue <!-- logged-finding: ${unscoped.details.fingerprint} -->`)
+    expect(store.requestLoggedFindingPickup({ ...request, before: body, fingerprints: [], issueFingerprints: [unscoped.details.fingerprint] })).toBe(false)
+    expect(store.claimFollowUpIssue('issues', at, 60_000)).toBeNull()
+  })
+
   it('dismisses a Repair selected before Finding scope existed', () => {
     const path = journalPath()
     const unscoped = { ...finding, details: { fingerprint: finding.details.fingerprint, identity: finding.details.identity, location: finding.details.location, proof: finding.details.proof } }
@@ -1214,6 +1248,19 @@ describe('follow-up routing by Finding scope', () => {
     expect(issue?.title).toBe('Follow-ups from #24')
     expect(issue?.body).toContain(existing.summary)
     expect(issue?.body).toContain(finding.summary)
+  })
+
+  it('rejects a Repair tick for a follow-up an issue already owns', () => {
+    const { store, pullRequest, request } = setup([finding])
+    // Repair cannot write a contributor branch, so the tick files an issue.
+    store.recordObservation({ externalId: 'contributor-branch', observedAt: at, source: 'poll', subject: { ...pullRequest, headRef: 'contributor-branch' } })
+    const comment = store.claimLoggedFindingComment('status', at, 60_000)!
+    expect(store.completeLoggedFindingComment(comment, at)).toBe(true)
+    expect(store.requestLoggedFindingPickup(issueTick(request, finding.details.fingerprint, comment.body))).toBe(true)
+    // The branch becomes writable again, and a stale Repair control arrives for the same head.
+    store.recordObservation({ externalId: 'writable-again', observedAt: at, source: 'poll', subject: pullRequest })
+    expect(store.requestLoggedFindingPickup({ ...request, before: comment.body })).toBe(false)
+    expect(store.claimNextReviewFixTask('repair', at, 60_000)).toBeNull()
   })
 
   it('files every unfixed follow-up as one issue from the Merged comment, once', () => {

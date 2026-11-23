@@ -135,6 +135,18 @@ function dismissalControl(fingerprint: string): string {
 }
 
 /**
+ * Each follow-up that has an owner, by fingerprint, to the kind of work that owns it.
+ *
+ * A Repair selection owns its finding, dismissed or not, and so does an
+ * issue filed or on its way. One finding never gets both kinds of work, and
+ * a finding with an owner gets no control. An issue GitHub refused for good
+ * owns nothing.
+ */
+export function followUpOwners(statuses: readonly LoggedFindingStatus[]): Map<string, 'Repair' | 'Issue'> {
+  return new Map(statuses.flatMap(status => status._tag === 'IssueRefused' ? [] : [[status.fingerprint, status._tag] as const]))
+}
+
+/**
  * The follow-ups the Merged control would file: listed, and with no owner.
  *
  * An owner is a Repair selected before merge, an issue filed or on its way,
@@ -142,7 +154,7 @@ function dismissalControl(fingerprint: string): string {
  * Merged issue is its fallback.
  */
 export function unfixedFollowUps(findings: readonly ReviewFinding[], statuses: readonly LoggedFindingStatus[]): LoggedReviewFinding[] {
-  const owned = new Set(statuses.filter(status => status._tag !== 'IssueRefused').map(status => status.fingerprint))
+  const owned = followUpOwners(statuses)
   return findings.filter((finding): finding is LoggedReviewFinding => listedFollowUp(finding)
     && /^[a-f\d]{64}$/.test(finding.details.fingerprint)
     && !owned.has(finding.details.fingerprint))

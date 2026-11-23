@@ -65,6 +65,8 @@ interface FindingThreadOptions {
    * whether a finding in this change gets the Repair control or the issue one.
    */
   controls?: { repairOnHead: boolean }
+  /** Follow-ups a Repair or an issue already owns, by fingerprint. Their threads offer no control. */
+  owned?: ReadonlySet<string>
   baseRef?: string
   fixed?: readonly VerifiedFindingRepair[]
   repairStatus?: FindingRepairStatus
@@ -198,9 +200,12 @@ export function reviewFindingThreadBody(finding: ThreadFinding, controls?: { hea
  *
  * A rerun can score a threaded follow-up below the floor. Its thread then
  * keeps its text and loses the control, as a new one would never get it.
+ * A follow-up that already has an owner loses it too, as its canonical row
+ * shows a status in place of a control.
  */
 function threadControls(headSha: string, finding: ThreadFinding, options: FindingThreadOptions): { headSha: string, baseRef: string | undefined, repairOnHead: boolean } | undefined {
   return options.controls === undefined || (finding._tag === 'Logged' && finding.impact < FOLLOW_UP_FLOOR)
+    || options.owned?.has(finding.details.fingerprint.toLowerCase()) === true
     ? undefined
     : { headSha, baseRef: options.baseRef, repairOnHead: options.controls.repairOnHead }
 }

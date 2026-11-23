@@ -7,7 +7,7 @@ import { mayRetryFailure, publicFailureCause } from './failure.ts'
 import { followUpIssue, isPublishedFollowUp, mergedFollowUpsIssue } from './follow-up-issue.ts'
 import { githubAccountBody } from './github-account.ts'
 import { recordLoggedFindingSignal } from './implicit-signal-store.ts'
-import { followUpRoute, normalizeLoggedFindingControls, unfixedFollowUps, withLoggedFindingControls } from './logged-finding-pickup.ts'
+import { followUpOwners, followUpRoute, normalizeLoggedFindingControls, unfixedFollowUps, withLoggedFindingControls } from './logged-finding-pickup.ts'
 import { isPublishedForm } from './public-text.ts'
 import { canFileFollowUpIssue, canRepairBaseline, canRepairSelectedFindingOnHead } from './repository-policy.ts'
 import { automatedReviewHead } from './review-comment.ts'
@@ -153,6 +153,50 @@ function issueStatus(row: { state_tag: string, github_issue_number: number | nul
   return one ? 'Filing an issue.' : 'Filing these as one issue.'
 }
 
+/**
+ * Each follow-up's disposition on the pull request's current head: its Repair or its issue.
+ *
+ * Every control reads this one answer, in the canonical comment and in the
+ * thread beside the code, so no surface offers work another already owns.
+ */
+export function loggedFindingStatuses(database: DatabaseSync, subjectId: number, pullRequest: GitHubPullRequestItem): LoggedFindingStatus[] {
+  // A filed issue answers its finding on every later head, so it outranks a Repair row.
+  const issues = (database.prepare(`SELECT dedupe_key AS fingerprint, state_tag, github_issue_number
+    FROM follow_up_issues WHERE subject_id = ? AND kind = 'Finding'`)
+    .all(subjectId) as Array<{ fingerprint: string, state_tag: string, github_issue_number: number | null }>)
+    .map((row): LoggedFindingStatus => ({ _tag: row.state_tag === 'Failed' ? 'IssueRefused' : 'Issue', fingerprint: row.fingerprint, status: issueStatus(row, true) }))
+  const rows = database.prepare(`
+    SELECT requests.fingerprint, requests.on_head, requests.dismissed, tasks.state_tag, tasks.progress_label, tasks.reason, tasks.evidence
+    FROM logged_finding_requests AS requests LEFT JOIN tasks ON tasks.id = requests.task_id
+    WHERE requests.subject_id = ? AND requests.head_sha = ? AND requests.base_ref = ?
+  `).all(subjectId, pullRequest.headSha, pullRequest.baseRef ?? '') as unknown as Array<{
+    fingerprint: string
+    on_head: number
+    dismissed: number
+    state_tag: string | null
+    progress_label: string | null
+    reason: string | null
+    evidence: string | null
+  }>
+  const repairs = rows.filter(row => !issues.some(issue => issue.fingerprint === row.fingerprint)).map((row): LoggedFindingStatus => ({
+    _tag: 'Repair',
+    fingerprint: row.fingerprint,
+    cancellable: row.on_head === 1 && row.dismissed === 0 && (row.state_tag === null || ['Queued', 'Running', 'Publishing'].includes(row.state_tag)),
+    status: row.dismissed === 1
+      ? 'Dismissed.'
+      : row.state_tag === null
+        ? row.on_head === 0 && pullRequest.mergedAt === null ? 'Queued after merge.' : 'Queued.'
+        : row.state_tag === 'Completed'
+          ? row.evidence ?? 'Completed.'
+          : row.state_tag === 'Running'
+            ? row.progress_label ?? 'Verifying the finding.'
+            : row.state_tag === 'Publishing'
+              ? row.on_head === 1 ? 'Publishing the fix.' : 'Opening the repair pull request.'
+              : row.state_tag === 'Queued' ? 'Queued.' : row.reason === null ? 'Action required.' : publicFailureCause(row.reason),
+  }))
+  return [...issues, ...repairs]
+}
+
 /** The newest confirmed canonical write, including closure after merge. */
 const candidatesSql = `
   WITH publications AS (
@@ -238,43 +282,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
       .map(receipt => [receipt.fingerprint, `${pullRequest.url}#discussion_r${receipt.commentId}`]))
   }
 
-  function statuses(subjectId: number, pullRequest: GitHubPullRequestItem): LoggedFindingStatus[] {
-    // A filed issue answers its finding on every later head, so it outranks a Repair row.
-    const issues = (database.prepare(`SELECT dedupe_key AS fingerprint, state_tag, github_issue_number
-      FROM follow_up_issues WHERE subject_id = ? AND kind = 'Finding'`)
-      .all(subjectId) as Array<{ fingerprint: string, state_tag: string, github_issue_number: number | null }>)
-      .map((row): LoggedFindingStatus => ({ _tag: row.state_tag === 'Failed' ? 'IssueRefused' : 'Issue', fingerprint: row.fingerprint, status: issueStatus(row, true) }))
-    const rows = database.prepare(`
-      SELECT requests.fingerprint, requests.on_head, requests.dismissed, tasks.state_tag, tasks.progress_label, tasks.reason, tasks.evidence
-      FROM logged_finding_requests AS requests LEFT JOIN tasks ON tasks.id = requests.task_id
-      WHERE requests.subject_id = ? AND requests.head_sha = ? AND requests.base_ref = ?
-    `).all(subjectId, pullRequest.headSha, pullRequest.baseRef ?? '') as unknown as Array<{
-      fingerprint: string
-      on_head: number
-      dismissed: number
-      state_tag: string | null
-      progress_label: string | null
-      reason: string | null
-      evidence: string | null
-    }>
-    const repairs = rows.filter(row => !issues.some(issue => issue.fingerprint === row.fingerprint)).map((row): LoggedFindingStatus => ({
-      _tag: 'Repair',
-      fingerprint: row.fingerprint,
-      cancellable: row.on_head === 1 && row.dismissed === 0 && (row.state_tag === null || ['Queued', 'Running', 'Publishing'].includes(row.state_tag)),
-      status: row.dismissed === 1
-        ? 'Dismissed.'
-        : row.state_tag === null
-          ? row.on_head === 0 && pullRequest.mergedAt === null ? 'Queued after merge.' : 'Queued.'
-          : row.state_tag === 'Completed'
-            ? row.evidence ?? 'Completed.'
-            : row.state_tag === 'Running'
-              ? row.progress_label ?? 'Verifying the finding.'
-              : row.state_tag === 'Publishing'
-                ? row.on_head === 1 ? 'Publishing the fix.' : 'Opening the repair pull request.'
-                : row.state_tag === 'Queued' ? 'Queued.' : row.reason === null ? 'Action required.' : publicFailureCause(row.reason),
-    }))
-    return [...issues, ...repairs]
-  }
+  const statuses = (subjectId: number, pullRequest: GitHubPullRequestItem): LoggedFindingStatus[] => loggedFindingStatuses(database, subjectId, pullRequest)
 
   /** The Merged issue's status for this head, once a person ticked it. */
   function mergedIssue(subjectId: number, headSha: string): string | undefined {
@@ -436,7 +444,13 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         WHERE subject_id = ? AND head_sha = ? AND base_ref = ? AND fingerprint = ? AND on_head = 1`)
         .get(candidate.subject_id, input.headSha, pullRequest.baseRef ?? '', fingerprint) !== undefined
       const routesToRepair = (finding: LoggedReviewFinding | undefined) => finding !== undefined && followUpRoute(finding, controls.repairOnHead) === 'Repair'
+      // A control issued before another kind of work took the finding must not
+      // add a second kind. The same kind repeats safely, as a redelivery does.
+      const owners = followUpOwners(statuses(candidate.subject_id, pullRequest))
+      const ownedBy = (finding: LoggedReviewFinding | undefined, kind: 'Repair' | 'Issue') => finding !== undefined && owners.get(finding.details.fingerprint) === kind
       if ([...repairFindings, ...dismissFindings, ...issueFindings].includes(undefined)
+        || issueFindings.some(finding => ownedBy(finding, 'Repair'))
+        || repairFindings.some(finding => ownedBy(finding, 'Issue'))
         || repairFindings.some(finding => !routesToRepair(finding))
         || dismissFindings.some(finding => !routesToRepair(finding) && (finding === undefined || !selectedOnHead(finding.details.fingerprint)))
         || (dismissed.length > 0 && (input.inline === true || dismissed.some(fingerprint => repairs.includes(fingerprint))))) {

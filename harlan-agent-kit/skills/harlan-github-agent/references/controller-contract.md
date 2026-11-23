@@ -374,6 +374,7 @@ Route each tick on an open pull request by scope:
 | Unknown | File it as an issue. Never route an unknown scope to Repair. |
 
 Accept a Repair checkbox only when its finding still routes to Repair. Accept an issue checkbox on any open pull request that offers controls.
+Give one finding one kind of work. Reject an issue tick for a finding a Repair selection owns, and a Repair tick for a finding an issue owns. A thread offers no control for a finding that has an owner, as its canonical row shows a status instead.
 Persist each selection before waking Repair. Reject stale selections and duplicate work.
 Run scoped Repair on the current pull request branch. Require a failing regression test before editing.
 Preserve pending selections across a confirmed scoped Repair push on the same branch. A contributor push or retarget revokes their authority.
