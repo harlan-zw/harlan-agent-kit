@@ -314,6 +314,9 @@ export async function prepareAgentSandbox(input: {
         : await prepareOpencodeTaskDirectory(controllerHome, opencodeTaskKey(input.taskId ?? randomUUID()))
       args.push('--bind', databaseDirectory, '/run/agent/opencode-database')
     }
+    // Git export runs only system Git, so it omits the tool and input mounts from here to the workspace.
+    // An upgrade can prune a mounted tool during the turn. A missing source must not block the export.
+    const exportOmitsFrom = args.length
     const skillRoots = []
     const packageTools = []
     if (input.reviewHome === undefined && input.networkMode !== 'opencode-client'
@@ -432,6 +435,7 @@ export async function prepareAgentSandbox(input: {
       args.push('--ro-bind', vitalsComparisonScript(), VITALS_COMPARISON_GUEST_SCRIPT)
       args.push('--bind', await permittedPath(input.vitalsEvidenceDirectory, controllerHome), VITALS_EVIDENCE_GUEST_DIRECTORY)
     }
+    const exportOmitsTo = args.length
     const workspace = await realpath(input.workspace)
     const repositoryBind = readOnly ? '--ro-bind' : '--bind'
     if (input.reviewHome === undefined) {
@@ -540,7 +544,7 @@ export async function prepareAgentSandbox(input: {
       if (finalHead === null || !finalHead.equals(originalHead))
         throw new Error('The Agent changed its approved Git branch.')
       const safeGit = ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'credential.helper=', '-C', workspace]
-      const exportArgs = [...args]
+      const exportArgs = [...args.slice(0, exportOmitsFrom), ...args.slice(exportOmitsTo)]
       exportArgs[exportArgs.lastIndexOf('/run/agent/runtime.ts') + 1] = 'command'
       const guest = [...exportArgs, ...safeGit]
       const newSha = (await execute('/usr/bin/bwrap', [...guest, 'rev-parse', '--verify', 'HEAD'], { env: guestEnvironment, timeout: 30_000 })).stdout.trim()

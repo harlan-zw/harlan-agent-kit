@@ -619,25 +619,30 @@ async function pnpmRuntimeFixture(home: string, runtimeTarget?: string) {
   await writeFile(join(shims, '.pnpm-shim-v1-node-target'), join(pnpmHome, 'global/v11/fixture-alias/node_modules/node/bin/node'))
   // pnpm's native shim reads its sibling target file, then runs that exact path.
   await writeFile(join(shims, 'node'), '#!/bin/sh\nread -r target < "$(dirname "$0")/.pnpm-shim-v1-node-target"\nexec "$target" "$@"\n', { mode: 0o755 })
-  return shims
+  return { shims, runtime }
+}
+
+async function pnpmRuntimeWorkspace(root: string) {
+  const home = join(root, 'controller')
+  const primary = join(root, 'primary')
+  await Promise.all([mkdir(home), mkdir(primary), mkdir(join(root, 'worker'))])
+  const { shims, runtime } = await pnpmRuntimeFixture(home)
+  const profile = join(root, 'worker.json')
+  await writeFile(profile, JSON.stringify({ home: join(root, 'worker'), codex: '/usr/bin/true', opencode: '/usr/bin/true', tools: [shims], readOnlyPaths: [] }))
+  await execute('git', ['init', primary])
+  await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
+  const wtConfig = join(root, 'wt.toml')
+  await writeFile(wtConfig, '[list]\njson-schema = 2\n')
+  await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'runtime', '--base', 'HEAD', '--yes'])
+  const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
+  const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'runtime').worktree.path as string
+  return { home, profile, runtime, workspace }
 }
 
 it('runs the pnpm managed Node runtime that the mounted node shim targets', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-pnpm-runtime-'))
-  const home = join(root, 'controller')
-  const primary = join(root, 'primary')
   try {
-    await Promise.all([mkdir(home), mkdir(primary), mkdir(join(root, 'worker'))])
-    const shims = await pnpmRuntimeFixture(home)
-    const profile = join(root, 'worker.json')
-    await writeFile(profile, JSON.stringify({ home: join(root, 'worker'), codex: '/usr/bin/true', opencode: '/usr/bin/true', tools: [shims], readOnlyPaths: [] }))
-    await execute('git', ['init', primary])
-    await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
-    const wtConfig = join(root, 'wt.toml')
-    await writeFile(wtConfig, '[list]\njson-schema = 2\n')
-    await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'runtime', '--base', 'HEAD', '--yes'])
-    const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
-    const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'runtime').worktree.path as string
+    const { home, profile, workspace } = await pnpmRuntimeWorkspace(root)
 
     const result = await runAgentSandboxCommand({ workspace, command: 'node', args: ['--version'], signal: AbortSignal.timeout(10_000), environment: { HOME: home }, profilePath: profile })
 
@@ -648,12 +653,32 @@ it('runs the pnpm managed Node runtime that the mounted node shim targets', asyn
   }
 }, 30_000)
 
+it('saves worker commits after a pnpm upgrade prunes the mounted runtime', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-pnpm-runtime-prune-'))
+  let sandbox: Awaited<ReturnType<typeof prepareAgentSandbox>> | undefined
+  try {
+    const { home, profile, runtime, workspace } = await pnpmRuntimeWorkspace(root)
+    sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'codex' })
+    await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'node --version && git -c user.name=Agent -c user.email=agent@example.com commit --allow-empty -m "test: keep worker commit"'], { env: sandbox.environment })
+    // A pnpm upgrade replaces the runtime while the turn still runs.
+    await rm(runtime, { recursive: true })
+
+    await sandbox.release()
+
+    expect((await execute('git', ['-C', workspace, 'log', '-1', '--format=%s'])).stdout.trim()).toBe('test: keep worker commit')
+  }
+  finally {
+    await sandbox?.release()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)
+
 it('refuses a pnpm runtime that resolves into controller credentials', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-pnpm-runtime-credentials-'))
   const home = join(root, 'controller')
   try {
     await mkdir(join(root, 'worker'), { recursive: true })
-    const shims = await pnpmRuntimeFixture(home, join(home, '.ssh/node'))
+    const { shims } = await pnpmRuntimeFixture(home, join(home, '.ssh/node'))
     const profile = join(root, 'worker.json')
     await writeFile(profile, JSON.stringify({ home: join(root, 'worker'), codex: '/usr/bin/true', opencode: '/usr/bin/true', tools: [shims], readOnlyPaths: [] }))
 
