@@ -21,6 +21,7 @@ import type { RepairRoundPlan } from './repair-rounds.ts'
 import type { Result } from './result.ts'
 import type { ReviewApproval } from './review-approval.ts'
 import type { ReviewProofStore } from './review-proof-store.ts'
+import type { RoutineYieldStore } from './routine-yield-store.ts'
 import type { PullRequestTriageStatsOutcome, StatsFact, StatsRange, StatsSnapshot, StatsTaskKind } from './stats.ts'
 import type { TakeOwnershipStore } from './take-ownership-store.ts'
 import type { TimelineStore } from './timeline-store.ts'
@@ -38,6 +39,7 @@ import type {
   BaselineRepairTask,
   Candidate,
   CandidateIssueCommand,
+  CandidateIssueState,
   CandidateResult,
   ClaimedAdversarialReviewTask,
   ClaimedBaselineRepairTask,
@@ -90,6 +92,7 @@ import type {
   RecordReviewRunRejection,
   RecordReviewRunResult,
   RepairRound,
+  ReportedCandidate,
   RepositoryMapping,
   RepositoryStatus,
   RestartOperation,
@@ -158,7 +161,8 @@ import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canResolveConflictPullRequestHead, canWorkIssues, conflictWriteBoundary } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { createReviewProofStore } from './review-proof-store.ts'
-import { foldCandidatesIntoDailyHeading, routineReportCommand } from './routine-report-controller.ts'
+import { foldCandidatesIntoDailyHeading, parseRunLogEntry, routineReportCommand } from './routine-report-controller.ts'
+import { createRoutineYieldStore } from './routine-yield-store.ts'
 import { buildStats } from './stats.ts'
 import { createTakeOwnershipStore } from './take-ownership-store.ts'
 import { cleanLine } from './text.ts'
@@ -839,7 +843,7 @@ export type StoredIssueTriageRun
     }
     | { _tag: 'Discussion', confidence: number, decidedAt: string }
 
-export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore, TrialStore, ImplicitSignalStore, TimelineStore {
+export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFindingStore, TakeOwnershipStore, ReviewProofStore, FindingThreadSyncStore, AgentTurnStore, PaybackStore, TrialStore, RoutineYieldStore, ImplicitSignalStore, TimelineStore {
   getTask: (taskId: string) => DashboardTask | null
   listTasks: () => DashboardTask[]
   getOpenPullRequest: (repository: string, number: number) => GitHubPullRequestItem | null
@@ -7593,14 +7597,23 @@ function installSchema(database: DatabaseSync): void {
     version = 107
   }
   if (version === 107) {
+    // A report staged before this column keeps a null entry and publishes its archive body.
+    const reportColumns = database.prepare('PRAGMA table_info(routine_report_commands)').all() as Array<{ name: string }>
+    const addEntry = reportColumns.some(column => column.name === 'entry_json')
+      ? ''
+      : 'ALTER TABLE routine_report_commands ADD COLUMN entry_json TEXT CHECK (entry_json IS NULL OR json_valid(entry_json));'
+    applyMigration(database, `${addEntry} PRAGMA user_version = 108;`)
+    version = 108
+  }
+  if (version === 108) {
     applyMigration(database, `CREATE TABLE IF NOT EXISTS private_details (
       kind TEXT NOT NULL CHECK (kind IN ('Path', 'Link')),
       entry TEXT NOT NULL,
       PRIMARY KEY (kind, entry)
-    ); PRAGMA user_version = 108;`)
-    version = 108
+    ); PRAGMA user_version = 109;`)
+    version = 109
   }
-  if (version === 108)
+  if (version === 109)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -7900,6 +7913,7 @@ export function openJournalStore(
   const agentTurnStore = createAgentTurnStore(database)
   const paybackStore = createPaybackStore(database)
   const trialStore = createTrialStore(database)
+  const routineYieldStore = createRoutineYieldStore(database)
   const implicitSignalStore = createImplicitSignalStore(database)
   const timelineStore = createTimelineStore(database)
   const loggedFindingStore = createLoggedFindingStore(database, {
@@ -16800,6 +16814,37 @@ export function openJournalStore(
   })
 
   /**
+   * The Candidates one run reported, each with the issue the controller filed.
+   *
+   * A known Candidate keeps the row an earlier run recorded, because one
+   * fingerprint holds one row per Routine. Its issue is that row's issue.
+   */
+  const listReportedCandidates = (routineId: string, fingerprints: readonly string[]): ReportedCandidate[] => {
+    if (fingerprints.length === 0)
+      return []
+    const rows = database.prepare(`
+      SELECT candidates.*, commands.state_tag AS issue_state, commands.github_issue_number AS issue_number
+      FROM candidates
+      LEFT JOIN candidate_issue_commands commands ON commands.candidate_id = candidates.id
+      WHERE candidates.routine_id = ? AND candidates.fingerprint IN (SELECT value FROM json_each(?))
+    `).all(routineId, JSON.stringify(fingerprints)) as unknown as Array<CandidateRow & { issue_state: string | null, issue_number: number | null }>
+    const byFingerprint = new Map(rows.map(row => [row.fingerprint, row]))
+    return fingerprints.flatMap((fingerprint) => {
+      const row = byFingerprint.get(fingerprint)
+      if (row === undefined)
+        return []
+      const issue: CandidateIssueState = row.issue_state === null
+        ? { _tag: 'NotRequested' }
+        : row.issue_state === 'Published' && row.issue_number !== null
+          ? { _tag: 'Filed', number: row.issue_number }
+          : row.issue_state === 'Failed' ? { _tag: 'Refused' } : { _tag: 'Requested' }
+      // A blank title is stored as the claim by the scan parser, and as null by older rows.
+      const title = row.title?.trim() ?? ''
+      return [{ title: title === '' || title === row.claim.trim() ? null : title, result: readCandidateResult(row), issue }]
+    })
+  }
+
+  /**
    * Records the Candidates one run found, keeping only the ones never seen.
    *
    * The unique constraint on `(routine_id, fingerprint)` carries the rejection
@@ -17124,8 +17169,8 @@ export function openJournalStore(
       report: { _tag: 'Failed', reason },
     })
     insertRoutineReportCommand(command, at)
-    database.prepare('UPDATE routine_report_commands SET body = ?, verdict_json = NULL, updated_at = ? WHERE id = ? AND state_tag = \'Pending\'')
-      .run(command.body, at, command.id)
+    database.prepare('UPDATE routine_report_commands SET body = ?, verdict_json = NULL, entry_json = ?, updated_at = ? WHERE id = ? AND state_tag = \'Pending\'')
+      .run(command.body, JSON.stringify(command.entry), at, command.id)
   }
 
   /**
@@ -17452,12 +17497,15 @@ export function openJournalStore(
   const insertRoutineReportCommand = (command: RoutineReportCommand, at: string): boolean => {
     const inserted = database.prepare(`
       INSERT INTO routine_report_commands (
-        id, routine_id, run_id, repository, routine_name, body, verdict_json, state_tag, created_at, updated_at
+        id, routine_id, run_id, repository, routine_name, body, verdict_json, entry_json, state_tag, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
-      ON CONFLICT (run_id) DO UPDATE SET body = excluded.body, verdict_json = excluded.verdict_json, updated_at = excluded.updated_at
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
+      ON CONFLICT (run_id) DO UPDATE SET body = excluded.body, verdict_json = excluded.verdict_json,
+        entry_json = excluded.entry_json, updated_at = excluded.updated_at
       WHERE routine_report_commands.state_tag = 'Pending'
-        AND (routine_report_commands.body <> excluded.body OR routine_report_commands.verdict_json IS NOT excluded.verdict_json)
+        AND (routine_report_commands.body <> excluded.body
+          OR routine_report_commands.verdict_json IS NOT excluded.verdict_json
+          OR routine_report_commands.entry_json IS NOT excluded.entry_json)
     `).run(
       command.id,
       command.routineId,
@@ -17466,6 +17514,7 @@ export function openJournalStore(
       command.routineName,
       command.body,
       command.verdict === null ? null : JSON.stringify(command.verdict),
+      JSON.stringify(command.entry),
       at,
       at,
     ).changes === 1
@@ -17535,7 +17584,9 @@ export function openJournalStore(
           routine_report_commands.routine_name,
           routine_report_commands.body,
           routine_report_commands.verdict_json,
+          routine_report_commands.entry_json,
           routine_report_commands.fence,
+          routine_runs.scheduled_for,
           routines.tracking_issue_number,
           repositories.policy_json
         FROM routine_report_commands
@@ -17558,8 +17609,10 @@ export function openJournalStore(
             repository: string
             routine_name: string
             verdict_json: string | null
+            entry_json: string | null
             body: string
             fence: number
+            scheduled_for: string
             tracking_issue_number: number | null
             policy_json: string
           } | undefined
@@ -17603,6 +17656,10 @@ export function openJournalStore(
       // below then carries them into the heading, the issue title derived
       // from it, and the proposal block the comment lists.
       const body = foldCandidatesIntoDailyHeading(content.body, candidates)
+      // Issues filed after staging are read here, so the run log names the
+      // issue that now owns each Candidate, new or known.
+      const entry = parseRunLogEntry(row.entry_json)
+      const reported = entry?._tag === 'Scanned' ? listReportedCandidates(row.routine_id, entry.fingerprints) : []
       database.exec('COMMIT')
       if (!claimed)
         return null
@@ -17615,8 +17672,11 @@ export function openJournalStore(
         verdict: content.verdict_json === null ? null : JSON.parse(content.verdict_json),
         repositoryMapping: JSON.parse(row.policy_json) as RepositoryMapping,
         body,
+        scheduledFor: row.scheduled_for,
+        entry,
         trackingIssueNumber: row.tracking_issue_number,
         candidates,
+        reported,
         fence,
         workerId,
       }
@@ -17737,6 +17797,7 @@ export function openJournalStore(
     ...agentTurnStore,
     ...paybackStore,
     ...trialStore,
+    ...routineYieldStore,
     ...implicitSignalStore,
     ...timelineStore,
     ...reviewProofStore,

@@ -738,6 +738,21 @@ A fix that is not holding names its issue for Harlan to reopen, because the ledg
 When a repository runs `vitals-review` in `propose` mode, the `seo-review` Routine leaves NuxtSEO's performance actions to it. In `report` mode `seo-review` still files them.
 The usual Review and merge policies apply. Repositories enable `vitals-review` through their own Routine spec.
 
+## Routine run log
+
+Every Routine except `daily-checkin` comments on one tracking issue per repository: `<name>: run log for <repository>`.
+Each comment is one run log entry. Its heading carries one dot and the run time in UTC.
+🟠 means a person must act: the run reported a Candidate, stated an AMBER or RED verdict, listed a READY pull request, or failed. ⚪ marks a quiet run.
+A counts table gives Found, New, and Known. It adds Coverage when the run states a verdict.
+An owner table names the issue that holds each Candidate the run reported, new or known.
+A Candidate without an Agent-written title reads Untitled proposal. Its claim never reaches the run log.
+Candidates the controller dropped fold under Dropped proposals. The fold counts them but names no cause.
+A failed run names its cause. The ready digest prints its list under the heading.
+The controller builds every line from stored fields. No Agent report text reaches the run log.
+The full report stays in the private archive. The Dashboard History page shows it.
+A title or failure cause that names a local path, a private network host, or a dashboard origin host prints a placeholder.
+A skipped run writes nothing, and so does a run with nothing to check. The Dashboard lists both.
+
 ## Adding a Routine
 
 Built-in definitions live in `src/routines/`. Each definition owns its scan and downstream issue policy.

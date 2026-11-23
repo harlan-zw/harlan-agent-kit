@@ -200,6 +200,33 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes the whole line around a parenthesized private URL before sending a %s', async (writer) => {
+    for (const destination of [
+      'https://notes.localhost/reports/quarterly(final)/appendix.pdf',
+      '<https://notes.localhost/reports/quarterly(final)/appendix.pdf>',
+      'https://notes.localhost/reports/quarterly(a(b)c)',
+      '<https://notes.localhost/reports/quarterly(final)>',
+      '(https://notes.localhost/reports/quarterly(final)/appendix.pdf)',
+    ]) {
+      const input = `Read ${destination}. Public text survives.`
+      const source = writer === 'review' ? encodeEntities(input) : input
+      const sent: string[] = []
+      await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, source).send(async (body) => {
+        sent.push(body)
+      })
+      expect(sent).toEqual([removed])
+    }
+  })
+
+  it.each(['', ' (public context)'])('keeps the lines after an unclosed private link%s', async (suffix) => {
+    const input = `[notes](https://notes.localhost/reports/quarterly(final)/appendix.pdf\nPublic text${suffix}.\n\n\`\`\`\n- [ ] Add this draft to the GitHub release`
+    const sent: string[] = []
+    await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'release comment' }, input).send(async (body) => {
+      sent.push(body)
+    })
+    expect(sent).toEqual([input.replace('[notes](https://notes.localhost/reports/quarterly(final)/appendix.pdf', removed)])
+  })
+
   it.each<PublicTextWriter>([
     'automated review',
     'automated triage',

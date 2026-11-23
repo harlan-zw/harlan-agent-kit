@@ -376,6 +376,25 @@ describe('release note drafts', () => {
     task.database.close()
   })
 
+  it('keeps an unclosed private link draft visible and approvable', async () => {
+    const task = setup()
+    const outgoing = (body: string) => publicBody({ details: { paths: [], hosts: ['notes.localhost'] }, report: () => {} }, { repository: repository.github, itemNumber: 24, writer: 'release comment' }, body)
+    task.source.comment = vi.fn(async (_number: number, body: string) => outgoing(body).send(async sent => ({ id: 99, body: sent })))
+    await publish(task)
+    const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
+    const notes = 'Read [notes](https://notes.localhost/reports/quarterly(final)/appendix.pdf\nPublic text survives.'
+    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes })
+    await task.run()
+    const shown = task.store.listPackageReleases(repository.github)[0]!.body
+    expect(shown).toContain(`> ${removedLine}\n> Public text survives.\n> \`\`\``)
+    expect(shown).not.toContain('notes.localhost')
+    expect(shown).toContain('- [ ] Add this draft to the GitHub release')
+    expect(task.store.approveReleaseNote(approval(shown))).toBe(true)
+    await task.run()
+    expect(task.source.applyReleaseNote).toHaveBeenCalledWith({ tag: 'v1.0.1', text: `${removedLine}\nPublic text survives.` })
+    task.database.close()
+  })
+
   it('refuses an approval of a comment that no longer shows this draft', async () => {
     const task = setup()
     const body = await drafted(task)

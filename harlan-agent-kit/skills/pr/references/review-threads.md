@@ -2,6 +2,7 @@
 
 Leave no review comment silent. Each review thread and each top-level review comment gets one response: Fixed, Answered, or Follow-up.
 Service finding threads follow section 2.
+Write every reply to the [comment voice](../../../references/comment-voice.md#thread-replies) contract.
 
 Run this sweep after every push to the pull request. Run it again before you call the pull request ready or hand it back.
 
@@ -110,6 +111,9 @@ harlan-github-agent control watch-pr --repository OWNER/REPO --number NUMBER --u
 
 Continue only when `headSha` is your pushed SHA and the `adversarial_review` Task is `Queued` or `Running`.
 In the window, you may post a Follow-up or Fixed reply. Leave every Service finding thread open.
+If the thread's Repair is still active, the Follow-up reply is `🤖 Harlan Agent Kit Agent: Repair fixes this in this pull request.`
+Active means the control is ticked, or the `Repair:` line reads `Queued.`, a step in progress, or `Publishing the fix.`
+Otherwise use a Follow-up form from section 3.
 Outside the window, leave Service threads open without a reply. A reply would start another Review.
 The finding's own text already marks a Logged finding as an optional follow-up.
 In the hand-back, link each unchecked or unknown Repair control, each selected Repair, and each fix awaiting Service verification.
@@ -120,9 +124,9 @@ Only Harlan's explicit dismissal or the Service's verified finding lifecycle may
 
 | Response | When | Reply | Resolve |
 | --- | --- | --- | --- |
-| Fixed | Above 80/100, or a defect you can show | `🤖 Harlan Agent Kit Agent: fixed in [abc1234](https://github.com/OWNER/REPO/commit/FULL_SHA).` | Yes |
-| Answered | The comment is wrong or does not apply | `🤖 Harlan Agent Kit Agent: not changed. EVIDENCE.` Give the proof in one or two sentences. | A bot's thread only |
-| Follow-up | Everything else | `🤖 Harlan Agent Kit Agent: optional follow-up, not changed in this pull request.` Add a reason or issue link only when it helps. | A bot's thread only |
+| Fixed | Above 80/100, or a defect you can show | `🤖 Harlan Agent Kit Agent: fixed in [abc1234](https://github.com/OWNER/REPO/commit/FULL_SHA): CHANGE.` Name what changed in one clause. | Yes |
+| Answered | The comment is wrong or does not apply | `🤖 Harlan Agent Kit Agent: EVIDENCE. Not changed.` Lead with the proof in one or two sentences. | A bot's thread only |
+| Follow-up | Everything else | Say where the work went. If an issue tracks it: `🤖 Harlan Agent Kit Agent: tracked in #NUMBER.` Otherwise: `🤖 Harlan Agent Kit Agent: not changed in this pull request: REASON.` Give the concrete reason in one clause. Never post a bare "optional follow-up, not changed". | A bot's thread only |
 
 Push the fixing commit before the reply names it. Use the short SHA as the link text and the full SHA in the link.
 Leave a human reviewer's thread open after Answered or Follow-up. That reviewer decides whether the answer is enough.

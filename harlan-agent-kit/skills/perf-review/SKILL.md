@@ -72,6 +72,8 @@ Never file an Opportunity that the series does not point at. A hunch about the c
 
 Write a Markdown report every run, including runs that find nothing and runs that judge nothing. State, for every Benchmark: judged, refused for a short series, Suspect, Regression, or Opportunity.
 
+GitHub shows the report and each Candidate. Follow the [comment voice](../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
+
 File one Candidate for each confirmed Regression, and at most one for an Opportunity:
 
 - **Fingerprint:** `perf:<benchmark-id>` for a Regression, `perf-opportunity:<benchmark-id>` for an Opportunity. No SHA, no date, no number. One open issue owns one Benchmark until it closes.

@@ -948,6 +948,59 @@ export interface ClaimedCandidateIssueCommand extends CandidateIssueCommand {
   workerId: string
 }
 
+/** What a Routine run concluded, when its Routine states a verdict. */
+export interface RoutineVerdict {
+  severity: 'GREEN' | 'AMBER' | 'RED'
+  coverage: 'complete' | 'incomplete'
+}
+
+/**
+ * The fields one run log entry prints, written when the report is staged.
+ *
+ * The run log used to print the Agent's whole report, up to 15,000 characters
+ * a week. The public entry now prints counts and owners. The full report stays
+ * in the private archive that the Dashboard shows.
+ */
+export type RunLogEntry
+  = | {
+    _tag: 'Scanned'
+    /** Every Candidate the Agent returned, including the ones the controller dropped. */
+    found: number
+    /** Candidates this run recorded first. */
+    fresh: number
+    /** Candidates an earlier run of the same Routine recorded. */
+    known: number
+    outsideScope: number
+    /** Null when the Routine sets no file limit. */
+    oversized: { limit: number, count: number } | null
+    /** New and known Candidates, in the order the Agent returned them. */
+    fingerprints: string[]
+    verdict: RoutineVerdict | null
+  }
+  /** The controller writes this list from its own Review records. */
+  | { _tag: 'ReadyDigest', total: number, list: string }
+  | { _tag: 'Failed', reason: string }
+
+/** What the controller did with the issue one Candidate asked for. */
+export type CandidateIssueState
+  = | { _tag: 'NotRequested' }
+    | { _tag: 'Requested' }
+    | { _tag: 'Refused' }
+    | { _tag: 'Filed', number: number }
+
+/** One Candidate a run reported, read again when its run log entry is written. */
+export interface ReportedCandidate {
+  /**
+   * The title the Agent wrote, or null when it wrote none.
+   *
+   * Readers elsewhere fall back to the claim. The run log must not: a
+   * report-mode claim never reaches GitHub.
+   */
+  title: string | null
+  result: CandidateResult
+  issue: CandidateIssueState
+}
+
 /** One request to write what a Routine run did to its tracking issue. */
 export interface RoutineReportCommand {
   id: string
@@ -955,15 +1008,23 @@ export interface RoutineReportCommand {
   runId: string
   repository: string
   routineName: RoutineName
+  /** The private archive of the run. The Dashboard shows it; only the daily check-in publishes it. */
   body: string
-  verdict: { severity: 'GREEN' | 'AMBER' | 'RED', coverage: 'complete' | 'incomplete' } | null
+  verdict: RoutineVerdict | null
+  entry: RunLogEntry
 }
 
 /** One leased report, with the tracking issue it belongs to when one exists. */
-export interface ClaimedRoutineReportCommand extends RoutineReportCommand {
+export interface ClaimedRoutineReportCommand extends Omit<RoutineReportCommand, 'entry'> {
   repositoryMapping: RepositoryMapping
   trackingIssueNumber: number | null
+  scheduledFor: string
+  /** Null for a report staged before run log entries had fields. Its archive body publishes instead. */
+  entry: RunLogEntry | null
+  /** The run's own new Candidates. The daily check-in lists them. */
   candidates: Candidate[]
+  /** Every Candidate the entry names, new or known, with its issue. */
+  reported: ReportedCandidate[]
   fence: number
   workerId: string
 }

@@ -78,7 +78,10 @@ export function parseKitServiceConfig(text: string): Result<KitServiceSettings> 
   }
 }
 
-/** Keep summaries automatic and preserve the existing Service's review ownership. */
+/**
+ * Run each workflow only on explicit request. The pr Skill writes the pull request
+ * description, and the existing Service owns automatic Review.
+ */
 export function buildKitOctorunConfig(options: KitOctorunOptions): Result<OperatorConfig> {
   const { settings, repository } = options
   if (repository.fullName.toLowerCase() !== KIT_REPOSITORY || settings.repository.fullName !== KIT_REPOSITORY
@@ -116,7 +119,7 @@ export function buildKitOctorunConfig(options: KitOctorunOptions): Result<Operat
         policy: { enabled: true, capabilities: ['repository:read', 'agent:invoke', 'github:comment', 'github:review', 'github:check'], maxConcurrency: 1 },
         workflowSource: {
           _tag: 'Inline',
-          definitions: [options.presets.summary, { ...options.presets.review, on: [] }],
+          definitions: [{ ...options.presets.summary, on: [] }, { ...options.presets.review, on: [] }],
         },
       }],
       pollIntervalMs: 60_000,
