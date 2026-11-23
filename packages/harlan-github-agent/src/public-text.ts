@@ -7,8 +7,8 @@ import { decodeHTML } from 'entities'
  * Private details that no public body may carry.
  *
  * Built once from configuration and the host, never from a blanket pattern.
- * A finding may legitimately describe `localhost`, `~/.config`, or a config
- * path under the controller home, so only these exact roots and hosts count.
+ * A finding may describe `localhost` or an absolute controller configuration
+ * path. Home-relative paths can name worker data, so worker aliases count too.
  */
 export interface PrivateDetails {
   /** Directory prefixes, absolute, `~/`, or `$HOME/`. A path at or under one is private. */
@@ -62,8 +62,10 @@ function privateRoot(path: string): string | null {
 
 /** Every way a body can spell one root: absolute, and from the home directory when it sits there. */
 function spellings(root: string, home: string | null): string[] {
-  if (home === null || !root.startsWith(`${home}/`))
+  if (home === null || (root !== home && !root.startsWith(`${home}/`)))
     return [root]
+  if (root === home)
+    return [root, '~/', `~${basename(home)}/`, '$HOME/', `\${HOME}/`]
   const rest = root.slice(home.length + 1)
   return [root, `~/${rest}`, `~${basename(home)}/${rest}`, `$HOME/${rest}`, `\${HOME}/${rest}`]
 }
@@ -84,7 +86,15 @@ export function privateDetailsFor(sources: PrivateDetailSources): PrivateDetails
     return LOOPBACK_HOSTS.has(host) ? [] : [host]
   })
   return {
-    paths: [...new Set(roots.flatMap(root => spellings(root, home)))],
+    // Workers report paths relative to their own HOME. Protect that entire home,
+    // while controller aliases still cover only its configured private roots.
+    paths: [...new Set([
+      ...roots.flatMap(root => spellings(root, home)),
+      ...sources.workerHomes.flatMap((path) => {
+        const root = privateRoot(path)
+        return root === null ? [] : spellings(root, root)
+      }),
+    ])],
     hosts: [...new Set([NOTES_HOST, DASHBOARD_LOCAL_HOST, ...hosts])],
   }
 }
@@ -187,12 +197,13 @@ function detector(details: PrivateDetails, spell: (entry: string) => string, end
   const entries = new Map(details.paths.map(entry => [spell(entry), entry]))
   const hosts = new Map(details.hosts.map(host => [spell(host).toLowerCase(), host]))
   const longestFirst = (values: Iterable<string>) => [...values].filter(Boolean).sort((left, right) => right.length - left.length).map(escape)
-  const paths = longestFirst(entries.keys())
+  // A spelling ending in a slash already marks the directory boundary.
+  const paths = [...entries.keys()].filter(Boolean).sort((left, right) => right.length - left.length).map(path => `${escape(path)}${path.endsWith('/') ? '' : end}`)
   const names = longestFirst(hosts.keys())
   return {
     entries,
     hosts,
-    path: paths.length === 0 ? null : new RegExp(String.raw`(?<![\w.~$-])(?:${paths.join('|')})${end}`, 'g'),
+    path: paths.length === 0 ? null : new RegExp(String.raw`(?<![\w.~$-])(?:${paths.join('|')})`, 'g'),
     // User information before an at sign is part of the line, so it goes with it.
     link: names.length === 0 ? null : new RegExp(String.raw`(?:${AUTHORITY}|(?<![\w./-]))(?:[\w-]{1,63}\.){0,8}(?:${names.join('|')})${HOST_END}`, 'gi'),
   }

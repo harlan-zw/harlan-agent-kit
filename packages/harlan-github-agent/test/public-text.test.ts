@@ -86,7 +86,8 @@ describe('redactPrivateDetails', () => {
     '"/home/harlan/public directory/../notes/private-evidence.md"',
     '/home/harlan/public(copy)/../notes/private-evidence.md',
   ])('removes a diagnostic path that resolves through parent segments: %s', (path) => {
-    expect(redactPrivateDetails(`Failed to read ${path}`, details)).toEqual({
+    const controllerDetails = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: [], serviceOrigins: [] })
+    expect(redactPrivateDetails(`Failed to read ${path}`, controllerDetails)).toEqual({
       text: removed,
       hits: [{ _tag: 'Path', entry: path.includes('/home/harlan/') ? '/home/harlan/notes' : `${path.split('/')[0]}/notes` }],
     })
@@ -126,14 +127,15 @@ describe('redactPrivateDetails', () => {
   })
 
   it.each([
-    'Set the key in ~/.config/opencode/opencode.json.',
+    'Set the key in /home/harlan/.config/opencode/opencode.json.',
     'The dev server answers on http://localhost:3000/api/health.',
     'The example config reads /home/harlan/.config/harlan-github-agent/app.pem.',
     'The preview runs at https://example.localhost.',
-    'Paths like ~/scratchpad stay.',
-    'A file named ~/scratch.txt stays.',
+    'Paths like /home/harlan/scratchpad stay.',
+    'A file named /home/harlan/scratch.txt stays.',
     'The host notes.localhost.example.com stays.',
     'The sibling /home/agent&#95;x/cache stays.',
+    '~~Old text~~ and $HOMELESS/example stay.',
     '[View code](https://github.com/harlan-zw/example/blob/abc123/fixtures/notes.localhost/README.md#L3)',
     'See https://github.com/harlan-zw/example/blob/abc123/fixtures/notes.localhost/README.md.',
     'Harlan\'s note says it\'s fine.',
@@ -169,7 +171,7 @@ describe('redactPrivateDetails', () => {
       .toBe(`${removed} <!-- marker: ok -->`)
   })
 
-  it('derives aliases only for protected roots inside the normalized controller home', () => {
+  it('protects worker aliases while keeping unrelated absolute controller paths public', () => {
     const configured = privateDetailsFor({
       home: '/home/harlan/./',
       storagePath: '/home/harlan/state/../journal/state.sqlite',
@@ -177,7 +179,7 @@ describe('redactPrivateDetails', () => {
       workerHomes: ['/home/harlan/workers/agent', '/home/agent'],
       serviceOrigins: [],
     })
-    const kept = ['~/sites/example', '$HOME/sites/example', '~/checkouts/example', '~/.config/app', '$HOME/.config/app', '~/pkg-extra/example']
+    const kept = ['/home/harlan/sites/example', '/home/harlan/checkouts/example', '/home/harlan/.config/app', '/home/harlan/pkg-extra/example']
 
     expect(redactPrivateDetails(['~/journal/run', '$HOME/journal/run', '~/workers/agent/cache', '$HOME/workers/agent/cache', '~/pkg/worktree', '$HOME/pkg/worktree', ...kept].join('\n'), configured).text)
       .toBe([...Array.from({ length: 6 }).fill(removed), ...kept].join('\n'))
@@ -212,6 +214,37 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each(['~/.codex/private-session.json', '$HOME/.codex/private-session.json', `\${HOME}/.codex/private-session.json`, '~agent/.codex/private-session.json'])('records an Incident when the only private detail is %s', async (path) => {
+    const store = journal()
+    const guard = createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} })
+
+    const sent = await publicBody(guard, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'comment' }, `Failed to read ${path}`).send(async body => body)
+
+    expect(sent).toBe(removed)
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('redacts worker-home aliases and records an Incident for %s', async (writer) => {
+    const store = journal()
+    const paths = ['/home/agent/.codex/private-session.json', '~/.codex/private-session.json', '$HOME/.codex/private-session.json', `\${HOME}/.codex/private-session.json`, '~agent/.codex/private-session.json']
+    const example = 'Example: /home/harlan/.config/example/config.json'
+    const finding: ReviewFinding = {
+      _tag: 'Logged',
+      impact: 42,
+      summary: 'Worker diagnostic',
+      nextAction: 'Check the diagnostic.',
+      details: { fingerprint: 'd'.repeat(64), identity: paths[1]!, location: { path: 'src/cache.ts', line: 3 }, proof: 'Worker diagnostic.' },
+    }
+    const diagnostic = [...paths.map(path => `Failed to read ${path}`), example].join('\n')
+    const input = `${reviewFindingThreadBody(finding, reviewHead)}\n${writer === 'review' ? encodeEntities(diagnostic) : diagnostic}`
+    const sent = await publicBody(createPublicTextGuard({ details, store, now: () => new Date(), log: () => {} }), { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async body => body)
+
+    expect(sent).toContain([...paths.map(() => removed), example].join('\n'))
+    expect(sent).not.toContain('private-session')
+    expect(reviewFindingThreadMarker(sent)).toMatchObject({ fingerprint: finding.details.fingerprint, identity: null })
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail' })])
+  })
+
   it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('guards encoded finding identities and parent paths for %s', async (writer) => {
     const store = journal()
     const finding: ReviewFinding = {
@@ -307,7 +340,7 @@ describe('the publish boundary', () => {
       runId: 'run-1',
       fingerprint: 'fixture',
       title: ' ',
-      claim: 'Read ~/notes/private-evidence.md',
+      claim: 'Read ~/.codex/private-evidence.md',
       target: 'src/cache.ts',
       verification: 'pnpm test',
       estimatedChangedFiles: 1,
@@ -410,7 +443,7 @@ describe('the publish boundary', () => {
       '__~/notes/fixture.md__',
       '[evidence](https://notes&#46;localhost/fixture.md)',
       'Public text &amp; punctuation stays.',
-      '__~/notes_old/fixture.md__',
+      '__/home/harlan/notes_old/fixture.md__',
       '_/home/agent_old/fixture.log_',
       '[public](https://example.com/notes&#46;localhost/fixture.md)',
       '[public](https://notes&#46;localhost.example.com/fixture.md)',
@@ -492,11 +525,11 @@ describe('the publish boundary', () => {
       publicText: createPublicTextGuard({ log: () => {}, details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
       tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
     })
-    const paths = ['pkg', 'sites'].flatMap(root => ['/home/harlan', '~', '$HOME'].map(home => `${home}/${root}/example-worktree`))
+    const paths = [...['pkg', 'sites'].flatMap(root => ['/home/harlan', '~', '$HOME'].map(home => `${home}/${root}/example-worktree`)), '~/.codex/private-session.json', '$HOME/.codex/private-session.json']
 
-    expect(await publisher.createComment({ repository: repositoryMapping({ github: 'harlan-zw/harlan-agent-kit' }), issueNumber: 271, body: [...paths, '~/.config'].join('\n') })).toEqual(ok({ id: 7 }))
+    expect(await publisher.createComment({ repository: repositoryMapping({ github: 'harlan-zw/harlan-agent-kit' }), issueNumber: 271, body: [...paths, '/home/harlan/.config'].join('\n') })).toEqual(ok({ id: 7 }))
 
-    expect(sent).toEqual([[...paths.map(() => removed), '~/.config'].join('\n')])
+    expect(sent).toEqual([[...paths.map(() => removed), '/home/harlan/.config'].join('\n')])
     expect(store.listIncidents()).toEqual([expect.objectContaining({
       scope: { _tag: 'Repository', repository: 'harlan-zw/harlan-agent-kit' },
       kind: 'private_detail',
@@ -948,9 +981,9 @@ describe('spellings GitHub renders, review findings on #754, final round', () =>
   })
 
   it.each([
-    'Set the key in ~/.config/opencode/opencode.json.',
+    'Set the key in /home/harlan/.config/opencode/opencode.json.',
     'The sibling /home/agent_x/cache stays.',
-    'Paths like ~/scratchpad stay.',
+    'Paths like /home/harlan/scratchpad stay.',
     'The host notes.localhost.example.com stays.',
     'Encode 100% of the input with &amp; escapes.',
   ])('keeps a public line after normalising it: %s', (line) => {
