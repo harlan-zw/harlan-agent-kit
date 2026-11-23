@@ -70,6 +70,39 @@ describe('redactPrivateDetails', () => {
     expect(redacted.text).toBe('See [private path] for proof.')
   })
 
+  it('derives aliases only for protected roots inside the normalized controller home', () => {
+    const configured = privateDetailsFor({
+      home: '/home/harlan/./',
+      storagePath: '/home/harlan/state/../journal/state.sqlite',
+      checkoutRoots: ['/home/harlan/pkg/', '/home/harlan-other/sites', '/srv/checkouts'],
+      workerHomes: ['/home/harlan/workers/agent', '/home/agent'],
+      serviceOrigins: [],
+    })
+
+    expect(redactPrivateDetails([
+      '~/journal/run',
+      '$HOME/journal/run',
+      '~/workers/agent/cache',
+      '$HOME/workers/agent/cache',
+      '~/pkg/worktree',
+      '$HOME/pkg/worktree',
+      '~/sites/example',
+      '$HOME/sites/example',
+      '~/checkouts/example',
+      '~/.config/app',
+      '$HOME/.config/app',
+      '~/pkg-extra/example',
+    ].join('\n'), configured).text).toBe([
+      ...Array.from({ length: 6 }).fill('[private path]'),
+      '~/sites/example',
+      '$HOME/sites/example',
+      '~/checkouts/example',
+      '~/.config/app',
+      '$HOME/.config/app',
+      '~/pkg-extra/example',
+    ].join('\n'))
+  })
+
   it('removes the Service dashboard hosts', () => {
     const redacted = redactPrivateDetails('Open https://harlan-github-agent.localhost/tasks/1 or https://hogwild.tail1234.ts.net/.', details)
 
@@ -104,6 +137,23 @@ describe('redactPrivateDetails', () => {
 })
 
 describe('the publish boundary', () => {
+  it('redacts absolute and home-relative checkout roots before GitHub receives a comment', async () => {
+    const sent: string[] = []
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { createComment: async (input: { body: string }) => {
+        sent.push(input.body)
+        return { data: { id: 7 } }
+      } } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ details, store: journal(), now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+    const paths = ['pkg', 'sites'].flatMap(root => ['/home/harlan', '~', '$HOME'].map(home => `${home}/${root}/example-worktree`))
+
+    expect(await publisher.createComment({ repository: repositoryMapping(), issueNumber: 24, body: [...paths, '~/.config'].join('\n') })).toEqual(ok({ id: 7 }))
+
+    expect(sent).toEqual([[...paths.map(() => '[private path]'), '~/.config'].join('\n')])
+  })
+
   it('redacts a Routine report comment before GitHub receives it and records an Incident', async () => {
     const store = journal()
     const sent: string[] = []
@@ -214,13 +264,13 @@ Notes: ~/notes/review-24.md`
         impact: 40,
         summary: 'The cache key ignores the locale.',
         nextAction: 'Key the cache by locale.',
-        details: { fingerprint: 'f'.repeat(64), identity: 'cache-locale', location: { path: 'src/cache.ts', line: 3 }, proof: 'The trace in ~/scratch/cache_trace/run.log shows two locales sharing one key.' },
+        details: { fingerprint: 'f'.repeat(64), identity: 'cache-locale', location: { path: 'src/cache.ts', line: 3 }, proof: 'The trace in ~/pkg/cache_trace/run.log shows two locales sharing one key.' },
       }],
     })
 
     expect(await source.upsertNativeReview(repositoryMapping(), 24, headSha, body, new AbortController().signal, () => ok(undefined))).toEqual(ok(undefined))
     expect(written).toHaveLength(1)
-    expect(written[0]).not.toContain('/scratch')
+    expect(written[0]).not.toContain('/pkg')
     expect(written[0]).toContain('The trace in [private path] shows two locales sharing one key.')
     expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', message: expect.stringContaining('the review on harlan-zw/example#24') })])
   })

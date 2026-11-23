@@ -17,7 +17,7 @@ export interface PrivateDetails {
 
 /** The roots and hosts this host and configuration use. */
 export interface PrivateDetailSources {
-  /** The controller home. Only `scratch` and `notes` under it are private, not the home itself. */
+  /** The controller home. Derive aliases for protected roots without protecting the home itself. */
   home: string
   /** The Journal path. Its directory holds the controller worktrees and desktop turns. */
   storagePath: string
@@ -66,8 +66,16 @@ export function privateDetailsFor(sources: PrivateDetailSources): PrivateDetails
     const host = new URL(origin).hostname.toLowerCase()
     return LOOPBACK_HOSTS.has(host) ? [] : [host]
   })
+  const homeAliases = home === null
+    ? []
+    : roots.flatMap((root) => {
+        if (!root.startsWith(`${home}/`))
+          return []
+        const suffix = root.slice(home.length)
+        return [`~${suffix}`, `$HOME${suffix}`]
+      })
   return {
-    paths: [...new Set([...roots, ...PRIVATE_HOME_DIRECTORIES.flatMap(name => [`~/${name}`, `$HOME/${name}`])])],
+    paths: [...new Set([...roots, ...homeAliases, ...PRIVATE_HOME_DIRECTORIES.flatMap(name => [`~/${name}`, `$HOME/${name}`])])],
     hosts: [...new Set([NOTES_HOST, DASHBOARD_LOCAL_HOST, ...hosts])],
   }
 }
