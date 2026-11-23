@@ -276,6 +276,21 @@ function normalise(decoded: string): string {
     .replaceAll(/(?<!:)\/{2,}/g, '/')
 }
 
+/**
+ * Every URL host as a URL parser reads it, from the Service Repair ea3f8596.
+ *
+ * It resolves percent escapes, case, and Unicode separators in a host the way
+ * a browser does, without reading a public URL's path as its authority.
+ */
+function normalizedAuthorities(text: string): string {
+  return text.replaceAll(/((?:[a-z][a-z\d+.-]{0,15}:)?\/\/(?:[^\s/?#<>"`]*@)?)([^\s@:/?#<>"`()[\]]+)/gi, (authority, prefix: string, hostname: string) => {
+    // Parse the host alone. Ports and Markdown delimiters cannot invalidate its normalization.
+    const url = URL.parse(`http://${hostname}`)
+    // An invalid host still passes through the other views.
+    return url === null ? authority : `${prefix}${url.hostname}`
+  })
+}
+
 function lineBreaks(text: string): number {
   let count = 0
   for (let index = text.indexOf('\n'); index !== -1; index = text.indexOf('\n', index + 1))
@@ -315,7 +330,12 @@ function detectorsFor(details: PrivateDetails): Detectors {
  */
 function detailsIn(detect: Detectors, text: string): Array<{ line: number, hit: PrivateDetailHit }> {
   const decoded = aligned(text, decodeAll)
-  const views: Array<[Detector, string]> = [[detect.raw, text], [detect.decoded, decoded], [detect.normalised, aligned(decoded, normalise)]]
+  const views: Array<[Detector, string]> = [
+    [detect.raw, text],
+    [detect.decoded, decoded],
+    [detect.decoded, aligned(decoded, normalizedAuthorities)],
+    [detect.normalised, aligned(decoded, normalise)],
+  ]
   return views.flatMap(([view, viewText]) => {
     const matches = (['Link', 'Path'] as const).flatMap((tag) => {
       const pattern = tag === 'Link' ? view.link : view.path

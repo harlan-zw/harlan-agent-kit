@@ -2,7 +2,7 @@ import type { Octokit } from 'octokit'
 import type { AutoMergeMethod } from './auto-merge.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { UploadUserAsset } from './github-user-assets.ts'
-import type { PublicTextGuard } from './public-text.ts'
+import type { PublicTextGuard, PublicTextTarget } from './public-text.ts'
 import type { Result } from './result.ts'
 import type { GitHubIssueItem, GitHubItem, GitHubPullRequestItem, PullRequestDiagram, RepositoryMapping, RoutineName } from './types.ts'
 import { Buffer } from 'node:buffer'
@@ -28,6 +28,21 @@ export interface GitHubReadError {
   repository: string
   message: string
   status?: number
+}
+
+/**
+ * Guards a title and a body in one write, so an accepted item reports its hits once.
+ *
+ * From the Service Repair ea3f8596. `itemNumber` reads the number GitHub gave
+ * a new issue or pull request, so its Incident names it.
+ */
+function publicTitledBody<T>(guard: PublicTextGuard, target: PublicTextTarget, input: { title: string, body: string }, write: (fields: { title: string, body: string }) => Promise<T>, itemNumber?: (written: T) => number): Promise<T> {
+  // A GitHub title occupies one line. Keep that boundary separate from the body.
+  const title = input.title.replaceAll(/[\r\n]/g, ' ')
+  return publicBody(guard, target, `${title}\n${input.body}`).send((text) => {
+    const boundary = text.indexOf('\n')
+    return write({ title: text.slice(0, boundary), body: text.slice(boundary + 1) })
+  }, itemNumber)
 }
 
 /** A listed Item whose complete detail is unavailable, never a closure. */
@@ -688,10 +703,7 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
       const client = await itemWriteClient(input.repository.github, signal)
       if (client._tag === 'Err')
         return client
-      // A title reaches GitHub too, so it passes the same guard as the body.
-      const target = { repository: input.repository.github, itemNumber: input.issueNumber, writer: 'issue' } as const
-      return publicBody(options.publicText, target, input.title).send(title => publicBody(options.publicText, target, githubAccountBody(input.body, input.repository.githubAccount))
-        .send(body => client.value.rest.issues.update({ owner, repo, issue_number: input.issueNumber, title, body, ...(signal === undefined ? {} : { request: { signal } }) }))).then(() => ok(undefined)).catch((error: unknown): Result<void, GitHubReadError> => {
+      return publicTitledBody(options.publicText, { repository: input.repository.github, itemNumber: input.issueNumber, writer: 'issue' }, { title: input.title, body: githubAccountBody(input.body, input.repository.githubAccount) }, fields => client.value.rest.issues.update({ owner, repo, issue_number: input.issueNumber, ...fields, ...(signal === undefined ? {} : { request: { signal } }) })).then(() => ok(undefined)).catch((error: unknown): Result<void, GitHubReadError> => {
         const status = errorStatus(error)
         return err({ repository: input.repository.github, message: error instanceof Error ? error.message : 'GitHub refused the report update.', ...(status === undefined ? {} : { status }) })
       })
@@ -702,18 +714,13 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
       if (octokit._tag === 'Err')
         return octokit
       const request = signal === undefined ? {} : { request: { signal } }
-      // A title reaches GitHub too, so it passes the same guard as the body.
-      const target = { repository: input.repository.github, itemNumber: null, writer: 'issue' } as const
-      const issueNumber = (response: { data: { number: number } }) => response.data.number
-      return publicBody(options.publicText, target, input.title).send(title => publicBody(options.publicText, target, githubAccountBody(input.body, input.repository.githubAccount))
-        .send(body => octokit.value.rest.issues.create({
-          owner,
-          repo,
-          title,
-          body,
-          ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
-          ...request,
-        }), issueNumber), issueNumber).then(response => ok({ number: response.data.number, url: response.data.html_url })).catch((error: unknown): Result<{ number: number, url: string }, GitHubReadError> => {
+      return publicTitledBody(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'issue' }, { title: input.title, body: githubAccountBody(input.body, input.repository.githubAccount) }, fields => octokit.value.rest.issues.create({
+        owner,
+        repo,
+        ...fields,
+        ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
+        ...request,
+      }), response => response.data.number).then(response => ok({ number: response.data.number, url: response.data.html_url })).catch((error: unknown): Result<{ number: number, url: string }, GitHubReadError> => {
         const status = errorStatus(error)
         return err({
           repository: input.repository.github,
@@ -931,18 +938,15 @@ export function createGitHubPullRequestPublisher(options: GitHubBodyPublisherOpt
           })
         }
         const attached = await attachDiagram()
-        const target = { repository: input.repository.github, itemNumber: null, writer: 'pull request description' } as const
-        const pullRequestNumber = (response: { data: { number: number } }) => response.data.number
-        return publicBody(options.publicText, target, input.title).send(title => publicBody(options.publicText, target, attached.body).send(body => octokit.rest.pulls.create({
+        return publicTitledBody(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'pull request description' }, { title: input.title, body: attached.body }, fields => octokit.rest.pulls.create({
           owner,
           repo,
           head: input.headRef,
           base: input.baseRef,
-          title,
-          body,
+          ...fields,
           draft: false,
           ...request,
-        }), pullRequestNumber), pullRequestNumber).then(async (created): Promise<Result<PublishedPullRequest, GitHubReadError>> => {
+        }), created => created.data.number).then(async (created): Promise<Result<PublishedPullRequest, GitHubReadError>> => {
           if (created.data.head.sha !== input.expectedHeadSha) {
             return err({
               repository: input.repository.github,

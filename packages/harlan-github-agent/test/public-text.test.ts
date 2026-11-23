@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { candidateIssueBody, candidateIssueTitle } from '../src/candidate-issue-controller.ts'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { createGitHubIssuePublisher } from '../src/github.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
@@ -193,6 +194,136 @@ describe('isPublishedForm', () => {
 })
 
 describe('the publish boundary', () => {
+  it.each([
+    ['create', true],
+    ['update', true],
+    ['create', false],
+    ['update', false],
+  ] as const)('guards a private title with a public body on %s, accepted: %s', async (operation, accepted) => {
+    const store = journal()
+    const sent: Array<{ title: string, body: string }> = []
+    const write = async (input: { title: string, body: string }) => {
+      sent.push({ title: input.title, body: input.body })
+      if (!accepted)
+        throw new Error('Fixture refuses the write.')
+      return { data: { number: 24, html_url: 'https://github.com/harlan-zw/example/issues/24' } }
+    }
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { create: write, update: write } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ log: () => {}, details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+    const input = { repository: repositoryMapping(), title: 'See https://%6eotes%2elocalhost:443', body: 'Public evidence.' }
+
+    const result = operation === 'create' ? await publisher.createIssue(input) : await publisher.updateIssue({ ...input, issueNumber: 24 })
+
+    expect(result._tag).toBe(accepted ? 'Ok' : 'Err')
+    expect(sent).toEqual([{ title: removed, body: input.body }])
+    expect(store.listIncidents()).toEqual(accepted
+      ? [expect.objectContaining({ kind: 'private_detail', occurrences: 1, message: expect.stringContaining('notes.localhost') })]
+      : [])
+  })
+
+  it.each([
+    '[reference](https://%70rivate%2eexample:443)',
+    '[reference](//%70rivate%2eexample:8443)',
+    '[reference](https://user:password@%70rivate%2eexample:443)',
+    '[reference](https://private。example:443)',
+    '[reference](https://%70rivate%2eexample:443 "title")',
+    '[reference](<https://%70rivate%2eexample:443>)',
+    '[reference]: https://%70rivate%2eexample:443',
+  ])('removes encoded hosts with ports through a publisher: %s', async (input) => {
+    const store = journal()
+    const sent: string[] = []
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { createComment: async (request: { body: string }) => {
+        sent.push(request.body)
+        return { data: { id: 7 } }
+      } } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ log: () => {}, details: { paths: [], hosts: ['private.example'] }, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+    const publicLine = '[public](https://example.com:443/%70rivate%2eexample)'
+
+    expect(await publisher.createComment({ repository: repositoryMapping(), issueNumber: 24, body: `${input}\n${publicLine}` })).toEqual(ok({ id: 7 }))
+    expect(sent).toEqual([`${removed}\n${publicLine}`])
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ message: expect.stringContaining('private.example') })])
+  })
+
+  it.each(['create', 'update'] as const)('guards a Candidate claim in both title and body on issue %s', async (operation) => {
+    const store = journal()
+    const sent: Array<{ title: string, body: string }> = []
+    const write = async (input: { title: string, body: string }) => {
+      sent.push({ title: input.title, body: input.body })
+      return { data: { number: 24, html_url: 'https://github.com/harlan-zw/example/issues/24' } }
+    }
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { create: write, update: write } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ log: () => {}, details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      tokens: { getToken: async () => ok({ token: 'fixture-token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+    const candidate = {
+      id: 'candidate-1',
+      routineId: 'routine-1',
+      runId: 'run-1',
+      fingerprint: 'fixture',
+      title: ' ',
+      claim: 'Read ~/notes/private-evidence.md',
+      target: 'src/cache.ts',
+      verification: 'pnpm test',
+      estimatedChangedFiles: 1,
+      result: { _tag: 'Proposed', pullRequest: null } as const,
+      createdAt: '2026-11-22T06:05:00.000Z',
+      updatedAt: '2026-11-22T06:05:00.000Z',
+    }
+    const input = {
+      repository: repositoryMapping(),
+      title: candidateIssueTitle(candidate),
+      body: candidateIssueBody(candidate, { repository: 'harlan-zw/example', name: 'pr-triage', scheduledFor: '2026-11-22T06:00:00.000Z' }),
+    }
+
+    const result = operation === 'create' ? await publisher.createIssue(input) : await publisher.updateIssue({ ...input, issueNumber: 24 })
+
+    expect(result._tag).toBe('Ok')
+    expect(sent).toEqual([{
+      title: removed,
+      body: input.body.replace(candidate.claim, removed),
+    }])
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', occurrences: 1 })])
+  })
+
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes normalized Markdown hosts before sending a %s', async (writer) => {
+    const privateLines = [
+      String.raw`[evidence](https://notes\.localhost/fixture.md)`,
+      String.raw`[evidence](//notes\.localhost/fixture.md)`,
+      String.raw`[ref]: <https://sub.notes\.localhost/fixture.md>`,
+      '_notes.localhost_',
+      '__harlan-github-agent.localhost__',
+      '___hogwild.tail1234.ts.net___',
+      '[evidence](https://%6eotes%2elocalhost/fixture.md)',
+      '[evidence](https://%6eotes%2elocalhost:443)',
+      '[evidence](//%6eotes%2elocalhost:8443)',
+      '[evidence](https://notes。localhost/fixture.md)',
+      String.raw`[evidence](https://fixture-user:fixture-password@notes\.localhost/fixture.md)`,
+      String.raw`<!-- evidence: https://notes\.localhost/fixture.md -->`,
+    ]
+    const publicLines = [
+      String.raw`[public](https://example.com/notes\.localhost/fixture.md)`,
+      String.raw`[public](https://notes\.localhost.example.com/fixture.md)`,
+      '[public](https://%6eotes%2elocalhost.example.com:443)',
+      '[public](https://example.com:443/%6eotes%2elocalhost)',
+      '_notes.localhost.example.com_',
+    ]
+    const input = [...privateLines, ...publicLines].join('\n')
+    const sent: string[] = []
+
+    await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, input).send(async (body) => {
+      sent.push(body)
+    })
+
+    expect(sent).toEqual([[...privateLines.map(() => removed), ...publicLines].join('\n')])
+  })
+
   it.each([
     '__~/notes/fixture.md__',
     '_$HOME/scratch/fixture.log_',
