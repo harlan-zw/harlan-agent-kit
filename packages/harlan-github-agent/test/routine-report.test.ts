@@ -399,6 +399,15 @@ describe('the summary a run log entry folds', () => {
   })
 
   it.each([
+    ['Checked <!-- private-fixture --> every workflow.', 'Checked  every workflow.'],
+    ['**Checked <!-- private-fixture --> every workflow.**', '**Checked  every workflow.**'],
+    ['[Checked <!-- private-fixture --> every workflow.](https://github.com)', '[Checked  every workflow.](https://github.com)'],
+    ['The literal `<!--` is code.\n\nSecond public paragraph.\n\n## Evidence\n\n<!-- private-fixture -->', 'The literal ` ` is code.\n\nSecond public paragraph.'],
+  ])('removes only parsed comments before cleaning public prose: %s', (detail, expected) => {
+    expect(summaryOf(detail)).toBe(expected)
+  })
+
+  it.each([
     ['a fence with a blank line inside', '```text\nprivate-fixture line\n\nprivate-fixture after the blank line\n```'],
     ['an HTML comment with a blank line inside', '<!--\n\nprivate-fixture note\n\n-->'],
     ['a details block with a blank line inside', '<details>\n<summary>Logs</summary>\n\nprivate-fixture\n\n</details>'],
@@ -487,6 +496,41 @@ describe('configured private hosts', () => {
       store.close()
     }
   })
+})
+
+it.each([
+  ['an inline comment marker', 'The literal `<!--` is code.\n\n## Evidence\n\n<!-- ordinary comment -->\n\nprivate-fixture paragraph.', 'is code.'],
+  ['a leading thematic break', '---\n\nprivate-fixture paragraph.', null],
+  ['a quote after redacted prose', 'Evidence: /var/log/agent/run.log\n\n> quoted evidence\n\nprivate-fixture paragraph.', null],
+  ['a fence after redacted prose', 'Evidence: /var/log/agent/run.log\n\n```text\nlogs\n```\n\nprivate-fixture paragraph.', null],
+  ['HTML after redacted prose', 'Evidence: /var/log/agent/run.log\n\n<div>logs</div>\n\nprivate-fixture paragraph.', null],
+] as const)('keeps evidence behind %s in the archive across scan parsers and public consumers', async (_name, report, summary) => {
+  for (const name of ['pr-triage', 'dependency-updates', 'vitals-review'] as const) {
+    const parsed = getRoutine(name).parseResponse({ report, candidates: [], outcome: 'complete', updates: [], fieldFindings: [], labFindings: [] })
+    if (parsed._tag === 'Err')
+      throw new Error(parsed.error)
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      stage(store, scanned('evidence', { detail: parsed.value.report }))
+      settleRun(store, runId)
+      const calls: Calls = { issues: [], comments: [] }
+
+      await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+        .publishPending(new AbortController().signal)
+
+      expect(calls.comments).toHaveLength(1)
+      expect(calls.comments[0]?.body).not.toContain('private-fixture')
+      if (summary === null)
+        expect(calls.comments[0]?.body).not.toContain('<summary>Summary</summary>')
+      else
+        expect(calls.comments[0]?.body).toContain(summary)
+      expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain(report)
+    }
+    finally {
+      store.close()
+    }
+  }
 })
 
 it.each(['pr-triage', 'dependency-updates', 'vitals-review'] as const)('keeps opening indented evidence private through the %s scan parser and publisher', async (name) => {

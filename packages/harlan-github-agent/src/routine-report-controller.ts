@@ -1,3 +1,4 @@
+import type { Token } from 'marked'
 import type { GitHubIssuePublisher } from './github.ts'
 import type { Result } from './result.ts'
 import type { CheckinVerdict } from './routines/contract.ts'
@@ -226,9 +227,26 @@ function publicProse(text: string, privateHosts: readonly string[]): string | nu
   return paragraphs.length === 0 ? null : paragraphs.join('\n\n')
 }
 
-/** An unclosed comment hides the rest of the report, so it runs to the end. */
-const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g
 const HTML_OPEN = /^\s*<([a-z][\w-]*)[\s/>]/i
+
+/** Remove parsed comments without treating code spans as HTML. */
+function withoutComments(token: Token): string {
+  if (token.type === 'html' && token.raw.startsWith('<!--'))
+    return ''
+  if (!('tokens' in token) || !Array.isArray(token.tokens))
+    return token.raw
+  let result = ''
+  let offset = 0
+  for (const child of token.tokens as Token[]) {
+    const index = token.raw.indexOf(child.raw, offset)
+    // If a child has no source range, omit this paragraph rather than expose it.
+    if (index < 0)
+      return ''
+    result += token.raw.slice(offset, index) + withoutComments(child)
+    offset = index + child.raw.length
+  }
+  return result + token.raw.slice(offset)
+}
 
 /**
  * The opening prose of an Agent report, short enough to fold into the log.
@@ -238,16 +256,17 @@ const HTML_OPEN = /^\s*<([a-z][\w-]*)[\s/>]/i
  * block qualify. A heading, table, or list ends the summary, even before prose.
  * A leading title has no exception. Quoted, fenced, and HTML evidence never qualifies.
  * An element such as `<details>` may hold blank lines, so everything up to its
- * closing tag is skipped. Comments go first, because the text cleaner would
- * otherwise turn their inside into visible prose.
+ * closing tag is skipped. Parsed comments are removed within each paragraph.
+ * The original tokens decide boundaries, even when redaction removes all prose.
  * A line that names a private path or host drops out. A paragraph that would
  * pass the limit ends the summary, because a cut sentence can break its Markdown.
  */
 function reportSummary(detail: string): string | null {
   const kept: string[] = []
   let length = 0
+  let sawParagraph = false
   let openElement: string | null = null
-  for (const token of Lexer.lex(detail.replaceAll('\r\n', '\n').replaceAll(HTML_COMMENT, ''))) {
+  for (const token of Lexer.lex(detail)) {
     if (openElement !== null) {
       if (token.raw.toLowerCase().includes(`</${openElement}>`))
         openElement = null
@@ -255,17 +274,16 @@ function reportSummary(detail: string): string | null {
     }
     if (token.type === 'space')
       continue
-    if (token.type === 'heading' || token.type === 'table' || token.type === 'list')
-      break
     if (token.type !== 'paragraph') {
+      if (sawParagraph || (token.type !== 'html' && token.type !== 'code'))
+        break
       const element = token.type === 'html' ? token.raw.match(HTML_OPEN)?.[1]?.toLowerCase() : undefined
       if (element !== undefined && !token.raw.toLowerCase().includes(`</${element}>`))
         openElement = element
-      if (kept.length > 0)
-        break
       continue
     }
-    const text = publicProse(cleanText(token.raw).replaceAll(/<\/?details>/gi, ''), [])
+    sawParagraph = true
+    const text = publicProse(cleanText(withoutComments(token)).replaceAll(/<\/?details>/gi, ''), [])
     if (text === null)
       continue
     const next = length + (kept.length === 0 ? 0 : 2) + text.length
