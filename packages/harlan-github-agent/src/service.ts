@@ -1581,6 +1581,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           else
             options.logger.error(`Follow-up issue: ${result.error}`)
         })
+        recordPassIncidents('follow_up_issue', followUpIssues.flatMap(result => result._tag === 'Err' ? [result.error] : []))
         const findingErrors = await guarded('Logged finding status', () => publishLoggedFindingPickups({
           github: workerGithub,
           store,

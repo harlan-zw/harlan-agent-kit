@@ -165,6 +165,44 @@ describe('gitHub subjects', () => {
     ]))
   })
 
+  it.each([
+    [['harlan-agent-follow-up'], [expect.objectContaining({ number: 31, routineFiled: true, routineTracking: false })]],
+    [[], []],
+  ])('keeps an issue the App filed for a follow-up tick only by its label: %j', async (labels, expected) => {
+    const listIssues = () => undefined
+    const listPulls = () => undefined
+    const client = {
+      paginate: (method: unknown) => Promise.resolve(method === listIssues
+        ? [{
+            number: 31,
+            state: 'open',
+            title: 'Finished bars disappear at a viewport boundary',
+            body: '<!-- follow-up-finding: ffff -->',
+            user: { login: 'harlan-github-agent[bot]', type: 'Bot' },
+            html_url: 'https://github.com/harlan-zw/example/issues/31',
+            created_at: '2026-08-01T00:00:00.000Z',
+            updated_at: '2026-08-13T00:00:00.000Z',
+            labels: labels.map(name => ({ name })),
+          }]
+        : []),
+      rest: {
+        issues: { listForRepo: listIssues },
+        pulls: { list: listPulls },
+      },
+    } as unknown as Octokit
+    const source = createGitHubSource({
+      actorLogin: () => 'harlan-github-agent[bot]',
+      createClient: () => client,
+      issueCutoff: '2026-07-01',
+      tokens: {
+        getToken: () => Promise.resolve(ok({ token: 'token', expiresAt: '2026-08-14T02:00:00.000Z' })),
+        invalidate: () => undefined,
+      },
+    })
+
+    expect(await source.listOpenItems(repositoryMapping())).toEqual(ok(expected))
+  })
+
   it('keeps unmarked user-token comments and ignores marked controller comments', async () => {
     const listIssues = () => undefined
     const listPulls = () => undefined

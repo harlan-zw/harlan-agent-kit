@@ -225,6 +225,40 @@ describe('durable Logged finding pickup', () => {
     expect(await remote.validateAuthority(command, new AbortController().signal)).toEqual(err('The pull request no longer authorizes publication.'))
   })
 
+  it('rewrites the threads of open pull requests once after the fix before merge upgrade', () => {
+    const path = journalPath()
+    const initial = setup([finding], path)
+    initial.store.queueReviewFindingThreadSync('review', at)
+    const sync = initial.store.claimReviewFindingThreadSync('threads', at, 60_000)!
+    expect(initial.store.completeReviewFindingThreadSync(sync, at, [])).toBe(true)
+    expect(initial.store.claimReviewFindingThreadSync('threads', at, 60_000)).toBeNull()
+    initial.store.close()
+    stores.pop()
+    const legacy = new DatabaseSync(path)
+    legacy.exec('PRAGMA user_version = 110;')
+    legacy.close()
+    const upgraded = openJournalStore(path, true)
+    stores.push(upgraded)
+    // A thread posted before Finding scope carries a Repair control its finding no longer routes to.
+    expect(upgraded.claimReviewFindingThreadSync('threads', at, 60_000)).toMatchObject({ reviewRunId: 'review' })
+  })
+
+  it('dismisses a Repair selected before Finding scope existed', () => {
+    const path = journalPath()
+    const unscoped = { ...finding, details: { fingerprint: finding.details.fingerprint, identity: finding.details.identity, location: finding.details.location, proof: finding.details.proof } }
+    const { store, pullRequest, request } = setup([unscoped], path)
+    const journal = new DatabaseSync(path)
+    const subject = journal.prepare('SELECT id FROM subjects WHERE github_number = ?').get(pullRequest.number) as { id: number }
+    journal.prepare(`INSERT INTO logged_finding_requests (id, subject_id, head_sha, base_ref, fingerprint, finding_json, requested_by, requested_at, on_head, dismissed)
+      VALUES (?, ?, ?, ?, ?, ?, 'harlan-zw', ?, 1, 0)`).run('e'.repeat(64), subject.id, pullRequest.headSha, pullRequest.baseRef!, unscoped.details.fingerprint, JSON.stringify(unscoped), at)
+    journal.close()
+    const comment = store.claimLoggedFindingComment('status', at, 60_000)!
+    expect(comment.body).toContain(`- [ ] Dismiss this finding <!-- dismiss-logged-finding: ${unscoped.details.fingerprint} -->`)
+    expect(store.completeLoggedFindingComment(comment, at)).toBe(true)
+    expect(store.requestLoggedFindingPickup({ ...request, before: comment.body, fingerprints: [], dismissedFingerprints: [unscoped.details.fingerprint] })).toBe(true)
+    expect(store.claimLoggedFindingComment('status', at, 60_000)?.body).toContain('Repair: Dismissed.')
+  })
+
   it('retains issued Dismiss controls across a version 103 upgrade and restart', () => {
     const directory = mkdtempSync(join(tmpdir(), 'finding-upgrade-'))
     directories.push(directory)

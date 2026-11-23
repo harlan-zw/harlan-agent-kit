@@ -7645,7 +7645,18 @@ function installSchema(database: DatabaseSync): void {
   }
   if (version === 110) {
     // The table is created only if missing, so a rewind or a renumbered replay is safe.
-    applyMigration(database, `${followUpIssueSchema} PRAGMA user_version = 111;`)
+    // A thread posted before Finding scope offers a Repair control its finding no
+    // longer routes to, so each open head with a follow-up syncs its threads once.
+    applyMigration(database, `${followUpIssueSchema}
+      UPDATE finding_thread_syncs SET state_tag = 'Pending'
+      WHERE state_tag = 'Written' AND review_run_id IN (
+        SELECT review_runs.id FROM review_runs JOIN subjects ON subjects.id = review_runs.subject_id
+        JOIN revisions ON revisions.id = subjects.current_revision_id
+        WHERE review_runs.head_sha = json_extract(revisions.payload, '$.headSha')
+          AND json_extract(revisions.payload, '$.state') = 'open'
+          AND EXISTS (SELECT 1 FROM json_each(review_runs.findings) WHERE json_extract(value, '$._tag') = 'Logged')
+      );
+      PRAGMA user_version = 111;`)
     version = 111
   }
   if (version === 111)

@@ -416,12 +416,18 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
           && (heldByGitHub(publishedBody(candidate), mapping.githubAccount, before) || delayedDismiss)
       if (!authorizedComment)
         return false
-      // Only a finding this change added goes to Repair here, and Dismiss sits only beside that control.
+      // Only a finding this change added goes to Repair here, and Dismiss sits only
+      // beside that control, or beside a Repair selected before Finding scope existed.
       const repairFindings = repairs.map(logged)
       const dismissFindings = dismissed.map(logged)
       const issueFindings = issues.map(logged)
+      const selectedOnHead = (fingerprint: string) => database.prepare(`SELECT 1 FROM logged_finding_requests
+        WHERE subject_id = ? AND head_sha = ? AND base_ref = ? AND fingerprint = ? AND on_head = 1`)
+        .get(candidate.subject_id, input.headSha, pullRequest.baseRef ?? '', fingerprint) !== undefined
+      const routesToRepair = (finding: LoggedReviewFinding | undefined) => finding !== undefined && followUpRoute(finding, controls.repairOnHead) === 'Repair'
       if ([...repairFindings, ...dismissFindings, ...issueFindings].includes(undefined)
-        || [...repairFindings, ...dismissFindings].some(finding => finding !== undefined && followUpRoute(finding, controls.repairOnHead) !== 'Repair')
+        || repairFindings.some(finding => !routesToRepair(finding))
+        || dismissFindings.some(finding => !routesToRepair(finding) && (finding === undefined || !selectedOnHead(finding.details.fingerprint)))
         || (dismissed.length > 0 && (input.inline === true || dismissed.some(fingerprint => repairs.includes(fingerprint))))) {
         return false
       }

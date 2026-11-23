@@ -41,7 +41,7 @@ import { agentProfile } from './agent-profile.ts'
 import { agentPhase } from './agent-progress.ts'
 import { runParsedAgentTurn } from './agent-turn.ts'
 import { APPROVAL_LABELS } from './approval-labels.ts'
-import { REVIEW_REPAIR_REFUSALS } from './failure.ts'
+import { classifyFailure, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { withFindingScopes } from './finding-scope.ts'
 import { githubAccountInstructions } from './github-account.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
@@ -482,8 +482,9 @@ async function reviewChangedFiles(
  * Stores each follow-up's Finding scope, read from the exact diff the Review covered.
  *
  * A Review with no Logged finding reads nothing. A failed read keeps every
- * scope unknown on purpose: the comment then shows those follow-ups as not
- * matched to the diff, and a tick files an issue instead of Repair on the head.
+ * scope unknown, so a tick files an issue instead of Repair on the head. It
+ * records an Incident, because an unknown scope looks like an old run and
+ * would otherwise switch Repair before merge off unseen.
  */
 async function scopeFollowUps(
   options: ReviewWorkerOptions,
@@ -494,6 +495,17 @@ async function scopeFollowUps(
   if (options.changedLines === undefined || !findings.some(finding => finding._tag === 'Logged'))
     return withFindingScopes(findings, null)
   const diff = await options.changedLines(task.repositoryMapping, task.pullRequest.baseSha, task.pullRequest.headSha, signal)
+  if (diff._tag === 'Err' && !signal.aborted) {
+    options.store.recordIncident({
+      scope: { _tag: 'Task', taskId: task.id, repository: task.repository, itemNumber: task.pullRequestNumber },
+      kind: classifyFailure({ message: diff.error }).kind,
+      severity: 'warning',
+      operation: 'finding_scope',
+      message: `The reviewed diff was unreadable, so every follow-up files an issue: ${diff.error}`,
+      recovery: { _tag: 'OnNextOperation' },
+      at: options.now().toISOString(),
+    })
+  }
   return withFindingScopes(findings, diff._tag === 'Ok' ? diff.value : null)
 }
 
