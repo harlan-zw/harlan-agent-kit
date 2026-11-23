@@ -13,7 +13,6 @@ import type { LoggedFindingStore } from './logged-finding-store.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PaybackStore } from './payback-store.ts'
-import type { PrivateDetails } from './public-text.ts'
 import type { PathRuleShadowReading, PullRequestTriageDecision } from './pull-request-triage.ts'
 import type { PullRequestWatchState } from './pull-request-watch.ts'
 import type { RepairRecoveryTarget } from './repair-recovery.ts'
@@ -7873,11 +7872,6 @@ export function openJournalStore(
   serviceUpdate: () => ServiceUpdateStatus = () => ({ _tag: 'Checking', deployedCommit: '' }),
   /** Reasoning effort overrides the configuration names, per Agent provider and role. */
   roleReasoningEfforts: RoleReasoningEfforts = {},
-  /**
-   * What the publish boundary redacts. A logged finding control matches the
-   * body GitHub holds, so the store compares after the same redaction.
-   */
-  privateDetails: PrivateDetails = { paths: [], hosts: [] },
 ): JournalStore {
   const database = openDatabase(path)
   const packageReleaseStore = createPackageReleaseStore(database)
@@ -7902,7 +7896,6 @@ export function openJournalStore(
     digest,
     transition: (taskId, at) => recordTransition(database, { taskId, from: null, to: 'Queued', reason: null, fence: 0, at }),
     cancel: (taskId, at) => { cancelStoredTask(database, taskId, at, 'Dismissed.') },
-    privateDetails,
   })
   // Retained gates answer the current head, target, and policy through stored Review evidence.
   const reviewGateEvidenceAuthoritySql = `

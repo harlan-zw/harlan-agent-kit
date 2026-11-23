@@ -591,6 +591,19 @@ describe('durable Logged finding pickup', () => {
     expect(store.claimNextReviewFixTask('repair', at, 60_000)?.pickup?.finding).toEqual(finding)
   })
 
+  it('shows a selected Repair that lost its provider sign-in as its cause', () => {
+    const { store, request } = setup([finding], ':memory:', 'head')
+    expect(store.requestLoggedFindingPickup(request)).toBe(true)
+    const repair = store.claimNextReviewFixTask('repair', at, 60_000)!
+    const providerError = 'The codex session failed: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.'
+    store.needsAttentionTask({ taskId: repair.id, workerId: repair.state.workerId, fence: repair.state.fence, at, reason: providerError, evidence: '{}' })
+
+    const body = store.claimLoggedFindingComment('publisher', at, 60_000)?.body
+
+    expect(body).toContain('Repair: The agent lost its sign-in. Harlan must sign it in again.')
+    expect(body).not.toContain('refresh token')
+  })
+
   it('dismisses a summary finding without queuing Repair', () => {
     const { store, request } = setup([finding], ':memory:', 'head')
     expect(store.requestLoggedFindingPickup({ ...request, fingerprints: [], dismissedFingerprints: [finding.details.fingerprint] })).toBe(true)

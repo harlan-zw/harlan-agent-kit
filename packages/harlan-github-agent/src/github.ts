@@ -16,7 +16,7 @@ import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
-import { guardPublicText } from './public-text.ts'
+import { publicBody } from './public-text.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
 import { findingDiscussions, inlineReviewComment } from './review-finding-threads.ts'
@@ -688,8 +688,8 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
       const client = await itemWriteClient(input.repository.github, signal)
       if (client._tag === 'Err')
         return client
-      const body = guardPublicText(options.publicText, { repository: input.repository.github, itemNumber: input.issueNumber, writer: 'issue' }, githubAccountBody(input.body, input.repository.githubAccount))
-      return client.value.rest.issues.update({ owner, repo, issue_number: input.issueNumber, title: input.title, body, ...(signal === undefined ? {} : { request: { signal } }) })
+      return publicBody(options.publicText, { repository: input.repository.github, itemNumber: input.issueNumber, writer: 'issue' }, githubAccountBody(input.body, input.repository.githubAccount))
+        .send(body => client.value.rest.issues.update({ owner, repo, issue_number: input.issueNumber, title: input.title, body, ...(signal === undefined ? {} : { request: { signal } }) }))
         .then(() => ok(undefined))
         .catch((error: unknown): Result<void, GitHubReadError> => {
           const status = errorStatus(error)
@@ -702,14 +702,15 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
       if (octokit._tag === 'Err')
         return octokit
       const request = signal === undefined ? {} : { request: { signal } }
-      return octokit.value.rest.issues.create({
-        owner,
-        repo,
-        title: input.title,
-        body: guardPublicText(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'issue' }, githubAccountBody(input.body, input.repository.githubAccount)),
-        ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
-        ...request,
-      })
+      return publicBody(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'issue' }, githubAccountBody(input.body, input.repository.githubAccount))
+        .send(body => octokit.value.rest.issues.create({
+          owner,
+          repo,
+          title: input.title,
+          body,
+          ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
+          ...request,
+        }))
         .then(response => ok({ number: response.data.number, url: response.data.html_url }))
         .catch((error: unknown): Result<{ number: number, url: string }, GitHubReadError> => {
           const status = errorStatus(error)
@@ -725,13 +726,14 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(input.repository.github)
-      return octokit.value.rest.issues.createComment({
-        owner,
-        repo,
-        issue_number: input.issueNumber,
-        body: guardPublicText(options.publicText, { repository: input.repository.github, itemNumber: input.issueNumber, writer: 'comment' }, githubAccountBody(input.body, input.repository.githubAccount)),
-        ...(signal === undefined ? {} : { request: { signal } }),
-      })
+      return publicBody(options.publicText, { repository: input.repository.github, itemNumber: input.issueNumber, writer: 'comment' }, githubAccountBody(input.body, input.repository.githubAccount))
+        .send(body => octokit.value.rest.issues.createComment({
+          owner,
+          repo,
+          issue_number: input.issueNumber,
+          body,
+          ...(signal === undefined ? {} : { request: { signal } }),
+        }))
         .then(response => ok({ id: response.data.id }))
         .catch((error: unknown): Result<{ id: number }, GitHubReadError> => {
           const status = errorStatus(error)
@@ -928,16 +930,16 @@ export function createGitHubPullRequestPublisher(options: GitHubBodyPublisherOpt
           })
         }
         const attached = await attachDiagram()
-        return octokit.rest.pulls.create({
+        return publicBody(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'pull request description' }, attached.body).send(body => octokit.rest.pulls.create({
           owner,
           repo,
           head: input.headRef,
           base: input.baseRef,
           title: input.title,
-          body: guardPublicText(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'pull request description' }, attached.body),
+          body,
           draft: false,
           ...request,
-        }).then(async (created): Promise<Result<PublishedPullRequest, GitHubReadError>> => {
+        })).then(async (created): Promise<Result<PublishedPullRequest, GitHubReadError>> => {
           if (created.data.head.sha !== input.expectedHeadSha) {
             return err({
               repository: input.repository.github,

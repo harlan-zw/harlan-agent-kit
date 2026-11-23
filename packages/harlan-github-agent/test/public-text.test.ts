@@ -225,3 +225,180 @@ Notes: ~/notes/review-24.md`
     expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', message: expect.stringContaining('the review on harlan-zw/example#24') })])
   })
 })
+
+/** One pull request whose comments live in memory, so a source can publish and read them back. */
+function commentHost(initial: Array<{ id: number, body: string }> = []) {
+  const comments = initial.map(comment => ({
+    ...comment,
+    author_association: 'NONE',
+    html_url: `https://github.com/harlan-zw/example/pull/24#issuecomment-${comment.id}`,
+    issue_url: 'https://api.github.com/repos/harlan-zw/example/issues/24',
+    user: { login: 'harlan-github-agent[bot]' },
+  }))
+  const writes: string[] = []
+  const write = (id: number | undefined, body: string) => {
+    writes.push(body)
+    const existing = comments.find(comment => comment.id === id)
+    if (existing !== undefined) {
+      existing.body = body
+      return Promise.resolve({ data: existing })
+    }
+    const created = { id: 50 + comments.length, body, author_association: 'NONE', html_url: `https://github.com/harlan-zw/example/pull/24#issuecomment-${50 + comments.length}`, issue_url: 'https://api.github.com/repos/harlan-zw/example/issues/24', user: { login: 'harlan-github-agent[bot]' } }
+    comments.push(created)
+    return Promise.resolve({ data: created })
+  }
+  const client = {
+    paginate: () => Promise.resolve(comments),
+    rest: { issues: {
+      listComments: () => undefined,
+      getComment: (input: { comment_id: number }) => Promise.resolve({ data: comments.find(comment => comment.id === input.comment_id) }),
+      createComment: (input: { body: string }) => write(undefined, input.body),
+      updateComment: (input: { comment_id: number, body: string }) => write(input.comment_id, input.body),
+    } },
+  } as unknown as Octokit
+  return { client, comments, writes }
+}
+
+function agentSource(client: Octokit, store: ReturnType<typeof journal>, sourceDetails = details) {
+  return createGitHubAgentSource({
+    actorLogin: () => 'harlan-github-agent[bot]',
+    createClient: () => client,
+    ownAppId: 98114,
+    publicText: createPublicTextGuard({ details: sourceDetails, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+    tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+  })
+}
+
+const reviewHead = '1031dc93dddca88266cb32a085c7b90dcd58ec23'
+function reviewBody(line: string) {
+  return `<!-- harlan-agent-kit:pr-triage -->
+<!-- reviewed-sha: ${reviewHead} -->
+### 🤖 READY
+
+${line}`
+}
+
+describe('review findings on #754', () => {
+  it('redacts every spelling of a checkout root under the home directory', async () => {
+    const store = journal()
+    const sent: string[] = []
+    const publisher = createGitHubIssuePublisher({
+      createClient: () => ({ rest: { issues: { createComment: (input: { body: string }) => {
+        sent.push(input.body)
+        return Promise.resolve({ data: { id: 7 } })
+      } } } }) as unknown as Octokit,
+      publicText: createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
+      tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
+    })
+
+    await publisher.createComment({ repository: repositoryMapping(), issueNumber: 24, body: [
+      'Absolute /home/harlan/pkg/example.fix-x/src/a.ts',
+      'Tilde ~/pkg/example.fix-x/src/a.ts',
+      'Variable $HOME/sites/site.fix-y/app.vue',
+      'Journal ~/.local/share/harlan-github-agent/worktrees/abc',
+      'Config ~/.config/opencode/opencode.json',
+    ].join('\n') })
+
+    expect(sent[0]).toBe([
+      'Absolute [private path]',
+      'Tilde [private path]',
+      'Variable [private path]',
+      'Journal [private path]',
+      'Config ~/.config/opencode/opencode.json',
+    ].join('\n'))
+  })
+
+  it('keeps editing a canonical comment after the deny list changes', async () => {
+    const store = journal()
+    const host = commentHost()
+    const before = reviewBody('Dashboard: https://hogwild.tail1234.ts.net/items/24')
+    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, before, false, new AbortController().signal)
+    if (published._tag === 'Err')
+      throw new Error(published.error)
+    const restarted = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: [], serviceOrigins: ['https://other.tail1234.ts.net'] })
+
+    const edited = await agentSource(host.client, store, restarted).editReviewStatus(repositoryMapping(), 24, published.value.commentId, before, reviewBody('Stopped.'), new AbortController().signal)
+
+    expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
+    expect(host.comments[0]?.body).toContain('Stopped.')
+  })
+
+  it('records one Incident for a body written once, and none for a refused write', async () => {
+    const store = journal()
+    const host = commentHost()
+    const source = agentSource(host.client, store)
+    const body = reviewBody('Notes: ~/notes/review-24.md')
+
+    expect(await source.upsertReviewStatus(repositoryMapping(), 24, null, body, false, new AbortController().signal, () => ok(undefined))).toEqual(ok(expect.anything()))
+    expect(await source.upsertReviewStatus(repositoryMapping(), 24, null, body, false, new AbortController().signal, () => ok(undefined))).toEqual(ok(expect.anything()))
+    expect(host.writes).toHaveLength(1)
+    expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', occurrences: 1 })])
+
+    const refused = journal()
+    const refusedHost = commentHost()
+    expect(await agentSource(refusedHost.client, refused).upsertReviewStatus(repositoryMapping(), 24, null, body, false, new AbortController().signal, () => ({ _tag: 'Err', error: 'Lease expired.' }))).toEqual({ _tag: 'Err', error: 'Lease expired.' })
+    expect(refusedHost.writes).toHaveLength(0)
+    expect(refused.listIncidents()).toEqual([])
+  })
+
+  it('redacts a worker home with an encoded character in the native review, and keeps a longer sibling', async () => {
+    const store = journal()
+    const written: string[] = []
+    const withEncodedRoot = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: ['/srv/agent_home', '/home/agent'], serviceOrigins: [] })
+    const client = {
+      paginate: async () => [],
+      rest: { pulls: {
+        listReviews: () => undefined,
+        createReview: async (input: { commit_id: string, body: string }) => {
+          written.push(input.body)
+          return { data: { id: 1, user: { login: 'harlan-github-agent[bot]' }, state: 'COMMENTED', commit_id: input.commit_id, body: input.body } }
+        },
+      } },
+    } as unknown as Octokit
+    const body = nativeReviewBody({
+      repository: 'harlan-zw/example',
+      headSha: reviewHead,
+      outcome: 'READY',
+      commentUrl: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+      findings: [{
+        _tag: 'Logged',
+        impact: 40,
+        summary: 'The cache key ignores the locale.',
+        nextAction: 'Key the cache by locale.',
+        details: { fingerprint: 'f'.repeat(64), identity: 'cache-locale', location: { path: 'src/cache.ts', line: 3 }, proof: 'The cache at /srv/agent_home/cache differs from /home/agent_x/cache.' },
+      }],
+    })
+
+    await agentSource(client, store, withEncodedRoot).upsertNativeReview(repositoryMapping(), 24, reviewHead, body, new AbortController().signal, () => ok(undefined))
+
+    expect(written[0]).toContain('The cache at [private path] differs from /home/agent&#95;x/cache.')
+  })
+
+  it.each([
+    ['`~/notes/client handover/acquisition.pdf`', '`[private path]`'],
+    ['Read "~/notes/client handover/acquisition.pdf" first.', 'Read "[private path]" first.'],
+    ['Run `cat /home/agent/my notes/a b.txt` there.', 'Run `cat [private path]` there.'],
+    ['Harlan\'s note says it\'s fine.', 'Harlan\'s note says it\'s fine.'],
+  ])('redacts a quoted path with spaces through its closing delimiter: %s', (text, expected) => {
+    expect(redactPrivateDetails(text, details).text).toBe(expected)
+  })
+
+  it.each([
+    '[View code](https://github.com/harlan-zw/example/blob/abc123/fixtures/notes.localhost/README.md#L3)',
+    'See https://github.com/harlan-zw/example/blob/abc123/fixtures/notes.localhost/README.md.',
+  ])('keeps a public link whose path names a private host: %s', (text) => {
+    expect(redactPrivateDetails(text, details)).toEqual({ text, hits: [] })
+  })
+
+  it('keeps redacting a private host given as a Markdown link or autolink', () => {
+    expect(redactPrivateDetails('Read [notes](https://notes.localhost/x) and <https://notes.localhost/y>.', details).text)
+      .toBe('Read [private link] and [private link].')
+  })
+
+  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a'])('redacts 65,536 characters of %s in linear time', (unit) => {
+    const text = unit.repeat(Math.ceil(65_536 / unit.length)).slice(0, 65_536)
+    const started = performance.now()
+    redactPrivateDetails(text, details)
+    expect(performance.now() - started).toBeLessThan(100)
+  })
+})

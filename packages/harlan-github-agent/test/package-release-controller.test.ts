@@ -18,7 +18,7 @@ function setup(mayPublish = () => true) {
   const source: PackageReleaseSource = {
     candidates: async () => [24],
     inspect: async () => plan,
-    comment: vi.fn(async () => 99),
+    comment: vi.fn(async (_number: number, body: string) => ({ id: 99, body })),
     prepare: vi.fn<PackageReleaseSource['prepare']>(async () => ({ _tag: 'Prepared', pullRequestNumber: 25, headSha: 'c'.repeat(40), branch: 'release/24-1.0.1' })),
     merge: vi.fn(async () => null),
     publish: vi.fn(async () => null),
@@ -78,9 +78,9 @@ describe('release controller', () => {
     task.source.inspect = async () => {
       throw new Error('Connection lost')
     }
-    task.source.comment = vi.fn(async () => {
+    task.source.comment = vi.fn(async (_number: number, body: string) => {
       allowed = false
-      return 99
+      return { id: 99, body }
     })
     await expect(task.run()).rejects.toThrow('Connection lost')
     expect(task.source.comment).toHaveBeenCalledTimes(1)
@@ -262,6 +262,20 @@ describe('release note drafts', () => {
     task.database.close()
   })
 
+  it('reports a draft that lost its provider sign-in as its cause', async () => {
+    const task = setup()
+    await publish(task)
+    for (const at of ['2026-11-18T00:00:00.000Z', '2026-11-18T00:01:00.000Z', '2026-11-18T00:02:00.000Z']) {
+      const claimed = task.store.claimNextReleaseNote('worker', at, 1_000)!
+      task.store.failReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at, reason: 'The codex session failed: Your refresh token was already used. Please log out and sign in again.' })
+    }
+    await task.run()
+    const body = vi.mocked(task.source.comment).mock.calls.at(-1)![1]
+    expect(body).toContain('No release note draft: The agent lost its sign-in.')
+    expect(body).not.toContain('refresh token')
+    task.database.close()
+  })
+
   it('keeps a failed Published announcement as a pass failure on every pass', async () => {
     const task = setup()
     await task.run()
@@ -285,10 +299,10 @@ describe('release note drafts', () => {
     await publish(task)
     const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
     task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws.' })
-    task.source.comment = vi.fn(async (number: number) => {
+    task.source.comment = vi.fn(async (number: number, body: string) => {
       if (number === 24)
         throw new Error('The release comment no longer belongs to this Task.')
-      return 100
+      return { id: 100, body }
     })
     task.source.candidates = async () => [30]
     task.source.inspect = async number => ({ ...plan, headSha: number === 30 ? 'e'.repeat(40) : plan.headSha })
@@ -329,6 +343,22 @@ describe('release note drafts', () => {
     expect(vi.mocked(task.source.comment).mock.calls.at(-1)![1]).not.toMatch(/^- \[[ xX]\] Add this draft/m)
     await task.run()
     expect(task.source.applyReleaseNote).toHaveBeenCalledTimes(1)
+    task.database.close()
+  })
+
+  it('accepts an approval of the redacted draft GitHub shows, and applies the original draft', async () => {
+    const task = setup()
+    // GitHub holds the body after the publish boundary redacted it.
+    task.source.comment = vi.fn(async (_number: number, body: string) => ({ id: 99, body: body.replaceAll('/home/agent/notes.md', '[private path]') }))
+    await publish(task)
+    const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
+    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws. See /home/agent/notes.md.' })
+    await task.run()
+    const shown = vi.mocked(task.source.comment).mock.calls.at(-1)![1].replaceAll('/home/agent/notes.md', '[private path]')
+
+    expect(task.store.approveReleaseNote(approval(shown))).toBe(true)
+    await task.run()
+    expect(task.source.applyReleaseNote).toHaveBeenCalledWith({ tag: 'v1.0.1', text: 'Empty input no longer throws. See /home/agent/notes.md.' })
     task.database.close()
   })
 

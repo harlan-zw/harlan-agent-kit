@@ -595,7 +595,7 @@ it('writes a maintained repository release with the user credential even when th
       return response
     } }, retry: { enabled: false }, throttle: { enabled: false } }),
   })
-  expect(await source.comment(24, 'status')).toBe(7)
+  expect(await source.comment(24, 'status')).toEqual({ id: 7, body: 'status' })
   expect(requests).toEqual([
     { method: 'GET', path: '/repos/nuxt-modules/example/issues/24/comments', authorization: 'token user-token' },
     { method: 'POST', path: '/repos/nuxt-modules/example/issues/24/comments', authorization: 'token user-token' },

@@ -27,7 +27,7 @@ import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { collectJobWorkflowContext } from './job-workflow-context.ts'
 import { normalizeLoggedFindingControls, withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
-import { guardPublicText, redactPrivateDetails, reportRedaction } from './public-text.ts'
+import { isPublishedForm, publicBody } from './public-text.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
@@ -1063,7 +1063,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async upsertIssueTriageComment(repository, issueNumber, commentId, bodyText, signal) {
-      const body = guardPublicText(options.publicText, { repository: repository.github, itemNumber: issueNumber, writer: 'automated triage' }, githubAccountBody(bodyText, repository.githubAccount))
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: issueNumber, writer: 'automated triage' }, githubAccountBody(bodyText, repository.githubAccount))
+      const body = outgoing.text
       if (!body.includes(AUTOMATED_ISSUE_TRIAGE_MARKER))
         return err('The automated issue triage comment is missing its marker.')
       const octokit = await client(repository.github, 'item_write', signal)
@@ -1090,9 +1091,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           return err('The stored issue triage comment belongs to another GitHub actor.')
         if (existing !== undefined && existing.body === body && existing.html_url !== undefined)
           return ok({ commentId: existing.id, url: existing.html_url })
-        const written = existing === undefined
-          ? await octokit.value.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body, ...requestOptions })
-          : await octokit.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body, ...requestOptions })
+        const written = await outgoing.send(sent => existing === undefined
+          ? octokit.value.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body: sent, ...requestOptions })
+          : octokit.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions }))
         const confirmed = await octokit.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
         if (
           confirmed.data.user?.login.toLowerCase() !== options.actorLogin(repository).toLowerCase()
@@ -1226,13 +1227,13 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async editReviewStatus(repository, pullRequestNumber, commentId, expectedBodyText, bodyText, signal, authorize) {
-      const body = guardPublicText(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'automated review' }, githubAccountBody(bodyText, repository.githubAccount))
-      const storedBody = githubAccountBody(expectedBodyText, repository.githubAccount)
-      // GitHub holds the redacted form of a body written since redaction began,
-      // and the stored form of one written before it. Either one is the comment
-      // this Task expects, so a comment that leaked earlier is cleaned up here.
-      const expectedBody = redactPrivateDetails(storedBody, options.publicText.details).text
-      const expectedBodies = new Set([expectedBody, storedBody])
+      const sourceBody = githubAccountBody(bodyText, repository.githubAccount)
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'automated review' }, sourceBody)
+      const body = outgoing.text
+      // The Journal keeps the text before redaction. GitHub holds it redacted
+      // under whatever deny list the writer used, or whole when it was written
+      // before redaction began. `isPublishedForm` accepts each of those.
+      const expectedBody = githubAccountBody(expectedBodyText, repository.githubAccount)
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
@@ -1257,13 +1258,12 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
             && existingHead === nextHead
           if (existing.data.user?.login.toLowerCase() !== actor && !legacyOwned)
             return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another GitHub actor.' as const })
-          if ((existing.data.body === body || (expectedBody === body
+          if ((existing.data.body === body || (expectedBody === sourceBody
             && withoutLoggedFindingControls(existing.data.body ?? '') === withoutLoggedFindingControls(body)))
           && existing.data.html_url !== undefined) {
             return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
           }
-          const existingBody = withoutLoggedFindingControls(normalizeReviewControl(existing.data.body ?? ''))
-          if (![...expectedBodies].some(expected => existingBody === withoutLoggedFindingControls(normalizeReviewControl(expected))))
+          if (!isPublishedForm(withoutLoggedFindingControls(normalizeReviewControl(existing.data.body ?? '')), withoutLoggedFindingControls(normalizeReviewControl(expectedBody))))
             return ok({ _tag: 'Changed' as const })
           const writer = legacyOwned && legacyActor !== undefined
             ? await clientWith(legacyActor.tokens, repository.github, 'item_write', signal)
@@ -1273,7 +1273,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           const authority = authorize?.()
           if (authority?._tag === 'Err')
             return authority
-          await writer.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body, ...requestOptions })
+          await outgoing.send(sent => writer.value.rest.issues.updateComment({ owner, repo, comment_id: commentId, body: sent, ...requestOptions }))
           // The compare and swap above is a client side read then write, so a
           // concurrent writer can land between the two. Reading back is the
           // only way to see that the written body no longer holds.
@@ -1289,7 +1289,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async upsertReviewStatus(repository, pullRequestNumber, commentId, bodyText, replacePriorReview, signal, authorize) {
-      const body = guardPublicText(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'automated review' }, githubAccountBody(bodyText, repository.githubAccount))
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'automated review' }, githubAccountBody(bodyText, repository.githubAccount))
+      const body = outgoing.text
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
@@ -1357,9 +1358,9 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         const authorization = authorize?.()
         if (authorization?._tag === 'Err')
           return authorization
-        const written = existing === undefined
-          ? await writer.value.rest.issues.createComment({ owner, repo, issue_number: pullRequestNumber, body, ...requestOptions })
-          : await writer.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body, ...requestOptions })
+        const written = await outgoing.send(sent => existing === undefined
+          ? writer.value.rest.issues.createComment({ owner, repo, issue_number: pullRequestNumber, body: sent, ...requestOptions })
+          : writer.value.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: sent, ...requestOptions }))
         const confirmed = await writer.value.rest.issues.getComment({ owner, repo, comment_id: written.data.id, ...requestOptions })
         const writerLogin = adopted && legacyActor !== undefined ? legacyActor.login.toLowerCase() : actor
         if (
@@ -1411,17 +1412,18 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       if (octokit._tag === 'Err')
         return octokit
       const { owner, repo } = repositoryParts(repository.github)
-      const body = guardPublicText(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'review comment' }, githubAccountBody(comment.body, repository.githubAccount))
-      const request = { owner, repo, pull_number: pullRequestNumber, commit_id: comment.headSha, path: comment.path, body, request: { signal } }
+      // A refused line and its file fallback are one body, so `send` reports it once.
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'review comment' }, githubAccountBody(comment.body, repository.githubAccount))
+      const request = { owner, repo, pull_number: pullRequestNumber, commit_id: comment.headSha, path: comment.path, request: { signal } }
       // GitHub refuses a line outside the diff with 422, and a file outside
       // the diff the same way. A line it refuses falls back to the file.
       const post = (line: number | null): Promise<Result<ReviewFindingCommentOutcome, string>> => {
         const authorized = authorize()
         if (authorized._tag === 'Err')
           return Promise.resolve(authorized)
-        return octokit.value.rest.pulls.createReviewComment(line === null
-          ? { ...request, subject_type: 'file' }
-          : { ...request, line, side: 'RIGHT' })
+        return outgoing.send(body => octokit.value.rest.pulls.createReviewComment(line === null
+          ? { ...request, body, subject_type: 'file' }
+          : { ...request, body, line, side: 'RIGHT' }))
           .then(({ data }): Result<ReviewFindingCommentOutcome, string> => ok({
             _tag: 'Posted',
             ...(typeof data.body === 'string' ? { comment: { id: data.id, body: data.body } } : {}),
@@ -1435,13 +1437,12 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
     },
 
     async editReviewFindingComment(repository, comment, bodyText, signal, authorize) {
-      // The finding thread sync calls this on every pass, so a redaction is
-      // reported only before a real write, never for a body GitHub already holds.
-      const redacted = redactPrivateDetails(githubAccountBody(bodyText, repository.githubAccount), options.publicText.details)
-      const body = redacted.text
+      // The finding thread sync calls this on every pass. `send` reports only
+      // the write, never a body GitHub already holds.
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: null, writer: 'review comment' }, githubAccountBody(bodyText, repository.githubAccount))
+      const body = outgoing.text
       if (normalizeLoggedFindingControls(comment.body) === body)
         return ok(comment)
-      reportRedaction(options.publicText, { repository: repository.github, itemNumber: null, writer: 'review comment' }, redacted)
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
@@ -1453,7 +1454,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         const authority = authorize()
         if (authority._tag === 'Err')
           return authority
-        return octokit.value.rest.pulls.updateReviewComment({ ...request, body })
+        return outgoing.send(sent => octokit.value.rest.pulls.updateReviewComment({ ...request, body: sent }))
           .then(({ data }) => data.body === body ? ok({ id: data.id, body: data.body }) : err('GitHub did not confirm the finding comment.'))
       }).catch((error: unknown) => err(message(error)))
     },
@@ -1479,7 +1480,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       const octokit = await client(repository.github, 'item_write', signal)
       if (octokit._tag === 'Err')
         return octokit
-      const body = guardPublicText(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'review' }, githubAccountBody(bodyText, repository.githubAccount))
+      const body = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'review' }, githubAccountBody(bodyText, repository.githubAccount))
       return writeNativeReview(octokit.value, { repository: repository.github, pullRequestNumber, actorLogin: options.actorLogin(repository), headSha, body }, signal, authorize)
     },
 

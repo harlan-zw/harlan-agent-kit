@@ -1,12 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { LoggedFindingPickup, LoggedFindingStatus, LoggedReviewFinding } from './logged-finding-pickup.ts'
-import type { PrivateDetails } from './public-text.ts'
 import type { InlineFindingReceipt, ReviewFindingThread } from './review-finding-threads.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewFinding } from './types.ts'
+import { publicFailureCause } from './failure.ts'
 import { githubAccountBody } from './github-account.ts'
 import { recordLoggedFindingSignal } from './implicit-signal-store.ts'
 import { normalizeLoggedFindingControls, onHeadPickupHint, withLoggedFindingControls } from './logged-finding-pickup.ts'
-import { redactPrivateDetails } from './public-text.ts'
+import { isPublishedForm } from './public-text.ts'
 import { canRepairBaseline, canRepairSelectedFindingOnHead } from './repository-policy.ts'
 import { automatedReviewHead } from './review-comment.ts'
 import { reviewFindingThreadBody } from './review-finding-threads.ts'
@@ -131,21 +131,16 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
   digest: (value: string) => string
   transition: (taskId: string, at: string) => void
   cancel: (taskId: string, at: string) => void
-  /** The publish boundary redacts these, so a stored body compares with GitHub's only after the same redaction. */
-  privateDetails: PrivateDetails
 }): LoggedFindingStore {
   const heldSelections = new Map<string, { repository: string, pullRequestNumber: number }>()
-  /** The exact text GitHub holds for a body the controller publishes now. */
-  const githubForm = (body: string, account: RepositoryMapping['githubAccount']): string =>
-    redactPrivateDetails(githubAccountBody(body, account), options.privateDetails).text
   /**
    * Whether GitHub's control body is one this body produced.
    *
-   * A comment written before redaction began still holds the unredacted form,
-   * and its controls stay usable until the controller edits it again.
+   * The publish boundary may have redacted it, under any deny list, so the
+   * Journal text and GitHub's text compare through `isPublishedForm`.
    */
   const heldByGitHub = (body: string, account: RepositoryMapping['githubAccount'], before: string): boolean =>
-    [githubAccountBody(body, account), githubForm(body, account)].some(form => normalizeLoggedFindingControls(form) === before)
+    isPublishedForm(before, normalizeLoggedFindingControls(githubAccountBody(body, account)))
   function candidates(): Candidate[] {
     const rows = database.prepare(`${candidatesSql} ${options.writeAuthoritySql}
       AND (SELECT state_tag FROM agent_control WHERE singleton = 1) = 'Running'
@@ -192,7 +187,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
               ? row.progress_label ?? 'Verifying the finding.'
               : row.state_tag === 'Publishing'
                 ? row.on_head === 1 ? 'Publishing the fix.' : 'Opening the repair pull request.'
-                : row.state_tag === 'Queued' ? 'Queued.' : row.reason ?? 'Action required.',
+                : row.state_tag === 'Queued' ? 'Queued.' : row.reason === null ? 'Action required.' : publicFailureCause(row.reason),
     }))
   }
 
@@ -268,8 +263,8 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
       // Accept only an exact issued control body from this Review and comment.
       const delayedDismiss = input.inline !== true && input.fingerprints.length === 0 && (input.dismissedFingerprints?.length ?? 0) > 0
         && (heldByGitHub(candidate.body, mapping.githubAccount, before)
-          || database.prepare(`SELECT 1 FROM logged_finding_control_receipts WHERE review_run_id = ? AND comment_id = ? AND body = ?`)
-            .get(candidate.review_run_id, input.commentId, before) !== undefined)
+          || (database.prepare(`SELECT body FROM logged_finding_control_receipts WHERE review_run_id = ? AND comment_id = ?`)
+            .all(candidate.review_run_id, input.commentId) as Array<{ body: string }>).some(receipt => isPublishedForm(before, receipt.body)))
       const authorizedComment = input.inline === true
         ? input.fingerprints.length === 1 && (publishingInline || inlineFindings(candidate.review_run_id).some(receipt => !receipt.resolved
           && receipt.commentId === input.commentId && receipt.fingerprint === input.fingerprints[0] && receipt.body === before))
@@ -408,7 +403,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         if (row !== undefined) {
           const receipt = database.prepare('INSERT OR IGNORE INTO logged_finding_control_receipts (review_run_id, comment_id, body) VALUES (?, ?, ?)')
           for (const issued of [expectedBody, body])
-            receipt.run(candidate.review_run_id, candidate.github_comment_id, normalizeLoggedFindingControls(githubForm(issued, (JSON.parse(candidate.policy_json) as RepositoryMapping).githubAccount)))
+            receipt.run(candidate.review_run_id, candidate.github_comment_id, normalizeLoggedFindingControls(githubAccountBody(issued, (JSON.parse(candidate.policy_json) as RepositoryMapping).githubAccount)))
           return { subjectId: candidate.subject_id, repository: candidate.repository, pullRequestNumber: candidate.github_number, headSha: pullRequest.headSha, commentId: candidate.github_comment_id, sourceBody: candidate.body, expectedBody, body, workerId, fence: row.fence }
         }
       }

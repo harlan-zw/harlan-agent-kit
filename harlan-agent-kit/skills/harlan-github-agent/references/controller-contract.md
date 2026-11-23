@@ -427,8 +427,11 @@ Self-identify every automated GitHub comment. Keep comments to the minimum requi
 
 Keep private details out of every body the controller writes to GitHub. The writer redacts them where it sends the body, so no template can skip the check.
 Private details come from the configuration and the host: the Journal directory, the trusted checkout roots, the Agent worker home, `~/scratch`, `~/notes`, `notes.localhost`, `harlan-github-agent.localhost`, and the dashboard hosts.
-`localhost`, `~/.config`, and other paths under the controller home stay public, because a finding may describe them.
-Replace each match with `[private path]` or `[private link]`. Record one `private_detail` Incident that names the item and the writer. Only a person resolves it.
+Match each root in its absolute, `~/`, `$HOME/`, and entity-encoded spellings. Inside inline code or quotes, a private path runs to the closing delimiter.
+`localhost`, `~/.config`, other paths under the controller home, and a public link whose path names a private host stay public, because a finding may describe them.
+Replace each match with `[private path]` or `[private link]`. A Markdown link to a private target goes as a whole.
+Record one `private_detail` Incident that names the item and the writer, only when the redacted body is written. A no-op or a refused write records nothing. Only a person resolves it.
+Compare a stored body with GitHub's text as a redaction of it, under any deny list, so a configuration change never strands a comment.
 Show an Agent provider failure in a comment as its cause, such as "The agent lost its sign-in." Keep the raw reason in the Journal and the Dashboard. Other reasons stay as written, because loose words cannot prove where a reason came from.
 
 ## Report

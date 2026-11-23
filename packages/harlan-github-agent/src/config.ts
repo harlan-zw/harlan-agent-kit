@@ -443,6 +443,16 @@ function isFrameAncestorOrigin(value: string): boolean {
   return origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)
 }
 
+/**
+ * The checkout roots as configured, under the home directory.
+ *
+ * Validation resolves them to real paths. The publish boundary also needs this
+ * spelling, because an Agent writes `~/pkg` even when `~/pkg` is a link.
+ */
+export function configuredCheckoutRoots(home: string): string[] {
+  return [join(home, 'pkg'), join(home, 'sites')]
+}
+
 function isDashboardOrigin(value: string): boolean {
   if (!URL.canParse(value))
     return false
@@ -967,7 +977,7 @@ export function parseConfigText(text: string): Result<AgentConfig, ConfigIssue[]
   ) ?? []
   duplicateExternalRepositories.forEach(watch => issues.push({ path: '$.external_repositories', message: `Duplicate repository: ${watch.github}.` }))
 
-  const trustedCheckoutRoots = [join(homedir(), 'pkg'), join(homedir(), 'sites')]
+  const trustedCheckoutRoots = configuredCheckoutRoots(homedir())
 
   const releaseDefaultsValue = document.value.release_defaults
   const releaseDefaultsRecord = releaseDefaultsValue === undefined ? undefined : isRecord(releaseDefaultsValue) ? releaseDefaultsValue : null

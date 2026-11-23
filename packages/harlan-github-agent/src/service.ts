@@ -487,7 +487,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     ...providerProfile,
     maximumActiveAgents: config.agent.maximumActiveAgents ?? providerProfile.maximumActiveAgents,
   }
-  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read, config.agent.reasoningEffort, options.privateDetails)
+  const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read, config.agent.reasoningEffort)
   // Every GitHub writer below takes this guard, so no body reaches GitHub unredacted.
   const publicText = createPublicTextGuard({ details: options.privateDetails, store, now })
   let releaseWebhookReady = false

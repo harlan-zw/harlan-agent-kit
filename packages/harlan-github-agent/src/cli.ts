@@ -12,7 +12,7 @@ import { createPairingLink, pairingTarget } from './browser-auth-authorities.ts'
 import { createClassificationSource } from './classification.ts'
 import { forwardLeadingOptions } from './cli-leading-options.ts'
 import { invokesSubCommand } from './cli-subcommand.ts'
-import { loadClassificationToken, loadConfig } from './config.ts'
+import { configuredCheckoutRoots, loadClassificationToken, loadConfig } from './config.ts'
 import { createControlClient } from './control-client.ts'
 import { loadDashboardPassword } from './dashboard-password.ts'
 import { parseIncidentResolutionRequest } from './incident-resolution.ts'
@@ -691,7 +691,8 @@ const command = defineCommand({
     const privateDetails = privateDetailsFor({
       home: homedir(),
       storagePath: config.storage.path,
-      checkoutRoots: config.trustedCheckoutRoots,
+      // Both spellings: the resolved roots, and the configured ones under the home directory.
+      checkoutRoots: [...config.trustedCheckoutRoots, ...configuredCheckoutRoots(homedir())],
       workerHomes: await agentWorkerHomes(process.env),
       serviceOrigins: [config.server.allowedOrigin, ...(config.server.browserOrigins ?? [])],
     })
