@@ -52,7 +52,7 @@ import { queuedReviewHistoryLine } from './queue-position-sweep.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { acceptedPullRequestCommands, canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, commitLink, findingNextAction, fixedRows, followUpSection, issueRows, plural, statusLine } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, commitLink, findingNextAction, fixedRows, followUpBudget, followUpSection, issueRows, plural, statusLine } from './review-comment.ts'
 import { applyReviewReasoningEffortBand, DEFAULT_REVIEW_REASONING_EFFORT_POLICY, reviewReasoningEffortBand } from './review-effort.ts'
 import { cleanLine, cleanText } from './text.ts'
 import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
@@ -1215,6 +1215,18 @@ function failedGateWords(gates: ReviewGates): string {
   ].join(' and ')
 }
 
+/**
+ * How many of the source Review's issues the Review of the Repair commit cleared.
+ *
+ * A Review can keep a source issue under its fingerprint at any impact, a
+ * Logged one included. That issue survived the Repair, so only fingerprints
+ * absent from this Review count as fixed.
+ */
+function repairFixedCount(source: RepairSource, findings: readonly ReviewFinding[]): number {
+  const surviving = new Set(findings.flatMap(finding => finding._tag !== 'Fixed' && finding.details !== undefined ? [finding.details.fingerprint.toLowerCase()] : []))
+  return new Set(source.fingerprints.filter(fingerprint => !surviving.has(fingerprint.toLowerCase()))).size
+}
+
 /** What a PENDING verdict waits for. */
 function pendingDetail(gates: ReviewGates): string {
   return gates.ci._tag === 'Pending'
@@ -1264,8 +1276,9 @@ export function terminalComment(input: TerminalCommentInput): string {
     ? []
     : [`Merge risk: **${input.mergeRisk._tag}**. ${cleanLine(input.mergeRisk.reason)}`, '']
   const repaired = input.repairedFrom
-  const delta = result === 'READY' && repaired !== null && repaired !== undefined && repaired.issues > 0
-    ? `Repair fixed ${plural(repaired.issues, 'issue')} from \`${repaired.headSha.slice(0, 7)}\`.`
+  const repairedIssues = repaired === null || repaired === undefined ? 0 : repairFixedCount(repaired, findings)
+  const delta = result === 'READY' && repaired !== null && repaired !== undefined && repairedIssues > 0
+    ? `Repair fixed ${plural(repairedIssues, 'issue')} from \`${repaired.headSha.slice(0, 7)}\`.`
     : null
   const coverage = reviewCoverageLine(input.checked, input.notChecked)
   const reviewLine = [delta, coverage ?? (blocking.length === 0 ? `No issues found in ${commitLink(repository, headSha)}.` : null)]
@@ -1286,7 +1299,7 @@ export function terminalComment(input: TerminalCommentInput): string {
   const waiting = result === 'PENDING' && gates.ci._tag === 'Pending' && input.ciCause !== undefined && unseenPendingCauses.has(input.ciCause._tag)
     ? gates.ci
     : undefined
-  return [
+  const above = [
     AUTOMATED_REVIEW_MARKER,
     `<!-- reviewed-sha: ${headSha} -->`,
     `<!-- workflow-state: ${workflow} -->`,
@@ -1297,7 +1310,8 @@ export function terminalComment(input: TerminalCommentInput): string {
     ...(blocking.length === 0 ? [] : [...issueRows(repository, headSha, blocking), '']),
     ...(fixed.length === 0 ? [] : [...fixedRows(fixed), '']),
     ...(reviewLine === '' ? [] : [reviewLine, '']),
-    ...followUpSection(repository, headSha, findings, input.baseRef ?? undefined),
+  ]
+  const below = [
     ...reported,
     automatedDisclosure({
       kind: 'review',
@@ -1306,7 +1320,9 @@ export function terminalComment(input: TerminalCommentInput): string {
       ...(result === 'PENDING' || input.reviewedAt === undefined ? {} : { at: input.reviewedAt }),
       commands: gates.merge._tag === 'Passed' ? input.commands ?? [] : [],
     }),
-  ].join('\n')
+  ]
+  // The follow-ups take the room the verdict leaves, so the verdict always fits GitHub's limit.
+  return [...above, ...followUpSection(repository, headSha, findings, input.baseRef ?? undefined, followUpBudget([...above, ...below])), ...below].join('\n')
 }
 
 function saveAgentProgress(options: ItemAgentOptions, task: ClaimedAgentTask, phase: AgentPhase): Result<void, string> {

@@ -1,5 +1,8 @@
 import type { LoggedReviewFinding } from './logged-finding-pickup.ts'
-import { automatedDisclosure, commitLink, findingLocation, findingNextAction, followUpRow } from './review-comment.ts'
+import type { GitHubAccount } from './types.ts'
+import { githubAccountBody } from './github-account.ts'
+import { isPublishedForm } from './public-text.ts'
+import { automatedDisclosure, commitLink, findingLocation, findingNextAction, fitFollowUpRows, fitNotes, followUpBudget } from './review-comment.ts'
 import { cleanLine, cleanText } from './text.ts'
 
 /**
@@ -18,11 +21,13 @@ export function hasFollowUpIssueLabel(labels: readonly string[]): boolean {
 /**
  * The hidden marker that finds one finding's issue again.
  *
- * It names the finding fingerprint, so a second tick, a retry, or the same
- * finding on another pull request finds the open issue instead of filing again.
+ * It names the pull request and the finding fingerprint, as the Journal
+ * deduplicates them, so a retry after a lost reply finds this pull request's
+ * issue. A fingerprint comes from the finding's identity, which another pull
+ * request can report too, and that pull request files its own issue.
  */
-export function followUpFindingMarker(fingerprint: string): string {
-  return `<!-- follow-up-finding: ${fingerprint} -->`
+export function followUpFindingMarker(pullRequestNumber: number, fingerprint: string): string {
+  return `<!-- follow-up-finding: ${pullRequestNumber} ${fingerprint} -->`
 }
 
 /** The hidden marker for the one issue a Merged comment files for its pull request and head. */
@@ -34,6 +39,18 @@ export interface FollowUpIssue {
   title: string
   body: string
   marker: string
+}
+
+/**
+ * Whether GitHub's title and body are one staged follow-up issue as the publish boundary sent it.
+ *
+ * The boundary removes each line that names a private detail, under the deny
+ * list it held at the time. So the check compares through `isPublishedForm`,
+ * which holds under any list, and never by equality.
+ */
+export function isPublishedFollowUp(published: { title: string, body: string | null }, staged: { title: string, body: string }, account?: GitHubAccount): boolean {
+  return published.body !== null
+    && isPublishedForm(`${published.title}\n${published.body}`, `${staged.title.replaceAll(/[\r\n]/g, ' ')}\n${githubAccountBody(staged.body, account)}`)
 }
 
 // GitHub refuses a title longer than 256 characters.
@@ -53,7 +70,7 @@ export function followUpIssue(input: { repository: string, pullRequestNumber: nu
   const { finding } = input
   const location = findingLocation(input.repository, input.headSha, finding)
   const action = findingNextAction(finding.nextAction ?? '')
-  const marker = followUpFindingMarker(finding.details.fingerprint)
+  const marker = followUpFindingMarker(input.pullRequestNumber, finding.details.fingerprint)
   return {
     title: title(finding.summary),
     marker,
@@ -73,19 +90,13 @@ export function followUpIssue(input: { repository: string, pullRequestNumber: nu
 /** The one issue the Merged control files for every unfixed follow-up. */
 export function mergedFollowUpsIssue(input: { repository: string, pullRequestNumber: number, headSha: string, findings: readonly LoggedReviewFinding[] }): FollowUpIssue {
   const marker = mergedFollowUpsMarker(input.pullRequestNumber, input.headSha)
+  const above = [`#${input.pullRequestNumber} merged with these follow-ups not fixed. None blocked merge.`, '']
+  const below = ['', `The Review read ${commitLink(input.repository, input.headSha)}.`, '', marker, '', automatedDisclosure({ kind: 'issue' })]
+  // Nothing decorates an issue, so its rows need no room for controls.
+  const fitted = fitFollowUpRows(input.repository, input.headSha, input.findings, followUpBudget([...above, ...below]), 0)
   return {
     title: `Follow-ups from #${input.pullRequestNumber}`,
     marker,
-    body: [
-      `#${input.pullRequestNumber} merged with these follow-ups not fixed. None blocked merge.`,
-      '',
-      ...input.findings.map(finding => followUpRow(input.repository, input.headSha, finding)),
-      '',
-      `The Review read ${commitLink(input.repository, input.headSha)}.`,
-      '',
-      marker,
-      '',
-      automatedDisclosure({ kind: 'issue' }),
-    ].join('\n'),
+    body: [...above, ...fitted.rows.map(({ row }) => row), ...(fitted.unlisted + fitted.proofsLeftOut === 0 ? [] : ['', ...fitNotes(fitted).filter(line => line !== '')]), ...below].join('\n'),
   }
 }

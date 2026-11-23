@@ -1,6 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { FindingRepairStatus, InlineFindingReceipt, VerifiedFindingRepair } from './review-finding-threads.ts'
-import type { RepositoryMapping, ReviewFinding } from './types.ts'
+import type { GitHubPullRequestItem, RepositoryMapping, ReviewFinding } from './types.ts'
+import { followUpOwners } from './logged-finding-pickup.ts'
+import { loggedFindingStatuses } from './logged-finding-store.ts'
 
 export interface FindingThreadSync {
   reviewRunId: string
@@ -12,6 +14,8 @@ export interface FindingThreadSync {
   findings: ReviewFinding[]
   verifiedRepairs: VerifiedFindingRepair[]
   repairStatus: FindingRepairStatus
+  /** Follow-ups a Repair or an issue already owns, by fingerprint. Their threads offer no control. */
+  ownedFollowUps: string[]
   workerId: string
   fence: number
 }
@@ -144,7 +148,8 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
         lease_expires_at = NULL, updated_at = ? WHERE state_tag IN ('Pending', 'Running')
         AND review_run_id NOT IN (SELECT sync.review_run_id FROM finding_thread_syncs AS sync ${joins} WHERE ${currentEvidence})`).run(at)
       const row = database.prepare(`SELECT sync.review_run_id, sync.fence, repositories.github,
-        repositories.policy_json, subjects.github_number, review_runs.head_sha, review_runs.base_ref, review_runs.findings,
+        repositories.policy_json, subjects.id AS subject_id, subjects.github_number, revisions.payload,
+        review_runs.head_sha, review_runs.base_ref, review_runs.findings,
         ${repairStatus} AS repair_status
         FROM finding_thread_syncs AS sync ${joins}
         WHERE ((sync.state_tag = 'Pending' AND sync.next_attempt_at <= ?)
@@ -157,7 +162,9 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
           fence: number
           github: string
           policy_json: string
+          subject_id: number
           github_number: number
+          payload: string
           head_sha: string
           base_ref: string
           findings: string
@@ -221,7 +228,8 @@ export function createFindingThreadSyncStore(database: DatabaseSync, writeAuthor
         ) WHERE rank = 1
       `).all(row.review_run_id) as Array<{ fingerprint: string, commitSha: string }>
       database.exec('COMMIT')
-      return { reviewRunId: row.review_run_id, repository: row.github, pullRequestNumber: row.github_number, headSha: row.head_sha, baseRef: row.base_ref, repositoryMapping: JSON.parse(row.policy_json), findings: JSON.parse(row.findings), verifiedRepairs, repairStatus: row.repair_status, workerId, fence }
+      const ownedFollowUps = [...followUpOwners(loggedFindingStatuses(database, row.subject_id, JSON.parse(row.payload) as GitHubPullRequestItem)).keys()]
+      return { reviewRunId: row.review_run_id, repository: row.github, pullRequestNumber: row.github_number, headSha: row.head_sha, baseRef: row.base_ref, repositoryMapping: JSON.parse(row.policy_json), findings: JSON.parse(row.findings), verifiedRepairs, repairStatus: row.repair_status, ownedFollowUps, workerId, fence }
     }
     catch (error) {
       database.exec('ROLLBACK')

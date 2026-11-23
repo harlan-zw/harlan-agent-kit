@@ -270,12 +270,15 @@ When a pull request review starts, create its single marked bot comment. Edit it
 ### Canonical comment format
 
 Start every comment with one Status line: a dot, the outcome in bold, and one fact only this comment knows.
+Write only controller words on a state's Status line. Put a stop reason an Agent or a tool wrote on a line below it, so a removed private detail leaves the state readable.
 The dot says who holds the work. ⚪ means the agent has it. 🟢 means READY. 🟠 means Harlan or the author must act. 🟣 means merged or published.
 Write outcome words in sentence case: Ready, Pending, Blocked, Queued, Reviewing, Repair, Stuck, Review skipped, Approval needed, Merged, Closed.
 Never restate what GitHub's merge box shows, such as CI status or a merge conflict. Name a failed gate only when it is the only reason for Blocked.
 Say what only the Review knows: `Checked … Not checked: …`, what Repair fixed, the issues to fix, and the follow-ups.
 Fold follow-ups and group them by Finding scope. List each with its score, title, location, proof, and fix. Count Logged findings below 40/100 and never list them or thread them.
 When a follow-up's thread opens beside the code, keep its row and link the thread in place of the control. A thread whose finding drops below 40/100 loses its control.
+End each follow-up row with a hidden marker that names its finding fingerprint. Bind a control to its row by that marker, never by the row's score or title.
+Fit every canonical comment and Follow-up issue within GitHub's 65536-character body limit, with room for the controls. Keep the Status line, the issues, and each follow-up's score and title. Leave out proofs first, then fixes, then whole rows, and say in small print what was left out.
 A fixed thread shows its fixing commit above its struck title and drops the merge label. A follow-up a rerun promotes to an issue rewrites its thread as an issue that blocks merge.
 
 End every comment with one `<sub>` footer. It names the bot, says it is not Harlan's, and links the AI policy.
@@ -291,8 +294,10 @@ Treat GitHub as the durable workflow record. Record each Review gate and the exa
 Treat the latest confirmed write to the canonical comment as its current state. This applies across every controller Publication path.
 
 If GitHub merges a pull request, publish Merged with the issues and follow-ups not fixed, or one line when none remain. The verdict it replaces offers commands a merged pull request refuses.
+List each unfixed issue as the verdict did, with its location and its fix.
 Say the merge was reviewed only when a Review verdict answered the merged commit. If a later commit merged, name the reviewed commit instead.
-If GitHub closes a pull request unmerged, leave a verdict standing without its commands, and replace any other state with Closed. Settle the Review check run with the standing verdict.
+If GitHub closes a pull request unmerged, leave a verdict standing without its commands, and replace any other state with Closed.
+Settle the stopped Task's Review check run with the standing verdict only when that verdict names the Task's head commit. Otherwise settle it as Closed, which concludes neutral.
 Clear every Agent status label in both cases.
 
 Before trusting a locally inferred close, read that exact pull request from GitHub. Store comment and label cleanup separately from the Task that last owned the comment. Resume incomplete cleanup after restart.
@@ -369,6 +374,7 @@ Route each tick on an open pull request by scope:
 | Unknown | File it as an issue. Never route an unknown scope to Repair. |
 
 Accept a Repair checkbox only when its finding still routes to Repair. Accept an issue checkbox on any open pull request that offers controls.
+Give one finding one kind of work. Reject an issue tick for a finding a Repair selection owns, and a Repair tick for a finding an issue owns. A thread offers no control for a finding that has an owner, as its canonical row shows a status instead.
 Persist each selection before waking Repair. Reject stale selections and duplicate work.
 Run scoped Repair on the current pull request branch. Require a failing regression test before editing.
 Preserve pending selections across a confirmed scoped Repair push on the same branch. A contributor push or retarget revokes their authority.
@@ -377,11 +383,16 @@ Resolve the Agent's finding thread after a published fix and a fresh Review that
 Stage each issue request with its title and body from the stored finding before any GitHub write.
 Give the issue the finding title, the proof, the fix, the code link at the reviewed head, a link back to the pull request, and the automated footer.
 Label it `harlan-agent-follow-up`, so observation keeps the App-authored issue and Issue triage reads it without an Approval.
-Deduplicate one finding's issue by pull request and fingerprint. Before each create, find an open issue by the fingerprint marker, because a lost reply may have filed it.
+Grant that only while GitHub holds the staged title and body as the publish boundary sent them. A line the boundary removed still matches; any other edit does not.
+Deduplicate one finding's issue by pull request and fingerprint. Before each create, find an open issue by the marker that names both, because a lost reply may have filed it. Another pull request with the same finding files its own issue.
+Anyone can copy a marker. Recover a marked issue only when the controller wrote it, it carries the follow-up label, and GitHub holds the staged title and body as published. Otherwise file a new issue.
 Retry a refused create. Stop after a permanent refusal or five attempts. Show the issue link, or the refusal, beside the finding.
+Check the current filing policy, Review included, when a pass claims a staged issue and again before its write. A staged issue waits while the policy refuses it.
 
 After merge, offer one `File these as one issue` checkbox on the Merged comment. Never offer a checkbox per finding.
 It files every unfixed follow-up as one issue: listed, with no Repair selection, issue, or Dismissal, and no resolved thread.
+An issue GitHub refused for good owns nothing, so its finding goes in this issue.
+Read every finding thread from GitHub when the tick arrives, because a person can resolve or reopen one after the last sync. Refuse the tick when that read fails.
 Deduplicate that issue by pull request and head. Show its link in place of the checkbox.
 Offer it only when the latest Review covered the merged head.
 A selection made before merge for the default branch still runs after merge and opens a linked pull request for a confirmed fix. No new tick creates one.

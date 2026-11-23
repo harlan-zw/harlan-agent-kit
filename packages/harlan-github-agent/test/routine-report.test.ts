@@ -133,6 +133,7 @@ function publisher(calls: Calls, issueNumber = 42): GitHubIssuePublisher {
     },
     findOpenIssueByFingerprint: async () => ok(null),
     findOpenIssueByMarker: async () => ok(null),
+    findFollowUpIssues: async () => ok([]),
     findRoutineTrackingIssue: async () => ok(created ? { number: issueNumber, url: `https://github.com/harlan-zw/example/issues/${issueNumber}` } : null),
     findIssueCommentByMarker: async input => ok(calls.comments.findIndex(comment => comment.body.includes(input.marker)) < 0 ? null : { id: 901 }),
   }
@@ -662,6 +663,7 @@ describe('publishing the run log', () => {
         updateIssue: async () => ok(undefined),
         findOpenIssueByFingerprint: async () => ok(null),
         findOpenIssueByMarker: async () => ok(null),
+        findFollowUpIssues: async () => ok([]),
         findRoutineTrackingIssue: async () => ok(null),
         findIssueCommentByMarker: async () => ok(null),
       }
@@ -721,6 +723,7 @@ describe('publishing the run log', () => {
         updateIssue: async () => ok(undefined),
         findOpenIssueByFingerprint: async () => ok(null),
         findOpenIssueByMarker: async () => ok(null),
+        findFollowUpIssues: async () => ok([]),
         findRoutineTrackingIssue: async () => ok(issue),
         findIssueCommentByMarker: async () => ok(comment),
         createIssue: async () => {
@@ -795,6 +798,7 @@ describe('publishing the run log', () => {
         updateIssue: async () => ok(undefined),
         findOpenIssueByFingerprint: async () => ok(null),
         findOpenIssueByMarker: async () => ok(null),
+        findFollowUpIssues: async () => ok([]),
         findRoutineTrackingIssue: async () => ok(null),
         findIssueCommentByMarker: async () => ok(null),
       }
