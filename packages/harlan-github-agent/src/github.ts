@@ -660,7 +660,7 @@ export interface GitHubIssuePublisher {
     title: string
     body: string
     labels?: readonly string[]
-  }, signal?: AbortSignal) => Promise<Result<{ number: number, url: string }, GitHubReadError>>
+  }, signal?: AbortSignal, authorize?: () => Result<void, string>) => Promise<Result<{ number: number, url: string }, GitHubReadError>>
   /**
    * Finds the issue whose body carries a Candidate's fingerprint marker.
    *
@@ -697,7 +697,7 @@ export interface GitHubIssuePublisher {
 }
 
 export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions): GitHubIssuePublisher {
-  const itemWriteClient = async (repository: string, signal?: AbortSignal) => {
+  const itemWriteClient = async (repository: string, signal?: AbortSignal, assertRequest?: () => void) => {
     const credential = await options.tokens.getToken(repository, 'item_write', signal)
     if (credential._tag === 'Err')
       return credential
@@ -709,6 +709,7 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
         token: credential.value.token,
         tokens: options.tokens,
         userAgent: options.userAgent ?? 'harlan-github-agent/0.0.0',
+        ...(assertRequest === undefined ? {} : { assertRequest }),
       })
     return ok(client)
   }
@@ -752,19 +753,28 @@ export function createGitHubIssuePublisher(options: GitHubBodyPublisherOptions):
         return err({ repository: input.repository.github, message: error instanceof Error ? error.message : 'GitHub refused the report update.', ...(status === undefined ? {} : { status }) })
       })
     },
-    async createIssue(input, signal) {
+    async createIssue(input, signal, authorize) {
+      const assertRequest = () => {
+        signal?.throwIfAborted()
+        const authority = authorize?.()
+        if (authority?._tag === 'Err')
+          throw new Error(authority.error)
+      }
       const { owner, repo } = repositoryParts(input.repository.github)
-      const octokit = await itemWriteClient(input.repository.github, signal)
+      const octokit = await itemWriteClient(input.repository.github, signal, assertRequest)
       if (octokit._tag === 'Err')
         return octokit
       const request = signal === undefined ? {} : { request: { signal } }
-      return publicTitledBody(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'issue' }, { title: input.title, body: githubAccountBody(input.body, input.repository.githubAccount) }, fields => octokit.value.rest.issues.create({
-        owner,
-        repo,
-        ...fields,
-        ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
-        ...request,
-      }), response => response.data.number).then(response => ok({ number: response.data.number, url: response.data.html_url })).catch((error: unknown): Result<{ number: number, url: string }, GitHubReadError> => {
+      return publicTitledBody(options.publicText, { repository: input.repository.github, itemNumber: null, writer: 'issue' }, { title: input.title, body: githubAccountBody(input.body, input.repository.githubAccount) }, (fields) => {
+        assertRequest()
+        return octokit.value.rest.issues.create({
+          owner,
+          repo,
+          ...fields,
+          ...(input.labels === undefined ? {} : { labels: [...input.labels] }),
+          ...request,
+        })
+      }, response => response.data.number).then(response => ok({ number: response.data.number, url: response.data.html_url })).catch((error: unknown): Result<{ number: number, url: string }, GitHubReadError> => {
         const status = errorStatus(error)
         return err({
           repository: input.repository.github,

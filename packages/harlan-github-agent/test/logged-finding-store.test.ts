@@ -7,9 +7,10 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { canResolveThread } from '../../../harlan-agent-kit/skills/pr/scripts/can-resolve-thread.ts'
 import { createFindingThreadSyncController } from '../src/finding-thread-sync.ts'
+import { createGitHubIssuePublisher } from '../src/github.ts'
 import { refreshControllerGates, terminalComment } from '../src/item-agent.ts'
 import { publishFollowUpIssues, publishLoggedFindingPickups, refreshLoggedFindingThreads } from '../src/logged-finding-sweep.ts'
 import { createPublicationScheduler } from '../src/publication-scheduler.ts'
@@ -19,12 +20,13 @@ import { refreshReviewGates } from '../src/review-gate-sweep.ts'
 import { openJournalStore } from '../src/store.ts'
 import { createWebhookApp } from '../src/webhook.ts'
 import { createGitPublicationRemote } from '../src/worktree.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { pullRequestItem, repositoryMapping, testPublicText } from './fixtures.ts'
 import { githubPublicationFixture } from './github-publication-fixture.ts'
 
 const stores: ReturnType<typeof openJournalStore>[] = []
 const directories: string[] = []
 afterEach(() => {
+  vi.unstubAllGlobals()
   stores.splice(0).forEach(store => store.close())
   directories.splice(0).forEach(directory => rmSync(directory, { recursive: true, force: true }))
 })
@@ -943,6 +945,72 @@ describe('follow-up routing by Finding scope', () => {
     expect(created).toEqual([expect.objectContaining({ title: 'The cache never expires', labels: ['harlan-agent-follow-up'] })])
     expect(store.claimLoggedFindingComment('status', at, 60_000)?.body).toContain(`  Filed as #123. <!-- logged-finding: ${existing.details.fingerprint} -->`)
   })
+
+  it.each(['writes disabled', 'repository paused', 'agents paused', 'lease expired', 'lease reclaimed', 'external ownership', 'repository disabled'] as const)('sends no create request when %s during marker lookup', async (revocation) => {
+    const { store, request, mapping } = setup([existing])
+    store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))
+    let now = new Date(at)
+    const lookup = Promise.withResolvers<Response>()
+    const started = Promise.withResolvers<void>()
+    const creates: string[] = []
+    vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
+      if (init.method === 'GET') {
+        started.resolve()
+        return lookup.promise
+      }
+      creates.push('create')
+      return Response.json({ number: 123, html_url: 'https://github.com/harlan-zw/example/issues/123' })
+    })
+    const github = createGitHubIssuePublisher({ publicText: testPublicText, tokens: {
+      getToken: async () => ok({ token: 'fixture', expiresAt: '2099-01-01T00:00:00.000Z' }),
+      invalidate: () => {},
+    } })
+    const publishing = publishFollowUpIssues({ github, store, now: () => now, workerId: 'issues' }, new AbortController().signal, 1)
+    await started.promise
+    if (revocation === 'writes disabled')
+      store.setRepositoryWritesEnabled(mapping.github, false)
+    if (revocation === 'repository paused')
+      store.setRepositoryPaused(mapping.github, true)
+    if (revocation === 'agents paused')
+      store.pauseAgents(at)
+    if (revocation === 'lease expired' || revocation === 'lease reclaimed')
+      now = new Date(new Date(at).getTime() + 60_000)
+    if (revocation === 'lease reclaimed')
+      expect(store.claimFollowUpIssue('replacement', now.toISOString(), 60_000)).not.toBeNull()
+    if (revocation === 'external ownership')
+      store.syncRepositories([{ ...mapping, ownership: 'external' }], at)
+    if (revocation === 'repository disabled')
+      store.syncRepositories([{ ...mapping, enabled: false }], at)
+    lookup.resolve(Response.json([]))
+    await publishing
+    expect(creates).toEqual([])
+  })
+
+  it.each(['credential', 'authentication retry'] as const)('rechecks follow-up authority after awaiting the %s', async (boundary) => {
+    const { store, request, mapping } = setup([existing])
+    store.requestLoggedFindingPickup(issueTick(request, existing.details.fingerprint))
+    const creates: string[] = []
+    vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
+      if (init.method === 'GET')
+        return Response.json([])
+      creates.push('create')
+      return creates.length === 1
+        ? Response.json({ message: 'Bad credentials' }, { status: 401 })
+        : Response.json({ number: 123, html_url: 'https://github.com/harlan-zw/example/issues/123' })
+    })
+    let credentials = 0
+    const github = createGitHubIssuePublisher({ publicText: testPublicText, tokens: {
+      getToken: async () => {
+        credentials++
+        if (credentials === (boundary === 'credential' ? 2 : 3))
+          store.setRepositoryWritesEnabled(mapping.github, false)
+        return ok({ token: 'fixture', expiresAt: '2099-01-01T00:00:00.000Z' })
+      },
+      invalidate: () => {},
+    } })
+    await publishFollowUpIssues({ github, store, now: () => new Date(at), workerId: 'issues' }, new AbortController().signal)
+    expect(creates).toEqual(boundary === 'credential' ? [] : ['create'])
+  }, 20_000)
 
   it('finds the issue a lost reply already filed instead of filing twice', async () => {
     const { store, request } = setup([finding, existing])

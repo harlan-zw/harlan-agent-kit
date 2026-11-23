@@ -111,6 +111,7 @@ export interface LoggedFindingStore {
   authorizeLoggedFindingComment: (command: LoggedFindingComment, at: string) => boolean
   completeLoggedFindingComment: (command: LoggedFindingComment, at: string) => boolean
   claimFollowUpIssue: (workerId: string, at: string, leaseMilliseconds: number) => FollowUpIssueCommand | null
+  authorizeFollowUpIssue: (command: FollowUpIssueCommand, at: string) => boolean
   completeFollowUpIssue: (input: { id: string, workerId: string, fence: number, at: string, issueNumber: number, url: string }) => boolean
   failFollowUpIssue: (input: { id: string, workerId: string, fence: number, at: string, reason: string, status?: number | undefined }) => 'Deferred' | 'Failed' | 'Unchanged'
 }
@@ -617,6 +618,17 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
         database.exec('ROLLBACK')
         throw error
       }
+    },
+    authorizeFollowUpIssue(command, at) {
+      return database.prepare(`SELECT 1 FROM follow_up_issues AS issues
+        JOIN subjects ON subjects.id = issues.subject_id
+        JOIN repositories ON repositories.id = subjects.repository_id
+        WHERE issues.id = ? AND issues.state_tag = 'Running' AND issues.worker_id = ? AND issues.fence = ?
+          AND issues.lease_expires_at > ? AND repositories.github = ? AND repositories.policy_json = ?
+          AND repositories.enabled = 1 AND repositories.paused = 0 AND repositories.ownership != 'external'
+          ${options.writeAuthoritySql}
+          AND (SELECT state_tag FROM agent_control WHERE singleton = 1) = 'Running'`)
+        .get(command.id, command.workerId, command.fence, at, command.repository, JSON.stringify(command.repositoryMapping)) !== undefined
     },
     completeFollowUpIssue(input) {
       return database.prepare(`UPDATE follow_up_issues SET state_tag = 'Published', github_issue_number = ?, github_url = ?, reason = NULL,

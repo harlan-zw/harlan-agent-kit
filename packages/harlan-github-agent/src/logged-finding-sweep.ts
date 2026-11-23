@@ -16,7 +16,7 @@ import { err, ok } from './result.ts'
  */
 export async function publishFollowUpIssues(options: {
   github: Pick<GitHubIssuePublisher, 'createIssue' | 'findOpenIssueByMarker'>
-  store: Pick<LoggedFindingStore, 'claimFollowUpIssue' | 'completeFollowUpIssue' | 'failFollowUpIssue'>
+  store: Pick<LoggedFindingStore, 'claimFollowUpIssue' | 'authorizeFollowUpIssue' | 'completeFollowUpIssue' | 'failFollowUpIssue'>
   now: () => Date
   workerId: string
 }, signal: AbortSignal, limit = 3): Promise<Array<Result<{ repository: string, issueNumber: number }, string>>> {
@@ -46,7 +46,16 @@ export async function publishFollowUpIssues(options: {
       settle(ok(existing.value))
       continue
     }
-    settle(await options.github.createIssue({ repository: command.repositoryMapping, title: command.title, body: command.body, labels: [FOLLOW_UP_ISSUE_LABEL] }, signal))
+    const authorize = () => !signal.aborted && options.store.authorizeFollowUpIssue(command, options.now().toISOString())
+      ? ok(undefined)
+      : err('The follow-up issue lost its publication authority.')
+    // Keep revoked work leased so a later pass can recover it.
+    if (authorize()._tag === 'Err')
+      continue
+    const result = await options.github.createIssue({ repository: command.repositoryMapping, title: command.title, body: command.body, labels: [FOLLOW_UP_ISSUE_LABEL] }, signal, authorize)
+    if (result._tag === 'Err' && authorize()._tag === 'Err')
+      continue
+    settle(result)
   }
   return results
 }
