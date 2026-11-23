@@ -49,6 +49,7 @@ import { createFindingThreadSyncController } from './finding-thread-sync.ts'
 import { createGitHubAccountTokenProvider, readGitHubAccountLogin, readGitHubAccountToken } from './github-account.ts'
 import { createGitHubAgentSource } from './github-agent-source.ts'
 import { createGitHubAppTokenProvider, createRoutedTokenProvider, createUserTokenProvider } from './github-auth.ts'
+import { createGitHubChangedLines } from './github-changed-lines.ts'
 import { createGitHubMediaSource } from './github-media.ts'
 import { createGitHubPullRequestDiff } from './github-pull-request-diff.ts'
 import { createGitHubRateLimitGate, readAfterGitHubRateLimit } from './github-rate-limit.ts'
@@ -1228,7 +1229,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         worker: withGitHubWritePreflight({
           accesses: ['item_write'],
           source: tokens,
-          worker: createReviewWorker(subjectWorkerOptions),
+          worker: createReviewWorker({ ...subjectWorkerOptions, changedLines: createGitHubChangedLines({ tokens: routedTokens }) }),
         }),
         workerId: randomUUID(),
       })),

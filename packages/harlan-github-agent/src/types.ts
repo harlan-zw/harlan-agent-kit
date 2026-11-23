@@ -2,6 +2,7 @@ import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PullRequestPurpose } from './baseline-repair-state.ts'
 import type { DesktopBroker } from './desktop-broker.ts'
+import type { FindingScope } from './finding-scope.ts'
 import type { GitHubRateLimitHold } from './github-rate-limit.ts'
 import type { AgentSlotLimits, HostCapacity } from './host-capacity.ts'
 import type { MergeRisk, MergeRiskPolicy } from './merge-risk.ts'
@@ -423,6 +424,12 @@ export type ReviewFinding
         identity: string
         location: { path: string, line: number | null }
         proof: string
+        /**
+         * Whether this pull request added the finding's line, computed by the
+         * controller from the reviewed diff. Absent means unknown, which
+         * covers every run recorded before it existed.
+         */
+        scope?: FindingScope
       }
     }
     | {
