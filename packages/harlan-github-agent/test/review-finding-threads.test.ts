@@ -63,7 +63,7 @@ describe('review finding threads', () => {
       line: 32,
       body: expect.stringContaining('- [ ] Ask an agent to verify and fix this finding'),
     })])
-    expect(posted[0]!.body).toContain('**Minor (42/100): A split sequence drops bytes**\n\nThe last chunk loses a byte.\n\nPreserve buffered bytes.\n\nKeep both chunks until decoding finishes.')
+    expect(posted[0]!.body).toContain('**Minor (42/100): A split sequence drops bytes**\n\nThe last chunk loses a byte.\n\npreserve buffered bytes.\n\nKeep both chunks until decoding finishes.')
   })
 
   it.each([

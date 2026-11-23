@@ -22,12 +22,10 @@ const OPTIONAL_FOLLOW_UP_PREFIX = /^(?:(?:optional follow-up[.:]|as an optional 
  *
  * The parser applies it where an answer enters, and each renderer applies it
  * again, because findings stored before the parser did still carry the prefix.
+ * The rest keeps its casing: an action can open with a command such as `pnpm`.
  */
 export function findingNextAction(text: string): string {
-  const action = cleanText(text)
-  if (!OPTIONAL_FOLLOW_UP_PREFIX.test(action))
-    return action
-  return action.replace(OPTIONAL_FOLLOW_UP_PREFIX, '').replace(/^[a-z]/, letter => letter.toUpperCase())
+  return cleanText(text).replace(OPTIONAL_FOLLOW_UP_PREFIX, '')
 }
 
 /** Show advice without implying that a Logged finding requires Repair. */
