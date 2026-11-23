@@ -121,14 +121,16 @@ export function listedFollowUp(finding: ReviewFinding): finding is LoggedFinding
 }
 
 /**
- * One follow-up row: score, title, and where.
+ * One follow-up row: score, title, where, and the fix.
  *
- * `withLoggedFindingControls` finds this row by its score and summary and adds
- * the finding's controls under it.
+ * A finding outside the diff gets no thread beside the code, so this row is
+ * the only place its fix shows. `withLoggedFindingControls` finds the row by
+ * its score and summary and adds the finding's controls under it.
  */
 export function followUpRow(repository: string | undefined, headSha: string, finding: LoggedFinding): string {
   const location = findingLocation(repository, headSha, finding)
-  return `- \`${finding.impact}\` ${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}`
+  const fix = finding.nextAction === undefined ? '' : cleanLine(findingNextAction(finding.nextAction))
+  return `- \`${finding.impact}\` ${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}${fix === '' ? '' : ` · Fix: ${fix}`}`
 }
 
 /** The folded follow-up list, then a count of the notes below the floor. */
@@ -203,6 +205,25 @@ const COMMAND_LINE_START = 'Comment `@harlan-agent '
 export function isCanonicalFooter(line: string): boolean {
   return line.startsWith(COMMAND_LINE_START)
     || (line.startsWith('<sub>') && line.endsWith('</sub>') && line.includes(POLICY_URL))
+}
+
+/**
+ * The same comment with no command left to offer.
+ *
+ * A closed or merged pull request refuses every command, so a verdict that
+ * stands after a close keeps its words and drops the command spans from its
+ * footer. A verdict written before the Status line drops its command sentence.
+ */
+export function withoutCommands(body: string): string {
+  const lines = body.split('\n')
+  const last = lines.at(-1)
+  if (last === undefined)
+    return body
+  if (last.startsWith(COMMAND_LINE_START))
+    return lines.slice(0, -1).join('\n').trimEnd()
+  if (!isCanonicalFooter(last))
+    return body
+  return [...lines.slice(0, -1), last.replaceAll(/ · `@harlan-agent [^`]+`/g, '')].join('\n')
 }
 
 /** Puts a block above the comment's footer, so the disclosure and commands stay last. */
@@ -346,6 +367,12 @@ function automatedReviewWorkflowState(body: string): AutomatedReviewWorkflowStat
     baseSha: value.baseSha,
     outcome: value.outcome as ReviewWorkflowState['outcome'],
   }
+}
+
+/** The head commit a canonical comment answers for: its workflow marker, else its reviewed-sha marker. */
+export function canonicalCommentHead(body: string): string | undefined {
+  const head = workflowStateMarker(body)?.headSha
+  return typeof head === 'string' ? head : automatedReviewHead(body)
 }
 
 export function automatedReviewHead(body: string): string | undefined {

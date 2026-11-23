@@ -765,6 +765,12 @@ export type QueuedReviewHistory
       findings: number
     }
 
+/** The Review a Repair answered: its head and the issues it left open. */
+export interface RepairSource {
+  headSha: string
+  issues: number
+}
+
 export interface QueuedReviewStatus {
   taskId: string
   taskKind: 'adversarial_review' | 'review_fix'
@@ -1187,6 +1193,14 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
    * verdict.
    */
   priorReviewHistory: (revisionId: string) => QueuedReviewHistory
+  /**
+   * The Review a published Repair answered, when Repair pushed this head.
+   *
+   * It reads the Repair's own source Review, so it holds after the Review of
+   * this head is recorded, when `priorReviewHistory` already reads FirstReview.
+   * Null for a head no Repair pushed.
+   */
+  repairSource: (revisionId: string) => RepairSource | null
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
   listReviewGateRefreshes: () => ReviewGateRefresh[]
   listStoppedReviews: () => StoppedReview[]
@@ -15793,6 +15807,23 @@ export function openJournalStore(
         }
   }
 
+  const repairSource: JournalStore['repairSource'] = (revisionId) => {
+    const row = database.prepare(`
+      SELECT review_runs.head_sha, ${priorReviewDefectCountSql} AS issues
+      FROM revisions
+      JOIN publication_commands ON publication_commands.state_tag = 'Published'
+        AND publication_commands.commit_sha = json_extract(revisions.payload, '$.headSha')
+      JOIN tasks AS repair ON repair.id = publication_commands.task_id
+        AND repair.kind = 'review_fix' AND repair.subject_id = revisions.subject_id
+      JOIN review_runs ON review_runs.subject_id = revisions.subject_id
+        AND review_runs.revision_id = repair.revision_id
+      WHERE revisions.id = ?
+      ORDER BY publication_commands.updated_at DESC, review_runs.completed_at DESC, review_runs.id DESC
+      LIMIT 1
+    `).get(revisionId) as { head_sha: string, issues: number } | undefined
+    return row === undefined ? null : { headSha: row.head_sha, issues: row.issues }
+  }
+
   const recordQueuedReviewStatus: JournalStore['recordQueuedReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)
     const taskTable = input.taskKind === 'adversarial_review' ? 'worker_tasks' : 'tasks'
@@ -17881,6 +17912,7 @@ export function openJournalStore(
     listRunningTaskItems,
     listQueuedReviewStatuses,
     priorReviewHistory,
+    repairSource,
     recordReviewApprovalLabelIntent,
     getReviewApprovalLabelIntent,
     clearReviewApprovalLabelIntent,

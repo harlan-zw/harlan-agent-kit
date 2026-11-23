@@ -129,16 +129,17 @@ describe('logged finding pickup', () => {
     expect(withLoggedFindingControls(decorated, [finding], [{ fingerprint, status: 'Repair round 1 is fixing this.', cancellable: true }], { target: 'head', baseRef: 'main' })).toBe(decorated)
   })
 
-  it('adds the control under a follow-up row and recounts the fold when a row moves inline', () => {
+  it('adds the control under a follow-up row and links a row whose thread opened beside the code', () => {
     const second = { ...finding, impact: 62, summary: 'The cache never expires.', details: { ...finding.details, fingerprint: 'e'.repeat(64), identity: 'cache' } }
     const hidden = { ...finding, impact: 12, summary: 'A comment has a typo.', details: { ...finding.details, fingerprint: 'd'.repeat(64), identity: 'typo' } }
     const footer = automatedDisclosure({ kind: 'review', merge: true })
     const source = [AUTOMATED_REVIEW_MARKER, `<!-- reviewed-sha: ${headSha} -->`, '🟢 **Ready**', '', ...followUpSection('harlan-zw/example', headSha, [finding, second, hidden]), footer].join('\n')
-    const decorated = withLoggedFindingControls(source, [finding, second, hidden], [], { target: 'head', baseRef: 'main', inline: new Set([second.details.fingerprint]) })
+    const decorated = withLoggedFindingControls(source, [finding, second, hidden], [], { target: 'head', baseRef: 'main', inline: new Map([[second.details.fingerprint, 'https://github.com/harlan-zw/example/pull/24#discussion_r7']]) })
 
-    expect(decorated).toContain('<b>1 follow-up</b> · none block merge')
+    expect(decorated).toContain('<b>2 follow-ups</b> · none block merge')
     expect(decorated).toContain(`- \`40\` The parser drops buffered bytes. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)\n  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fingerprint} -->`)
-    expect(decorated).not.toContain('The cache never expires.')
+    expect(decorated).toContain(`The cache never expires. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)\n  [Open the thread beside the code](https://github.com/harlan-zw/example/pull/24#discussion_r7) <!-- logged-finding: ${'e'.repeat(64)} -->`)
+    expect(decorated.match(/Ask an agent to verify and fix this finding/g)).toHaveLength(1)
     expect(decorated).not.toContain(`logged-finding: ${hidden.details.fingerprint}`)
     expect(decorated).toContain('<sub>1 note below 40/100 not shown.</sub>')
     expect(decorated.split('\n').at(-1)).toBe(footer)

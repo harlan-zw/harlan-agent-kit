@@ -28,7 +28,8 @@ const afterMergePickupHint = 'Selected findings run after merge and open separat
 export const onHeadPickupHint = 'Selected findings run on this pull request.'
 const controlPattern = /^( {0,2})- \[([ xX])\] Ask an agent to verify and fix this finding <!-- logged-finding: ([a-f\d]{64}) -->$/gm
 const dismissalPattern = /^ {2}- \[([ xX])\] Dismiss this finding <!-- dismiss-logged-finding: ([a-f\d]{64}) -->$/gm
-const statusPattern = /^ {2}(?:(?:- \[[ xX]\] Ask an agent to verify and fix this finding|Repair: [^\n]+) <!-- logged-finding: [a-f\d]{64} -->|- \[[ xX]\] Dismiss this finding <!-- dismiss-logged-finding: [a-f\d]{64} -->)\n?/gm
+const threadLinkText = 'Open the thread beside the code'
+const statusPattern = /^ {2}(?:(?:- \[[ xX]\] Ask an agent to verify and fix this finding|Repair: [^\n]+|\[Open the thread beside the code\]\([^)\n]*\)) <!-- logged-finding: [a-f\d]{64} -->|- \[[ xX]\] Dismiss this finding <!-- dismiss-logged-finding: [a-f\d]{64} -->)\n?/gm
 
 /** Removes controller decorations when another canonical writer compares its source body. */
 export function withoutLoggedFindingControls(body: string): string {
@@ -66,7 +67,13 @@ function loggedFindingRow(line: string, finding: LoggedReviewFinding): boolean {
 /** Adds one control beside each recorded finding. Task status replaces its control. */
 export function withLoggedFindingControls(body: string, findings: readonly ReviewFinding[], statuses: readonly LoggedFindingStatus[], options: {
   target?: 'head' | 'after-merge' | undefined
-  inline?: ReadonlySet<string>
+  /**
+   * Findings whose thread opened beside the code, by fingerprint, to that thread's URL.
+   *
+   * The row stays, so the fold keeps the count the native review shows, and
+   * the thread link replaces the control: the thread carries its own.
+   */
+  inline?: ReadonlyMap<string, string>
   baseRef?: string | undefined
 } = { target: 'after-merge' }): string {
   const lines = withoutLoggedFindingControls(body).split('\n')
@@ -82,8 +89,9 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
     const status = statuses.find(status => status.fingerprint === finding.details.fingerprint)
     if (status !== undefined)
       return [line, `  Repair: ${status.status.replace(/\s+/g, ' ').trim()} <!-- logged-finding: ${finding.details.fingerprint} -->`, ...(options.target === 'head' && status.cancellable ? [dismissalControl(finding.details.fingerprint)] : [])]
-    if (options.inline?.has(finding.details.fingerprint))
-      return []
+    const thread = options.inline?.get(finding.details.fingerprint)
+    if (thread !== undefined)
+      return [line, `  [${threadLinkText}](${thread}) <!-- logged-finding: ${finding.details.fingerprint} -->`]
     return [
       line,
       ...(options.target === undefined ? [] : [`  ${loggedFindingControl(finding.details.fingerprint)}`]),

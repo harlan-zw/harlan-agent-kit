@@ -76,7 +76,7 @@ export interface ReviewFindingThreadMirror {
 
 const FINDING_MARKER_PATTERN = /<!-- review-finding: ([a-f\d]{64})(?: ([\w-]+))? -->/i
 /** The Status line of a finding thread, open or struck through once a commit fixed it. */
-const FINDING_STATUS_PATTERN = /^(?:(?:⚪|🟠) \*\*(.+)\*\*|~~(.+)~~)(?: · `\d+\/100`)? · (?:blocks merge|does not block merge)$/u
+const FINDING_STATUS_PATTERN = /^(?:(?:⚪|🟠) \*\*(.+)\*\*(?: · `\d+\/100`)? · (?:blocks merge|does not block merge)|~~(.+)~~(?: · `\d+\/100`)?(?: · (?:blocks merge|does not block merge))?)$/u
 /** The line a resolved thread carries above its title. */
 const FIXED_LINE_PATTERN = /^🟢 \*\*Fixed in /u
 /** The heading a thread carried before the Status line. Old threads stay on GitHub. */
@@ -217,7 +217,7 @@ export function planReviewFindingThreads(headSha: string, findings: ReviewFindin
       headSha,
       path,
       line: anchor,
-      body: withRepairStatus(reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef), findingRepairStatus(finding, options.repairStatus)),
+      body: withRepairStatus(reviewFindingThreadBody(finding, threadControls(finding, options) ? headSha : undefined, options.baseRef), findingRepairStatus(finding, options.repairStatus)),
       ...(finding._tag === 'Logged' ? { lineOnly: true } as const : {}),
     })
   }
@@ -232,6 +232,16 @@ export function planReviewFindingThreads(headSha: string, findings: ReviewFindin
       return repairs.has(thread.fingerprint) || (marker.summary !== null && fixedSummaries.has(marker.summary))
     }).map(thread => ({ thread, commitSha: repairs.get(thread.fingerprint) })),
   }
+}
+
+/**
+ * Whether a thread offers its pickup control.
+ *
+ * A rerun can score a threaded follow-up below the floor. Its thread then
+ * keeps its text and loses the control, as a new one would never get it.
+ */
+function threadControls(finding: ThreadFinding, options: FindingThreadOptions): boolean {
+  return options.controls === true && (finding._tag !== 'Logged' || finding.impact >= FOLLOW_UP_FLOOR)
 }
 
 /** The line a fixed thread shows above its title. */
@@ -251,7 +261,8 @@ export function resolvedThreadBody(body: string, fingerprint: string, commitSha:
   const heading = lines.findIndex(line => FINDING_STATUS_PATTERN.test(line) || FINDING_HEADING_PATTERN.test(line) || LEGACY_FINDING_HEADING_PATTERN.test(line))
   if (heading === -1)
     return `${lines.join('\n').trimEnd()}\n\n${fixedLine(commitSha, url)}`
-  const title = lines[heading]!.replace(/^(?:⚪|🟠) \*\*(.+?)\*\*/u, '~~$1~~')
+  // A fixed finding blocks nothing, so the merge label goes with the dot.
+  const title = lines[heading]!.replace(/^(?:⚪|🟠) \*\*(.+?)\*\*/u, '~~$1~~').replace(/ · (?:blocks merge|does not block merge)$/, '')
   return [...lines.slice(0, heading), fixedLine(commitSha, url), '', title, ...lines.slice(heading + 1)].join('\n').trimEnd()
 }
 
@@ -301,7 +312,7 @@ async function syncReviewFindingThreads(
     let comment = thread.comment
     if (state === 'open' && !thread.resolved && source.editReviewFindingComment !== undefined) {
       const body = finding._tag === 'Logged'
-        ? reviewFindingThreadBody(finding, options.controls ? headSha : undefined, options.baseRef)
+        ? reviewFindingThreadBody(finding, threadControls(finding, options) ? headSha : undefined, options.baseRef)
         : withRepairStatus(comment.body, findingRepairStatus(finding, options.repairStatus))
       if (body !== comment.body) {
         const edited = await source.editReviewFindingComment(repository, comment, body, signal, authorize)

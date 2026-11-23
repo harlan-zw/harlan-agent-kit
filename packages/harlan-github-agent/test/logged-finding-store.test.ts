@@ -524,7 +524,9 @@ describe('durable Logged finding pickup', () => {
     expect(store.completeReviewFindingThreadSync(sync, at, [inline])).toBe(true)
     const summary = store.claimLoggedFindingComment('publisher', at, 60_000)
     expect(summary?.body).toContain(generic.summary)
-    expect(summary?.body).not.toContain(finding.summary)
+    // The threaded finding keeps its row with a link to the thread, and the thread carries its control.
+    expect(summary?.body).toContain(`[Open the thread beside the code](${pullRequest.url}#discussion_r${inline.commentId}) <!-- logged-finding: ${finding.details.fingerprint} -->`)
+    expect(summary?.body).not.toContain(`- [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${finding.details.fingerprint} -->`)
 
     const click = { ...request, inline: true as const, commentId: inline.commentId, before: inline.body }
     expect(store.requestLoggedFindingPickup({ ...click, commentId: inline.commentId + 1 })).toBe(false)

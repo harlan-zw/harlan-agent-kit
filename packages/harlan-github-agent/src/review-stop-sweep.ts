@@ -6,7 +6,7 @@ import type { RepositoryMapping } from './types.ts'
 import { publicFailureCause, REVIEW_NOT_READY_REASON, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { err, ok } from './result.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, canonicalCommentOutcome, findingLocation, fixedRows, followUpRow, followUpSection, issueRows, listedFollowUp, plural, statusLine, workflowStateLine } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, canonicalCommentHead, canonicalCommentOutcome, commitLink, findingLocation, fixedRows, followUpRow, followUpSection, issueRows, listedFollowUp, plural, statusLine, withoutCommands, workflowStateLine } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type StoppedReviewOutcome
@@ -63,8 +63,10 @@ async function completeStoppedReviewCheckRun(
   at: string,
   signal: AbortSignal,
 ): Promise<void> {
+  // A verdict that stands after a close keeps its own conclusion, so a READY
+  // check run that never completed reads READY, not neutral.
   const update: ReviewCheckRunUpdate | null = reviewCheckRunUpdate(
-    { taskKind: review.taskKind, phase: 'terminal', desiredOutcome: 'SKIPPED', body },
+    { taskKind: review.taskKind, phase: 'terminal', desiredOutcome: canonicalCommentOutcome(body) === 'READY' ? 'READY' : 'SKIPPED', body },
     at,
   )
   if (update === null)
@@ -123,7 +125,7 @@ export function stoppedReviewComment(
 ): string {
   const cause = stopCause(review)
   if (disposition._tag === 'Closed' && showsVerdict(review.publishedBody))
-    return review.publishedBody
+    return withoutCommands(review.publishedBody)
   if (disposition._tag !== 'Stopped') {
     const workflow = JSON.stringify({
       _tag: disposition._tag === 'Merged' ? 'PullRequestMerged' : 'PullRequestClosed',
@@ -137,16 +139,28 @@ export function stoppedReviewComment(
       return [...head, statusLine('work', 'Closed', 'no further reviews'), '', footer].join('\n')
     const open = review.findings.filter(finding => finding._tag === 'Open')
     const followUps = review.findings.filter(listedFollowUp)
+    const mergedHead = review.currentHeadSha.toLowerCase()
     if (open.length + followUps.length === 0) {
-      // A skipped Review reviewed nothing, so only a Review outcome may say it did.
+      // Only a Review outcome of the merged commit itself may say it was reviewed.
+      // A skipped Review reviewed nothing, and a later commit can merge before
+      // its own Review publishes.
       const outcome = canonicalCommentOutcome(review.publishedBody)
-      const reviewed = outcome === 'READY' || outcome === 'PENDING' || outcome === 'BLOCKED'
-      const detail = reviewed ? 'reviewed with no issues' : 'no further reviews'
+      const verdict = outcome === 'READY' || outcome === 'PENDING' || outcome === 'BLOCKED'
+      const detail = !verdict
+        ? 'no further reviews'
+        : canonicalCommentHead(review.publishedBody)?.toLowerCase() === mergedHead
+          ? 'reviewed with no issues'
+          : `the merged commit ${commitLink(review.repository, review.currentHeadSha)} has no review`
       return [...head, statusLine('done', 'Merged', detail), '', footer].join('\n')
     }
-    const left = open.length === 0
+    const counted = open.length === 0
       ? plural(followUps.length, 'follow-up')
       : plural(open.length + followUps.length, 'issue')
+    // The findings belong to the reviewed commit. A later merged commit may
+    // have fixed them, so say which Review they came from.
+    const left = review.headSha.toLowerCase() === mergedHead
+      ? `${counted} not fixed`
+      : `${counted} from the review of ${commitLink(review.repository, review.headSha)}`
     const rows = [
       ...open.map((finding) => {
         const location = findingLocation(review.repository, review.headSha, finding)
@@ -154,7 +168,7 @@ export function stoppedReviewComment(
       }),
       ...followUps.map(finding => followUpRow(review.repository, review.headSha, finding)),
     ]
-    return [...head, statusLine('done', 'Merged', `${left} not fixed`), '', ...rows, '', footer].join('\n')
+    return [...head, statusLine('done', 'Merged', left), '', ...rows, '', footer].join('\n')
   }
   const { detail, rest } = causeDetail(cause)
   if (review.taskKind === 'review_fix') {
@@ -318,9 +332,9 @@ export async function publishStoppedReviews(
     // The comment is closed. Close the check run it mirrored. It gates
     // nothing: a failure reaches a person through the report, and the row
     // still settles, because no later pass can grant a missing permission.
-    // A verdict left standing already concluded its check run.
-    if (body !== review.publishedBody)
-      await completeStoppedReviewCheckRun(options, mapping, review, body, at, signal)
+    // A verdict left standing may have published without its check run, so
+    // settle the check run with the verdict's own conclusion.
+    await completeStoppedReviewCheckRun(options, mapping, review, body, at, signal)
     const labels = await options.github.clearAgentLabels(mapping, review.pullRequestNumber, signal)
     if (labels._tag === 'Err')
       return err(`${review.repository}#${review.pullRequestNumber}: ${labels.error}`)

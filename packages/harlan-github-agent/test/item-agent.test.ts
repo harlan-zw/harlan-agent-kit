@@ -142,6 +142,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
         recordReviewRun: (input) => {
           attempt = input
           return { _tag: 'Inserted', reviewRunId: input.id }
@@ -259,6 +260,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
         recordReviewRun: () => { throw new Error('A second review must not be recorded.') },
         recordReviewPublication: () => { throw new Error('A second comment must not be recorded.') },
       },
@@ -382,6 +384,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -521,6 +524,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -635,6 +639,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, _phase, body) => {
@@ -762,6 +767,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -852,6 +858,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -954,6 +961,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -1050,6 +1058,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -1145,6 +1154,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        repairSource: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
