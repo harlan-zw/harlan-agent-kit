@@ -104,7 +104,7 @@ it('writes the summary with the kit GitHub comment brief', async () => {
   }
 })
 
-it.each([['outside', 0], ['maintainer', 1]] as const)('admits automatic summaries for %s using Service trust, including fork heads', async (author, expectedCalls) => {
+it.each(['outside', 'maintainer'])('posts no automatic summary for a pull request from %s', async (author) => {
   const f = await fixture()
   const client: GitHubClient = {
     ...f.options.client,
@@ -119,8 +119,33 @@ it.each([['outside', 0], ['maintainer', 1]] as const)('admits automatic summarie
     throw new Error(host.error.message)
   try {
     expect(await host.value.command('poll', { backfill: true })).toMatchObject({ _tag: 'Ok' })
-    expect(f.calls()).toBe(expectedCalls)
-    expect(f.comments).toHaveLength(expectedCalls)
+    expect(f.calls()).toBe(0)
+    expect(f.comments).toEqual([])
+    expect(f.checks).toEqual([])
+  }
+  finally {
+    await host.value.close()
+  }
+})
+
+it('posts no cancellation when a pull request becomes a draft without a summary request', async () => {
+  const f = await fixture()
+  let snapshots = 0
+  const client: GitHubClient = {
+    ...f.options.client,
+    paginate: async (repository, path, signal) => path.includes('/pulls?') ? ok([{ number: 7 }]) : f.options.client.paginate(repository, path, signal),
+    snapshot: async (...args) => {
+      const snapshot = await f.options.client.snapshot(...args)
+      return snapshot._tag === 'Err' ? snapshot : ok({ ...snapshot.value, draft: snapshots++ > 0 })
+    },
+  }
+  const host = await createKitHost({ ...f.options, client })
+  if (host._tag === 'Err')
+    throw new Error(host.error.message)
+  try {
+    expect(await host.value.command('poll', { backfill: true })).toMatchObject({ _tag: 'Ok' })
+    expect(f.calls()).toBe(0)
+    expect(f.comments).toEqual([])
   }
   finally {
     await host.value.close()
