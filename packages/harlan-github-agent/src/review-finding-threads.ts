@@ -311,9 +311,13 @@ async function syncReviewFindingThreads(
       continue
     let comment = thread.comment
     if (state === 'open' && !thread.resolved && source.editReviewFindingComment !== undefined) {
+      // A follow-up the rerun promoted to an issue keeps its thread, so the
+      // thread is rewritten: it now blocks merge and offers no pickup control.
       const body = finding._tag === 'Logged'
         ? reviewFindingThreadBody(finding, threadControls(finding, options) ? headSha : undefined, options.baseRef)
-        : withRepairStatus(comment.body, findingRepairStatus(finding, options.repairStatus))
+        : reviewFindingThreadMarker(comment.body)?.logged === true
+          ? withRepairStatus(reviewFindingThreadBody(finding, undefined, options.baseRef), findingRepairStatus(finding, options.repairStatus))
+          : withRepairStatus(comment.body, findingRepairStatus(finding, options.repairStatus))
       if (body !== comment.body) {
         const edited = await source.editReviewFindingComment(repository, comment, body, signal, authorize)
         if (edited._tag === 'Err')

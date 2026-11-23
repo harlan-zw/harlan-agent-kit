@@ -722,7 +722,7 @@ GitHub's `annotation` is anchored to a file and line on a check run. A Review fi
 
 One Review finding at impact 80 or below. It never blocks Review or starts automatic Repair.
 
-Comments call it a follow-up. They fold follow-ups under the verdict and list each one with its score, title, location, and fix. A follow-up below 40/100 is counted and never listed or threaded.
+Comments call it a follow-up. They fold follow-ups under the verdict and list each one with its score, title, location, proof, and fix. A follow-up below 40/100 is counted and never listed or threaded.
 
 Use follow-up in comments and Logged finding in code and the Journal. Do not use nit, suggestion, or optional follow-up.
 

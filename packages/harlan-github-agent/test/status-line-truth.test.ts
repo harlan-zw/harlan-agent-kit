@@ -108,7 +108,7 @@ describe('a closed pull request', () => {
 describe('a follow-up', () => {
   it('keeps its fix in the canonical row, because a finding outside the diff has no thread', () => {
     const body = terminalComment({ headSha: reviewed, baseSha: 'c'.repeat(40), gates, findings: [followUp(55)], confidence: 90, reportedChecks: [], repository })
-    expect(body).toContain(`- \`55\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/${repository}/blob/${reviewed}/src/timeline-store.ts#L83) · Fix: Query for span overlap with the viewport.`)
+    expect(body).toContain(`- \`55\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/${repository}/blob/${reviewed}/src/timeline-store.ts#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport.`)
   })
 
   it('keeps a linked row when its thread opens beside the code, so the count the native review shows stays true', () => {
@@ -118,7 +118,7 @@ describe('a follow-up', () => {
     const decorated = withLoggedFindingControls(source, findings, [], { target: 'head', baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })
 
     expect(decorated).toContain('<b>1 follow-up</b> · none block merge')
-    expect(decorated).toContain(`· Fix: Query for span overlap with the viewport.\n  [Open the thread beside the code](${thread}) <!-- logged-finding: ${'f'.repeat(64)} -->`)
+    expect(decorated).toContain(`<br>Fix: Query for span overlap with the viewport.\n  [Open the thread beside the code](${thread}) <!-- logged-finding: ${'f'.repeat(64)} -->`)
     expect(decorated).not.toContain('Ask an agent to verify and fix this finding')
     expect(withoutLoggedFindingControls(decorated)).toBe(source)
     expect(withLoggedFindingControls(decorated, findings, [], { target: 'head', baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })).toBe(decorated)
@@ -170,5 +170,49 @@ describe('a passed Review of a Repair commit', () => {
   it('names what Repair fixed from the Repair\'s source Review', () => {
     const body = terminalComment({ headSha: merged, baseSha: 'c'.repeat(40), gates, findings: [], confidence: 90, reportedChecks: [], repository, repairedFrom: { headSha: reviewed, issues: 2 } })
     expect(body).toContain(`🟢 **Ready** · \`90/100\`\n\nRepair fixed 2 issues from \`aaaaaaa\`.`)
+  })
+})
+
+describe('a follow-up without a thread', () => {
+  it('keeps its proof beside its fix in the canonical row', () => {
+    const body = terminalComment({ headSha: reviewed, baseSha: 'c'.repeat(40), gates, findings: [followUp(55)], confidence: 90, reportedChecks: [], repository })
+    expect(body).toContain(`#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport.`)
+  })
+})
+
+describe('a promoted finding', () => {
+  it('rewrites its thread as an issue that blocks merge, without the follow-up control', async () => {
+    const fingerprint = 'd'.repeat(64)
+    const edits: string[] = []
+    const logged = followUp(55, fingerprint)
+    const thread: ReviewFindingThread = { threadId: 'T1', fingerprint, resolved: false, comment: { id: 1, body: reviewFindingThreadBody(logged, reviewed, 'main') } }
+    const promoted: Extract<ReviewFinding, { _tag: 'Open' }> = {
+      _tag: 'Open',
+      impact: 86,
+      summary: logged.summary,
+      nextAction: 'Query for span overlap with the viewport.',
+      resolution: 'Repair',
+      details: { fingerprint, identity: logged.details.identity, location: logged.details.location, proof: logged.details.proof, regressionTest: 'Cross the edge and assert the bar stays.' },
+    }
+    const mirror: ReviewFindingThreadMirror = {
+      source: {
+        listReviewFindingThreads: () => Promise.resolve(ok([thread])),
+        postReviewFindingComment: () => Promise.resolve(ok({ _tag: 'Posted' })),
+        resolveReviewFindingThread: () => Promise.resolve(ok(undefined)),
+        editReviewFindingComment: async (_repository, comment, body) => {
+          edits.push(body)
+          return ok({ ...comment, body })
+        },
+      },
+      report: () => undefined,
+    }
+    await mirrorReviewFindingThreads(mirror, repositoryMapping(), 24, reviewed, [promoted], new AbortController().signal, () => ok(undefined), 'open', { controls: true, baseRef: 'main', repairStatus: 'Active' })
+
+    expect(edits).toHaveLength(1)
+    expect(edits[0]).toContain('🟠 **Finished bars disappear at a viewport boundary** · `86/100` · blocks merge')
+    expect(edits[0]).not.toContain('does not block merge')
+    expect(edits[0]).not.toContain('Ask an agent to verify and fix this finding')
+    expect(edits[0]).toContain('⚪ Repair is fixing this.')
+    expect(reviewFindingThreadMarker(edits[0]!)).toMatchObject({ fingerprint, logged: false })
   })
 })

@@ -121,16 +121,22 @@ export function listedFollowUp(finding: ReviewFinding): finding is LoggedFinding
 }
 
 /**
- * One follow-up row: score, title, where, and the fix.
+ * One follow-up row: score, title, and where, then the proof and the fix.
  *
  * A finding outside the diff gets no thread beside the code, so this row is
- * the only place its fix shows. `withLoggedFindingControls` finds the row by
- * its score and summary and adds the finding's controls under it.
+ * the only place its evidence shows. It stays one physical line, joined with
+ * `<br>`, because `withLoggedFindingControls` finds the row by its score and
+ * summary and adds the finding's controls directly under it.
  */
 export function followUpRow(repository: string | undefined, headSha: string, finding: LoggedFinding): string {
   const location = findingLocation(repository, headSha, finding)
-  const fix = finding.nextAction === undefined ? '' : cleanLine(findingNextAction(finding.nextAction))
-  return `- \`${finding.impact}\` ${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}${fix === '' ? '' : ` · Fix: ${fix}`}`
+  const proof = cleanText(finding.details.proof).replaceAll(/\s+/g, ' ')
+  const fix = finding.nextAction === undefined ? '' : findingNextAction(finding.nextAction).replaceAll(/\s+/g, ' ')
+  return [
+    `- \`${finding.impact}\` ${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}`,
+    ...(proof === '' ? [] : [proof]),
+    ...(fix === '' ? [] : [`Fix: ${fix}`]),
+  ].join('<br>')
 }
 
 /** The folded follow-up list, then a count of the notes below the floor. */

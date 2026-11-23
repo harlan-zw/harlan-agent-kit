@@ -274,9 +274,9 @@ The dot says who holds the work. ⚪ means the agent has it. 🟢 means READY. �
 Write outcome words in sentence case: Ready, Pending, Blocked, Queued, Reviewing, Repair, Stuck, Review skipped, Approval needed, Merged, Closed.
 Never restate what GitHub's merge box shows, such as CI status or a merge conflict. Name a failed gate only when it is the only reason for Blocked.
 Say what only the Review knows: `Checked … Not checked: …`, what Repair fixed, the issues to fix, and the follow-ups.
-Fold follow-ups. List each with its score, title, location, and fix. Count Logged findings below 40/100 and never list them or thread them.
+Fold follow-ups. List each with its score, title, location, proof, and fix. Count Logged findings below 40/100 and never list them or thread them.
 When a follow-up's thread opens beside the code, keep its row and link the thread in place of the control. A thread whose finding drops below 40/100 loses its control.
-A fixed thread shows its fixing commit above its struck title and drops the merge label.
+A fixed thread shows its fixing commit above its struck title and drops the merge label. A follow-up a rerun promotes to an issue rewrites its thread as an issue that blocks merge.
 
 End every comment with one `<sub>` footer. It names the bot, says it is not Harlan's, and links the AI policy.
 A verdict also says a person merges and lists the accepted commands in code spans.

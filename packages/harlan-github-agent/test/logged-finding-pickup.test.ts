@@ -137,8 +137,8 @@ describe('logged finding pickup', () => {
     const decorated = withLoggedFindingControls(source, [finding, second, hidden], [], { target: 'head', baseRef: 'main', inline: new Map([[second.details.fingerprint, 'https://github.com/harlan-zw/example/pull/24#discussion_r7']]) })
 
     expect(decorated).toContain('<b>2 follow-ups</b> · none block merge')
-    expect(decorated).toContain(`- \`40\` The parser drops buffered bytes. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)\n  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fingerprint} -->`)
-    expect(decorated).toContain(`The cache never expires. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)\n  [Open the thread beside the code](https://github.com/harlan-zw/example/pull/24#discussion_r7) <!-- logged-finding: ${'e'.repeat(64)} -->`)
+    expect(decorated).toContain(`- \`40\` The parser drops buffered bytes. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)<br>A split sequence loses bytes.\n  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fingerprint} -->`)
+    expect(decorated).toContain(`The cache never expires. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)<br>A split sequence loses bytes.\n  [Open the thread beside the code](https://github.com/harlan-zw/example/pull/24#discussion_r7) <!-- logged-finding: ${'e'.repeat(64)} -->`)
     expect(decorated.match(/Ask an agent to verify and fix this finding/g)).toHaveLength(1)
     expect(decorated).not.toContain(`logged-finding: ${hidden.details.fingerprint}`)
     expect(decorated).toContain('<sub>1 note below 40/100 not shown.</sub>')
