@@ -227,8 +227,6 @@ function publicProse(text: string, privateHosts: readonly string[]): string | nu
   return paragraphs.length === 0 ? null : paragraphs.join('\n\n')
 }
 
-const HTML_OPEN = /^\s*<([a-z][\w-]*)[\s/>]/i
-
 /** Remove parsed comments without treating code spans as HTML. */
 function withoutComments(token: Token): string {
   if (token.type === 'html' && token.raw.startsWith('<!--'))
@@ -255,8 +253,8 @@ function withoutComments(token: Token): string {
  * move a block boundary. Only top-level paragraphs before the first other
  * block qualify. A heading, table, or list ends the summary, even before prose.
  * A leading title has no exception. Quoted, fenced, and HTML evidence never qualifies.
- * An element such as `<details>` may hold blank lines, so everything up to its
- * closing tag is skipped. Parsed comments are removed within each paragraph.
+ * HTML blocks end extraction. Markdown tokens cannot prove that nested HTML has closed.
+ * Parsed comments are removed within each paragraph.
  * The original tokens decide boundaries, even when redaction removes all prose.
  * A line that names a private path or host drops out. A paragraph that would
  * pass the limit ends the summary, because a cut sentence can break its Markdown.
@@ -265,21 +263,12 @@ function reportSummary(detail: string): string | null {
   const kept: string[] = []
   let length = 0
   let sawParagraph = false
-  let openElement: string | null = null
   for (const token of Lexer.lex(detail)) {
-    if (openElement !== null) {
-      if (token.raw.toLowerCase().includes(`</${openElement}>`))
-        openElement = null
-      continue
-    }
     if (token.type === 'space')
       continue
     if (token.type !== 'paragraph') {
-      if (sawParagraph || (token.type !== 'html' && token.type !== 'code'))
+      if (sawParagraph || token.type !== 'code')
         break
-      const element = token.type === 'html' ? token.raw.match(HTML_OPEN)?.[1]?.toLowerCase() : undefined
-      if (element !== undefined && !token.raw.toLowerCase().includes(`</${element}>`))
-        openElement = element
       continue
     }
     sawParagraph = true

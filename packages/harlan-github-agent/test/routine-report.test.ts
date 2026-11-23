@@ -409,10 +409,17 @@ describe('the summary a run log entry folds', () => {
 
   it.each([
     ['a fence with a blank line inside', '```text\nprivate-fixture line\n\nprivate-fixture after the blank line\n```'],
-    ['an HTML comment with a blank line inside', '<!--\n\nprivate-fixture note\n\n-->'],
-    ['a details block with a blank line inside', '<details>\n<summary>Logs</summary>\n\nprivate-fixture\n\n</details>'],
   ])('keeps %s out of the summary', (_case, opening) => {
     expect(summaryOf(`${opening}\n\nThe run checked every workflow.`)).toBe('The run checked every workflow.')
+  })
+
+  it.each([
+    '<!--\n\nprivate-fixture note\n\n-->',
+    '<details>\n<summary>Logs</summary>\n\nprivate-fixture\n\n</details>',
+    '<div>private-fixture</div>',
+  ])('ends the summary at an HTML block: %s', (block) => {
+    expect(summaryOf(`${block}\n\nLater prose.`)).toBeNull()
+    expect(summaryOf(`Public opening.\n\n${block}\n\nLater prose.`)).toBe('Public opening.')
   })
 
   it('keeps a fence left open out of the summary', () => {
@@ -525,6 +532,52 @@ it.each([
         expect(calls.comments[0]?.body).not.toContain('<summary>Summary</summary>')
       else
         expect(calls.comments[0]?.body).toContain(summary)
+      expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain(report)
+    }
+    finally {
+      store.close()
+    }
+  }
+})
+
+it.each([
+  ['nested folds', '<details>\n<summary>Outer</summary>\n\n<details>\n<summary>Inner</summary>\n\nInner evidence.\n\n</details>\n\nprivate-fixture between closing tags.\n\n</details>'],
+  ['mixed nested elements', '<div>\n\n<details>\n\nInner evidence.\n\n</details>\n\nprivate-fixture between closing tags.\n\n</div>'],
+  ['nested folds in one HTML token', '<details><details>Inner evidence.</details>\n\nprivate-fixture between closing tags.\n\n</details>'],
+  ['an unclosed outer fold', '<details>\n\n<details>\n\nInner evidence.\n\n</details>\n\nprivate-fixture after the inner fold.'],
+])('keeps %s private across scan parsers, stored entries, and public consumers', async (_name, report) => {
+  for (const name of ['pr-triage', 'dependency-updates', 'vitals-review'] as const) {
+    const parsed = getRoutine(name).parseResponse({ report, candidates: [], outcome: 'complete', updates: [], fieldFindings: [], labFindings: [] })
+    if (parsed._tag === 'Err')
+      throw new Error(parsed.error)
+    const store = openJournalStore(':memory:')
+    try {
+      seed(store)
+      stage(store, scanned('evidence', { detail: parsed.value.report }))
+      settleRun(store, runId)
+      const calls: Calls = { issues: [], comments: [] }
+
+      await createRoutineReportController({
+        github: publisher(calls),
+        now,
+        store: {
+          ...store,
+          claimNextRoutineReport: (...args) => {
+            const command = store.claimNextRoutineReport(...args)
+            if (command !== null) {
+              expect(command.entry).toMatchObject({ _tag: 'Scanned', summary: null })
+              if (command.entry !== null)
+                expect(runLogEntryComment({ ...command, entry: command.entry })).not.toContain('private-fixture')
+            }
+            return command
+          },
+        },
+        workerId: 'reporter',
+      }).publishPending(new AbortController().signal)
+
+      expect(calls.comments).toHaveLength(1)
+      for (const body of [...calls.issues, ...(calls.issueBodies ?? []), ...(calls.updates ?? []).map(update => update.body), ...calls.comments.map(comment => comment.body)])
+        expect(body).not.toContain('private-fixture')
       expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain(report)
     }
     finally {
