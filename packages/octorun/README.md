@@ -4,13 +4,15 @@ Run [Octorun](https://github.com/harlan-zw/octorun) workflows for this repositor
 This private package imports the standalone runtime at an exact Git commit.
 It adds the existing GitHub App mapping and a Claude subscription provider.
 
-Automatic pull request events select the change summary workflow.
-Automatic summaries require an author listed in the Service mapping's `writable_pr_authors`.
-Fork pull requests use the same author rule.
-The existing Service owns automatic Review, Repair, conflict resolution, and releases.
+Octorun runs a workflow only when someone requests it.
+Pull request events start no workflow.
+Octorun cancels a requested run if its pull request is a draft or closed.
+The pr Skill writes the pull request description, so Octorun posts no automatic change summary.
+Use `@octorun run change-summary` to request a change summary comment.
 Use `@octorun review` for an explicit Octorun adversarial review.
+A comment request needs repository write access.
 Questions inside Octorun findings stay in their threads.
-For outside contributors, a repository writer must request an Octorun workflow explicitly.
+The existing Service owns automatic Review, Repair, conflict resolution, and releases.
 The existing Service keeps its own Approval path for Review and Repair.
 
 ## Run
@@ -47,8 +49,7 @@ pnpm octorun serve
 
 The controller polls every minute and exposes a private local control socket.
 It requires no public HTTP listener or webhook routing change.
-Its first poll records existing pull requests without starting workflows for them.
-To process existing pull requests explicitly, run `pnpm octorun poll --backfill existing`.
+Each poll reads new `@octorun` comments and starts the workflows they request.
 Use the managed user service for continuous processing.
 
 ## Install the user service
@@ -152,7 +153,7 @@ Its Service mapping must remain enabled, owned, and authenticated through the co
 The allow-list accepts the whole owner or this exact repository.
 It grants no access to other repositories or organizations.
 Octorun rechecks this authority before paid work and result publication.
-It also rechecks current contributor trust and the exact pull request revision for automatic work.
+For a comment request, it also rechecks the requester's write permission.
 If the App identity or mapped paths change, restart Octorun after checking the new configuration.
 
 ## Provider boundary

@@ -32,6 +32,7 @@ Return no Candidate when the evidence does not support a precise change.
 ## Candidate
 
 Return at most one Candidate.
+GitHub shows the Candidate and the pull request description. Follow the [comment voice](../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 
 Target one exact `harlan-agent-kit/skills/<skill>/SKILL.md` path.
 

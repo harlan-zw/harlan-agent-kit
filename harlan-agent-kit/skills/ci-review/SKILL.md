@@ -70,6 +70,7 @@ Never fabricate a file edit for an operational action or unavailable evidence.
 ### Return the report
 
 Return the controller's JSON response with `report` and `candidates`.
+GitHub shows the report and each Candidate. Follow the [comment voice](../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 The Markdown report starts with coverage: complete or incomplete for the stated window and scope.
 Keep the report within 20,000 characters, including Markdown. Group repeated diagnostics and keep each disposition concise.
 If every diagnostic disposition cannot fit, mark coverage incomplete and identify the omitted scope.

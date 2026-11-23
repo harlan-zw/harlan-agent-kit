@@ -8,7 +8,7 @@ function sentryCheckinTurn(mode: RoutineScanInput['mode']): string {
 This is a scheduled Routine for the named repository and the controller's prepared worktree only.
 Do not edit repository files, commit, push, open pull requests, deploy, or delegate another site Agent.
 Persist the audited ledger and record the run history, even with zero code proposals.
-Return the complete issue report in \`report\`, including issue counts, resolution results, and artifact paths.
+Return the complete issue report in \`report\`, including issue counts, resolution results, and the artifact file names without their directory.
 Return only code repairs as Candidates. Sentry resolutions do not require code proposals.
 
 ${mode === 'propose'

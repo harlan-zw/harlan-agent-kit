@@ -136,12 +136,14 @@ const TOKEN = String.raw`(?:(?!&#(?:96|60|62|91|93);)[^\s'"\`()<>[\]{}|])`
 const TOKEN_END = String.raw`(?![\w-]|\.[\w-]|&#95;)`
 /** Sentence punctuation after a token belongs to the sentence. */
 const TRAILING_PUNCTUATION = /[)\]}'.,:;!?]+$/
+/** Markdown emphasis closes outside the URL, including native Review entities. */
+const TRAILING_EMPHASIS = /(?:&#(?:42|95);|[*_])+$/
 /**
  * A URL authority: any scheme, or none, then `//`. A host after it is the
  * URL's own host and is private. A host after a single slash is a path
  * segment of some other URL, so it stays.
  */
-const AUTHORITY = String.raw`(?:(?<![\w.+-])[a-z][a-z\d+.-]{0,15}:)?(?<![\w./-])//`
+const AUTHORITY = String.raw`(?:(?<![a-z\d.+-])[a-z][a-z\d+.-]{0,15}:)?(?<![\w./-])//`
 /** Read the authority before classifying its host. User information may contain URL subdelimiters. */
 const URL_AUTHORITY = String.raw`(?:(?:&#\d{2,3};)|[^\s/<>"\x60?#])+`
 
@@ -175,7 +177,7 @@ function matchers(details: PrivateDetails): Matchers {
 function entryFor(details: PrivateDetails, hit: PrivateDetailHit['_tag'], token: string): string {
   const text = decodeEntities(token)
   if (hit === 'Link') {
-    const authority = text.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, '').split(/[/?#]/)[0]!.replace(TRAILING_PUNCTUATION, '')
+    const authority = text.replace(/^(?:[a-z][a-z\d+.-]*:)?\/\//i, '').split(/[/?#]/)[0]!.replace(TRAILING_PUNCTUATION, '').replace(TRAILING_EMPHASIS, '')
     const url = `https://${authority}`
     const host = URL.canParse(url) ? new URL(url).hostname.toLowerCase() : ''
     return details.hosts.find(entry => host === entry || host.endsWith(`.${entry}`)) ?? ''
@@ -192,14 +194,14 @@ interface Span {
  * The whole Markdown link or autolink whose target is the token at `start`.
  *
  * Its label alone would read as a broken link, so the link goes as a whole.
- * Every search stays on the token's line. Redaction consumes the scanned span.
+ * A destination may follow a line break. Redaction consumes the scanned span.
  */
 function linkSpan(text: string, start: number, end: number): Span | null {
   const encoded = text.slice(start - 5, start) === '&#60;'
   const angleLength = encoded ? 5 : text[start - 1] === '<' ? 1 : 0
   const angleStart = start - angleLength
   let targetStart = angleStart
-  while (targetStart > 0 && /[\t ]/.test(text[targetStart - 1]!))
+  while (targetStart > 0 && /\s/.test(text[targetStart - 1]!))
     targetStart--
   const labelClose = text.slice(targetStart - 6, targetStart) === '&#93;(' ? '&#93;(' : ']('
   if (text.slice(targetStart - labelClose.length, targetStart) !== labelClose) {
@@ -218,8 +220,6 @@ function linkSpan(text: string, start: number, end: number): Span | null {
   let angle = false
   for (let index = targetStart; index < text.length; index++) {
     const character = text[index]!
-    if (character === '\n')
-      return { start: startOfSpan, end: index }
     if (character === '\\') {
       index++
       continue
@@ -245,7 +245,7 @@ function linkSpan(text: string, start: number, end: number): Span | null {
     else if (!angle && character === ')' && --depth === 0)
       return { start: startOfSpan, end: index + 1 }
   }
-  // An unclosed private destination has no safe public suffix on this line.
+  // An unclosed private destination has no safe public suffix.
   return { start: startOfSpan, end: text.length }
 }
 
@@ -271,8 +271,10 @@ function redactTokens(text: string, pattern: RegExp, tag: PrivateDetailHit['_tag
       continue
     }
     // An entity's closing semicolon belongs to the token, not to the sentence.
-    const punctuation = /&#\d{2,3};$/.test(found[0]) ? '' : found[0].match(TRAILING_PUNCTUATION)?.[0] ?? ''
-    const token = found[0].slice(0, found[0].length - punctuation.length)
+    const emphasis = tag === 'Link' ? found[0].match(TRAILING_EMPHASIS)?.[0] ?? '' : ''
+    const withoutEmphasis = found[0].slice(0, found[0].length - emphasis.length)
+    const punctuation = /&#\d{2,3};$/.test(withoutEmphasis) ? '' : withoutEmphasis.match(TRAILING_PUNCTUATION)?.[0] ?? ''
+    const token = withoutEmphasis.slice(0, withoutEmphasis.length - punctuation.length)
     output += `${text.slice(cursor, start)}${placeholder}`
     cursor = start + token.length
     hits.push({ _tag: tag, entry: entryFor(details, tag, token) })
@@ -333,7 +335,7 @@ const MAXIMUM_COMPARED_PLACEHOLDERS = 200
  *
  * It holds whatever deny list the writer used, so a comment written before a
  * configuration change still matches the Journal text that produced it. Each
- * placeholder stands for some text on one line. Equal text always matches.
+ * placeholder stands for a private span, including multiline Markdown. Equal text always matches.
  */
 function publishedRedactions(published: string, source: string): Array<{ source: string, placeholder: string }> | null {
   if (published === source)
@@ -350,13 +352,13 @@ function publishedRedactions(published: string, source: string): Array<{ source:
   const redactions: Array<{ source: string, placeholder: string }> = []
   for (const [offset, segment] of segments.slice(1, -1).entries()) {
     const index = source.indexOf(segment, position + 1)
-    if (index === -1 || source.slice(position, index).includes('\n'))
+    if (index === -1)
       return null
     redactions.push({ source: source.slice(position, index), placeholder: placeholders[offset]![0] })
     position = index + segment.length
   }
   const tail = source.length - last.length
-  if (tail <= position || !source.endsWith(last) || source.slice(position, tail).includes('\n'))
+  if (tail <= position || !source.endsWith(last))
     return null
   redactions.push({ source: source.slice(position, tail), placeholder: placeholders.at(-1)![0] })
   return redactions
@@ -447,11 +449,11 @@ export function privateDetailIncidentMessage(leak: PrivateDetailLeak): string {
 /** Records each redaction as an Incident on its repository. Only a person resolves it. */
 export function createPublicTextGuard(options: {
   details: PrivateDetails
-  store: Pick<JournalStore, 'recordIncident'>
+  store: Pick<JournalStore, 'recordIncident' | 'retainPrivateDetails'>
   now: () => Date
 }): PublicTextGuard {
   return {
-    details: options.details,
+    details: options.store.retainPrivateDetails(options.details),
     report: (leak) => {
       options.store.recordIncident({
         scope: { _tag: 'Repository', repository: leak.repository },

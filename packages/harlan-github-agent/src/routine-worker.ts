@@ -23,7 +23,7 @@ import { collectTrialReportEvidence } from './trial-report.ts'
 
 export interface RoutineScanWorkerOptions {
   github: Pick<GitHubSource, 'getIssue'>
-  serviceEvidence?: Pick<JournalStore, 'groupWorkflowFailures' | 'listIncidents' | 'listWorkflowEvents' | 'summarizeWorkflowEvents' | 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt' | 'listTrialRetroCandidates' | 'listReadyPullRequests'>
+  serviceEvidence?: Pick<JournalStore, 'groupWorkflowFailures' | 'listIncidents' | 'listRoutineYieldRuns' | 'listWorkflowEvents' | 'summarizeWorkflowEvents' | 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt' | 'listTrialRetroCandidates' | 'listReadyPullRequests'>
   /** Repositories GitHub reports as public. The `ready-digest` list shows titles only for these. */
   publicRepositories?: ReadonlySet<string>
   serviceUpdate?: () => ServiceUpdateStatus
@@ -79,22 +79,13 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       if (preparation._tag === 'Err')
         return preparation
       if (preparation.value._tag === 'Skip') {
+        // No report: a run with nothing to check did nothing. The Dashboard keeps the run and its evidence.
         const { evidence, progressLabel } = preparation.value
         options.store.updateRoutineRunProgress({
           taskId: task.id,
           workerId: task.state.workerId,
           fence: task.state.fence,
           progress: agentPhase('Reporting', progressLabel),
-          at: options.now().toISOString(),
-        })
-        options.store.stageRoutineReport({
-          command: routineReportCommand({
-            repository: task.repository,
-            routineId: task.routineId,
-            routineName: task.name,
-            run: { id: task.id, scheduledFor: task.scheduledFor },
-            report: { _tag: 'Completed', evidence },
-          }),
           at: options.now().toISOString(),
         })
         options.logger.info(evidence)
@@ -118,7 +109,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
             routineId: task.routineId,
             routineName: task.name,
             run: { id: task.id, scheduledFor: task.scheduledFor },
-            report: { _tag: 'Completed', evidence, detail: list.markdown },
+            report: { _tag: 'ReadyDigest', evidence, total: list.total, list: list.markdown },
           }),
           at: options.now().toISOString(),
         })
@@ -127,11 +118,13 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       }
 
       // Feedback and trial evidence come from the Journal, so they spend no GitHub read.
+      // Titles alone cannot pass the open-work duplicate check, so repair-proposing Routines get bodies.
+      const ownershipScope = task.name === 'seo-review' || task.name === 'vitals-review' || task.name === 'daily-checkin'
       const githubEvidence = task.name === 'agent-feedback' || task.name === 'trial-report'
         ? null
         : options.githubEvidence === undefined
           ? { _tag: 'Unavailable' as const, reason: 'The controller has no GitHub metadata source.' }
-          : await options.githubEvidence.collect(task.repositoryMapping, signal, task.name === 'ci-review', task.name === 'daily-checkin' ? task.repositoryMapping.defaultBranch : undefined, task.name === 'seo-review' || task.name === 'vitals-review' ? 'ownership' : 'metadata')
+          : await options.githubEvidence.collect(task.repositoryMapping, signal, task.name === 'ci-review', task.name === 'daily-checkin' ? task.repositoryMapping.defaultBranch : undefined, ownershipScope ? 'ownership' : 'metadata')
       const routine = options.store.listRoutines(task.repository).find(candidate => candidate.id === task.routineId)
       if (task.name === 'daily-checkin' && githubEvidence !== null && routine?.when === 'changed' && answersSchedule(routine, task.scheduledFor)) {
         const change = checkinChange({
@@ -264,7 +257,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       // against merged fixes at 0.48 area under the curve, and its floor
       // dropped one merged fix and no noise. Most noise is a duplicate, which
       // one proposal alone cannot show.
-      const fresh = options.store.recordCandidates({
+      options.store.recordCandidates({
         routineId: task.routineId,
         runId: task.id,
         candidates: withinSize,
@@ -286,11 +279,26 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           })
         : 0
 
+      // The run log names every Candidate this run reported, new or known, so
+      // it can show the issue that owns each one. New means this run recorded
+      // it: a retry finds its first attempt's rows already stored, and must
+      // not call them known. Each fingerprint counts once.
+      const ownFingerprints = new Set(runCandidates.map(candidate => candidate.fingerprint))
+      const fingerprints = [...new Set(withinSize.map(candidate => candidate.fingerprint))]
+      const fresh = fingerprints.filter(fingerprint => ownFingerprints.has(fingerprint)).length
+      const tally = {
+        found: response.candidates.length,
+        fresh,
+        known: fingerprints.length - fresh,
+        outsideScope,
+        oversized: maximumChangedFiles === null ? null : { limit: maximumChangedFiles, count: oversized },
+        fingerprints,
+      }
       const evidence = [
         `${task.name} on ${task.repository}`,
-        `${response.candidates.length} ${definition.findingsLabel}`,
-        `${fresh.length} new`,
-        `${withinSize.length - fresh.length} already known`,
+        `${tally.found} ${definition.findingsLabel}`,
+        `${tally.fresh} new`,
+        `${tally.known} already known`,
         `${outsideScope} outside allowed scope`,
         maximumChangedFiles === null ? 'no file limit' : `${oversized} over ${maximumChangedFiles} files`,
         `${requested} issues requested`,
@@ -304,8 +312,9 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           routineName: task.name,
           run: { id: task.id, scheduledFor: task.scheduledFor },
           report: {
-            _tag: 'Completed',
+            _tag: 'Scanned',
             evidence,
+            tally,
             ...(detail === '' ? {} : { detail }),
             ...(response.verdict === undefined ? {} : { verdict: response.verdict }),
           },

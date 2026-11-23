@@ -79,8 +79,9 @@ flock "$SENTRY_CHECKIN_STATE_DIR/history.lock" \
 ```
 
 Return the complete Markdown report in `report`.
+GitHub shows the report and each Candidate. Follow the [comment voice](../../../references/comment-voice.md#never-publish) Never publish rule: no paths, hosts, or raw errors from your own run, and no tokens or session IDs.
 Include frozen issue count, ledger coverage, and `new`, `recurring`, and `unclosed` counts.
 List resolved IDs with their releases, unresolved IDs with reasons, and code repair Candidates.
-Include snapshot, ledger, audit, resolution evidence, and history paths.
-Report missing evidence and script failures explicitly. Never claim a failed step completed.
+Name the snapshot, ledger, audit, resolution evidence, and history files this run wrote, without their directory.
+Report missing evidence and script failures explicitly. Name the failed step and its cause. Never claim a failed step completed.
 For zero issues, still audit and record the empty ledger, and report the project query.

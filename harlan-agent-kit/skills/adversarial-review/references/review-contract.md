@@ -61,8 +61,9 @@ Derive one outcome without judgment:
 Gate outcomes are deterministic. Confidence never changes an outcome. Do not show
 `PENDING` or `BLOCKED` a confidence score or call either a sign-off.
 
-The Agent returns only the premise, scored findings, and confidence. It never
-returns workflow state. The controller derives every gate and the outcome.
+The Agent returns only the premise, scored findings, confidence, and the
+[Review run fields](#review-run-fields). It never returns workflow state. The
+controller derives every gate and the outcome.
 
 ## Confidence
 
@@ -83,6 +84,16 @@ Bands:
 - Low: 0 to 69.
 
 Never inflate confidence to fill a band. State each deduction in the final queue.
+
+## Review run fields
+
+Return two clauses beside confidence. They say what the score rests on.
+If the controller's response schema omits them, follow the schema.
+
+- `checked` (string): one clause that names what the Review exercised: inputs, cases, or files.
+- `notChecked` (string or null): one clause that names the largest gap. Return null only when the Review skipped nothing.
+
+The [comment voice](../../../references/comment-voice.md#review-run) contract gives examples.
 
 ## Review status
 
@@ -166,6 +177,12 @@ Record every evidence-backed Review finding. Never cap the finding count.
 
 Each finding records impact, a stable fingerprint, exact path and line, proof, summary, and proposed next action.
 An actionable finding also records its resolution.
+
+Write the words to the [comment voice](../../../references/comment-voice.md#finding) Finding rules:
+
+- The summary is the title: the consequence, in 10 words or fewer.
+- The proof states the condition, then the effect, in one to three sentences.
+- The next action is one imperative sentence. It never starts with "Optional follow-up".
 
 Decide the pull request premise once before classifying findings.
 
