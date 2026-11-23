@@ -10,6 +10,9 @@ import { publicBody } from '../src/public-text.ts'
 import { createWebhookApp } from '../src/webhook.ts'
 import { repositoryMapping } from './fixtures.ts'
 
+/** The line the publish boundary writes in place of a line that names a private detail. */
+const removedLine = '_One line removed: it named a private path or host._'
+
 const plan = { _tag: 'Available' as const, headSha: 'f'.repeat(40), bump: 'patch' as const, packageName: 'example', version: '1.0.1', previousVersion: '1.0.0', previousTag: 'v1.0.0', sourceSha: 'a'.repeat(40), mergeSha: 'b'.repeat(40) }
 const repository = { ...repositoryMapping(), release: { manifest: 'package.json', versionFiles: ['package.json'], tagPrefix: 'v', workflow: 'release.yml', checks: ['test'], credential: { _tag: 'Repository' as const } } }
 
@@ -353,21 +356,22 @@ describe('release note drafts', () => {
     const outgoing = (writer: 'release comment' | 'GitHub release', body: string) => publicBody({ details: { paths: [], hosts }, report: () => {} }, { repository: repository.github, itemNumber: 24, writer }, body)
     task.source.comment = vi.fn(async (_number: number, body: string) => ({ id: 99, body: outgoing('release comment', body).text }))
     const releases: string[] = []
-    task.source.applyReleaseNote = vi.fn(async ({ text }) => outgoing('GitHub release', text).send((body) => {
+    task.source.applyReleaseNote = vi.fn(async ({ text }) => outgoing('GitHub release', text).send(async (body) => {
       releases.push(body)
       return url
     }))
     await publish(task)
     const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
-    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws. See https://old-dashboard.example.test/tasks/24.' })
+    task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes: 'Empty input no longer throws.\nSee https://old-dashboard.example.test/tasks/24.' })
     await task.run()
     const shown = task.store.listPackageReleases(repository.github)[0]!.body
-    expect(shown).toContain('See [private link].')
+    expect(shown).toContain(`> ${removedLine}`)
+    expect(shown).not.toContain('old-dashboard')
     hosts = ['new-dashboard.example.test']
 
     expect(createPackageReleaseStore(task.database).approveReleaseNote(approval(shown))).toBe(true)
     await task.run()
-    expect(releases).toEqual(['Empty input no longer throws. See [private link].'])
+    expect(releases).toEqual([`Empty input no longer throws.\n${removedLine}`])
     expect(task.store.getReleaseNote(repository.github, '1.0.1')?.state).toEqual({ _tag: 'Applied', text: releases[0], url })
     task.database.close()
   })
@@ -375,18 +379,19 @@ describe('release note drafts', () => {
   it('keeps an unclosed private link draft visible and approvable', async () => {
     const task = setup()
     const outgoing = (body: string) => publicBody({ details: { paths: [], hosts: ['notes.localhost'] }, report: () => {} }, { repository: repository.github, itemNumber: 24, writer: 'release comment' }, body)
-    task.source.comment = vi.fn(async (_number: number, body: string) => outgoing(body).send(sent => ({ id: 99, body: sent })))
+    task.source.comment = vi.fn(async (_number: number, body: string) => outgoing(body).send(async sent => ({ id: 99, body: sent })))
     await publish(task)
     const claimed = task.store.claimNextReleaseNote('worker', '2026-11-18T00:00:00.000Z', 60_000)!
     const notes = 'Read [notes](https://notes.localhost/reports/quarterly(final)/appendix.pdf\nPublic text survives.'
     task.store.completeReleaseNote({ taskId: claimed.id, workerId: 'worker', fence: claimed.state.fence, at: '2026-11-18T00:00:01.000Z', notes })
     await task.run()
     const shown = task.store.listPackageReleases(repository.github)[0]!.body
-    expect(shown).toContain('> Read [notes]([private link]\n> Public text survives.\n> ```')
+    expect(shown).toContain(`> ${removedLine}\n> Public text survives.\n> \`\`\``)
+    expect(shown).not.toContain('notes.localhost')
     expect(shown).toContain('- [ ] Add this draft to the GitHub release')
     expect(task.store.approveReleaseNote(approval(shown))).toBe(true)
     await task.run()
-    expect(task.source.applyReleaseNote).toHaveBeenCalledWith({ tag: 'v1.0.1', text: notes.replace('https://notes.localhost/reports/quarterly(final)/appendix.pdf', '[private link]') })
+    expect(task.source.applyReleaseNote).toHaveBeenCalledWith({ tag: 'v1.0.1', text: `${removedLine}\nPublic text survives.` })
     task.database.close()
   })
 

@@ -111,6 +111,7 @@ describe('stoppedReviewComment', () => {
   it.each([
     'The helper was not found in the module, so the Repair is unsafe.',
     'The fix would bypass the rate limit guard.',
+    'The earlier run said "The codex session failed: timeout", but the real blocker is the missing migration.',
   ])('keeps a Repair Agent summary that only mentions a failure word: %s', (summary) => {
     const body = stoppedReviewComment({ ...stoppedRepair, reason: summary }, '2026-11-22T04:00:00.000Z')
 
