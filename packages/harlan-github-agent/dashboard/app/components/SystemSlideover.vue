@@ -71,7 +71,7 @@ const routines = computed(() => {
       trackingUrl: routineTrackingUrl(record.routine),
       next: nextRoutineInstant(record.routine, from)?.toISOString() ?? null,
       reportPending: record.latestRun !== undefined
-        && routineReportPending(record.latestRun, writes.get(record.routine.repository) ?? false, record.latestRun.reportState === 'Published'),
+        && routineReportPending(record.latestRun, writes.get(record.routine.repository) ?? false),
     }
   })
 })

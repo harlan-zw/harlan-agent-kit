@@ -124,14 +124,15 @@ export function routineTrackingUrl(routine: Routine): string | undefined {
 /**
  * Whether a finished Routine run still owes its tracking-issue report.
  *
- * The report command, not the writes flag alone, says what happened: a run
- * whose report already published must not read as pending, whatever the
- * repository writes do now.
+ * The report command, not the writes flag alone, says what happened. A run
+ * that staged no report owes none: a skipped run and a run with nothing to
+ * check write nothing. A published report never reads as pending, whatever
+ * the repository writes do now.
  */
-export function routineReportPending(latestRun: RoutineRun, writesEnabled: boolean, reportPublished: boolean): boolean {
-  if (reportPublished || writesEnabled)
+export function routineReportPending(latestRun: Pick<DashboardRoutineRun, 'state' | 'reportState'>, writesEnabled: boolean): boolean {
+  if (writesEnabled || latestRun.reportState === null || latestRun.reportState === 'Published')
     return false
-  return latestRun.state._tag === 'Completed' || latestRun.state._tag === 'Skipped'
+  return latestRun.state._tag !== 'Queued' && latestRun.state._tag !== 'Running'
 }
 
 /**

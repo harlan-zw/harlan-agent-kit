@@ -255,6 +255,21 @@ describe('planning the Routine runs that are due', () => {
     }
   })
 
+  it('writes nothing to GitHub for a skipped run, and keeps the run for the Dashboard', async () => {
+    const store = openJournalStore(':memory:')
+    try {
+      await seed(store)
+      planRoutineRuns({ repositories: mapped, now: at('2026-08-27T07:30:00.000Z'), store })
+      planRoutineRuns({ repositories: mapped, now: at('2026-08-29T06:00:00.000Z'), store })
+
+      expect(store.getDashboardSnapshot('2026-08-29T06:00:00.000Z').routineRuns.find(run => run.scheduledFor === '2026-08-28T07:00:00.000Z'))
+        .toMatchObject({ state: { _tag: 'Skipped' }, reportState: null, report: null })
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('opens one run for a Routine that lists two schedules on the same morning', async () => {
     const store = openJournalStore(':memory:')
     try {

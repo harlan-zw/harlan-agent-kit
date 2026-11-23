@@ -78,7 +78,14 @@ export function githubAccountBody(body: string, account?: GitHubAccount): string
         fence = undefined
       return line
     }
-    if (fence !== undefined || !line.startsWith('> '))
+    if (fence !== undefined)
+      return line
+    // A run log entry signs off in one `<sub>` line instead of a quote.
+    if (line.startsWith('<sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) ')) {
+      return line.replace('[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit)', link)
+        .replace(', not Harlan.', '.')
+    }
+    if (!line.startsWith('> '))
       return line
     if (/^> (?:🤖 AI disclosure: )?\[Harlan Agent Kit\]\(https:\/\/github.com\/harlan-zw\/harlan-agent-kit\)/.test(line)) {
       return line.replace('[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit)', link)

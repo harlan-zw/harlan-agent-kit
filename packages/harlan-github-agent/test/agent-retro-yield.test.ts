@@ -76,7 +76,7 @@ function checkin(store: Store, scheduledFor: string, outcome: { verdict?: Checki
       routineId,
       routineName: 'daily-checkin',
       run,
-      report: { _tag: 'Completed', evidence, detail: outcome.report, ...(outcome.verdict === undefined ? {} : { verdict: outcome.verdict }) },
+      report: { _tag: 'Scanned', evidence, tally: { found: found.length, fresh: fresh.length, known: 0, outsideScope: 0, oversized: { limit: 5, count: 0 }, fingerprints: found.map(candidate => candidate.fingerprint) }, detail: outcome.report, ...(outcome.verdict === undefined ? {} : { verdict: outcome.verdict }) },
     }),
     at: scheduledFor,
   })

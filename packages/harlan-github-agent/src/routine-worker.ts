@@ -79,22 +79,13 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
       if (preparation._tag === 'Err')
         return preparation
       if (preparation.value._tag === 'Skip') {
+        // No report: a run with nothing to check did nothing. The Dashboard keeps the run and its evidence.
         const { evidence, progressLabel } = preparation.value
         options.store.updateRoutineRunProgress({
           taskId: task.id,
           workerId: task.state.workerId,
           fence: task.state.fence,
           progress: agentPhase('Reporting', progressLabel),
-          at: options.now().toISOString(),
-        })
-        options.store.stageRoutineReport({
-          command: routineReportCommand({
-            repository: task.repository,
-            routineId: task.routineId,
-            routineName: task.name,
-            run: { id: task.id, scheduledFor: task.scheduledFor },
-            report: { _tag: 'Completed', evidence },
-          }),
           at: options.now().toISOString(),
         })
         options.logger.info(evidence)
@@ -118,7 +109,7 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
             routineId: task.routineId,
             routineName: task.name,
             run: { id: task.id, scheduledFor: task.scheduledFor },
-            report: { _tag: 'Completed', evidence, detail: list.markdown },
+            report: { _tag: 'ReadyDigest', evidence, total: list.total, list: list.markdown },
           }),
           at: options.now().toISOString(),
         })
@@ -288,11 +279,21 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           })
         : 0
 
+      // The run log names every Candidate this run reported, new or known, so
+      // it can show the issue that owns each one.
+      const tally = {
+        found: response.candidates.length,
+        fresh: fresh.length,
+        known: withinSize.length - fresh.length,
+        outsideScope,
+        oversized: maximumChangedFiles === null ? null : { limit: maximumChangedFiles, count: oversized },
+        fingerprints: withinSize.map(candidate => candidate.fingerprint),
+      }
       const evidence = [
         `${task.name} on ${task.repository}`,
-        `${response.candidates.length} ${definition.findingsLabel}`,
-        `${fresh.length} new`,
-        `${withinSize.length - fresh.length} already known`,
+        `${tally.found} ${definition.findingsLabel}`,
+        `${tally.fresh} new`,
+        `${tally.known} already known`,
         `${outsideScope} outside allowed scope`,
         maximumChangedFiles === null ? 'no file limit' : `${oversized} over ${maximumChangedFiles} files`,
         `${requested} issues requested`,
@@ -306,8 +307,9 @@ export function createRoutineScanWorker(options: RoutineScanWorkerOptions): Rout
           routineName: task.name,
           run: { id: task.id, scheduledFor: task.scheduledFor },
           report: {
-            _tag: 'Completed',
+            _tag: 'Scanned',
             evidence,
+            tally,
             ...(detail === '' ? {} : { detail }),
             ...(response.verdict === undefined ? {} : { verdict: response.verdict }),
           },
