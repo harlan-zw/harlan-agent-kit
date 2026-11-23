@@ -117,6 +117,18 @@ describe('logged finding pickup', () => {
     expect(withLoggedFindingControls(decorated, [finding], [])).toBe(decorated)
   })
 
+  it('shows a ticked follow-up as its Repair status, and strips back to the source body', () => {
+    const footer = automatedDisclosure({ kind: 'review', merge: true, commands: ['Rerun'] })
+    const source = [AUTOMATED_REVIEW_MARKER, `<!-- reviewed-sha: ${headSha} -->`, '🟢 **Ready**', '', ...followUpSection('harlan-zw/example', headSha, [finding]), footer].join('\n')
+    const decorated = withLoggedFindingControls(source, [finding], [{ fingerprint, status: 'Repair round 1 is fixing this.', cancellable: true }], { target: 'head', baseRef: 'main' })
+
+    expect(decorated).toContain(`  Repair: Repair round 1 is fixing this. <!-- logged-finding: ${fingerprint} -->\n  - [ ] Dismiss this finding <!-- dismiss-logged-finding: ${fingerprint} -->`)
+    expect(decorated).not.toContain('Ask an agent to verify and fix this finding')
+    expect(decorated.split('\n').at(-1)).toBe(footer)
+    expect(withoutLoggedFindingControls(decorated)).toBe(source)
+    expect(withLoggedFindingControls(decorated, [finding], [{ fingerprint, status: 'Repair round 1 is fixing this.', cancellable: true }], { target: 'head', baseRef: 'main' })).toBe(decorated)
+  })
+
   it('adds the control under a follow-up row and recounts the fold when a row moves inline', () => {
     const second = { ...finding, impact: 62, summary: 'The cache never expires.', details: { ...finding.details, fingerprint: 'e'.repeat(64), identity: 'cache' } }
     const hidden = { ...finding, impact: 12, summary: 'A comment has a typo.', details: { ...finding.details, fingerprint: 'd'.repeat(64), identity: 'typo' } }

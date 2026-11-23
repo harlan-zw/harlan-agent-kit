@@ -59,12 +59,18 @@ describe('reviewOutcome', () => {
   })
 
   it('says what PENDING waits for, and never lists the gates', () => {
-    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates({ ci: pending('Base branch CI: deploy is still running.') }), findings: [], confidence: undefined, reportedChecks: [] })
+    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates({ ci: pending('Base branch CI: deploy is still running.') }), findings: [], confidence: undefined, reportedChecks: [], ciCause: { _tag: 'BaseBranchFailed', check: 'deploy' } })
 
     expect(body).toContain('⚪ **Pending** · the review passed; the verdict waits for CI\n\n<sub>Base branch CI: deploy is still running.</sub>')
     expect(body).toContain('<!-- workflow-state: {"_tag":"Review","headSha":"abc123","baseSha":"base123","outcome":"PENDING"')
     expect(body).not.toContain('gate:')
     expect(body).not.toContain('relative-time')
+  })
+
+  it('says nothing more about a running check, because the merge box shows it', () => {
+    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates({ ci: pending('test is still running.') }), findings: [], confidence: undefined, reportedChecks: [], ciCause: { _tag: 'CheckRunning', check: 'test' } })
+
+    expect(body).not.toContain('still running')
   })
 
   it.each(['owned', 'maintained'] as const)('keeps issues above the folded follow-ups on %s repositories', (ownership) => {

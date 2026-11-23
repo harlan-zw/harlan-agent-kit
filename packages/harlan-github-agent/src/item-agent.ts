@@ -1135,7 +1135,19 @@ export interface TerminalCommentInput {
   notChecked?: string | null | undefined
   /** The Review of the previous head, for the Repair delta. */
   history?: QueuedReviewHistory | undefined
+  /** Why the CI Review gate has not settled, so PENDING explains only what the merge box cannot show. */
+  ciCause?: CiGateCause | undefined
 }
+
+/**
+ * The PENDING causes GitHub's merge box does not show, or shows as the opposite.
+ *
+ * A lost runner reads as a failed check there, a broken base branch and an
+ * unreported required check do not show at all, and only the controller knows
+ * when it could not read the checks. A running or queued check shows there
+ * already, so the comment says nothing more about it.
+ */
+const unseenPendingCauses = new Set<CiGateCause['_tag']>(['RunnerLost', 'BaseBranchFailed', 'NoCheckRun', 'ChecksUnreadable'])
 
 /** What the Review exercised, as the Agent wrote it, without a repeated "Checked" or a trailing stop. */
 function coverageClause(text: string, prefix: RegExp): string {
@@ -1227,10 +1239,10 @@ export function terminalComment(input: TerminalCommentInput): string {
         '</details>',
         '',
       ]
-  // GitHub's merge box shows a lost runner as a failed check, so a PENDING
-  // verdict says in small print which check it waits on.
-  const waiting = result === 'PENDING'
-    ? [gates.ci, gates.merge].find((gate): gate is Extract<ReviewGates['ci'], { _tag: 'Pending' }> => gate._tag === 'Pending')
+  // A PENDING verdict names its wait in small print only when the merge box
+  // cannot show it.
+  const waiting = result === 'PENDING' && gates.ci._tag === 'Pending' && input.ciCause !== undefined && unseenPendingCauses.has(input.ciCause._tag)
+    ? gates.ci
     : undefined
   return [
     AUTOMATED_REVIEW_MARKER,
@@ -1561,6 +1573,7 @@ async function projectReviewRun(
     repository: task.repository,
     commands,
     reviewedAt: run.completedAt,
+    ciCause: refreshed.ciCause,
     checked: run.checked,
     notChecked: run.notChecked,
     history: options.store.priorReviewHistory(task.revisionId),

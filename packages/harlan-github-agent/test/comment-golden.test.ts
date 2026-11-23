@@ -86,8 +86,6 @@ describe('review verdict', () => {
       <!-- workflow-state: {"_tag":"Review","headSha":"6aa6d8e1520848daef9646d402ea16ee3f9a4221","baseSha":"70edfe5f32699f7f6042c0bd66e8a68e3b282fc5","outcome":"PENDING","gates":{"merge":"Passed","review":"Passed","ci":"Pending"}} -->
       ⚪ **Pending** · the review passed; the verdict waits for CI
 
-      <sub>test is still running.</sub>
-
       Merge risk: **Sensitive**. A migration changes the Journal schema.
 
       No issues found in [\`6aa6d8e\`](https://github.com/harlan-zw/example/commit/6aa6d8e1520848daef9646d402ea16ee3f9a4221).

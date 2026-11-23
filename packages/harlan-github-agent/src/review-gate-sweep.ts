@@ -124,6 +124,7 @@ export async function refreshReviewGates(
       repository: review.repository,
       commands,
       reviewedAt: review.completedAt,
+      ciCause,
       checked: review.checked,
       notChecked: review.notChecked,
       history: options.store.priorReviewHistory(review.revisionId),

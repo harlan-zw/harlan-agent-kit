@@ -1,6 +1,8 @@
 import type { QueuedReviewStatus, StoppedReview } from '../src/store.ts'
 import type { ClaimedReviewFixTask } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
+import { progressComment, terminalComment } from '../src/item-agent.ts'
+import { reviewSkippedComment } from '../src/pull-request-triage.ts'
 import { queuePositionComment } from '../src/queue-position-sweep.ts'
 import { reviewCheckRunUpdate } from '../src/review-check-run.ts'
 import { canonicalCommentHeadline, canonicalCommentOutcome, priorAutomatedReviewForHead } from '../src/review-comment.ts'
@@ -219,5 +221,51 @@ describe('every canonical comment names its state in a marker', () => {
     const repair = stoppedReviewComment({ ...stopped, taskKind: 'review_fix' }, '2026-11-23T15:03:00.000Z')
     expect(tag(repair)).toBe('RepairStopped')
     expect(canonicalCommentOutcome(repair)).toBe('BLOCKED')
+  })
+})
+
+describe('the readers on the bodies the templates write', () => {
+  const stoppedReview: StoppedReview = {
+    taskId: 'task',
+    taskKind: 'adversarial_review',
+    repository: 'harlan-zw/example',
+    pullRequestNumber: 1,
+    revisionId: 'revision',
+    headSha: head,
+    closureRevisionId: 'revision',
+    currentHeadSha: head,
+    currentBaseSha: base,
+    reason: null,
+    disposition: { _tag: 'Stopped' },
+    commentId: 1,
+    publishedBody: '',
+    findings: [],
+  }
+  const passed = { _tag: 'Passed' as const, evidence: [] }
+  const verdict = (overrides: Partial<Parameters<typeof terminalComment>[0]>) => terminalComment({ headSha: head, baseSha: base, gates: { merge: passed, review: passed, ci: passed }, findings: [], confidence: 90, reportedChecks: [], repository: 'harlan-zw/example', ...overrides })
+  const read = (body: string) => ({
+    outcome: canonicalCommentOutcome(body),
+    prior: priorAutomatedReviewForHead([{ authorAssociation: 'NONE', authorLogin: 'harlan-github-agent[bot]', body, url: 'https://github.com/harlan-zw/example/pull/1#issuecomment-1' }], head, 'harlan-github-agent[bot]')._tag,
+  })
+
+  it.each([
+    ['READY', verdict({}), { outcome: 'READY', prior: 'Found' }],
+    ['PENDING', verdict({ gates: { merge: passed, review: passed, ci: { _tag: 'Pending', reason: 'test is running.', evidence: [] } } }), { outcome: 'PENDING', prior: 'None' }],
+    ['BLOCKED', verdict({ gates: { merge: { _tag: 'Failed', reason: 'conflict', evidence: [] }, review: passed, ci: passed } }), { outcome: 'BLOCKED', prior: 'Found' }],
+    ['Review skipped', reviewSkippedComment(head, base, { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'model: classification chose skip with confidence 0.94.', source: 'model' }, '2026-11-23T15:03:00.000Z'), { outcome: 'SKIPPED', prior: 'Found' }],
+    ['Reviewing', progressComment(head, base, { _tag: 'FirstReview' }, 'harlan-zw/example'), { outcome: null, prior: 'None' }],
+    ['a stopped Review', stoppedReviewComment({ ...stoppedReview, reason: 'The agent lost its sign-in.' }, '2026-11-23T15:03:00.000Z'), { outcome: null, prior: 'None' }],
+    // Its visible words say Review skipped, but its marker says the Review stopped, so no reader takes this head as reviewed.
+    ['a not-ready stop', stoppedReviewComment({ ...stoppedReview, reason: 'The pull request is not ready for review.' }, '2026-11-23T15:03:00.000Z'), { outcome: null, prior: 'None' }],
+    ['a stopped Repair', stoppedReviewComment({ ...stoppedReview, taskKind: 'review_fix' }, '2026-11-23T15:03:00.000Z'), { outcome: 'BLOCKED', prior: 'None' }],
+  ])('reads %s the way the workflow needs', (_name, body, expected) => {
+    expect(read(body)).toEqual(expected)
+  })
+
+  it('never says a skipped Review reviewed a merged pull request', () => {
+    const skipped = reviewSkippedComment(head, base, { _tag: 'ADVERSARIAL_REVIEW_SKIPPED', reason: 'model: classification chose skip with confidence 0.94.', source: 'model' }, '2026-11-23T15:03:00.000Z')
+    expect(stoppedReviewComment({ ...stoppedReview, publishedBody: skipped }, '2026-11-23T15:03:00.000Z', { _tag: 'Merged' })).toContain('🟣 **Merged** · no further reviews')
+    // Frozen: a skip comment written before the Status line.
+    expect(stoppedReviewComment({ ...stoppedReview, publishedBody: `<!-- harlan-agent-kit:pr-triage -->\n### 🤖 REVIEW SKIPPED` }, '2026-11-23T15:03:00.000Z', { _tag: 'Merged' })).toContain('🟣 **Merged** · no further reviews')
   })
 })

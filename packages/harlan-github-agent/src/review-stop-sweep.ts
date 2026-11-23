@@ -138,7 +138,10 @@ export function stoppedReviewComment(
     const open = review.findings.filter(finding => finding._tag === 'Open')
     const followUps = review.findings.filter(listedFollowUp)
     if (open.length + followUps.length === 0) {
-      const detail = showsVerdict(review.publishedBody) ? 'reviewed with no issues' : 'no further reviews'
+      // A skipped Review reviewed nothing, so only a Review outcome may say it did.
+      const outcome = canonicalCommentOutcome(review.publishedBody)
+      const reviewed = outcome === 'READY' || outcome === 'PENDING' || outcome === 'BLOCKED'
+      const detail = reviewed ? 'reviewed with no issues' : 'no further reviews'
       return [...head, statusLine('done', 'Merged', detail), '', footer].join('\n')
     }
     const left = open.length === 0
