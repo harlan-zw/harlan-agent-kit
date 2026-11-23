@@ -431,3 +431,34 @@ describe('a review comment on a line', () => {
     expect(reports.every(outcome => outcome._tag === 'Written')).toBe(true)
   })
 })
+
+describe('ported from the Service Repair 0b4efc07', () => {
+  it('keeps a repeated line removed in a MERGED edit after the dashboard hostname changes', async () => {
+    const store = journal()
+    const host = commentHost()
+    const action = 'Read https://hogwild.tail1234.ts.net/items/24/private-evidence for the next action.'
+    const before = reviewBody(action)
+    const published = await agentSource(host.client, store).upsertReviewStatus(repositoryMapping(), 24, null, before, false, new AbortController().signal)
+    if (published._tag === 'Err')
+      throw new Error(published.error)
+    expect(host.comments[0]?.body).toBe(reviewBody(removed))
+    const restarted = { paths: [], hosts: ['other.tail1234.ts.net'] }
+
+    const edited = await agentSource(host.client, store, restarted).editReviewStatus(repositoryMapping(), 24, published.value.commentId, before, reviewBody(`MERGED\n\n${action}\n${action}`), new AbortController().signal)
+
+    expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
+    expect(host.comments[0]?.body).toBe(reviewBody(`MERGED\n\n${removed}\n${removed}`))
+  })
+
+  it.each([
+    'Read https://fixture-user:fixture\'password@notes.localhost/report.md first.',
+    '\'https://fixture-user:fixture\'password@notes.localhost\'',
+    'https://fixture-user:fixture(password)@notes.localhost/report.md',
+    'https://fixture-user:fixture;password@notes.localhost/report.md',
+    'Read [notes]( https://notes.localhost/docs/report(final)/draft.pdf) first.',
+    'Read [notes](\thttps://notes.localhost/docs/report(final)/draft.pdf) first.',
+  ])('removes the whole line around unusual URL syntax: %s', (input) => {
+    expect(redactPrivateDetails(input, details).text).toBe(removed)
+    expect(redactPrivateDetails(encodeEntities(input), details).text).toBe(removed)
+  })
+})

@@ -275,6 +275,28 @@ export function isPublishedForm(published: string, source: string): boolean {
     && publishedLines.every((line, index) => line === sourceLines[index] || isRemovedFormOf(line, sourceLines[index] ?? ''))
 }
 
+/**
+ * Keeps removed every line GitHub already shows removed, when an edit repeats it.
+ *
+ * The deny list can change between two writes of one comment. A line the old
+ * list removed must stay removed, even when the current list no longer knows
+ * why, so `next` reuses the exact line GitHub holds for each such source line.
+ */
+export function preservePublishedRedactions(published: string, source: string, next: string): string {
+  const publishedLines = published.split('\n')
+  const sourceLines = source.split('\n')
+  if (publishedLines.length !== sourceLines.length)
+    return next
+  const removed = new Map<string, string>()
+  sourceLines.forEach((line, index) => {
+    const shown = publishedLines[index] ?? line
+    if (shown !== line && isRemovedFormOf(shown, line))
+      removed.set(line, shown)
+  })
+  return removed.size === 0 ? next : next.split('\n').map(line => removed.get(line) ?? line).join('\n')
+}
+
+
 /** What a published body is, in GitHub's words and the GLOSSARY's. */
 export type PublicTextWriter
   = | 'automated review'
