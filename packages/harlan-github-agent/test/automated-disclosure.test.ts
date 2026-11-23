@@ -1,45 +1,68 @@
+import type { GitHubAccount } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { automatedDisclosure } from '../src/review-comment.ts'
+import { githubAccountBody } from '../src/github-account.ts'
+import { aboveFooter, automatedDisclosure, isCanonicalFooter } from '../src/review-comment.ts'
+
+const kit = '[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit)'
+const policy = '[AI policy](https://harlanzw.com/blog/ai-in-open-source)'
 
 describe('automatedDisclosure', () => {
-  it('names the bot once and links the policy, whatever the comment is', () => {
-    const kinds = ['review', 'repair update', 'status', 'triage'] as const
+  it('names the bot, says it is not Harlan, and links the policy, whatever the comment is', () => {
+    const kinds = ['review', 'repair', 'status', 'triage', 'release'] as const
 
     kinds.forEach((kind) => {
-      const line = automatedDisclosure({ kind })
-
-      expect(line).toContain('[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated')
-      expect(line).toContain('[AI open source policy](https://harlanzw.com/blog/ai-in-open-source).')
-      expect(line).toContain(`automated ${kind}.`)
+      expect(automatedDisclosure({ kind })).toBe(`<sub>${kit} automated ${kind}, not Harlan's · ${policy}</sub>`)
     })
   })
 
-  it('reads as one quoted line, so a comment never breaks its own blockquote', () => {
-    const line = automatedDisclosure({
-      kind: 'review',
-      disclaimer: 'It is not Harlan\'s personal review or approval.',
-      notes: ['A person still decides the merge.'],
-      updatedAt: '2026-08-27 03:02 UTC',
-    })
+  it('says a person merges on a verdict, and lists the accepted commands in code spans', () => {
+    expect(automatedDisclosure({ kind: 'review', merge: true, commands: ['Change', 'Rerun'] }))
+      .toBe(`<sub>${kit} automated review, not Harlan's; a person merges · ${policy} · \`@harlan-agent rerun\` · \`@harlan-agent <change>\`</sub>`)
+  })
 
+  it('opens a settled state with a time that ages for the reader, and email keeps the clock time', () => {
+    expect(automatedDisclosure({ kind: 'review', at: '2026-11-23T15:03:00.000Z' }))
+      .toBe(`<sub><relative-time datetime="2026-11-23T15:03:00.000Z">2026-11-23 15:03 UTC</relative-time> · ${kit} automated review, not Harlan's · ${policy}</sub>`)
+  })
+
+  it('leaves out the time, so a working state that repeats itself writes nothing', () => {
+    expect(automatedDisclosure({ kind: 'review' })).not.toContain('relative-time')
+  })
+
+  it('reads as one line that the comment readers know as its footer', () => {
+    const line = automatedDisclosure({ kind: 'review', merge: true, at: '2026-11-23T15:03:00.000Z', commands: ['Rerun'] })
     expect(line.split('\n')).toHaveLength(1)
-    expect(line.startsWith('> ')).toBe(true)
+    expect(isCanonicalFooter(line)).toBe(true)
+    expect(isCanonicalFooter('Comment `@harlan-agent rerun` to review this commit again.')).toBe(true)
+    expect(isCanonicalFooter('<sub>1 note below 40/100 not shown.</sub>')).toBe(false)
   })
 
-  it('puts the disclaimer before the policy and the timestamp last', () => {
-    const line = automatedDisclosure({
-      kind: 'review',
-      disclaimer: 'Disclaimed.',
-      notes: ['Noted.'],
-      updatedAt: '2026-08-27 03:02 UTC',
-    })
+  it('puts a control above the footer, so the disclosure stays last', () => {
+    const footer = automatedDisclosure({ kind: 'review' })
+    expect(aboveFooter(`⚪ **Reviewing**\n\n${footer}`, '- [ ] Stop Review and any follow-up repair'))
+      .toBe(`⚪ **Reviewing**\n\n- [ ] Stop Review and any follow-up repair\n\n${footer}`)
+    expect(aboveFooter('A body without a footer', '- [ ] Control')).toBe('A body without a footer\n\n- [ ] Control')
+  })
+})
 
-    expect(line.indexOf('Disclaimed.')).toBeLessThan(line.indexOf('AI open source policy'))
-    expect(line.indexOf('Noted.')).toBeLessThan(line.indexOf('Last updated'))
-    expect(line.endsWith('Last updated: 2026-08-27 03:02 UTC.')).toBe(true)
+describe('a dedicated GitHub account', () => {
+  const account: GitHubAccount = {
+    login: 'im-brundlefly',
+    tokenPath: '/private/brundlefly-token',
+    name: 'Brundlefly',
+    url: 'https://github.com/harlan-zw/brundlefly',
+    instructions: 'Use short, clear sentences.',
+  }
+
+  it('names the account in the footer and drops "not Harlan\'s", with or without a time', () => {
+    const body = `🟢 **Ready**\n\n${automatedDisclosure({ kind: 'review', merge: true, at: '2026-11-23T15:03:00.000Z', commands: ['Rerun'] })}`
+    expect(githubAccountBody(body, account)).toBe(`🟢 **Ready**\n\n<sub><relative-time datetime="2026-11-23T15:03:00.000Z">2026-11-23 15:03 UTC</relative-time> · [Brundlefly](https://github.com/harlan-zw/brundlefly) automated review; a person merges · ${policy} · \`@harlan-agent rerun\`</sub>`)
+    expect(githubAccountBody(automatedDisclosure({ kind: 'triage', disclaimer: 'not Harlan\'s commitment' }), account))
+      .toBe(`<sub>[Brundlefly](https://github.com/harlan-zw/brundlefly) automated triage · ${policy}</sub>`)
   })
 
-  it('leaves out the timestamp, so a comment that repeats itself writes nothing', () => {
-    expect(automatedDisclosure({ kind: 'review' })).not.toContain('Last updated')
+  it('leaves a footer inside a code block alone', () => {
+    const quoted = `\`\`\`text\n${automatedDisclosure({ kind: 'review' })}\n\`\`\``
+    expect(githubAccountBody(quoted, account)).toBe(quoted)
   })
 })

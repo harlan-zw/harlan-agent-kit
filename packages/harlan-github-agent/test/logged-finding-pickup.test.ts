@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { loggedFindingPickup, normalizeLoggedFindingControls, withLoggedFindingControls, withoutLoggedFindingControls } from '../src/logged-finding-pickup.ts'
-import { AUTOMATED_REVIEW_MARKER, pullRequestCommandFooter } from '../src/review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, followUpSection } from '../src/review-comment.ts'
 import { reviewFindingThreadBody } from '../src/review-finding-threads.ts'
 import { createWebhookApp } from '../src/webhook.ts'
 
@@ -103,8 +103,11 @@ describe('logged finding pickup', () => {
     expect(withLoggedFindingControls(before, [finding], [])).toBe(before)
   })
 
-  it('keeps the command line last after it adds the selection hint', () => {
-    const footer = pullRequestCommandFooter(['Change', 'Rerun'])!
+  it.each([
+    ['the Status line footer', automatedDisclosure({ kind: 'review', merge: true, commands: ['Change', 'Rerun'] })],
+    // Frozen: the command line a canonical comment ended with before the Status line.
+    ['an old command line', 'Comment `@harlan-agent <change to make>` to request a change, or `@harlan-agent rerun` to review this commit again.'],
+  ])('keeps %s last after it adds the selection hint', (_name, footer) => {
     const source = `${original}\n\n${footer}`
     const decorated = withLoggedFindingControls(source, [finding], [])
 
@@ -112,6 +115,22 @@ describe('logged finding pickup', () => {
     expect(decorated).toContain('Selected findings run after merge and open separate pull requests.')
     expect(withoutLoggedFindingControls(decorated)).toBe(source)
     expect(withLoggedFindingControls(decorated, [finding], [])).toBe(decorated)
+  })
+
+  it('adds the control under a follow-up row and recounts the fold when a row moves inline', () => {
+    const second = { ...finding, impact: 62, summary: 'The cache never expires.', details: { ...finding.details, fingerprint: 'e'.repeat(64), identity: 'cache' } }
+    const hidden = { ...finding, impact: 12, summary: 'A comment has a typo.', details: { ...finding.details, fingerprint: 'd'.repeat(64), identity: 'typo' } }
+    const footer = automatedDisclosure({ kind: 'review', merge: true })
+    const source = [AUTOMATED_REVIEW_MARKER, `<!-- reviewed-sha: ${headSha} -->`, '🟢 **Ready**', '', ...followUpSection('harlan-zw/example', headSha, [finding, second, hidden]), footer].join('\n')
+    const decorated = withLoggedFindingControls(source, [finding, second, hidden], [], { target: 'head', baseRef: 'main', inline: new Set([second.details.fingerprint]) })
+
+    expect(decorated).toContain('<b>1 follow-up</b> · none block merge')
+    expect(decorated).toContain(`- \`40\` The parser drops buffered bytes. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)\n  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fingerprint} -->`)
+    expect(decorated).not.toContain('The cache never expires.')
+    expect(decorated).not.toContain(`logged-finding: ${hidden.details.fingerprint}`)
+    expect(decorated).toContain('<sub>1 note below 40/100 not shown.</sub>')
+    expect(decorated.split('\n').at(-1)).toBe(footer)
+    expect(decorated.split('\n').at(-3)).toBe('Selected findings run on this pull request.')
   })
 
   it('still strips a published comment that ends with the selection hint', () => {

@@ -100,7 +100,7 @@ describe('review status controller', () => {
     expect(await controller.publishRepair(task, new AbortController().signal)).toEqual(ok(undefined))
 
     expect(read().replaced).toBe(true)
-    expect(read().body).toContain('### 🤖 REPAIR · round 1 of 3\n')
+    expect(read().body).toContain('⚪ **Repair** · round 1 of 3\n')
   })
 
   it('publishes progress after reading only the pull request identity', async () => {
@@ -120,6 +120,8 @@ describe('review status controller', () => {
     const { controller, task, read } = harness(enabled)
     await controller.publishRepair(task, new AbortController().signal)
     expect(read().body.includes('- [ ] Stop Review and any follow-up repair')).toBe(enabled)
+    // The control sits above the footer, so the disclosure stays last.
+    expect(read().body.split('\n').at(-1)).toContain('automated repair, not Harlan\'s')
   })
 
   it('names the round and the head, and what happens after the Repair', () => {
@@ -129,12 +131,11 @@ describe('review status controller', () => {
       '<!-- harlan-agent-kit:pr-triage -->',
       `<!-- reviewed-sha: ${task.pullRequest.headSha} -->`,
       `<!-- workflow-state: {"_tag":"Repair","headSha":"${task.pullRequest.headSha}"} -->`,
-      '### 🤖 REPAIR · round 1 of 3',
+      '⚪ **Repair** · round 1 of 3',
       '',
-      '> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated repair update. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).',
+      `Repair is fixing the issues found in [\`${task.pullRequest.headSha.slice(0, 7)}\`](https://github.com/${task.repository}/commit/${task.pullRequest.headSha}). A new review checks its commit.`,
       '',
-      '> [!NOTE]',
-      `> Repair is fixing the Review findings on \`${task.pullRequest.headSha.slice(0, 12)}\`. If it pushes a commit, a new Review reads that commit.`,
+      '<sub>[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated repair, not Harlan\'s · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>',
     ].join('\n'))
   })
 })
@@ -234,7 +235,7 @@ describe('review status check run sink', () => {
     expect(upsert).toHaveBeenCalledWith(
       repositoryMapping(),
       task.pullRequest.headSha,
-      expect.objectContaining({ _tag: 'Running', title: '🤖 REPAIR · round 1 of 3' }),
+      expect.objectContaining({ _tag: 'Running', title: '⚪ Repair · round 1 of 3' }),
       expect.anything(),
       expect.anything(),
     )

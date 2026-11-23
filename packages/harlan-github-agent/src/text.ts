@@ -28,13 +28,26 @@ export function cleanText(value: string): string {
  * The moment a comment last changed, written for a person.
  *
  * GitHub shows when a comment was posted, not when the controller last edited
- * it, so the body has to say. A relative time cannot work here: the comment is
- * written with the current time, so it would always read "just now" and would
- * never age. A clock time stays true however long the comment sits.
+ * it, so the body has to say. A clock time stays true however long the
+ * comment sits.
  */
 export function updatedAtLabel(at: string): string {
   const parsed = new Date(at)
   if (Number.isNaN(parsed.getTime()))
     return at
   return `${parsed.toISOString().slice(0, 10)} ${parsed.toISOString().slice(11, 16)} UTC`
+}
+
+/**
+ * The moment a state settled, as GitHub's `<relative-time>` element.
+ *
+ * GitHub renders it relative to the reader's clock, so it ages with the
+ * comment. Email and any reader that drops the element show the clock time
+ * inside it. Text that is no time stays plain.
+ */
+export function relativeTime(at: string): string {
+  const parsed = new Date(at)
+  if (Number.isNaN(parsed.getTime()))
+    return cleanLine(at)
+  return `<relative-time datetime="${parsed.toISOString()}">${updatedAtLabel(at)}</relative-time>`
 }

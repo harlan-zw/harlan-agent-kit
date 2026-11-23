@@ -21,8 +21,8 @@ describe('issue triage evidence', () => {
     if (result === null)
       return
     const comment = issueTriageComment(result)
-    expect(comment).toContain('**Duplicate of:** #17: Both reports reproduce the same chunk boundary error.')
-    expect(comment).toContain('**Related pull requests:** #25: Changes the affected parser branch.')
+    expect(comment).toContain('⚪ **Duplicate of #17**\n\nBoth reports reproduce the same chunk boundary error. Follow #17 for the fix.')
+    expect(comment).toContain('- #25: Changes the affected parser branch.')
   })
 
   it('rejects duplicate evidence without a reason', () => {

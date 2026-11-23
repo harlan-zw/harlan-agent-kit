@@ -27,19 +27,20 @@ describe('reviewOutcome', () => {
     expect(reviewOutcome(gates({ review: failed('A material defect remains.') }))).toBe('BLOCKED')
   })
 
-  it('blocks on red CI when the review did complete', () => {
+  it('blocks on red CI when the review did complete, and names CI as the only reason', () => {
     const failedCi = gates({ ci: failed('test failed.') })
 
     expect(reviewOutcome(failedCi)).toBe('BLOCKED')
-    expect(terminalComment('abc123', 'base123', failedCi, [], undefined, [])).toContain('**CI gate:** BLOCKED. test failed.')
+    expect(terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: failedCi, findings: [], confidence: undefined, reportedChecks: [] }))
+      .toContain('🟠 **Blocked** · CI failed; the review itself passed')
   })
 
   it('reports READY when every gate passed', () => {
     expect(reviewOutcome(gates())).toBe('READY')
   })
 
-  it('logs an 80-impact finding without an action or failed Review gate', () => {
-    const body = terminalComment('abc123', 'base123', gates(), [{
+  it('folds an 80-impact finding as a follow-up without an issue to fix', () => {
+    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [{
       _tag: 'Logged',
       impact: 80,
       summary: 'A rare empty state loses spacing.',
@@ -49,33 +50,24 @@ describe('reviewOutcome', () => {
         location: { path: 'src/view.ts', line: 14 },
         proof: 'The empty list hides its gap.',
       },
-    }], 95, [], undefined, 'harlan-zw/example')
+    }], confidence: 95, reportedChecks: [], repository: 'harlan-zw/example' })
 
-    expect(body).toContain('### 🤖 READY · 95/100')
-    expect(body).toContain('**Logged (80/100):** A rare empty state loses spacing.')
-    expect(body).toContain('[View code](https://github.com/harlan-zw/example/blob/abc123/src/view.ts#L14)')
-    expect(body).not.toContain('**Open:**')
+    expect(body).toContain('🟢 **Ready** · `95/100`')
+    expect(body).toContain('<details><summary><b>1 follow-up</b> · none block merge</summary>')
+    expect(body).toContain('- `80` A rare empty state loses spacing. · [`view.ts:14`](https://github.com/harlan-zw/example/blob/abc123/src/view.ts#L14)')
+    expect(body).not.toContain('Fix:')
   })
 
-  it('shows every Review gate while CI is pending', () => {
-    const body = terminalComment(
-      'abc123',
-      'base123',
-      gates({ ci: pending('Base branch CI: deploy is still running.') }),
-      [],
-      undefined,
-      [],
-    )
+  it('says what PENDING waits for, and never lists the gates', () => {
+    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates({ ci: pending('Base branch CI: deploy is still running.') }), findings: [], confidence: undefined, reportedChecks: [] })
 
-    expect(body).toContain('### 🤖 PENDING')
+    expect(body).toContain('⚪ **Pending** · the review passed; the verdict waits for CI\n\n<sub>Base branch CI: deploy is still running.</sub>')
     expect(body).toContain('<!-- workflow-state: {"_tag":"Review","headSha":"abc123","baseSha":"base123","outcome":"PENDING"')
-    expect(body).toContain('**Merge gate:** Passed.')
-    expect(body).toContain('**Review gate:** Passed. No material issues.')
-    expect(body).toContain('**CI gate:** PENDING. Base branch CI: deploy is still running.')
-    expect(body).toContain('Next: The controller updates this comment when a Review gate changes.')
+    expect(body).not.toContain('gate:')
+    expect(body).not.toContain('relative-time')
   })
 
-  it.each(['owned', 'maintained'] as const)('keeps Open findings visible on %s repositories', (ownership) => {
+  it.each(['owned', 'maintained'] as const)('keeps issues above the folded follow-ups on %s repositories', (ownership) => {
     const findings = [
       {
         _tag: 'Logged' as const,
@@ -91,23 +83,18 @@ describe('reviewOutcome', () => {
         nextAction: 'Preserve pending events.',
       },
     ]
-    const body = terminalComment('abc123', 'base123', gates({ review: failed('A defect remains.') }), findings, undefined, [], undefined, 'harlan-zw/example', [], ownership)
+    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates({ review: failed('A defect remains.') }), findings, confidence: undefined, reportedChecks: [], repository: `harlan-zw/${ownership}`, commands: [] })
     const decorated = withLoggedFindingControls(body, findings, [])
-    const summary = '<summary>Logged findings (1)</summary>'
-    expect(decorated).toContain('Optional follow-up: Include the delay.')
-    expect(decorated).toContain('Ask an agent to verify and fix this finding')
-    if (ownership === 'owned') {
-      expect(decorated).toContain(summary)
-      expect(decorated.indexOf('The queue can drop events.')).toBeLessThan(decorated.indexOf(summary))
-      expect(decorated.indexOf('Ask an agent to verify and fix this finding')).toBeLessThan(decorated.indexOf('</details>'))
-    }
-    else {
-      expect(decorated).not.toContain(summary)
-    }
+    const summary = '<summary><b>1 follow-up</b> · none block merge</summary>'
+    expect(decorated).toContain('🟠 **Blocked** · 1 issue to fix before merge')
+    expect(decorated).toContain(summary)
+    expect(decorated).not.toContain('Optional follow-up')
+    expect(decorated.indexOf('The queue can drop events.')).toBeLessThan(decorated.indexOf(summary))
+    expect(decorated.indexOf('Ask an agent to verify and fix this finding')).toBeLessThan(decorated.indexOf('</details>'))
   })
 
-  it('links an open finding to the reviewed code line', () => {
-    const body = terminalComment('abc123', 'base123', gates({ review: failed('A defect remains.') }), [{
+  it('links an issue to the reviewed code line', () => {
+    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates({ review: failed('A defect remains.') }), findings: [{
       _tag: 'Open',
       impact: 81,
       summary: 'The queue can drop events.',
@@ -118,15 +105,13 @@ describe('reviewOutcome', () => {
         proof: 'The queue resets before sending.',
         regressionTest: 'Send two events.',
       },
-    }], undefined, [], undefined, 'harlan-zw/example')
+    }], confidence: undefined, reportedChecks: [], repository: 'harlan-zw/example' })
 
-    expect(body).toContain('[View code](https://github.com/harlan-zw/example/blob/abc123/src/queue%20worker.ts#L42)')
-    expect(body).toContain('**Open (81/100):**')
-    expect(body).not.toContain('events..')
+    expect(body).toContain('1. **The queue can drop events.** `81/100`  \n   [`queue worker.ts:42`](https://github.com/harlan-zw/example/blob/abc123/src/queue%20worker.ts#L42) · Fix: Preserve pending events.')
   })
 
-  it('keeps the finding when its code path cannot form a safe link', () => {
-    const body = terminalComment('abc123', 'base123', gates({ review: failed('A defect remains.') }), [{
+  it('keeps the issue when its code path cannot form a safe link', () => {
+    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates({ review: failed('A defect remains.') }), findings: [{
       _tag: 'Open',
       summary: 'The queue can drop events.',
       nextAction: 'Preserve pending events.',
@@ -136,54 +121,81 @@ describe('reviewOutcome', () => {
         proof: 'The queue resets before sending.',
         regressionTest: 'Send two events.',
       },
-    }], undefined, [], undefined, 'harlan-zw/example')
+    }], confidence: undefined, reportedChecks: [], repository: 'harlan-zw/example' })
 
-    expect(body).toContain('The queue can drop events. Next: Preserve pending events.')
-    expect(body).not.toContain('[View code]')
+    expect(body).toContain('1. **The queue can drop events.**  \n   Fix: Preserve pending events.')
+    expect(body).not.toContain('](https://github.com/harlan-zw/example/blob')
+  })
+
+  it('counts follow-ups below 40/100 and never lists them', () => {
+    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [{
+      _tag: 'Logged',
+      impact: 39,
+      summary: 'A comment has a typo.',
+      details: { fingerprint: 'typo', identity: 'typo', location: { path: 'src/view.ts', line: 1 }, proof: 'The word is misspelled.' },
+    }], confidence: 95, reportedChecks: [], repository: 'harlan-zw/example' })
+
+    expect(body).toContain('<sub>1 note below 40/100 not shown.</sub>')
+    expect(body).not.toContain('A comment has a typo.')
+    expect(body).not.toContain('<details>')
+  })
+
+  it('prints a Merge risk only when a person must read the merge', () => {
+    const contained = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], mergeRisk: { _tag: 'Contained' } })
+    const sensitive = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], mergeRisk: { _tag: 'Sensitive', reason: 'A migration changes the journal.' } })
+
+    expect(contained).not.toContain('Merge risk')
+    expect(sensitive).toContain('🟢 **Ready** · `95/100`\n\nMerge risk: **Sensitive**. A migration changes the journal.')
+  })
+
+  it('carries the stored review time, so a re-render writes the same body', () => {
+    const input = { headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], reviewedAt: '2026-11-23T15:03:00.000Z' }
+    expect(terminalComment(input)).toBe(terminalComment(input))
+    expect(terminalComment(input)).toContain('<relative-time datetime="2026-11-23T15:03:00.000Z">')
   })
 })
 
 describe('terminalComment command line', () => {
   const headSha = 'a'.repeat(40)
-  const both = 'Comment `@harlan-agent <change to make>` to request a change, or `@harlan-agent rerun` to review this commit again.'
+  const both = ' · `@harlan-agent rerun` · `@harlan-agent <change>`</sub>'
 
   it('ends an owned pull request comment with both commands', () => {
-    const body = terminalComment(headSha, 'base123', gates(), [], 95, [], undefined, 'harlan-zw/example', ['Change', 'Rerun'])
+    const body = terminalComment({ headSha, baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], repository: 'harlan-zw/example', commands: ['Change', 'Rerun'] })
 
-    expect(body.split('\n').at(-1)).toBe(both)
+    expect(body.split('\n').at(-1)!.endsWith(both)).toBe(true)
   })
 
   it('ends a pull request that accepts only rerun with rerun alone', () => {
-    const body = terminalComment(headSha, 'base123', gates({ review: failed('A defect remains.') }), [], undefined, [], undefined, 'acme/example', ['Rerun'])
+    const body = terminalComment({ headSha, baseSha: 'base123', gates: gates({ review: failed('A defect remains.') }), findings: [], confidence: undefined, reportedChecks: [], repository: 'acme/example', commands: ['Rerun'] })
 
-    expect(body.split('\n').at(-1)).toBe('Comment `@harlan-agent rerun` to review this commit again.')
-    expect(body).not.toContain('<change to make>')
+    expect(body.split('\n').at(-1)!.endsWith(' · `@harlan-agent rerun`</sub>')).toBe(true)
+    expect(body).not.toContain('<change>')
   })
 
-  it('writes no command line when the pull request accepts none', () => {
-    const body = terminalComment(headSha, 'base123', gates(), [], 95, [], undefined, 'acme/example', [])
+  it('names no command when the pull request accepts none', () => {
+    const body = terminalComment({ headSha, baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], repository: 'acme/example', commands: [] })
 
     expect(body).not.toContain('@harlan-agent')
-    expect(body).toBe(terminalComment(headSha, 'base123', gates(), [], 95, [], undefined, 'acme/example'))
+    expect(body).toBe(terminalComment({ headSha, baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], repository: 'acme/example' }))
   })
 
-  it('writes no command line while merge conflicts refuse every command', () => {
-    const body = terminalComment(headSha, 'base123', gates({ merge: failed('The pull request has merge conflicts.') }), [], undefined, [], undefined, 'harlan-zw/example', ['Change', 'Rerun'])
+  it('names no command while merge conflicts refuse every command', () => {
+    const body = terminalComment({ headSha, baseSha: 'base123', gates: gates({ merge: failed('The pull request has merge conflicts.') }), findings: [], confidence: undefined, reportedChecks: [], repository: 'harlan-zw/example', commands: ['Change', 'Rerun'] })
 
     expect(body).not.toContain('@harlan-agent')
   })
 
-  it('keeps every marker and parsed field the command line would follow', () => {
-    const plain = terminalComment(headSha, 'base123', gates({ ci: pending('Base branch CI: deploy is still running.') }), [], undefined, [], undefined, 'harlan-zw/example')
-    const body = terminalComment(headSha, 'base123', gates({ ci: pending('Base branch CI: deploy is still running.') }), [], undefined, [], undefined, 'harlan-zw/example', ['Change', 'Rerun'])
+  it('keeps every marker and parsed field whatever commands the footer names', () => {
+    const plain = terminalComment({ headSha, baseSha: 'base123', gates: gates({ ci: pending('Base branch CI: deploy is still running.') }), findings: [], confidence: undefined, reportedChecks: [], repository: 'harlan-zw/example' })
+    const body = terminalComment({ headSha, baseSha: 'base123', gates: gates({ ci: pending('Base branch CI: deploy is still running.') }), findings: [], confidence: undefined, reportedChecks: [], repository: 'harlan-zw/example', commands: ['Change', 'Rerun'] })
 
-    expect(body).toBe(`${plain}\n\n${both}`)
+    expect(body.replace(both, '</sub>')).toBe(plain)
     expect(automatedReviewHead(body)).toBe(headSha)
     expect(reviewCheckRunUpdate({ taskKind: 'adversarial_review', phase: 'terminal', desiredOutcome: 'PENDING', body }, 'now'))
       .toEqual(reviewCheckRunUpdate({ taskKind: 'adversarial_review', phase: 'terminal', desiredOutcome: 'PENDING', body: plain }, 'now'))
     const comment = { authorAssociation: 'NONE', authorLogin: 'harlan-github-agent[bot]', body, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-1' }
     expect(priorAutomatedReviewForHead([comment], headSha, 'harlan-github-agent[bot]')).toEqual({ _tag: 'None' })
-    const ready = terminalComment(headSha, 'base123', gates(), [], 95, [], undefined, 'harlan-zw/example', ['Change', 'Rerun'])
+    const ready = terminalComment({ headSha, baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], repository: 'harlan-zw/example', commands: ['Change', 'Rerun'] })
     expect(priorAutomatedReviewForHead([{ ...comment, body: ready }], headSha, 'harlan-github-agent[bot]'))
       .toEqual({ _tag: 'Found', authorLogin: 'harlan-github-agent[bot]', state: 'complete', url: comment.url })
   })

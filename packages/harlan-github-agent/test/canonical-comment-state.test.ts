@@ -214,7 +214,7 @@ describe('every canonical comment names its state in a marker', () => {
   })
 
   it('marks Repair, a stopped Review, and a stopped Repair', () => {
-    expect(tag(repairProgressComment({ pullRequest: { headSha: head } as ClaimedReviewFixTask['pullRequest'], rounds: { number: 1, limit: 3 } as ClaimedReviewFixTask['rounds'] }))).toBe('Repair')
+    expect(tag(repairProgressComment({ repository: 'harlan-zw/example', pullRequest: { headSha: head } as ClaimedReviewFixTask['pullRequest'], rounds: { number: 1, limit: 3 } as ClaimedReviewFixTask['rounds'] }))).toBe('Repair')
     expect(tag(stoppedReviewComment(stopped, '2026-11-23T15:03:00.000Z'))).toBe('ReviewStopped')
     const repair = stoppedReviewComment({ ...stopped, taskKind: 'review_fix' }, '2026-11-23T15:03:00.000Z')
     expect(tag(repair)).toBe('RepairStopped')

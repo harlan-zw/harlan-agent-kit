@@ -30,7 +30,7 @@ export interface ReviewGateSweepOptions {
   /** Proves the controller may publish Repair commits in this repository. */
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
   repositories: RepositoryMapping[]
-  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'queueBaselineRepairForGate' | 'queueReviewFixForGate' | 'recordCiRepairFinding' | 'recordIncident' | 'recordReviewPublication' | 'repairRoundPlan' | 'resolveIncidents' | 'stageReviewGateStatus'>
+  store: Pick<JournalStore, 'listReviewGateRefreshes' | 'priorReviewHistory' | 'queueBaselineRepairForGate' | 'queueReviewFixForGate' | 'recordCiRepairFinding' | 'recordIncident' | 'recordReviewPublication' | 'repairRoundPlan' | 'resolveIncidents' | 'stageReviewGateStatus'>
 }
 
 /**
@@ -113,7 +113,19 @@ export async function refreshReviewGates(
         : finding)
     }
     const commands = acceptedPullRequestCommands(mapping, live.value.pullRequest, options.allowedAuthors ?? [])
-    const body = terminalComment(review.headSha, live.value.pullRequest.baseSha, gates, findings, confidence, reportedChecks, review.mergeRisk?.combined, review.repository, commands, mapping.ownership)
+    const body = terminalComment({
+      headSha: review.headSha,
+      baseSha: live.value.pullRequest.baseSha,
+      gates,
+      findings,
+      confidence,
+      reportedChecks,
+      mergeRisk: review.mergeRisk?.combined,
+      repository: review.repository,
+      commands,
+      reviewedAt: review.completedAt,
+      history: options.store.priorReviewHistory(review.revisionId),
+    })
     // A red default branch holds this review PENDING until someone repairs
     // it. No review lease exists here, so this is the only place that can
     // queue that repair. The store answers Existing on every later pass.

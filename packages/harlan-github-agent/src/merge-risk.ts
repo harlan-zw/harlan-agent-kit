@@ -128,8 +128,3 @@ export function mergeRiskFloor(files: readonly PullRequestFile[], policy: MergeR
 export function combineMergeRisk(floor: MergeRisk, claim: MergeRisk): MergeRisk {
   return severity(claim) > severity(floor) ? claim : floor
 }
-
-/** One line naming the verdict and why, for the pull request and the dashboard. */
-export function describeMergeRisk(risk: MergeRisk): string {
-  return risk._tag === 'Contained' ? 'Contained' : `${risk._tag}: ${risk.reason}`
-}

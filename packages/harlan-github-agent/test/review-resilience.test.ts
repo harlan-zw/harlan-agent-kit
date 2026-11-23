@@ -324,7 +324,7 @@ describe('review resilience', () => {
     expect(result._tag).toBe('Ok')
     expect(test.provider.requests).toEqual([])
     expect(test.attempts).toEqual([])
-    expect(test.comments.at(-1)).toContain('READY · 91/100')
+    expect(test.comments.at(-1)).toContain('🟢 **Ready** · `91/100`')
   })
 
   it('retries a failed post-Agent GitHub read without another Agent turn', async () => {
@@ -367,7 +367,7 @@ describe('review resilience', () => {
 
     expect(second._tag).toBe('Ok')
     expect(test.provider.requests).toHaveLength(1)
-    expect(test.comments.at(-1)).toContain('READY · 91/100')
+    expect(test.comments.at(-1)).toContain('🟢 **Ready** · `91/100`')
   })
 
   it('accepts the minimal Agent report and derives every Review gate', async () => {
@@ -388,7 +388,7 @@ describe('review resilience', () => {
       review: expect.objectContaining({ _tag: 'Passed' }),
       ci: expect.objectContaining({ _tag: 'Passed' }),
     })
-    expect(test.comments.at(-1)).toContain('READY · 91/100')
+    expect(test.comments.at(-1)).toContain('🟢 **Ready** · `91/100`')
   })
 
   it('keeps the newest discussion inside one bounded Review context', () => {
@@ -474,7 +474,7 @@ describe('review resilience', () => {
     expect(result._tag).toBe('Ok')
     expect(test.attempts).toHaveLength(1)
     expect(test.attempts[0]?.usage).toEqual({ _tag: 'Unavailable' })
-    expect(test.comments.at(-1)).toContain('READY · 91/100')
+    expect(test.comments.at(-1)).toContain('🟢 **Ready** · `91/100`')
   })
 
   it('abandons a review when the head commit moves, because it describes another diff', async () => {
@@ -606,7 +606,7 @@ describe('review resilience', () => {
 
     expect(result._tag).toBe('Ok')
     expect(test.queued).toBe(1)
-    expect(test.comments.at(-1)).toContain('### 🤖 BLOCKED')
+    expect(test.comments.at(-1)).toContain('🟠 **Blocked**')
     expect(test.comments.at(-1)).toContain('Malformed input crosses the parser boundary.')
   })
 

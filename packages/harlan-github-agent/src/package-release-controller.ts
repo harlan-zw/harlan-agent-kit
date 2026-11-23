@@ -3,10 +3,10 @@ import type { PackageReleaseOffer, PackageReleasePlan } from './package-release.
 import type { RepositoryMapping } from './types.ts'
 import { publicFailureCause } from './failure.ts'
 import { parseRateLimit } from './github-rate-limit.ts'
-import { PACKAGE_RELEASE_MARKER, RELEASE_NOTE_APPLY_LABEL, renderManualMajorRelease, renderPackageRelease } from './package-release.ts'
+import { RELEASE_NOTE_APPLY_LABEL, releaseComment, releaseName, renderManualMajorRelease, renderPackageRelease } from './package-release.ts'
 import { isPublishedForm } from './public-text.ts'
 import { canReleasePackages } from './repository-policy.ts'
-import { automatedDisclosure } from './review-comment.ts'
+import { statusLine } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export interface PackageReleaseSource {
@@ -50,39 +50,56 @@ function quoteReleaseNote(text: string): string {
   return [`${fence}markdown`, ...lines, fence].map(line => line.trim() === '' ? '>' : `> ${line}`).join('\n')
 }
 
-function releaseNoteStatus(note: ReleaseNote | null): string {
+/** The draft folded under one summary line. Every draft line stays quoted, so it cannot start a control. */
+function foldedDraft(summary: string, text: string): string[] {
+  return [`<details><summary>${summary}</summary>`, '', quoteReleaseNote(text), '', '</details>']
+}
+
+/** What happened to the release note draft, below the Published line. */
+function releaseNoteStatus(note: ReleaseNote | null): string[] {
   if (note === null)
-    return ''
+    return []
   switch (note.state._tag) {
     case 'Queued':
     case 'Running':
-      return '\n\nDrafting a release note.'
+      return ['Drafting a release note.']
     case 'Drafted':
-      return `\n\nRelease note draft for review. The GitHub release is unchanged.\n\n${quoteReleaseNote(note.state.text)}\n\n- [ ] ${RELEASE_NOTE_APPLY_LABEL}`
+      return [...foldedDraft('Release note draft · the GitHub release is unchanged', note.state.text), '', `- [ ] ${RELEASE_NOTE_APPLY_LABEL}`]
     case 'Approved':
-      return `\n\nRelease note draft approved. Adding it to the GitHub release.\n\n${quoteReleaseNote(note.state.text)}\n\n- [x] ${RELEASE_NOTE_APPLY_LABEL}`
+      return [...foldedDraft('Release note draft · adding it to the GitHub release', note.state.text), '', `- [x] ${RELEASE_NOTE_APPLY_LABEL}`]
     case 'Applied':
-      return `\n\nAdded this draft to the [GitHub release](${note.state.url}).\n\n${quoteReleaseNote(note.state.text)}`
+      return [`Added the release note draft to the [GitHub release](${note.state.url}).`, '', ...foldedDraft('Release note draft', note.state.text)]
     case 'ApplyFailed':
-      return `\n\nCould not add this draft to the GitHub release: ${cleanLine(publicFailureCause(note.state.reason))}\nCopy it by hand if you still want it.\n\n${quoteReleaseNote(note.state.text)}`
+      return [`Could not add the draft to the GitHub release: ${cleanLine(publicFailureCause(note.state.reason))} Copy it by hand if you still want it.`, '', ...foldedDraft('Release note draft', note.state.text)]
     case 'Failed':
-      return `\n\nNo release note draft: ${cleanLine(publicFailureCause(note.state.reason))}`
+      return [`No release note draft: ${cleanLine(publicFailureCause(note.state.reason))}`]
   }
 }
 
+/**
+ * The release comment for every state after the offer.
+ *
+ * Queued, Prepared and Publishing read as one word, Publishing, because nobody
+ * acts until the release publishes or blocks. Blocked names who acts.
+ */
 export function packageReleaseStatus(record: PackageReleaseRecord, note: ReleaseNote | null = null): string {
-  if (record.state._tag === 'Available')
-    return renderPackageRelease(record.plan)
-  if (record.state._tag === 'AwaitingMerge')
-    return renderPackageRelease(record.plan, true)
-  const details: Record<Exclude<PackageReleaseState['_tag'], 'Available' | 'AwaitingMerge'>, string> = {
-    Queued: 'Release requested. Waiting for passing default branch checks on the pinned release range.',
-    Prepared: record.state._tag === 'Prepared' ? `Waiting for Review and required checks on #${record.state.pullRequestNumber}.` : '',
-    Publishing: 'Waiting for GitHub Actions and npm publication.',
-    Completed: record.state._tag === 'Completed' ? `Published [${record.plan.packageName}@${record.plan.version}](${record.state.url}).${releaseNoteStatus(note)}` : '',
-    Blocked: record.state._tag === 'Blocked' ? `Action required: ${record.state.reason}` : '',
+  const name = releaseName(record.plan.packageName, record.plan.version)
+  switch (record.state._tag) {
+    case 'Available':
+      return renderPackageRelease(record.plan)
+    case 'AwaitingMerge':
+      return renderPackageRelease(record.plan, true)
+    case 'Queued':
+      return releaseComment(statusLine('work', `Publishing ${name}`, 'waits for default branch checks'))
+    case 'Prepared':
+      return releaseComment(statusLine('work', `Publishing ${name}`, `waits for #${record.state.pullRequestNumber}`))
+    case 'Publishing':
+      return releaseComment(statusLine('work', `Publishing ${name}`, 'GitHub Actions, then npm'))
+    case 'Completed':
+      return releaseComment(statusLine('done', `Published [${name}](${record.state.url})`), releaseNoteStatus(note))
+    case 'Blocked':
+      return releaseComment(statusLine('act', 'Release blocked', `${name} · needs Harlan`), [cleanLine(record.state.reason)])
   }
-  return `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\n${details[record.state._tag]}\n`
 }
 
 /** One pass advances durable Publications. A network error leaves the phase resumable. */
@@ -218,8 +235,10 @@ export async function reconcilePackageReleases(options: {
           }
         })
       }
-      if (record.state._tag === 'Completed' && record.body.startsWith(packageReleaseStatus(record).trimEnd())) {
-        // The comment already announces the release, so only its draft line can
+      // The marker and the Published Status line lead the comment, whatever the draft says.
+      const announcement = packageReleaseStatus(record).split('\n').slice(0, 2).join('\n')
+      if (record.state._tag === 'Completed' && record.body.startsWith(`${announcement}\n`)) {
+        // The comment already announces the release, so only its draft can
         // change. A failed write logs and retries next pass, and never stops
         // offers for this repository. A failed Published write still throws,
         // so it stays a Service Incident until the announcement lands.
@@ -279,7 +298,7 @@ export async function reconcilePackageReleases(options: {
         store.requestPackageRelease({ ...command, commentId: offer.commentId, before: offer.body, commentAuthor: '', requestId: `comment:${command.commentId}`, selected: true })
       }
       else if (offer === undefined && !manualReleases.has(command.pullRequestNumber)) {
-        await source.comment(command.pullRequestNumber, `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nNo matching patch or minor release is available.\n`)
+        await source.comment(command.pullRequestNumber, releaseComment(statusLine('work', 'No release', 'no matching patch or minor release is available')))
       }
       store.consumePackageReleaseCommand(command)
     }
@@ -291,7 +310,7 @@ export async function reconcilePackageReleases(options: {
     const active = store.listPackageReleases(repository.github).find(record => ['Queued', 'Prepared', 'Publishing'].includes(record.state._tag))
     if (active !== undefined && !signal.aborted && options.mayPublish()) {
       const message = cleanLine(error instanceof Error ? error.message : 'The release request failed.')
-      const body = `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nRelease ${active.plan.version} is waiting: ${message}\nRetries keep this version.\n`
+      const body = releaseComment(statusLine('work', `Publishing ${releaseName(active.plan.packageName, active.plan.version)}`, 'retrying'), [`Last attempt: ${message} Retries keep this version.`])
       if (!isPublishedForm(active.body, body)) {
         await (async () => {
           assertLease()

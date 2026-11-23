@@ -24,6 +24,7 @@ import type {
   GitHubPullRequestItem,
   MergeRiskRecord,
   RepositoryMapping,
+  ReviewCoverage,
   ReviewFinding,
   ReviewGates,
   ReviewGateState,
@@ -45,14 +46,14 @@ import { githubAccountInstructions } from './github-account.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
 import { mediaEvidenceLines, snapshotMedia } from './github-media.ts'
 import { parseStoredIssueTriage } from './issue-triage.ts'
-import { combineMergeRisk, describeMergeRisk, mergeRiskFloor } from './merge-risk.ts'
+import { combineMergeRisk, mergeRiskFloor } from './merge-risk.ts'
 import { queuedReviewHistoryLine } from './queue-position-sweep.ts'
 import { repairRoundLabel } from './repair-rounds.ts'
 import { acceptedPullRequestCommands, canRepairBaseline, canRepairPullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, findingNextAction, pullRequestCommandFooter, reviewFindingCodeLink, reviewFindingFollowUp } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, commitLink, findingNextAction, fixedRows, followUpSection, issueRows, plural, statusLine } from './review-comment.ts'
 import { applyReviewReasoningEffortBand, DEFAULT_REVIEW_REASONING_EFFORT_POLICY, reviewReasoningEffortBand } from './review-effort.ts'
-import { cleanLine, cleanText, updatedAtLabel } from './text.ts'
+import { cleanLine, cleanText } from './text.ts'
 import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
 
 interface ReviewResponse {
@@ -1058,59 +1059,112 @@ export function reviewOutcome(gates: ReviewGates): ReviewOutcomeName {
  * history line keeps the verdict a person already read in view
  * (unjs/unhead#1086, 2026-11-17).
  */
-export function progressComment(headSha: string, baseSha: string, history: QueuedReviewHistory): string {
+export function progressComment(headSha: string, baseSha: string, history: QueuedReviewHistory, repository?: string): string {
   const workflow = JSON.stringify({ _tag: 'Reviewing', headSha, baseSha })
   const prior = queuedReviewHistoryLine(history)
   return [
     AUTOMATED_REVIEW_MARKER,
     `<!-- reviewed-sha: ${headSha} -->`,
     `<!-- workflow-state: ${workflow} -->`,
-    '### 🤖 REVIEWING',
+    `${statusLine('work', `Reviewing`)} ${commitLink(repository, headSha)} · this comment updates when it finishes`,
     '',
+    ...(prior === null ? [] : [`<sub>${prior}</sub>`, '']),
     automatedDisclosure({ kind: 'review' }),
-    '',
-    '> [!NOTE]',
-    `> The Review of \`${headSha.slice(0, 12)}\` is running. This comment changes when it finishes.`,
-    ...(prior === null ? [] : ['', prior]),
   ].join('\n')
 }
 
-function baselineWaitingComment(headSha: string, baseSha: string, at: string): string {
+/**
+ * The canonical comment while the default branch fails CI under this Review.
+ *
+ * It reads Stuck, because a person must merge or repair the Baseline repair
+ * before the Review can run. CI is named here because it is the only reason.
+ */
+function baselineWaitingComment(headSha: string, baseSha: string, at: string, repository: string): string {
   const workflow = JSON.stringify({ _tag: 'WaitingForBaselineRepair', baseSha })
-  return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${headSha} -->
-<!-- workflow-state: ${workflow} -->
-### 🤖 WAITING
-
-${automatedDisclosure({ kind: 'status', updatedAt: updatedAtLabel(at) })}
-
-Base branch CI fails at \`${baseSha.slice(0, 12)}\`.
-
-Next: merge or repair the marked Baseline repair pull request.`
+  return [
+    AUTOMATED_REVIEW_MARKER,
+    `<!-- reviewed-sha: ${headSha} -->`,
+    `<!-- workflow-state: ${workflow} -->`,
+    statusLine('act', 'Stuck', `the default branch fails CI at ${commitLink(repository, baseSha)}`),
+    '',
+    'Review starts after the Baseline repair pull request merges.',
+    '',
+    automatedDisclosure({ kind: 'status', at }),
+  ].join('\n')
 }
 
-function gateSummary(name: 'Merge' | 'Review' | 'CI', gate: ReviewGateState, findings: ReviewFinding[]): string {
-  if (gate._tag === 'Passed')
-    return `- **${name} gate:** Passed.${name === 'Review' && findings.length === 0 ? ' No material issues.' : name === 'Review' && findings.some(finding => finding._tag === 'Logged') ? ' No finding above 80/100.' : ''}`
-  const outcome = gate._tag === 'Pending' ? 'PENDING' : 'BLOCKED'
-  return `- **${name} gate:** ${outcome}. ${cleanLine(gate.reason)}`
+export interface TerminalCommentInput {
+  headSha: string
+  baseSha: string
+  gates: ReviewGates
+  findings: ReviewFinding[]
+  confidence: number | undefined
+  /** Failing checks GitHub does not require. They never decide the outcome. */
+  reportedChecks: string[]
+  /** Absent for a repository that never asked for Merge risk. */
+  mergeRisk?: MergeRisk | undefined
+  repository?: string | undefined
+  /** From `acceptedPullRequestCommands`. */
+  commands?: readonly PullRequestCommand[]
+  /** When the Review run completed. A stored time, so every re-render writes the same body. */
+  reviewedAt?: string | undefined
+  /** What the Review exercised and its largest gap. Null for a run recorded before the fields existed. */
+  coverage?: ReviewCoverage | null | undefined
+  /** The Review of the previous head, for the Repair delta. */
+  history?: QueuedReviewHistory | undefined
+}
+
+/** What the Review exercised, as the Agent wrote it, without a repeated "Checked" or a trailing stop. */
+function coverageClause(text: string, prefix: RegExp): string {
+  return cleanLine(text).replace(prefix, '').replace(/[.;,\s]+$/, '')
+}
+
+/** `Checked … Not checked: …`, the line only the Review knows. Empty for a run without the fields. */
+export function reviewCoverageLine(coverage: ReviewCoverage | null | undefined): string | null {
+  if (coverage === null || coverage === undefined)
+    return null
+  const checked = coverageClause(coverage.checked, /^(?:i\s+)?checked:?\s+/i)
+  if (checked === '')
+    return null
+  const notChecked = coverage.notChecked === null ? '' : coverageClause(coverage.notChecked, /^not checked:?\s+/i)
+  return `Checked ${checked}.${notChecked === '' ? '' : ` Not checked: ${notChecked}.`}`
+}
+
+/** The gates that fail, named in two or three words, for a BLOCKED Review that found nothing. */
+function failedGateWords(gates: ReviewGates): string {
+  return [
+    ...(gates.merge._tag === 'Failed' ? ['merge conflict'] : []),
+    ...(gates.ci._tag === 'Failed' ? ['CI failed'] : []),
+  ].join(' and ')
+}
+
+/** What a PENDING verdict waits for. */
+function pendingDetail(gates: ReviewGates): string {
+  return gates.ci._tag === 'Pending'
+    ? 'the review passed; the verdict waits for CI'
+    : 'the review passed; the verdict waits for GitHub to check mergeability'
 }
 
 /**
  * The canonical comment for a finished Review.
  *
+ * The first line answers whether a person must act. It never restates CI or a
+ * merge conflict, which GitHub's merge box already shows, unless a failed gate
+ * is the only reason for BLOCKED. The body says what only the Review knows:
+ * the issues to fix, what it checked, what Repair fixed, and the follow-ups.
+ *
  * `commands` comes from `acceptedPullRequestCommands`. The store refuses every
- * command while the pull request has merge conflicts, so the command line reads
- * the settled merge gate. A raw mergeable state of `unknown` would rewrite the
+ * command while the pull request has merge conflicts, so the footer reads the
+ * settled merge gate. A raw mergeable state of `unknown` would rewrite the
  * comment on every base branch push.
  */
-export function terminalComment(headSha: string, baseSha: string, gates: ReviewGates, findings: ReviewFinding[], confidence: number | undefined, reportedChecks: string[], mergeRisk?: MergeRisk, repository?: string, commands: readonly PullRequestCommand[] = [], ownership?: RepositoryMapping['ownership']): string {
+export function terminalComment(input: TerminalCommentInput): string {
+  const { headSha, gates, findings, repository } = input
   const result = reviewOutcome(gates)
-  const heading = result === 'READY' && confidence !== undefined ? `${result} · ${confidence}/100` : result
   const workflow = JSON.stringify({
     _tag: 'Review',
     headSha,
-    baseSha,
+    baseSha: input.baseSha,
     outcome: result,
     gates: {
       merge: gates.merge._tag,
@@ -1118,59 +1172,63 @@ export function terminalComment(headSha: string, baseSha: string, gates: ReviewG
       ci: gates.ci._tag,
     },
   })
-  const disclosure = automatedDisclosure({
-    kind: 'review',
-    disclaimer: `It is not Harlan's personal review or approval.`,
-    notes: ['A person still decides the merge.'],
-  })
-  const gateLines = [
-    gateSummary('Merge', gates.merge, findings),
-    gateSummary('Review', gates.review, findings),
-    gateSummary('CI', gates.ci, findings),
-    // A repository that never asked for Merge risk records no verdict, so its
-    // comment keeps the shape it always had.
-    ...(mergeRisk === undefined ? [] : [`- **Merge risk:** ${describeMergeRisk(mergeRisk)}`]),
-  ]
-  const visibleFindings: string[] = []
-  const loggedFindings: string[] = []
-  for (const finding of findings) {
-    const summary = cleanLine(finding.summary)
-    if (finding._tag === 'Fixed') {
-      visibleFindings.push(`- **Fixed:** ${summary}`)
-      continue
-    }
-    const sentence = `${summary}${/[.!?]$/.test(summary) ? '' : '.'}`
-    const link = reviewFindingCodeLink(repository, headSha, finding)
-    if (finding._tag === 'Logged') {
-      const destination = ownership === 'owned' ? loggedFindings : visibleFindings
-      destination.push(`- **Logged (${finding.impact}/100):** ${sentence}${link} ${reviewFindingFollowUp(finding)}`)
-      continue
-    }
-    const score = finding.impact === undefined ? '' : ` (${finding.impact}/100)`
-    visibleFindings.push(finding.resolution === 'Dismissal'
-      ? `- **Dismissal recommended${score}:** ${sentence}${link} Next: ${cleanLine(finding.nextAction)}`
-      : `- **Open${score}:** ${sentence}${link} Next: ${cleanLine(finding.nextAction)}`)
-  }
-  const loggedSection = loggedFindings.length === 0
+  const blocking = findings.filter((finding): finding is Extract<ReviewFinding, { _tag: 'Open' }> => finding._tag === 'Open')
+  const fixed = findings.filter(finding => finding._tag === 'Fixed')
+  const status = result === 'READY'
+    ? statusLine('ready', 'Ready', input.confidence === undefined ? undefined : `\`${input.confidence}/100\``)
+    : result === 'PENDING'
+      ? statusLine('work', 'Pending', pendingDetail(gates))
+      : blocking.length > 0
+        ? statusLine('act', 'Blocked', `${plural(blocking.length, 'issue')} to fix before merge`)
+        : statusLine('act', 'Blocked', `${failedGateWords(gates)}; the review itself passed`)
+  // A repository that never asked for Merge risk records no verdict, and a
+  // Contained one needs no reader, so only the other two print.
+  const mergeRisk = input.mergeRisk === undefined || input.mergeRisk._tag === 'Contained'
     ? []
-    : ['', '<details>', `<summary>Logged findings (${loggedFindings.length})</summary>`, ...loggedFindings.flatMap(line => ['', line]), '', '</details>']
-  const checkLines = reportedChecks.map(line => `- **Reported:** ${cleanLine(line)}`)
-  const next = result === 'PENDING' ? ['', 'Next: The controller updates this comment when a Review gate changes.'] : []
-  const commandLine = gates.merge._tag === 'Passed' ? pullRequestCommandFooter(commands) : undefined
+    : [`Merge risk: **${input.mergeRisk._tag}**. ${cleanLine(input.mergeRisk.reason)}`, '']
+  const history = input.history
+  const delta = result === 'READY' && history?._tag === 'AfterRepair' && history.findings > 0
+    ? `Repair fixed ${plural(history.findings, 'issue')} from \`${history.priorHeadSha.slice(0, 7)}\`.`
+    : null
+  const coverage = reviewCoverageLine(input.coverage)
+  const reviewLine = [delta, coverage ?? (blocking.length === 0 ? `No issues found in ${commitLink(repository, headSha)}.` : null)]
+    .filter((line): line is string => line !== null)
+    .join(' ')
+  const reported = input.reportedChecks.length === 0
+    ? []
+    : [
+        `<details><summary>${plural(input.reportedChecks.length, 'failed check')} GitHub does not require</summary>`,
+        '',
+        ...input.reportedChecks.map(line => `- ${cleanLine(line)}`),
+        '',
+        '</details>',
+        '',
+      ]
+  // GitHub's merge box shows a lost runner as a failed check, so a PENDING
+  // verdict says in small print which check it waits on.
+  const waiting = result === 'PENDING'
+    ? [gates.ci, gates.merge].find((gate): gate is Extract<ReviewGates['ci'], { _tag: 'Pending' }> => gate._tag === 'Pending')
+    : undefined
   return [
     AUTOMATED_REVIEW_MARKER,
     `<!-- reviewed-sha: ${headSha} -->`,
     `<!-- workflow-state: ${workflow} -->`,
-    `### 🤖 ${heading}`,
+    status,
     '',
-    disclosure,
-    '',
-    ...gateLines,
-    ...visibleFindings.flatMap(line => ['', line]),
-    ...loggedSection,
-    ...checkLines.flatMap(line => ['', line]),
-    ...next,
-    ...(commandLine === undefined ? [] : ['', commandLine]),
+    ...(waiting === undefined ? [] : [`<sub>${cleanLine(waiting.reason)}</sub>`, '']),
+    ...mergeRisk,
+    ...(blocking.length === 0 ? [] : [...issueRows(repository, headSha, blocking), '']),
+    ...(fixed.length === 0 ? [] : [...fixedRows(fixed), '']),
+    ...(reviewLine === '' ? [] : [reviewLine, '']),
+    ...followUpSection(repository, headSha, findings),
+    ...reported,
+    automatedDisclosure({
+      kind: 'review',
+      merge: true,
+      // PENDING is not settled yet, so it carries no time.
+      ...(result === 'PENDING' || input.reviewedAt === undefined ? {} : { at: input.reviewedAt }),
+      commands: gates.merge._tag === 'Passed' ? input.commands ?? [] : [],
+    }),
   ].join('\n')
 }
 
@@ -1207,7 +1265,7 @@ async function reportReviewProgress(
   if (saved._tag === 'Err')
     return saved
   const history = options.store.priorReviewHistory(task.revisionId)
-  const posted = await options.status.publish(task, publicationPhase, progressComment(task.pullRequest.headSha, task.pullRequest.baseSha, history), signal)
+  const posted = await options.status.publish(task, publicationPhase, progressComment(task.pullRequest.headSha, task.pullRequest.baseSha, history, task.repository), signal)
   if (posted._tag === 'Err' && !signal.aborted)
     options.onProgressPublishFailure?.(task, posted.error)
   else
@@ -1469,7 +1527,19 @@ async function projectReviewRun(
   const outcome = reviewOutcome(gates)
   const confidence = outcome === 'READY' ? run.outcome.confidence : undefined
   const commands = acceptedPullRequestCommands(task.repositoryMapping, snapshot.pullRequest, options.allowedAuthors ?? [])
-  const body = terminalComment(task.pullRequest.headSha, task.pullRequest.baseSha, gates, findings, confidence, refreshed.reportedChecks, run.mergeRisk?.combined, task.repository, commands, task.repositoryMapping.ownership)
+  const body = terminalComment({
+    headSha: task.pullRequest.headSha,
+    baseSha: task.pullRequest.baseSha,
+    gates,
+    findings,
+    confidence,
+    reportedChecks: refreshed.reportedChecks,
+    mergeRisk: run.mergeRisk?.combined,
+    repository: task.repository,
+    commands,
+    reviewedAt: run.completedAt,
+    history: options.store.priorReviewHistory(task.revisionId),
+  })
   const durablePublication = options.status.stageTerminal !== undefined
   const staged = !durablePublication
     ? await options.status.publish(task, 'terminal', body, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))
@@ -1570,7 +1640,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         // repair that ended ActionRequired carries its own Incident. In both
         // cases the review still runs, and its CI gate reports the red base.
         if (baseline._tag === 'Queued' || baseline._tag === 'Existing') {
-          const waitingBody = baselineWaitingComment(task.pullRequest.headSha, snapshot.value.pullRequest.baseSha, options.now().toISOString())
+          const waitingBody = baselineWaitingComment(task.pullRequest.headSha, snapshot.value.pullRequest.baseSha, options.now().toISOString(), task.repository)
           const waiting = options.status.stageTerminal === undefined
             ? await options.status.publish(task, 'terminal', waitingBody, signal).then(result => result._tag === 'Err' ? result : ok({ commandId: `legacy:${result.value.commentId}` }))
             : options.status.stageTerminal(task, waitingBody, 'WAITING')

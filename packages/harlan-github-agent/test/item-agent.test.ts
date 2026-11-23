@@ -179,8 +179,8 @@ describe('subject Workers', () => {
     expect(comments).toHaveLength(5)
     // Every phase publishes one body, so GitHub records one edit for the whole Review.
     expect(new Set(comments.slice(0, 4)).size).toBe(1)
-    expect(comments[0]).toContain('### 🤖 REVIEWING\n')
-    expect(comments[4]).toContain('READY · 96/100')
+    expect(comments[0]).toContain('⚪ **Reviewing** ')
+    expect(comments[4]).toContain('🟢 **Ready** · `96/100`')
     expect(comments.join('\n')).not.toContain('Head commit and CI checked')
     expect(stamped).toEqual(['READY'])
     expect(attempt).toEqual(expect.objectContaining({ model: 'gpt-6.2-sol', confidence: 96 }))
@@ -425,12 +425,13 @@ describe('subject Workers', () => {
       expect(terminal).toBe('')
     }
     else {
-      expect(terminal).toContain(impact > 80 ? '### 🤖 BLOCKED' : '### 🤖 READY')
+      expect(terminal).toContain(impact > 80 ? '🟠 **Blocked** · 1 issue to fix before merge' : '🟢 **Ready**')
       expect(terminal).toContain('The parser drops data.')
       if (impact <= 80)
-        expect(terminal).toContain('Optional follow-up: Preserve the buffered bytes.')
+        expect(terminal).toContain(`- \`${impact}\` The parser drops data.`)
       else
-        expect(terminal).not.toContain('Optional follow-up')
+        expect(terminal).toContain('Preserve the buffered bytes.')
+      expect(terminal).not.toContain('Optional follow-up')
     }
     expect(worktreeVerified).toBe(true)
   })
@@ -873,7 +874,7 @@ describe('subject Workers', () => {
       resolution: { _tag: 'WaitingForBaselineRepair', taskId: 'baseline-task' },
     }))
     expect(baselineQueued).toBe(true)
-    expect(published).toContain('### 🤖 WAITING')
+    expect(published).toContain('🟠 **Stuck** · the default branch fails CI at ')
     expect(published).toContain('WaitingForBaselineRepair')
     expect(published).toContain(pullRequest.baseSha)
   })
@@ -1157,7 +1158,7 @@ describe('subject Workers', () => {
 
     expect(result).toEqual(ok({ evidence: expect.any(String), resolution: { _tag: 'Reviewed', reviewRunId: expect.any(String) } }))
     expect(capture.requests).toHaveLength(1)
-    expect(published).toContain('READY · 88/100')
+    expect(published).toContain('🟢 **Ready** · `88/100`')
   })
 
   it.each([

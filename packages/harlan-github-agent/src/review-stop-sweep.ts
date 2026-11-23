@@ -3,11 +3,11 @@ import type { Result } from './result.ts'
 import type { ReviewCheckRunReport, ReviewCheckRunUpdate } from './review-check-run.ts'
 import type { JournalStore, StoppedReview, StoppedReviewDisposition } from './store.ts'
 import type { RepositoryMapping } from './types.ts'
-import { publicFailureCause } from './failure.ts'
+import { publicFailureCause, REVIEW_NOT_READY_REASON, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { err, ok } from './result.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, reviewFindingCodeLink, reviewFindingFollowUp, workflowStateLine } from './review-comment.ts'
-import { cleanLine, updatedAtLabel } from './text.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, canonicalCommentOutcome, findingLocation, fixedRows, followUpRow, followUpSection, issueRows, listedFollowUp, plural, statusLine, workflowStateLine } from './review-comment.ts'
+import { cleanLine } from './text.ts'
 
 export type StoppedReviewOutcome
   = | { _tag: 'Published', repository: string, pullRequestNumber: number }
@@ -85,12 +85,45 @@ function stopCause(review: StoppedReview): string | null {
   return cause === '' ? null : cause
 }
 
+/**
+ * The cause's first sentence as a Status line detail, and the rest of it.
+ *
+ * The first line names the cause, so a notification preview says why. A long
+ * first sentence stays below the Status line instead.
+ */
+function causeDetail(cause: string | null): { detail: string | null, rest: string | null } {
+  if (cause === null)
+    return { detail: null, rest: null }
+  const [first = '', ...others] = cause.split(/(?<=[.!?])\s+/)
+  if (first.length > 80)
+    return { detail: null, rest: cause }
+  const detail = first.replace(/[.!?]$/, '').replace(/^[A-Z](?=[a-z])/, letter => letter.toLowerCase())
+  return { detail, rest: others.length === 0 ? null : others.join(' ') }
+}
+
+/** True when the comment shows a Review verdict, which a close leaves standing. */
+function showsVerdict(body: string): boolean {
+  const outcome = canonicalCommentOutcome(body)
+  return outcome === 'READY' || outcome === 'PENDING' || outcome === 'BLOCKED' || outcome === 'SKIPPED'
+}
+
+/**
+ * The canonical comment once its Task ended without a verdict, or its pull request left.
+ *
+ * A stopped Review reads Stuck, and a stopped Repair reads Blocked: both need
+ * a person. A merge lists only what is left to fix. A merge with nothing left
+ * still writes one line, because the verdict it replaces carries commands
+ * and controls a merged pull request no longer accepts. A close leaves a
+ * verdict standing and replaces only a state that still claims work.
+ */
 export function stoppedReviewComment(
   review: StoppedReview,
   at: string,
   disposition: StoppedReviewDisposition = { _tag: 'Stopped' },
 ): string {
   const cause = stopCause(review)
+  if (disposition._tag === 'Closed' && showsVerdict(review.publishedBody))
+    return review.publishedBody
   if (disposition._tag !== 'Stopped') {
     const workflow = JSON.stringify({
       _tag: disposition._tag === 'Merged' ? 'PullRequestMerged' : 'PullRequestClosed',
@@ -98,48 +131,68 @@ export function stoppedReviewComment(
       headSha: review.currentHeadSha,
       baseSha: review.currentBaseSha,
     })
-    const action = disposition._tag === 'Merged' ? 'merged' : 'closed'
-    const causeParagraph = cause === null ? '' : `\n\n${cause}`
-    return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${review.currentHeadSha} -->
-<!-- workflow-state: ${workflow} -->
-### 🤖 ${disposition._tag.toUpperCase()}
-
-${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, updatedAt: updatedAtLabel(at) })}
-
-GitHub ${action} this pull request.${disposition._tag === 'Merged'
-  ? `
-
-${review.findings.length === 0 ? 'No material findings were recorded.' : review.findings.map(finding => finding._tag === 'Open' ? `- ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} Next: ${finding.resolution === 'Dismissal' ? 'Decide a safe follow-up for the merged change.' : cleanLine(finding.nextAction)}` : finding._tag === 'Logged' ? `- Logged (${finding.impact}/100): ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} ${reviewFindingFollowUp(finding)}` : `- Fixed: ${cleanLine(finding.summary)}`).join('\n')}${causeParagraph}`
-  : ' No further automated Review will run.'}`
+    const head = [AUTOMATED_REVIEW_MARKER, `<!-- reviewed-sha: ${review.currentHeadSha} -->`, `<!-- workflow-state: ${workflow} -->`]
+    const footer = automatedDisclosure({ kind: 'review', at })
+    if (disposition._tag === 'Closed')
+      return [...head, statusLine('work', 'Closed', 'no further reviews'), '', footer].join('\n')
+    const open = review.findings.filter(finding => finding._tag === 'Open')
+    const followUps = review.findings.filter(listedFollowUp)
+    if (open.length + followUps.length === 0) {
+      const detail = showsVerdict(review.publishedBody) ? 'reviewed with no issues' : 'no further reviews'
+      return [...head, statusLine('done', 'Merged', detail), '', footer].join('\n')
+    }
+    const left = open.length === 0
+      ? plural(followUps.length, 'follow-up')
+      : plural(open.length + followUps.length, 'issue')
+    const rows = [
+      ...open.map((finding) => {
+        const location = findingLocation(review.repository, review.headSha, finding)
+        return `- ${finding.impact === undefined ? '' : `\`${finding.impact}\` `}${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}`
+      }),
+      ...followUps.map(finding => followUpRow(review.repository, review.headSha, finding)),
+    ]
+    return [...head, statusLine('done', 'Merged', `${left} not fixed`), '', ...rows, '', footer].join('\n')
   }
+  const { detail, rest } = causeDetail(cause)
   if (review.taskKind === 'review_fix') {
-    const findings = review.findings.map(finding => finding._tag === 'Fixed'
-      ? `- **Fixed:** ${cleanLine(finding.summary)}`
-      : finding._tag === 'Logged'
-        ? `- **Logged (${finding.impact}/100):** ${cleanLine(finding.summary)}${reviewFindingCodeLink(review.repository, review.headSha, finding)} ${reviewFindingFollowUp(finding)}`
-        : `- **Open:** ${cleanLine(finding.summary)}${/[.!?]$/.test(cleanLine(finding.summary)) ? '' : '.'}${reviewFindingCodeLink(review.repository, review.headSha, finding)} Next: ${cleanLine(finding.nextAction)}`)
-    return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${review.headSha} -->
-${workflowStateLine({ _tag: 'RepairStopped', headSha: review.headSha })}
-### 🤖 BLOCKED
-
-${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, notes: ['A person still decides the merge.'], updatedAt: updatedAtLabel(at) })}
-
-Repair stopped${cause === null ? '.' : `: ${cause}`}
-
-${findings.join('\n')}`
+    const open = review.findings.filter(finding => finding._tag === 'Open')
+    const fixed = fixedRows(review.findings)
+    return [
+      AUTOMATED_REVIEW_MARKER,
+      `<!-- reviewed-sha: ${review.headSha} -->`,
+      workflowStateLine({ _tag: 'RepairStopped', headSha: review.headSha }),
+      statusLine('act', 'Blocked', 'repair stopped'),
+      '',
+      ...(cause === null ? [] : [cause, '']),
+      ...(open.length === 0 ? [] : [...issueRows(review.repository, review.headSha, open), '']),
+      ...(fixed.length === 0 ? [] : [...fixed, '']),
+      ...followUpSection(review.repository, review.headSha, review.findings),
+      automatedDisclosure({ kind: 'review', at, merge: true }),
+    ].join('\n')
   }
-  return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${review.headSha} -->
-${workflowStateLine({ _tag: 'ReviewStopped', headSha: review.headSha })}
-### 🤖 STOPPED
-
-${automatedDisclosure({ kind: 'review', disclaimer: `It is not Harlan's personal review or approval.`, notes: ['A person still decides the merge.'], updatedAt: updatedAtLabel(at) })}
-
-The automated review stopped.${cause === null ? '' : ` Reason: ${cause}`}
-
-Push a new commit to start a new review. To review this commit again, comment \`@harlan-agent rerun\`.`
+  // A draft, or a pull request no longer eligible, needs nobody: it reads as a skip.
+  // The marker stays ReviewStopped, so no reader takes this head as reviewed.
+  if (review.reason === REVIEW_NOT_READY_REASON || review.reason === REVIEW_REPAIR_REFUSALS.draft) {
+    return [
+      AUTOMATED_REVIEW_MARKER,
+      `<!-- reviewed-sha: ${review.headSha} -->`,
+      workflowStateLine({ _tag: 'ReviewStopped', headSha: review.headSha }),
+      statusLine('work', 'Review skipped', detail ?? 'the pull request is not ready for review'),
+      '',
+      automatedDisclosure({ kind: 'review', at }),
+    ].join('\n')
+  }
+  return [
+    AUTOMATED_REVIEW_MARKER,
+    `<!-- reviewed-sha: ${review.headSha} -->`,
+    workflowStateLine({ _tag: 'ReviewStopped', headSha: review.headSha }),
+    statusLine('act', 'Stuck', detail ?? 'the review stopped'),
+    '',
+    ...(rest === null ? [] : [rest, '']),
+    'Push a commit to start a new review, or comment `@harlan-agent rerun` to review this commit again.',
+    '',
+    automatedDisclosure({ kind: 'review', at }),
+  ].join('\n')
 }
 
 /**
@@ -262,7 +315,9 @@ export async function publishStoppedReviews(
     // The comment is closed. Close the check run it mirrored. It gates
     // nothing: a failure reaches a person through the report, and the row
     // still settles, because no later pass can grant a missing permission.
-    await completeStoppedReviewCheckRun(options, mapping, review, body, at, signal)
+    // A verdict left standing already concluded its check run.
+    if (body !== review.publishedBody)
+      await completeStoppedReviewCheckRun(options, mapping, review, body, at, signal)
     const labels = await options.github.clearAgentLabels(mapping, review.pullRequestNumber, signal)
     if (labels._tag === 'Err')
       return err(`${review.repository}#${review.pullRequestNumber}: ${labels.error}`)

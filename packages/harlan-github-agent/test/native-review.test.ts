@@ -45,13 +45,13 @@ function sourceFixture() {
 describe('native GitHub Review', () => {
   it('submits COMMENT once per head and updates it when Review runs again', async () => {
     const { source, reviews, writes } = sourceFixture()
-    const input = { repository: repositoryMapping().github, headSha, commentUrl: url, findings: [] }
+    const input = { headSha, commentUrl: url, findings: [] }
     const body = nativeReviewBody({ ...input, outcome: 'READY' })
     expect(await source.upsertNativeReview(repositoryMapping(), 24, headSha, body, signal, () => ok(undefined))).toEqual(ok(undefined))
     expect(writes).toEqual([expect.objectContaining({ event: 'COMMENT', commit_id: headSha, body })])
     expect(body).toContain(NATIVE_REVIEW_MARKER)
-    expect(body).toContain(`[Read the Review results](${url})`)
-    expect(body).not.toContain('Optional follow-ups')
+    expect(body).toContain(`🟢 **Ready** · [read the review](${url})`)
+    expect(body.split('\n').at(-1)).toContain('automated review, not Harlan\'s')
     expect(await source.upsertNativeReview(repositoryMapping(), 24, headSha, body, signal, () => ok(undefined))).toEqual(ok(undefined))
     const changed = nativeReviewBody({ ...input, outcome: 'BLOCKED' })
     expect(await source.upsertNativeReview(repositoryMapping(), 24, headSha, changed, signal, () => ok(undefined))).toEqual(ok(undefined))
@@ -70,7 +70,7 @@ describe('native GitHub Review', () => {
     expect(writes).toEqual([])
   })
 
-  it.each([false, true])('publishes follow-ups with the terminal Review without blocking status on failure: %s', async (fail) => {
+  it.each([false, true])('publishes one line that links the canonical comment, without blocking status on failure: %s', async (fail) => {
     const repository = repositoryMapping()
     const pullRequest = pullRequestItem({ headSha, baseRef: 'main' })
     const command: ClaimedReviewStatusCommand = {
@@ -114,15 +114,11 @@ describe('native GitHub Review', () => {
         publisher: { upsertNativeReview: async (_repository, _number, sha, body) => {
           calls.push('native')
           expect(sha).toBe(headSha)
-          expect(body).toContain(url)
-          expect(body).toContain('## Optional follow-ups')
-          expect(body).toContain('<summary>Minor (40/100) · Keep optional fields visible')
-          expect(body).not.toContain('visible <details>')
-          expect(body).toContain('The label disappears.')
-          expect(body).toContain('Add a hint.')
-          expect(body).toContain(`https://github.com/${repository.github}/blob/${headSha}/src/form.ts#L12`)
+          // The canonical comment carries the findings; the review only counts them and links it.
+          expect(body).toContain(`🟢 **Ready** · 1 follow-up · [read the review](${url})`)
+          expect(body).not.toContain('Keep optional fields visible')
+          expect(body).not.toContain('The label disappears.')
           expect(body).not.toContain('Fix the crash')
-          expect(body).not.toContain('Restore the heading')
           return fail ? err('GitHub unavailable') : ok(undefined)
         } },
         report: (_repository, result) => mirrored.push(result._tag),

@@ -49,21 +49,21 @@ describe('the queued review history line', () => {
       findings: 4,
     })
 
-    expect(line).toBe('The last Review of `eb2933b2d12a` answered blocked on 4 defects. A Repair pushed this commit, so this Review answers the Repair.')
+    expect(line).toBe('Last review of `eb2933b`: Blocked, 4 issues. Repair pushed this commit.')
   })
 
   it('names a new commit when somebody else pushed it', () => {
     const line = queuedReviewHistoryLine({
       _tag: 'AfterPush',
       priorHeadSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8',
-      priorOutcome: 'Blocked',
+      priorOutcome: 'BLOCKED',
       findings: 1,
     })
 
-    expect(line).toBe('The last Review of `eb2933b2d12a` answered blocked on 1 defect. A new commit replaced it, so this Review answers the new commit.')
+    expect(line).toBe('Last review of `eb2933b`: Blocked, 1 issue. A new commit replaced it.')
   })
 
-  it('leaves the defect count out when the prior Review found none', () => {
+  it('leaves the issue count out when the prior Review found none', () => {
     const line = queuedReviewHistoryLine({
       _tag: 'AfterPush',
       priorHeadSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8',
@@ -71,7 +71,7 @@ describe('the queued review history line', () => {
       findings: 0,
     })
 
-    expect(line).toBe('The last Review of `eb2933b2d12a` answered ready. A new commit replaced it, so this Review answers the new commit.')
+    expect(line).toBe('Last review of `eb2933b`: Ready. A new commit replaced it.')
   })
 
   it('puts the history into the comment a waiting pull request carries', () => {
@@ -80,8 +80,8 @@ describe('the queued review history line', () => {
       history: { _tag: 'AfterRepair', priorHeadSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8', priorOutcome: 'Blocked', findings: 4 },
     }))
 
-    expect(body).toContain('A Repair pushed this commit, so this Review answers the Repair.')
-    expect(body).toContain('Next: Review starts when an Agent is free.')
+    expect(body).toContain('<sub>Last review of `eb2933b`: Blocked, 4 issues. Repair pushed this commit.</sub>')
+    expect(body).toContain('⚪ **Queued** · review of [`abc123`](https://github.com/harlan-zw/example/commit/abc123) starts when an agent is free')
   })
 })
 
@@ -89,27 +89,25 @@ describe('a comment for a failed attempt', () => {
   const reason = 'The opencode session failed: Unexpected server error.'
   const cause = 'The agent provider failed before the agent answered.'
 
-  it('says the attempt stopped and when it restarts', () => {
+  it('says when the retry starts, and the public cause of the last attempt', () => {
     const body = queuePositionComment(queuedRepair({
       taskKind: 'adversarial_review',
       attempt: { _tag: 'Retrying', reason, retry: { spent: 3, limit: 12 }, nextAttemptAt: '2026-10-21T02:37:00.000Z' },
     }))
 
-    expect(body).toContain('### 🤖 RETRYING')
-    expect(body).toContain(`The last attempt stopped: ${cause} Retry 3 of 12.`)
-    expect(body).toContain('Next: Review restarts after 02:37 UTC.')
+    expect(body).toContain('⚪ **Queued** · retry 3 of 12 at 02:37 UTC')
+    expect(body).toContain(`<sub>Last attempt: ${cause}</sub>`)
     expect(body).not.toContain(reason)
   })
 
-  it('says a person has to act once nothing will retry', () => {
+  it('reads Stuck once nothing will retry, because Harlan must act', () => {
     const body = queuePositionComment(queuedRepair({
       taskKind: 'adversarial_review',
       attempt: { _tag: 'Stuck', reason },
     }))
 
-    expect(body).toContain('### 🤖 STUCK')
-    expect(body).toContain(`The Review stopped and will not run again on its own: ${cause}`)
-    expect(body).toContain('Next: Fix the cause, then push a commit to start a new Review.')
+    expect(body).toContain('🟠 **Stuck** · needs Harlan')
+    expect(body).toContain(`${cause} Fix the cause, then push a commit. The Dashboard shows the Incident.`)
   })
 
   it('keeps a reason the controller wrote itself', () => {
@@ -118,18 +116,18 @@ describe('a comment for a failed attempt', () => {
       attempt: { _tag: 'Stuck', reason: 'The pull request is still draft, so the review cannot publish its repair.' },
     }))
 
-    expect(body).toContain('will not run again on its own: The pull request is still draft, so the review cannot publish its repair.')
+    expect(body).toContain('The pull request is still draft, so the review cannot publish its repair. Fix the cause')
   })
 
   it('keeps a long reason to one readable line', () => {
     const body = queuePositionComment(queuedRepair({
       attempt: { _tag: 'Retrying', reason: `line one\n${'x'.repeat(400)}`, retry: null, nextAttemptAt: null },
     }))
-    const line = body.split('\n').find(entry => entry.startsWith('The last attempt stopped:'))
+    const line = body.split('\n').find(entry => entry.startsWith('<sub>Last attempt:'))
 
     expect(line).toBeDefined()
     expect(line!.length).toBeLessThan(320)
-    expect(body).toContain('Next: Repair restarts when an Agent is free.')
+    expect(body).toContain('⚪ **Queued** · repair restarts when an agent is free')
   })
 })
 
@@ -137,20 +135,20 @@ describe('queuePositionComment', () => {
   it('keeps exact position in the Dashboard', () => {
     const body = queuePositionComment(queuedRepair())
 
-    expect(body).toContain('### 🤖 QUEUED')
-    expect(body).toContain('The Dashboard shows the exact Queue position.')
+    expect(body).toContain('⚪ **Queued**')
     expect(body).not.toContain('3rd')
     expect(body).not.toMatch(/[▓░]|\b\d+%/)
   })
 
   it('says an agent is the only thing left to wait for at the head of the Queue', () => {
     expect(queuePositionComment(queuedRepair({ queue: { _tag: 'Waiting', position: 1, total: 4 } })))
-      .toContain('Next: Repair starts when an Agent is free.')
+      .toContain('repair of [`abc123`](https://github.com/harlan-zw/example/commit/abc123) starts when an agent is free')
   })
 
   it('names the work the Queue is holding', () => {
     expect(queuePositionComment(queuedRepair({ taskKind: 'adversarial_review', queue: { _tag: 'Waiting', position: 2, total: 2 } })))
-      .toContain('Next: Review starts when an Agent is free.')
+      .toContain('review of [`abc123`]')
+    expect(queuePositionComment(queuedRepair()).split('\n').at(-1)).toContain('automated repair, not Harlan\'s')
   })
 
   it('renders the same body for the same position, so an idle Queue writes nothing', () => {
@@ -167,8 +165,7 @@ describe('queuePositionComment', () => {
   it('names the pause, because a position on a paused repository never moves', () => {
     const body = queuePositionComment(queuedRepair({ queue: { _tag: 'Paused' } }))
 
-    expect(body).toContain('### 🤖 PAUSED')
-    expect(body).toContain('Next: Repair starts when this repository resumes.')
+    expect(body).toContain('⚪ **Queued** · this repository is paused')
   })
 })
 
@@ -233,7 +230,7 @@ describe('publishQueuePositions', () => {
 
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24, queue: { _tag: 'Waiting', position: 3, total: 7 } })])
     expect(edited?.commentId).toBe(42)
-    expect(edited?.body).toContain('### 🤖 QUEUED')
+    expect(edited?.body).toContain('⚪ **Queued**')
     expect(recorded?.taskId).toBe('repair-task')
     expect(recorded?.body).toBe(edited?.body)
   })

@@ -1,6 +1,6 @@
 import type { PullRequestCommand } from './repository-policy.ts'
 import type { ReviewFinding } from './types.ts'
-import { cleanText } from './text.ts'
+import { cleanLine, cleanText, relativeTime } from './text.ts'
 
 export const AUTOMATED_REVIEW_MARKER = '<!-- harlan-agent-kit:pr-triage -->'
 /** The login the GitHub App posts as. */
@@ -26,15 +26,7 @@ export function workflowStateLine(state: CanonicalWorkState): string {
   return `<!-- workflow-state: ${JSON.stringify(state)} -->`
 }
 
-export function reviewFindingSeverity(impact: number): string {
-  if (impact >= 91)
-    return 'Critical'
-  if (impact >= 81)
-    return 'Major'
-  return impact >= 40 ? 'Minor' : 'Trivial'
-}
-
-/** Agents open Logged advice with these, and every surface already says "Optional follow-up". */
+/** Agents open Logged advice with these. The template names a follow-up itself. */
 const OPTIONAL_FOLLOW_UP_PREFIX = /^(?:(?:optional follow-up[.:]|as an optional follow-up,)\s*)+/i
 
 /**
@@ -48,81 +40,178 @@ export function findingNextAction(text: string): string {
   return cleanText(text).replace(OPTIONAL_FOLLOW_UP_PREFIX, '')
 }
 
-/** Show advice without implying that a Logged finding requires Repair. */
-export function reviewFindingFollowUp(finding: Extract<ReviewFinding, { _tag: 'Logged' }>): string {
-  const action = finding.nextAction === undefined
-    ? ''
-    : findingNextAction(finding.nextAction).replaceAll(/\s+/g, ' ')
-  return action === '' ? 'Optional follow-up.' : `Optional follow-up: ${action}`
+const AGENT_LINK = '[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit)'
+const POLICY_URL = 'https://harlanzw.com/blog/ai-in-open-source'
+const POLICY_LINK = `[AI policy](${POLICY_URL})`
+
+/**
+ * Who holds the work, as one dot at the start of the Status line.
+ *
+ * Orange means one thing only: Harlan or the author must act.
+ */
+export type StatusDot = 'work' | 'ready' | 'act' | 'done'
+
+const dots: Record<StatusDot, string> = { work: '⚪', ready: '🟢', act: '🟠', done: '🟣' }
+
+/**
+ * The first visible line of every comment: a dot, the outcome in bold, and one fact only this comment knows.
+ *
+ * A notification preview shows this line alone, so it answers whether a
+ * person must act. CI and merge conflicts stay out: GitHub's merge box shows
+ * them before a reader reaches the comment.
+ */
+export function statusLine(dot: StatusDot, outcome: string, detail?: string): string {
+  return `${dots[dot]} **${outcome}**${detail === undefined || detail === '' ? '' : ` · ${detail}`}`
 }
 
-const AGENT_LINK = '[Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit)'
-const POLICY_LINK = '[AI open source policy](https://harlanzw.com/blog/ai-in-open-source)'
+/** `1 issue`, `2 issues`. */
+export function plural(count: number, one: string, many = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`
+}
 
-/** Links a finding to the code that was reviewed, even after the branch moves. */
-export function reviewFindingCodeLink(repository: string | undefined, headSha: string, finding: ReviewFinding): string {
-  if (repository === undefined || finding._tag === 'Fixed' || finding.details === undefined)
+/** Sentence case for an outcome word stored in capitals, such as `BLOCKED`. */
+export function outcomeWord(outcome: string): string {
+  return `${outcome.slice(0, 1).toUpperCase()}${outcome.slice(1).toLowerCase()}`
+}
+
+function validRepository(repository: string | undefined): repository is string {
+  return repository !== undefined && /^[\w.-]+\/[\w.-]+$/.test(repository)
+}
+
+/** A short commit SHA in a code span, linked to the commit when the repository is known. */
+export function commitLink(repository: string | undefined, sha: string): string {
+  const short = `\`${sha.slice(0, 7)}\``
+  return validRepository(repository) && /^[a-f\d]{6,64}$/i.test(sha) ? `[${short}](https://github.com/${repository}/commit/${sha})` : short
+}
+
+/**
+ * Links a finding to the code that was reviewed, even after the branch moves.
+ *
+ * The link text is the file name and line, so a reader sees where without
+ * opening it. Empty when the finding has no location or the path is unsafe.
+ */
+export function findingLocation(repository: string | undefined, headSha: string, finding: ReviewFinding): string {
+  if (!validRepository(repository) || finding._tag === 'Fixed' || finding.details === undefined)
     return ''
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !/^[a-f\d]{6,64}$/i.test(headSha))
+  if (!/^[a-f\d]{6,64}$/i.test(headSha))
     return ''
   const { path, line } = finding.details.location
   const segments = path.split('/')
   if (segments.some(segment => segment === '' || segment === '.' || segment === '..' || segment.includes('\\')))
     return ''
   const encodedPath = segments.map(segment => encodeURIComponent(segment).replace(/[!'()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)).join('/')
-  const lineAnchor = line !== null && Number.isSafeInteger(line) && line > 0 ? `#L${line}` : ''
-  return ` [View code](https://github.com/${repository}/blob/${headSha}/${encodedPath}${lineAnchor})`
-}
-
-export interface AutomatedDisclosure {
-  /** What this comment is, as one noun. The reader sees it in the first sentence. */
-  kind: 'review' | 'repair update' | 'status' | 'triage'
-  /** Says the comment is not Harlan speaking, where a reader could take it that way. */
-  disclaimer?: string
-  /** Sentences after the policy link, before the timestamp. */
-  notes?: string[]
-  /** Absent on a comment that carries no timestamp, so an unchanged body writes nothing. */
-  updatedAt?: string
+  const hasLine = line !== null && Number.isSafeInteger(line) && line > 0
+  const name = `${segments.at(-1)!.replaceAll('`', '')}${hasLine ? `:${line}` : ''}`
+  return `[\`${name}\`](https://github.com/${repository}/blob/${headSha}/${encodedPath}${hasLine ? `#L${line}` : ''})`
 }
 
 /**
- * The disclosure line every automated comment carries.
+ * Logged findings below this impact are counted and never listed.
  *
- * Eight templates wrote eight versions of this sentence, under two different
- * names for the same bot, and one of them linked no policy at all. A reader
- * cannot tell one bot from two. One function means one name and one wording.
+ * The Trivial band drew the most "nit" complaints across automated reviewers.
+ * They get no row, no control, and no inline thread.
+ */
+export const FOLLOW_UP_FLOOR = 40
+
+type LoggedFinding = Extract<ReviewFinding, { _tag: 'Logged' }>
+
+/** True for a Logged finding that the comments list as a follow-up. */
+export function listedFollowUp(finding: ReviewFinding): finding is LoggedFinding {
+  return finding._tag === 'Logged' && finding.impact >= FOLLOW_UP_FLOOR
+}
+
+/**
+ * One follow-up row: score, title, and where.
+ *
+ * `withLoggedFindingControls` finds this row by its score and summary and adds
+ * the finding's controls under it.
+ */
+export function followUpRow(repository: string | undefined, headSha: string, finding: LoggedFinding): string {
+  const location = findingLocation(repository, headSha, finding)
+  return `- \`${finding.impact}\` ${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}`
+}
+
+/** The folded follow-up list, then a count of the notes below the floor. */
+export function followUpSection(repository: string | undefined, headSha: string, findings: readonly ReviewFinding[]): string[] {
+  const logged = findings.filter((finding): finding is LoggedFinding => finding._tag === 'Logged')
+  const shown = logged.filter(listedFollowUp)
+  const hidden = logged.length - shown.length
+  return [
+    ...(shown.length === 0
+      ? []
+      : [
+          `<details><summary><b>${plural(shown.length, 'follow-up')}</b> · none block merge</summary>`,
+          '',
+          ...shown.map(finding => followUpRow(repository, headSha, finding)),
+          '',
+          '</details>',
+          '',
+        ]),
+    ...(hidden === 0 ? [] : [`<sub>${plural(hidden, 'note')} below ${FOLLOW_UP_FLOOR}/100 not shown.</sub>`, '']),
+  ]
+}
+
+export interface AutomatedDisclosure {
+  /** What this comment is, as one noun. */
+  kind: 'review' | 'repair' | 'status' | 'triage' | 'release'
+  /**
+   * When this state settled. Only a settled state passes it, and only a stored
+   * time, so a re-render of an unchanged state writes an unchanged body.
+   */
+  at?: string
+  /** Says a person still decides the merge. Verdicts carry it. */
+  merge?: boolean
+  /** The comment commands this pull request accepts, as `acceptedPullRequestCommands` returns them. */
+  commands?: readonly PullRequestCommand[]
+  /** What the comment is not. Defaults to "not Harlan's". */
+  disclaimer?: string
+}
+
+const commandSpans: Record<PullRequestCommand, string> = {
+  Rerun: '`@harlan-agent rerun`',
+  Change: '`@harlan-agent <change>`',
+}
+
+/**
+ * The last line of every automated comment: the disclosure, then the commands.
+ *
+ * The disclosure licenses posting without Harlan's approval, so it shrinks but
+ * never goes. It names the bot, says it is not Harlan, and links the AI policy.
+ *
+ * GitHub's mention picker does not offer the App, so a person cannot discover
+ * the commands from the comment box. Code spans keep the handle from notifying
+ * the Organization and keep `<change>` visible.
  */
 export function automatedDisclosure(input: AutomatedDisclosure): string {
-  return `> ${[
-    `${AGENT_LINK} posted this automated ${input.kind}.`,
-    ...(input.disclaimer === undefined ? [] : [input.disclaimer]),
-    `${POLICY_LINK}.`,
-    ...(input.notes ?? []),
-    ...(input.updatedAt === undefined ? [] : [`Last updated: ${input.updatedAt}.`]),
-  ].join(' ')}`
+  const commands = (['Rerun', 'Change'] as const).filter(command => input.commands?.includes(command)).map(command => commandSpans[command])
+  return `<sub>${[
+    ...(input.at === undefined ? [] : [relativeTime(input.at)]),
+    `${AGENT_LINK} automated ${input.kind}, ${input.disclaimer ?? 'not Harlan\'s'}${input.merge === true ? '; a person merges' : ''}`,
+    POLICY_LINK,
+    ...commands,
+  ].join(' · ')}</sub>`
 }
 
 const COMMAND_LINE_START = 'Comment `@harlan-agent '
 
-const commandPhrases: Record<PullRequestCommand, string> = {
-  Change: '`@harlan-agent <change to make>` to request a change',
-  Rerun: '`@harlan-agent rerun` to review this commit again',
-}
-
 /**
- * The last line of the canonical comment: the commands this pull request accepts.
+ * True for the last line of a canonical comment.
  *
- * GitHub's mention picker does not offer the App, so a person cannot discover
- * the commands from the comment box. Code spans keep the handle from notifying
- * the Organization and keep `<change to make>` visible.
+ * Today that is the `<sub>` disclosure. A comment written before the Status
+ * line ended with its command sentence instead, and stored bodies still do.
  */
-export function pullRequestCommandFooter(commands: readonly PullRequestCommand[]): string | undefined {
-  const phrases = (['Change', 'Rerun'] as const).filter(command => commands.includes(command)).map(command => commandPhrases[command])
-  return phrases.length === 0 ? undefined : `Comment ${phrases.join(', or ')}.`
+export function isCanonicalFooter(line: string): boolean {
+  return line.startsWith(COMMAND_LINE_START)
+    || (line.startsWith('<sub>') && line.endsWith('</sub>') && line.includes(POLICY_URL))
 }
 
-export function isPullRequestCommandFooter(line: string): boolean {
-  return line.startsWith(COMMAND_LINE_START)
+/** Puts a block above the comment's footer, so the disclosure and commands stay last. */
+export function aboveFooter(body: string, block: string): string {
+  const lines = body.split('\n')
+  const last = lines.at(-1)
+  if (last === undefined || !isCanonicalFooter(last))
+    return `${body}\n\n${block}`
+  return [...lines.slice(0, -1), block, '', last].join('\n')
 }
 
 export type PriorAutomatedReview
@@ -300,4 +389,31 @@ export function priorAutomatedReviewForHead(
         state: reviewState(found.body),
         url: found.url,
       }
+}
+
+type OpenFinding = Extract<ReviewFinding, { _tag: 'Open' }>
+
+/**
+ * The issues to fix before merge, numbered, each with where it is and what to do.
+ *
+ * Two lines per issue: the title and score, then the location and the fix.
+ * The trailing double space is Markdown's hard line break.
+ */
+export function issueRows(repository: string | undefined, headSha: string, findings: readonly OpenFinding[]): string[] {
+  return findings.flatMap((finding, index) => {
+    const score = finding.impact === undefined ? '' : ` \`${finding.impact}/100\``
+    const location = findingLocation(repository, headSha, finding)
+    const action = finding.resolution === 'Dismissal'
+      ? 'Dismissal recommended.'
+      : `Fix: ${cleanLine(findingNextAction(finding.nextAction))}`
+    return [
+      `${index + 1}. **${cleanLine(finding.summary)}**${score}  `,
+      `   ${location === '' ? action : `${location} · ${action}`}`,
+    ]
+  })
+}
+
+/** Findings a Repair already fixed, struck through. */
+export function fixedRows(findings: readonly ReviewFinding[]): string[] {
+  return findings.flatMap(finding => finding._tag === 'Fixed' ? [`- ~~${cleanLine(finding.summary)}~~ fixed`] : [])
 }

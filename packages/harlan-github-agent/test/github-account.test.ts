@@ -64,11 +64,17 @@ it('rechecks identity after a rejected credential is invalidated', async () => {
 })
 
 it('changes automated attribution while preserving evidence, markers, and commands', () => {
-  const disclosure = automatedDisclosure({ kind: 'triage', disclaimer: 'It is not Harlan\'s personal assessment or commitment.' })
+  const disclosure = automatedDisclosure({ kind: 'triage', disclaimer: 'not Harlan\'s commitment' })
   const evidence = `<!-- harlan-agent-kit:issue-triage -->\nHarlan Agent Kit owns this code.\n\`\`\`text\n${disclosure}\n\`\`\`\n`
   const result = githubAccountBody(evidence + disclosure, account)
-  expect(result).toBe(`${evidence}> [Brundlefly](https://github.com/harlan-zw/brundlefly) posted this automated triage. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).`)
+  expect(result).toBe(`${evidence}<sub>[Brundlefly](https://github.com/harlan-zw/brundlefly) automated triage · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>`)
   expect(githubAccountBody(evidence + disclosure)).toBe(evidence + disclosure)
+})
+
+it('still changes the quoted disclosure that a stored comment carries', () => {
+  // Frozen: the disclosure every comment carried before the Status line footer.
+  const stored = '> [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) posted this automated triage. It is not Harlan\'s personal assessment or commitment. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).'
+  expect(githubAccountBody(stored, account)).toBe('> [Brundlefly](https://github.com/harlan-zw/brundlefly) posted this automated triage. [AI open source policy](https://harlanzw.com/blog/ai-in-open-source).')
 })
 
 it('recognises both original and branded Routine logs for the configured repository', () => {

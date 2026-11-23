@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
 import { createRepositoryTokenProvider } from '../src/github-auth.ts'
 import { err, ok } from '../src/result.ts'
-import { mirrorReviewFindingThreads, reviewFindingThreadBody } from '../src/review-finding-threads.ts'
+import { mirrorReviewFindingThreads, reviewFindingThreadBody, reviewFindingThreadMarker } from '../src/review-finding-threads.ts'
 import { repositoryMapping, testPublicText } from './fixtures.ts'
 
 const headSha = '5a885d2507bd5c0f86f027c7054fcda215d444f1'
@@ -63,7 +63,7 @@ describe('review finding threads', () => {
       line: 32,
       body: expect.stringContaining('- [ ] Ask an agent to verify and fix this finding'),
     })])
-    expect(posted[0]!.body).toContain('**Minor (42/100): A split sequence drops bytes**\n\nThe last chunk loses a byte.\n\npreserve buffered bytes.\n\nKeep both chunks until decoding finishes.')
+    expect(posted[0]!.body).toContain('⚪ **A split sequence drops bytes** · `42/100` · does not block merge\n\nThe last chunk loses a byte.\n\n**Fix:** preserve buffered bytes.\n\nKeep both chunks until decoding finishes.')
   })
 
   it.each([
@@ -105,7 +105,8 @@ describe('review finding threads', () => {
     await expect(sync()).resolves.toEqual({ _tag: 'Failed', message: 'GitHub timed out.' })
     await expect(sync()).resolves.toMatchObject({ _tag: 'Written', resolved: 1 })
     expect(edit).toHaveBeenCalledTimes(1)
-    expect(thread.comment.body).toContain(`✅ Addressed in commit [eeeeeee](https://github.com/${repository.github}/commit/${commitSha})`)
+    expect(thread.comment.body).toContain(`🟢 **Fixed in [\`eeeeeee\`](https://github.com/${repository.github}/commit/${commitSha})**\n\n~~A split sequence drops bytes~~ · \`42/100\` · does not block merge`)
+    expect(reviewFindingThreadMarker(thread.comment.body)).toMatchObject({ fingerprint: lockFingerprint, summary: 'A split sequence drops bytes.', logged: true })
     expect(thread.comment.body).not.toContain('Ask an agent to verify and fix this finding')
   })
 
@@ -131,8 +132,8 @@ describe('review finding threads', () => {
     ], new AbortController().signal, authorize)
 
     expect(posted).toEqual([expect.objectContaining({ headSha, path: 'test/jobs/lane.test.ts', line: 32 })])
-    expect(posted[0]!.body).toContain('**Finding: Lane tests share the isolate lock**')
-    expect(posted[0]!.body).toContain('Two tests hold the lock at once\n\nReset the module state between tests')
+    expect(posted[0]!.body).toContain('🟠 **Lane tests share the isolate lock** · blocks merge')
+    expect(posted[0]!.body).toContain('Two tests hold the lock at once\n\n**Fix:** Reset the module state between tests')
     expect(reports).toEqual([{ _tag: 'Written', posted: 1, outsideDiff: 0, resolved: 0 }])
   })
 

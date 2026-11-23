@@ -141,7 +141,7 @@ import { RESULT_PHASE_RANK } from './agent-progress.ts'
 import { agentTurnSchema, createAgentTurnStore } from './agent-turn-store.ts'
 import { createBatchStore } from './batch-store.ts'
 import { conflictByHandStep, conflictStopReason } from './conflict-stop.ts'
-import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_REPAIR_REFUSALS } from './failure.ts'
+import { canRecoverFailure, classifyFailure, MAXIMUM_PROVIDER_RECOVERY_ATTEMPTS, MAXIMUM_RECOVERY_ATTEMPTS, mayRetryFailure, nextRecoveryAt, REVIEW_NOT_READY_REASON, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { createFindingThreadSyncStore, findingThreadSyncSchema } from './finding-thread-sync-store.ts'
 import { gitHubRateLimitRetryAt } from './github-rate-limit.ts'
 import { isRepositoryWriteQuarantineReason } from './github-write-gate.ts'
@@ -5089,7 +5089,7 @@ function planAdversarialReview(
       observedAt,
       alreadyReviewed
         ? REVIEW_ALREADY_RECORDED_REASON
-        : 'The pull request is not ready for review.',
+        : REVIEW_NOT_READY_REASON,
       undefined,
       ownRunLanded ? revisionId : undefined,
     )

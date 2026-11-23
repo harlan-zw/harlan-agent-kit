@@ -295,7 +295,7 @@ describe('logged finding picked up', () => {
       throw new Error('Expected Review.')
     store.recordReviewRun({ id: 'review', repository: mapping.github, pullRequestNumber: pullRequest.number, revisionId: observation.revisionId, headSha: pullRequest.headSha, provider: 'codex', sessionId: 'session', model: 'model', agentVersion: 'version', skillDigest: 'c'.repeat(64), startedAt: at(2), completedAt: at(2), gates: passed, findings: [finding] })
     store.completeWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at: at(2), evidence: 'review' })
-    const body = store.decorateLoggedFindings(terminalComment(pullRequest.headSha, pullRequest.baseSha, passed, [finding], 95, [], undefined, mapping.github), 'review')
+    const body = store.decorateLoggedFindings(terminalComment({ headSha: pullRequest.headSha, baseSha: pullRequest.baseSha, gates: passed, findings: [finding], confidence: 95, reportedChecks: [], repository: mapping.github }), 'review')
     store.recordReviewPublication({ id: 'publication', reviewRunId: 'review', body, at: at(2), result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' } })
     const request = { repository: mapping.github, pullRequestNumber: pullRequest.number, headSha: pullRequest.headSha, commentId: 42, requestedBy: 'harlan-zw', commentAuthor: 'harlan-github-agent[bot]', fingerprints: [finding.details.fingerprint], before: body, requestId: 'delivery', at: at(3) }
 

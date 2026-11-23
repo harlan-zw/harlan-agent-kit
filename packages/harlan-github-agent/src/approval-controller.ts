@@ -5,7 +5,7 @@ import type { GitHubItem, GitHubPullRequestItem, RepositoryMapping } from './typ
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { err, ok } from './result.ts'
 import { REVIEW_APPROVAL_CONTROL } from './review-approval.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, workflowStateLine } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, commitLink, statusLine, workflowStateLine } from './review-comment.ts'
 
 export interface ApprovalController {
   reconcile: (repository: RepositoryMapping, subject: GitHubItem, revisionId: string, signal: AbortSignal) => Promise<Result<void, string>>
@@ -19,18 +19,30 @@ export interface ApprovalControllerOptions {
   store: Pick<JournalStore, 'approveIssue' | 'approvePullRequest' | 'getSelectionMode' | 'hasApprovalPromptComment' | 'hasPullRequestApproval' | 'isIssueApprovalPending' | 'recordApprovalPromptComment'>
 }
 
-function approvalPrompt(label: string, headSha: string, baseRef: string | undefined, controls: boolean): string {
-  return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${headSha} -->${baseRef === undefined ? '' : `\n<!-- target-branch: ${encodeURIComponent(baseRef)} -->`}
-${workflowStateLine({ _tag: 'ApprovalRequired', headSha })}
-### 🤖 REVIEW PAUSED
-
-${automatedDisclosure({ kind: 'status' })}
-
-This pull request is from an outside contributor.
-
-Add the \`${label}\` label to approve automated review and verified repairs.
-Approval covers head commit \`${headSha.slice(0, 12)}\`.${controls && baseRef !== undefined ? `\n\n${REVIEW_APPROVAL_CONTROL}\n\nOnly Harlan's click starts work. It adds the \`${label}\` label.` : ''}`
+/**
+ * The canonical comment on an outside contributor's pull request before Harlan approves it.
+ *
+ * Orange, because Harlan must act. With signed webhooks it offers the
+ * `Review and repair` checkbox; without them it names the label instead, and
+ * prints no "tick" text for a control that does not exist.
+ */
+function approvalPrompt(label: string, headSha: string, baseRef: string | undefined, controls: boolean, repository: string): string {
+  const offered = controls && baseRef !== undefined
+  return [
+    AUTOMATED_REVIEW_MARKER,
+    `<!-- reviewed-sha: ${headSha} -->`,
+    ...(baseRef === undefined ? [] : [`<!-- target-branch: ${encodeURIComponent(baseRef)} -->`]),
+    workflowStateLine({ _tag: 'ApprovalRequired', headSha }),
+    statusLine('act', 'Approval needed', 'outside contributor'),
+    '',
+    `Thanks for the pull request. Automated review and repair of ${commitLink(repository, headSha)} wait for Harlan.`,
+    '',
+    ...(offered
+      ? [REVIEW_APPROVAL_CONTROL, '', `<sub>Only Harlan's click starts work. It adds the <kbd>${label}</kbd> label.</sub>`]
+      : [`<sub>Harlan adds the <kbd>${label}</kbd> label to start them.</sub>`]),
+    '',
+    automatedDisclosure({ kind: 'status' }),
+  ].join('\n')
 }
 
 export function createApprovalController(options: ApprovalControllerOptions): ApprovalController {
@@ -101,7 +113,7 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
           if (cleared._tag === 'Err')
             return cleared
         }
-        const body = approvalPrompt(label, pullRequest.headSha, pullRequest.baseRef, options.reviewApprovalControls?.(repository) === true)
+        const body = approvalPrompt(label, pullRequest.headSha, pullRequest.baseRef, options.reviewApprovalControls?.(repository) === true, repository.github)
         const posted = await options.github.upsertReviewStatus(repository, pullRequest.number, null, body, false, signal)
         if (posted._tag === 'Err')
           return posted
@@ -118,7 +130,7 @@ export function createApprovalController(options: ApprovalControllerOptions): Ap
           at: options.now().toISOString(),
         })
         if (!recorded)
-          return err(`The REVIEW PAUSED prompt for ${repository.github}#${pullRequest.number} could not be recorded.`)
+          return err(`The Approval prompt for ${repository.github}#${pullRequest.number} could not be recorded.`)
         return ok(undefined)
       }
 

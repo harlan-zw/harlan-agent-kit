@@ -57,36 +57,38 @@ function snapshot(overrides: Parameters<typeof pullRequestItem>[0] = {}) {
 }
 
 describe('stoppedReviewComment', () => {
-  it.each(['Merged', 'Repair'] as const)('keeps optional advice when closing %s work', (mode) => {
+  const followUp = {
+    _tag: 'Logged' as const,
+    impact: 40,
+    summary: 'The fallback needs more detail.',
+    nextAction: 'Name the missing setting.',
+    details: { fingerprint: 'f'.repeat(64), identity: 'fallback', location: { path: 'src/config.ts', line: 1 }, proof: 'The fallback omits the setting.' },
+  }
+
+  it.each(['Merged', 'Repair'] as const)('keeps a follow-up row when closing %s work', (mode) => {
     const body = stoppedReviewComment({
       ...stopped,
       taskKind: mode === 'Repair' ? 'review_fix' : 'adversarial_review',
-      findings: [{
-        _tag: 'Logged',
-        impact: 40,
-        summary: 'The fallback needs more detail.',
-        nextAction: 'Name the missing setting.',
-        details: { fingerprint: 'f'.repeat(64), identity: 'fallback', location: { path: 'src/config.ts', line: 1 }, proof: 'The fallback omits the setting.' },
-      }],
+      findings: [followUp, { ...followUp, impact: 12, summary: 'A comment has a typo.' }],
     }, '2026-08-15T04:00:00.000Z', mode === 'Merged' ? { _tag: 'Merged' } : { _tag: 'Stopped' })
-    expect(body).toContain('Optional follow-up: Name the missing setting.')
+    expect(body).toContain('- `40` The fallback needs more detail. · [`config.ts:1`](https://github.com/harlan-zw/example/blob/abc123/src/config.ts#L1)')
+    expect(body).not.toContain('A comment has a typo.')
   })
 
-  it('replaces the progress claim with a final state and its reason', () => {
+  it('reads a review that stopped on a pull request no longer eligible as a skip, with no work claimed', () => {
     const body = stoppedReviewComment(stopped, '2026-08-15T04:00:00.000Z')
 
-    expect(body).toContain('### 🤖 STOPPED')
-    expect(body).toContain('The pull request is not ready for review.')
+    expect(body).toContain('⚪ **Review skipped** · the pull request is not ready for review')
+    expect(body).toContain('{"_tag":"ReviewStopped"')
     expect(body).not.toContain('REVIEWING')
     expect(body).not.toMatch(/[▓░]|\b\d+%/)
   })
 
-  it('names a lost provider sign-in instead of printing the provider error', () => {
+  it('names a lost provider sign-in in the first line instead of printing the provider error', () => {
     const providerError = 'The codex session failed: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.'
     const body = stoppedReviewComment({ ...stopped, reason: providerError }, '2026-11-22T04:00:00.000Z')
 
-    expect(body).toContain('### 🤖 STOPPED')
-    expect(body).toContain('The automated review stopped. Reason: The agent lost its sign-in.')
+    expect(body).toContain('🟠 **Stuck** · the agent lost its sign-in\n\nHarlan must sign it in again.')
     expect(body).not.toContain('refresh token')
     expect(body).not.toContain('codex session failed')
   })
@@ -94,7 +96,7 @@ describe('stoppedReviewComment', () => {
   it.each([
     ['Merged', { _tag: 'Merged' } as const],
     ['Repair', { _tag: 'Stopped' } as const],
-  ])('maps a provider error on %s work too', (mode, disposition) => {
+  ])('never prints the provider error on %s work', (mode, disposition) => {
     const body = stoppedReviewComment({
       ...stopped,
       taskKind: mode === 'Repair' ? 'review_fix' : 'adversarial_review',
@@ -102,7 +104,8 @@ describe('stoppedReviewComment', () => {
     }, '2026-11-22T04:00:00.000Z', disposition)
 
     expect(body).not.toContain('opencode session failed')
-    expect(body).toContain('The agent provider failed before the agent answered.')
+    if (mode === 'Repair')
+      expect(body).toContain('The agent provider failed before the agent answered.')
   })
 
   it.each([
@@ -111,23 +114,31 @@ describe('stoppedReviewComment', () => {
   ])('keeps a Repair Agent summary that only mentions a failure word: %s', (summary) => {
     const body = stoppedReviewComment({ ...stoppedRepair, reason: summary }, '2026-11-22T04:00:00.000Z')
 
-    expect(body).toContain(`Repair stopped: ${summary}`)
+    expect(body).toContain(`🟠 **Blocked** · repair stopped\n\n${summary}`)
   })
 
-  it('writes no reason line after merge when the Task recorded none', () => {
-    const body = stoppedReviewComment({ ...stopped, reason: null }, '2026-11-22T04:00:00.000Z', { _tag: 'Merged' })
-
-    expect(body.trimEnd().endsWith('No material findings were recorded.')).toBe(true)
+  it('writes one line after a clean merge, because the verdict it replaces offers commands', () => {
+    const verdict = `${stopped.publishedBody}\n<!-- workflow-state: {"_tag":"Review","headSha":"abc123","baseSha":"base123","outcome":"READY","gates":{"merge":"Passed","review":"Passed","ci":"Passed"}} -->`
+    expect(stoppedReviewComment({ ...stopped, reason: null, publishedBody: verdict }, '2026-11-22T04:00:00.000Z', { _tag: 'Merged' }))
+      .toContain('🟣 **Merged** · reviewed with no issues')
+    expect(stoppedReviewComment({ ...stopped, reason: null }, '2026-11-22T04:00:00.000Z', { _tag: 'Merged' }))
+      .toContain('🟣 **Merged** · no further reviews')
   })
 
-  it('replaces Repair progress with BLOCKED and every exact finding', () => {
+  it('leaves a verdict standing when the pull request closes, and replaces a working state', () => {
+    const verdict = '<!-- workflow-state: {"_tag":"Review","headSha":"abc123","baseSha":"base123","outcome":"BLOCKED","gates":{"merge":"Passed","review":"Failed","ci":"Passed"}} -->\n🟠 **Blocked** · 1 issue to fix before merge'
+    expect(stoppedReviewComment({ ...stopped, publishedBody: verdict }, '2026-11-22T04:00:00.000Z', { _tag: 'Closed' })).toBe(verdict)
+    expect(stoppedReviewComment(stopped, '2026-11-22T04:00:00.000Z', { _tag: 'Closed' })).toContain('⚪ **Closed** · no further reviews')
+  })
+
+  it('replaces Repair progress with Blocked and every exact finding', () => {
     const body = stoppedReviewComment(stoppedRepair, '2026-08-15T04:00:00.000Z')
 
-    expect(body).toContain('### 🤖 BLOCKED')
-    expect(body).toContain('First exact finding. Next: Fix the first boundary.')
-    expect(body).toContain('Second exact finding. Next: Fix the second boundary.')
+    expect(body).toContain('🟠 **Blocked** · repair stopped')
+    expect(body).toContain('1. **First exact finding.**  \n   Fix: Fix the first boundary.')
+    expect(body).toContain('2. **Second exact finding.**  \n   Fix: Fix the second boundary.')
     expect(body).toContain('The Repair Agent found an unsafe scope.')
-    expect(body).not.toContain('### 🤖 REPAIR')
+    expect(body).not.toContain('REPAIR')
   })
 
   it('keeps the reviewed code link after merge', () => {
@@ -146,7 +157,7 @@ describe('stoppedReviewComment', () => {
       }],
     }, '2026-08-15T04:00:00.000Z', { _tag: 'Merged' })
 
-    expect(body).toContain('[View code](https://github.com/harlan-zw/example/blob/abc123/src/queue.ts#L42)')
+    expect(body).toContain('🟣 **Merged** · 1 issue not fixed\n\n- The queue can drop events. · [`queue.ts:42`](https://github.com/harlan-zw/example/blob/abc123/src/queue.ts#L42)')
   })
 })
 
@@ -214,7 +225,7 @@ describe('publishStoppedReviews', () => {
 
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
     expect(edited?.commentId).toBe(42)
-    expect(edited?.body).toContain('### 🤖 STOPPED')
+    expect(edited?.body).toContain('⚪ **Review skipped**')
     expect(recorded).toBe(1)
   })
 
@@ -309,7 +320,7 @@ describe('publishStoppedReviews', () => {
     }, new AbortController().signal)
 
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
-    expect(body).toContain('### 🤖 MERGED')
+    expect(body).toContain('🟣 **Merged**')
     expect(body).not.toContain('REVIEWING')
     expect(labelsCleared).toBe(1)
   })
@@ -341,7 +352,7 @@ describe('publishStoppedReviews', () => {
     }, new AbortController().signal)
 
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
-    expect(body).toContain('### 🤖 MERGED')
+    expect(body).toContain('🟣 **Merged**')
     expect(closure).toEqual(expect.objectContaining({
       repository: 'harlan-zw/example',
       pullRequestNumber: 24,
@@ -503,7 +514,7 @@ describe('publishStoppedReviews', () => {
     }, new AbortController().signal)
 
     expect(results).toEqual([ok({ _tag: 'Published', repository: 'harlan-zw/example', pullRequestNumber: 24 })])
-    expect(checkRuns).toEqual([{ headSha: 'abc123', conclusion: 'neutral', title: '🤖 STOPPED' }])
+    expect(checkRuns).toEqual([{ headSha: 'abc123', conclusion: 'neutral', title: '⚪ Review skipped · the pull request is not ready for review' }])
   })
 
   it('completes the Review check run even when a person deleted the comment', async () => {

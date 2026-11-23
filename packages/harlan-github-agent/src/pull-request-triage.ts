@@ -9,8 +9,8 @@ import { choice } from 'advocaat'
 import { APPROVAL_LABELS } from './approval-labels.ts'
 import { err, ok } from './result.ts'
 import { mirrorReviewCheckRun, reviewCheckRunUpdate } from './review-check-run.ts'
-import { AUTOMATED_REVIEW_MARKER, automatedDisclosure } from './review-comment.ts'
-import { cleanLine, updatedAtLabel } from './text.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, statusLine } from './review-comment.ts'
+import { cleanLine } from './text.ts'
 
 export const PULL_REQUEST_TRIAGE_STATES = [
   'ADVERSARIAL_REVIEW_REQUIRED',
@@ -88,18 +88,22 @@ export function classifyPullRequestPaths(changedFiles: readonly string[]): PullR
 /**
  * The canonical comment a skip publishes. Carries the head commit marker, so
  * the next Review on a new head replaces it.
+ *
+ * Only a prose-only change reaches a skip: the path rule requires Review for
+ * every other path. The stored reason stays in small print for the audit.
  */
 export function reviewSkippedComment(headSha: string, baseSha: string, result: PullRequestTriageResult, at: string): string {
   const workflow = JSON.stringify({ _tag: 'ReviewSkipped', headSha, baseSha })
-  return `${AUTOMATED_REVIEW_MARKER}
-<!-- reviewed-sha: ${headSha} -->
-<!-- workflow-state: ${workflow} -->
-### 🤖 REVIEW SKIPPED
-
-${automatedDisclosure({ kind: 'triage', updatedAt: updatedAtLabel(at) })}
-
-- **Reason:** ${cleanLine(result.reason)}
-- **Override:** Add the \`${APPROVAL_LABELS.review}\` label to force an adversarial Review.`
+  return [
+    AUTOMATED_REVIEW_MARKER,
+    `<!-- reviewed-sha: ${headSha} -->`,
+    `<!-- workflow-state: ${workflow} -->`,
+    statusLine('work', 'Review skipped', 'prose-only change'),
+    '',
+    `<sub>${cleanLine(result.reason)} Add the <kbd>${APPROVAL_LABELS.review}</kbd> label to review it anyway.</sub>`,
+    '',
+    automatedDisclosure({ kind: 'triage', at }),
+  ].join('\n')
 }
 
 export interface PullRequestTriageController {

@@ -149,7 +149,7 @@ function recordPublishedRefreshReview(store: ReturnType<typeof openJournalStore>
     at: '2026-08-27T08:21:00.000Z',
     result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
   })).toEqual({ _tag: 'Inserted', publicationId: 'published-refresh-publication' })
-  const body = terminalComment('abc123', 'base123', gates, [], 88, refreshed.reportedChecks)
+  const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates, findings: [], confidence: 88, reportedChecks: refreshed.reportedChecks })
   expect(store.stageReviewGateStatus({
     reviewRunId: 'published-refresh-review',
     repository: repository.github,
@@ -235,6 +235,7 @@ function harness(options: {
     repositories: [repositoryMapping()],
     store: {
       listReviewGateRefreshes: () => [options.review ?? gateRefresh()],
+      priorReviewHistory: () => ({ _tag: 'FirstReview' }),
       repairRoundPlan: () => options.rounds ?? { _tag: 'Allowed', number: 1 },
       queueReviewFixForGate: ({ at: _at, ...input }) => {
         recorded.fixQueued.push(input)
@@ -611,7 +612,7 @@ describe('refreshReviewGates', () => {
       outcome: 'READY',
     })])
     expect(recorded.edited).toBeUndefined()
-    expect(recorded.staged[0]?.body).toContain('### 🤖 READY · 88/100')
+    expect(recorded.staged[0]?.body).toContain('🟢 **Ready** · `88/100`')
     expect(recorded.staged[0]?.body).not.toContain('Waiting:')
     expect(recorded.stamped).toEqual([])
   })
@@ -624,7 +625,7 @@ describe('refreshReviewGates', () => {
     await unconfigured.run()
 
     expect(owned.recorded.staged[0]?.body.split('\n').at(-1))
-      .toBe('Comment `@harlan-agent <change to make>` to request a change, or `@harlan-agent rerun` to review this commit again.')
+      .toMatch(/ · `@harlan-agent rerun` · `@harlan-agent <change>`<\/sub>$/)
     expect(unconfigured.recorded.staged[0]?.body).not.toContain('@harlan-agent')
   })
 
@@ -637,7 +638,7 @@ describe('refreshReviewGates', () => {
       reviewRunId: 'run-1',
       outcome: 'READY',
       ci: 'Passed',
-      body: expect.stringContaining('### 🤖 READY'),
+      body: expect.stringContaining('🟢 **Ready**'),
     }])
   })
 
@@ -700,7 +701,7 @@ describe('refreshReviewGates', () => {
       pullRequestNumber: 24,
       outcome: 'BLOCKED',
     })])
-    expect(recorded.staged[0]?.body).toContain('### 🤖 BLOCKED')
+    expect(recorded.staged[0]?.body).toContain('🟠 **Blocked**')
     // The score belongs to a passing verdict, so a blocked one never names it.
     expect(recorded.staged[0]?.body).not.toContain('88/100')
     expect(recorded.stamped).toEqual([])
@@ -741,7 +742,7 @@ describe('refreshReviewGates', () => {
       pullRequestNumber: 24,
       outcome: 'BLOCKED',
     })])
-    expect(recorded.staged[0]?.body).toContain('**Merge gate:** BLOCKED. The pull request has merge conflicts.')
+    expect(recorded.staged[0]?.body).toContain('🟠 **Blocked** · merge conflict; the review itself passed')
     expect(recorded.staged).toHaveLength(1)
     expect(recorded.stamped).toEqual([])
   })
@@ -965,7 +966,7 @@ describe('refreshReviewGates against the journal store', () => {
     expect(publication).toMatchObject({
       reviewRunId: 'run-pending',
       desiredOutcome: 'READY',
-      body: expect.stringContaining('### 🤖 READY'),
+      body: expect.stringContaining('🟢 **Ready**'),
     })
   })
 

@@ -1,5 +1,5 @@
 import ts from 'typescript'
-import { automatedDisclosure } from './review-comment.ts'
+import { automatedDisclosure, statusLine } from './review-comment.ts'
 
 /**
  * Which GitHub credential writes a package release.
@@ -175,15 +175,45 @@ function classifyPackageRelease(input: Omit<PackageReleaseInput, 'merged' | 'sou
 
 export const PACKAGE_RELEASE_MARKER = '<!-- harlan-agent-kit:package-release -->'
 
-export function renderManualMajorRelease(plan: Extract<PackageReleaseOffer, { _tag: 'ManualMajor' }>): string {
-  return `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\n${plan.reason}\nIncludes all unreleased changes since \`${plan.previousTag}\`.\nChecked head \`${plan.headSha}\`.\n`
+/**
+ * One release comment: the marker first, then the Status line, then the body.
+ *
+ * The marker leads, because the release parsers find their comment by it.
+ */
+export function releaseComment(status: string, body: readonly string[] = []): string {
+  return [PACKAGE_RELEASE_MARKER, status, '', ...body, ...(body.length === 0 ? [] : ['']), automatedDisclosure({ kind: 'release' }), ''].join('\n')
 }
 
+/** `nuxt-seo@6.1.0` in a code span, the name a release goes by. */
+export function releaseName(packageName: string, version: string): string {
+  return `\`${packageName}@${version}\``
+}
+
+export function renderManualMajorRelease(plan: Extract<PackageReleaseOffer, { _tag: 'ManualMajor' }>): string {
+  return releaseComment(statusLine('act', 'Release blocked', 'needs Harlan'), [
+    plan.reason,
+    '',
+    `<sub>Includes all unreleased changes since \`${plan.previousTag}\`. Checked head \`${plan.headSha.slice(0, 7)}\`.</sub>`,
+  ])
+}
+
+/**
+ * The release offer: the release is the headline, and one checkbox starts it.
+ *
+ * The control lines stay exact, because `releaseRequest` matches them.
+ */
 export function renderPackageRelease(plan: PackageReleasePlan, selected = false): string {
+  const name = releaseName(plan.packageName, plan.version)
   if (plan._tag === 'BeforeMerge') {
-    return `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nRelease **${plan.packageName}@${plan.version}** after this pull request merges and default branch checks pass.\nIncludes all unreleased changes since \`${plan.previousTag}\`.\nSelection applies to head \`${plan.headSha}\`. A changed head or release version clears it.\nClear the checkbox to cancel before merge.\n\n- [${selected ? 'x' : ' '}] Release ${plan.bump} after merge\n`
+    return releaseComment(statusLine('work', `Release ${name} after merge`, `${plan.bump} · all changes since \`${plan.previousTag}\``), [
+      `- [${selected ? 'x' : ' '}] Release ${plan.bump} after merge`,
+      '',
+      `<sub>It runs once this pull request merges and default branch checks pass. It applies to head \`${plan.headSha.slice(0, 7)}\`; a new commit or version clears it. Clear the checkbox to cancel.</sub>`,
+    ])
   }
-  return `${PACKAGE_RELEASE_MARKER}\n${automatedDisclosure({ kind: 'status' })}\n\nRelease **${plan.packageName}@${plan.version}** from \`${plan.sourceSha}\`.\nIncludes all unreleased changes since \`${plan.previousTag}\`.\n\n- [ ] Release ${plan.bump}\n`
+  return releaseComment(statusLine('work', `Release ${name}`, `${plan.bump} · all changes since \`${plan.previousTag}\` · from \`${plan.sourceSha.slice(0, 7)}\``), [
+    `- [ ] Release ${plan.bump}`,
+  ])
 }
 
 export interface PackageReleaseRequest {

@@ -504,6 +504,18 @@ export type ReviewGatePublication
   = | { _tag: 'Unpublished' }
     | { _tag: 'Published', publicationId: string }
 
+/**
+ * What one Review exercised, and the largest part it did not.
+ *
+ * The Agent names both, because only the Review knows them. They read as
+ * `Checked … Not checked: …` on the canonical comment.
+ */
+export interface ReviewCoverage {
+  checked: string
+  /** Null when the Review skipped nothing. */
+  notChecked: string | null
+}
+
 export interface ReviewRun {
   gatePublication: ReviewGatePublication
   /** The target branch whose diff this Review covered. */

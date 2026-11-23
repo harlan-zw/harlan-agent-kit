@@ -312,7 +312,7 @@ Notes: ~/notes/review-24.md`
     expect(store.listIncidents()).toEqual([expect.objectContaining({ kind: 'private_detail', message: expect.stringContaining('harlan-zw/example#24') })])
   })
 
-  it('redacts a follow-up in the native review after its text was entity-encoded', async () => {
+  it('redacts a private path the native review writer receives', async () => {
     const store = journal()
     const headSha = 'a'.repeat(40)
     const written: string[] = []
@@ -332,19 +332,13 @@ Notes: ~/notes/review-24.md`
       publicText: createPublicTextGuard({ details, store, now: () => new Date('2026-11-22T06:05:00.000Z') }),
       tokens: { getToken: async () => ok({ token: 'token', expiresAt: '2099-01-01T00:00:00.000Z' }), invalidate: () => undefined },
     })
-    const body = nativeReviewBody({
-      repository: 'harlan-zw/example',
+    // The native review carries no finding text now, so the leak arrives in the body the writer receives.
+    const body = `${nativeReviewBody({
       headSha,
       outcome: 'READY',
       commentUrl: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
-      findings: [{
-        _tag: 'Logged',
-        impact: 40,
-        summary: 'The cache key ignores the locale.',
-        nextAction: 'Key the cache by locale.',
-        details: { fingerprint: 'f'.repeat(64), identity: 'cache-locale', location: { path: 'src/cache.ts', line: 3 }, proof: 'The trace in ~/pkg/cache_trace/run.log shows two locales sharing one key.' },
-      }],
-    })
+      findings: [],
+    })}\n\nThe trace in ~/pkg/cache_trace/run.log shows two locales sharing one key.`
 
     expect(await source.upsertNativeReview(repositoryMapping(), 24, headSha, body, new AbortController().signal, () => ok(undefined))).toEqual(ok(undefined))
     expect(written).toHaveLength(1)
@@ -501,19 +495,13 @@ describe('review findings on #754', () => {
         },
       } },
     } as unknown as Octokit
-    const body = nativeReviewBody({
-      repository: 'harlan-zw/example',
+    // The native review carries no finding text now, so the encoded leak arrives in the body the writer receives.
+    const body = `${nativeReviewBody({
       headSha: reviewHead,
       outcome: 'READY',
       commentUrl: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
-      findings: [{
-        _tag: 'Logged',
-        impact: 40,
-        summary: 'The cache key ignores the locale.',
-        nextAction: 'Key the cache by locale.',
-        details: { fingerprint: 'f'.repeat(64), identity: 'cache-locale', location: { path: 'src/cache.ts', line: 3 }, proof: 'The cache at /srv/agent_home/cache differs from /home/agent_x/cache.' },
-      }],
-    })
+      findings: [],
+    })}\n\n${encodeEntities('The cache at /srv/agent_home/cache differs from /home/agent_x/cache.')}`
 
     await agentSource(client, store, withEncodedRoot).upsertNativeReview(repositoryMapping(), 24, reviewHead, body, new AbortController().signal, () => ok(undefined))
 
@@ -572,19 +560,12 @@ describe('review findings on #754', () => {
         },
       } },
     } as unknown as Octokit
-    const body = nativeReviewBody({
-      repository: 'harlan-zw/example',
+    const body = `${nativeReviewBody({
       headSha: reviewHead,
       outcome: 'READY',
       commentUrl: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
-      findings: [{
-        _tag: 'Logged',
-        impact: 40,
-        summary: 'The exported file is stale.',
-        nextAction: 'Regenerate it.',
-        details: { fingerprint: 'f'.repeat(64), identity: 'stale-handover', location: { path: 'src/a.ts', line: 3 }, proof: `The file \`${path}\` is stale.` },
-      }],
-    })
+      findings: [],
+    })}\n\n${encodeEntities(`The file \`${path}\` is stale.`)}`
 
     await agentSource(client, store).upsertNativeReview(repositoryMapping(), 24, reviewHead, body, new AbortController().signal, () => ok(undefined))
 

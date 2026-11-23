@@ -1,6 +1,6 @@
 import type { ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
-import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, isPullRequestCommandFooter } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, isCanonicalFooter, plural } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type LoggedReviewFinding = Extract<ReviewFinding, { _tag: 'Logged' }>
@@ -51,6 +51,18 @@ function dismissalControl(fingerprint: string): string {
   return `  - [ ] Dismiss this finding <!-- dismiss-logged-finding: ${fingerprint} -->`
 }
 
+/**
+ * True for the row that lists one Logged finding.
+ *
+ * A follow-up row starts with its score in a code span. A comment written
+ * before the Status line labelled the row `Logged (N/100)`, and stored
+ * bodies still do.
+ */
+function loggedFindingRow(line: string, finding: LoggedReviewFinding): boolean {
+  return (line.startsWith(`- \`${finding.impact}\` `) || (line.startsWith('- ') && line.includes(`Logged (${finding.impact}/100)`)))
+    && line.includes(cleanLine(finding.summary))
+}
+
 /** Adds one control beside each recorded finding. Task status replaces its control. */
 export function withLoggedFindingControls(body: string, findings: readonly ReviewFinding[], statuses: readonly LoggedFindingStatus[], options: {
   target?: 'head' | 'after-merge' | undefined
@@ -63,8 +75,7 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
     const finding = findings.find((finding): finding is LoggedReviewFinding => finding._tag === 'Logged'
       && /^[a-f\d]{64}$/.test(finding.details.fingerprint)
       && !rendered.has(finding.details.fingerprint)
-      && line.startsWith('- ') && line.includes(`Logged (${finding.impact}/100)`)
-      && line.includes(cleanLine(finding.summary)))
+      && loggedFindingRow(line, finding))
     if (finding === undefined)
       return [line]
     rendered.add(finding.details.fingerprint)
@@ -78,7 +89,11 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
       ...(options.target === undefined ? [] : [`  ${loggedFindingControl(finding.details.fingerprint)}`]),
       ...(options.target === 'head' ? [dismissalControl(finding.details.fingerprint)] : []),
     ]
-  }).join('\n').replace(/<details>\n<summary>Logged findings \(\d+\)<\/summary>\n([\s\S]*?)<\/details>/g, (_block, content: string) => {
+  }).join('\n').replace(/<details><summary><b>\d+ follow-ups?<\/b> · none block merge<\/summary>\n([\s\S]*?)<\/details>/g, (_block, content: string) => {
+    // A row moved to its inline thread leaves the fold, so the count follows.
+    const count = [...content.matchAll(/^- `\d+` /gm)].length
+    return count === 0 ? '' : `<details><summary><b>${plural(count, 'follow-up')}</b> · none block merge</summary>\n${content}</details>`
+  }).replace(/<details>\n<summary>Logged findings \(\d+\)<\/summary>\n([\s\S]*?)<\/details>/g, (_block, content: string) => {
     const count = [...content.matchAll(/^- \*\*Logged \(/gm)].length
     return count === 0 ? '' : `<details>\n<summary>Logged findings (${count})</summary>\n${content}</details>`
   }).replace(/\n{3,}/g, '\n\n').trimEnd()
@@ -87,10 +102,10 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
   const pickupHint = options.target === 'head'
     ? [options.baseRef === undefined ? '' : loggedFindingBaseMarker(options.baseRef), onHeadPickupHint].filter(Boolean).join('\n')
     : afterMergePickupHint
-  // The command line stays last, so the hint goes above it.
-  const commandLine = decorated.split('\n').at(-1)
-  return commandLine !== undefined && isPullRequestCommandFooter(commandLine)
-    ? `${decorated.slice(0, -commandLine.length)}${pickupHint}\n\n${commandLine}`
+  // The footer stays last, so the hint goes above it.
+  const footer = decorated.split('\n').at(-1)
+  return footer !== undefined && isCanonicalFooter(footer)
+    ? `${decorated.slice(0, -footer.length)}${pickupHint}\n\n${footer}`
     : `${decorated}\n\n${pickupHint}`
 }
 

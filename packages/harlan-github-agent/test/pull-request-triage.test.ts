@@ -405,7 +405,7 @@ describe('pull request triage controller', () => {
 
     await expect(harness.settle({ _tag: 'Skipped', reason: 'model: classification chose skip with confidence 0.93.', source: 'model' })).resolves.toEqual(ok(undefined))
     expect(harness.comments).toHaveLength(1)
-    expect(harness.comments[0]).toContain('REVIEW SKIPPED')
+    expect(harness.comments[0]).toContain('⚪ **Review skipped** · prose-only change')
     expect(harness.comments[0]).toContain(`<!-- reviewed-sha: ${subject.headSha} -->`)
     expect(harness.comments[0]).toContain('harlan-agent-review')
     expect(harness.stamped).toEqual(['ADVERSARIAL_REVIEW_SKIPPED'])
@@ -425,8 +425,8 @@ describe('pull request triage controller', () => {
     expect(harness.comments).toHaveLength(2)
     expect(harness.comments[0]).toBe(harness.comments[1])
     expect(harness.checkRuns).toEqual([
-      { headSha: subject.headSha, update: { _tag: 'Completed', title: '🤖 REVIEW SKIPPED', conclusion: 'neutral', completedAt: '2026-09-18T00:30:00.000Z' } },
-      { headSha: subject.headSha, update: { _tag: 'Completed', title: '🤖 REVIEW SKIPPED', conclusion: 'neutral', completedAt: '2026-09-18T00:30:00.000Z' } },
+      { headSha: subject.headSha, update: { _tag: 'Completed', title: '⚪ Review skipped · prose-only change', conclusion: 'neutral', completedAt: '2026-09-18T00:30:00.000Z' } },
+      { headSha: subject.headSha, update: { _tag: 'Completed', title: '⚪ Review skipped · prose-only change', conclusion: 'neutral', completedAt: '2026-09-18T00:30:00.000Z' } },
     ])
   })
 
