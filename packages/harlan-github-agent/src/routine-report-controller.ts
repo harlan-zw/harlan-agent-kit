@@ -235,7 +235,8 @@ const HTML_OPEN = /^\s*<([a-z][\w-]*)[\s/>]/i
  *
  * The Markdown is parsed before any line is filtered, so a removed line cannot
  * move a block boundary. Only top-level paragraphs before the first other
- * block qualify. Quoted, fenced, listed, and HTML evidence never does.
+ * block qualify. A heading, table, or list ends the summary, even before prose.
+ * A leading title has no exception. Quoted, fenced, and HTML evidence never qualifies.
  * An element such as `<details>` may hold blank lines, so everything up to its
  * closing tag is skipped. Comments go first, because the text cleaner would
  * otherwise turn their inside into visible prose.
@@ -254,6 +255,8 @@ function reportSummary(detail: string): string | null {
     }
     if (token.type === 'space')
       continue
+    if (token.type === 'heading' || token.type === 'table' || token.type === 'list')
+      break
     if (token.type !== 'paragraph') {
       const element = token.type === 'html' ? token.raw.match(HTML_OPEN)?.[1]?.toLowerCase() : undefined
       if (element !== undefined && !token.raw.toLowerCase().includes(`</${element}>`))

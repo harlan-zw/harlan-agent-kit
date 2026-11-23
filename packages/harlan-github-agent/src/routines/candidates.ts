@@ -143,7 +143,7 @@ function parseCandidates(input: unknown): Result<RoutineScanResponse, string> {
   if (verdict._tag === 'Err')
     return verdict
   return ok({
-    report: typeof input.report === 'string' ? input.report.trim() : '',
+    report: typeof input.report === 'string' && input.report.trim() !== '' ? input.report : '',
     candidates,
     ...(verdict.value === null ? {} : { verdict: verdict.value }),
   })

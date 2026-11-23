@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { candidateIssueCommands } from '../src/candidate-issue-controller.ts'
 import { ok } from '../src/result.ts'
 import { createRoutineReportController, isRoutineTrackingIssue, parseRunLogEntry, routineReportBody, routineReportCommand, runLogEntryComment, trackingIssueBody, trackingIssueTitle } from '../src/routine-report-controller.ts'
+import { getRoutine } from '../src/routines/index.ts'
 import { openJournalStore } from '../src/store.ts'
 import { repositoryMapping } from './fixtures.ts'
 
@@ -371,8 +372,6 @@ describe('the summary a run log entry folds', () => {
 
   it('keeps the opening prose and drops local paths, hosts, and everything after the first heading', () => {
     const detail = [
-      '# ci-review report',
-      '',
       'Coverage: **incomplete**.',
       '',
       '**One urgent Candidate.** Vulnerable dependencies remain.',
@@ -403,7 +402,6 @@ describe('the summary a run log entry folds', () => {
     ['a fence with a blank line inside', '```text\nprivate-fixture line\n\nprivate-fixture after the blank line\n```'],
     ['an HTML comment with a blank line inside', '<!--\n\nprivate-fixture note\n\n-->'],
     ['a details block with a blank line inside', '<details>\n<summary>Logs</summary>\n\nprivate-fixture\n\n</details>'],
-    ['indented code after a list', '- one item\n\n    private-fixture'],
   ])('keeps %s out of the summary', (_case, opening) => {
     expect(summaryOf(`${opening}\n\nThe run checked every workflow.`)).toBe('The run checked every workflow.')
   })
@@ -489,6 +487,58 @@ describe('configured private hosts', () => {
       store.close()
     }
   })
+})
+
+it.each(['pr-triage', 'dependency-updates', 'vitals-review'] as const)('keeps opening indented evidence private through the %s scan parser and publisher', async (name) => {
+  const report = '    private-fixture first line\n    private-fixture second line\n\nThe run checked every workflow.'
+  const parsed = getRoutine(name).parseResponse({ report, candidates: [], outcome: 'complete', updates: [], fieldFindings: [], labFindings: [] })
+  if (parsed._tag === 'Err')
+    throw new Error(parsed.error)
+  const store = openJournalStore(':memory:')
+  try {
+    seed(store)
+    stage(store, scanned('evidence', { detail: parsed.value.report }))
+    settleRun(store, runId)
+    const calls: Calls = { issues: [], comments: [] }
+
+    await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+      .publishPending(new AbortController().signal)
+
+    expect(calls.comments[0]?.body).toContain('<details><summary>Summary</summary>\n\nThe run checked every workflow.\n\n')
+    expect(calls.comments[0]?.body).not.toContain('private-fixture')
+    expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain(report)
+  }
+  finally {
+    store.close()
+  }
+})
+
+it.each([
+  '# Evidence',
+  '## Evidence',
+  'Evidence\n========',
+  '- Evidence',
+  '| Evidence |\n| --- |\n| fixture |',
+])('keeps prose after the opening section boundary %s in the archive only', async (opening) => {
+  const report = `${opening}\n\nprivate-fixture paragraph.`
+  const store = openJournalStore(':memory:')
+  try {
+    seed(store)
+    stage(store, scanned('evidence', { detail: report }))
+    settleRun(store, runId)
+    const calls: Calls = { issues: [], comments: [] }
+
+    await createRoutineReportController({ github: publisher(calls), now, store, workerId: 'reporter' })
+      .publishPending(new AbortController().signal)
+
+    expect(calls.comments).toHaveLength(1)
+    expect(calls.comments[0]?.body).not.toContain('private-fixture')
+    expect(calls.comments[0]?.body).not.toContain('<summary>Summary</summary>')
+    expect(store.getDashboardSnapshot(now().toISOString()).routineRuns[0]?.report?.body).toContain(report)
+  }
+  finally {
+    store.close()
+  }
 })
 
 it('publishes only the prose after an opening fence and keeps the fence in the archive', async () => {

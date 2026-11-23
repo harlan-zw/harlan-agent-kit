@@ -104,7 +104,7 @@ function parseDependencyUpdates(input: unknown) {
     if (input.updates.length > 0)
       return err('Existing dependency work must return an empty update list.')
     return ok({
-      report: `Dependency scan skipped because dependency work is open. Registry coverage is not established by this result.\n\n${input.report.trim()}`,
+      report: `Dependency scan skipped because dependency work is open. Registry coverage is not established by this result.\n\n${input.report}`,
       candidates: [],
     })
   }
@@ -134,7 +134,7 @@ function parseDependencyUpdates(input: unknown) {
   }
   const ordered = [...new Map(updates.map(update => [JSON.stringify(update), update])).values()]
     .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
-  const report = [input.report.trim(), ...excluded].join('\n\n')
+  const report = [input.report, ...excluded].join('\n\n')
   if (ordered.length === 0)
     return ok({ report, candidates: [] })
 
