@@ -27,7 +27,7 @@ import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { collectJobWorkflowContext } from './job-workflow-context.ts'
 import { normalizeLoggedFindingControls, withoutLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
-import { isRedactedFormOf, keepRemovedLines, preservePublishedRedactions, publicBody } from './public-text.ts'
+import { isRedactedFormOf, publicBody, removalsByPosition, removalsBySource } from './public-text.ts'
 import { err, ok } from './result.ts'
 import { normalizeReviewControl } from './review-cancel.ts'
 import { REVIEW_CHECK_RUN_NAME } from './review-check-run.ts'
@@ -1245,7 +1245,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
         .then(async (existing) => {
           const priorPublished = withoutLoggedFindingControls(normalizeReviewControl(existing.data.body ?? ''))
           const priorSource = withoutLoggedFindingControls(normalizeReviewControl(expectedBody))
-          const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'automated review' }, preservePublishedRedactions(priorPublished, priorSource, sourceBody))
+          const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'automated review' }, sourceBody, removalsBySource(priorPublished, priorSource))
           const body = outgoing.text
           if (existing.data.issue_url !== undefined && !existing.data.issue_url.endsWith(`/${pullRequestNumber}`))
             return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another pull request.' as const })
@@ -1445,7 +1445,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       // The finding thread sync calls this on every pass. `send` reports only
       // the write, never a body GitHub already holds. A line GitHub shows
       // removed stays removed, whatever the deny list says now.
-      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'review comment' }, keepRemovedLines(comment.body, githubAccountBody(bodyText, repository.githubAccount)))
+      const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'review comment' }, githubAccountBody(bodyText, repository.githubAccount), removalsByPosition(comment.body))
       const body = outgoing.text
       if (normalizeLoggedFindingControls(comment.body) === body)
         return ok(comment)

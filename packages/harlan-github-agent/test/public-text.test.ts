@@ -990,6 +990,13 @@ describe('review findings on #754, fourth round', () => {
     expect(redactPrivateDetails(line, details).text).toBe(removed)
   })
 
+  it('removes the destination line of a Markdown link that breaks after its parenthesis', () => {
+    const redacted = redactPrivateDetails('Read [x](\nhttps://notes.localhost/docs/a(b)c.md) now.', details)
+
+    expect(redacted.text).toBe(`Read [x](\n${removed}`)
+    expectNoFragment(redacted.text)
+  })
+
   it('protects a dedicated top-level worker home, and never a system directory', () => {
     const topLevel = privateDetailsFor({ home: '/home/harlan', storagePath: ':memory:', checkoutRoots: [], workerHomes: ['/worker-data', '/home', '/tmp'], serviceOrigins: [] })
 
@@ -1005,6 +1012,13 @@ describe('ported from the Service Repair 73c25d86', () => {
     expect(redactPrivateDetails(encodeEntities(input), details).text).toBe(removed)
   })
 
+  it.each(['\n', '\r\n'])('removes the destination line of a Markdown link split by %j', (newline) => {
+    const input = `Read [evidence](${newline}https://hogwild.tail1234.ts.net/docs/report(final)/private.pdf${newline}) first.`
+    const expected = `Read [evidence](${newline}${removed}${newline}) first.`
+    expect(redactPrivateDetails(input, details).text).toBe(expected)
+    expect(redactPrivateDetails(encodeEntities(input), details).text).toBe(`${encodeEntities('Read [evidence](')}${newline}${removed}${newline}) first.`)
+  })
+
   it('can edit a canonical comment after removing a multiline destination', async () => {
     const store = journal()
     const host = commentHost()
@@ -1017,7 +1031,7 @@ describe('ported from the Service Repair 73c25d86', () => {
     const edited = await agentSource(host.client, store).editReviewStatus(repositoryMapping(), 24, published.value.commentId, before, reviewBody(`MERGED\n\n${link}`), new AbortController().signal)
 
     expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
-    expect(host.comments[0]?.body).toBe(reviewBody(`MERGED\n\n${removed}\n${removed}\n${removed}`))
+    expect(host.comments[0]?.body).toBe(reviewBody(`MERGED\n\nRead [evidence](\n${removed}\n).`))
   })
 
   it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('keeps protected details after a Journal restart for %s', async (writer) => {
@@ -1088,7 +1102,7 @@ describe('ported from the Service Repair 73c25d86', () => {
     await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(input) : input).send(async (body) => {
       sent.push(body)
     })
-    expect(sent).toEqual([`${removed}\n${removed}\n${removed}`])
+    expect(sent).toEqual([`${removed}\n${removed}\n).`])
   })
 })
 
@@ -1201,27 +1215,22 @@ describe('rendered views stay aligned and complete', () => {
 })
 
 describe('review findings on #754, follow-ups', () => {
-  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes nested wrapped links at the %s boundary', async (writer) => {
-    for (const link of [
-      '[private acquisition\n[plan]](https://notes.localhost/a.pdf)',
-      '[report](https://notes.localhost/a(b(c)).pdf "private\nacquisition title")',
-    ]) {
-      const source = `Public before.\n\n${link}\n\nPublic after.`
-      const expected = `Public before.\n\n${link.split('\n').map(() => removed).join('\n')}\n\nPublic after.`
-      const sent = await publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer }, writer === 'review' ? encodeEntities(source) : source).send(async body => body)
-      expect(sent).toBe(expected)
+  const withheld = '_This text was withheld: it named a private path or host across lines._'
+
+  it.each([
+    ['a blockquote', '> See <a href="https://notes.\n> localhost/acquisition.pdf">docs</a>.'],
+    ['a nested blockquote', '> > See <a href="https://notes.\n> > localhost/acquisition.pdf">docs</a>.'],
+    ['a list item', '- See <a href="https://notes.\n  localhost/acquisition.pdf">docs</a>.'],
+    ['a numbered list item', '1. See <img src="https://notes.\n   localhost/acquisition.png">'],
+    ['a quoted path', '> Open /home/har\n> lan/pkg/example now.'],
+  ])('withholds a body whose private detail splits across the lines of %s', (_name, text) => {
+    for (const input of [text, `<!-- harlan-agent-kit:pr-triage -->\n${text}`]) {
+      const redacted = redactPrivateDetails(input, details)
+
+      expect(redacted.text).toBe(input.startsWith('<!--') ? `<!-- harlan-agent-kit:pr-triage -->\n${withheld}` : withheld)
+      expect(redacted.hits).not.toHaveLength(0)
     }
   })
-
-  it.each(['-', '1.', '> -', '- -'])('keeps literal code and removes a following wrapped private link after a %s list fence', (marker) => {
-    const indent = marker.replace(/[^>]/g, ' ')
-    const source = `${marker} \`\`\`html\n${indent} ~/notes/a.md <!--\n${indent} Public literal -->\n${indent} \`\`\`\n\n[report](https://notes.localhost/a.pdf "private\nacquisition title")\n\nPublic after.`
-    const privatePrefix = marker.includes('>') ? '> ' : `${indent} `
-    const expected = `${marker} \`\`\`html\n${privatePrefix}${removed}\n${indent} Public literal -->\n${indent} \`\`\`\n\n${removed}\n${removed}\n\nPublic after.`
-    expect(redactPrivateDetails(source, details).text).toBe(expected)
-  })
-
-  const withheld = '_This text was withheld: it named a private path or host across lines._'
   const signal = new AbortController().signal
   const control = `  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${'f'.repeat(64)} -->`
 
@@ -1309,38 +1318,6 @@ describe('review findings on #754, follow-ups', () => {
     expect(redactPrivateDetails(text, details).text).toBe(expected)
   })
 
-  it.each([
-    ['a link title', 'Read [report](https://notes.localhost/reports/ "Q3\nacquisition plan") now.'],
-    ['a link label', 'Read [the\nacquisition plan](https://notes.localhost/reports/plan.md) now.'],
-    ['an image label', '![chart of\nthe acquisition](https://notes.localhost/a.png) here.'],
-    ['a destination after its parenthesis', 'Read [x](\nhttps://notes.localhost/docs/a(b)c.md) now.'],
-    ['a destination between line breaks', 'Read [evidence](\nhttps://hogwild.tail1234.ts.net/docs/report(final)/private.pdf\n) first.'],
-    ['a code span', 'Open `~/notes/\nacquisition plan.pdf` now.'],
-    ['a double-backtick code span', 'Open ``~/notes/\nacquisition `plan`.pdf`` now.'],
-    ['the title of a linked image', 'Read [![chart](https://example.com/c.png)](https://notes.localhost/reports/ "Q3\nacquisition plan") now.'],
-  ])('removes every line of a private Markdown construct that wraps in %s', (_name, text) => {
-    for (const input of [text, encodeEntities(text), text.replaceAll('\n', '\r\n')]) {
-      const redacted = redactPrivateDetails(input, details)
-
-      expect(redacted.text.split('\n').map(line => line.replace(/\r$/, ''))).toEqual(input.split('\n').map(() => removed))
-      expectNoFragment(redacted.text)
-    }
-  })
-
-  it('removes every line of a reference definition whose title wraps', () => {
-    const redacted = redactPrivateDetails('Read [doc][ref].\n\n[ref]: https://notes.localhost/a.md\n  "acquisition plan"', details)
-
-    expect(redacted.text).toBe(`Read [doc][ref].\n\n${removed}\n  ${removed}`)
-    expectNoFragment(redacted.text)
-  })
-
-  it.each([
-    ['a blank line', 'Read [report](https://notes.localhost/a.md "Q3\n\nacquisition") now.', `${removed}\n\nacquisition") now.`],
-    ['a list item', 'Open `~/notes/a.md\n- next` item.', `${removed}\n- next\` item.`],
-  ])('keeps a line that %s separates from a private line', (_name, text, expected) => {
-    expect(redactPrivateDetails(text, details).text).toBe(expected)
-  })
-
   it('refuses a stale edit when GitHub holds a newer Review that differs only on a removed line', async () => {
     const store = journal()
     const host = commentHost()
@@ -1368,6 +1345,38 @@ describe('review findings on #754, follow-ups', () => {
     expect(newer).toContain(withheld)
     expect(edited).toEqual(ok({ _tag: 'Changed' }))
     expect(host.comments[0]?.body).toBe(newer)
+  })
+
+  it('removes the rest of a multi-line tag when an edit keeps an earlier removal of its host line', async () => {
+    const store = journal()
+    const link = 'See <a href="https://notes.localhost/\nacquisition.pdf">docs</a>.'
+    const host = commentHost([{ id: 5, body: reviewBody(`${removed}\nacquisition.pdf">docs</a>.`) }])
+
+    const edited = await agentSource(host.client, store).editReviewStatus(repositoryMapping(), 24, 5, reviewBody(link), reviewBody(link, 'STOPPED'), signal)
+
+    expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
+    expect(host.comments[0]?.body).toBe(reviewBody(`${removed}\n${removed}`, 'STOPPED'))
+  })
+
+  it('removes the rest of a multi-line tag when a finding comment edit keeps an earlier removal of its host line', async () => {
+    const store = journal()
+    const written: string[] = []
+    const thread = '<!-- harlan-agent-kit:pr-triage -->\n**Minor (40/100): The cache leaks**\n\nSee <a href="https://notes.localhost/\nacquisition.pdf">docs</a>.'
+    const published = thread.replace('See <a href="https://notes.localhost/', removed)
+    const client = {
+      rest: { pulls: {
+        getReviewComment: async () => ({ data: { id: 101, body: published, user: { login: 'harlan-github-agent[bot]' } } }),
+        updateReviewComment: async (input: { body: string }) => {
+          written.push(input.body)
+          return { data: { id: 101, body: input.body } }
+        },
+      } },
+    } as unknown as Octokit
+
+    await agentSource(client, store).editReviewFindingComment!(repositoryMapping(), { id: 101, body: published }, `${thread}\n\nResolved.`, signal, () => ok(undefined), 24)
+
+    expect(written).toEqual([thread.replace('See <a href="https://notes.localhost/\nacquisition.pdf">docs</a>.', `${removed}\n${removed}`).concat('\n\nResolved.')])
+    expectNoFragment(written[0]!)
   })
 
   it('edits a Review whose removed line and ticked control GitHub holds', async () => {
@@ -1415,11 +1424,11 @@ function expectLinear(build: (size: number) => string): void {
 }
 
 describe('redaction time', () => {
-  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a', '&#96;', '//', '~/notes/a ', '\n', 'a\n', '~/notes/a\n', '](https://notes.localhost/a', '[x](https://notes.localhost/a)', '](https://notes.localhost/a)\n', '[x](y "', '[x](y \'', '[x](y (', '[x\n', '](\n', '`` ```\n`', '> ```\n', '```\n<!--\n', '`<!--` ', '<b title="\n- ', '\t', '&#9;'])('scales linearly on repeated %j', (unit) => {
+  it.each(['[', '](', '<https://', '`', '"', 'a.', '![x](', '[a', '&#96;', '//', '~/notes/a ', '\n', 'a\n', '~/notes/a\n', '](https://notes.localhost/a', '[x](https://notes.localhost/a)', '](https://notes.localhost/a)\n', '> - 1. ', '>\n', '> > a\n', '`` ```\n`', '> ```\n', '```\n<!--\n', '`<!--` ', '<b title="\n- ', '\t', '&#9;'])('scales linearly on repeated %j', (unit) => {
     expectLinear(size => unit.repeat(Math.ceil(size / unit.length)).slice(0, size))
   })
 
-  it.each(['<!--', '&#8203;', '%2F', '\\~', '&sol;', '<b ', '[[', '((', '%E2%80%8B', '<!-- ', '<!--\n- ', '`<!--', '[x](y "\n', '`\n', '<a href="https://notes.\tlocalhost/'])('scales linearly on a private line followed by repeated %j', (unit) => {
+  it.each(['<!--', '&#8203;', '%2F', '\\~', '&sol;', '<b ', '[[', '((', '%E2%80%8B', '<!-- ', '<!--\n- ', '`<!--', '`\n', '> <a href="https://notes.\n', '<a href="https://notes.\tlocalhost/'])('scales linearly on a private line followed by repeated %j', (unit) => {
     expectLinear(size => `~/notes/a ${unit.repeat(Math.ceil(size / unit.length))}`.slice(0, size))
   })
 })

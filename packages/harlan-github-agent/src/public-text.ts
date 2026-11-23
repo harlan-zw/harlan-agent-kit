@@ -443,18 +443,12 @@ interface Region {
   end: number
 }
 
-/** A run of source lines, both ends inclusive. */
-interface LineSpan {
-  first: number
-  last: number
-}
-
 /**
- * The Markdown structure that decides how far inline markup reaches in one view.
+ * The Markdown structure that decides how far HTML markup reaches in one view.
  *
- * Code renders its text as written, so markup inside it hides and joins
- * nothing. Inline markup ends with its paragraph, so a comment, tag, link, or
- * code span never reaches past a line that starts another block.
+ * Code renders its text as written, so multi-line markup inside it hides and
+ * joins nothing. Markup inside a line ends with its paragraph, so it never
+ * reaches past a line that starts another block.
  */
 interface Layout {
   starts: number[]
@@ -464,8 +458,6 @@ interface Layout {
   contentStarts: number[]
   /** Fenced code blocks and inline code spans, sorted and disjoint. */
   code: Region[]
-  /** Inline code spans that wrap onto another line. */
-  wrappedCode: LineSpan[]
 }
 
 const CONTAINER = /^(?:[ \t]*>)*/
@@ -482,28 +474,19 @@ function layoutOf(text: string): Layout {
   const isBreak: boolean[] = []
   const code: Region[] = []
   let offset = 0
-  let fence: { char: string, length: number, depth: number, indent: number, start: number } | null = null
+  let fence: { char: string, length: number, depth: number, start: number } | null = null
   for (const line of lines) {
     starts.push(offset)
     contentStarts.push(offset + (CONTENT_START.exec(line)?.[0].length ?? 0))
     const container = CONTAINER.exec(line)?.[0] ?? ''
     const depth = container.split('>').length - 1
     const rest = line.slice(container.length)
-    // Consume list markers only outside code. Inside code they are literal.
-    let content = rest
-    if (fence === null) {
-      for (let item = /^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/.exec(content); item !== null; item = /^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/.exec(content))
-        content = content.slice(item[0].length)
-    }
-    const indent = rest.length - content.length
-    // Leaving a list container ends its code block, even without a closer.
-    const indentation = rest.match(/^[ \t]*/)?.[0].length ?? 0
+    const marker = FENCE.exec(rest)
     // A fence inside a blockquote ends with the blockquote.
-    if (fence !== null && (depth < fence.depth || (rest.trim() !== '' && indentation < fence.indent))) {
+    if (fence !== null && depth < fence.depth) {
       code.push({ start: fence.start, end: offset })
       fence = null
     }
-    const marker = FENCE.exec(content)
     if (fence !== null) {
       fenced.push(true)
       isBreak.push(true)
@@ -513,7 +496,7 @@ function layoutOf(text: string): Layout {
       }
     }
     else if (marker?.[1] !== undefined && !(marker[1].startsWith('`') && marker[2]?.includes('`'))) {
-      fence = { char: marker[1].charAt(0), length: marker[1].length, depth, indent, start: offset }
+      fence = { char: marker[1].charAt(0), length: marker[1].length, depth, start: offset }
       fenced.push(true)
       isBreak.push(true)
     }
@@ -545,7 +528,6 @@ function layoutOf(text: string): Layout {
     partner[index] = nearest.get(run.end - run.start) ?? -1
     nearest.set(run.end - run.start, index)
   }
-  const wrappedCode: LineSpan[] = []
   for (let index = 0; index < runs.length;) {
     const open = runs[index]!
     const close = runs[partner[index] ?? -1]
@@ -554,12 +536,10 @@ function layoutOf(text: string): Layout {
       continue
     }
     code.push({ start: open.start, end: close.end })
-    if (close.line > open.line)
-      wrappedCode.push({ first: open.line, last: close.line })
     index = (partner[index] ?? index) + 1
   }
   code.sort((left, right) => left.start - right.start)
-  return { starts, breaks, contentStarts, code, wrappedCode }
+  return { starts, breaks, contentStarts, code }
 }
 
 /** Whether a paragraph would have to end somewhere between `first` and `last`. */
@@ -649,141 +629,6 @@ function htmlLines(text: string, layout: Layout): Array<{ text: string, first: n
   return lines
 }
 
-/** A line break inside a paragraph: the next line holds more than blockquote markers. */
-const SOFT_BREAK = String.raw`\r?\n(?![ \t>]*(?:\r?\n|$))`
-/** Optional spaces, then at most one line break and the next line's blockquote markers. */
-const LINK_GAP = String.raw`[ \t]*(?:${SOFT_BREAK}[ \t>]*)?`
-/** A destination never starts with `>`, so it cannot trade characters with the blockquote markers before it. */
-const LINK_DESTINATION = String.raw`(?:<[^<>\r\n]*>|(?:[^\s()<>]|\([^\s()]*\))(?:[^\s()<]|\([^\s()]*\))*)`
-const LINK_TITLE = String.raw`"(?:[^"\r\n]|${SOFT_BREAK})*"|'(?:[^'\r\n]|${SOFT_BREAK})*'|\((?:[^()\r\n]|${SOFT_BREAK})*\)`
-const LINK_TAIL = String.raw`${LINK_DESTINATION}(?:${LINK_GAP}(?:${LINK_TITLE}))?`
-const INLINE_GAP = new RegExp(LINK_GAP, 'y')
-const INLINE_TITLE = new RegExp(LINK_TITLE, 'y')
-
-/** Read a balanced destination, then its optional title and closing parenthesis. */
-function inlineLinkEnd(text: string, start: number, parentheses: ReadonlyMap<number, number>): number | undefined {
-  const gap = (at: number) => {
-    INLINE_GAP.lastIndex = at
-    return at + (INLINE_GAP.exec(text)?.[0].length ?? 0)
-  }
-  let at = gap(start)
-  if (text[at] === '<') {
-    at++
-    while (at < text.length && !/[<>\r\n]/.test(text[at]!)) {
-      at += text[at] === '\\' ? 2 : 1
-    }
-    if (text[at] !== '>')
-      return undefined
-    at++
-  }
-  else {
-    while (at < text.length) {
-      const char = text[at]!
-      if (char === '\\') {
-        at += 2
-        continue
-      }
-      if (/[\s<>)]/.test(char))
-        break
-      if (char === '(') {
-        const close = parentheses.get(at)
-        if (close === undefined)
-          return undefined
-        at = close
-      }
-      at++
-    }
-  }
-  const afterGap = gap(at)
-  if (afterGap > at) {
-    INLINE_TITLE.lastIndex = afterGap
-    const title = INLINE_TITLE.exec(text)
-    at = title === null ? afterGap : gap(afterGap + title[0].length)
-  }
-  return text[at] === ')' ? at + 1 : undefined
-}
-
-/** Keep label nesting and destination nesting independent, including linked images. */
-function inlineLinks(text: string): Region[] {
-  // Resolve nested destinations once. Repeated unmatched openers stay linear.
-  const parentheses = new Map<number, number>()
-  const open: number[] = []
-  for (let at = 0; at < text.length; at++) {
-    const char = text[at]!
-    if (char === '\\') {
-      at++
-      continue
-    }
-    if (/[\s<>]/.test(char))
-      open.length = 0
-    if (char === '(')
-      open.push(at)
-    if (char === ')') {
-      const start = open.pop()
-      if (start !== undefined)
-        parentheses.set(start, at)
-    }
-  }
-  const labels: number[] = []
-  const links: Region[] = []
-  for (let at = 0; at < text.length; at++) {
-    if (text[at] === '\\') {
-      at++
-      continue
-    }
-    if (text[at] === '[')
-      labels.push(at)
-    if (text[at] !== ']')
-      continue
-    const start = labels.pop()
-    if (start === undefined || text[at + 1] !== '(')
-      continue
-    const end = inlineLinkEnd(text, at + 2, parentheses)
-    if (end !== undefined) {
-      links.push({ start, end })
-      at = end - 1
-    }
-  }
-  return links
-}
-/** A link reference definition. Its destination and title may each start on the next line. */
-const LINK_DEFINITION = new RegExp(String.raw`^[ \t]*(?:>[ \t]*)*\[[^[\]\r\n]+\]:${LINK_GAP}${LINK_TAIL}`, 'gm')
-
-/** Links and code spans that wrap onto another line, outside code and within one paragraph. */
-function wrappedConstructs(text: string, layout: Layout): LineSpan[] {
-  const regions = [...inlineLinks(text), ...text.matchAll(LINK_DEFINITION).map(match => ({ start: match.index, end: match.index + match[0].length }))]
-  const links = regions.flatMap(({ start, end }) => {
-    const first = lineAt(layout.starts, start)
-    const last = lineAt(layout.starts, end - 1)
-    return last === first || crossesBlock(layout, first, last) || codeAt(layout, start) !== undefined ? [] : [{ first, last }]
-  })
-  return [...links, ...layout.wrappedCode]
-}
-
-/**
- * The wrapped links and code spans that share a line with a span.
- *
- * A hit on any line of one removes all of its lines. Otherwise a title or a
- * filename on its next line outlives the host or path that made it private.
- */
-function constructsTouching(spans: readonly LineSpan[], constructs: readonly LineSpan[], lineCount: number): LineSpan[] {
-  if (spans.length === 0 || constructs.length === 0)
-    return []
-  const depth = Array.from<number>({ length: lineCount + 1 }).fill(0)
-  for (const { first, last } of spans) {
-    depth[first] = (depth[first] ?? 0) + 1
-    depth[last + 1] = (depth[last + 1] ?? 0) - 1
-  }
-  // `marked[i]` counts the lines before `i` that a span covers.
-  const marked = [0]
-  let open = 0
-  for (let line = 0; line < lineCount; line++) {
-    open += depth[line] ?? 0
-    marked.push((marked[line] ?? 0) + (open > 0 ? 1 : 0))
-  }
-  return constructs.filter(({ first, last }) => (marked[last + 1] ?? 0) > (marked[first] ?? 0))
-}
-
 /** Parse HTML before decoding attribute entities, including each encoded transport layer. */
 function detailsIn(detect: Detectors, text: string): { spans: Array<{ first: number, last: number }>, hits: PrivateDetailHit[] } {
   const spans: Array<{ first: number, last: number }> = []
@@ -809,19 +654,15 @@ function detailsIn(detect: Detectors, text: string): { spans: Array<{ first: num
       layer = next
     }
   }
-  const constructs: LineSpan[] = []
   for (const view of views) {
-    const layout = layoutOf(view)
-    for (const rendered of htmlLines(view, layout)) {
+    for (const rendered of htmlLines(view, layoutOf(view))) {
       const found = detailsInAligned(detect, rendered.text)
       if (found.length > 0)
         spans.push({ first: rendered.first, last: rendered.last })
       for (const { hit } of found)
         remember(hit)
     }
-    constructs.push(...wrappedConstructs(view, layout))
   }
-  spans.push(...constructsTouching(spans, constructs, lineBreaks(text) + 1))
   // Merge before expanding. Repeated matches and views must never multiply source lines.
   spans.sort((left, right) => left.first - right.first)
   const merged: typeof spans = []
@@ -925,13 +766,31 @@ function isMarkerLine(line: string): boolean {
  * Per-line views cannot see a host or path split by a source newline, which
  * HTML attributes and URL parsers ignore. Every such spelling found one review
  * at a time, so this check runs after line removal on the whole body: joined
- * by a space, and joined directly.
+ * by a space, and joined directly. Markdown removes each line's blockquote and
+ * list markers before a quoted or listed HTML attribute reaches a URL parser,
+ * so the lines also join without those markers.
  */
 function joinedHits(detect: Detectors, text: string): PrivateDetailHit[] {
   if (!text.includes('\n'))
     return []
-  return [text.replaceAll(/\r?\n/g, ' '), text.replaceAll(/\r?\n/g, '')]
+  const lines = text.split('\n').map(line => line.replace(/\r$/, ''))
+  const contents = lines.map(withoutContainers)
+  return [...new Set([lines.join(' '), lines.join(''), contents.join(' '), contents.join('')])]
     .flatMap(joined => detailsIn(detect, joined).hits)
+}
+
+/** A blockquote marker, or a list marker before whitespace, after any indentation. */
+const CONTAINER_MARKER = /[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$))/y
+
+/** A line without the blockquote markers, list markers, and indentation that Markdown removes. */
+function withoutContainers(line: string): string {
+  let at = 0
+  for (;;) {
+    CONTAINER_MARKER.lastIndex = at
+    if (CONTAINER_MARKER.exec(line) === null)
+      return line.slice(at).replace(/^[ \t]+/, '')
+    at = CONTAINER_MARKER.lastIndex
+  }
 }
 
 /** Keeps the marker lines that name nothing private, then one withheld line. */
@@ -1008,41 +867,61 @@ export function isRedactedFormOf(published: string, source: string, details: Pri
 }
 
 /**
- * Keeps removed every line GitHub already shows removed, when an edit repeats it.
+ * For one line of an edit's source and its index, the removed line GitHub
+ * already shows in its place, if any.
  *
  * The deny list can change between two writes of one comment. A line the old
  * list removed must stay removed, even when the current list no longer knows
- * why, so `next` reuses the exact line GitHub holds for each such source line.
+ * why. `publicBody` asks only after it redacts the intact source, so a kept
+ * removal never hides a host from the rest of its tag.
  */
-export function preservePublishedRedactions(published: string, source: string, next: string): string {
+export type KeptRemovals = (line: string, index: number) => string | undefined
+
+/** Keeps removed each source line GitHub shows removed, wherever an edit repeats that line. */
+export function removalsBySource(published: string, source: string): KeptRemovals {
   const publishedLines = published.split('\n')
   const sourceLines = source.split('\n')
-  if (publishedLines.length !== sourceLines.length)
-    return next
   const removed = new Map<string, string>()
-  sourceLines.forEach((line, index) => {
-    const shown = publishedLines[index] ?? line
-    if (shown !== line && isRemovedFormOf(shown, line))
-      removed.set(line, shown)
-  })
-  return removed.size === 0 ? next : next.split('\n').map(line => removed.get(line) ?? line).join('\n')
+  if (publishedLines.length === sourceLines.length) {
+    sourceLines.forEach((line, index) => {
+      const shown = publishedLines[index] ?? line
+      if (shown !== line && isRemovedFormOf(shown, line))
+        removed.set(line, shown)
+    })
+  }
+  return line => removed.get(line)
 }
 
 /**
  * Keeps removed each line GitHub shows removed, by position.
  *
  * For a comment the controller rebuilds whole from the same finding on every
- * pass, where the Journal keeps no earlier source text. A line in `next` stays
- * removed when GitHub shows a removed line of the same shape at its position,
- * so a deny list change cannot publish it again.
+ * pass, where the Journal keeps no earlier source text. A line stays removed
+ * when GitHub shows a removed line of the same shape at its position, so a
+ * deny list change cannot publish it again.
  */
-export function keepRemovedLines(published: string, next: string): string {
-  if (!published.includes(REMOVED_LINE))
-    return next
-  const publishedLines = published.split('\n')
-  return next.split('\n').map((line, index) => {
+export function removalsByPosition(published: string): KeptRemovals {
+  const publishedLines = published.includes(REMOVED_LINE) ? published.split('\n') : []
+  return (line, index) => {
     const shown = publishedLines[index]
-    return shown !== undefined && shown !== line && isRemovedFormOf(shown, line) ? shown : line
+    return shown !== undefined && shown !== line && isRemovedFormOf(shown, line) ? shown : undefined
+  }
+}
+
+/**
+ * The redacted body with the removals GitHub already shows carried forward.
+ *
+ * A line the guard removes now keeps its current form, so its markers follow
+ * the current deny list. A withheld body is already complete.
+ */
+function withKeptRemovals(redacted: string, source: string, kept: KeptRemovals): string {
+  const redactedLines = redacted.split('\n')
+  const sourceLines = source.split('\n')
+  if (redactedLines.length !== sourceLines.length)
+    return redacted
+  return redactedLines.map((line, index) => {
+    const sourceLine = sourceLines[index] ?? line
+    return line !== sourceLine ? line : kept(sourceLine, index) ?? line
   }).join('\n')
 }
 
@@ -1109,26 +988,38 @@ export function publicFields<Field extends string>(guard: PublicTextGuard, targe
   const redactions = (Object.entries(source) as Array<[Field, string]>).map(([field, text]) => [field, redactPrivateDetails(text, guard.details)] as const)
   const text = Object.fromEntries(redactions.map(([field, redaction]) => [field, redaction.text])) as Record<Field, string>
   const hits = [...new Map(redactions.flatMap(([, redaction]) => redaction.hits).map(hit => [`${hit._tag}:${hit.entry}`, hit])).values()]
+  return { text, send: reportingSend(guard, target, text, hits) }
+}
+
+/** Writes `body`, then reports `hits` once, after GitHub accepts the first write. */
+function reportingSend<Body>(guard: PublicTextGuard, target: PublicTextTarget, body: Body, hits: readonly PrivateDetailHit[]) {
   let reported = false
-  return {
-    text,
-    send: async (write, itemNumber) => {
-      const written = await write(text)
-      if (!reported && hits.length > 0) {
-        reported = true
-        guard.report({ ...target, itemNumber: target.itemNumber ?? itemNumber?.(written) ?? null, hits })
-      }
-      return written
-    },
+  return async <T>(write: (body: Body) => Promise<T>, itemNumber?: (written: T) => number): Promise<T> => {
+    const written = await write(body)
+    if (!reported && hits.length > 0) {
+      reported = true
+      guard.report({ ...target, itemNumber: target.itemNumber ?? itemNumber?.(written) ?? null, hits })
+    }
+    return written
   }
 }
 
-export function publicBody(guard: PublicTextGuard, target: PublicTextTarget, source: string): PublicBody {
-  const fields = publicFields(guard, target, { body: source })
-  return {
-    text: fields.text.body,
-    send: (write, itemNumber) => fields.send(sent => write(sent.body), itemNumber),
+/**
+ * `kept` carries forward the removals an edit's comment already shows on GitHub.
+ *
+ * The intact source decides what the guard removes, so a kept removal never
+ * hides a host from the rest of its tag. Only hits outside the kept removals
+ * report, because GitHub accepted those removals before.
+ */
+export function publicBody(guard: PublicTextGuard, target: PublicTextTarget, source: string, kept?: KeptRemovals): PublicBody {
+  const detect = detectorsFor(guard.details)
+  if (kept === undefined) {
+    const redaction = guarded(detect, source)
+    return { text: redaction.text, send: reportingSend(guard, target, redaction.text, redaction.hits) }
   }
+  const carried = guarded(detect, source.split('\n').map((line, index) => kept(line, index) ?? line).join('\n'))
+  const text = carried.withheld ? carried.text : withKeptRemovals(guarded(detect, source).text, source, kept)
+  return { text, send: reportingSend(guard, target, text, carried.hits) }
 }
 
 export const PRIVATE_DETAIL_OPERATION = 'public_text'
