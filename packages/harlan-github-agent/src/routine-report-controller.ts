@@ -367,14 +367,16 @@ function scannedLines(entry: ScannedEntry, reported: readonly ReportedCandidate[
   const owners = reported.length === 0
     ? []
     : ['', '| Proposal | Owner |', '| :-- | :-- |', ...reported.map(candidate => `| ${tableText(candidate.title)} | ${ownerCell(candidate)} |`)]
-  const gaps = [
-    ...(entry.outsideScope > 0 ? [`- ${plural(entry.outsideScope, 'proposal')} fell outside the allowed scope.`] : []),
-    ...(entry.oversized !== null && entry.oversized.count > 0 ? [`- ${plural(entry.oversized.count, 'proposal')} changed more than ${entry.oversized.limit} files.`] : []),
+  // A Routine's rules drop work for several causes: scope, a per-run cap, or
+  // an open issue that already holds it. The count alone carries no cause.
+  const dropped = [
+    ...(entry.outsideScope > 0 ? [`- This Routine's rules left out ${plural(entry.outsideScope, 'proposal')}.`] : []),
+    ...(entry.oversized !== null && entry.oversized.count > 0 ? [`- ${plural(entry.oversized.count, 'proposal')} would change more than ${entry.oversized.limit} files.`] : []),
   ]
   return [
     ...counts,
     ...owners,
-    ...(gaps.length === 0 ? [] : ['', '<details><summary>Coverage gaps</summary>', '', ...gaps, '', 'The run dropped these proposals and filed no issue for them.', '', '</details>']),
+    ...(dropped.length === 0 ? [] : ['', '<details><summary>Dropped proposals</summary>', '', ...dropped, '', 'The run filed no issue for these proposals.', '', '</details>']),
     ...(entry.summary === null ? [] : ['', '<details><summary>Summary</summary>', '', entry.summary, '', 'The Dashboard History page keeps the full report.', '', '</details>']),
   ]
 }

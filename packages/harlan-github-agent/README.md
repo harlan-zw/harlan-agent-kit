@@ -745,7 +745,7 @@ Each comment is one run log entry. Its heading carries one dot and the run time 
 🟠 means a person must act: the run reported a Candidate, stated an AMBER or RED verdict, listed a READY pull request, or failed. ⚪ marks a quiet run.
 A counts table gives Found, New, and Known. It adds Coverage when the run states a verdict.
 An owner table names the issue that holds each Candidate the run reported, new or known.
-Candidates the controller dropped fold under Coverage gaps.
+Candidates the controller dropped fold under Dropped proposals. The fold counts them but names no cause.
 The opening prose of the Agent report folds under Summary, up to 600 characters. A line that names a local path or host never reaches it.
 The full report stays in the private archive. The Dashboard History page shows it.
 A failed run names its cause. The ready digest prints its list under the heading.
