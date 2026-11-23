@@ -1116,6 +1116,10 @@ describe('routineReportPending', () => {
     expect(routineReportPending(routineRun(), false)).toBe(false)
   })
 
+  it('never offers writes for a report that used up its attempts, because enabling writes cannot send it', () => {
+    expect(routineReportPending(routineRun({ reportState: 'Failed' }), false)).toBe(false)
+  })
+
   it('waits for a retrying run to settle', () => {
     expect(routineReportPending(routineRun({ state: { _tag: 'Queued' }, reportState: 'Pending' }), false)).toBe(false)
     expect(routineReportPending(routineRun({ state: { _tag: 'Running', workerId: 'worker-1', leaseExpiresAt: '2026-08-28T22:00:00.000Z' }, reportState: 'Pending' }), false)).toBe(false)
