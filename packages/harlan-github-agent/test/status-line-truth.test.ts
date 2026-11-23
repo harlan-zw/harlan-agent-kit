@@ -169,7 +169,7 @@ describe('a finding thread', () => {
 
 describe('a passed Review of a Repair commit', () => {
   it('names what Repair fixed from the Repair\'s source Review', () => {
-    const body = terminalComment({ headSha: merged, baseSha: 'c'.repeat(40), gates, findings: [], confidence: 90, reportedChecks: [], repository, repairedFrom: { headSha: reviewed, issues: 2 } })
+    const body = terminalComment({ headSha: merged, baseSha: 'c'.repeat(40), gates, findings: [], confidence: 90, reportedChecks: [], repository, repairedFrom: { headSha: reviewed, fingerprints: ['a'.repeat(64), 'b'.repeat(64)] } })
     expect(body).toContain(`🟢 **Ready** · \`90/100\`\n\nRepair fixed 2 issues from \`aaaaaaa\`.`)
   })
 })

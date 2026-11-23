@@ -64,7 +64,7 @@ describe('review verdict', () => {
       reviewedAt: at,
       ...overrides,
     })
-    expect(verdict({ findings: scopedFollowUps, baseRef: 'main', checked: 'Timeline reads against dense windows', notChecked: 'the dashboard in a browser', repairedFrom: { headSha: prior, issues: 2 } })).toMatchInlineSnapshot(`
+    expect(verdict({ findings: scopedFollowUps, baseRef: 'main', checked: 'Timeline reads against dense windows', notChecked: 'the dashboard in a browser', repairedFrom: { headSha: prior, fingerprints: ['a'.repeat(64), 'b'.repeat(64)] } })).toMatchInlineSnapshot(`
       "<!-- harlan-agent-kit:pr-triage -->
       <!-- reviewed-sha: 6aa6d8e1520848daef9646d402ea16ee3f9a4221 -->
       <!-- workflow-state: {"_tag":"Review","headSha":"6aa6d8e1520848daef9646d402ea16ee3f9a4221","baseSha":"70edfe5f32699f7f6042c0bd66e8a68e3b282fc5","outcome":"READY","gates":{"merge":"Passed","review":"Passed","ci":"Passed"}} -->

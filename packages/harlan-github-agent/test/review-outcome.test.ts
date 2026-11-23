@@ -163,8 +163,27 @@ describe('reviewOutcome', () => {
   })
 
   it('names what Repair fixed when this head answers a Repair', () => {
-    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], repairedFrom: { headSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8', issues: 2 } })
+    const body = terminalComment({ headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], repairedFrom: { headSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8', fingerprints: ['a'.repeat(64), 'b'.repeat(64)] } })
     expect(body).toContain('Repair fixed 2 issues from \`eb2933b\`.')
+  })
+
+  it('counts only the source issues the Review of the Repair cleared', () => {
+    const surviving = {
+      _tag: 'Logged' as const,
+      impact: 60,
+      summary: 'The cache never expires.',
+      nextAction: 'Expire the cache.',
+      details: { fingerprint: 'A'.repeat(64), identity: 'cache', location: { path: 'src/cache.ts', line: 3 }, proof: 'Entries stay forever.' },
+    }
+    const input = { headSha: 'abc123', baseSha: 'base123', gates: gates(), confidence: 95, reportedChecks: [], repository: 'harlan-zw/example' }
+    const repairedFrom = { headSha: 'eb2933b2d12adbdc25a9600668450b395bc55ff8', fingerprints: ['a'.repeat(64), 'b'.repeat(64)] }
+
+    // The Repair Review kept one source issue at a lower impact, so Repair fixed only the other.
+    expect(terminalComment({ ...input, findings: [surviving], repairedFrom })).toContain('Repair fixed 1 issue from \`eb2933b\`.')
+    // A Repair that fixed nothing says nothing.
+    expect(terminalComment({ ...input, findings: [surviving, { ...surviving, details: { ...surviving.details, fingerprint: 'b'.repeat(64) } }], repairedFrom }))
+      .not
+      .toContain('Repair fixed')
   })
 
   it('carries the stored review time, so a re-render writes the same body', () => {

@@ -768,10 +768,16 @@ export type QueuedReviewHistory
       findings: number
     }
 
-/** The Review a Repair answered: its head and the issues it left open. */
+/**
+ * The Review a Repair answered: its head and the issues it left open.
+ *
+ * Each issue is named by its fingerprint, so the Review of the Repair commit
+ * can say which ones it cleared. An issue recorded before fingerprints has
+ * none, so no comment ever counts it as fixed.
+ */
 export interface RepairSource {
   headSha: string
-  issues: number
+  fingerprints: string[]
 }
 
 export interface QueuedReviewStatus {
@@ -15828,7 +15834,7 @@ export function openJournalStore(
 
   const repairSource: JournalStore['repairSource'] = (revisionId) => {
     const row = database.prepare(`
-      SELECT review_runs.head_sha, ${priorReviewDefectCountSql} AS issues
+      SELECT review_runs.head_sha, review_runs.findings
       FROM revisions
       JOIN publication_commands ON publication_commands.state_tag = 'Published'
         AND publication_commands.commit_sha = json_extract(revisions.payload, '$.headSha')
@@ -15839,8 +15845,12 @@ export function openJournalStore(
       WHERE revisions.id = ?
       ORDER BY publication_commands.updated_at DESC, review_runs.completed_at DESC, review_runs.id DESC
       LIMIT 1
-    `).get(revisionId) as { head_sha: string, issues: number } | undefined
-    return row === undefined ? null : { headSha: row.head_sha, issues: row.issues }
+    `).get(revisionId) as { head_sha: string, findings: string } | undefined
+    if (row === undefined)
+      return null
+    const fingerprints = (JSON.parse(row.findings) as ReviewFinding[])
+      .flatMap(finding => finding._tag === 'Open' && finding.details !== undefined ? [finding.details.fingerprint.toLowerCase()] : [])
+    return { headSha: row.head_sha, fingerprints }
   }
 
   const recordQueuedReviewStatus: JournalStore['recordQueuedReviewStatus'] = (input) => {

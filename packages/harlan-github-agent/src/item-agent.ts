@@ -1215,6 +1215,18 @@ function failedGateWords(gates: ReviewGates): string {
   ].join(' and ')
 }
 
+/**
+ * How many of the source Review's issues the Review of the Repair commit cleared.
+ *
+ * A Review can keep a source issue under its fingerprint at any impact, a
+ * Logged one included. That issue survived the Repair, so only fingerprints
+ * absent from this Review count as fixed.
+ */
+function repairFixedCount(source: RepairSource, findings: readonly ReviewFinding[]): number {
+  const surviving = new Set(findings.flatMap(finding => finding._tag !== 'Fixed' && finding.details !== undefined ? [finding.details.fingerprint.toLowerCase()] : []))
+  return new Set(source.fingerprints.filter(fingerprint => !surviving.has(fingerprint.toLowerCase()))).size
+}
+
 /** What a PENDING verdict waits for. */
 function pendingDetail(gates: ReviewGates): string {
   return gates.ci._tag === 'Pending'
@@ -1264,8 +1276,9 @@ export function terminalComment(input: TerminalCommentInput): string {
     ? []
     : [`Merge risk: **${input.mergeRisk._tag}**. ${cleanLine(input.mergeRisk.reason)}`, '']
   const repaired = input.repairedFrom
-  const delta = result === 'READY' && repaired !== null && repaired !== undefined && repaired.issues > 0
-    ? `Repair fixed ${plural(repaired.issues, 'issue')} from \`${repaired.headSha.slice(0, 7)}\`.`
+  const repairedIssues = repaired === null || repaired === undefined ? 0 : repairFixedCount(repaired, findings)
+  const delta = result === 'READY' && repaired !== null && repaired !== undefined && repairedIssues > 0
+    ? `Repair fixed ${plural(repairedIssues, 'issue')} from \`${repaired.headSha.slice(0, 7)}\`.`
     : null
   const coverage = reviewCoverageLine(input.checked, input.notChecked)
   const reviewLine = [delta, coverage ?? (blocking.length === 0 ? `No issues found in ${commitLink(repository, headSha)}.` : null)]
