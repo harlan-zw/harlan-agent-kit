@@ -324,7 +324,7 @@ If GitHub closes the pull request unmerged, revoke its running task. Stop the ag
 
 Accept a leading Agent mention followed by a change request from the repository owner only.
 The same handles and slash form used for `rerun` accept the request.
-Keep exact `rerun` commands as Review requests.
+Keep exact `rerun` commands as Review requests. Keep exact `stop` commands as Stop Review requests.
 Require an owned repository, enabled Review, and a writable open pull request head branch.
 Save the exact request and author once, bound to the observed head commit and base branch.
 Queue scoped Repair. Wait for existing Review and Repair work before claiming it.
@@ -347,6 +347,16 @@ If no findings remain, record completion without opening a pull request.
 Deduplicate Repair work by the original pull request and reviewed head commit.
 Never push Repair to the merged branch. Surface unsafe fixes as Action required.
 With active Take Ownership, continue delivery verification.
+
+Allow Harlan to stop Review with the exact pull request comment `@harlan-agent stop`.
+The same handles and slash form used for `rerun` accept it. A stop in the middle of a sentence does nothing.
+Accept it only from the authors who may rerun, in a repository that is not external.
+Bind it to the head commit that the poll observes when it reads the comment.
+Cancel queued and running Review and follow-up Repair for that head commit through the Stop Review checkbox path.
+Keep both stops when the base branch moves. Do not queue Review for that head commit again.
+Store the comment id once as the request identity. Repeated polls and edits must not act twice.
+Never queue a change request for it. A later head commit gets Review as usual.
+Apply comment commands in the order they were written. A later `rerun` on the same head commit queues Review again.
 
 Use the dashboard `Cancel` control for active or queued tasks. Store that cancellation for the current commit. A later poll must not queue it again. Closing a pull request must use the same durable cancellation path.
 

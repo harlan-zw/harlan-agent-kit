@@ -347,6 +347,7 @@ export interface AutomatedDisclosure {
 
 const commandSpans: Record<PullRequestCommand, string> = {
   Rerun: '`@harlan-agent rerun`',
+  Stop: '`@harlan-agent stop`',
   Change: '`@harlan-agent <change>`',
 }
 
@@ -361,7 +362,7 @@ const commandSpans: Record<PullRequestCommand, string> = {
  * the Organization and keep `<change>` visible.
  */
 export function automatedDisclosure(input: AutomatedDisclosure): string {
-  const commands = (['Rerun', 'Change'] as const).filter(command => input.commands?.includes(command)).map(command => commandSpans[command])
+  const commands = (['Rerun', 'Stop', 'Change'] as const).filter(command => input.commands?.includes(command)).map(command => commandSpans[command])
   return `<sub>${[
     ...(input.at === undefined ? [] : [relativeTime(input.at)]),
     `${AGENT_LINK} automated ${input.kind}, ${input.disclaimer ?? 'not Harlan\'s'}${input.merge === true ? '; a person merges' : ''}`,

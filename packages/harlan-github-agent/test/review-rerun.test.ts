@@ -15,6 +15,20 @@ describe('pull request commands', () => {
     expect(parsePullRequestCommand(`${handle} change it\nKeep the tests.`))
       .toEqual({ _tag: 'Change', instruction: 'change it\nKeep the tests.' })
     expect(parsePullRequestCommand(`${handle} rerun`)).toEqual({ _tag: 'Rerun' })
+    expect(parsePullRequestCommand(`${handle} stop`)).toEqual({ _tag: 'Stop' })
+  })
+
+  it.each([' @harlan-agent stop ', '@harlan-agent STOP', '/harlan-agent\tStop'])('reads %j as a stop', (body) => {
+    expect(parsePullRequestCommand(body)).toEqual({ _tag: 'Stop' })
+  })
+
+  it('ignores a stop in the middle of a sentence', () => {
+    expect(parsePullRequestCommand('Please @harlan-agent stop')).toBeNull()
+  })
+
+  it('keeps a longer instruction as a change request', () => {
+    expect(parsePullRequestCommand('@harlan-agent stop using the cache'))
+      .toEqual({ _tag: 'Change', instruction: 'stop using the cache' })
   })
 })
 

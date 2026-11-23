@@ -4,14 +4,19 @@ import type { JournalStore } from './store.ts'
 import type { RepositoryMapping, ReviewRerunResult } from './types.ts'
 import { err, ok } from './result.ts'
 
+/** What one pull request comment command did. */
+export type PullRequestCommandResult
+  = | ReviewRerunResult
+    | { _tag: 'Stopped', pullRequestNumber: number, headSha: string }
+
 export interface ReviewRerunSync {
   repository: string
-  results: ReviewRerunResult[]
+  results: PullRequestCommandResult[]
 }
 
 export interface ReviewRerunDependencies {
   github: Pick<GitHubSource, 'listReviewRerunRequests'>
-  store: Pick<JournalStore, 'listOpenPullRequestRevisions' | 'requestReviewRerun' | 'requestPullRequestChange'>
+  store: Pick<JournalStore, 'listOpenPullRequestRevisions' | 'requestReviewRerun' | 'requestPullRequestChange' | 'cancelReviewForHead'>
   allowedAuthors: string[]
   now: () => Date
   signal?: AbortSignal
@@ -27,7 +32,10 @@ export function syncReviewRerunRequests(
     const at = dependencies.now().toISOString()
     const subjects = dependencies.store.listOpenPullRequestRevisions(repository.github)
     const allowedAuthors = new Set(dependencies.allowedAuthors.map(author => author.toLowerCase()))
-    const results = requests.value.flatMap((request): ReviewRerunResult[] => {
+    // GitHub lists the newest comment first. Apply commands in the order they
+    // were written, so a rerun after a stop queues Review again.
+    const ordered = requests.value.toSorted((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+    const results = ordered.flatMap((request): PullRequestCommandResult[] => {
       if (!allowedAuthors.has(request.author.toLowerCase()))
         return []
       const subject = subjects.find(candidate =>
@@ -35,6 +43,19 @@ export function syncReviewRerunRequests(
       )
       if (subject === undefined)
         return []
+      if (request.origin === 'Stop') {
+        // Bound to the head this poll observed. The comment id alone is the
+        // identity, so a later poll or an edit never stops a newer head.
+        const stopped = dependencies.store.cancelReviewForHead({
+          repository: repository.github,
+          pullRequestNumber: request.pullRequestNumber,
+          headSha: subject.headSha,
+          requestId: `github-stop:${repository.github}:${request.commentId}`,
+          requestedBy: request.author,
+          at,
+        })
+        return stopped ? [{ _tag: 'Stopped', pullRequestNumber: request.pullRequestNumber, headSha: subject.headSha }] : []
+      }
       if (request.origin === 'ChangeRequest') {
         return [dependencies.store.requestPullRequestChange({
           repository: repository.github,
