@@ -162,3 +162,63 @@ it('delivers compressed live updates before close and releases a cancelled subsc
     await server.close()
   }
 })
+
+it('closes a keep-alive socket that a proxy keeps reusing after close starts', { timeout: 5_000 }, async () => {
+  const app = new H3()
+  app.get('/api/state', async () => {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    return { controller: true }
+  })
+  const server = await startAgentServer({ app, hostname: '127.0.0.1', port: 0 })
+  const address = server.node!.server!.address()
+  if (!address || typeof address === 'string')
+    throw new Error('Expected a TCP listener.')
+  // A pooling proxy sends every request over one upstream socket. The dashboard
+  // reconnects its event stream every 1.5 s, which is under the 5 s keep-alive timeout.
+  const socket = connect(address.port, '127.0.0.1')
+  const send = () => socket.writable && socket.write('GET /api/state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n')
+  let answered = 0
+  socket.on('data', (chunk) => {
+    answered += chunk.toString().split('HTTP/1.1 200 ').length - 1
+    setTimeout(send, 300)
+  })
+  const socketClosed = new Promise(resolve => socket.once('close', resolve))
+  try {
+    await new Promise(resolve => socket.once('connect', resolve))
+    send()
+    // The first request is still in flight when the close starts.
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const started = performance.now()
+
+    await server.close()
+
+    expect(performance.now() - started).toBeLessThan(1_000)
+    await socketClosed
+    expect(answered).toBe(1)
+  }
+  finally {
+    socket.destroy()
+  }
+})
+
+it('cuts a request that never answers when the close grace ends', { timeout: 5_000 }, async () => {
+  const app = new H3()
+  let arrived = false
+  app.get('/api/hang', () => {
+    arrived = true
+    return new Promise(() => undefined)
+  })
+  const server = await startAgentServer({ app, hostname: '127.0.0.1', port: 0, closeGraceMilliseconds: 200 })
+  const address = server.node!.server!.address()
+  if (!address || typeof address === 'string')
+    throw new Error('Expected a TCP listener.')
+  const response = fetch(`http://127.0.0.1:${address.port}/api/hang`).then(() => 'answered', () => 'cut')
+  await expect.poll(() => arrived).toBe(true)
+  const started = performance.now()
+
+  await server.close()
+
+  expect(performance.now() - started).toBeGreaterThanOrEqual(190)
+  expect(performance.now() - started).toBeLessThan(1_000)
+  expect(await response).toBe('cut')
+})
