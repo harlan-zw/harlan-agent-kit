@@ -4,6 +4,7 @@
 #   service.sh update [REF]   move to REF (default origin/main), rebuild, restart
 #   service.sh prepare-update [REF]   move to REF and rebuild without restarting
 #   service.sh resolve-update [REF]   fetch and print REF without changing checkout
+#   service.sh changed-paths FROM..TO   print the paths that range changes
 #   service.sh restart        restart the revision already deployed
 #   service.sh revision       print the deployed commit
 #   service.sh status         report what is deployed and whether it answers
@@ -207,6 +208,11 @@ case "$command" in
     git -C "$SERVICE_CHECKOUT" fetch --quiet origin
     git -C "$SERVICE_CHECKOUT" rev-parse --verify "${2:-origin/main}^{commit}"
     ;;
+  changed-paths)
+    require_checkout
+    # Without renames, a file moved away from a paired name still lists that name.
+    git -C "$SERVICE_CHECKOUT" diff --name-only --no-renames "${2:?Name a commit range such as FROM..TO.}"
+    ;;
   status)
     require_checkout
     report
@@ -219,7 +225,7 @@ case "$command" in
     ;;
   *)
     echo "Unknown command: $command" >&2
-    echo "Use update, prepare-update, resolve-update, restart, revision, or status." >&2
+    echo "Use update, prepare-update, resolve-update, changed-paths, restart, revision, or status." >&2
     exit 1
     ;;
 esac

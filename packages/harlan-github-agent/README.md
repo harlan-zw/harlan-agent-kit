@@ -59,7 +59,7 @@ Use these commands from the repository root:
 pnpm worktrunk:update                  # Install Worktrunk configuration locally
 pnpm service:hogwild:sync-worktrunk   # Install it on Hogwild
 pnpm service:hogwild:sync-env         # Copy declared environment files to Hogwild
-pnpm service:hogwild:update           # Sync everything, update, then restart
+pnpm service:hogwild:update           # Sync everything, update, then restart; paired files or --reason only
 ```
 
 Environment files move one way from the desktop checkouts.
