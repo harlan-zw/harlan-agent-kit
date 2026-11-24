@@ -135,7 +135,7 @@ import type {
   WorkflowEventSummary,
   WorkflowFailureGroup,
 } from './types.ts'
-import type { AgentWorktreeLease } from './worktree.ts'
+import type { AgentWorktreeLease, ConflictMergeWithFailingChecks } from './worktree.ts'
 import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -170,7 +170,7 @@ import { createTakeOwnershipStore } from './take-ownership-store.ts'
 import { cleanLine } from './text.ts'
 import { createTimelineStore, deliverySchema, timelineSchema } from './timeline-store.ts'
 import { createTrialStore } from './trial-store.ts'
-import { parseConflictCleanMergeEvidence } from './worktree.ts'
+import { parseConflictCleanMergeEvidence, parseConflictMergeWithFailingChecks } from './worktree.ts'
 
 export interface RecordIncidentInput {
   scope: IncidentScope
@@ -1216,6 +1216,14 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
    * Null for a head no Repair pushed.
    */
   repairSource: (revisionId: string) => RepairSource | null
+  /**
+   * The failing checks a conflict resolution named when it pushed this exact head commit.
+   *
+   * Null for a head no conflict resolution pushed, and for a merge it pushed
+   * with every check passing. A later head commit reads null, because no
+   * conflict resolution published it.
+   */
+  mergedWithFailingChecks: (repository: string, pullRequestNumber: number, headSha: string) => ConflictMergeWithFailingChecks | null
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
   listReviewGateRefreshes: () => ReviewGateRefresh[]
   listStoppedReviews: () => StoppedReview[]
@@ -1451,6 +1459,13 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
     at: string
     publication: PreparedPublication
     usage?: AgentTokenUsage
+    /**
+     * The Completed evidence a conflict resolution keeps once its push lands.
+     *
+     * Only a conflict Task may stage it. Staging a conflict Task without it
+     * clears what an earlier run left, so a stale value never names a later push.
+     */
+    evidence?: string
   }) => StagePublicationResult
   supersedeTask: (input: { taskId: string, workerId: string, fence: number, at: string, reason: string, usage?: AgentTokenUsage }) => boolean
   supersedePublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
@@ -13765,6 +13780,12 @@ export function openJournalStore(
         database.exec('COMMIT')
         return { _tag: 'Rejected', reason: 'The task fence or repository policy no longer authorizes publication.' }
       }
+      // Other Task kinds keep their own evidence through publication, such as
+      // a retained Repair recovery proof, so only a conflict Task may stage one.
+      if (input.evidence !== undefined && task.kind !== 'resolve_conflict') {
+        database.exec('COMMIT')
+        return { _tag: 'Rejected', reason: 'Only a conflict resolution stages its own Completed evidence.' }
+      }
       const subject = JSON.parse(task.payload) as GitHubItem
       const publication = input.publication
       const matches = publication._tag === 'UpdatePullRequest'
@@ -13848,9 +13869,10 @@ export function openJournalStore(
       const update = database.prepare(`
         UPDATE tasks
         SET state_tag = 'Publishing', worker_id = NULL, lease_expires_at = NULL,
-          command_id = ?, updated_at = ?
+          command_id = ?, updated_at = ?,
+          evidence = CASE WHEN kind = 'resolve_conflict' THEN ? ELSE evidence END
         WHERE id = ? AND state_tag = 'Running' AND worker_id = ? AND fence = ?
-      `).run(commandId, input.at, input.taskId, input.workerId, input.fence)
+      `).run(commandId, input.at, input.evidence ?? null, input.taskId, input.workerId, input.fence)
       if (update.changes !== 1)
         throw new Error(`Publication staging lost the task fence for ${input.taskId}.`)
       recordTransition(database, {
@@ -14093,11 +14115,14 @@ export function openJournalStore(
         JOIN tasks ON tasks.id = publication_commands.task_id
         WHERE publication_commands.id = ?
       `).get(input.commandId) as { task_id: string, task_fence: number }
+      // A conflict Task that staged its own evidence keeps it, because the
+      // Review of the pushed head reads it. Staging cleared any older value.
       database.prepare(`
         UPDATE tasks
-        SET state_tag = 'Completed', evidence = ?, command_id = NULL, updated_at = ?
+        SET state_tag = 'Completed', command_id = NULL, updated_at = ?,
+          evidence = CASE WHEN kind = 'resolve_conflict' AND evidence IS NOT NULL THEN evidence ELSE ? END
         WHERE id = ? AND state_tag = 'Publishing' AND command_id = ?
-      `).run(input.evidence, input.at, task.task_id, input.commandId)
+      `).run(input.at, input.evidence, task.task_id, input.commandId)
       recordPublicationEvent(database, {
         commandId: input.commandId,
         from: 'Running',
@@ -15971,6 +15996,24 @@ export function openJournalStore(
     const fingerprints = (JSON.parse(row.findings) as ReviewFinding[])
       .flatMap(finding => finding._tag === 'Open' && finding.details !== undefined ? [finding.details.fingerprint.toLowerCase()] : [])
     return { headSha: row.head_sha, fingerprints }
+  }
+
+  const mergedWithFailingChecks: JournalStore['mergedWithFailingChecks'] = (repository, pullRequestNumber, headSha) => {
+    const row = database.prepare(`
+      SELECT conflict.evidence, publication_commands.commit_sha
+      FROM publication_commands
+      JOIN tasks AS conflict ON conflict.id = publication_commands.task_id
+        AND conflict.kind = 'resolve_conflict' AND conflict.state_tag = 'Completed'
+      JOIN subjects ON subjects.id = conflict.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+        AND publication_commands.state_tag = 'Published' AND publication_commands.commit_sha = ?
+      ORDER BY publication_commands.published_at DESC, publication_commands.id DESC
+      LIMIT 1
+    `).get(repository, pullRequestNumber, headSha) as { evidence: string | null, commit_sha: string } | undefined
+    const merge = row === undefined ? undefined : parseConflictMergeWithFailingChecks(row.evidence)
+    // The evidence names its own commit, so it never describes another push.
+    return merge !== undefined && merge.commitSha === row?.commit_sha ? merge : null
   }
 
   const recordQueuedReviewStatus: JournalStore['recordQueuedReviewStatus'] = (input) => {
@@ -18066,6 +18109,7 @@ export function openJournalStore(
     listQueuedReviewStatuses,
     priorReviewHistory,
     repairSource,
+    mergedWithFailingChecks,
     recordReviewApprovalLabelIntent,
     getReviewApprovalLabelIntent,
     clearReviewApprovalLabelIntent,

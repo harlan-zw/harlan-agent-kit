@@ -144,6 +144,7 @@ describe('subject Workers', () => {
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
+        mergedWithFailingChecks: () => null,
         recordReviewRun: (input) => {
           attempt = input
           return { _tag: 'Inserted', reviewRunId: input.id }
@@ -263,6 +264,7 @@ describe('subject Workers', () => {
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
+        mergedWithFailingChecks: () => null,
         recordReviewRun: () => { throw new Error('A second review must not be recorded.') },
         recordReviewPublication: () => { throw new Error('A second comment must not be recorded.') },
       },
@@ -388,6 +390,7 @@ describe('subject Workers', () => {
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
+        mergedWithFailingChecks: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -529,6 +532,7 @@ describe('subject Workers', () => {
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
+        mergedWithFailingChecks: () => null,
       },
       status: {
         publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -622,6 +626,7 @@ describe('subject Workers', () => {
         recordExactPullRequestObservation: () => { throw new Error('Unexpected merge observation.') },
         queueReviewFixTaskForReview: () => { throw new Error('A follow-up never queues Repair.') },
         repairSource: () => null,
+        mergedWithFailingChecks: () => null,
         getRepairedHeadFindings: () => [],
         repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 1 }),
         getWorkerSession: () => null,
@@ -752,6 +757,7 @@ describe('subject Workers', () => {
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
+        mergedWithFailingChecks: () => null,
       },
       status: {
         publish: (_task, _phase, body) => {
@@ -881,6 +887,7 @@ describe('subject Workers', () => {
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
+        mergedWithFailingChecks: () => null,
       },
       status: {
         publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -973,6 +980,7 @@ describe('subject Workers', () => {
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
+        mergedWithFailingChecks: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -1077,6 +1085,7 @@ describe('subject Workers', () => {
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
+        mergedWithFailingChecks: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -1175,6 +1184,7 @@ describe('subject Workers', () => {
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
+        mergedWithFailingChecks: () => null,
       },
       status: {
         publish: (_task, phase, body) => {
@@ -1272,6 +1282,7 @@ describe('subject Workers', () => {
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
         latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
+        mergedWithFailingChecks: () => null,
       },
       status: {
         publish: (_task, phase, body) => {

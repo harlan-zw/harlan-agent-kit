@@ -115,6 +115,7 @@ condition holds:
 5. Review confidence meets the configured minimum: the repository's own with `pull_requests: every`, else `auto_merge.minimum_confidence`.
 6. The pull request is open, is not a draft, and GitHub reports it mergeable.
 7. A complete comparison of the observed base commit and the exact head commit changes no [Protected path](#protected-paths).
+8. No conflict resolution pushed the exact head commit with a check failing outside the merge. CI may never run that check, so a green head does not clear it. A later head commit does.
 
 The handover pins the reviewed head commit as `expectedHeadOid`, so GitHub
 cancels its own auto-merge when a new commit lands. A review can never merge a

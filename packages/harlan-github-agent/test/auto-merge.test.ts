@@ -1,7 +1,8 @@
 import type { AutoMergePolicy, HeadChangedFiles } from '../src/auto-merge.ts'
 import type { ReviewFinding, ReviewGates, ReviewGateState, ReviewOutcome, ReviewPublication, ReviewRun } from '../src/types.ts'
+import type { ConflictMergeWithFailingChecks } from '../src/worktree.ts'
 import { describe, expect, it } from 'vitest'
-import { AUTO_MERGE_LABEL, autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasAutoMergeLabel } from '../src/auto-merge.ts'
+import { AUTO_MERGE_HOLD_CAUSES, AUTO_MERGE_LABEL, autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasAutoMergeLabel } from '../src/auto-merge.ts'
 import { err, ok } from '../src/result.ts'
 import { comparedFile, headChangedFiles, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -55,15 +56,43 @@ function decide(input: {
   policy?: AutoMergePolicy
   pullRequest?: Parameters<typeof pullRequestItem>[0]
   repository?: Parameters<typeof repositoryMapping>[0]
+  mergedWithFailingChecks?: ConflictMergeWithFailingChecks | null
 } = {}) {
   return autoMergeDecision({
     attempts: input.attempts ?? [attempt()],
     changedFiles: input.changedFiles ?? headChangedFiles(),
+    mergedWithFailingChecks: input.mergedWithFailingChecks ?? null,
     policy: input.policy ?? enabled,
     pullRequest: pullRequestItem({ autoMerge: true, mergeState: 'clean', ...input.pullRequest }),
     repository: repositoryMapping(input.repository),
   })
 }
+
+describe('auto merge after a conflict merge with failing checks', () => {
+  const pushedMerge = (commitSha: string): ConflictMergeWithFailingChecks => ({
+    _tag: 'MergedWithFailingChecks',
+    commitSha,
+    baseRef: 'main',
+    failures: [{ command: 'pnpm vitest run test/render.test.ts', paths: ['test/render.test.ts'] }],
+  })
+
+  it('holds the pushed merge even with green CI and a READY Review', () => {
+    expect(decide({ mergedWithFailingChecks: pushedMerge('abc123') })).toEqual({
+      _tag: 'Hold',
+      cause: 'MergedWithFailingChecks',
+      reason: AUTO_MERGE_HOLD_CAUSES.MergedWithFailingChecks,
+    })
+  })
+
+  it('merges the next head commit, which the conflict resolution did not push', () => {
+    expect(decide({
+      attempts: [attempt({ headSha: 'repair-commit' })],
+      changedFiles: headChangedFiles(undefined, { baseSha: 'base123', headSha: 'repair-commit' }),
+      mergedWithFailingChecks: pushedMerge('abc123'),
+      pullRequest: { headSha: 'repair-commit' },
+    })).toEqual(expect.objectContaining({ _tag: 'Merge', headSha: 'repair-commit' }))
+  })
+})
 
 describe('auto merge label', () => {
   it('matches the label whatever its case', () => {

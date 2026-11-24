@@ -6,7 +6,7 @@ import type { GitHubSource } from './github.ts'
 import type { Result } from './result.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedConflictResolutionTask, MutationWorkerOutcome, RepositoryMapping } from './types.ts'
-import type { ConflictWorktreeManager, PreparedConflictWorktree } from './worktree.ts'
+import type { ConflictCheckFailure, ConflictMergeWithFailingChecks, ConflictWorktreeManager, PreparedConflictWorktree } from './worktree.ts'
 import { redactSecrets } from './agent-activity.ts'
 import { CHECK_SCOPES, checkBudgetLines, findRepositoryMemory, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
 import { agentPhase } from './agent-progress.ts'
@@ -50,26 +50,34 @@ interface CheckReport {
  * start. The controller never publishes it: CI can pass without running that
  * check, and a head with no CI still reaches READY. It stops with the exact
  * command and error instead of a blocker Harlan has to decode.
+ *
+ * `ResolvedWithFailures` is a resolved merge whose checks all ran, where a
+ * failing check needs a fix outside the merge. Such merges used to stop for a
+ * merge by hand, which threw the resolution away. The controller now pushes
+ * it, and CI, a fresh Review, and head CI Repair answer the failure, as for
+ * any other head.
  */
 type AgentResult
   = | { _tag: 'Resolved', summary: string, checks: CheckReport[], commitMessage: string }
+    | { _tag: 'ResolvedWithFailures', summary: string, checks: CheckReport[], commitMessage: string, failures: ConflictCheckFailure[] }
     | { _tag: 'ChecksUnavailable', summary: string, checks: CheckReport[], commitMessage: string, command: string, error: string }
     | { _tag: 'Blocked', summary: string, checks: CheckReport[] }
 
 interface AgentResponse {
-  outcome: 'resolved' | 'checks_unavailable' | 'blocked'
+  outcome: 'resolved' | 'resolved_with_failures' | 'checks_unavailable' | 'blocked'
   summary: string
   checks: CheckReport[]
   commitMessage: string
   unavailableCheck: { command: string, error: string }
+  failures: ConflictCheckFailure[]
 }
 
 const outputSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['outcome', 'summary', 'checks', 'commitMessage', 'unavailableCheck'],
+  required: ['outcome', 'summary', 'checks', 'commitMessage', 'unavailableCheck', 'failures'],
   properties: {
-    outcome: { type: 'string', enum: ['resolved', 'checks_unavailable', 'blocked'] },
+    outcome: { type: 'string', enum: ['resolved', 'resolved_with_failures', 'checks_unavailable', 'blocked'] },
     summary: { type: 'string' },
     checks: {
       type: 'array',
@@ -90,6 +98,18 @@ const outputSchema = {
       additionalProperties: false,
       required: ['command', 'error'],
       properties: { command: { type: 'string' }, error: { type: 'string' } },
+    },
+    failures: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['command', 'paths'],
+        properties: {
+          command: { type: 'string' },
+          paths: { type: 'array', items: { type: 'string' } },
+        },
+      },
     },
   },
 }
@@ -136,19 +156,25 @@ A check cannot start when setup, a toolchain binary, or generated output is miss
 Put that exact command and its error in unavailableCheck. The controller does not publish that merge. It reports the command and error.
 If a prerequisite ran and found a code failure, return outcome blocked, even when the downstream check cannot start.
 Unchanged tests and call sites can fail because the merge changed their dependencies.
-If a check ran and failed outside the files the merge touched, report the failure and return outcome blocked.
 If the resolution breaks a test or call site that the base branch moved, fix that file too. The controller accepts edits to files the merge touched.
+If a failing check's fix needs a listed path, fix it. If you cannot, return outcome blocked.
+If a check ran and failed, and its fix needs a path outside the listed paths, return outcome resolved_with_failures.
+Resolve every conflict first. Do not edit the unlisted path. The controller pushes the merge, and CI and Repair handle the failure.
+In failures, give one entry per failed check: its exact command, and every path its fix needs.
+Write commands and paths relative to the repository root. Give paths without line numbers.
 
 Do not stage files. The controller stages verified conflict files.
 Do not commit, push, amend, rebase, abort the merge, or edit Git configuration.
 Choose a commit message that describes the resolved conflict.
-Return the required JSON result. Use outcome blocked when intent is ambiguous or a failing check needs a path outside the list.
-The controller rejects a resolved or checks_unavailable outcome without a commit message. Return an empty commit message only with outcome blocked.
+Return the required JSON result. Use outcome blocked when intent is ambiguous, a conflict remains, or the resolution needs a path outside the list.
+The controller rejects a resolved, resolved_with_failures, or checks_unavailable outcome without a commit message. Return an empty commit message only with outcome blocked.
 Leave unavailableCheck command and error empty unless the outcome is checks_unavailable.
+Leave failures empty unless the outcome is resolved_with_failures.
 Report every required command in checks with its command, outcome, and details.
 Use check outcome passed only when the command ran and passed.
 Use failed when the command ran and failed. Use unavailable when it could not start.
-Return resolved only with a nonempty checks list and every reported check passed.`
+Return resolved only with a nonempty checks list and every reported check passed.
+Return resolved_with_failures only when no check is unavailable and every failed check has an entry in failures.`
 }
 
 function isCheckReport(value: unknown): value is CheckReport {
@@ -158,6 +184,61 @@ function isCheckReport(value: unknown): value is CheckReport {
   return typeof check.command === 'string' && check.command.trim() !== ''
     && (check.outcome === 'passed' || check.outcome === 'failed' || check.outcome === 'unavailable')
     && typeof check.details === 'string'
+}
+
+/**
+ * One path a failing check's fix needs, relative to the repository root.
+ *
+ * Agents name a failure by its location, so a trailing `:line` or
+ * `:line:column` is dropped. Anything that could leave the repository, or
+ * name a host path the comment writer would remove, is refused.
+ */
+function repositoryPath(value: string): string | undefined {
+  const path = value.trim().replace(/:\d+(?::\d+)?$/, '').replace(/^(?:\.\/)+/, '')
+  const segments = path.split('/')
+  return path === ''
+    || path.startsWith('/')
+    || path.startsWith('~')
+    || /[\\\p{Cc}]/u.test(path)
+    || segments.some(segment => segment === '' || segment === '.' || segment === '..')
+    ? undefined
+    : path
+}
+
+function isFailureReport(value: unknown): value is ConflictCheckFailure {
+  if (typeof value !== 'object' || value === null)
+    return false
+  const failure = value as Partial<ConflictCheckFailure>
+  return typeof failure.command === 'string'
+    && Array.isArray(failure.paths)
+    && failure.paths.every(path => typeof path === 'string')
+}
+
+/**
+ * The failures of a `resolved_with_failures` answer, or undefined when the answer does not prove one.
+ *
+ * Every check ran, at least one failed, and each failed check names the paths
+ * its fix needs. A missing or extra entry is doubt, and doubt never publishes.
+ */
+function checkFailures(checks: readonly CheckReport[], failures: readonly ConflictCheckFailure[]): ConflictCheckFailure[] | undefined {
+  const failed = checks.filter(check => check.outcome === 'failed').map(check => check.command.trim())
+  const named = failures.map(failure => failure.command.trim())
+  if (
+    failed.length === 0
+    || checks.some(check => check.outcome === 'unavailable')
+    || new Set(named).size !== named.length
+    || failed.some(command => !named.includes(command))
+    || named.some(command => !failed.includes(command))
+  ) {
+    return undefined
+  }
+  const parsed = failures.map((failure) => {
+    const paths = failure.paths.map(repositoryPath)
+    return failure.command.trim() !== '' && paths.length > 0 && paths.every((path): path is string => path !== undefined)
+      ? { command: failure.command.trim(), paths: [...new Set(paths)] }
+      : undefined
+  })
+  return parsed.every((failure): failure is ConflictCheckFailure => failure !== undefined) ? parsed : undefined
 }
 
 function parseAgentResponse(text: string): Result<AgentResult, string> {
@@ -171,17 +252,23 @@ function parseAgentResponse(text: string): Result<AgentResult, string> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
     return err('The agent returned an invalid conflict resolution result.')
   const unavailable = value.unavailableCheck
+  const outcome = value.outcome
   if (
-    (value.outcome !== 'resolved' && value.outcome !== 'checks_unavailable' && value.outcome !== 'blocked')
+    (outcome !== 'resolved' && outcome !== 'resolved_with_failures' && outcome !== 'checks_unavailable' && outcome !== 'blocked')
     || typeof value.summary !== 'string'
     || !Array.isArray(value.checks)
     || !value.checks.every(isCheckReport)
-    || (value.outcome === 'resolved' && (value.checks.length === 0 || value.checks.some(check => check.outcome !== 'passed')))
+    || (outcome === 'resolved' && (value.checks.length === 0 || value.checks.some(check => check.outcome !== 'passed')))
     || typeof value.commitMessage !== 'string'
-    || (value.outcome !== 'blocked' && value.commitMessage.trim().length === 0)
+    || (outcome !== 'blocked' && value.commitMessage.trim().length === 0)
     || typeof unavailable !== 'object' || unavailable === null
     || typeof unavailable.command !== 'string' || typeof unavailable.error !== 'string'
-    || (value.outcome === 'resolved' && (unavailable.command !== '' || unavailable.error !== ''))
+    || ((outcome === 'resolved' || outcome === 'resolved_with_failures') && (unavailable.command !== '' || unavailable.error !== ''))
+    || !Array.isArray(value.failures)
+    || !value.failures.every(isFailureReport)
+    // A fully passing merge names no failure. A blocked or checks_unavailable
+    // answer may describe one, and still stops with its own reason.
+    || (outcome === 'resolved' && value.failures.length > 0)
   ) {
     return err('The agent returned an invalid conflict resolution result.')
   }
@@ -190,11 +277,17 @@ function parseAgentResponse(text: string): Result<AgentResult, string> {
   const summary = redactSecrets(value.summary)
   const checks = value.checks.map(check => ({ command: redactSecrets(check.command), outcome: check.outcome, details: redactSecrets(check.details) }))
   const commitMessage = redactSecrets(value.commitMessage)
-  switch (value.outcome) {
+  switch (outcome) {
     case 'blocked':
       return ok({ _tag: 'Blocked', summary, checks })
     case 'resolved':
       return ok({ _tag: 'Resolved', summary, checks, commitMessage })
+    case 'resolved_with_failures': {
+      const failures = checkFailures(checks, value.failures.map(failure => ({ command: redactSecrets(failure.command), paths: failure.paths })))
+      return failures === undefined
+        ? err('The agent returned an invalid conflict resolution result.')
+        : ok({ _tag: 'ResolvedWithFailures', summary, checks, commitMessage, failures })
+    }
     case 'checks_unavailable':
       return unavailable.command.trim() === '' || unavailable.error.trim() === ''
         ? err('The agent returned checks_unavailable without the exact command and error.')
@@ -316,7 +409,26 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
           usage: turn.value.usage,
         })
       }
+      if (result._tag === 'ResolvedWithFailures') {
+        // The Agent may edit every file the merge changed, so a failure whose
+        // fix needs one belongs to the resolution and stops like blocked. A
+        // named directory that holds such a file counts as that file.
+        const touchesMerge = (path: string): boolean => worktree.writablePaths.some(writable => writable === path || writable.startsWith(`${path}/`))
+        const inside = result.failures
+          .flatMap(failure => failure.paths.filter(touchesMerge).map(path => ({ command: failure.command, path })))
+          .at(0)
+        if (inside !== undefined) {
+          return ok({
+            _tag: 'ActionRequired',
+            reason: conflictStopReason({ _tag: 'FailureInsideMerge', ...inside }, validated.value, current.value),
+            evidence: JSON.stringify(result),
+            usage: turn.value.usage,
+          })
+        }
+      }
 
+      // A resolved merge and one with failing checks outside it pass the same
+      // verification, authority, and commit steps before any push.
       const verified = await options.worktrees.verify(currentTask, worktree, signal)
       if (verified._tag === 'Err')
         return verified
@@ -358,6 +470,11 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       const commitReady = reportProgress(agentPhase('Committed', 'Fix committed'))
       if (commitReady._tag === 'Err')
         return commitReady
+      const baseRef = currentTask.pullRequest.baseRef ?? task.repositoryMapping.defaultBranch
+      // The Review of the pushed head reads this, so its comment names the failing checks.
+      const failingChecks: ConflictMergeWithFailingChecks | null = result._tag === 'ResolvedWithFailures'
+        ? { _tag: 'MergedWithFailingChecks', commitSha: committed.value.commitSha, baseRef, failures: result.failures }
+        : null
       return ok({
         _tag: 'Publish',
         usage: turn.value.usage,
@@ -367,7 +484,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
           pullRequestNumber: task.pullRequestNumber,
           commitSha: committed.value.commitSha,
           baseSha: committed.value.baseSha,
-          baseRef: currentTask.pullRequest.baseRef ?? task.repositoryMapping.defaultBranch,
+          baseRef,
           expectedHeadSha: currentTask.pullRequest.headSha,
           headRef: currentTask.pullRequest.headRef,
           headRepository: currentTask.pullRequest.headRepository,
@@ -375,6 +492,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
           patchDigest: committed.value.digest,
           changedFiles: committed.value.changedFiles,
         },
+        ...(failingChecks === null ? {} : { evidence: JSON.stringify(failingChecks) }),
       })
     },
   }

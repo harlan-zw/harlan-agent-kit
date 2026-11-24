@@ -15,7 +15,14 @@ export type ConflictStop
     | { _tag: 'ProtectedHead' }
     /** The agent resolved the merge, but a required local check could not start. */
     | { _tag: 'ChecksUnavailable', command: string, error: string }
-    /** The agent found ambiguous intent, or a check failed that it could not fix inside the merge. */
+    /**
+     * The agent resolved the merge, but a failing check needs a file the merge changed.
+     *
+     * The agent may edit that file, so the failure belongs to the resolution.
+     * Only a fix outside the merge lets the Service push a failing merge.
+     */
+    | { _tag: 'FailureInsideMerge', command: string, path: string }
+    /** The agent found ambiguous intent, or could not resolve the merge. */
     | { _tag: 'AgentBlocked', summary: string }
 
 const prefixList = new Intl.ListFormat('en', { type: 'disjunction' })
@@ -50,6 +57,8 @@ export function conflictStopReason(stop: ConflictStop, mapping: RepositoryMappin
     case 'ChecksUnavailable':
       return `The agent resolved the merge conflict, but ${cleanLine(stop.command)} could not start: ${sentence(stop.error)} `
         + `The Service does not push a merge whose required check did not run. ${byHand}`
+    case 'FailureInsideMerge':
+      return `The agent resolved the merge conflict, but ${cleanLine(stop.command)} fails, and its fix needs ${cleanLine(stop.path)}, which the merge changed. ${byHand}`
     case 'AgentBlocked':
       return `${sentence(stop.summary)} ${byHand}`
     case 'Boundary':

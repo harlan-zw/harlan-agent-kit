@@ -1414,21 +1414,31 @@ export type PreparedPublication = PublicationCommand extends infer Command
   : never
 
 export type MutationWorkerOutcome
-  = | { _tag: 'Publish', publication: PreparedPublication, usage?: AgentTokenUsage }
-    | { _tag: 'ActionRequired', reason: string, evidence: string, usage?: AgentTokenUsage }
+  = | {
+    _tag: 'Publish'
+    publication: PreparedPublication
+    usage?: AgentTokenUsage
+    /**
+     * The Completed evidence a conflict resolution keeps once GitHub accepts its push.
+     *
+     * It names the checks the pushed merge still fails. Absent, the publisher's own evidence stands.
+     */
+    evidence?: string
+  }
+  | { _tag: 'ActionRequired', reason: string, evidence: string, usage?: AgentTokenUsage }
     /**
      * The work this Task existed for is already on GitHub.
      *
      * The evidence names it, so nobody spends an agent turn producing it again.
      */
-    | { _tag: 'Completed', evidence: string, usage?: AgentTokenUsage }
+  | { _tag: 'Completed', evidence: string, usage?: AgentTokenUsage }
     /**
      * The world fixed the problem this Task existed for.
      *
      * Retrying cannot help and nobody needs to act, so the Task completes
      * instead of failing. A failure here used to sit in the dashboard forever.
      */
-    | { _tag: 'Superseded', reason: string, usage?: AgentTokenUsage }
+  | { _tag: 'Superseded', reason: string, usage?: AgentTokenUsage }
 
 export type ClaimedPublicationCommand = PublicationCommand & {
   /** Durable selected finding authority, distinct from general Review Repair approval. */

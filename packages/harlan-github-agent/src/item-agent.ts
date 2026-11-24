@@ -34,7 +34,7 @@ import type {
   ReviewRun,
 } from './types.ts'
 import type { RoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
-import type { AgentWorkspaceManager, PreparedWorkerWorkspace } from './worktree.ts'
+import type { AgentWorkspaceManager, ConflictMergeWithFailingChecks, PreparedWorkerWorkspace } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { findRepositoryMemory, GITHUB_MEDIA_LINES, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
 import { reviewVerdictLabel } from './agent-label.ts'
@@ -127,7 +127,7 @@ export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'
    */
   changedLines?: ChangedLinesReader
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
-  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress' | 'priorReviewHistory' | 'repairSource' | 'latestReviewOfEarlierHead'>
+  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress' | 'priorReviewHistory' | 'repairSource' | 'mergedWithFailingChecks' | 'latestReviewOfEarlierHead'>
   /**
    * `readHeadAdvance` lets a clean base merge carry the Review of an earlier
    * head. Absent reviews every head afresh, which is how most tests run.
@@ -1183,6 +1183,8 @@ export interface TerminalCommentInput {
   notChecked?: string | null | undefined
   /** The Review a published Repair answered, when Repair pushed this head. Null otherwise. */
   repairedFrom?: RepairSource | null | undefined
+  /** The checks a conflict resolution left failing when it pushed this head. Null otherwise. */
+  mergedWithFailingChecks?: ConflictMergeWithFailingChecks | null | undefined
   /** Why the CI Review gate has not settled, so PENDING explains only what the merge box cannot show. */
   ciCause?: CiGateCause | undefined
 }
@@ -1231,6 +1233,31 @@ function failedGateWords(gates: ReviewGates): string {
 function repairFixedCount(source: RepairSource, findings: readonly ReviewFinding[]): number {
   const surviving = new Set(findings.flatMap(finding => finding._tag !== 'Fixed' && finding.details !== undefined ? [finding.details.fingerprint.toLowerCase()] : []))
   return new Set(source.fingerprints.filter(fingerprint => !surviving.has(fingerprint.toLowerCase()))).size
+}
+
+/** The most failing checks the merge sentence names before it counts the rest. */
+const NAMED_FAILING_CHECKS = 3
+const LONGEST_NAMED_CHECK = 80
+const checkList = new Intl.ListFormat('en', { type: 'conjunction' })
+
+function codeSpan(value: string): string {
+  const text = cleanLine(value).replaceAll('`', '')
+  return `\`${text.length > LONGEST_NAMED_CHECK ? `${text.slice(0, LONGEST_NAMED_CHECK - 1).trimEnd()}…` : text}\``
+}
+
+/**
+ * One sentence that says a conflict resolution pushed this head with checks failing.
+ *
+ * The merge box shows GitHub's check runs, never the local commands the
+ * resolution ran, so only this comment can name them. Head CI Repair starts
+ * from a red check run, so the sentence ties Repair to CI.
+ */
+function mergedWithFailingChecksLine(merge: ConflictMergeWithFailingChecks): string {
+  const commands = merge.failures.map(failure => codeSpan(failure.command))
+  const named = commands.length > NAMED_FAILING_CHECKS
+    ? [...commands.slice(0, NAMED_FAILING_CHECKS), `${commands.length - NAMED_FAILING_CHECKS} more`]
+    : commands
+  return `Conflict resolution pushed this merge of ${codeSpan(merge.baseRef)} with ${checkList.format(named)} failing; Repair follows when CI fails.`
 }
 
 /** What a PENDING verdict waits for. */
@@ -1313,6 +1340,7 @@ export function terminalComment(input: TerminalCommentInput): string {
     '',
     ...(waiting === undefined ? [] : [`<sub>${cleanLine(waiting.reason)}</sub>`, '']),
     ...mergeRisk,
+    ...(input.mergedWithFailingChecks === null || input.mergedWithFailingChecks === undefined ? [] : [mergedWithFailingChecksLine(input.mergedWithFailingChecks), '']),
     ...(blocking.length === 0 ? [] : [...issueRows(repository, headSha, blocking), '']),
     ...(fixed.length === 0 ? [] : [...fixedRows(fixed), '']),
     ...(reviewLine === '' ? [] : [reviewLine, '']),
@@ -1642,6 +1670,7 @@ async function projectReviewRun(
     checked: run.checked,
     notChecked: run.notChecked,
     repairedFrom: options.store.repairSource(task.revisionId),
+    mergedWithFailingChecks: options.store.mergedWithFailingChecks(task.repository, task.pullRequestNumber, task.pullRequest.headSha),
   })
   const durablePublication = options.status.stageTerminal !== undefined
   const staged = !durablePublication

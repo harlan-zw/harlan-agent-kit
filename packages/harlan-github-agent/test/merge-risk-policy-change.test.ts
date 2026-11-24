@@ -108,6 +108,7 @@ describe('a Contained verdict recorded under one policy', () => {
     const decide = () => autoMergeDecision({
       attempts: store.listReviewRuns('harlan-zw/example', 24),
       changedFiles: headChangedFiles(),
+      mergedWithFailingChecks: null,
       policy,
       pullRequest: pullRequestItem({ mergeState: 'clean' }),
       repository: repositoryMapping({ autoMerge: looseScope }),

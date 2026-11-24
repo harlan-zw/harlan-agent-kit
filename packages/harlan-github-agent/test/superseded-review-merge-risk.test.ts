@@ -123,6 +123,7 @@ describe('a settlement carries the parent Review run Merge risk', () => {
     const decision = autoMergeDecision({
       attempts: store.listReviewRuns('harlan-zw/example', 24),
       changedFiles: headChangedFiles(),
+      mergedWithFailingChecks: null,
       policy,
       pullRequest: pullRequestItem({ autoMerge: false, mergeState: 'clean' }),
       repository: repositoryMapping({ autoMerge: containedScope }),

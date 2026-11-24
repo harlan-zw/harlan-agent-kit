@@ -64,6 +64,54 @@ export function parseConflictCleanMergeEvidence(evidence: string | null): Confli
     : undefined
 }
 
+/** One local check a resolved merge still fails, and the paths outside the merge that its fix needs. */
+export interface ConflictCheckFailure {
+  command: string
+  paths: string[]
+}
+
+/**
+ * Stored as the Completed evidence of a conflict Task that pushed a resolved
+ * merge while a check still failed outside the merge.
+ *
+ * The Review of the pushed head reads it, so its canonical comment names the
+ * failing checks. CI and head CI Repair answer the failure itself.
+ */
+export interface ConflictMergeWithFailingChecks {
+  _tag: 'MergedWithFailingChecks'
+  commitSha: string
+  baseRef: string
+  failures: ConflictCheckFailure[]
+}
+
+function isCheckFailure(value: unknown): value is ConflictCheckFailure {
+  if (typeof value !== 'object' || value === null)
+    return false
+  const failure = value as Partial<ConflictCheckFailure>
+  return typeof failure.command === 'string'
+    && Array.isArray(failure.paths)
+    && failure.paths.every(path => typeof path === 'string')
+}
+
+export function parseConflictMergeWithFailingChecks(evidence: string | null): ConflictMergeWithFailingChecks | undefined {
+  if (evidence === null || !evidence.startsWith('{'))
+    return undefined
+  const value = JSON.parse(evidence) as Partial<ConflictMergeWithFailingChecks>
+  return value._tag === 'MergedWithFailingChecks'
+    && typeof value.commitSha === 'string'
+    && typeof value.baseRef === 'string'
+    && Array.isArray(value.failures)
+    && value.failures.length > 0
+    && value.failures.every(isCheckFailure)
+    ? {
+        _tag: 'MergedWithFailingChecks',
+        commitSha: value.commitSha,
+        baseRef: value.baseRef,
+        failures: value.failures.map(failure => ({ command: failure.command, paths: [...failure.paths] })),
+      }
+    : undefined
+}
+
 export interface VerifiedConflictPatch {
   digest: string
   changedFiles: number

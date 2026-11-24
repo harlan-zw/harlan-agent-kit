@@ -96,7 +96,12 @@ export async function runClaimedTask<Task extends PublicationTask>(task: Task, o
       options.store.needsAttentionTask({ ...fenced, reason: outcome.reason, evidence: outcome.evidence, ...usage })
       return { _tag: 'ActionRequired', reason: outcome.reason }
     }
-    const staged = options.store.stagePublication({ ...fenced, publication: outcome.publication, ...usage })
+    const staged = options.store.stagePublication({
+      ...fenced,
+      publication: outcome.publication,
+      ...usage,
+      ...(outcome.evidence === undefined ? {} : { evidence: outcome.evidence }),
+    })
     if (staged._tag !== 'Rejected')
       return { _tag: 'Publishing' }
     options.store.failTask({ ...fenced, reason: staged.reason })
