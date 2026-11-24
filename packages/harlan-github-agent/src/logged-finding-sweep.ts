@@ -1,7 +1,7 @@
 import type { GitHubAgentSource } from './github-agent-source.ts'
 import type { GitHubIssuePublisher, GitHubSource } from './github.ts'
 import type { LoggedFindingPickup } from './logged-finding-pickup.ts'
-import type { LoggedFindingStore } from './logged-finding-store.ts'
+import type { LoggedFindingComment, LoggedFindingStore } from './logged-finding-store.ts'
 import type { Result } from './result.ts'
 import type { ReviewFindingThread, ReviewFindingThreadSource } from './review-finding-threads.ts'
 import type { JournalStore } from './store.ts'
@@ -124,6 +124,14 @@ export async function refreshLoggedFindingThreads(
   return ok(undefined)
 }
 
+/** How long a comment that did not update waits before the sweep tries it again. */
+const RETRY_AFTER = {
+  /** GitHub or the network failed. The same write may work soon. */
+  Failed: 15 * 60_000,
+  /** The comment changed on GitHub, belongs to someone else, or is gone. The same write will not work until its source changes. */
+  Refused: 24 * 60 * 60_000,
+} as const
+
 /** Updates the existing canonical comment under a durable Publication lease. */
 export async function publishLoggedFindingPickups(options: {
   github: Pick<GitHubAgentSource, 'editReviewStatus'>
@@ -134,30 +142,41 @@ export async function publishLoggedFindingPickups(options: {
   controls?: (repository: string) => boolean
 }, signal: AbortSignal): Promise<string[]> {
   const errors: string[] = []
-  // Bound one pass. A failed comment releases itself when its lease expires.
+  // The claim scans in a fixed order. A comment that did not update waits out
+  // its back-off, so it never takes the next claim from one that can update.
+  const retryLater = (command: LoggedFindingComment, wait: number): void => {
+    options.store.deferLoggedFindingComment(command, new Date(options.now().getTime() + wait).toISOString())
+  }
   for (let index = 0; index < 20 && !signal.aborted; index++) {
     const command = options.store.claimLoggedFindingComment(options.workerId, options.now().toISOString(), 60_000, options.controls)
     if (command === null)
       break
     const mapping = options.repositories.find(mapping => mapping.github.toLowerCase() === command.repository.toLowerCase())
-    if (mapping === undefined)
+    if (mapping === undefined) {
+      retryLater(command, RETRY_AFTER.Refused)
       continue
+    }
     const authorize = () => options.store.authorizeLoggedFindingComment(command, options.now().toISOString())
       ? ok(undefined)
       : err('The finding status lost its publication authority.')
     const authority = authorize()
     if (authority._tag === 'Err') {
       errors.push(authority.error)
+      retryLater(command, RETRY_AFTER.Failed)
       continue
     }
     const result = await options.github.editReviewStatus(mapping, command.pullRequestNumber, command.commentId, command.expectedBody, command.body, signal, authorize)
       .catch((error: unknown) => err(error instanceof Error ? error.message : 'The finding status update failed.'))
     if (result._tag === 'Err') {
       errors.push(`${command.repository}#${command.pullRequestNumber}: ${result.error}`)
+      retryLater(command, RETRY_AFTER.Failed)
     }
     else if (result.value._tag === 'Edited') {
       if (!options.store.completeLoggedFindingComment(command, options.now().toISOString()))
         errors.push(`${command.repository}#${command.pullRequestNumber}: the finding status receipt lost its publication lease.`)
+    }
+    else {
+      retryLater(command, RETRY_AFTER.Refused)
     }
   }
   return errors

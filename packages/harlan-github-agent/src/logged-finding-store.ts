@@ -115,6 +115,14 @@ export interface LoggedFindingStore {
   claimLoggedFindingComment: (workerId: string, at: string, leaseMilliseconds: number, controls?: (repository: string) => boolean) => LoggedFindingComment | null
   authorizeLoggedFindingComment: (command: LoggedFindingComment, at: string) => boolean
   completeLoggedFindingComment: (command: LoggedFindingComment, at: string) => boolean
+  /**
+   * Holds a comment that did not update until `until`.
+   *
+   * The claim scans in a fixed order, so a comment that failed would win the
+   * next claim as soon as its lease ran out and keep every later comment
+   * waiting. A new source body ends the hold at once.
+   */
+  deferLoggedFindingComment: (command: LoggedFindingComment, until: string) => boolean
   claimFollowUpIssue: (workerId: string, at: string, leaseMilliseconds: number) => FollowUpIssueCommand | null
   authorizeFollowUpIssue: (command: FollowUpIssueCommand, at: string) => boolean
   isPublishedFollowUpIssue: (repository: RepositoryMapping, issue: { number: number, title: string, body: string | null }) => boolean
@@ -601,6 +609,7 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
             published_body = excluded.published_body, desired_body = excluded.desired_body, comment_id = excluded.comment_id,
             worker_id = excluded.worker_id, fence = logged_finding_comments.fence + 1, lease_expires_at = excluded.lease_expires_at
           WHERE logged_finding_comments.lease_expires_at IS NULL OR logged_finding_comments.lease_expires_at <= ?
+            OR (logged_finding_comments.worker_id IS NULL AND logged_finding_comments.source_body != excluded.source_body)
           RETURNING fence
         `).get(candidate.subject_id, candidate.body, expectedBody, body, candidate.github_comment_id, workerId, new Date(new Date(at).getTime() + leaseMilliseconds).toISOString(), at) as { fence: number } | undefined
         if (row !== undefined) {
@@ -622,6 +631,13 @@ export function createLoggedFindingStore(database: DatabaseSync, options: {
       return database.prepare(`UPDATE logged_finding_comments SET published_body = desired_body, worker_id = NULL, lease_expires_at = NULL
         WHERE subject_id = ? AND worker_id = ? AND fence = ? AND lease_expires_at > ?`)
         .run(command.subjectId, command.workerId, command.fence, at)
+        .changes === 1
+    },
+    deferLoggedFindingComment(command, until) {
+      // A deferred row has no worker, so a new source body may claim it before `until`.
+      return database.prepare(`UPDATE logged_finding_comments SET worker_id = NULL, lease_expires_at = ?
+        WHERE subject_id = ? AND worker_id = ? AND fence = ?`)
+        .run(until, command.subjectId, command.workerId, command.fence)
         .changes === 1
     },
     claimFollowUpIssue(workerId, at, leaseMilliseconds) {

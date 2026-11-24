@@ -1359,3 +1359,73 @@ describe('follow-up routing by Finding scope', () => {
     expect(store.claimLoggedFindingComment('status', at, 60_000)?.body).toContain(`Filing these as one issue. <!-- logged-findings: ${pullRequest.headSha} -->`)
   })
 })
+
+/** A second pull request in the same repository, reviewed and published like the one `setup` makes. */
+function addReviewedPullRequest(store: ReturnType<typeof openJournalStore>, mapping: RepositoryMapping, number: number) {
+  const pullRequest = pullRequestItem({ number, url: `https://github.com/harlan-zw/example/pull/${number}`, mergeState: 'clean', headSha: 'e'.repeat(40), baseSha: 'b'.repeat(40) })
+  const observation = store.recordObservation({ externalId: `open-${number}`, observedAt: at, source: 'poll', subject: pullRequest })
+  if (observation._tag !== 'Inserted')
+    throw new Error('Expected a pull request.')
+  const task = store.claimNextAdversarialReviewTask('reviewer', at, 60_000)
+  if (task === null)
+    throw new Error('Expected Review.')
+  const gates = { merge: { _tag: 'Passed' as const, evidence: [] }, review: { _tag: 'Passed' as const, evidence: [] }, ci: { _tag: 'Passed' as const, evidence: [] } }
+  const reviewRunId = `review-${number}`
+  store.recordReviewRun({ id: reviewRunId, repository: mapping.github, pullRequestNumber: number, revisionId: observation.revisionId, headSha: pullRequest.headSha, provider: 'codex', sessionId: 'session', model: 'model', agentVersion: 'version', skillDigest: 'c'.repeat(64), startedAt: at, completedAt: at, gates, findings: [finding] })
+  store.completeWorkerTask({ taskId: task.id, workerId: task.state.workerId, fence: task.state.fence, at, evidence: reviewRunId })
+  const body = store.decorateLoggedFindings(terminalComment({ headSha: pullRequest.headSha, baseSha: pullRequest.baseSha, gates, findings: [finding], confidence: 95, reportedChecks: [], repository: mapping.github, baseRef: pullRequest.baseRef }), reviewRunId)
+  store.recordReviewPublication({ id: `publication-${number}`, reviewRunId, body, at, result: { _tag: 'Published', githubCommentId: 1000 + number, url: `${pullRequest.url}#issuecomment-${1000 + number}` } })
+  return pullRequest
+}
+
+describe('finding status pass', () => {
+  it.each([
+    ['GitHub shows a changed comment', ok({ _tag: 'Changed' as const })],
+    ['the comment is gone', ok({ _tag: 'Missing' as const })],
+    ['GitHub refuses the write', err('GitHub refused the update.')],
+  ])('backs off a comment that did not update, so the next one gets its turn: %s', async (_case, refused) => {
+    const { store, mapping, pullRequest } = setup([finding])
+    const later = addReviewedPullRequest(store, mapping, 25)
+    store.recordObservation({ externalId: 'merged-24', observedAt: at, source: 'poll', subject: { ...pullRequest, state: 'closed', mergedAt: at } })
+    store.recordObservation({ externalId: 'merged-25', observedAt: at, source: 'poll', subject: { ...later, state: 'closed', mergedAt: at } })
+    let clock = Date.parse(at)
+    const attempts: number[] = []
+    const github = {
+      editReviewStatus: async (_mapping: RepositoryMapping, number: number, commentId: number) => {
+        attempts.push(number)
+        if (number !== pullRequest.number)
+          return ok({ _tag: 'Edited' as const, commentId, url: `${later.url}#issuecomment-${commentId}` })
+        // A slow GitHub round trip outlasts the claim lease.
+        clock += 61_000
+        return refused
+      },
+    }
+
+    await publishLoggedFindingPickups({ github, store, repositories: [mapping], now: () => new Date(clock), workerId: 'status' }, new AbortController().signal)
+
+    expect(attempts.filter(number => number === pullRequest.number)).toHaveLength(1)
+    expect(attempts).toContain(later.number)
+  })
+
+  it('retries a backed-off comment after the back-off', async () => {
+    const { store, mapping, pullRequest } = setup([finding])
+    store.recordObservation({ externalId: 'merged-24', observedAt: at, source: 'poll', subject: { ...pullRequest, state: 'closed', mergedAt: at } })
+    const github = { editReviewStatus: async () => ok({ _tag: 'Changed' as const }) }
+    await publishLoggedFindingPickups({ github, store, repositories: [mapping], now: () => new Date(at), workerId: 'status' }, new AbortController().signal)
+
+    const minutes = (count: number) => new Date(Date.parse(at) + count * 60_000).toISOString()
+    expect(store.claimLoggedFindingComment('status', minutes(30), 60_000)).toBeNull()
+    expect(store.claimLoggedFindingComment('status', minutes(24 * 60 + 1), 60_000)?.pullRequestNumber).toBe(pullRequest.number)
+  })
+
+  it('ends the back-off at once when the comment gets a new source body', async () => {
+    const { store, mapping, pullRequest, body } = setup([finding])
+    store.recordObservation({ externalId: 'merged-24', observedAt: at, source: 'poll', subject: { ...pullRequest, state: 'closed', mergedAt: at } })
+    const github = { editReviewStatus: async () => ok({ _tag: 'Changed' as const }) }
+    await publishLoggedFindingPickups({ github, store, repositories: [mapping], now: () => new Date(at), workerId: 'status' }, new AbortController().signal)
+
+    const later = new Date(Date.parse(at) + 10 * 60_000).toISOString()
+    store.recordReviewPublication({ id: 'republished', reviewRunId: 'review', body: `${body}\n`, at: later, result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' } })
+    expect(store.claimLoggedFindingComment('status', later, 60_000)?.sourceBody).toBe(`${body}\n`)
+  })
+})
