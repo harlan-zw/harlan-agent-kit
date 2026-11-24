@@ -38,9 +38,60 @@ export type AutoMergePolicy
   = | { _tag: 'Disabled' }
     | { _tag: 'Enabled', minimumConfidence: number, method: AutoMergeMethod }
 
+/**
+ * Each reason Auto merge holds a head, with one fixed sentence.
+ *
+ * A Hold's own reason can carry a path, a GitHub error, or Review prose. The
+ * hold record and the weekly trial report keep only the name, so no private
+ * detail leaves the Service.
+ */
+export const AUTO_MERGE_HOLD_CAUSES = {
+  Disabled: 'Auto merge is disabled.',
+  NoLabel: `The pull request has no ${AUTO_MERGE_LABEL} label.`,
+  RepositoryDisabled: 'The repository is disabled.',
+  NotOwned: 'The repository is not owned.',
+  UntrustedAuthor: 'The author is not a trusted author.',
+  NotOpen: 'The pull request is not open.',
+  Draft: 'The pull request is a draft.',
+  NotDefaultBranch: 'The pull request does not target the default branch.',
+  NotMergeable: 'GitHub does not report it mergeable.',
+  NoReadyReview: 'The head has no READY review.',
+  NoPublishedReadyReview: 'The READY review is not published.',
+  OpenFinding: 'The review left an open finding.',
+  ChangedFilesUnavailable: 'Its changed files are unavailable.',
+  ChangedFilesStale: 'Its changed files were compared for other commits.',
+  ProtectedPath: 'It changes a Protected path.',
+  NoMergeRisk: 'The review recorded no Merge risk.',
+  SensitiveMergeRisk: 'Merge risk is Sensitive.',
+  MergeRiskNotContained: 'Merge risk is not Contained, and it has no label.',
+  NoConfidence: 'The review reported no confidence.',
+  BelowConfidence: 'Review confidence is below the bar.',
+} as const
+
+export type AutoMergeHoldCause = keyof typeof AUTO_MERGE_HOLD_CAUSES
+
+export function isAutoMergeHoldCause(value: string): value is AutoMergeHoldCause {
+  return Object.hasOwn(AUTO_MERGE_HOLD_CAUSES, value)
+}
+
 export type AutoMergeDecision
   = | { _tag: 'Merge', headSha: string, method: AutoMergeMethod, reviewRunId: string }
-    | { _tag: 'Hold', reason: string }
+    | { _tag: 'Hold', cause: AutoMergeHoldCause, reason: string }
+
+function hold(cause: AutoMergeHoldCause, reason: string): Extract<AutoMergeDecision, { _tag: 'Hold' }> {
+  return { _tag: 'Hold', cause, reason }
+}
+
+/** One hold of one candidate head, as the Service records it. */
+export interface AutoMergeHoldRecord {
+  repository: string
+  pullRequestNumber: number
+  headSha: string
+  cause: AutoMergeHoldCause
+  /** True when the head has no label and the label alone would merge it. */
+  heldOnlyByLabel: boolean
+  at: string
+}
 
 /**
  * The changed paths of one exact comparison, `baseSha...headSha`.
@@ -81,17 +132,17 @@ export interface AutoMergeInput {
  * about. A new base commit can change the merge base, so an older comparison
  * proves nothing about it.
  */
-function changedFilesHold(changedFiles: HeadChangedFiles, pullRequest: GitHubPullRequestItem): string | null {
+function changedFilesHold(changedFiles: HeadChangedFiles, pullRequest: GitHubPullRequestItem): AutoMergeDecision | null {
   if (changedFiles._tag === 'Unavailable')
-    return `The changed files of the head commit are unavailable: ${changedFiles.reason}`
+    return hold('ChangedFilesUnavailable', `The changed files of the head commit are unavailable: ${changedFiles.reason}`)
   if (changedFiles.headSha !== pullRequest.headSha)
-    return 'The changed files were compared for another head commit.'
+    return hold('ChangedFilesStale', 'The changed files were compared for another head commit.')
   if (changedFiles.baseSha !== pullRequest.baseSha)
-    return 'The changed files were compared against another base commit.'
+    return hold('ChangedFilesStale', 'The changed files were compared against another base commit.')
   if (changedFiles.paths.length === 0)
-    return 'GitHub lists no changed file for the head commit.'
+    return hold('ChangedFilesUnavailable', 'GitHub lists no changed file for the head commit.')
   const path = changedFiles.paths.find(isProtectedPath)
-  return path === undefined ? null : `${path} is a Protected path. Auto merge never merges it.`
+  return path === undefined ? null : hold('ProtectedPath', `${path} is a Protected path. Auto merge never merges it.`)
 }
 
 function latestReviewForHead(attempts: ReviewRun[], headSha: string, baseRef: string): ReviewRun | undefined {
@@ -113,37 +164,37 @@ export function hasCurrentPublishedReadyReview(attempts: ReviewRun[], headSha: s
 export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
   const { attempts, changedFiles, policy, pullRequest, repository } = input
   if (policy._tag === 'Disabled')
-    return { _tag: 'Hold', reason: 'Auto merge is disabled.' }
+    return hold('Disabled', 'Auto merge is disabled.')
   if (!autoMergeCandidate(repository, pullRequest))
-    return { _tag: 'Hold', reason: `The pull request has no ${AUTO_MERGE_LABEL} label.` }
+    return hold('NoLabel', `The pull request has no ${AUTO_MERGE_LABEL} label.`)
   if (!repository.enabled)
-    return { _tag: 'Hold', reason: 'The repository is disabled.' }
+    return hold('RepositoryDisabled', 'The repository is disabled.')
   if (repository.ownership !== 'owned')
-    return { _tag: 'Hold', reason: 'Auto merge covers owned repositories only.' }
+    return hold('NotOwned', 'Auto merge covers owned repositories only.')
   if (!repository.writablePullRequestAuthors.some(author => author.toLowerCase() === pullRequest.author.toLowerCase()))
-    return { _tag: 'Hold', reason: 'The pull request author is not a trusted author.' }
+    return hold('UntrustedAuthor', 'The pull request author is not a trusted author.')
   if (pullRequest.state !== 'open' || pullRequest.mergedAt !== null)
-    return { _tag: 'Hold', reason: 'The pull request is not open.' }
+    return hold('NotOpen', 'The pull request is not open.')
   if (pullRequest.draft)
-    return { _tag: 'Hold', reason: 'The pull request is a draft.' }
+    return hold('Draft', 'The pull request is a draft.')
   if (pullRequest.baseRef !== repository.defaultBranch)
-    return { _tag: 'Hold', reason: 'The pull request must target the default branch before Auto merge.' }
+    return hold('NotDefaultBranch', 'The pull request must target the default branch before Auto merge.')
   if (pullRequest.mergeState !== 'clean')
-    return { _tag: 'Hold', reason: 'GitHub does not report the pull request as mergeable.' }
+    return hold('NotMergeable', 'GitHub does not report the pull request as mergeable.')
 
   const attempt = latestReviewForHead(attempts, pullRequest.headSha, pullRequest.baseRef)
   if (attempt === undefined || attempt.outcome._tag !== 'Ready')
-    return { _tag: 'Hold', reason: 'The current head commit has no READY review.' }
+    return hold('NoReadyReview', 'The current head commit has no READY review.')
   if (!hasCurrentPublishedReadyReview(attempts, pullRequest.headSha, pullRequest.baseRef)) {
-    return { _tag: 'Hold', reason: 'The current head commit has no published READY review.' }
+    return hold('NoPublishedReadyReview', 'The current head commit has no published READY review.')
   }
   if (attempt.findings.some(finding => finding._tag === 'Open'))
-    return { _tag: 'Hold', reason: 'The review left an open finding.' }
+    return hold('OpenFinding', 'The review left an open finding.')
   // Before any scope rule, so neither the label nor a Merge risk verdict can
   // reach around it.
   const filesHold = changedFilesHold(changedFiles, pullRequest)
   if (filesHold !== null)
-    return { _tag: 'Hold', reason: filesHold }
+    return filesHold
   const scope = repository.autoMerge
   // A pull request qualifies through Merge risk or through the label. Which one
   // it used decides which confidence bar it must clear, because the repository's
@@ -154,11 +205,11 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
     // earlier head can never merge a pull request that has since grown.
     const risk = attempt.mergeRisk?.combined
     if (risk === undefined)
-      return { _tag: 'Hold', reason: 'The current review recorded no Merge risk.' }
+      return hold('NoMergeRisk', 'The current review recorded no Merge risk.')
     if (risk._tag === 'Sensitive' && !scope.labelOverridesRisk)
-      return { _tag: 'Hold', reason: `Merge risk is Sensitive: ${risk.reason}` }
+      return hold('SensitiveMergeRisk', `Merge risk is Sensitive: ${risk.reason}`)
     if (risk._tag !== 'Contained' && !pullRequest.autoMerge)
-      return { _tag: 'Hold', reason: `Merge risk is ${risk._tag}: ${risk.reason}` }
+      return hold('MergeRiskNotContained', `Merge risk is ${risk._tag}: ${risk.reason}`)
     // The label is the qualification whenever it is present, so only an
     // unlabelled pull request ever clears the repository's Merge risk bar.
     qualifiedByRisk = risk._tag === 'Contained' && !pullRequest.autoMerge
@@ -172,8 +223,24 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
         ? scope.minimumConfidence
         : policy.minimumConfidence
   const confidence = attempt.outcome.confidence
-  if (confidence === undefined || confidence < minimumConfidence)
-    return { _tag: 'Hold', reason: `Review confidence is below ${minimumConfidence}.` }
+  // Apart from the bar, so a lower bar never reads as releasing a head with no confidence at all.
+  if (confidence === undefined)
+    return hold('NoConfidence', 'The review reported no confidence.')
+  if (confidence < minimumConfidence)
+    return hold('BelowConfidence', `Review confidence is below ${minimumConfidence}.`)
 
   return { _tag: 'Merge', headSha: pullRequest.headSha, method: policy.method, reviewRunId: attempt.id }
+}
+
+/**
+ * Whether the label alone keeps this head from Auto merge.
+ *
+ * Only an unlabelled head can answer yes, and only where the label changes the
+ * decision: a `contained` scope whose Merge risk is not `Contained`, or whose
+ * own confidence bar sits above the service-wide one.
+ */
+export function heldOnlyByLabel(input: AutoMergeInput): boolean {
+  return !input.pullRequest.autoMerge
+    && autoMergeDecision(input)._tag === 'Hold'
+    && autoMergeDecision({ ...input, pullRequest: { ...input.pullRequest, autoMerge: true } })._tag === 'Merge'
 }

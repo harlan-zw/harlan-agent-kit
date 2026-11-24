@@ -1000,6 +1000,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       autoMerge: createAutoMergeController({
         changedLines: createGitHubChangedLines({ tokens: routedTokens }),
         merger: createGitHubPullRequestMerger({ tokens }),
+        now,
         policy: config.autoMerge,
         report: (event) => {
           if (event._tag === 'Retargeted') {

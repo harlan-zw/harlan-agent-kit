@@ -568,3 +568,74 @@ describe('review revert trial', () => {
     expect(reading.markdown).not.toContain('0%')
   })
 })
+
+describe('auto merge hold trial', () => {
+  const holdTrial: Trial = {
+    _tag: 'Measured',
+    id: 'auto-merge-holds',
+    title: '9. Why Auto merge holds a READY pull request',
+    start: { _tag: 'FirstEvent', stream: 'review_run', event: 'auto_merge_hold' },
+    weeks: 4,
+    ...trialText,
+    onMiss: { _tag: 'Revise', what: 'The Auto merge scope' },
+    measure: { _tag: 'AutoMergeHolds', maximumHeldOnlyShare: 0.25 },
+  }
+
+  function observe(store: Store, number: number, headSha: string): void {
+    const observed = store.recordObservation({ externalId: `pull-${number}-${headSha}`, observedAt: '2026-11-19T00:00:00.000Z', source: 'poll', subject: pullRequestItem({ number, headSha, mergeState: 'clean' }) })
+    if (observed._tag !== 'Inserted')
+      throw new Error(`Expected pull request ${number}.`)
+  }
+
+  it('reports not started, never a zero share, before Auto merge holds a head', () => {
+    const store = createStore(['harlan-zw/example'])
+
+    const [reading] = collectTrialReportEvidence(store, new Date('2026-11-25T00:00:00.000Z'), [holdTrial]).trials
+    if (reading?._tag !== 'Measured')
+      throw new Error('Expected a measured hold trial.')
+
+    expect(reading.state._tag).toBe('NotStarted')
+    expect(reading.metrics).toBeNull()
+    expect(reading.markdown).not.toContain('0%')
+  })
+
+  it('counts held heads per week and reason, and those held only by the confidence bar or the label', () => {
+    const store = createStore(['harlan-zw/example'])
+    observe(store, 30, 'a'.repeat(40))
+    observe(store, 31, 'b'.repeat(40))
+    observe(store, 32, 'c'.repeat(40))
+    observe(store, 33, 'd'.repeat(40))
+    const hold = (pullRequestNumber: number, headSha: string, cause: 'BelowConfidence' | 'ProtectedPath' | 'NotMergeable' | 'MergeRiskNotContained', at: string, heldOnlyByLabel = false) =>
+      store.recordAutoMergeHold({ repository: 'harlan-zw/example', pullRequestNumber, headSha, cause, heldOnlyByLabel, at })
+    // Week 1.
+    hold(30, 'a'.repeat(40), 'BelowConfidence', '2026-11-19T00:00:00.000Z')
+    hold(31, 'b'.repeat(40), 'ProtectedPath', '2026-11-19T01:00:00.000Z')
+    hold(31, 'b'.repeat(40), 'NotMergeable', '2026-11-19T02:00:00.000Z')
+    hold(32, 'c'.repeat(40), 'MergeRiskNotContained', '2026-11-20T00:00:00.000Z', true)
+    // Week 2. The repeat of an earlier head and reason is not a new hold.
+    hold(30, 'a'.repeat(40), 'BelowConfidence', '2026-11-26T00:00:00.000Z')
+    hold(33, 'd'.repeat(40), 'BelowConfidence', '2026-11-27T00:00:00.000Z')
+
+    const [reading] = collectTrialReportEvidence(store, new Date('2026-11-28T00:00:00.000Z'), [holdTrial]).trials
+    if (reading?._tag !== 'Measured' || reading.metrics?._tag !== 'AutoMergeHolds')
+      throw new Error('Expected a measured hold trial.')
+
+    expect(reading.state).toMatchObject({ _tag: 'Running', startedAt: '2026-11-19T00:00:00.000Z', week: 2 })
+    expect(reading.metrics.weeks.map(week => [week.week, week.heldHeads, week.heldOnlyByConfidenceBar, week.heldOnlyByLabel])).toEqual([
+      [1, 3, 1, 1],
+      [2, 1, 1, 0],
+    ])
+    expect(reading.metrics.toDate).toMatchObject({ heldHeads: 4, heldOnlyByConfidenceBar: 2, heldOnlyByLabel: 1, heldOnlyShare: 0.75 })
+    expect(reading.metrics.reasons).toEqual([
+      { cause: 'BelowConfidence', weeks: [1, 1], toDate: 2 },
+      { cause: 'MergeRiskNotContained', weeks: [1, 0], toDate: 1 },
+      { cause: 'NotMergeable', weeks: [1, 0], toDate: 1 },
+      { cause: 'ProtectedPath', weeks: [1, 0], toDate: 1 },
+    ])
+    expect(reading.keep).toEqual([{ _tag: 'NotMet', detail: expect.stringContaining('3 of 4 held heads') }])
+    expect(reading.kill).toEqual([])
+    expect(reading.suggestion.verdict).toBe('Continue')
+    expect(reading.markdown).toContain('| Week 2 | 1 | 1 | 0 |')
+    expect(reading.markdown).toContain('It changes a Protected path.')
+  })
+})

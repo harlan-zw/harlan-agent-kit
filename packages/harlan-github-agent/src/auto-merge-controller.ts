@@ -1,9 +1,9 @@
-import type { AutoMergePolicy, HeadChangedFiles } from './auto-merge.ts'
+import type { AutoMergeInput, AutoMergePolicy, HeadChangedFiles } from './auto-merge.ts'
 import type { ChangedLinesReader } from './github-changed-lines.ts'
 import type { GitHubPullRequestMerger } from './github.ts'
 import type { JournalStore } from './store.ts'
 import type { GitHubItem, RepositoryMapping } from './types.ts'
-import { autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasCurrentPublishedReadyReview } from './auto-merge.ts'
+import { autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasCurrentPublishedReadyReview, heldOnlyByLabel } from './auto-merge.ts'
 import { err, ok } from './result.ts'
 
 export type AutoMergeEvent
@@ -22,10 +22,12 @@ export interface AutoMergeControllerOptions {
   /** Compares two exact commits, so the changed files belong to the head and base the decision names. */
   changedLines: ChangedLinesReader
   merger: GitHubPullRequestMerger
+  /** Stamps each hold record. */
+  now: () => Date
   policy: AutoMergePolicy
   /** Every merge and every refusal is reported. A refusal never fails the poll. */
   report: (event: AutoMergeEvent) => void
-  store: Pick<JournalStore, 'getAutoMergeContext' | 'listReviewRuns'>
+  store: Pick<JournalStore, 'getAutoMergeContext' | 'listReviewRuns' | 'recordAutoMergeHold'>
 }
 
 export function createAutoMergeController(options: AutoMergeControllerOptions): AutoMergeController {
@@ -111,15 +113,29 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
       // The decision reads the stored context, so the comparison uses its
       // commits. The subject can name an older base commit.
       const changedFiles = await headChangedFiles(repository, subject.number, { baseSha: context.pullRequest.baseSha, headSha: context.pullRequest.headSha }, signal)
-      const decision = autoMergeDecision({
+      const input: AutoMergeInput = {
         attempts,
         changedFiles,
         policy: options.policy,
         pullRequest: context.pullRequest,
         repository: context.repository,
-      })
-      if (decision._tag === 'Hold')
+      }
+      const decision = autoMergeDecision(input)
+      if (decision._tag === 'Hold') {
+        // Only a head that reached a published READY Review gets here, so the
+        // record says why a reviewed candidate waited for Harlan.
+        if (autoMergeCandidate(context.repository, context.pullRequest)) {
+          options.store.recordAutoMergeHold({
+            repository: repository.github,
+            pullRequestNumber: subject.number,
+            headSha: context.pullRequest.headSha,
+            cause: decision.cause,
+            heldOnlyByLabel: heldOnlyByLabel(input),
+            at: options.now().toISOString(),
+          })
+        }
         return
+      }
       const publication = attempts.find(attempt => attempt.id === decision.reviewRunId)?.gatePublication
       if (publication?._tag !== 'Published')
         return

@@ -1,6 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite'
+import type { AutoMergeHoldCause } from './auto-merge.ts'
 import type { RoutineName } from './routines/index.ts'
 import type { ReviewOutcome, RoutineRunState } from './types.ts'
+import { isAutoMergeHoldCause } from './auto-merge.ts'
 import { openingWork } from './implicit-signal-store.ts'
 
 /** One window of time, start inclusive and end exclusive, as ISO instants. */
@@ -78,6 +80,17 @@ export interface TrialReviewedMerge {
   revertedBy: number | null
 }
 
+/** One reason Auto merge held one candidate head, when it was first recorded. */
+export interface TrialAutoMergeHold {
+  repository: string
+  pullRequestNumber: number
+  headSha: string
+  cause: AutoMergeHoldCause
+  /** True when the head had no label and the label alone would have merged it. */
+  heldOnlyByLabel: boolean
+  occurredAt: string
+}
+
 export interface TrialStore {
   /** Every run of one Routine whose cron instant falls in the range. */
   listTrialRoutineRuns: (input: { routineName: RoutineName, range: TrialRange }) => TrialRoutineRun[]
@@ -93,6 +106,8 @@ export interface TrialStore {
   listTrialRetroCandidates: (range: TrialRange) => TrialRetroCandidate[]
   /** Pull requests merged in the range whose merged head has a Review run, oldest merge first. */
   listTrialReviewedMerges: (range: TrialRange) => TrialReviewedMerge[]
+  /** Auto merge holds first recorded in the range, oldest first. `unreadable` counts records that did not parse. */
+  listTrialAutoMergeHolds: (range: TrialRange) => { holds: TrialAutoMergeHold[], unreadable: number }
 }
 
 /**
@@ -189,6 +204,14 @@ interface RetroCandidateRow {
   merged_at: string | null
 }
 
+interface AutoMergeHoldRow {
+  repository: string
+  item_number: number
+  cause: string
+  reason: string | null
+  occurred_at: string
+}
+
 interface ReviewedMergeRow {
   subject_id: number
   repository: string
@@ -244,6 +267,13 @@ export function createTrialStore(database: DatabaseSync): TrialStore {
   `)
   const firstEvent = database.prepare(`
     SELECT min(occurred_at) AS at FROM workflow_events WHERE stream = ? AND event = ?
+  `)
+  const autoMergeHolds = database.prepare(`
+    SELECT repository, item_number, to_state AS cause, reason, occurred_at
+    FROM workflow_events
+    WHERE stream = 'review_run' AND event = 'auto_merge_hold' AND occurred_at >= ? AND occurred_at < ?
+      AND repository IS NOT NULL AND item_number IS NOT NULL
+    ORDER BY occurred_at, id
   `)
   // The latest Review run on the current head and base decides; a settled run counts through its settlement.
   const readyPullRequests = database.prepare(`
@@ -373,5 +403,25 @@ export function createTrialStore(database: DatabaseSync): TrialStore {
         revertedAt: row.reverted_at,
         revertedBy: row.reverted_by,
       })),
+    listTrialAutoMergeHolds: (range) => {
+      const holds: TrialAutoMergeHold[] = []
+      let unreadable = 0
+      for (const row of autoMergeHolds.all(range.from, range.to) as unknown as AutoMergeHoldRow[]) {
+        const reason = parseJson(row.reason)
+        if (!isAutoMergeHoldCause(row.cause) || !isRecord(reason) || typeof reason.headSha !== 'string' || typeof reason.heldOnlyByLabel !== 'boolean') {
+          unreadable += 1
+          continue
+        }
+        holds.push({
+          repository: row.repository,
+          pullRequestNumber: row.item_number,
+          headSha: reason.headSha,
+          cause: row.cause,
+          heldOnlyByLabel: reason.heldOnlyByLabel,
+          occurredAt: row.occurred_at,
+        })
+      }
+      return { holds, unreadable }
+    },
   }
 }

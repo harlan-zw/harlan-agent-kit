@@ -128,7 +128,7 @@ describe('merge risk at the Auto merge gate', () => {
       labelled: true,
       mergeRisk: agreed({ _tag: 'Sensitive', reason: 'AGENTS.md is read as instructions by an agent.' }),
     })
-    expect(decision).toEqual({ _tag: 'Hold', reason: 'AGENTS.md is a Protected path. Auto merge never merges it.' })
+    expect(decision).toEqual({ _tag: 'Hold', cause: 'ProtectedPath', reason: 'AGENTS.md is a Protected path. Auto merge never merges it.' })
   })
 
   it('keeps the existing label behaviour by default', () => {

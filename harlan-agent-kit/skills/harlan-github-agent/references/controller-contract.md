@@ -32,6 +32,8 @@ Bind Approval to the exact head commit; never let the label approve a head commi
 Review every tracked pull request, whatever its labels. Merge one pull request automatically only when it carries `harlan-agent-auto-merge`, `auto_merge.enabled` is true, the repository is owned, the author is trusted, and review returned `READY` at or above `auto_merge.minimum_confidence`. A repository block with `auto_merge.pull_requests: every` drops the label condition and uses its own `minimum_confidence`. Never merge a pull request that changes a Protected path, in any scope. The label and Merge risk never override this. Before the merge, compare the last observed base commit with the exact head commit, by SHA. If the comparison is unavailable, empty, or may be incomplete, hold. Hold when the observed base commit moves away from the compared one. Recheck the head commit at merge time. Everything else waits for Harlan.
 
 Auto merge targets the default branch only. If a stack's exact parent merged there, retarget the child before the next observation.
+
+When Auto merge holds a candidate head that has a published `READY` Review, record one `auto_merge_hold` workflow event for that head and reason. Store the fixed reason name, never the reason text. Record nothing for a merge or for a pull request outside Auto merge. The weekly trial report counts these holds.
 Keep independent Issue work on the default branch, even when another pull request changes the same file.
 If the default branch advances normally, publish the existing verified patch. Fresh Review and GitHub checks evaluate the current base.
 

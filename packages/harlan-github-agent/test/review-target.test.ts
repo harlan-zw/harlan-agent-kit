@@ -51,6 +51,7 @@ describe('review target branch authority', () => {
     const retargets: string[] = []
     const controller = createAutoMergeController({
       changedLines: changedLinesSource(),
+      now: () => new Date('2026-08-13T02:00:00.000Z'),
       policy: { _tag: 'Enabled', minimumConfidence: 100, method: 'squash' },
       store,
       report: () => undefined,
@@ -108,6 +109,7 @@ describe('review target branch authority', () => {
     const merges: string[] = []
     const controller = createAutoMergeController({
       changedLines: changedLinesSource(),
+      now: () => new Date('2026-08-13T02:00:00.000Z'),
       policy: { _tag: 'Enabled', minimumConfidence: 100, method: 'squash' },
       store: restarted,
       report: () => {},
@@ -188,6 +190,7 @@ describe('review target branch authority', () => {
     const merges: string[] = []
     const controller = createAutoMergeController({
       changedLines: changedLinesSource(),
+      now: () => new Date('2026-08-13T02:00:00.000Z'),
       policy: { _tag: 'Enabled', minimumConfidence: 100, method: 'squash' },
       store: upgraded,
       report: () => {},
