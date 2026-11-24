@@ -216,6 +216,7 @@ A head that the controller's own Repair pushed gets a Repair focus Review. It is
 - The Repair must start from the head of the Review it answered. That Review must still be the current Review of an earlier head.
 - Every commit since that head must be a plain commit. A merge in the range starts a full Review.
 - The Repair delta is the diff from that head to the new head. If it is over 32,000 characters, start a full Review.
+- If Git shows no lines for a changed file, start a full Review. A binary file or text marked `-diff` would hide what the Repair removed.
 - The prompt carries the Repair delta and the paths of the whole pull request. The Agent starts from the delta.
 - The Agent checks each targeted finding and the defects the delta adds. It checks every removed line.
 - The Agent searches for every use of a symbol the delta adds, removes, renames, or changes.

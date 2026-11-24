@@ -89,6 +89,18 @@ describe('readRepairDelta', () => {
 
     expect(delta).toMatchObject({ _tag: 'Ok', value: { _tag: 'TooLarge' } })
   })
+
+  it('reads a Repair to a file Git shows no lines for as opaque, so its removed lines cannot hide', async () => {
+    const { directory } = repositoryWithReviewedHead()
+    commitFile(directory, '.gitattributes', 'generated.ts -diff\n', 'mark generated source')
+    const reviewed = commitFile(directory, 'generated.ts', 'export const kept = 1\nexport const removed = 2\n', 'generated exports')
+    commitFile(directory, 'parser.ts', 'export const limit = 2\n', 'repair parser')
+    const headSha = commitFile(directory, 'generated.ts', 'export const kept = 1\n', 'repair drops an export')
+
+    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha }, 32_000, AbortSignal.timeout(10_000))
+
+    expect(delta).toEqual({ _tag: 'Ok', value: { _tag: 'Opaque', paths: ['generated.ts'] } })
+  })
 })
 
 function gates(review: ReviewGates['review'] = { _tag: 'Passed', evidence: [] }): ReviewGates {
@@ -182,6 +194,7 @@ describe('repairFocusScope', () => {
     ['the branch was rewritten', { _tag: 'Rewritten' }],
     ['a merge came in', { _tag: 'IncludesMerge' }],
     ['the delta is over budget', { _tag: 'TooLarge', characters: 90_000 }],
+    ['Git shows no lines for a changed file', { _tag: 'Opaque', paths: ['generated.ts'] }],
     ['the delta is empty', { _tag: 'Diff', diff: '', paths: [] }],
   ])('reviews the full diff when %s', (_case, delta) => {
     expect(repairFocusScope(sourceRun(), delta)._tag).toBe('Full')

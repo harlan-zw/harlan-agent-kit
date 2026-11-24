@@ -199,7 +199,8 @@ export interface AgentWorkspaceManager {
  *
  * The delta must be plain commits on top of that head. A merge in the range
  * brings in work the Repair did not write, so it reads as `IncludesMerge`. A
- * delta over the character budget returns only its size.
+ * file Git shows no lines for reads as `Opaque`. A delta over the character
+ * budget returns only its size.
  */
 export async function readRepairDelta(
   path: string,
@@ -217,6 +218,14 @@ export async function readRepairDelta(
     return err(`Could not list the Repair commits: ${listed.stderr}`)
   if (listed.stdout !== '' && listed.stdout.split('\n').some(line => line.split(' ').length > 2))
     return ok({ _tag: 'IncludesMerge' })
+  // Git counts no lines for a binary file or text marked `-diff`, and its patch
+  // says only that the files differ. Such a delta would hide removed exports.
+  const counted = await runGit(path, ['diff', '--numstat', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', commits.sourceHeadSha, commits.headSha], signal)
+  if (counted.exitCode !== 0)
+    return err(`Could not count the Repair delta: ${counted.stderr}`)
+  const opaque = counted.stdout.split('\0').filter(entry => entry.startsWith('-\t-\t')).map(entry => entry.slice(4))
+  if (opaque.length > 0)
+    return ok({ _tag: 'Opaque', paths: opaque })
   const diff = await runGit(path, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--find-renames', commits.sourceHeadSha, commits.headSha], signal)
   if (diff.exitCode !== 0)
     return err(`Could not read the Repair delta: ${diff.stderr}`)

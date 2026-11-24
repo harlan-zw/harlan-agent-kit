@@ -19,6 +19,11 @@ export type RepairDelta
     | { _tag: 'IncludesMerge' }
   /** The delta is over the budget, so its text stays out of the prompt. */
     | { _tag: 'TooLarge', characters: number }
+  /**
+   * Git shows no lines for these changed files: a binary file, or text marked
+   * `-diff` in `.gitattributes`. The delta would hide what they removed.
+   */
+    | { _tag: 'Opaque', paths: readonly string[] }
     | { _tag: 'Diff', diff: string, paths: readonly string[] }
 
 /**
@@ -71,6 +76,8 @@ export function repairFocusScope(source: ReviewRun, delta: RepairDelta | null): 
     return { _tag: 'Full', reason: 'A merge came in after the answered head.' }
   if (delta._tag === 'TooLarge')
     return { _tag: 'Full', reason: `The Repair delta has ${delta.characters} characters, over the ${REPAIR_DELTA_CHARACTER_BUDGET} budget.` }
+  if (delta._tag === 'Opaque')
+    return { _tag: 'Full', reason: `Git shows no lines for ${delta.paths.join(', ')}, so the Repair delta would hide its changes.` }
   if (delta.diff.trim() === '' || delta.paths.length === 0)
     return { _tag: 'Full', reason: 'The Repair delta changes no file.' }
   return { _tag: 'RepairFocus', source, diff: delta.diff, paths: delta.paths }
