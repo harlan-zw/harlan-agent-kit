@@ -208,21 +208,24 @@ const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { 
  * Runs one Review of a Repair head and reports the prompt the Agent received
  * and what the Review run recorded.
  */
-async function reviewRepairHead(input: { source: ReviewRun, callerVerification?: 'complete' | 'incomplete' | null, notChecked?: string | null, paths?: string[], task?: ClaimedAdversarialReviewTask, journal?: ReturnType<typeof openJournalStore>, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
+async function reviewRepairHead(input: { source: ReviewRun, callerVerification?: 'complete' | 'incomplete' | null | ((prompt: string) => 'complete' | 'incomplete'), findings?: { identity: string, impact: number, line: number, nextAction: string, path: string, proof: string, regressionTest: string, summary: string }[], notChecked?: string | null, paths?: string[], task?: ClaimedAdversarialReviewTask, journal?: ReturnType<typeof openJournalStore>, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
   const pullRequest = pullRequestItem({ mergeState: 'clean', ...input.task?.pullRequest })
   const capture: ProviderCapture = { requests: [] }
   const recorded: RecordReviewRunInput[] = []
   const publications: string[] = []
   const worker = createReviewWorker({
-    runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
-      checked: 'the limit in parser.ts and its caller',
-      notChecked: input.notChecked ?? null,
-      ...(input.callerVerification === null ? {} : { callerVerification: input.callerVerification ?? 'complete' }),
-      premise: { verdict: 'sound', reason: 'The change keeps its intent.' },
-      findings: [],
-      confidence: 96,
-      ...(input.mergeRisk === undefined ? {} : { mergeRisk: input.mergeRisk }),
-    }), capture)),
+    runtime: agentRuntime(CODEX_AGENT_PROFILE, {
+      name: 'codex',
+      runTurn: request => stubProvider(turnEvents({
+        checked: 'the limit in parser.ts and its caller',
+        notChecked: input.notChecked ?? null,
+        ...(input.callerVerification === null ? {} : { callerVerification: typeof input.callerVerification === 'function' ? input.callerVerification(request.prompt) : input.callerVerification ?? 'complete' }),
+        premise: { verdict: 'sound', reason: 'The change keeps its intent.' },
+        findings: input.findings ?? [],
+        confidence: 96,
+        ...(input.mergeRisk === undefined ? {} : { mergeRisk: input.mergeRisk }),
+      }), capture).runTurn(request),
+    }),
     github: {
       consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
       editReviewStatus: () => Promise.reject(new Error('Unexpected comment edit.')),
@@ -270,7 +273,7 @@ async function reviewRepairHead(input: { source: ReviewRun, callerVerification?:
       updateAgentProgress: () => true,
       priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       latestReviewOfEarlierHead: () => input.source,
-      repairSource: () => input.repaired === false ? null : { headSha: input.source.headSha, builtOnHeadSha: input.source.headSha, fingerprints: ['a'.repeat(64)] },
+      repairSource: revisionId => input.repaired === false || revisionId === input.source.revisionId ? null : { headSha: input.source.headSha, builtOnHeadSha: input.source.headSha, fingerprints: ['a'.repeat(64)] },
       mergedWithFailingChecks: () => null,
       recordReviewRun: (run) => {
         recorded.push(run)
@@ -283,6 +286,11 @@ async function reviewRepairHead(input: { source: ReviewRun, callerVerification?:
             repairSource: input.journal.repairSource,
             latestReviewOfEarlierHead: input.journal.latestReviewOfEarlierHead,
             getRepairedHeadFindings: input.journal.getRepairedHeadFindings,
+            queueReviewFixTaskForReview: input.journal.queueReviewFixTaskForReview,
+            recordReviewRun: (run) => {
+              recorded.push(run)
+              return input.journal!.recordReviewRun(run)
+            },
           }),
     },
     status: {
@@ -327,6 +335,68 @@ async function reviewRepairHead(input: { source: ReviewRun, callerVerification?:
 const fullDiffMandate = 'Follow nextOffset until truncated is false.'
 
 describe('a Review of a Repair head', () => {
+  it.each([false, true])('keeps earlier callers in scope across two Repairs, all callers verified: %s', async (allCallersVerified) => {
+    const store = openJournalStore(':memory:')
+    let second = 0
+    const at = () => `2026-11-24T00:10:${String(second++).padStart(2, '0')}.000Z`
+    const unrelated = {
+      identity: 'unrelated-blocker',
+      impact: 88,
+      line: 1,
+      nextAction: 'Fix the unrelated bug.',
+      path: 'other.ts',
+      proof: 'The unrelated operation fails.',
+      regressionTest: 'Call the unrelated operation.',
+      summary: 'An unrelated operation fails',
+    }
+    const publishRepair = (review: ClaimedAdversarialReviewTask, headSha: string) => {
+      expect(['Queued', 'Existing']).toContain(store.queueReviewFixTaskForReview({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at: at() })._tag)
+      const repair = store.claimNextReviewFixTask('repairer', at(), 60_000)!
+      expect(store.stagePublication({
+        taskId: repair.id,
+        workerId: repair.state.workerId,
+        fence: repair.state.fence,
+        at: at(),
+        publication: { _tag: 'UpdatePullRequest', taskKind: 'review_fix', baseRef: 'main', pullRequestNumber: 24, commitSha: headSha, baseSha: repair.pullRequest.baseSha, expectedHeadSha: repair.pullRequest.headSha, headRef: repair.pullRequest.headRef, artifactRef: 'refs/test/repair', patchDigest: 'repair-patch', changedFiles: 1 },
+      })._tag).toBe('Staged')
+      const publication = store.claimNextPublication('publisher', at(), 60_000)!
+      expect(store.completePublication({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at: at(), evidence: 'Published Repair.' })).toBe(true)
+      expect(store.recordObservation({ externalId: headSha, observedAt: at(), source: 'poll', subject: pullRequestItem({ ...review.pullRequest, headSha }) })._tag).toBe('Inserted')
+      return store.claimNextAdversarialReviewTask('reviewer', at(), 60_000)!
+    }
+    try {
+      store.syncRepositories([repositoryMapping()], at())
+      store.recordObservation({ externalId: 'source', observedAt: at(), source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
+      const initial = store.claimNextAdversarialReviewTask('reviewer', at(), 60_000)!
+      expect(store.recordReviewRun({ ...sourceRun(), revisionId: initial.revisionId, headSha: initial.pullRequest.headSha })._tag).toBe('Inserted')
+      const firstTask = publishRepair(initial, 'e'.repeat(40))
+      const first = await reviewRepairHead({
+        task: firstTask,
+        journal: store,
+        source: store.latestReviewOfEarlierHead(initial.repository, 24, firstTask.pullRequest.headSha)!,
+        callerVerification: 'incomplete',
+        notChecked: 'The API Repair has unverified callers.',
+        findings: [unrelated],
+      })
+      expect(first.run?.gates.review._tag).toBe('Failed')
+      const secondTask = publishRepair(firstTask, 'f'.repeat(40))
+      const next = await reviewRepairHead({
+        task: secondTask,
+        journal: store,
+        source: store.latestReviewOfEarlierHead(initial.repository, 24, secondTask.pullRequest.headSha)!,
+        delta: { _tag: 'Diff', paths: ['other.ts'], diff: 'diff --git a/other.ts b/other.ts\n-broken()\n+fixed()\n' },
+        // This Agent verified the latest delta. A full Review also asks it
+        // about the earlier API callers, which remain unverified in one case.
+        callerVerification: prompt => allCallersVerified || !prompt.includes(fullDiffMandate) ? 'complete' : 'incomplete',
+        notChecked: allCallersVerified ? null : 'The earlier API callers remain unverified.',
+      })
+      expect(reviewOutcome(next.run!.gates)).toBe(allCallersVerified ? 'READY' : 'PENDING')
+      expect(next.prompt).toContain(fullDiffMandate)
+      expect(next.prompt).toContain('This full Review covers a Repair head. Verify every affected caller')
+    }
+    finally { store.close() }
+  })
+
   it('withholds Ready when caller verification remains incomplete after a truncated search', async () => {
     const review = await reviewRepairHead({
       source: sourceRun(),

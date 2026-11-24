@@ -2069,6 +2069,11 @@ async function reviewScope(
   })
   if (source._tag === 'Err')
     return { _tag: 'Full', reason: source.error }
+  // A failed Repair Review can hide incomplete caller verification behind
+  // an unrelated blocker. Its next delta cannot discharge the earlier check.
+  // Recheck the whole diff instead of inheriting that unverified baseline.
+  if (source.value.gates.review._tag !== 'Passed' && options.store.repairSource(source.value.revisionId) !== null)
+    return { _tag: 'Full', reason: 'The earlier Repair Review did not pass.' }
   const delta = await readRepairDelta(workspace, source.value.headSha, signal)
   return delta._tag === 'Err'
     ? { _tag: 'Full', reason: `Git could not read the Repair delta: ${delta.error}` }
