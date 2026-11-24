@@ -100,6 +100,46 @@ describe('readHeadAdvance', () => {
     expect(advance).toMatchObject({ _tag: 'Ok', value: { _tag: 'ResolvedBaseMerges', merges: [headSha] } })
   })
 
+  it('reads a kept file from a modify/delete conflict as resolved', async () => {
+    const { directory } = repositoryWithReviewedHead()
+    git(directory, 'switch', '-q', 'feature')
+    const reviewed = commitFile(directory, 'shared.txt', 'feature\n', 'feature edits shared')
+    git(directory, 'switch', '-q', 'main')
+    git(directory, 'rm', '-q', 'shared.txt')
+    git(directory, 'commit', '-q', '-m', 'main deletes shared')
+    const baseSha = git(directory, 'rev-parse', 'HEAD')
+    git(directory, 'switch', '-q', 'feature')
+    expect(() => execFileSync('git', ['-C', directory, 'merge', '-q', '--no-edit', 'main'], { stdio: 'ignore' })).toThrow()
+    git(directory, 'add', 'shared.txt')
+    git(directory, 'commit', '-q', '--no-edit')
+    const headSha = git(directory, 'rev-parse', 'HEAD')
+
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
+
+    expect(advance).toMatchObject({ _tag: 'Ok', value: { _tag: 'ResolvedBaseMerges', merges: [headSha] } })
+  })
+
+  it('reads a pull request edit the base merge moved to a renamed file as a changed diff', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'harlan-review-reuse-'))
+    temporaryDirectories.push(directory)
+    execFileSync('git', ['init', '-q', '-b', 'main', directory])
+    git(directory, 'config', 'user.email', 'agent@example.com')
+    git(directory, 'config', 'user.name', 'Agent Test')
+    const lines = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`)
+    commitFile(directory, 'parser.ts', `${lines.join('\n')}\n`, 'base')
+    git(directory, 'switch', '-q', '-c', 'feature')
+    const reviewed = commitFile(directory, 'parser.ts', `${lines.map((line, index) => index === 5 ? 'line 6 changed' : line).join('\n')}\n`, 'feature edits parser')
+    git(directory, 'switch', '-q', 'main')
+    git(directory, 'mv', 'parser.ts', 'legacy-parser.ts')
+    git(directory, 'commit', '-q', '-m', 'main renames parser')
+    const baseSha = git(directory, 'rev-parse', 'HEAD')
+    const headSha = mergeMain(directory)
+
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
+
+    expect(advance).toEqual({ _tag: 'Ok', value: { _tag: 'ChangedDiff' } })
+  })
+
   it('reads a commit after the merge as new work', async () => {
     const { directory, reviewed } = repositoryWithReviewedHead()
     const baseSha = commitFile(directory, 'main-only.txt', 'main\n', 'main moves')
@@ -179,7 +219,8 @@ describe('decideReviewReuse', () => {
     ['an unreadable head', { forced: false, earlier: earlierRun(), advance: null }],
     ['a rewritten branch', { forced: false, earlier: earlierRun(), advance: { _tag: 'Rewritten' } }],
     ['new commits', { forced: false, earlier: earlierRun(), advance: { _tag: 'NewCommits' } }],
-    ['a conflict resolution too large to review alone', { forced: false, earlier: earlierRun(), advance: { _tag: 'ResolvedBaseMerges', merges: ['m'], changedPaths: [], resolution: null } }],
+    ['a clean merge that moved the pull request edits', { forced: false, earlier: earlierRun(), advance: { _tag: 'ChangedDiff' } }],
+    ['a conflict resolution too large to send as evidence', { forced: false, earlier: earlierRun(), advance: { _tag: 'ResolvedBaseMerges', merges: ['m'], changedPaths: [], resolution: null } }],
     ['a conflict resolution in a carried finding\'s file', { forced: false, earlier: earlierRun({ findings: [logged('shared.txt')] }), advance: { _tag: 'ResolvedBaseMerges', merges: ['m'], changedPaths: ['shared.txt'], resolution: 'diff' } }],
     ['a merge into a finding\'s file', { forced: false, earlier: earlierRun({ findings: [logged('main-only.txt')] }), advance: clean }],
   ])('reviews again after %s', (_case, input) => {
