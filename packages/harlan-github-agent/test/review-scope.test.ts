@@ -10,6 +10,7 @@ import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { createReviewWorker } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
 import { repairFocusCoverage, repairFocusScope, repairFocusSource } from '../src/review-scope.ts'
+import { createReviewStaticReader } from '../src/review-static.ts'
 import { openJournalStore } from '../src/store.ts'
 import { readRepairDelta } from '../src/worktree.ts'
 import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
@@ -320,6 +321,27 @@ async function reviewRepairHead(input: { source: ReviewRun, task?: ClaimedAdvers
 const fullDiffMandate = 'Follow nextOffset until truncated is false.'
 
 describe('a Review of a Repair head', () => {
+  it('requires a fallback scan when bounded search misses a changed caller beyond byte 16000', async () => {
+    const { directory } = repositoryWithReviewedHead()
+    commitFile(directory, 'parser.ts', 'export const limit = () => 1\n', 'original callee')
+    const reviewed = commitFile(directory, 'caller.ts', `${'// padding\n'.repeat(1700)}import { limit } from './parser'\nexport const result = limit()\n`, 'change caller')
+    const headSha = commitFile(directory, 'parser.ts', 'export const limit = () => 2\n', 'repair callee')
+    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha }, 32_000, AbortSignal.timeout(10_000))
+    if (delta._tag !== 'Ok')
+      throw new Error(delta.error)
+    const reader = createReviewStaticReader(directory)
+    expect(await reader.search('limit()')).toEqual({ _tag: 'Matches', matches: [], truncated: true })
+    const caller = await reader.read('caller.ts', 16_000)
+    expect(caller).toMatchObject({ _tag: 'Read', truncated: false })
+    if (caller._tag === 'Read')
+      expect(caller.text).toContain('limit()')
+
+    const review = await reviewRepairHead({ source: sourceRun({ headSha: reviewed }), delta: delta.value })
+
+    expect(review.prompt).toContain('If review_search returns truncated: true or refuses the search, scan the full base-to-head diff.')
+    expect(review.prompt).toContain('Page each changed file that may use the symbol, including beyond byte 16000, until truncated is false.')
+  })
+
   it.each([false, true])('uses the published Repair delta unless a full Review was explicitly requested: %s', async (explicit) => {
     const store = openJournalStore(':memory:')
     const at = (second: number) => `2026-11-24T00:10:${String(second).padStart(2, '0')}.000Z`
@@ -372,7 +394,6 @@ describe('a Review of a Repair head', () => {
     expect(review.prompt).toContain('review_read with revision diff and an empty path')
     expect(review.prompt).toContain('review_search')
     expect(review.prompt).toContain('caller.ts')
-    expect(review.prompt).not.toContain(fullDiffMandate)
   })
 
   it('asks the Agent to recheck the earlier Review\'s other findings by their identity', async () => {

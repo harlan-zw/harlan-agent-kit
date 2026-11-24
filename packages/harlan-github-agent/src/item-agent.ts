@@ -1504,6 +1504,9 @@ The Repair delta below holds every change since that head. Start there:
 - Check each finding the Repair targeted against this head.
 - Find defects the delta adds. For each removed line, confirm nothing still depends on it.
 - For each symbol the delta adds, removes, renames, or changes, use review_search to find its uses. Read each use this pull request changed or that relied on the old behaviour.
+- If review_search returns truncated: true or refuses the search, scan the full base-to-head diff. Use review_read with revision diff and an empty path. Follow nextOffset until truncated is false, including all changed-file paths.
+- Page each changed file that may use the symbol, including beyond byte 16000, until truncated is false. Treat every source file as a possible use until fully scanned. This fallback overrides the 300-line reading limit. Read uses against the Repair's new behaviour.
+- An incomplete search with zero matches proves no absence of uses. If fallback evidence is unavailable, report the verification limit.
 - When the delta changes behaviour that other parts of this pull request rely on, use review_read with revision diff and an empty path to page the full base-to-head diff.
 Leave the hunks the delta does not reach to the earlier Review.
 Answer premise, confidence, and mergeRisk for the whole pull request, not the delta alone.
