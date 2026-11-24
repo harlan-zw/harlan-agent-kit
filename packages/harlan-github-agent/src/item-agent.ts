@@ -1433,7 +1433,7 @@ function reviewMemoryBlock(memory: RepositoryMemory | null): string {
     : `\n${lines}\nThe memory index and its notes are the only read allowed outside the worktree.\n`
 }
 
-/** The conflict resolution a scoped Review reads, and the head whose Review covers the rest. */
+/** Additional conflict resolution evidence, and the head whose findings carry over. */
 export interface ReviewResolutionScope {
   earlierHeadSha: string
   /** `git show --remerge-diff` output for each merge that resolved a conflict. */
@@ -1443,8 +1443,8 @@ export interface ReviewResolutionScope {
 /**
  * The adversarial Review prompt. Exported so tests can assert its contract without an Agent.
  *
- * A resolution scope replaces the full diff read with the conflict resolution
- * alone, because the Review of the earlier head already covers the rest.
+ * Resolution evidence supplements the full diff. Cleanly merged changes can
+ * break callers that the earlier Review covered.
  */
 export function reviewPrompt(task: ClaimedAdversarialReviewTask, snapshot: PullRequestReviewSnapshot, workspace: string, preflight: RepairPreflight, repairedHeadFindings: ReviewFinding[], memory: RepositoryMemory | null, resolution: ReviewResolutionScope | null = null): string {
   const repairPolicy = preflight._tag === 'Authorized'
@@ -1505,12 +1505,13 @@ If exact evidence is Unavailable, report the verification limit. Native Git and 
 
 function resolutionRead(scope: ReviewResolutionScope, baseRef: string | null): string {
   const base = baseRef ?? 'the base branch'
-  return `A Review of ${scope.earlierHeadSha.slice(0, 7)} already covers this pull request. Its findings carry over.
-The commits after it only merge ${base}. Git merged them cleanly, except for the conflict resolution below.
-Review only this resolution. Check that it keeps the intent of the pull request and the change from ${base}.
-Do not page the whole diff. Use review_read with revision head or workspace for code the resolution touches.
-Report findings only on lines the resolution wrote. Static reads never spend the proof invocation.
-If exact evidence is Unavailable, report the verification limit. Native Git and shell tools are unavailable.
+  return `${fullDiffRead}
+A Review of ${scope.earlierHeadSha.slice(0, 7)} supplied the findings that carry over.
+The commits after it merge ${base}, including the conflict resolution below.
+Review the full diff and integration with cleanly merged changes. Trace changed contracts through their callers.
+Check that the resolution keeps the intent of the pull request and the change from ${base}.
+Report deletion defects on surviving code or the affected file. Use a surviving line for the finding location.
+Findings may also name code affected by cleanly merged changes, even outside the resolution.
 Untrusted conflict resolution follows, as git show --remerge-diff prints it:
 ${scope.text}`
 }
@@ -2058,10 +2059,10 @@ function resolutionMergeRisk(fresh: MergeRiskRecord, earlier: MergeRiskRecord | 
 }
 
 /**
- * The findings of a Review that read only a conflict resolution.
+ * The findings of a full diff Review after a resolved base merge.
  *
- * The earlier Review's findings still describe the rest of the change, so they
- * carry over. A carried finding the new turn reported again keeps the new copy.
+ * Earlier findings carry over when the merge left their files untouched.
+ * A carried finding the new turn reported again keeps the new copy.
  */
 function withCarriedFindings(fresh: ReviewFinding[], carried: readonly ReviewFinding[]): ReviewFinding[] {
   const reported = new Set(fresh.flatMap(finding => finding._tag === 'Fixed' || finding.details === undefined ? [] : [finding.details.fingerprint]))

@@ -24,7 +24,7 @@ export type HeadAdvance
 
 export type ReviewReuse
   = | { _tag: 'Reuse', run: ReviewRun }
-  /** Review only the conflict resolution, and carry the rest from the earlier run. */
+  /** Review the full diff with resolution evidence, and carry the earlier findings. */
     | { _tag: 'ReviewResolution', run: ReviewRun, resolution: string }
     | { _tag: 'Review', reason: string }
 
@@ -45,9 +45,9 @@ export interface ReviewReuseInput {
  * service already keeps that Review. So the earlier verdict carries over, and
  * the controller gates still answer for the new head.
  *
- * A merge that resolved a conflict changed code nobody reviewed yet, so only
- * that resolution goes to an Agent. A resolution too large to read alone gets
- * a full Review.
+ * A resolved merge needs a full diff Review, including cleanly merged changes.
+ * Its resolution supplies extra evidence. Earlier findings carry over when
+ * their files did not move. Oversized evidence uses a fresh Review instead.
  *
  * It carries only a Review whose review gate passed, so no Repair waits on it.
  * A carried finding whose file the merge touched could point at a moved line,
@@ -88,8 +88,8 @@ export function carriedCoverage(earlier: Pick<ReviewRun, 'checked' | 'headSha'>,
     : `${earlier.checked.trim().replace(/[.;,\s]+$/, '')} at ${head}; ${merged}`
 }
 
-/** The `Checked` clause of a Review that read only a conflict resolution. */
+/** The `Checked` clause of a Review that also carries earlier findings. */
 export function resolutionCoverage(checked: string, earlier: Pick<ReviewRun, 'headSha'>): string {
   const own = checked.trim().replace(/[.;,\s]+$/, '')
-  return `${own === '' ? 'the conflict resolution' : own}; the rest carried from the Review of ${earlier.headSha.slice(0, 7)}`
+  return `${own === '' ? 'the full diff and conflict resolution' : own}; earlier findings carried from the Review of ${earlier.headSha.slice(0, 7)}`
 }

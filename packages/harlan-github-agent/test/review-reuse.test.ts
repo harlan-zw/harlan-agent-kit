@@ -186,7 +186,7 @@ describe('decideReviewReuse', () => {
     expect(decideReviewReuse(input)._tag).toBe('Review')
   })
 
-  it('reviews only the resolution of a conflict, and carries the rest', () => {
+  it('carries earlier findings with resolution evidence for the full diff Review', () => {
     const earlier = earlierRun()
 
     expect(decideReviewReuse({ forced: false, earlier, advance: { _tag: 'ResolvedBaseMerges', merges: ['m'], changedPaths: ['shared.txt'], resolution: 'diff' } }))
@@ -311,6 +311,71 @@ async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance) 
 }
 
 describe('a Review after an earlier reviewed head', () => {
+  it('permits a finding on surviving code when a deletion-only resolution drops a required fallback', async () => {
+    const { directory } = repositoryWithReviewedHead()
+    const original = 'export function value(input) {\n  return input\n}\n'
+    const feature = 'export function value(input) {\n  return input.value\n}\n'
+    git(directory, 'switch', '-q', 'feature')
+    commitFile(directory, 'value.js', original, 'add value')
+    git(directory, 'switch', '-q', 'main')
+    git(directory, 'merge', '-q', 'feature')
+    git(directory, 'switch', '-q', 'feature')
+    const reviewed = commitFile(directory, 'value.js', feature, 'read value')
+    git(directory, 'switch', '-q', 'main')
+    const baseSha = commitFile(directory, 'value.js', 'export function value(input) {\n  return input ?? "fallback"\n}\n', 'add fallback')
+    git(directory, 'switch', '-q', 'feature')
+    expect(() => git(directory, 'merge', '-q', '--no-edit', 'main')).toThrow()
+    writeFileSync(join(directory, 'value.js'), feature)
+    git(directory, 'add', 'value.js')
+    git(directory, 'commit', '-q', '--no-edit')
+    const headSha = git(directory, 'rev-parse', 'HEAD')
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
+    if (advance._tag !== 'Ok' || advance.value._tag !== 'ResolvedBaseMerges')
+      throw new Error('Expected a resolved base merge.')
+    const resolution = advance.value.resolution!
+    expect(resolution).toContain('-  return input ?? "fallback"')
+    expect(resolution.split('\n').some(line => line.startsWith('+') && !line.startsWith('+++'))).toBe(false)
+
+    const review = await reviewAfterEarlierHead(earlierRun({ headSha: reviewed }), advance.value)
+
+    expect(review.prompt).not.toContain('Report findings only on lines the resolution wrote.')
+    expect(review.prompt).toContain('Report deletion defects on surviving code or the affected file.')
+  })
+
+  it('requests the full diff when a clean helper change breaks an extra caller beside an unrelated conflict', async () => {
+    const { directory } = repositoryWithReviewedHead()
+    commitFile(directory, 'helper.ts', 'export const value = () => "ok"\n', 'add helper')
+    commitFile(directory, 'caller.ts', 'import { value } from "./helper.ts"\nexport const call = () => value().toUpperCase()\n', 'add base caller')
+    git(directory, 'switch', '-q', 'feature')
+    git(directory, 'merge', '-q', 'main')
+    commitFile(directory, 'extra.ts', 'import { value } from "./helper.ts"\nexport const extra = () => value().toUpperCase()\n', 'add extra caller')
+    const callExtra = () => execFileSync(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', 'import { extra } from "./extra.ts"; console.log(extra())'], { cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    expect(callExtra()).toBe('OK\n')
+    const reviewed = commitFile(directory, 'shared.txt', 'feature\n', 'feature text')
+    git(directory, 'switch', '-q', 'main')
+    commitFile(directory, 'helper.ts', 'export const value = () => ({ text: "ok" })\n', 'change helper contract')
+    commitFile(directory, 'caller.ts', 'import { value } from "./helper.ts"\nexport const call = () => value().text.toUpperCase()\n', 'update base caller')
+    const baseSha = commitFile(directory, 'shared.txt', 'main\n', 'base text')
+    git(directory, 'switch', '-q', 'feature')
+    expect(() => git(directory, 'merge', '-q', '--no-edit', 'main')).toThrow()
+    writeFileSync(join(directory, 'shared.txt'), 'feature and main\n')
+    git(directory, 'add', 'shared.txt')
+    git(directory, 'commit', '-q', '--no-edit')
+    const headSha = git(directory, 'rev-parse', 'HEAD')
+    expect(callExtra).toThrow('value(...).toUpperCase is not a function')
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
+    if (advance._tag !== 'Ok' || advance.value._tag !== 'ResolvedBaseMerges')
+      throw new Error('Expected a resolved base merge.')
+    expect(advance.value.resolution).not.toContain('helper.ts')
+    expect(advance.value.resolution).not.toContain('extra.ts')
+
+    const review = await reviewAfterEarlierHead(earlierRun({ headSha: reviewed }), advance.value)
+
+    expect(review.turns).toBe(1)
+    expect(review.prompt).toContain('Use review_read with revision diff and an empty path. Follow nextOffset until truncated is false.')
+    expect(review.prompt).not.toContain('Do not page the whole diff.')
+  })
+
   it('carries the earlier verdict across a clean base merge without an Agent turn', async () => {
     const earlier = earlierRun({ findings: [logged('src/untouched.ts')] })
 
@@ -328,18 +393,18 @@ describe('a Review after an earlier reviewed head', () => {
     expect(review.run?.findings).toMatchObject([{ _tag: 'Logged', details: { location: { path: 'src/untouched.ts' } } }])
   })
 
-  it('sends only the conflict resolution to the Agent, and carries the earlier findings', async () => {
+  it('supplements the full diff with the resolution and carries the earlier findings', async () => {
     const earlier = earlierRun({ findings: [logged('src/untouched.ts')] })
 
     const review = await reviewAfterEarlierHead(earlier, { _tag: 'ResolvedBaseMerges', merges: ['m'], changedPaths: ['shared.txt'], resolution: '+feature and main' })
 
     expect(review.turns).toBe(1)
-    expect(review.prompt).toContain('Review only this resolution.')
+    expect(review.prompt).toContain('Review the full diff and integration with cleanly merged changes.')
     expect(review.prompt).toContain('+feature and main')
-    expect(review.prompt).not.toContain('Follow nextOffset until truncated is false.')
+    expect(review.prompt).toContain('Follow nextOffset until truncated is false.')
     expect(review.run).toMatchObject({
       confidence: 92,
-      checked: 'the changed files; the rest carried from the Review of abc1234',
+      checked: 'the changed files; earlier findings carried from the Review of abc1234',
       gates: { review: { _tag: 'Passed' } },
     })
     expect(review.run?.findings).toMatchObject([{ _tag: 'Logged', details: { location: { path: 'src/untouched.ts' } } }])
