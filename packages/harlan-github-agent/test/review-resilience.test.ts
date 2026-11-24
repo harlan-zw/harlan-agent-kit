@@ -144,7 +144,6 @@ function harness(input: {
       ...agentTurnLedger,
       updateAgentProgress: () => true,
       priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
-      latestReviewOfEarlierHead: () => undefined,
       repairSource: () => null,
       mergedWithFailingChecks: () => null,
       recordReviewRun: (attempt) => {

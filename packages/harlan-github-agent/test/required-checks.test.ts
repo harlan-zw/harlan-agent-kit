@@ -96,7 +96,6 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       ...agentTurnLedger,
       updateAgentProgress: () => true,
       priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
-      latestReviewOfEarlierHead: () => undefined,
       repairSource: () => null,
       mergedWithFailingChecks: () => null,
       recordReviewRun: (run) => {

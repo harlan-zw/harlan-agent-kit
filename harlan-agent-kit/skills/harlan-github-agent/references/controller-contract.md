@@ -209,8 +209,6 @@ Use the exact issue state or pull request head commit for every dispatch.
 
 Keep one implementation Agent for an issue and its resulting pull request. Start one fresh Review Agent per head SHA.
 
-A head can carry the Review of an earlier head instead. Every new commit after the earlier head must merge the base branch. Git must merge its two parents without a conflict, and its tree must equal that merge. The pull request must still add and remove the same lines at the same paths. The earlier Review must pass its review gate and match the current base branch and repository policy. If the merge changed the file of a carried finding, start a fresh Review. A rerun or the manual Review label also starts a fresh Review. The carried run records zero usage. Its merge and CI gates read the new head.
-
 Preflight Repair authority before Review. Keep Review read only, and reject a Review worktree that changed.
 
 Use GitHub Actions CI for every repository-wide test, lint, typecheck, and build result. Review Agents may run only focused checks for changed files, their direct dependants, or one material finding. Never let a Review Agent run a full suite, repository typecheck, build, dev server, site crawl, or Lighthouse audit.

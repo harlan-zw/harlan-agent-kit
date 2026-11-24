@@ -1317,13 +1317,6 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   recordAutoMergeHold: (input: AutoMergeHoldRecord) => void
   /** What this service already holds for one head commit. */
   storedReviewForHead: (repository: string, pullRequestNumber: number, headSha: string) => StoredReviewForHead
-  /**
-   * The newest Review of another head that still answers for this pull request.
-   *
-   * It must share the current base branch and repository policy, like a stored
-   * Review of the current head. A Review a later settlement superseded is not one.
-   */
-  latestReviewOfEarlierHead: (repository: string, pullRequestNumber: number, headSha: string) => ReviewRun | undefined
   /** Replaces one person's explicit judgment about one Review run. */
   recordAgentFeedback: (input: { reviewRunId: string, feedback: AgentFeedbackInput, at: string }) => RecordAgentFeedbackResult
   /** Newest explicit judgments with the Review evidence needed by the feedback Routine. */
@@ -10416,31 +10409,6 @@ export function openJournalStore(
     return run === undefined ? { _tag: 'Stale' } : { _tag: 'Current', run }
   }
 
-  const latestReviewOfEarlierHead: JournalStore['latestReviewOfEarlierHead'] = (repository, pullRequestNumber, headSha) => {
-    const ids = database.prepare(`
-      SELECT review_runs.id
-      FROM review_runs
-      JOIN subjects ON subjects.id = review_runs.subject_id
-      JOIN revisions AS current ON current.id = subjects.current_revision_id
-      JOIN repositories ON repositories.id = subjects.repository_id
-      WHERE repositories.github = ? AND subjects.github_number = ?
-        AND subjects.kind = 'pull_request' AND review_runs.kind = 'adversarial_review'
-        AND review_runs.head_sha <> ?
-        AND review_runs.base_ref = json_extract(current.payload, '$.baseRef')
-        AND EXISTS (
-          SELECT 1 FROM review_evidence_scopes
-          WHERE review_evidence_scopes.review_run_id = review_runs.id
-            AND review_evidence_scopes.policy_digest = repositories.policy_digest
-        )
-      ORDER BY review_runs.completed_at DESC, review_runs.id DESC
-    `).all(repository, pullRequestNumber, headSha) as Array<{ id: string }>
-    if (ids.length === 0)
-      return undefined
-    // listReviewRuns leaves out superseded runs, so the newest listed one wins.
-    const listed = new Map(listReviewRuns(repository, pullRequestNumber).map(run => [run.id, run]))
-    return ids.map(row => listed.get(row.id)).find(run => run !== undefined)
-  }
-
   const listReviewRuns: JournalStore['listReviewRuns'] = (repository, pullRequestNumber) => {
     const reviewRuns = database.prepare(`
       SELECT
@@ -18248,7 +18216,6 @@ export function openJournalStore(
     getAutoMergeContext,
     recordAutoMergeHold: input => recordAutoMergeHold(database, input),
     storedReviewForHead,
-    latestReviewOfEarlierHead,
     recordAgentFeedback,
     needsAttentionTask,
     requestRestart,
