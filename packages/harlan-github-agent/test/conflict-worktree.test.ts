@@ -5,10 +5,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { createConflictWorker } from '../src/conflict-worker.ts'
 import { ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
 import { createConflictWorktreeManager, createGitPublicationRemote } from '../src/worktree.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const temporaryDirectories: string[] = []
 const stores: ReturnType<typeof openJournalStore>[] = []
@@ -619,5 +621,42 @@ describe('conflict worktree', () => {
     const verified = await manager.verify(task, prepared, new AbortController().signal)
 
     expect(verified).toEqual({ _tag: 'Err', error: 'The worker changed a file the merge did not touch: keep.ts.' })
+  })
+})
+
+describe('conflict worker against a real merge', () => {
+  it('does not publish a merge with a failing check while conflict markers remain', async () => {
+    const { remote, root, task } = fixture()
+    let commits = 0
+    const manager = createConflictWorktreeManager({
+      gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
+      remoteUrl: () => remote,
+      root,
+      tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+    })
+    // The Agent claims a resolved merge but never edits file.txt, so Git's markers stay in it.
+    const worker = createConflictWorker({
+      github: { getPullRequest: () => Promise.resolve(ok(task.pullRequest)), isBranchProtected: () => Promise.resolve(ok(false)) },
+      now: () => new Date('2026-08-13T01:00:00.000Z'),
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
+        outcome: 'resolved_with_failures',
+        summary: 'Merged. keep.ts still fails its test.',
+        checks: [{ command: 'pnpm vitest run keep.test.ts', outcome: 'failed', details: 'keep.ts exports the old value.' }],
+        commitMessage: 'merge: keep both changes',
+        unavailableCheck: { command: '', error: '' },
+        failures: [{ command: 'pnpm vitest run keep.test.ts', paths: ['keep.ts'] }],
+      }))),
+      store: { getWorkerSession: () => null, saveWorkerSession: () => undefined, ...agentTurnLedger, updateAgentProgress: () => true },
+      validateMapping: mapping => Promise.resolve(ok(mapping)),
+      worktrees: { ...manager, commit: (...args) => {
+        commits += 1
+        return manager.commit(...args)
+      } },
+    })
+
+    const result = await worker.run(task, new AbortController().signal)
+
+    expect(result).toEqual({ _tag: 'Err', error: expect.stringContaining('file.txt:1: leftover conflict marker') })
+    expect(commits).toBe(0)
   })
 })

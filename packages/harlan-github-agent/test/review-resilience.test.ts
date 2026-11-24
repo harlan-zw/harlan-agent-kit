@@ -146,6 +146,7 @@ function harness(input: {
       priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       latestReviewOfEarlierHead: () => undefined,
       repairSource: () => null,
+      mergedWithFailingChecks: () => null,
       recordReviewRun: (attempt) => {
         attempts.push(attempt)
         return { _tag: 'Inserted', reviewRunId: attempt.id }
