@@ -14,11 +14,18 @@ export type HeadAdvance
     | { _tag: 'NewCommits' }
   /** Every new commit merges the base branch, with no conflict resolution. */
     | { _tag: 'CleanBaseMerges', changedPaths: readonly string[] }
-  /** Every new commit merges the base branch, and at least one differs from Git's own merge. */
-    | { _tag: 'ResolvedBaseMerges', merges: readonly string[], changedPaths: readonly string[] }
+  /**
+   * Every new commit merges the base branch, and at least one differs from Git's own merge.
+   *
+   * `resolution` is what each such merge changed against Git's own merge, as
+   * `git show --remerge-diff` prints it. Null when it is too large to review alone.
+   */
+    | { _tag: 'ResolvedBaseMerges', merges: readonly string[], changedPaths: readonly string[], resolution: string | null }
 
 export type ReviewReuse
   = | { _tag: 'Reuse', run: ReviewRun }
+  /** Review only the conflict resolution, and carry the rest from the earlier run. */
+    | { _tag: 'ReviewResolution', run: ReviewRun, resolution: string }
     | { _tag: 'Review', reason: string }
 
 export interface ReviewReuseInput {
@@ -37,6 +44,10 @@ export interface ReviewReuseInput {
  * same holds when the base branch moves under an unchanged head, and the
  * service already keeps that Review. So the earlier verdict carries over, and
  * the controller gates still answer for the new head.
+ *
+ * A merge that resolved a conflict changed code nobody reviewed yet, so only
+ * that resolution goes to an Agent. A resolution too large to read alone gets
+ * a full Review.
  *
  * It carries only a Review whose review gate passed, so no Repair waits on it.
  * A carried finding whose file the merge touched could point at a moved line,
@@ -57,13 +68,15 @@ export function decideReviewReuse(input: ReviewReuseInput): ReviewReuse {
     return { _tag: 'Review', reason: 'The reviewed head is not an ancestor of the new head.' }
   if (advance._tag === 'NewCommits')
     return { _tag: 'Review', reason: 'The new head adds commits that are not base merges.' }
-  if (advance._tag === 'ResolvedBaseMerges')
-    return { _tag: 'Review', reason: 'A base merge resolved a conflict.' }
+  if (advance._tag === 'ResolvedBaseMerges' && advance.resolution === null)
+    return { _tag: 'Review', reason: 'The conflict resolution is too large to review alone.' }
   const changed = new Set(advance.changedPaths)
   const moved = earlier.findings.find(finding => finding._tag === 'Logged' && changed.has(finding.details.location.path))
   if (moved !== undefined && moved._tag === 'Logged')
     return { _tag: 'Review', reason: `The base merge changed ${moved.details.location.path}, which a carried finding names.` }
-  return { _tag: 'Reuse', run: earlier }
+  return advance._tag === 'ResolvedBaseMerges' && advance.resolution !== null
+    ? { _tag: 'ReviewResolution', run: earlier, resolution: advance.resolution }
+    : { _tag: 'Reuse', run: earlier }
 }
 
 /** The `Checked` clause of a carried Review, so the canonical comment says what happened. */
@@ -73,4 +86,10 @@ export function carriedCoverage(earlier: Pick<ReviewRun, 'checked' | 'headSha'>,
   return earlier.checked === null || earlier.checked === undefined || earlier.checked.trim() === ''
     ? `the Review of ${head}, carried forward because ${merged}`
     : `${earlier.checked.trim().replace(/[.;,\s]+$/, '')} at ${head}; ${merged}`
+}
+
+/** The `Checked` clause of a Review that read only a conflict resolution. */
+export function resolutionCoverage(checked: string, earlier: Pick<ReviewRun, 'headSha'>): string {
+  const own = checked.trim().replace(/[.;,\s]+$/, '')
+  return `${own === '' ? 'the conflict resolution' : own}; the rest carried from the Review of ${earlier.headSha.slice(0, 7)}`
 }

@@ -15,6 +15,7 @@ import type { RepairRoundPlan } from './repair-rounds.ts'
 import type { PullRequestCommand } from './repository-policy.ts'
 import type { Result } from './result.ts'
 import type { ReviewReasoningEffort, ReviewReasoningEffortPolicy } from './review-effort.ts'
+import type { ReviewReuse } from './review-reuse.ts'
 import type { ReviewStatusController } from './review-status-controller.ts'
 import type { JournalStore, QueuedReviewHistory, RepairSource } from './store.ts'
 import type {
@@ -55,7 +56,7 @@ import { acceptedPullRequestCommands, canRepairBaseline, canRepairPullRequestHea
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, commitLink, findingNextAction, fixedRows, followUpBudget, followUpSection, issueRows, plural, statusLine } from './review-comment.ts'
 import { applyReviewReasoningEffortBand, DEFAULT_REVIEW_REASONING_EFFORT_POLICY, reviewReasoningEffortBand } from './review-effort.ts'
-import { carriedCoverage, decideReviewReuse } from './review-reuse.ts'
+import { carriedCoverage, decideReviewReuse, resolutionCoverage } from './review-reuse.ts'
 import { cleanLine, cleanText } from './text.ts'
 import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
 
@@ -1432,8 +1433,20 @@ function reviewMemoryBlock(memory: RepositoryMemory | null): string {
     : `\n${lines}\nThe memory index and its notes are the only read allowed outside the worktree.\n`
 }
 
-/** The adversarial Review prompt. Exported so tests can assert its contract without an Agent. */
-export function reviewPrompt(task: ClaimedAdversarialReviewTask, snapshot: PullRequestReviewSnapshot, workspace: string, preflight: RepairPreflight, repairedHeadFindings: ReviewFinding[], memory: RepositoryMemory | null): string {
+/** The conflict resolution a scoped Review reads, and the head whose Review covers the rest. */
+export interface ReviewResolutionScope {
+  earlierHeadSha: string
+  /** `git show --remerge-diff` output for each merge that resolved a conflict. */
+  text: string
+}
+
+/**
+ * The adversarial Review prompt. Exported so tests can assert its contract without an Agent.
+ *
+ * A resolution scope replaces the full diff read with the conflict resolution
+ * alone, because the Review of the earlier head already covers the rest.
+ */
+export function reviewPrompt(task: ClaimedAdversarialReviewTask, snapshot: PullRequestReviewSnapshot, workspace: string, preflight: RepairPreflight, repairedHeadFindings: ReviewFinding[], memory: RepositoryMemory | null, resolution: ReviewResolutionScope | null = null): string {
   const repairPolicy = preflight._tag === 'Authorized'
     ? 'Repair authority preflight passed. A separate fresh Repair Agent may fix findings after this read only Review.'
     : `Repair authority preflight requires action: ${preflight.reason}`
@@ -1475,17 +1488,31 @@ Workspace: ${workspace}
 Base SHA: ${task.pullRequest.baseSha}
 Head SHA: ${task.pullRequest.headSha}
 
-Use review_read with revision diff and an empty path. Follow nextOffset until truncated is false.
-The immutable diff names exact base, merge-base, and head revisions. It includes all changed file paths.
-Use revision base or head to page changed file contents. Base means the triple-dot merge base.
-Use revision workspace and byte offsets for surrounding code. Static reads never spend the proof invocation.
-If exact evidence is Unavailable, report the verification limit. Native Git and shell tools are unavailable.
+${resolution === null ? fullDiffRead : resolutionRead(resolution, task.pullRequest.baseRef ?? null)}
 ${repeatedFindings}${discussedFindings}
 Untrusted pull request data follows as JSON:
 ${JSON.stringify(reviewConversationContext(snapshot))}
 
 The worker GitHub CLI supports public reads only. Use this snapshot for private conversation evidence.
 If omitted private history matters to a finding, state the missing evidence. Do not retry credentials.`
+}
+
+const fullDiffRead = `Use review_read with revision diff and an empty path. Follow nextOffset until truncated is false.
+The immutable diff names exact base, merge-base, and head revisions. It includes all changed file paths.
+Use revision base or head to page changed file contents. Base means the triple-dot merge base.
+Use revision workspace and byte offsets for surrounding code. Static reads never spend the proof invocation.
+If exact evidence is Unavailable, report the verification limit. Native Git and shell tools are unavailable.`
+
+function resolutionRead(scope: ReviewResolutionScope, baseRef: string | null): string {
+  const base = baseRef ?? 'the base branch'
+  return `A Review of ${scope.earlierHeadSha.slice(0, 7)} already covers this pull request. Its findings carry over.
+The commits after it only merge ${base}. Git merged them cleanly, except for the conflict resolution below.
+Review only this resolution. Check that it keeps the intent of the pull request and the change from ${base}.
+Do not page the whole diff. Use review_read with revision head or workspace for code the resolution touches.
+Report findings only on lines the resolution wrote. Static reads never spend the proof invocation.
+If exact evidence is Unavailable, report the verification limit. Native Git and shell tools are unavailable.
+Untrusted conflict resolution follows, as git show --remerge-diff prints it:
+${scope.text}`
 }
 
 /** The Issue triage prompt. Exported so tests can assert its contract without an Agent. */
@@ -1782,9 +1809,10 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // files are read once too: the Reasoning effort band needs them before
       // the turn, and Merge risk needs the same list after it.
       const changedFiles = await reviewChangedFiles(options, task, signal)
-      const reused = await reuseEarlierReview(options, task, snapshot.value, workspace.value, changedFiles, { forced: manualReview || task.rerun._tag !== 'NotRequested', startedAt }, signal)
-      if (reused !== undefined)
-        return reused
+      const reuse = await readReviewReuse(options, task, workspace.value, manualReview || task.rerun._tag !== 'NotRequested', signal)
+      if (reuse._tag === 'Reuse')
+        return settleCarriedReview(options, task, snapshot.value, reuse.run, changedFiles, startedAt, signal)
+      const carried = reuse._tag === 'ReviewResolution' ? reuse : null
       const band = reviewReasoningEffortBand(changedFiles._tag === 'Ok' ? changedFiles.value : null, reviewReasoningEffortPolicy(task))
       const reviewRuntime = bandedReviewRuntime(options.runtime(task.repository), band.effort)
       const preflight = repairPreflight(task.repositoryMapping, snapshot.value, repairAccess, repairRounds(options, snapshot.value))
@@ -1800,7 +1828,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         freshSession: task.state.fence > 1 || freshReviewSession,
         ...(memory === null ? {} : { instructionPaths: [memory.indexPath] }),
         number: task.pullRequestNumber,
-        prompt: `${reviewPrompt(task, snapshot.value, workspace.value.path, preflight, repairedHeadFindings, memory)}\n${mediaEvidenceLines(media)}`,
+        prompt: `${reviewPrompt(task, snapshot.value, workspace.value.path, preflight, repairedHeadFindings, memory, carried === null ? null : { earlierHeadSha: carried.run.headSha, text: carried.resolution })}\n${mediaEvidenceLines(media)}`,
         progress: {
           current: agentPhase('WorktreeReady', 'Git worktree ready'),
           report: phase => reportReviewProgress(options, task, 'review', phase, signal),
@@ -1838,8 +1866,9 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
               details: { ...details, regressionTest: finding.regressionTest },
             }
       })
-      const scoped = await scopeFollowUps(options, task, findings, signal)
+      const scoped = await scopeFollowUps(options, task, carried === null ? findings : withCarriedFindings(findings, carried.run.findings), signal)
       const { gates } = reviewGates(snapshot.value, response, repairsBaseline, { reviewStartedAt: startedAt, now: options.now() })
+      const freshMergeRisk = resolveMergeRisk(task, response, changedFiles)
       return settleReviewRun(options, task, snapshot.value, {
         provider: reviewRuntime.profile.provider,
         sessionId: turn.value.sessionId,
@@ -1849,10 +1878,11 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         startedAt,
         usage: turn.value.usage,
         gates,
-        confidence: response.confidence,
+        // A carried Review answers for most of the change, so the lower confidence stands.
+        confidence: carried === null ? response.confidence : Math.min(response.confidence, carried.run.outcome.confidence ?? 0),
         findings: scoped,
-        mergeRisk: resolveMergeRisk(task, response, changedFiles),
-        checked: response.checked,
+        mergeRisk: carried === null || freshMergeRisk === null ? freshMergeRisk : resolutionMergeRisk(freshMergeRisk, carried.run.mergeRisk ?? null),
+        checked: carried === null ? response.checked : resolutionCoverage(response.checked, carried.run),
         notChecked: response.notChecked,
       }, signal)
     },
@@ -1948,41 +1978,51 @@ async function settleReviewRun(
 }
 
 /**
- * Answers this head with the Review of an earlier head, when the new commits
- * only merge the base branch without conflicts.
+ * How much of this head still needs an Agent, given the Review of an earlier head.
  *
- * Undefined means a fresh Review runs, which is also the answer when Git could
- * not compare the two heads. No Agent turn starts here, so the run records zero
- * usage. The merge and CI gates read the new head, as a fresh Review's would.
+ * A fresh Review is also the answer when Git could not compare the two heads.
  */
-async function reuseEarlierReview(
+async function readReviewReuse(
   options: ReviewWorkerOptions,
   task: ClaimedAdversarialReviewTask,
-  snapshot: PullRequestReviewSnapshot,
   workspace: PreparedWorkerWorkspace,
-  changedFiles: Result<PullRequestFile[], string>,
-  context: { forced: boolean, startedAt: string },
+  forced: boolean,
   signal: AbortSignal,
-): Promise<Result<{ evidence: string, resolution: ReviewResolution }, string> | undefined> {
+): Promise<ReviewReuse> {
   const readHeadAdvance = options.workspaces.readHeadAdvance
-  if (readHeadAdvance === undefined || context.forced)
-    return undefined
-  const earlier = options.store.latestReviewOfEarlierHead(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
+  if (readHeadAdvance === undefined)
+    return { _tag: 'Review', reason: 'This worker cannot compare heads.' }
+  const earlier = forced ? undefined : options.store.latestReviewOfEarlierHead(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
   const advance = earlier === undefined
     ? null
     : await readHeadAdvance(workspace, earlier.headSha, signal).then(read => read._tag === 'Ok' ? read.value : null)
-  const decision = decideReviewReuse({ forced: context.forced, earlier, advance })
-  if (decision._tag === 'Review')
-    return undefined
-  const carried = decision.run
-  const { gates } = refreshControllerGates(carried.gates, snapshot, task.repositoryMapping, { reviewStartedAt: context.startedAt, now: options.now() })
+  return decideReviewReuse({ forced, earlier, advance })
+}
+
+/**
+ * Answers this head with the Review of an earlier head, when the new commits
+ * only merge the base branch without conflicts.
+ *
+ * No Agent turn starts here, so the run records zero usage. The merge and CI
+ * gates read the new head, as a fresh Review's would.
+ */
+async function settleCarriedReview(
+  options: ReviewWorkerOptions,
+  task: ClaimedAdversarialReviewTask,
+  snapshot: PullRequestReviewSnapshot,
+  carried: ReviewRun,
+  changedFiles: Result<PullRequestFile[], string>,
+  startedAt: string,
+  signal: AbortSignal,
+): Promise<Result<{ evidence: string, resolution: ReviewResolution }, string>> {
+  const { gates } = refreshControllerGates(carried.gates, snapshot, task.repositoryMapping, { reviewStartedAt: startedAt, now: options.now() })
   return settleReviewRun(options, task, snapshot, {
     provider: carried.provider,
     sessionId: carried.sessionId,
     model: carried.model,
     reasoningEffort: carried.reasoningEffort ?? null,
     skillDigest: carried.skillDigest,
-    startedAt: context.startedAt,
+    startedAt,
     usage: { _tag: 'Available', input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 },
     gates,
     // A run recorded before confidence existed carries none. Zero keeps such a
@@ -2009,6 +2049,26 @@ function carriedMergeRisk(
     : mergeRiskFloor(files.value, scope.policy)
   const claim: MergeRisk = earlier?.claim ?? { _tag: 'Reviewable', reason: 'The carried Review recorded no Merge risk.' }
   return { claim, combined: combineMergeRisk(floor, claim), floor }
+}
+
+/** The Merge risk of a resolution Review: the more severe of the earlier claim and the new one. */
+function resolutionMergeRisk(fresh: MergeRiskRecord, earlier: MergeRiskRecord | null): MergeRiskRecord {
+  const claim = combineMergeRisk(earlier?.claim ?? { _tag: 'Reviewable', reason: 'The carried Review recorded no Merge risk.' }, fresh.claim)
+  return { claim, combined: combineMergeRisk(fresh.floor, claim), floor: fresh.floor }
+}
+
+/**
+ * The findings of a Review that read only a conflict resolution.
+ *
+ * The earlier Review's findings still describe the rest of the change, so they
+ * carry over. A carried finding the new turn reported again keeps the new copy.
+ */
+function withCarriedFindings(fresh: ReviewFinding[], carried: readonly ReviewFinding[]): ReviewFinding[] {
+  const reported = new Set(fresh.flatMap(finding => finding._tag === 'Fixed' || finding.details === undefined ? [] : [finding.details.fingerprint]))
+  return [
+    ...fresh,
+    ...carried.filter(finding => finding._tag !== 'Logged' || !reported.has(finding.details.fingerprint)),
+  ]
 }
 
 /**

@@ -179,10 +179,26 @@ export async function readHeadAdvance(
   if (changed.exitCode !== 0)
     return err(`Could not list the merged paths: ${changed.stderr}`)
   const changedPaths = changed.stdout.split('\0').filter(entry => entry !== '')
-  return resolved.length === 0
-    ? ok({ _tag: 'CleanBaseMerges', changedPaths })
-    : ok({ _tag: 'ResolvedBaseMerges', merges: resolved, changedPaths })
+  if (resolved.length === 0)
+    return ok({ _tag: 'CleanBaseMerges', changedPaths })
+  const shown: string[] = []
+  for (const merge of resolved) {
+    const remerge = await runGit(path, ['show', '--remerge-diff', '--no-color', '--format=Merge %H', merge], signal)
+    if (remerge.exitCode !== 0)
+      return err(`Could not read the conflict resolution of ${merge}: ${remerge.stderr}`)
+    shown.push(remerge.stdout.trim())
+  }
+  const resolution = shown.join('\n\n')
+  return ok({ _tag: 'ResolvedBaseMerges', merges: resolved, changedPaths, resolution: resolution.length > MAXIMUM_RESOLUTION_CHARACTERS ? null : resolution })
 }
+
+/**
+ * The largest conflict resolution a scoped Review reads alone.
+ *
+ * Above it, the resolution rewrote enough of the change that a full Review
+ * costs little more and sees the whole change.
+ */
+const MAXIMUM_RESOLUTION_CHARACTERS = 32_000
 
 export interface BaselineRepairWorktreeManager {
   commit: (task: ClaimedBaselineRepairTask, worktree: PreparedWorkerWorkspace, patch: VerifiedConflictPatch, message: string, signal: AbortSignal) => Promise<Result<PreparedConflictPublication, string>>

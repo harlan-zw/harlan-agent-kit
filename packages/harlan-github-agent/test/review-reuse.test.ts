@@ -79,7 +79,10 @@ describe('readHeadAdvance', () => {
 
     const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
 
-    expect(advance).toEqual({ _tag: 'Ok', value: { _tag: 'ResolvedBaseMerges', merges: [headSha], changedPaths: ['shared.txt'] } })
+    expect(advance).toMatchObject({ _tag: 'Ok', value: { _tag: 'ResolvedBaseMerges', merges: [headSha], changedPaths: ['shared.txt'] } })
+    const resolution = advance._tag === 'Ok' && advance.value._tag === 'ResolvedBaseMerges' ? advance.value.resolution : null
+    expect(resolution).toContain(`Merge ${headSha}`)
+    expect(resolution).toContain('+feature and main')
   })
 
   it('reads a merge that edits a file Git merged cleanly as resolved', async () => {
@@ -176,10 +179,18 @@ describe('decideReviewReuse', () => {
     ['an unreadable head', { forced: false, earlier: earlierRun(), advance: null }],
     ['a rewritten branch', { forced: false, earlier: earlierRun(), advance: { _tag: 'Rewritten' } }],
     ['new commits', { forced: false, earlier: earlierRun(), advance: { _tag: 'NewCommits' } }],
-    ['a resolved conflict', { forced: false, earlier: earlierRun(), advance: { _tag: 'ResolvedBaseMerges', merges: ['m'], changedPaths: [] } }],
+    ['a conflict resolution too large to review alone', { forced: false, earlier: earlierRun(), advance: { _tag: 'ResolvedBaseMerges', merges: ['m'], changedPaths: [], resolution: null } }],
+    ['a conflict resolution in a carried finding\'s file', { forced: false, earlier: earlierRun({ findings: [logged('shared.txt')] }), advance: { _tag: 'ResolvedBaseMerges', merges: ['m'], changedPaths: ['shared.txt'], resolution: 'diff' } }],
     ['a merge into a finding\'s file', { forced: false, earlier: earlierRun({ findings: [logged('main-only.txt')] }), advance: clean }],
   ])('reviews again after %s', (_case, input) => {
     expect(decideReviewReuse(input)._tag).toBe('Review')
+  })
+
+  it('reviews only the resolution of a conflict, and carries the rest', () => {
+    const earlier = earlierRun()
+
+    expect(decideReviewReuse({ forced: false, earlier, advance: { _tag: 'ResolvedBaseMerges', merges: ['m'], changedPaths: ['shared.txt'], resolution: 'diff' } }))
+      .toEqual({ _tag: 'ReviewResolution', run: earlier, resolution: 'diff' })
   })
 })
 
@@ -296,7 +307,7 @@ async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance) 
 
   if (result._tag !== 'Ok')
     throw new Error(result.error)
-  return { turns: capture.requests.length, run: recorded.at(0) }
+  return { turns: capture.requests.length, prompt: capture.requests.at(0)?.prompt ?? '', run: recorded.at(0) }
 }
 
 describe('a Review after an earlier reviewed head', () => {
@@ -313,6 +324,23 @@ describe('a Review after an earlier reviewed head', () => {
       gates: { review: { _tag: 'Passed' } },
       confidence: 92,
       checked: 'the Review of abc1234, carried forward because the new commits only merge main without conflicts',
+    })
+    expect(review.run?.findings).toMatchObject([{ _tag: 'Logged', details: { location: { path: 'src/untouched.ts' } } }])
+  })
+
+  it('sends only the conflict resolution to the Agent, and carries the earlier findings', async () => {
+    const earlier = earlierRun({ findings: [logged('src/untouched.ts')] })
+
+    const review = await reviewAfterEarlierHead(earlier, { _tag: 'ResolvedBaseMerges', merges: ['m'], changedPaths: ['shared.txt'], resolution: '+feature and main' })
+
+    expect(review.turns).toBe(1)
+    expect(review.prompt).toContain('Review only this resolution.')
+    expect(review.prompt).toContain('+feature and main')
+    expect(review.prompt).not.toContain('Follow nextOffset until truncated is false.')
+    expect(review.run).toMatchObject({
+      confidence: 92,
+      checked: 'the changed files; the rest carried from the Review of abc1234',
+      gates: { review: { _tag: 'Passed' } },
     })
     expect(review.run?.findings).toMatchObject([{ _tag: 'Logged', details: { location: { path: 'src/untouched.ts' } } }])
   })
