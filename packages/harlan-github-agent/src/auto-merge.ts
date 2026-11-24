@@ -58,6 +58,7 @@ export const AUTO_MERGE_HOLD_CAUSES = {
   NoReadyReview: 'The head has no READY review.',
   NoPublishedReadyReview: 'The READY review is not published.',
   OpenFinding: 'The review left an open finding.',
+  KnownLocalCheckFailure: 'Conflict resolution recorded a failing local check on this head.',
   ChangedFilesUnavailable: 'Its changed files are unavailable.',
   ChangedFilesStale: 'Its changed files were compared for other commits.',
   ProtectedPath: 'It changes a Protected path.',

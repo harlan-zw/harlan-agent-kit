@@ -1,9 +1,9 @@
-import type { AutoMergeInput, AutoMergePolicy, HeadChangedFiles } from './auto-merge.ts'
+import type { AutoMergeDecision, AutoMergeInput, AutoMergePolicy, HeadChangedFiles } from './auto-merge.ts'
 import type { ChangedLinesReader } from './github-changed-lines.ts'
 import type { GitHubPullRequestMerger } from './github.ts'
 import type { JournalStore } from './store.ts'
 import type { GitHubItem, RepositoryMapping } from './types.ts'
-import { autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasCurrentPublishedReadyReview, heldOnlyByLabel } from './auto-merge.ts'
+import { AUTO_MERGE_HOLD_CAUSES, autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasCurrentPublishedReadyReview, heldOnlyByLabel } from './auto-merge.ts'
 import { err, ok } from './result.ts'
 
 export type AutoMergeEvent
@@ -120,7 +120,12 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
         pullRequest: context.pullRequest,
         repository: context.repository,
       }
-      const decision = autoMergeDecision(input)
+      // Review and unrelated green CI cannot clear a recorded local failure.
+      // Re-read this evidence in authorize, immediately before either GitHub merge path.
+      const decide = (candidate: AutoMergeInput, current: typeof context): AutoMergeDecision => current.mergedWithFailingChecks === null
+        ? autoMergeDecision(candidate)
+        : { _tag: 'Hold', cause: 'KnownLocalCheckFailure', reason: AUTO_MERGE_HOLD_CAUSES.KnownLocalCheckFailure }
+      const decision = decide(input, context)
       if (decision._tag === 'Hold') {
         // Only a head that reached a published READY Review gets here, so the
         // record says why a reviewed candidate waited for Harlan.
@@ -130,7 +135,7 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
             pullRequestNumber: subject.number,
             headSha: context.pullRequest.headSha,
             cause: decision.cause,
-            heldOnlyByLabel: heldOnlyByLabel(input),
+            heldOnlyByLabel: decision.cause !== 'KnownLocalCheckFailure' && heldOnlyByLabel(input),
             at: options.now().toISOString(),
           })
         }
@@ -150,13 +155,13 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
           if (current === null)
             return err('Auto merge lost its current authority before the GitHub write.')
           const currentAttempts = options.store.listReviewRuns(repository.github, subject.number)
-          const currentDecision = autoMergeDecision({
+          const currentDecision = decide({
             attempts: currentAttempts,
             changedFiles,
             policy: options.policy,
             pullRequest: current.pullRequest,
             repository: current.repository,
-          })
+          }, current)
           const currentPublication = currentAttempts.find(attempt => attempt.id === decision.reviewRunId)?.gatePublication
           return currentDecision._tag === 'Merge' && currentDecision.headSha === decision.headSha
             && currentDecision.method === decision.method && currentDecision.reviewRunId === decision.reviewRunId

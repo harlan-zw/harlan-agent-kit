@@ -1311,7 +1311,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   /** Answers whether the current pull request remains eligible for Review writes. */
   hasCurrentReviewAuthority: (repository: string, pullRequestNumber: number) => boolean
   /** Reads current Auto merge inputs only while operator authority remains active. */
-  getAutoMergeContext: (repository: string, pullRequestNumber: number) => { repository: RepositoryMapping, pullRequest: Omit<GitHubPullRequestItem, 'approvalLabels' | 'autoMerge'> } | null
+  getAutoMergeContext: (repository: string, pullRequestNumber: number) => { repository: RepositoryMapping, pullRequest: Omit<GitHubPullRequestItem, 'approvalLabels' | 'autoMerge'>, mergedWithFailingChecks: ConflictMergeWithFailingChecks | null } | null
   /** Records why Auto merge held one candidate head, once per head and reason. A repeat records nothing. */
   recordAutoMergeHold: (input: AutoMergeHoldRecord) => void
   /** What this service already holds for one head commit. */
@@ -10548,17 +10548,18 @@ export function openJournalStore(
     if (getAgentControl()._tag === 'Paused' || !hasCurrentReviewAuthority(repository, pullRequestNumber))
       return null
     const row = database.prepare(`
-      SELECT repositories.policy_json, revisions.payload
+      SELECT repositories.policy_json, revisions.payload, revisions.id AS revision_id
       FROM subjects
       JOIN repositories ON repositories.id = subjects.repository_id
       JOIN revisions ON revisions.id = subjects.current_revision_id
       WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
-    `).get(repository, pullRequestNumber) as { policy_json: string, payload: string } | undefined
+    `).get(repository, pullRequestNumber) as { policy_json: string, payload: string, revision_id: string } | undefined
     return row === undefined
       ? null
       : {
           repository: JSON.parse(row.policy_json) as RepositoryMapping,
           pullRequest: JSON.parse(row.payload) as Omit<GitHubPullRequestItem, 'approvalLabels' | 'autoMerge'>,
+          mergedWithFailingChecks: mergedWithFailingChecks(row.revision_id),
         }
   }
 
