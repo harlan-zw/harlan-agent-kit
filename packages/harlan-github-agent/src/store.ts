@@ -11430,7 +11430,7 @@ export function openJournalStore(
     })
   }
 
-  const nextWorkerTask = (kind: 'adversarial_review' | 'issue_triage' | null, now: string): (ClaimRow & { rerun_requested: number, new_head: number }) | undefined => database.prepare(`
+  const nextWorkerTask = (kind: 'adversarial_review' | 'issue_triage' | null, now: string): (ClaimRow & { rerun_requested: number }) | undefined => database.prepare(`
         SELECT
           worker_tasks.id,
           worker_tasks.kind,
@@ -11447,11 +11447,10 @@ export function openJournalStore(
           worker_tasks.updated_at,
           repositories.policy_json,
           revisions.payload AS subject_payload,
-          EXISTS (
+          CASE WHEN EXISTS (
             SELECT 1 FROM review_rerun_requests
             WHERE review_rerun_requests.task_id = worker_tasks.id
-          ) AS rerun_requested,
-          (
+          ) THEN 1 WHEN (
             worker_tasks.kind = 'adversarial_review'
             AND EXISTS (SELECT 1 FROM review_runs WHERE review_runs.subject_id = worker_tasks.subject_id)
             AND NOT EXISTS (
@@ -11459,7 +11458,7 @@ export function openJournalStore(
               WHERE review_runs.subject_id = worker_tasks.subject_id
                 AND review_runs.revision_id = worker_tasks.revision_id
             )
-          ) AS new_head
+          ) THEN 2 ELSE 0 END AS rerun_requested
         FROM worker_tasks
         JOIN subjects ON subjects.id = worker_tasks.subject_id
         JOIN repositories ON repositories.id = subjects.repository_id
@@ -11521,7 +11520,7 @@ export function openJournalStore(
           CASE WHEN worker_tasks.kind = 'adversarial_review' THEN 1 WHEN worker_tasks.updated_at <= ? THEN 2 ELSE 0 END DESC,
           worker_tasks.updated_at, worker_tasks.id
         LIMIT 1
-      `).get(kind, kind, new Date(Date.parse(now) - issueWaitMilliseconds).toISOString()) as (ClaimRow & { rerun_requested: number, new_head: number }) | undefined
+      `).get(kind, kind, new Date(Date.parse(now) - issueWaitMilliseconds).toISOString()) as (ClaimRow & { rerun_requested: number }) | undefined
 
   const claimWorkerTask = (
     kind: 'adversarial_review' | 'issue_triage',
@@ -11597,7 +11596,7 @@ export function openJournalStore(
         updatedAt: now,
         repositoryMapping,
         pullRequest: subject,
-        rerun: row.rerun_requested === 1 ? { _tag: 'Requested' } : row.new_head === 1 ? { _tag: 'NewHead' } : { _tag: 'NotRequested' },
+        rerun: row.rerun_requested === 1 ? { _tag: 'Requested' } : row.rerun_requested === 2 ? { _tag: 'NewRevision' } : { _tag: 'NotRequested' },
       }
     }
     catch (error) {
