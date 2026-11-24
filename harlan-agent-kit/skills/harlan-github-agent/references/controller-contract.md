@@ -353,9 +353,11 @@ With active Take Ownership, continue delivery verification.
 Allow Harlan to stop Review with the exact pull request comment `@harlan-agent stop`.
 The same handles and slash form used for `rerun` accept it. A stop in the middle of a sentence does nothing.
 Accept it only from the authors who may rerun, in a repository that is not external.
-Bind it to the head commit that the poll observes when it reads the comment.
+Bind it to the head commit that the latest repository read recorded.
+If that read started less than one second after the comment, wait for the next read. Hold later commands on that pull request until then.
 Cancel queued and running Review and follow-up Repair for that head commit through the Stop Review checkbox path.
 Keep both stops when the base branch moves. Do not queue Review for that head commit again.
+No automatic recovery restarts it, including a closed Baseline repair or the manual Review label.
 Store the comment id once as the request identity. Repeated polls and edits must not act twice.
 Never queue a change request for it. A later head commit gets Review as usual.
 Apply comment commands in the order they were written. A later `rerun` on the same head commit queues Review again.
