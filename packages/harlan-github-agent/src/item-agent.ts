@@ -1927,6 +1927,7 @@ async function settleReviewRun(
     pullRequestNumber: task.pullRequestNumber,
     revisionId: task.revisionId,
     headSha: task.pullRequest.headSha,
+    baseSha: task.pullRequest.baseSha,
     provider: answer.provider,
     sessionId: answer.sessionId,
     model: answer.model,
@@ -1997,9 +1998,9 @@ async function reuseEarlierReview(
   if (readHeadAdvance === undefined || context.forced)
     return undefined
   const earlier = options.store.latestReviewOfEarlierHead(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
-  const advance = earlier === undefined
+  const advance = earlier === undefined || earlier.baseSha === undefined || earlier.baseSha === null
     ? null
-    : await readHeadAdvance(workspace, earlier.headSha, signal).then(read => read._tag === 'Ok' ? read.value : null)
+    : await readHeadAdvance(workspace, { headSha: earlier.headSha, baseSha: earlier.baseSha }, signal).then(read => read._tag === 'Ok' ? read.value : null)
   const decision = decideReviewReuse({ forced: context.forced, earlier, advance })
   if (decision._tag === 'Review')
     return undefined

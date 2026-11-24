@@ -1569,6 +1569,7 @@ interface ClaimRow extends TaskRow {
 interface ReviewRunRow {
   gate_publication_id: string | null
   base_ref: string | null
+  base_sha?: string | null
   id: string
   repository: string
   github_number: number
@@ -2995,6 +2996,7 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
     revisionId: row.revision_id,
     headSha: row.head_sha,
     baseRef: row.base_ref,
+    baseSha: row.base_sha ?? null,
     provider: row.provider,
     sessionId: row.session_id,
     model: row.model,
@@ -7774,7 +7776,13 @@ function installSchema(database: DatabaseSync): void {
     }
     version = 112
   }
-  if (version === 112)
+  if (version === 112) {
+    const columns = database.prepare('PRAGMA table_info(review_runs)').all() as Array<{ name: string }>
+    const addBase = columns.some(column => column.name === 'base_sha') ? '' : 'ALTER TABLE review_runs ADD COLUMN base_sha TEXT NULL;'
+    applyMigration(database, `${addBase} PRAGMA user_version = 113;`)
+    version = 113
+  }
+  if (version === 113)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -9966,6 +9974,7 @@ export function openJournalStore(
       pullRequestNumber: input.pullRequestNumber,
       revisionId: input.revisionId,
       headSha: input.headSha,
+      baseSha: input.baseSha ?? null,
       provider: input.provider,
       sessionId: input.sessionId,
       model: input.model,
@@ -9994,8 +10003,8 @@ export function openJournalStore(
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
           confidence, findings, content_digest, usage, base_ref, merge_risk, reasoning_effort,
-          checked, not_checked
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          checked, not_checked, base_sha
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -10019,6 +10028,7 @@ export function openJournalStore(
         input.reasoningEffort ?? null,
         input.checked ?? null,
         input.notChecked ?? null,
+        input.baseSha ?? null,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -10137,7 +10147,7 @@ export function openJournalStore(
       // controller gates and never re-judges the diff, so it inherits the
       // parent's Merge risk verdict and coverage verbatim.
       const parent = database.prepare(`
-        SELECT merge_risk, checked, not_checked FROM review_runs
+        SELECT merge_risk, checked, not_checked, base_sha FROM review_runs
         WHERE id = ? AND subject_id = ? AND revision_id = ? AND head_sha = ?
           AND base_ref = ?
           AND NOT EXISTS (
@@ -10150,7 +10160,7 @@ export function openJournalStore(
         revisionId,
         input.headSha,
         pullRequest.baseRef ?? null,
-      ) as { merge_risk: string | null, checked: string | null, not_checked: string | null } | undefined
+      ) as { merge_risk: string | null, checked: string | null, not_checked: string | null, base_sha: string | null } | undefined
       if (parent === undefined) {
         const orphaned = database.prepare('SELECT 1 FROM review_runs WHERE id = ?').get(input.supersedesReviewRunId)
         database.exec('COMMIT')
@@ -10163,8 +10173,8 @@ export function openJournalStore(
           id, subject_id, revision_id, kind, provider, session_id, model, agent_version,
           skill_digest, head_sha, started_at, completed_at, gates, outcome_tag,
           confidence, findings, content_digest, usage, supersedes_review_run_id, base_ref,
-          merge_risk, reasoning_effort, checked, not_checked
-        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          merge_risk, reasoning_effort, checked, not_checked, base_sha
+        ) VALUES (?, ?, ?, 'adversarial_review', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.id,
         revision.subject_id,
@@ -10189,6 +10199,7 @@ export function openJournalStore(
         input.reasoningEffort ?? null,
         parent.checked,
         parent.not_checked,
+        parent.base_sha,
       )
       database.prepare(`
         INSERT INTO review_evidence_scopes (review_run_id, policy_digest, created_at)
@@ -10450,6 +10461,7 @@ export function openJournalStore(
         review_runs.revision_id,
         review_runs.head_sha,
         review_runs.base_ref,
+        review_runs.base_sha,
         review_runs.provider,
         review_runs.session_id,
         review_runs.model,

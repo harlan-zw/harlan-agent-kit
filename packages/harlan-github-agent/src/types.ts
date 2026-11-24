@@ -515,6 +515,8 @@ export type ReviewGatePublication
 
 export interface ReviewRun {
   gatePublication: ReviewGatePublication
+  /** The immutable base commit used for this Review's diff. Older runs have none. */
+  baseSha?: string | null
   /** The target branch whose diff this Review covered. */
   baseRef: string | null
   id: string

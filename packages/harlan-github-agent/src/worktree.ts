@@ -187,7 +187,7 @@ export interface AgentWorkspaceManager {
   prepareReleaseNote: (task: ReleaseNoteWorkspaceTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   verifyReview: (task: ClaimedAdversarialReviewTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<void, string>>
   /** Reads what the commits after an earlier reviewed head contain. Read only. */
-  readHeadAdvance: (worktree: PreparedWorkerWorkspace, earlierHeadSha: string, signal: AbortSignal) => Promise<Result<HeadAdvance, string>>
+  readHeadAdvance: (worktree: PreparedWorkerWorkspace, earlier: { headSha: string, baseSha: string }, signal: AbortSignal) => Promise<Result<HeadAdvance, string>>
 }
 
 /**
@@ -199,7 +199,7 @@ export interface AgentWorkspaceManager {
  */
 export async function readHeadAdvance(
   path: string,
-  commits: { earlierHeadSha: string, headSha: string, baseSha: string },
+  commits: { earlierHeadSha: string, earlierBaseSha: string, headSha: string, baseSha: string },
   signal: AbortSignal,
 ): Promise<Result<HeadAdvance, string>> {
   const ancestor = await runGit(path, ['merge-base', '--is-ancestor', commits.earlierHeadSha, commits.headSha], signal)
@@ -233,8 +233,9 @@ export async function readHeadAdvance(
     return ok({ _tag: 'ResolvedBaseMerges', merges: resolved, changedPaths })
   // A clean merge can still move the pull request's own edit, for example
   // into a file the base branch renamed. Only the same edits at the same
-  // paths keep the earlier verdict.
-  const earlier = await pullRequestEdits(path, commits.baseSha, commits.earlierHeadSha, signal)
+  // paths keep the earlier verdict. Pin the earlier diff to its recorded base,
+  // because a rewritten base can expose commits the earlier Review never saw.
+  const earlier = await pullRequestEdits(path, commits.earlierBaseSha, commits.earlierHeadSha, signal)
   const current = await pullRequestEdits(path, commits.baseSha, commits.headSha, signal)
   if (earlier._tag === 'Err')
     return earlier
@@ -1294,8 +1295,8 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
         : err('The Review Agent changed files. Review must stay read only.')
     },
 
-    readHeadAdvance(worktree, earlierHeadSha, signal) {
-      return readHeadAdvance(worktree.path, { earlierHeadSha, headSha: worktree.headSha, baseSha: worktree.baseSha }, signal)
+    readHeadAdvance(worktree, earlier, signal) {
+      return readHeadAdvance(worktree.path, { earlierHeadSha: earlier.headSha, earlierBaseSha: earlier.baseSha, headSha: worktree.headSha, baseSha: worktree.baseSha }, signal)
     },
   }
 }

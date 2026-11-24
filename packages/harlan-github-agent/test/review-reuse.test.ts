@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { createReviewWorker } from '../src/item-agent.ts'
@@ -54,12 +55,30 @@ function mergeMain(directory: string): string {
 }
 
 describe('readHeadAdvance', () => {
+  it('requires a fresh Review when a rewritten base exposes a previously shared commit', async () => {
+    const { directory } = repositoryWithReviewedHead()
+    const originalBaseSha = commitFile(directory, 'shared-change.txt', 'outside the reviewed diff\n', 'shared change')
+    const reviewed = mergeMain(directory)
+    git(directory, 'switch', '-q', 'main')
+    git(directory, 'reset', '--hard', `${originalBaseSha}^`)
+    const baseSha = commitFile(directory, 'replacement.txt', 'rewritten base\n', 'replacement base')
+    const headSha = mergeMain(directory)
+
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, earlierBaseSha: originalBaseSha, headSha, baseSha }, AbortSignal.timeout(10_000))
+
+    expect(advance).toEqual({ _tag: 'Ok', value: { _tag: 'ChangedDiff' } })
+    if (advance._tag !== 'Ok')
+      throw new Error(advance.error)
+    const review = await reviewAfterEarlierHead(earlierRun({ headSha: reviewed, baseSha: originalBaseSha }), advance.value)
+    expect(review.turns).toBe(1)
+  })
+
   it('reads a clean merge of the base branch, with the paths it brought in', async () => {
     const { directory, reviewed } = repositoryWithReviewedHead()
     const baseSha = commitFile(directory, 'main-only.txt', 'main\n', 'main moves')
     const headSha = mergeMain(directory)
 
-    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, earlierBaseSha: git(directory, 'merge-base', reviewed, baseSha), headSha, baseSha }, AbortSignal.timeout(10_000))
 
     expect(advance).toEqual({ _tag: 'Ok', value: { _tag: 'CleanBaseMerges', changedPaths: ['main-only.txt'] } })
   })
@@ -77,7 +96,7 @@ describe('readHeadAdvance', () => {
     git(directory, 'commit', '-q', '--no-edit')
     const headSha = git(directory, 'rev-parse', 'HEAD')
 
-    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, earlierBaseSha: git(directory, 'merge-base', reviewed, baseSha), headSha, baseSha }, AbortSignal.timeout(10_000))
 
     expect(advance).toEqual({ _tag: 'Ok', value: { _tag: 'ResolvedBaseMerges', merges: [headSha], changedPaths: ['shared.txt'] } })
   })
@@ -92,7 +111,7 @@ describe('readHeadAdvance', () => {
     git(directory, 'commit', '-q', '--no-edit')
     const headSha = git(directory, 'rev-parse', 'HEAD')
 
-    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, earlierBaseSha: git(directory, 'merge-base', reviewed, baseSha), headSha, baseSha }, AbortSignal.timeout(10_000))
 
     expect(advance).toMatchObject({ _tag: 'Ok', value: { _tag: 'ResolvedBaseMerges', merges: [headSha] } })
   })
@@ -111,7 +130,7 @@ describe('readHeadAdvance', () => {
     git(directory, 'commit', '-q', '--no-edit')
     const headSha = git(directory, 'rev-parse', 'HEAD')
 
-    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, earlierBaseSha: git(directory, 'merge-base', reviewed, baseSha), headSha, baseSha }, AbortSignal.timeout(10_000))
 
     expect(advance).toMatchObject({ _tag: 'Ok', value: { _tag: 'ResolvedBaseMerges', merges: [headSha] } })
   })
@@ -132,7 +151,7 @@ describe('readHeadAdvance', () => {
     const baseSha = git(directory, 'rev-parse', 'HEAD')
     const headSha = mergeMain(directory)
 
-    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, earlierBaseSha: git(directory, 'merge-base', reviewed, baseSha), headSha, baseSha }, AbortSignal.timeout(10_000))
 
     expect(advance).toEqual({ _tag: 'Ok', value: { _tag: 'ChangedDiff' } })
   })
@@ -143,7 +162,7 @@ describe('readHeadAdvance', () => {
     mergeMain(directory)
     const headSha = commitFile(directory, 'feature.txt', 'more feature\n', 'more feature')
 
-    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, earlierBaseSha: git(directory, 'merge-base', reviewed, baseSha), headSha, baseSha }, AbortSignal.timeout(10_000))
 
     expect(advance).toEqual({ _tag: 'Ok', value: { _tag: 'NewCommits' } })
   })
@@ -155,7 +174,7 @@ describe('readHeadAdvance', () => {
     git(directory, 'rebase', '-q', 'main')
     const headSha = git(directory, 'rev-parse', 'HEAD')
 
-    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, earlierBaseSha: git(directory, 'merge-base', reviewed, baseSha), headSha, baseSha }, AbortSignal.timeout(10_000))
 
     expect(advance).toEqual({ _tag: 'Ok', value: { _tag: 'Rewritten' } })
   })
@@ -177,6 +196,7 @@ function earlierRun(overrides: Partial<ReviewRun> = {}): ReviewRun {
   return {
     gatePublication: { _tag: 'Unpublished' },
     baseRef: 'main',
+    baseSha: 'original-base',
     id: 'earlier-run',
     repository: 'harlan-zw/example',
     pullRequestNumber: 24,
@@ -317,7 +337,7 @@ async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance, 
       prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
       prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
       verifyReview: () => Promise.resolve(ok(undefined)),
-      readHeadAdvance: (_worktree, earlierHeadSha) => earlierHeadSha === earlier.headSha
+      readHeadAdvance: (_worktree, compared) => compared.headSha === earlier.headSha && compared.baseSha === earlier.baseSha
         ? Promise.resolve(ok(advance))
         : Promise.reject(new Error('The probe must compare the earlier reviewed head.')),
     },
@@ -342,6 +362,12 @@ async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance, 
 }
 
 describe('a Review after an earlier reviewed head', () => {
+  it('runs a fresh Agent turn when the earlier Review has no recorded base', async () => {
+    const review = await reviewAfterEarlierHead(earlierRun({ baseSha: null }), clean)
+
+    expect(review.turns).toBe(1)
+  })
+
   it('carries the earlier verdict across a clean base merge without an Agent turn', async () => {
     const earlier = earlierRun({ findings: [logged('src/untouched.ts')] })
 
@@ -349,6 +375,7 @@ describe('a Review after an earlier reviewed head', () => {
 
     expect(review.turns).toBe(0)
     expect(review.run).toMatchObject({
+      baseSha: pullRequestItem().baseSha,
       headSha: pullRequestItem().headSha,
       model: earlier.model,
       usage: { _tag: 'Available', input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 },
@@ -400,6 +427,31 @@ describe('a Review the store claims for a new head', () => {
 })
 
 describe('latestReviewOfEarlierHead', () => {
+  it('keeps legacy Reviews without a base when upgrading the Journal', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'harlan-review-reuse-'))
+    temporaryDirectories.push(directory)
+    const path = join(directory, 'journal.sqlite')
+    const before = openJournalStore(path)
+    const repository = repositoryMapping()
+    before.syncRepositories([repository], '2026-11-24T00:00:00.000Z')
+    before.setRepositoryWritesEnabled(repository.github, true)
+    before.recordObservation({ externalId: 'legacy-head', observedAt: '2026-11-24T00:01:00.000Z', source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
+    const task = before.claimNextAdversarialReviewTask('reviewer', '2026-11-24T00:01:30.000Z', 60 * 60_000)!
+    expect(before.recordReviewRun({ ...earlierRun({ headSha: task.pullRequest.headSha, revisionId: task.revisionId }), confidence: 92 })._tag).toBe('Inserted')
+    before.close()
+    const legacy = new DatabaseSync(path)
+    legacy.exec('ALTER TABLE review_runs DROP COLUMN base_sha; PRAGMA user_version = 112;')
+    legacy.close()
+
+    const migrated = openJournalStore(path)
+    try {
+      expect(migrated.listReviewRuns(repository.github, 24)).toMatchObject([{ headSha: task.pullRequest.headSha, baseSha: null }])
+    }
+    finally {
+      migrated.close()
+    }
+  })
+
   it('finds the Review of the previous head once a new head arrives', () => {
     const store = openJournalStore(':memory:')
     try {
@@ -412,9 +464,21 @@ describe('latestReviewOfEarlierHead', () => {
 
       expect(store.latestReviewOfEarlierHead(repository.github, 24, 'abc123')).toBeUndefined()
 
+      expect(store.supersedeReviewRun({
+        ...earlierRun({ id: 'gate-refresh', headSha: 'abc123', revisionId: task.revisionId, baseSha: 'unreviewed-base' }),
+        supersedesReviewRunId: 'first-review',
+        confidence: 92,
+        publication: {
+          id: 'gate-publication',
+          body: 'READY',
+          at: '2026-11-24T00:06:00.000Z',
+          result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' },
+        },
+      })._tag).toBe('Inserted')
+
       store.recordObservation({ externalId: 'merged-main', observedAt: '2026-11-24T00:10:00.000Z', source: 'poll', subject: pullRequestItem({ mergeState: 'clean', headSha: 'def456', baseSha: 'base456' }) })
 
-      expect(store.latestReviewOfEarlierHead(repository.github, 24, 'def456')).toMatchObject({ id: 'first-review', headSha: 'abc123' })
+      expect(store.latestReviewOfEarlierHead(repository.github, 24, 'def456')).toMatchObject({ id: 'gate-refresh', headSha: 'abc123', baseSha: 'original-base' })
     }
     finally {
       store.close()
