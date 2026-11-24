@@ -7,6 +7,7 @@ import type { PublicationRemote } from './publication-scheduler.ts'
 import type { RepairRecoveryArtifact, RepairRecoveryWorktrees } from './repair-recovery.ts'
 import type { Result } from './result.ts'
 import type { HeadAdvance } from './review-reuse.ts'
+import type { RepairDelta } from './review-scope.ts'
 import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedBatch, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase, RepositoryMapping, RoutineIssueSource } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
@@ -23,6 +24,7 @@ import { BASELINE_REPAIR_LABEL_SPEC } from './baseline-repair-state.ts'
 import { dependencyUpdateLabel, isDependencyFile } from './dependency-update-label.ts'
 import { canPushBranch, canRepairBaseline, canRepairSelectedFindingOnHead, canResolveConflictPullRequestHead, canWorkIssues, canWritePullRequestHead } from './repository-policy.ts'
 import { err, ok } from './result.ts'
+import { REPAIR_DELTA_CHARACTER_BUDGET } from './review-scope.ts'
 import { cleanLine } from './text.ts'
 
 export interface PreparedConflictWorktree {
@@ -140,6 +142,42 @@ export interface AgentWorkspaceManager {
   verifyReview: (task: ClaimedAdversarialReviewTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<void, string>>
   /** Reads what the commits after an earlier reviewed head contain. Read only. */
   readHeadAdvance: (worktree: PreparedWorkerWorkspace, earlierHeadSha: string, signal: AbortSignal) => Promise<Result<HeadAdvance, string>>
+  /** Reads the Repair delta since the head a Repair answered. Read only. */
+  readRepairDelta: (worktree: PreparedWorkerWorkspace, sourceHeadSha: string, signal: AbortSignal) => Promise<Result<RepairDelta, string>>
+}
+
+/**
+ * Reads the diff from the head a Repair answered to this head.
+ *
+ * The delta must be plain commits on top of that head. A merge in the range
+ * brings in work the Repair did not write, so it reads as `IncludesMerge`. A
+ * delta over the character budget returns only its size.
+ */
+export async function readRepairDelta(
+  path: string,
+  commits: { sourceHeadSha: string, headSha: string },
+  characterBudget: number,
+  signal: AbortSignal,
+): Promise<Result<RepairDelta, string>> {
+  const ancestor = await runGit(path, ['merge-base', '--is-ancestor', commits.sourceHeadSha, commits.headSha], signal)
+  if (ancestor.exitCode === 1)
+    return ok({ _tag: 'Rewritten' })
+  if (ancestor.exitCode !== 0)
+    return err(`Could not compare the answered head: ${ancestor.stderr}`)
+  const listed = await runGitScalar(path, ['rev-list', '--parents', commits.headSha, `^${commits.sourceHeadSha}`], signal)
+  if (listed.exitCode !== 0)
+    return err(`Could not list the Repair commits: ${listed.stderr}`)
+  if (listed.stdout !== '' && listed.stdout.split('\n').some(line => line.split(' ').length > 2))
+    return ok({ _tag: 'IncludesMerge' })
+  const diff = await runGit(path, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--find-renames', commits.sourceHeadSha, commits.headSha], signal)
+  if (diff.exitCode !== 0)
+    return err(`Could not read the Repair delta: ${diff.stderr}`)
+  if (diff.stdout.length > characterBudget)
+    return ok({ _tag: 'TooLarge', characters: diff.stdout.length })
+  const changed = await runGit(path, ['diff', '--name-only', '-z', '--no-renames', commits.sourceHeadSha, commits.headSha], signal)
+  if (changed.exitCode !== 0)
+    return err(`Could not list the Repair paths: ${changed.stderr}`)
+  return ok({ _tag: 'Diff', diff: diff.stdout, paths: changed.stdout.split('\0').filter(entry => entry !== '') })
 }
 
 /**
@@ -1248,6 +1286,10 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
 
     readHeadAdvance(worktree, earlierHeadSha, signal) {
       return readHeadAdvance(worktree.path, { earlierHeadSha, headSha: worktree.headSha, baseSha: worktree.baseSha }, signal)
+    },
+
+    readRepairDelta(worktree, sourceHeadSha, signal) {
+      return readRepairDelta(worktree.path, { sourceHeadSha, headSha: worktree.headSha }, REPAIR_DELTA_CHARACTER_BUDGET, signal)
     },
   }
 }

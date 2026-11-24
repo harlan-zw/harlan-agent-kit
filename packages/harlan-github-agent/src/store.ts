@@ -778,6 +778,8 @@ export type QueuedReviewHistory
  */
 export interface RepairSource {
   headSha: string
+  /** The head the Repair commit extends. A Repair normally starts from the head its Review read. */
+  builtOnHeadSha: string
   fingerprints: string[]
 }
 
@@ -15954,7 +15956,7 @@ export function openJournalStore(
 
   const repairSource: JournalStore['repairSource'] = (revisionId) => {
     const row = database.prepare(`
-      SELECT review_runs.head_sha, review_runs.findings
+      SELECT review_runs.head_sha, publication_commands.expected_head_sha, review_runs.findings
       FROM revisions
       JOIN publication_commands ON publication_commands.state_tag = 'Published'
         AND publication_commands.commit_sha = json_extract(revisions.payload, '$.headSha')
@@ -15965,12 +15967,12 @@ export function openJournalStore(
       WHERE revisions.id = ?
       ORDER BY publication_commands.updated_at DESC, review_runs.completed_at DESC, review_runs.id DESC
       LIMIT 1
-    `).get(revisionId) as { head_sha: string, findings: string } | undefined
+    `).get(revisionId) as { head_sha: string, expected_head_sha: string, findings: string } | undefined
     if (row === undefined)
       return null
     const fingerprints = (JSON.parse(row.findings) as ReviewFinding[])
       .flatMap(finding => finding._tag === 'Open' && finding.details !== undefined ? [finding.details.fingerprint.toLowerCase()] : [])
-    return { headSha: row.head_sha, fingerprints }
+    return { headSha: row.head_sha, builtOnHeadSha: row.expected_head_sha, fingerprints }
   }
 
   const recordQueuedReviewStatus: JournalStore['recordQueuedReviewStatus'] = (input) => {

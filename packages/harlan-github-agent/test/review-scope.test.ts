@@ -103,7 +103,7 @@ const targeted: ReviewFinding = {
   summary: 'Limit rejects valid input',
   nextAction: 'Raise the limit.',
   resolution: 'Repair',
-  details: { fingerprint: 'a'.repeat(64), identity: 'limit-rejects-valid-input', location: { path: 'parser.ts', line: 1 }, proof: 'A value of 2 fails.' },
+  details: { fingerprint: 'a'.repeat(64), identity: 'limit-rejects-valid-input', location: { path: 'parser.ts', line: 1 }, proof: 'A value of 2 fails.', regressionTest: 'Parse a value of 2.' },
 }
 
 const logged: ReviewFinding = {

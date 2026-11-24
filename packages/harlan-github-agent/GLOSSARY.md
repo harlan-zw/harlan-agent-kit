@@ -484,6 +484,14 @@ A pull request gets 3 rounds per contributor commit. A contributor push ends the
 
 Use Repair round. Do not use attempt, retry, iteration, or loop.
 
+### Repair focus
+
+The scope of a Review run of a head that the controller's own Repair pushed. The Agent starts from the Repair delta, and the whole diff stays readable.
+
+The Repair delta is the diff from the head of the Review the Repair answered to the Repair commit. Every other Review run is a full Review.
+
+Use Repair focus for the scope and Repair delta for the diff. Do not use incremental review, delta review, scoped review, or partial review.
+
 ### Conflict resolution
 
 A Task that updates an open pull request after its base branch causes merge conflicts.

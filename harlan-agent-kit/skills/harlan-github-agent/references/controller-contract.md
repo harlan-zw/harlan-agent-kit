@@ -211,6 +211,21 @@ Keep one implementation Agent for an issue and its resulting pull request. Start
 
 A head can carry the Review of an earlier head instead. Every new commit after the earlier head must merge the base branch. Git must merge its two parents without a conflict, and its tree must equal that merge. The pull request must still add and remove the same lines at the same paths. The earlier Review must pass its review gate and match the current base branch and repository policy. If the merge changed the file of a carried finding, start a fresh Review. A rerun or the manual Review label also starts a fresh Review. The carried run records zero usage. Its merge and CI gates read the new head.
 
+A head that the controller's own Repair pushed gets a Repair focus Review. It is a fresh Review Agent with a different starting point:
+
+- The Repair must start from the head of the Review it answered. That Review must still be the current Review of an earlier head.
+- Every commit since that head must be a plain commit. A merge in the range starts a full Review.
+- The Repair delta is the diff from that head to the new head. If it is over 32,000 characters, start a full Review.
+- The prompt carries the Repair delta and the paths of the whole pull request. The Agent starts from the delta.
+- The Agent checks each targeted finding and the defects the delta adds. It checks every removed line.
+- The Agent searches for every use of a symbol the delta adds, removes, renames, or changes.
+- The whole base-to-head diff stays readable through `review_read`. The Agent pages it when the delta changes behaviour that other parts of the pull request rely on.
+- The answered Review's other findings go to the Agent by identity. The Agent returns each one that still stands.
+- Findings, confidence, and Merge risk come only from this turn. The controller merges nothing from the answered Review.
+- The run records its own policy digest. Its `Checked` clause names the head the focus started from.
+
+A rerun, the manual Review label, or a rebase starts a full Review. A Repair focus Review can answer a Repair of another Repair focus Review. The Repair round limit bounds that chain. A contributor commit ends the chain, so its head gets a full Review.
+
 Preflight Repair authority before Review. Keep Review read only, and reject a Review worktree that changed.
 
 Use GitHub Actions CI for every repository-wide test, lint, typecheck, and build result. Review Agents may run only focused checks for changed files, their direct dependants, or one material finding. Never let a Review Agent run a full suite, repository typecheck, build, dev server, site crawl, or Lighthouse audit.
@@ -220,7 +235,7 @@ Log scores of 80 or below. Give Repair only findings above 80.
 
 Start Repair as a fresh Agent session. Require each failing regression test before its fix. Let Repair choose its fix, checks, and commit message.
 
-After publication, start a fresh Review Agent against the exact new head SHA. Never reuse evidence from the prior head.
+After publication, start a fresh Review Agent against the exact new head SHA. Never reuse a verdict, confidence, or evidence from the prior head. A Repair focus Review hands the prior findings to the Agent only to recheck.
 
 If default branch CI fails, do not repair the reviewed pull request. Queue one Baseline repair for the exact failing base commit. Open its fix as a separate pull request.
 
