@@ -1501,6 +1501,24 @@ describe('review findings on #759', () => {
     expectNoFragment(redacted.text)
   })
 
+  it('removes a private tag after a fence that a lone tag on a lazy quote line cannot hide', () => {
+    const fence = '\`\`\`\ncode\n\nmore code\n\`\`\`'
+    const redacted = redactPrivateDetails(`> Some prose\n<br>\n${fence}\nSee <a href="https://notes.localhost/\nacquisition.pdf">docs</a>.`, details)
+
+    expect(redacted.text).toBe(`> Some prose\n<br>\n${fence}\n${removed}\n${removed}`)
+    expectNoFragment(redacted.text)
+  })
+
+  it.each([
+    ['a setext heading', 'Title\n==='],
+    ['indented code', '    indented code'],
+  ])('removes a private tag inside the raw HTML block a lone tag opens after %s', (_name, before) => {
+    const redacted = redactPrivateDetails(`${before}\n<span>\nSee <a href="https://notes.localhost/\n> acquisition.pdf">docs</a>.`, details)
+
+    expect(redacted.text).toBe(`${before}\n<span>\n${removed}\n> ${removed}`)
+    expectNoFragment(redacted.text)
+  })
+
   it('keeps the removals a carried fence removal exposes in a finding comment edit', async () => {
     const header = '<!-- harlan-agent-kit:pr-triage -->\n**Minor (40/100): The cache leaks**\n'
     const published = `${header}\n${removed}\nProof line two.`

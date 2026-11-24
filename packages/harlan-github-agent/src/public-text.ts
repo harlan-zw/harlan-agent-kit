@@ -495,15 +495,24 @@ const POSSIBLE_ONE_LINE_BLOCK = /^[ \t]*(?:#{1,6}(?:\s|$)|([-*_])(?:[ \t]*\1){2,
 const HTML_BLOCK = /^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?=[\s/>])/i
 const HTML_BLOCK_TAG = new RegExp(`^ {0,3}${HTML_TAG.source}[ \\t]*$`, 'i')
 
-type HtmlBlockEnd = { _tag: 'Blank' } | { _tag: 'Closing', pattern: RegExp }
+/** Where an HTML block ends. `interrupts` says whether its first line can end a paragraph. */
+type HtmlBlockEnd = { _tag: 'Blank', interrupts: boolean } | { _tag: 'Closing', pattern: RegExp }
 
 /**
- * Raw HTML owns its lines, including lines that resemble Markdown fences or quotes.
+ * An open HTML block, and whether it is raw HTML for certain.
  *
- * A lone complete tag opens a block only where no paragraph continues. Inside
- * a paragraph it is inline HTML, and a fence on the next line is still a fence.
+ * A lone complete tag cannot end a paragraph, and the layout only guesses
+ * whether one is open. A quote marker four spaces in may be text. Such a block
+ * may be inline HTML, so it gives way to a fence opener, as Markdown without
+ * the block would. A fence it wrongly hid would turn its closer into an opener.
  */
-function htmlBlockEnd(rest: string, inParagraph: boolean): HtmlBlockEnd | null {
+interface OpenHtmlBlock {
+  end: HtmlBlockEnd
+  certain: boolean
+}
+
+/** Raw HTML owns its lines, including lines that resemble Markdown fences or quotes. */
+function htmlBlockEnd(rest: string): HtmlBlockEnd | null {
   const literal = /^ {0,3}<(script|pre|style|textarea)(?=[\s>])/i.exec(rest)
   if (literal !== null)
     return { _tag: 'Closing', pattern: new RegExp(`</${literal[1]}[ \\t]*>`, 'i') }
@@ -513,7 +522,9 @@ function htmlBlockEnd(rest: string, inParagraph: boolean): HtmlBlockEnd | null {
   }
   if (/^ {0,3}<![A-Z]/.test(rest))
     return { _tag: 'Closing', pattern: />/ }
-  return HTML_BLOCK.test(rest) || (!inParagraph && HTML_BLOCK_TAG.test(rest)) ? { _tag: 'Blank' } : null
+  if (HTML_BLOCK.test(rest))
+    return { _tag: 'Blank', interrupts: true }
+  return HTML_BLOCK_TAG.test(rest) ? { _tag: 'Blank', interrupts: false } : null
 }
 
 /** An open paragraph: its blockquote depth, and the content column of the list item it starts in. */
@@ -593,7 +604,7 @@ function layoutOf(text: string, removed: ReadonlySet<number> = new Set()): Layou
   let paragraph: OpenParagraph | null = null
   let previousQuotes: string | null = null
   let previousOneLine = false
-  let html: HtmlBlockEnd | null = null
+  let html: OpenHtmlBlock | null = null
   for (const [index, original] of lines.entries()) {
     // Read the outgoing structure without discarding the original attribute evidence.
     const line = removed.has(index) ? `${LINE_STRUCTURE.exec(original)?.[0] ?? ''}${REMOVED_LINE}` : original
@@ -609,10 +620,16 @@ function layoutOf(text: string, removed: ReadonlySet<number> = new Set()): Layou
     }
     const anyQuotes = ANY_QUOTE_MARKERS.exec(line)?.[0] ?? ''
     const anyRest = line.slice(anyQuotes.length)
-    // A lazy line closes the containers of the paragraph, so a lone tag there opens a block.
-    const lineDepth = (QUOTE_MARKERS.exec(line)?.[0] ?? '').split('>').length - 1
-    if (fence === null)
-      html ??= htmlBlockEnd(anyRest, paragraph !== null && lineDepth >= paragraph.depth)
+    const opensFence = marker?.[1] !== undefined && !(marker[1].startsWith('`') && marker[2]?.includes('`'))
+    if (fence === null && html === null) {
+      const end = htmlBlockEnd(anyRest)
+      if (end !== null) {
+        const interrupts = end._tag === 'Closing' || end.interrupts
+        html = { end, certain: (interrupts || paragraph === null) && QUOTE_MARKERS.exec(line)?.[0] === anyQuotes }
+      }
+    }
+    if (html !== null && !html.certain && fence === null && opensFence)
+      html = null
     if (html !== null && fence === null) {
       const blank = line.trim() === ''
       fenced.push(!blank)
@@ -620,10 +637,10 @@ function layoutOf(text: string, removed: ReadonlySet<number> = new Set()): Layou
       possible.push(true)
       deeper.push(false)
       paragraph = null
-      if ((html._tag === 'Blank' && blank) || (html._tag === 'Closing' && html.pattern.test(line)))
+      if ((html.end._tag === 'Blank' && blank) || (html.end._tag === 'Closing' && html.end.pattern.test(line)))
         html = null
     }
-    else if (fence !== null || (marker?.[1] !== undefined && !(marker[1].startsWith('`') && marker[2]?.includes('`')))) {
+    else if (fence !== null || opensFence) {
       if (fence === null && marker?.[1] !== undefined) {
         fence = { char: marker[1].charAt(0), length: marker[1].length, depth: fenceDepth, start: offset }
       }
