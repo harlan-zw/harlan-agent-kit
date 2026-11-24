@@ -4,8 +4,9 @@ import type { ReviewRun } from './types.ts'
  * What the commits since an earlier reviewed head contain, read from Git.
  *
  * Only `CleanBaseMerges` leaves the pull request's own change as it was. Each
- * of its merges brings the base branch in, and its tree is exactly the tree
- * Git produces for those two parents with no person's hand in it.
+ * of its merges brings the base branch in, Git merged its parents without a
+ * conflict, and its tree is exactly the tree Git produced. The pull request
+ * still adds and removes the same lines at the same paths.
  */
 export type HeadAdvance
   /** The earlier head is not an ancestor: a rebase or force push. */
@@ -14,6 +15,8 @@ export type HeadAdvance
     | { _tag: 'NewCommits' }
   /** Every new commit merges the base branch, with no conflict resolution. */
     | { _tag: 'CleanBaseMerges', changedPaths: readonly string[] }
+  /** Every merge is clean, but the pull request's own edits moved or changed, as through a base rename. */
+    | { _tag: 'ChangedDiff' }
   /** Every new commit merges the base branch, and at least one differs from Git's own merge. */
     | { _tag: 'ResolvedBaseMerges', merges: readonly string[], changedPaths: readonly string[] }
 
@@ -59,6 +62,8 @@ export function decideReviewReuse(input: ReviewReuseInput): ReviewReuse {
     return { _tag: 'Review', reason: 'The new head adds commits that are not base merges.' }
   if (advance._tag === 'ResolvedBaseMerges')
     return { _tag: 'Review', reason: 'A base merge resolved a conflict.' }
+  if (advance._tag === 'ChangedDiff')
+    return { _tag: 'Review', reason: 'The base merge moved or changed the pull request\'s own edits.' }
   const changed = new Set(advance.changedPaths)
   const moved = earlier.findings.find(finding => finding._tag === 'Logged' && changed.has(finding.details.location.path))
   if (moved !== undefined && moved._tag === 'Logged')

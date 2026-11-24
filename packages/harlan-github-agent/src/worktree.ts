@@ -168,20 +168,53 @@ export async function readHeadAdvance(
   const resolved: string[] = []
   for (const [merge, first, second] of added) {
     const tree = await runGitScalar(path, ['rev-parse', `${merge}^{tree}`], signal)
-    // Exit 1 means Git's own merge conflicts. Its tree still holds the markers, so it never matches.
     const automatic = await runGitScalar(path, ['merge-tree', '--write-tree', '--no-messages', first!, second!], signal)
     if (tree.exitCode !== 0 || (automatic.exitCode !== 0 && automatic.exitCode !== 1))
       return err(`Could not recreate base merge ${merge}: ${tree.stderr || automatic.stderr}`)
-    if (automatic.stdout.split('\n')[0] !== tree.stdout)
+    // Exit 1 means Git's own merge conflicted. A modify/delete conflict leaves
+    // the kept file in that tree with no markers, so a matching tree is not
+    // proof that nobody resolved anything.
+    if (automatic.exitCode !== 0 || automatic.stdout.split('\n')[0] !== tree.stdout)
       resolved.push(merge!)
   }
   const changed = await runGit(path, ['diff', '--name-only', '-z', '--no-renames', commits.earlierHeadSha, commits.headSha], signal)
   if (changed.exitCode !== 0)
     return err(`Could not list the merged paths: ${changed.stderr}`)
   const changedPaths = changed.stdout.split('\0').filter(entry => entry !== '')
-  return resolved.length === 0
+  if (resolved.length > 0)
+    return ok({ _tag: 'ResolvedBaseMerges', merges: resolved, changedPaths })
+  // A clean merge can still move the pull request's own edit, for example
+  // into a file the base branch renamed. Only the same edits at the same
+  // paths keep the earlier verdict.
+  const earlier = await pullRequestEdits(path, commits.baseSha, commits.earlierHeadSha, signal)
+  const current = await pullRequestEdits(path, commits.baseSha, commits.headSha, signal)
+  if (earlier._tag === 'Err')
+    return earlier
+  if (current._tag === 'Err')
+    return current
+  return earlier.value === current.value
     ? ok({ _tag: 'CleanBaseMerges', changedPaths })
-    : ok({ _tag: 'ResolvedBaseMerges', merges: resolved, changedPaths })
+    : ok({ _tag: 'ChangedDiff' })
+}
+
+/**
+ * The lines a head adds and removes against its merge base, with paths.
+ *
+ * Line numbers and hunk context drop out, because a base merge moves them
+ * without changing what the pull request edits.
+ */
+async function pullRequestEdits(path: string, baseSha: string, headSha: string, signal: AbortSignal): Promise<Result<string, string>> {
+  const mergeBase = await runGitScalar(path, ['merge-base', baseSha, headSha], signal)
+  if (mergeBase.exitCode !== 0)
+    return err(`Could not find the merge base of ${headSha}: ${mergeBase.stderr}`)
+  const diff = await runGit(path, ['diff', '-U0', '--no-color', '--no-ext-diff', '--find-renames', mergeBase.stdout, headSha], signal)
+  if (diff.exitCode !== 0)
+    return err(`Could not read the edits of ${headSha}: ${diff.stderr}`)
+  return ok(diff.stdout
+    .split('\n')
+    .filter(line => !line.startsWith('index '))
+    .map(line => line.startsWith('@@') ? '@@' : line)
+    .join('\n'))
 }
 
 export interface BaselineRepairWorktreeManager {
