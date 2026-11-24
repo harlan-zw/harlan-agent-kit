@@ -1049,7 +1049,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   isRoutineTrackingIssue: (github: string, issueNumber: number) => boolean
   /** Pull requests absent from the next open snapshot need one exact final GitHub read. */
   listOpenPullRequestNumbers: (github: string) => number[]
-  listOpenPullRequestRevisions: (github: string) => Array<{ number: number, revisionId: string, headSha: string }>
+  /** `observedAt` is when a read last confirmed the stored head. */
+  listOpenPullRequestRevisions: (github: string) => Array<{ number: number, revisionId: string, headSha: string, observedAt: string }>
   /** Old inferred closures need one exact read before GitHub becomes final truth. */
   listUnverifiedClosedPullRequestNumbers: (github: string, limit?: number) => number[]
   /** Records one exact pull request read without trusting a local closure timestamp. */
@@ -5193,17 +5194,36 @@ function planAdversarialReview(
       updated_at DESC, id DESC
     LIMIT 1
   `).get(subjectId, revisionId) as { id: string, state_tag: TaskRow['state_tag'], reason: string | null, fence: number, recovery_attempts: number, updated_at: string } | undefined
+  // Stop Review binds to the head commit. No automatic path may start Review
+  // of that head again: not a new Revision from a base branch move, and not a
+  // requeue of a finished Task. A rerun of the head after the stop still wins.
+  // One poll can apply both at the same time, so a rerun counts only while
+  // the stop has not cancelled its Task.
+  const headStopped = subject.kind === 'pull_request' && database.prepare(`
+    SELECT 1 FROM review_cancel_requests AS cancel
+    WHERE cancel.subject_id = ? AND cancel.head_sha = ?
+      AND NOT EXISTS (
+        SELECT 1 FROM review_rerun_requests
+        JOIN worker_tasks ON worker_tasks.id = review_rerun_requests.task_id
+        JOIN revisions ON revisions.id = worker_tasks.revision_id
+        WHERE worker_tasks.subject_id = cancel.subject_id
+          AND json_extract(revisions.payload, '$.headSha') = cancel.head_sha
+          AND review_rerun_requests.requested_at >= cancel.requested_at
+          AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = worker_tasks.id)
+      )
+    LIMIT 1
+  `).get(subjectId, subject.headSha) !== undefined
   // The failure taxonomy decides, never a list of exact wordings. The list this
   // replaces was collected from past incidents, so rewording any one of those
   // messages silently left a recoverable review dead until someone noticed.
-  const recoverableFailure = existing?.state_tag === 'Failed'
+  const recoverableFailure = !headStopped && existing?.state_tag === 'Failed'
     && existing.reason !== null
     && existing.recovery_attempts < MAXIMUM_RECOVERY_ATTEMPTS
     && canRecoverFailure({ message: existing.reason }, existing.recovery_attempts)
     && Date.parse(observedAt) >= Date.parse(nextRecoveryAt(existing.updated_at, existing.recovery_attempts, { message: existing.reason }))
   // Older deployments retired a publication retry as a duplicate Review.
   // Only that automatic decision can resume; explicit stops still win above.
-  const prematureDeduplication = needsReviewPublication && existing?.state_tag === 'Superseded'
+  const prematureDeduplication = !headStopped && needsReviewPublication && existing?.state_tag === 'Superseded'
     && existing.reason === REVIEW_ALREADY_RECORDED_REASON
   if (prematureDeduplication) {
     database.prepare(`
@@ -5225,7 +5245,7 @@ function planAdversarialReview(
     recordWorkerTransition(database, { taskId: existing.id, from: 'Failed', to: 'Queued', reason: 'Retrying a recoverable review failure.', fence: existing.fence, at: observedAt })
     return
   }
-  if (existing?.state_tag === 'Completed' && manualReviewRequested && localAttempt.revision_attempt === 0) {
+  if (!headStopped && existing?.state_tag === 'Completed' && manualReviewRequested && localAttempt.revision_attempt === 0) {
     database.prepare(`
       UPDATE worker_tasks
       SET state_tag = 'Queued', reason = NULL, evidence = NULL, attempts = 0,
@@ -5243,7 +5263,7 @@ function planAdversarialReview(
     })
     return
   }
-  if (existing?.state_tag === 'Completed' && (localAttempt.revision_attempt === 1 || localAttempt.unscoped_comment === 1) && localAttempt.head_review_run_id === null) {
+  if (!headStopped && existing?.state_tag === 'Completed' && (localAttempt.revision_attempt === 1 || localAttempt.unscoped_comment === 1) && localAttempt.head_review_run_id === null) {
     database.prepare(`
       UPDATE worker_tasks
       SET state_tag = 'Queued', reason = NULL, evidence = NULL, attempts = 0,
@@ -5290,6 +5310,9 @@ function planAdversarialReview(
       WHERE id = ? AND state_tag = 'Completed'
     `).run(reason, observedAt, completedBaseline.id)
     recordTransition(database, { taskId: completedBaseline.id, from: 'Completed', to: 'Superseded', reason, fence: completedBaseline.fence, at: observedAt })
+    // The closed repair no longer holds the Review. A stopped head stays stopped.
+    if (headStopped)
+      return
     database.prepare(`
       UPDATE worker_tasks
       SET state_tag = 'Queued', reason = NULL, evidence = NULL, attempts = 0,
@@ -5300,28 +5323,8 @@ function planAdversarialReview(
     recordWorkerTransition(database, { taskId: existing.id, from: 'Completed', to: 'Queued', reason: 'Recovering from current GitHub state.', fence: existing.fence, at: observedAt })
     return
   }
-  if (existing !== undefined)
+  if (existing !== undefined || headStopped)
     return
-  // Stop Review binds to the head commit. A base branch move makes a new
-  // Revision of that head, which must not queue Review again. A rerun of the
-  // head after the stop still wins. One poll can apply both at the same time,
-  // so a rerun counts only while the stop has not cancelled its Task.
-  if (subject.kind === 'pull_request' && database.prepare(`
-    SELECT 1 FROM review_cancel_requests AS cancel
-    WHERE cancel.subject_id = ? AND cancel.head_sha = ?
-      AND NOT EXISTS (
-        SELECT 1 FROM review_rerun_requests
-        JOIN worker_tasks ON worker_tasks.id = review_rerun_requests.task_id
-        JOIN revisions ON revisions.id = worker_tasks.revision_id
-        WHERE worker_tasks.subject_id = cancel.subject_id
-          AND json_extract(revisions.payload, '$.headSha') = cancel.head_sha
-          AND review_rerun_requests.requested_at >= cancel.requested_at
-          AND NOT EXISTS (SELECT 1 FROM task_cancellations WHERE task_id = worker_tasks.id)
-      )
-    LIMIT 1
-  `).get(subjectId, subject.headSha) !== undefined) {
-    return
-  }
 
   const taskId = unusedWorkerTaskId(database, digest(`${mapping.github}:pull_request:${subject.number}:${revisionId}:adversarial_review`), observedAt)
   database.prepare(`
@@ -9261,7 +9264,7 @@ export function openJournalStore(
 
   const listOpenPullRequestRevisions: JournalStore['listOpenPullRequestRevisions'] = github => database.prepare(`
     SELECT subjects.github_number AS number, revisions.id AS revisionId,
-      json_extract(revisions.payload, '$.headSha') AS headSha
+      json_extract(revisions.payload, '$.headSha') AS headSha, revisions.observed_at AS observedAt
     FROM subjects
     JOIN repositories ON repositories.id = subjects.repository_id
     JOIN revisions ON revisions.id = subjects.current_revision_id
@@ -9269,7 +9272,7 @@ export function openJournalStore(
       AND subjects.kind = 'pull_request'
       AND json_extract(revisions.payload, '$.state') = 'open'
     ORDER BY subjects.github_number
-  `).all(github) as Array<{ number: number, revisionId: string, headSha: string }>
+  `).all(github) as Array<{ number: number, revisionId: string, headSha: string, observedAt: string }>
 
   const isItemDismissed: JournalStore['isItemDismissed'] = (github, kind, itemNumber) => database.prepare(`
     SELECT 1

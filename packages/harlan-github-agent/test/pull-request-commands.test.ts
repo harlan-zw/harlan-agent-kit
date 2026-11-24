@@ -106,13 +106,15 @@ async function storeAccepts(input: CommandCase, command: PullRequestCommand): Pr
   const store = openJournalStore(':memory:')
   stores.push(store)
   const at = '2026-10-09T01:00:00.000Z'
+  // A stop acts only after a read that started later than its comment.
+  const written = '2026-10-09T00:59:00Z'
   // The store observes only enabled repositories, so a disabled one is disabled after its pull request arrived.
   store.syncRepositories([{ ...input.mapping, enabled: true }], at)
   store.recordObservation({ externalId: 'pr', observedAt: at, source: 'poll', subject: input.pullRequest })
   store.syncRepositories([input.mapping], at)
   const requests = input.allowedAuthors.map((author, index) => command === 'Change'
-    ? { author, commentId: index + 1, origin: 'ChangeRequest' as const, instruction: 'Rename the option.', pullRequestNumber: input.pullRequest.number, updatedAt: at }
-    : { author, commentId: index + 1, origin: command === 'Stop' ? 'Stop' as const : 'Command' as const, pullRequestNumber: input.pullRequest.number, updatedAt: at })
+    ? { author, commentId: index + 1, origin: 'ChangeRequest' as const, instruction: 'Rename the option.', pullRequestNumber: input.pullRequest.number, updatedAt: written }
+    : { author, commentId: index + 1, origin: command === 'Stop' ? 'Stop' as const : 'Command' as const, pullRequestNumber: input.pullRequest.number, updatedAt: written })
   const synced = await syncOpenReviewRerunRequests([input.mapping], {
     github: { listReviewRerunRequests: async () => ok(requests) },
     store,

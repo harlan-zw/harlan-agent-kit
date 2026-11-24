@@ -4,6 +4,8 @@ import type { JournalStore } from './store.ts'
 import type { RepositoryMapping, ReviewRerunResult } from './types.ts'
 import { err, ok } from './result.ts'
 
+const GITHUB_TIMESTAMP_RESOLUTION_MILLISECONDS = 1000
+
 /** What one pull request comment command did. */
 export type PullRequestCommandResult
   = | ReviewRerunResult
@@ -35,16 +37,27 @@ export function syncReviewRerunRequests(
     // GitHub lists the newest comment first. Apply commands in the order they
     // were written, so a rerun after a stop queues Review again.
     const ordered = requests.value.toSorted((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+    // Pull requests whose stop waits for a newer read. Later commands on them
+    // wait too, so the next poll still applies them in the order written.
+    const waiting = new Set<number>()
     const results = ordered.flatMap((request): PullRequestCommandResult[] => {
       if (!allowedAuthors.has(request.author.toLowerCase()))
         return []
       const subject = subjects.find(candidate =>
         candidate.number === request.pullRequestNumber,
       )
-      if (subject === undefined)
+      if (subject === undefined || waiting.has(request.pullRequestNumber))
         return []
       if (request.origin === 'Stop') {
-        // Bound to the head this poll observed. The comment id alone is the
+        // The repository poll and this comment poll run apart, so the stored
+        // head can predate a push made before the comment. Spend the stop
+        // only after a read that started later than the comment. GitHub
+        // stamps comments to the second, so that read starts a second later.
+        if (Date.parse(subject.observedAt) - Date.parse(request.updatedAt) < GITHUB_TIMESTAMP_RESOLUTION_MILLISECONDS) {
+          waiting.add(request.pullRequestNumber)
+          return []
+        }
+        // Bound to the head that read recorded. The comment id alone is the
         // identity, so a later poll or an edit never stops a newer head.
         const stopped = dependencies.store.cancelReviewForHead({
           repository: repository.github,
