@@ -13,7 +13,7 @@ import { createGitHubIssuePublisher } from '../src/github.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
 import { packageReleaseStatus } from '../src/package-release-controller.ts'
 import { releaseNoteApproval } from '../src/package-release.ts'
-import { createPublicTextGuard, encodeEntities, isPublishedForm, privateDetailsFor, publicBody, redactPrivateDetails } from '../src/public-text.ts'
+import { createPublicTextGuard, encodeEntities, isPublishedForm, privateDetailsFor, publicBody, redactPrivateDetails, removalsByPosition } from '../src/public-text.ts'
 import { ok } from '../src/result.ts'
 import { mirrorReviewFindingThreads, reviewFindingThreadBody, reviewFindingThreadFingerprint, reviewFindingThreadMarker } from '../src/review-finding-threads.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -1417,6 +1417,65 @@ describe('review findings on #754, follow-ups', () => {
 
     expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
     expect(comment.body).toBe(reviewBody('Stopped.', 'STOPPED'))
+  })
+})
+
+describe('review findings on #759', () => {
+  it.each([
+    ['an ordered item that does not start at one', '2. acquisition.pdf">docs</a>.', `2. ${removed}`],
+    ['an ordered item with a parenthesis', '3) acquisition.pdf">docs</a>.', `3) ${removed}`],
+    ['an empty bullet item', '*\nacquisition.pdf">docs</a>.', `${removed}\n${removed}`],
+    ['a quote marker after four spaces', '    > acquisition.pdf">docs</a>.', `    > ${removed}`],
+    ['a heading marker after four spaces', '    # acquisition.pdf">docs</a>.', `    ${removed}`],
+  ])('removes a private destination that continues on %s', (_name, continuation, expected) => {
+    const redacted = redactPrivateDetails(`See <a href="https://notes.localhost/\n${continuation}`, details)
+
+    expect(redacted.text).toBe(`${removed}\n${expected}`)
+    expectNoFragment(redacted.text)
+  })
+
+  it.each([
+    ['a blockquote', '> acquisition.pdf">docs</a>. `'],
+    ['a nested blockquote', '> > acquisition.pdf">docs</a>. `'],
+  ])('removes a private destination when a code span would have to cross into %s', (_name, continuation) => {
+    const quote = continuation.startsWith('> >') ? '> > ' : '> '
+    const redacted = redactPrivateDetails(`Run \`x\n${quote}See <a href="https://notes.localhost/\n${continuation}`, details)
+
+    expect(redacted.text).toBe(`Run \`x\n${quote}${removed}\n${quote}${removed}`)
+    expectNoFragment(redacted.text)
+  })
+
+  it.each([
+    ['a comment', 'See ~/notes/a.md <!--  literal\n>   marker  -->'],
+    ['a tag', 'See ~/notes/a.md <span title="  literal\n>   marker  ">'],
+    ['a comment and a nested quote', '> See ~/notes/a.md <!--  literal\n> >   marker  -->'],
+  ])('keeps a public blockquote line when %s would have to cross into it', (_name, text) => {
+    const [, quoted] = text.split('\n')
+    const structure = text.startsWith('>') ? '> ' : ''
+
+    expect(redactPrivateDetails(text, details).text).toBe(`${structure}${removed}\n${quoted}`)
+  })
+
+  it('keeps the removals a carried fence removal exposes in a finding comment edit', () => {
+    const header = '<!-- harlan-agent-kit:pr-triage -->\n**Minor (40/100): The cache leaks**\n'
+    const published = `${header}\n${removed}\nProof line two.`
+    const source = `${header}\n\`\`\`html\n<a href="https://notes.localhost/\nacquisition.pdf">docs</a>\n\`\`\``
+    const reports: PrivateDetailLeak[] = []
+
+    const outgoing = publicBody({ details, report: leak => reports.push(leak) }, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'review comment' }, source, removalsByPosition(published))
+
+    expect(outgoing.text).toBe(`${header}\n${removed}\n${removed}\n${removed}\n\`\`\``)
+    expectNoFragment(outgoing.text)
+  })
+
+  it.each([
+    ['bullet items', '- Read the notes.\n- localhost is a loopback name.'],
+    ['numbered items', '1. Read the notes.\n2. localhost is a loopback name.'],
+    ['quoted bullet items', '> - Read the notes.\n> - localhost is a loopback name.'],
+    ['a heading', 'Read the notes.\n# localhost is a loopback name.'],
+    ['nested quote lines', '> Read the notes.\n> > localhost is a loopback name.'],
+  ])('keeps a body whose %s only touch at a public boundary', (_name, text) => {
+    expect(redactPrivateDetails(text, details)).toEqual({ text, hits: [] })
   })
 })
 

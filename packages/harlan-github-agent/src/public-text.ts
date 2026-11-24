@@ -452,8 +452,16 @@ interface Region {
  */
 interface Layout {
   starts: number[]
-  /** `breaks[i]` counts the lines up to and including line `i` that no paragraph continues into. */
+  /**
+   * `breaks[i]` counts the lines up to and including line `i` that no paragraph continues into.
+   *
+   * It counts only the lines that end a paragraph whatever their context. A
+   * missed break groups too many lines, which removes public text. A false
+   * break leaves the rest of a private tag behind.
+   */
   breaks: number[]
+  /** Whether line `i` opens a blockquote deeper than the paragraph above it, so it continues nothing. */
+  deeper: boolean[]
   /** Where each line's content starts, after blockquote markers and up to three spaces. */
   contentStarts: number[]
   /** Fenced code blocks and inline code spans, sorted and disjoint. */
@@ -463,58 +471,146 @@ interface Layout {
 const CONTAINER = /^(?:[ \t]*>)*/
 const CONTENT_START = /^(?:[ \t]*>)*[ \t]{0,3}/
 const FENCE = /^[ \t]*(`{3,}(?!`)|~{3,}(?!~))(.*)$/
-/** A line that starts a list item, a heading, or a thematic break, which ends any paragraph above it. */
-const BLOCK_START = /^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])(?:\s|$)|#{1,6}(?:\s|$)|([-*_])(?:[ \t]*\1){2,}\s*$)/
+/**
+ * Blockquote markers as Markdown reads them, with at most three spaces before
+ * each. After four spaces or a tab, `>` is paragraph text.
+ */
+const QUOTE_MARKERS = /^(?: {0,3}>[ \t]?)*/
+/** Blockquote markers at any indentation, the widest reading. */
+const ANY_QUOTE_MARKERS = /^(?:[ \t]*>[ \t]?)*/
+/** A list marker at most three spaces in, before whitespace or the line end. */
+const LIST_MARKER = /^( {0,3})(?:[-*+]|(\d{1,9})[.)])(?=[ \t]|$)[ \t]*/
+const ATX_HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/
+/**
+ * Any line that might start a block, at any indentation: a list item, a
+ * heading, a thematic break, a setext underline, or HTML. Code spans never
+ * pair across one, because a code span that is not there hides real markup.
+ */
+const POSSIBLE_BLOCK_START = /^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])(?:\s|$)|#{1,6}(?:\s|$)|([-*_])(?:[ \t]*\1){2,}\s*$|(?:=+|-+)\s*$|<[a-z/!?])/i
+/** A block that is always one line long, so the next line starts another block. */
+const POSSIBLE_ONE_LINE_BLOCK = /^[ \t]*(?:#{1,6}(?:\s|$)|([-*_])(?:[ \t]*\1){2,}\s*$|(?:=+|-+)\s*$)/
+
+/** An open paragraph: its blockquote depth, and the content column of the list item it starts in. */
+interface OpenParagraph {
+  depth: number
+  item: number | null
+}
+
+/**
+ * Whether `rest`, a line after its blockquote markers, ends `paragraph`.
+ *
+ * It follows CommonMark. A heading or thematic break always ends a paragraph.
+ * A bullet item, or an ordered item that starts at 1, ends it when the item
+ * holds text. Any list marker ends it when the line is lazy, or sits left of
+ * the content column of the list item the paragraph starts in, because then a
+ * list item closes and the marker opens the next one.
+ */
+function endsParagraph(rest: string, paragraph: OpenParagraph, lazy: boolean): boolean {
+  if (ATX_HEADING.test(rest) || THEMATIC_BREAK.test(rest))
+    return true
+  const marker = LIST_MARKER.exec(rest)
+  if (marker === null)
+    return false
+  const holdsText = rest.length > marker[0].length && rest.slice(marker[0].length).trim() !== ''
+  if (holdsText && (marker[2] === undefined || Number(marker[2]) === 1))
+    return true
+  return lazy || (paragraph.item !== null && (marker[1]?.length ?? 0) < paragraph.item)
+}
+
+/**
+ * How many list markers on one line `opensParagraph` reads. Each costs a scan
+ * of the line, so the cap keeps a line of markers linear. Past it, the item
+ * column reads too small, which only ends fewer paragraphs.
+ */
+const NESTED_LIST_MARKERS = 8
+
+/** The paragraph that `rest` opens, or null for a heading, a thematic break, or a list item with no text yet. */
+function opensParagraph(rest: string, depth: number): OpenParagraph | null {
+  let item: number | null = null
+  let content = rest
+  for (let nested = 0; nested < NESTED_LIST_MARKERS; nested++) {
+    if (ATX_HEADING.test(content) || THEMATIC_BREAK.test(content))
+      return null
+    const marker = LIST_MARKER.exec(content)
+    if (marker === null)
+      return { depth, item }
+    if (content.slice(marker[0].length).trim() === '')
+      return null
+    item = (item ?? 0) + marker[0].length
+    content = content.slice(marker[0].length)
+  }
+  return { depth, item }
+}
 
 function layoutOf(text: string): Layout {
   const lines = text.split('\n')
   const starts: number[] = []
   const contentStarts: number[] = []
   const fenced: boolean[] = []
-  const isBreak: boolean[] = []
+  const definite: boolean[] = []
+  const possible: boolean[] = []
+  const deeper: boolean[] = []
   const code: Region[] = []
   let offset = 0
   let fence: { char: string, length: number, depth: number, start: number } | null = null
+  let paragraph: OpenParagraph | null = null
+  let previousQuotes: string | null = null
+  let previousOneLine = false
   for (const line of lines) {
     starts.push(offset)
     contentStarts.push(offset + (CONTENT_START.exec(line)?.[0].length ?? 0))
     const container = CONTAINER.exec(line)?.[0] ?? ''
-    const depth = container.split('>').length - 1
-    const rest = line.slice(container.length)
-    const marker = FENCE.exec(rest)
+    const fenceDepth = container.split('>').length - 1
+    const marker = FENCE.exec(line.slice(container.length))
     // A fence inside a blockquote ends with the blockquote.
-    if (fence !== null && depth < fence.depth) {
+    if (fence !== null && fenceDepth < fence.depth) {
       code.push({ start: fence.start, end: offset })
       fence = null
     }
-    if (fence !== null) {
-      fenced.push(true)
-      isBreak.push(true)
-      if (marker?.[1]?.[0] === fence.char && marker[1].length >= fence.length && marker[2]?.trim() === '') {
+    const anyQuotes = ANY_QUOTE_MARKERS.exec(line)?.[0] ?? ''
+    const anyRest = line.slice(anyQuotes.length)
+    if (fence !== null || (marker?.[1] !== undefined && !(marker[1].startsWith('`') && marker[2]?.includes('`')))) {
+      if (fence === null && marker?.[1] !== undefined) {
+        fence = { char: marker[1].charAt(0), length: marker[1].length, depth: fenceDepth, start: offset }
+      }
+      else if (fence !== null && marker?.[1]?.[0] === fence.char && marker[1].length >= fence.length && marker[2]?.trim() === '') {
         code.push({ start: fence.start, end: offset + line.length })
         fence = null
       }
-    }
-    else if (marker?.[1] !== undefined && !(marker[1].startsWith('`') && marker[2]?.includes('`'))) {
-      fence = { char: marker[1].charAt(0), length: marker[1].length, depth, start: offset }
       fenced.push(true)
-      isBreak.push(true)
+      definite.push(true)
+      possible.push(true)
+      deeper.push(false)
+      paragraph = null
     }
     else {
+      const quotes = QUOTE_MARKERS.exec(line)?.[0] ?? ''
+      const depth = quotes.split('>').length - 1
+      const rest = line.slice(quotes.length)
+      const blank = rest.trim() === ''
+      const goesDeeper = paragraph !== null && depth > paragraph.depth
+      const ends = blank || paragraph === null || goesDeeper || endsParagraph(rest, paragraph, depth < paragraph.depth)
       fenced.push(false)
-      isBreak.push(rest.trim() === '' || BLOCK_START.test(rest))
+      definite.push(ends)
+      deeper.push(goesDeeper)
+      possible.push(ends || anyQuotes !== previousQuotes || anyRest.trim() === '' || POSSIBLE_BLOCK_START.test(anyRest) || previousOneLine)
+      if (blank)
+        paragraph = null
+      else if (ends)
+        paragraph = opensParagraph(rest, depth)
     }
+    previousQuotes = anyQuotes
+    previousOneLine = POSSIBLE_ONE_LINE_BLOCK.test(anyRest)
     offset += line.length + 1
   }
   if (fence !== null)
     code.push({ start: fence.start, end: text.length })
-  const breaks: number[] = []
-  isBreak.reduce((count, value, index) => {
-    breaks[index] = count + (value ? 1 : 0)
-    return breaks[index]
-  }, 0)
+  const breaks = runningCount(definite)
   // A backtick run opens a code span that the next run of the same length in
-  // its paragraph closes. A run with no such partner is literal.
+  // its paragraph closes. A run with no such partner is literal. Pairing uses
+  // every line that might end a paragraph, so a guess never makes code.
+  const codeBreaks = runningCount(possible)
   const runs: Array<{ start: number, end: number, line: number }> = []
   for (const run of text.matchAll(/`+/g)) {
     const line = lineAt(starts, run.index)
@@ -531,7 +627,7 @@ function layoutOf(text: string): Layout {
   for (let index = 0; index < runs.length;) {
     const open = runs[index]!
     const close = runs[partner[index] ?? -1]
-    if (close === undefined || breaks[close.line] !== breaks[open.line]) {
+    if (close === undefined || codeBreaks[close.line] !== codeBreaks[open.line]) {
       index++
       continue
     }
@@ -539,7 +635,19 @@ function layoutOf(text: string): Layout {
     index = (partner[index] ?? index) + 1
   }
   code.sort((left, right) => left.start - right.start)
-  return { starts, breaks, contentStarts, code }
+  return { starts, breaks, deeper, contentStarts, code }
+}
+
+/** For each index, how many values up to and including it are true. */
+function runningCount(values: readonly boolean[]): number[] {
+  const counts: number[] = []
+  let count = 0
+  for (const value of values) {
+    if (value)
+      count++
+    counts.push(count)
+  }
+  return counts
 }
 
 /** Whether a paragraph would have to end somewhere between `first` and `last`. */
@@ -774,13 +882,21 @@ function isMarkerLine(line: string): boolean {
  * by a space, and joined directly. Markdown removes each line's blockquote and
  * list markers before a quoted or listed HTML attribute reaches a URL parser,
  * so the lines also join without those markers.
+ *
+ * Markdown never removes the list marker of a line that continues the line
+ * above it: that marker starts a new list item, or stays as text. A deeper
+ * blockquote marker starts a new blockquote. So the join without markers
+ * keeps a space before such a line, and two list items never form a host.
+ * The joins that keep the markers still read those lines directly.
  */
 function joinedHits(detect: Detectors, text: string): PrivateDetailHit[] {
   if (!text.includes('\n'))
     return []
   const lines = text.split('\n').map(line => line.replace(/\r$/, ''))
-  const contents = lines.map(withoutContainers)
-  return [...new Set([lines.join(' '), lines.join(''), contents.join(' '), contents.join('')])]
+  const { deeper } = layoutOf(lines.join('\n'))
+  const contents = lines.map(containerContent)
+  const unmarked = contents.map(({ content, listItem }, index) => index > 0 && (listItem || deeper[index]) ? ` ${content}` : content).join('')
+  return [...new Set([lines.join(' '), lines.join(''), contents.map(({ content }) => content).join(' '), unmarked])]
     .flatMap(joined => detailsIn(detect, joined).hits)
 }
 
@@ -789,11 +905,19 @@ const CONTAINER_MARKER = /[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$))/y
 
 /** A line without the blockquote markers, list markers, and indentation that Markdown removes. */
 function withoutContainers(line: string): string {
+  return containerContent(line).content
+}
+
+/** A line's content after its blockquote and list markers, and whether one of those was a list marker. */
+function containerContent(line: string): { content: string, listItem: boolean } {
   let at = 0
+  let listItem = false
   for (;;) {
     CONTAINER_MARKER.lastIndex = at
-    if (CONTAINER_MARKER.exec(line) === null)
-      return line.slice(at).replace(/^[ \t]+/, '')
+    const marker = CONTAINER_MARKER.exec(line)
+    if (marker === null)
+      return { content: line.slice(at).replace(/^[ \t]+/, ''), listItem }
+    listItem ||= !marker[0].endsWith('>')
     at = CONTAINER_MARKER.lastIndex
   }
 }
@@ -917,16 +1041,21 @@ export function removalsByPosition(published: string): KeptRemovals {
  * The redacted body with the removals GitHub already shows carried forward.
  *
  * A line the guard removes now keeps its current form, so its markers follow
- * the current deny list. A withheld body is already complete.
+ * the current deny list. A withheld body is already complete. A line that
+ * only `carried` removes goes too: a kept removal can change the Markdown
+ * around it, such as a removed fence opener that turns code into HTML.
  */
-function withKeptRemovals(redacted: string, source: string, kept: KeptRemovals): string {
+function withKeptRemovals(redacted: string, source: string, kept: KeptRemovals, carried: Guarded): string {
   const redactedLines = redacted.split('\n')
   const sourceLines = source.split('\n')
   if (redactedLines.length !== sourceLines.length)
     return redacted
+  const carriedLines = carried.text.split('\n')
   return redactedLines.map((line, index) => {
     const sourceLine = sourceLines[index] ?? line
-    return line !== sourceLine ? line : kept(sourceLine, index) ?? line
+    if (line !== sourceLine)
+      return line
+    return kept(sourceLine, index) ?? (carried.removed.has(index) ? carriedLines[index] ?? line : line)
   }).join('\n')
 }
 
@@ -1012,9 +1141,11 @@ function reportingSend<Body>(guard: PublicTextGuard, target: PublicTextTarget, b
 /**
  * `kept` carries forward the removals an edit's comment already shows on GitHub.
  *
- * The intact source decides what the guard removes, so a kept removal never
- * hides a host from the rest of its tag. Only hits outside the kept removals
- * report, because GitHub accepted those removals before.
+ * The guard removes what the intact source needs, so a kept removal never
+ * hides a host from the rest of its tag. It also removes what the source with
+ * the kept removals needs, because that is the Markdown GitHub renders. Only
+ * hits outside the kept removals report, because GitHub accepted those
+ * removals before.
  */
 export function publicBody(guard: PublicTextGuard, target: PublicTextTarget, source: string, kept?: KeptRemovals): PublicBody {
   const detect = detectorsFor(guard.details)
@@ -1023,7 +1154,7 @@ export function publicBody(guard: PublicTextGuard, target: PublicTextTarget, sou
     return { text: redaction.text, send: reportingSend(guard, target, redaction.text, redaction.hits) }
   }
   const carried = guarded(detect, source.split('\n').map((line, index) => kept(line, index) ?? line).join('\n'))
-  const text = carried.withheld ? carried.text : withKeptRemovals(guarded(detect, source).text, source, kept)
+  const text = carried.withheld ? carried.text : withKeptRemovals(guarded(detect, source).text, source, kept, carried)
   return { text, send: reportingSend(guard, target, text, carried.hits) }
 }
 
