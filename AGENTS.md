@@ -26,7 +26,7 @@ pnpm release patch|minor|major  # Bump version, tag, push (syncs plugin.json, ma
 
 **Hook lifecycle** (`harlan-agent-kit/hooks/`, wired in `.claude-plugin/plugin.json`):
 - `SessionStart`: detect project type (Nuxt module/app, UnJS, Vue, Node), show git info, warn if not pnpm
-- `PreToolUse` (Bash): block npm/yarn/npx (`pnpm-only.sh`); block raw `git worktree` mutation and `.claude/worktrees` paths (`wt-only.sh`); keep email read only (`himalaya-read-only.sh`); require the PR skill (`pr-skill-only.sh`); send `wrangler d1 execute --remote --command` to `cf d1 query` with the database id (`cf-d1-routing.sh`); on `git commit` inject the commit-format rule (`pre-commit-push.sh`)
+- `PreToolUse` (Bash): block npm/yarn/npx (`pnpm-only.sh`); block raw `git worktree` mutation and `.claude/worktrees` paths (`wt-only.sh`); keep email read only (`himalaya-read-only.sh`); require the PR skill (`pr-skill-only.sh`); send `wrangler d1 execute --remote --command` to `cf d1 query`, naming no database id (`cf-d1-routing.sh`); on `git commit` inject the commit-format rule (`pre-commit-push.sh`)
 - `PostToolUse` (Write|Edit): eslint autofix on the edited file
 - `WorktreeCreate` and `WorktreeRemove`: create and remove harness worktrees with `wt` (`wt-worktree-create.sh`, `wt-worktree-remove.sh`), so subagent, background, and Remote Control worktrees never land in `.claude/worktrees`. Create prints only the path on stdout. Remove never forces, so uncommitted work keeps the worktree.
 - `PostToolUse` (Bash): append a `command-not-found.sh` install or BSD/GNU flag suggestion to the shell output, once per session per command
