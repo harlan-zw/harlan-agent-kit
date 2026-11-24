@@ -231,7 +231,7 @@ describe('listQueuedReviewStatuses', () => {
       findings: [],
     })
     expect(store.priorReviewHistory(repaired.revisionId)).toEqual({ _tag: 'FirstReview' })
-    expect(store.repairSource(repaired.revisionId)).toEqual({ headSha: 'head30', fingerprints: ['f'.repeat(64)] })
+    expect(store.repairSource(repaired.revisionId)).toEqual({ headSha: 'head30', builtOnHeadSha: 'head30', fingerprints: ['f'.repeat(64)] })
     expect(store.repairSource(store.listReviewRuns('harlan-zw/example', 30).find(run => run.headSha === 'head30')!.revisionId)).toBeNull()
   })
 
