@@ -2,7 +2,9 @@ import type { ReviewGates } from '../src/types.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createRestartController } from '../src/restart-request.ts'
+import { ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
 
@@ -10,6 +12,7 @@ const stores: Array<ReturnType<typeof openJournalStore>> = []
 const directories: string[] = []
 
 afterEach(() => {
+  vi.useRealTimers()
   stores.splice(0).forEach(store => store.close())
   directories.splice(0).forEach(directory => rmSync(directory, { recursive: true, force: true }))
 })
@@ -142,6 +145,7 @@ describe('restart drain', () => {
     expect(store.prepareForRestart('2026-11-24T01:58:01.000Z')).toBe(true)
 
     expect(store.beginRestart({ id: 'restart', processId: 'old', at: '2026-11-24T01:58:02.000Z' })?._tag).toBe('Restarting')
+    expect(store.claimNextTerminalReviewStatus('publisher', '2026-11-24T01:58:03.000Z', 60_000)).toBeNull()
     const next = replaceProcess(store, path)
     next.completeRestart('2026-11-24T01:58:10.000Z')
     next.recoverInterruptedAgentTasks('2026-11-24T01:58:10.000Z')
@@ -168,5 +172,63 @@ describe('restart drain', () => {
 
     expect(refreshGates({ ci: 'Passed', body: '### READY', reconciliationId: 'Missing:42', at: '2026-11-24T01:58:00.000Z' })).toBe(published)
     expect(store.prepareForRestart('2026-11-24T01:58:01.000Z')).toBe(true)
+  })
+
+  it('restarts while a terminal comment waits out a GitHub rate limit', () => {
+    const store = openStore(':memory:')
+    const { refreshGates } = publishedReview(store)
+    const queued = refreshGates({ ci: 'Passed', body: '### READY', at: '2026-11-24T01:40:00.000Z' })
+    const command = store.claimNextTerminalReviewStatus('publisher', '2026-11-24T01:40:01.000Z', 60_000)!
+    expect(command.id).toBe(queued)
+    expect(store.deferReviewStatus({
+      commandId: command.id,
+      workerId: command.workerId,
+      fence: command.fence,
+      at: '2026-11-24T01:40:02.000Z',
+      reason: 'GitHub rate limit. Requests pause until 2026-11-24T02:40:00.000Z.',
+    })).toBe(true)
+    requestRestart(store, '2026-11-24T01:41:15.000Z')
+
+    expect(store.prepareForRestart('2026-11-24T01:41:16.000Z')).toBe(true)
+    expect(store.prepareForRestart('2026-11-24T02:40:00.000Z')).toBe(false)
+  })
+
+  it('stops only after a publication claimed during Update preparation finishes', async () => {
+    vi.useFakeTimers()
+    const store = openStore(':memory:')
+    const { refreshGates } = publishedReview(store)
+    store.requestRestart({ id: 'update', source: 'helper', operation: { _tag: 'Update', targetCommit: 'b'.repeat(40), preparation: 'Ready' }, at: '2026-11-24T01:41:15.000Z' })
+    const queued = refreshGates({ ci: 'Passed', body: '### READY', at: '2026-11-24T01:58:00.000Z' })
+    let clock = new Date('2026-11-24T01:58:01.000Z')
+    const claims: Array<ReturnType<typeof store.claimNextTerminalReviewStatus>> = []
+    const prepareUpdate = vi.fn(() => {
+      claims.push(store.claimNextTerminalReviewStatus('publisher', '2026-11-24T01:58:01.500Z', 60_000))
+      return Promise.resolve(ok(undefined))
+    })
+    const controller = createRestartController({ store, processId: 'old', now: () => clock, onActionRequired: vi.fn(), prepareUpdate, intervalMilliseconds: 1_000 })
+
+    controller.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+    const claimed = claims[0]
+    if (claimed === null || claimed === undefined)
+      throw new Error('Expected a Publication claimed during preparation.')
+    expect(claimed.id).toBe(queued)
+    expect(store.getRestartRequest()?._tag).toBe('Requested')
+
+    expect(store.completeReviewStatus({
+      commandId: claimed.id,
+      workerId: claimed.workerId,
+      fence: claimed.fence,
+      at: '2026-11-24T01:58:02.000Z',
+      commentId: 42,
+      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+    })).toBe(true)
+    clock = new Date('2026-11-24T01:58:03.000Z')
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    await expect(controller.waitForRestart()).resolves.toBeUndefined()
+    expect(store.getRestartRequest()?._tag).toBe('Restarting')
+    expect(prepareUpdate).toHaveBeenCalledTimes(1)
+    controller.stop()
   })
 })

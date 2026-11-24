@@ -12877,6 +12877,9 @@ export function openJournalStore(
         JOIN repositories ON repositories.id = subjects.repository_id
         WHERE review_status_commands.id = ? AND review_status_commands.state_tag = 'Pending'
           AND (review_status_commands.retry_at IS NULL OR review_status_commands.retry_at <= ?)
+          -- A process that began its Restart is about to stop. A Publication
+          -- it started now would be cut off, so the next process claims it.
+          AND NOT EXISTS (SELECT 1 FROM restart_requests WHERE state_tag = 'Restarting')
           AND (${reviewStatusAuthoritySql}) = 'Authorized'
           AND (
             (
@@ -14398,13 +14401,29 @@ export function openJournalStore(
       : null
   }
 
+  /**
+   * Begins only while the drain is complete.
+   *
+   * An Update prepares its checkout for minutes after the drain. A comment
+   * Publication can start in that time, and stopping then cuts it off.
+   */
   const beginRestart: JournalStore['beginRestart'] = (input) => {
-    const result = database.prepare(`
-      UPDATE restart_requests
-      SET state_tag = 'Restarting', restarting_at = ?, process_id = ?
-      WHERE id = ? AND state_tag = 'Requested' AND (operation_tag = 'Restart' OR preparation_tag = 'Ready')
-    `).run(input.at, input.processId, input.id)
-    return result.changes === 0 ? null : restartRequestById(input.id)
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const result = isSafeToRestart(input.at)
+        ? database.prepare(`
+            UPDATE restart_requests
+            SET state_tag = 'Restarting', restarting_at = ?, process_id = ?
+            WHERE id = ? AND state_tag = 'Requested' AND (operation_tag = 'Restart' OR preparation_tag = 'Ready')
+          `).run(input.at, input.processId, input.id)
+        : { changes: 0 }
+      database.exec('COMMIT')
+      return result.changes === 0 ? null : restartRequestById(input.id)
+    }
+    catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   const completeRestart: JournalStore['completeRestart'] = (at) => {
@@ -14544,7 +14563,8 @@ export function openJournalStore(
    * an empty queue held one Update for 22 minutes. A comment queued later
    * stays Pending in the journal, and the next process publishes it.
    * `updated_at` moves on every return to Pending, so a requeued comment
-   * counts as new too.
+   * counts as new too. A comment held by a GitHub rate limit waits only after
+   * its retry time, because no process can publish it before then.
    */
   const isSafeToRestart: JournalStore['isSafeToRestart'] = (at = '') => {
     const queuedBefore = activeRestartRequest()?.requestedAt ?? null
@@ -14571,7 +14591,8 @@ export function openJournalStore(
         OR EXISTS (
           SELECT 1 FROM review_status_commands
           WHERE (state_tag = 'Running' AND (lease_expires_at IS NULL OR lease_expires_at > ?))
-            OR (state_tag = 'Pending' AND phase = 'terminal' AND (? IS NULL OR updated_at <= ?))
+            OR (state_tag = 'Pending' AND phase = 'terminal' AND (? IS NULL OR updated_at <= ?)
+              AND (retry_at IS NULL OR retry_at <= ?))
         )
         OR EXISTS (
           SELECT 1 FROM issue_triage_comment_commands
@@ -14590,7 +14611,7 @@ export function openJournalStore(
           WHERE json_extract(state, '$._tag') = 'Running' AND json_extract(state, '$.leaseExpiresAt') > ?
         )
       ) AS busy
-    `).get(at, at, at, at, at, queuedBefore, queuedBefore, at, at, at, at) as { busy: number }
+    `).get(at, at, at, at, at, queuedBefore, queuedBefore, at, at, at, at, at) as { busy: number }
     return row.busy === 0
   }
 
