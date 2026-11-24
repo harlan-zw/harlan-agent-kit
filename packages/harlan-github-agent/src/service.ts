@@ -1,5 +1,4 @@
 import type { ConsolaInstance } from 'consola'
-import type { Server } from 'srvx'
 import type { AgentProviderName } from './agent-provider.ts'
 import type { ReloadableExternalWatchController } from './external-watch.ts'
 import type { GitIdentity } from './git-identity.ts'
@@ -14,8 +13,10 @@ import type { Result } from './result.ts'
 import type { ReviewCheckRunReport } from './review-check-run.ts'
 import type { ReviewFindingThreadMirror } from './review-finding-threads.ts'
 import type { RoutineSyncOutcome } from './routine-controller.ts'
+import type { AgentServer } from './server.ts'
 import type { ServiceUpdateSource } from './service-update.ts'
 import type { SessionController } from './session-controller.ts'
+import type { ShutdownStages } from './shutdown.ts'
 import type { JournalStore } from './store.ts'
 import type { ClaimedAgentTask, DashboardSnapshot, IncidentScope, RepositoryMapping, ServiceTrigger, ValidatedAgentConfig } from './types.ts'
 import { randomUUID } from 'node:crypto'
@@ -119,8 +120,8 @@ import { createWorkerTaskScheduler } from './worker-task-scheduler.ts'
 import { agentWorktreeLeaseKey, confirmRepairRecoveryRegression, createAgentWorkspaceManager, createBaselineRepairWorktreeManager, createConflictWorktreeManager, createGitPublicationRemote, createIssueWorktreeManager, createRepairRecoveryWorktreeManager, createReviewFixWorktreeManager, runRepairRecoveryChecks, sweepAgentWorktrees } from './worktree.ts'
 
 export interface RunningAgentService {
-  server: Server
-  stop: () => Promise<void>
+  server: AgentServer
+  stop: (stages: ShutdownStages) => Promise<void>
   waitForRestart: () => Promise<void>
 }
 
@@ -2124,36 +2125,46 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   return {
     server,
     waitForRestart: restartController.waitForRestart,
-    stop: async () => {
+    stop: async (stages) => {
       restartController.stop()
       updateScheduler?.stop()
+      // One stage per stoppable part, so an overrun names the part still running.
+      const schedulerStages = (kind: string, schedulers: ReadonlyArray<{ stop: () => Promise<void> }> = []) =>
+        schedulers.map((scheduler, index) => stages.run(
+          schedulers.length === 1 ? `${kind} scheduler` : `${kind} scheduler ${index + 1}`,
+          () => scheduler.stop(),
+        ))
       await Promise.all([
-        capacity.stop(),
-        options.serviceUpdate.stop(),
-        reconcileHint.stop(),
-        poller.stop(),
-        externalPoller.stop(),
-        ...[...repositoryPollers.values()].map(repositoryPoller => repositoryPoller.stop()),
-        worktreeSweeper.stop(),
-        ...(mutationSchedulers?.tasks.map(scheduler => scheduler.stop()) ?? []),
-        ...(mutationSchedulers?.baselineRepairs.map(scheduler => scheduler.stop()) ?? []),
-        ...(mutationSchedulers?.issueWork.map(scheduler => scheduler.stop()) ?? []),
-        ...(mutationSchedulers?.batches.map(scheduler => scheduler.stop()) ?? []),
-        mutationSchedulers?.publications.stop() ?? Promise.resolve(),
-        mutationSchedulers?.repairRecovery.stop() ?? Promise.resolve(),
-        mutationSchedulers?.reviewStatuses.stop() ?? Promise.resolve(),
-        ...(mutationSchedulers?.repairs.map(scheduler => scheduler.stop()) ?? []),
-        ...(mutationSchedulers?.reviews.map(scheduler => scheduler.stop()) ?? []),
-        ...(mutationSchedulers?.issues.map(scheduler => scheduler.stop()) ?? []),
-        mutationSchedulers?.routines.stop() ?? Promise.resolve(),
-        mutationSchedulers?.releaseNotes.stop() ?? Promise.resolve(),
+        stages.run('Capacity reading', () => capacity.stop()),
+        stages.run('Service update check', () => options.serviceUpdate.stop()),
+        stages.run('delivery polls', () => reconcileHint.stop()),
+        stages.run('maintenance polls', () => poller.stop()),
+        stages.run('external watch poll', () => externalPoller.stop()),
+        ...[...repositoryPollers].map(([repository, repositoryPoller]) => stages.run(`${repository} poll`, () => repositoryPoller.stop())),
+        stages.run('Agent worktree sweep', () => worktreeSweeper.stop()),
+        ...schedulerStages('Task', mutationSchedulers?.tasks),
+        ...schedulerStages('Baseline repair', mutationSchedulers?.baselineRepairs),
+        ...schedulerStages('Issue work', mutationSchedulers?.issueWork),
+        ...schedulerStages('Batch', mutationSchedulers?.batches),
+        ...schedulerStages('Publication command', mutationSchedulers && [mutationSchedulers.publications]),
+        ...schedulerStages('Repair recovery', mutationSchedulers && [mutationSchedulers.repairRecovery]),
+        ...schedulerStages('Review status', mutationSchedulers && [mutationSchedulers.reviewStatuses]),
+        ...schedulerStages('Repair', mutationSchedulers?.repairs),
+        ...schedulerStages('Review', mutationSchedulers?.reviews),
+        ...schedulerStages('Issue triage', mutationSchedulers?.issues),
+        ...schedulerStages('Routine', mutationSchedulers && [mutationSchedulers.routines]),
+        ...schedulerStages('release notes', mutationSchedulers && [mutationSchedulers.releaseNotes]),
       ])
       dashboardShutdown.abort()
-      await terminals?.close()
-      await Promise.all([server.close(), webhookServer?.close() ?? Promise.resolve()])
+      if (terminals !== undefined)
+        await stages.run('Agent sessions', () => terminals.close())
+      await Promise.all([
+        stages.run('Control API listener', () => server.close()),
+        ...(webhookServer === null ? [] : [stages.run('webhook listener', () => webhookServer.close())]),
+      ])
       browserAuth?.close()
       requestCounts.stop()
-      store.close()
+      await stages.run('Journal', () => store.close())
     },
   }
 }
