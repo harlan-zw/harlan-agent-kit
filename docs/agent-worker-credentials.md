@@ -11,7 +11,7 @@ The desktop helper runs the same check before advertising capacity.
 Install `bubblewrap` through the host's administrator account.
 On Hogwild, use `hogwild-admin` for installation.
 Run the following command as the Service account, from the new checkout.
-It copies provider logins, the public GitHub token, Agent instructions, Skills, and Hooks.
+It copies provider logins, the public [GitHub](https://github.com) token, Agent instructions, Skills, and Hooks.
 For ZAI, it extracts only the named provider API key from OpenCode configuration.
 It does not copy the controller's GitHub login, Git helpers, or SSH keys.
 
@@ -33,6 +33,8 @@ The corresponding provider then needs login before it can serve turns.
 
 Tools with external runtime directories need additional `--tool-dir` or `--read-only` arguments.
 For example, mount pnpm's installation directory if its executable imports sibling modules.
+A native [pnpm](https://pnpm.io) shim, such as `node`, runs a runtime from pnpm's global directory.
+If a tool directory holds such a shim, each turn mounts that runtime package read only.
 Mount exact installation directories; never mount a complete home, configuration directory, or Service state directory.
 Host mounts are read only, except the worker home, worktree files, and selected temporary evidence directories.
 Do not place controller credentials in the worker home or tool directories.
@@ -40,7 +42,7 @@ Do not place controller credentials in the worker home or tool directories.
 ## Keep Agent tools current
 
 On provisioned hosts, context sync installs stable Agent tools.
-These tools include GitHub CLI, Codex, OpenCode, Bun, Worktrunk, ripgrep, and fd.
+These tools include GitHub CLI, Codex, OpenCode, [Bun](https://bun.sh), Worktrunk, ripgrep, and fd.
 Each host downloads its own Linux archive and checks GitHub's SHA-256 digest.
 The installer checks the executable before replacing its previous version.
 An unchanged release skips the download.

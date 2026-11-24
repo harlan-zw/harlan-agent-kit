@@ -1,6 +1,6 @@
 import { constants } from 'node:fs'
-import { access, open, realpath } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { access, open, readdir, readFile, realpath } from 'node:fs/promises'
+import { dirname, join, normalize } from 'node:path'
 import process from 'node:process'
 
 export const workerToolNames = ['gh', 'bun', 'wt', 'rg', 'fd', 'codex', 'opencode'] as const
@@ -113,4 +113,71 @@ export async function resolvePnpmPackage(home: string, directories: readonly str
       return candidate
   }
   return undefined
+}
+
+/** pnpm writes this file beside each native shim. It holds the absolute path that the shim runs. */
+const PNPM_SHIM_TARGET = /^\.pnpm-shim-v1-.+-target$/
+
+/** A file of one top-level package in one pnpm global install: the install, then the package name. */
+const PNPM_GLOBAL_PACKAGE_FILE = /^(\/.+\/pnpm\/global\/v\d+\/[^/]+)\/node_modules\/([^/.@][^/]*)\/[^/]/
+
+/** The runtime names that a pnpm global install manifest declares in `engines.runtime`. */
+function declaredRuntimes(manifest: string): string[] {
+  let value: unknown
+  try {
+    value = JSON.parse(manifest)
+  }
+  catch (error) {
+    // pnpm owns this file. An unreadable manifest proves no runtime, so the Agent gets no extra mount.
+    if (error instanceof SyntaxError)
+      return []
+    throw error
+  }
+  const runtime = (value as { engines?: { runtime?: unknown } } | null)?.engines?.runtime
+  return [runtime].flat().flatMap(item => typeof item === 'object' && item !== null && 'name' in item && typeof item.name === 'string' ? [item.name] : [])
+}
+
+/**
+ * The pnpm managed runtime packages that native pnpm shims in these directories run.
+ *
+ * A native shim, such as pnpm's `node`, runs the path in its sibling target file.
+ * That path names a pnpm global install by a hashed alias, outside every tool directory.
+ * Each result keeps the path as the shim names it, so a mount there serves the shim.
+ */
+export async function resolvePnpmRuntimePackages(directories: readonly string[]): Promise<string[]> {
+  const packages = new Set<string>()
+  for (const directory of new Set(directories)) {
+    const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.code === 'EACCES')
+        return []
+      throw error
+    })
+    for (const entry of entries) {
+      if (!entry.isFile() || !PNPM_SHIM_TARGET.test(entry.name))
+        continue
+      const target = (await readFile(join(directory, entry.name), 'utf8')).trim()
+      const match = PNPM_GLOBAL_PACKAGE_FILE.exec(target)
+      const install = match?.[1]
+      const name = match?.[2]
+      if (install === undefined || name === undefined || normalize(target) !== target)
+        continue
+      const manifest = await readFile(join(install, 'package.json'), 'utf8').catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.code === 'EACCES')
+          return undefined
+        throw error
+      })
+      // Only a runtime install qualifies. Other global packages keep their own mounts.
+      if (manifest === undefined || !declaredRuntimes(manifest).includes(name))
+        continue
+      const runtime = join(install, 'node_modules', name)
+      const present = await access(runtime).then(() => true).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT' || error.code === 'ENOTDIR')
+          return false
+        throw error
+      })
+      if (present)
+        packages.add(runtime)
+    }
+  }
+  return [...packages]
 }

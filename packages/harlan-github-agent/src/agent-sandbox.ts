@@ -16,7 +16,7 @@ import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
 import { VITALS_COMPARISON_GUEST_SCRIPT, VITALS_EVIDENCE_GUEST_DIRECTORY, vitalsComparisonScript } from './vitals-comparison-runtime.ts'
 import { resolveBrowserSetupRuntime } from './worker-browser-runtime.ts'
-import { isPnpmPackagePath, resolvePnpmPackage, resolveWorkerHostTools } from './worker-host-tools.ts'
+import { isPnpmPackagePath, resolvePnpmPackage, resolvePnpmRuntimePackages, resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
 import { resolveWorkerNuxtseo, workerNuxtseoEnvironment, workerNuxtseoRoutine } from './worker-nuxtseo.ts'
 import { resolveWorkerPackage } from './worker-package.ts'
@@ -189,7 +189,9 @@ async function currentWorkerConfiguration(home: string, profilePath: string) {
   const pnpmPackage = await resolvePnpmPackage(home, profile.tools)
   if (pnpmPackage !== undefined)
     profile.readOnlyPaths = [...new Set(profile.readOnlyPaths.map(path => isPnpmPackagePath(path) ? pnpmPackage : path))]
-  return { profile, hostTools }
+  // A pnpm upgrade can move the runtime that a mounted pnpm shim runs. Find it again for each turn.
+  const runtimePackages = await resolvePnpmRuntimePackages(profile.tools)
+  return { profile, hostTools, runtimePackages }
 }
 
 function within(path: string, root: string): boolean {
@@ -239,8 +241,8 @@ export async function agentWorkerHomes(environment: NodeJS.ProcessEnv, profilePa
 /** Refuse an update before restarting a host that cannot isolate its Agents. */
 export async function checkAgentWorker(environment: NodeJS.ProcessEnv, profilePath?: string): Promise<void> {
   const controllerHome = resolve(environment.HOME ?? '/home/harlan')
-  const { profile } = await currentWorkerConfiguration(controllerHome, profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json'))
-  for (const path of [profile.home, ...profile.tools, ...profile.readOnlyPaths, profile.codex, profile.opencode])
+  const { profile, runtimePackages } = await currentWorkerConfiguration(controllerHome, profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json'))
+  for (const path of [profile.home, ...profile.tools, ...profile.readOnlyPaths, ...runtimePackages, profile.codex, profile.opencode])
     await permittedPath(path, controllerHome)
   for (const path of [profile.codex, profile.opencode]) {
     const metadata = await stat(path)
@@ -277,7 +279,7 @@ export async function prepareAgentSandbox(input: {
 }): Promise<AgentSandbox> {
   const controllerHome = resolve(input.environment.HOME ?? '/home/harlan')
   const profilePath = input.profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json')
-  const { profile, hostTools } = await currentWorkerConfiguration(controllerHome, profilePath)
+  const { profile, hostTools, runtimePackages } = await currentWorkerConfiguration(controllerHome, profilePath)
   const readOnly = input.readOnly === true || input.reviewHome !== undefined
   const isolatedHome = await permittedPath(input.reviewHome ?? profile.home, controllerHome)
   if (within(controllerHome, isolatedHome) || isolatedHome === '/home' || isolatedHome === '/')
@@ -297,9 +299,13 @@ export async function prepareAgentSandbox(input: {
     const adapterSource = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './agent-sandbox-cli.ts' : '../agent-sandbox-cli.mjs', import.meta.url))
     const adapterPath = join(scratch, import.meta.url.endsWith('.ts') ? 'codex-adapter.ts' : 'codex-adapter.mjs')
     await writeFile(adapterPath, `#!${process.execPath} --experimental-strip-types\n${(await readFile(adapterSource, 'utf8')).replace(/^#![^\n]*\n/, '')}`, { mode: 0o700 })
+    // Git export runs system Git alone. It omits every mount between these marks and the tool marks below,
+    // because an upgrade can prune a mounted executable during the turn. A missing source must not block the export.
+    const serviceMountsFrom = args.length
     args.push('--ro-bind', await realpath(process.execPath), '/run/agent/node', '--ro-bind', runtime, '/run/agent/runtime.ts', '--ro-bind', egressDirectory, '/run/agent/egress')
     if (input.transportDirectory !== undefined)
       args.push('--bind', input.transportDirectory, '/run/agent/transport')
+    const serviceMountsTo = args.length
     for (const path of ['/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf', '/etc/ssl/certs', '/etc/ca-certificates', '/etc/ld.so.cache']) {
       if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
         args.push('--ro-bind', path, path)
@@ -312,6 +318,7 @@ export async function prepareAgentSandbox(input: {
         : await prepareOpencodeTaskDirectory(controllerHome, opencodeTaskKey(input.taskId ?? randomUUID()))
       args.push('--bind', databaseDirectory, '/run/agent/opencode-database')
     }
+    const toolMountsFrom = args.length
     const skillRoots = []
     const packageTools = []
     if (input.reviewHome === undefined && input.networkMode !== 'opencode-client'
@@ -386,6 +393,9 @@ export async function prepareAgentSandbox(input: {
       if (profile.readOnlyPaths.includes(path))
         skillRoots.push({ path: join(canonical, 'skills'), agentPath: join(path, 'skills') })
     }
+    // A pnpm shim names its runtime through a hashed alias. Mount the package at that exact path.
+    for (const path of runtimePackages)
+      args.push('--ro-bind', await permittedPath(path, controllerHome), path)
     const skillCatalogPath = input.reviewHome === undefined && input.networkMode !== 'opencode-client'
       ? AGENT_SKILL_CATALOG_PATH
       : undefined
@@ -427,6 +437,7 @@ export async function prepareAgentSandbox(input: {
       args.push('--ro-bind', vitalsComparisonScript(), VITALS_COMPARISON_GUEST_SCRIPT)
       args.push('--bind', await permittedPath(input.vitalsEvidenceDirectory, controllerHome), VITALS_EVIDENCE_GUEST_DIRECTORY)
     }
+    const toolMountsTo = args.length
     const workspace = await realpath(input.workspace)
     const repositoryBind = readOnly ? '--ro-bind' : '--bind'
     if (input.reviewHome === undefined) {
@@ -496,6 +507,8 @@ export async function prepareAgentSandbox(input: {
     await writeFile(join(privateGit.directory, 'config.worktree'), '', { mode: 0o600 })
     args.push('--ro-bind', gitConfig, join(common, 'config'))
     args.push('--ro-bind', gitConfig, join(taskDirectory, 'config.worktree'))
+    const omittedFromExport = [[serviceMountsFrom, serviceMountsTo], [toolMountsFrom, toolMountsTo]] as const
+    const exportArgs = [...args.filter((_, index) => !omittedFromExport.some(([from, to]) => index >= from && index < to)), '--chdir', workspace, '--']
     args.push('--chdir', workspace, '--', '/run/agent/node', '--experimental-strip-types', '/run/agent/runtime.ts', input.networkMode ?? 'command')
     const baseEnvironment: NodeJS.ProcessEnv = {
       HOME: workerHome,
@@ -535,22 +548,22 @@ export async function prepareAgentSandbox(input: {
       if (finalHead === null || !finalHead.equals(originalHead))
         throw new Error('The Agent changed its approved Git branch.')
       const safeGit = ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'credential.helper=', '-C', workspace]
-      const exportArgs = [...args]
-      exportArgs[exportArgs.lastIndexOf('/run/agent/runtime.ts') + 1] = 'command'
+      // Export Git reads neither worker configuration nor the worker environment and its secrets.
+      const gitEnvironment = { PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }
       const guest = [...exportArgs, ...safeGit]
-      const newSha = (await execute('/usr/bin/bwrap', [...guest, 'rev-parse', '--verify', 'HEAD'], { env: guestEnvironment, timeout: 30_000 })).stdout.trim()
+      const newSha = (await execute('/usr/bin/bwrap', [...guest, 'rev-parse', '--verify', 'HEAD'], { env: gitEnvironment, timeout: 30_000 })).stdout.trim()
       if (!/^[a-f0-9]{40}$/.test(newSha) || !/^[a-f0-9]{40}$/.test(originalSha))
         throw new Error('The Agent Git head must use a complete commit SHA.')
       if (newSha !== originalSha) {
-        const exporting = execute('/usr/bin/bwrap', [...guest, 'pack-objects', '--stdout', '--revs', '--thin'], { env: guestEnvironment, encoding: 'buffer', maxBuffer: 128 * 1024 * 1024, timeout: 30_000 })
+        const exporting = execute('/usr/bin/bwrap', [...guest, 'pack-objects', '--stdout', '--revs', '--thin'], { env: gitEnvironment, encoding: 'buffer', maxBuffer: 128 * 1024 * 1024, timeout: 30_000 })
         exporting.child.stdin!.end(`${newSha}\n^${originalSha}\n`)
         const pack = (await exporting).stdout
         // Host Git reads only a pack stream. It never reads worker configuration or aliases.
-        const importing = execute('/usr/bin/git', [...safeGit.slice(1), 'index-pack', '--stdin', '--fix-thin'], { env: { PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }, encoding: 'buffer', maxBuffer: 1024 * 1024, timeout: 30_000 })
+        const importing = execute('/usr/bin/git', [...safeGit.slice(1), 'index-pack', '--stdin', '--fix-thin'], { env: gitEnvironment, encoding: 'buffer', maxBuffer: 1024 * 1024, timeout: 30_000 })
         importing.child.stdin!.end(pack)
         await importing
       }
-      await execute('/usr/bin/git', [...safeGit.slice(1), 'update-ref', branch, newSha, originalSha], { env: { PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }, timeout: 30_000 })
+      await execute('/usr/bin/git', [...safeGit.slice(1), 'update-ref', branch, newSha, originalSha], { env: gitEnvironment, timeout: 30_000 })
       await privateGit.save()
     }
     const memory = input.memoryPerAgentGiB === undefined ? undefined : await workerMemoryCommand({ binary: '/usr/bin/bwrap', args, memoryGiB: input.memoryPerAgentGiB, ...(input.taskId === undefined ? {} : { taskId: input.taskId }) })
