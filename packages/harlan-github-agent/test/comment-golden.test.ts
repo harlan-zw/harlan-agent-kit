@@ -76,11 +76,13 @@ describe('review verdict', () => {
 
       **In this change.**
 
-      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
 
       **Already in \`main\`.**
 
-      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
 
       </details>
 
@@ -115,8 +117,10 @@ describe('review verdict', () => {
 
       **Not matched to the diff.**
 
-      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
-      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
 
       </details>
 
@@ -323,8 +327,10 @@ describe('a stopped Task and a pull request that left', () => {
 
       **Not matched to the diff.**
 
-      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
-      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
 
       </details>
 
@@ -338,8 +344,10 @@ describe('a stopped Task and a pull request that left', () => {
       <!-- workflow-state: {"_tag":"PullRequestMerged","workflowVersion":2,"headSha":"6aa6d8e1520848daef9646d402ea16ee3f9a4221","baseSha":"70edfe5f32699f7f6042c0bd66e8a68e3b282fc5"} -->
       🟣 **Merged** · 2 follow-ups not fixed
 
-      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
-      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
 
       <sub><relative-time datetime="2026-11-23T15:03:00.000Z">2026-11-23 15:03 UTC</relative-time> · [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated review, not Harlan's · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>"
     `)
@@ -376,13 +384,44 @@ describe('a stopped Task and a pull request that left', () => {
 
       **In this change.** Tick to have Repair fix it here, before merge.
 
-      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
         - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
         - [ ] Dismiss this finding <!-- dismiss-logged-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
 
       **Already in \`main\`.** Tick to file it as an issue.
 
-      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+        - [ ] File this finding as an issue <!-- logged-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+
+      </details>
+
+      <!-- finding-base: bWFpbg -->
+
+      <sub><relative-time datetime="2026-11-23T15:03:00.000Z">2026-11-23 15:03 UTC</relative-time> · [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated review, not Harlan's; a person merges · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>"
+    `)
+    // The thread beside the code shows the proof and fix, so its row keeps one line and the link.
+    const thread = 'https://github.com/harlan-zw/example/pull/740#discussion_r4640421240'
+    expect(withLoggedFindingControls(open, findings, [], { controls: { _tag: 'Open', repairOnHead: true }, baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })).toMatchInlineSnapshot(`
+      "<!-- harlan-agent-kit:pr-triage -->
+      <!-- reviewed-sha: 6aa6d8e1520848daef9646d402ea16ee3f9a4221 -->
+      <!-- workflow-state: {"_tag":"Review","headSha":"6aa6d8e1520848daef9646d402ea16ee3f9a4221","baseSha":"70edfe5f32699f7f6042c0bd66e8a68e3b282fc5","outcome":"READY","gates":{"merge":"Passed","review":"Passed","ci":"Passed"}} -->
+      🟢 **Ready** · \`90/100\`
+
+      No issues found in [\`6aa6d8e\`](https://github.com/harlan-zw/example/commit/6aa6d8e1520848daef9646d402ea16ee3f9a4221).
+
+      <details><summary><b>2 follow-ups</b> · none block merge</summary>
+
+      **In this change.**
+
+      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+        [Open the thread beside the code](https://github.com/harlan-zw/example/pull/740#discussion_r4640421240) <!-- logged-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+
+      **Already in \`main\`.** Tick to file it as an issue.
+
+      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
         - [ ] File this finding as an issue <!-- logged-finding: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
 
       </details>
@@ -398,8 +437,10 @@ describe('a stopped Task and a pull request that left', () => {
       <!-- workflow-state: {"_tag":"PullRequestMerged","workflowVersion":2,"headSha":"6aa6d8e1520848daef9646d402ea16ee3f9a4221","baseSha":"70edfe5f32699f7f6042c0bd66e8a68e3b282fc5"} -->
       🟣 **Merged** · 2 follow-ups not fixed
 
-      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
-      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+      - \`79\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L83) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff79 -->
+      - \`55\` Zero deliveries for an unmeasured interval · [\`timeline-store.ts:208\`](https://github.com/harlan-zw/example/blob/6aa6d8e1520848daef9646d402ea16ee3f9a4221/src/timeline-store.ts#L208) <!-- follow-up: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
+        When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff55 -->
 
       - [ ] File these as one issue <!-- logged-findings: 6aa6d8e1520848daef9646d402ea16ee3f9a4221 -->
 

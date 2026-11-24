@@ -195,7 +195,7 @@ export function stoppedReviewComment(
     const fitted = fitFollowUpRows(review.repository, review.headSha, followUps, followUpBudget([...above, footer]))
     return [
       ...above,
-      ...(fitted.rows.length === 0 ? [] : [...fitted.rows.map(({ row }) => row), '']),
+      ...(fitted.rows.length === 0 ? [] : [...fitted.rows.flatMap(({ lines }) => lines), '']),
       ...fitNotes(fitted),
       footer,
     ].join('\n')

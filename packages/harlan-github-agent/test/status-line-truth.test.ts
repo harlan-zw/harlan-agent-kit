@@ -4,7 +4,7 @@ import type { StoppedReview } from '../src/store.ts'
 import type { ReviewFinding, ReviewGates } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { terminalComment } from '../src/item-agent.ts'
-import { withLoggedFindingControls, withoutLoggedFindingControls } from '../src/logged-finding-pickup.ts'
+import { comparableCanonicalBody, withLoggedFindingControls } from '../src/logged-finding-pickup.ts'
 import { ok } from '../src/result.ts'
 import { mirrorReviewFindingThreads, resolvedThreadBody, reviewFindingThreadBody, reviewFindingThreadMarker } from '../src/review-finding-threads.ts'
 import { publishStoppedReviews, stoppedReviewComment } from '../src/review-stop-sweep.ts'
@@ -107,21 +107,22 @@ describe('a closed pull request', () => {
 })
 
 describe('a follow-up', () => {
-  it('keeps its fix in the canonical row, because a finding outside the diff has no thread', () => {
+  it('keeps its proof and fix under its row, because a finding outside the diff has no thread', () => {
     const body = terminalComment({ headSha: reviewed, baseSha: 'c'.repeat(40), gates, findings: [followUp(55)], confidence: 90, reportedChecks: [], repository })
-    expect(body).toContain(`- \`55\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/${repository}/blob/${reviewed}/src/timeline-store.ts#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport.`)
+    expect(body).toContain(`- \`55\` Finished bars disappear at a viewport boundary · [\`timeline-store.ts:83\`](https://github.com/${repository}/blob/${reviewed}/src/timeline-store.ts#L83) <!-- follow-up: ${'f'.repeat(64)} -->\n  When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ${'f'.repeat(64)} -->`)
   })
 
-  it('keeps a linked row when its thread opens beside the code, so the count the native review shows stays true', () => {
+  it('keeps a one-line linked row when its thread opens beside the code, so the count the native review shows stays true', () => {
     const findings = [followUp(55)]
     const source = terminalComment({ headSha: reviewed, baseSha: 'c'.repeat(40), gates, findings, confidence: 90, reportedChecks: [], repository })
     const thread = `https://github.com/${repository}/pull/24#discussion_r4640421240`
     const decorated = withLoggedFindingControls(source, findings, [], { controls: { _tag: 'Open', repairOnHead: true }, baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })
 
     expect(decorated).toContain('<b>1 follow-up</b> · none block merge')
-    expect(decorated).toContain(`<br>Fix: Query for span overlap with the viewport. <!-- follow-up: ${'f'.repeat(64)} -->\n  [Open the thread beside the code](${thread}) <!-- logged-finding: ${'f'.repeat(64)} -->`)
+    expect(decorated).toContain(`#L83) <!-- follow-up: ${'f'.repeat(64)} -->\n  [Open the thread beside the code](${thread}) <!-- logged-finding: ${'f'.repeat(64)} -->`)
+    expect(decorated).not.toContain('Fix: Query for span overlap with the viewport.')
     expect(decorated).not.toContain('Ask an agent to verify and fix this finding')
-    expect(withoutLoggedFindingControls(decorated)).toBe(source)
+    expect(comparableCanonicalBody(decorated)).toBe(comparableCanonicalBody(source))
     expect(withLoggedFindingControls(decorated, findings, [], { controls: { _tag: 'Open', repairOnHead: true }, baseRef: 'main', inline: new Map([[findings[0]!.details.fingerprint, thread]]) })).toBe(decorated)
   })
 })
@@ -175,9 +176,10 @@ describe('a passed Review of a Repair commit', () => {
 })
 
 describe('a follow-up without a thread', () => {
-  it('keeps its proof beside its fix in the canonical row', () => {
+  it('keeps its proof beside its fix under the canonical row', () => {
     const body = terminalComment({ headSha: reviewed, baseSha: 'c'.repeat(40), gates, findings: [followUp(55)], confidence: 90, reportedChecks: [], repository })
-    expect(body).toContain(`#L83)<br>When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport.`)
+    const decorated = withLoggedFindingControls(body, [followUp(55)], [], { controls: { _tag: 'Open', repairOnHead: true }, baseRef: 'main' })
+    expect(decorated).toContain(`\n  When a bar crosses the viewport edge, the query drops it.<br>Fix: Query for span overlap with the viewport. <!-- follow-up-detail: ${'f'.repeat(64)} -->\n  - [ ] Ask an agent to verify and fix this finding`)
   })
 })
 

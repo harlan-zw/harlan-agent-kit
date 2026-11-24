@@ -162,11 +162,34 @@ const SECTION_OVERHEAD = 600
 /** The room `fitNotes` needs under a cut list. */
 const FIT_NOTES = 200
 
+/**
+ * The hidden marker that ends one follow-up's detail line: its proof and its fix.
+ *
+ * The decorator drops that line when the finding has a thread beside the
+ * code, because the thread shows the same proof and fix there.
+ */
+export function followUpDetailMarker(fingerprint: string): string {
+  return `<!-- follow-up-detail: ${fingerprint.toLowerCase()} -->`
+}
+
+/** One follow-up's detail line, and the fingerprint it names. */
+export const FOLLOW_UP_DETAIL_LINE = /^ {2}[^\n]* <!-- follow-up-detail: ([a-f\d]{64}) -->$/
+
+/**
+ * Where a follow-up list goes, which sets the room each row keeps and where its proof and fix sit.
+ *
+ * A `Comment` row keeps room for the controls the decorator adds. Its proof
+ * and fix go on their own line, which the decorator drops for a finding with
+ * a thread beside the code. An `Issue` gets no controls and no threads, so
+ * each row carries its proof and fix, joined with `<br>`.
+ */
+export type FollowUpSurface = 'Comment' | 'Issue'
+
 interface FollowUpParts {
   head: string
   proof: string
   fix: string
-  marker: string
+  fingerprint: string | undefined
 }
 
 function followUpParts(repository: string | undefined, headSha: string, finding: LoggedFinding): FollowUpParts {
@@ -177,29 +200,53 @@ function followUpParts(repository: string | undefined, headSha: string, finding:
     head: `- \`${finding.impact}\` ${cleanLine(finding.summary)}${location === '' ? '' : ` · ${location}`}`,
     proof,
     fix: fix === '' ? '' : `Fix: ${fix}`,
-    marker: /^[a-f\d]{64}$/i.test(finding.details.fingerprint) ? ` ${followUpRowMarker(finding.details.fingerprint)}` : '',
+    fingerprint: /^[a-f\d]{64}$/i.test(finding.details.fingerprint) ? finding.details.fingerprint : undefined,
   }
 }
 
 /**
- * One follow-up row: score, title, and where, then the proof and the fix.
+ * The text with a Markdown block opener at its start escaped.
  *
- * A finding outside the diff gets no thread beside the code, so this row is
- * the only place its evidence shows. It stays one physical line, joined with
- * `<br>`, because `withLoggedFindingControls` finds the row by its marker and
- * adds the finding's controls directly under it.
+ * A detail line continues its row's list item. A proof that opens with a
+ * heading, a quote, a list marker, a fence, or an HTML tag such as `<head>`
+ * would start a new block there. An HTML block would also swallow the
+ * controls below. Inline Markdown, such as a code span, stays as written.
  */
-function joinedRow(parts: FollowUpParts, shown: { fix: boolean, proof: boolean }): string {
-  return `${[
-    parts.head,
+function inlineStart(text: string): string {
+  return text
+    .replace(/^(\d{1,9})([.)]\s)/, '$1\\$2')
+    .replace(/^(?:#{1,6}(?:\s|$)|>|[-+*]\s|`{3}|~{3}|<[a-z/!?])/i, '\\$&')
+}
+
+/**
+ * One follow-up: score, title, and where, then its proof and its fix.
+ *
+ * The row stays one physical line that ends with its marker, because
+ * `withLoggedFindingControls` finds the row by that marker and adds the
+ * finding's controls directly under it.
+ */
+function followUpLines(parts: FollowUpParts, shown: { fix: boolean, proof: boolean }, surface: FollowUpSurface): string[] {
+  const detail = [
     ...(shown.proof && parts.proof !== '' ? [parts.proof] : []),
     ...(shown.fix && parts.fix !== '' ? [parts.fix] : []),
-  ].join('<br>')}${parts.marker}`
+  ]
+  const marker = parts.fingerprint === undefined ? '' : ` ${followUpRowMarker(parts.fingerprint)}`
+  if (surface === 'Issue' || detail.length === 0)
+    return [`${[parts.head, ...detail].join('<br>')}${marker}`]
+  return [
+    `${parts.head}${marker}`,
+    `  ${inlineStart(detail.join('<br>'))}${parts.fingerprint === undefined ? '' : ` ${followUpDetailMarker(parts.fingerprint)}`}`,
+  ]
+}
+
+/** The characters some lines add to a body, with the line break after them. */
+function size(lines: readonly string[]): number {
+  return lines.join('\n').length + 1
 }
 
 /** Follow-up rows cut to fit a body, and what the cut left out. */
 export interface FittedFollowUps {
-  rows: Array<{ finding: LoggedFinding, row: string }>
+  rows: Array<{ finding: LoggedFinding, lines: string[] }>
   proofsLeftOut: number
   unlisted: number
 }
@@ -213,19 +260,23 @@ export interface FittedFollowUps {
  * when the titles alone overflow does the list stop, and it counts the rest.
  * The budget includes the notes `fitNotes` writes under the list.
  */
-export function fitFollowUpRows(repository: string | undefined, headSha: string, findings: readonly LoggedFinding[], budget: number, decoration = FOLLOW_UP_DECORATION): FittedFollowUps {
+export function fitFollowUpRows(repository: string | undefined, headSha: string, findings: readonly LoggedFinding[], budget: number, surface: FollowUpSurface = 'Comment'): FittedFollowUps {
+  const decoration = surface === 'Comment' ? FOLLOW_UP_DECORATION : 0
   let room = budget - FIT_NOTES
   const listed: Array<{ finding: LoggedFinding, parts: FollowUpParts, fix: boolean, proof: boolean }> = []
   for (const finding of findings) {
     const parts = followUpParts(repository, headSha, finding)
-    const cost = joinedRow(parts, { fix: false, proof: false }).length + 1 + decoration
+    const cost = size(followUpLines(parts, { fix: false, proof: false }, surface)) + decoration
     if (cost > room)
       break
     room -= cost
     listed.push({ finding, parts, fix: false, proof: false })
   }
+  /** What showing one more part of an entry adds to the body. */
+  const added = (entry: typeof listed[number], shown: { fix: boolean, proof: boolean }): number =>
+    size(followUpLines(entry.parts, shown, surface)) - size(followUpLines(entry.parts, entry, surface))
   for (const entry of listed) {
-    const cost = entry.parts.fix === '' ? 0 : entry.parts.fix.length + '<br>'.length
+    const cost = added(entry, { fix: true, proof: false })
     if (cost <= room) {
       room -= cost
       entry.fix = true
@@ -235,7 +286,7 @@ export function fitFollowUpRows(repository: string | undefined, headSha: string,
   for (const entry of listed) {
     if (entry.parts.proof === '')
       continue
-    const cost = entry.parts.proof.length + '<br>'.length
+    const cost = added(entry, { fix: entry.fix, proof: true })
     if (cost > room) {
       proofsLeftOut += 1
       continue
@@ -244,7 +295,7 @@ export function fitFollowUpRows(repository: string | undefined, headSha: string,
     entry.proof = true
   }
   return {
-    rows: listed.map(entry => ({ finding: entry.finding, row: joinedRow(entry.parts, entry) })),
+    rows: listed.map(entry => ({ finding: entry.finding, lines: followUpLines(entry.parts, entry, surface) })),
     proofsLeftOut,
     unlisted: findings.length - listed.length,
   }
@@ -312,7 +363,7 @@ export function followUpSection(repository: string | undefined, headSha: string,
   const fitted = fitFollowUpRows(repository, headSha, ordered, budget - SECTION_OVERHEAD)
   const groups = followUpGroups.flatMap((group) => {
     const rows = fitted.rows.filter(({ finding }) => followUpGroup(finding) === group)
-    return rows.length === 0 ? [] : [followUpGroupLabel(group, baseRef), '', ...rows.map(({ row }) => row), '']
+    return rows.length === 0 ? [] : [followUpGroupLabel(group, baseRef), '', ...rows.flatMap(({ lines }) => lines), '']
   })
   return [
     ...(fitted.rows.length === 0

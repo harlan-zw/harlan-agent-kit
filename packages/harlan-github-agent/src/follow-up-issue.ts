@@ -92,11 +92,11 @@ export function mergedFollowUpsIssue(input: { repository: string, pullRequestNum
   const marker = mergedFollowUpsMarker(input.pullRequestNumber, input.headSha)
   const above = [`#${input.pullRequestNumber} merged with these follow-ups not fixed. None blocked merge.`, '']
   const below = ['', `The Review read ${commitLink(input.repository, input.headSha)}.`, '', marker, '', automatedDisclosure({ kind: 'issue' })]
-  // Nothing decorates an issue, so its rows need no room for controls.
-  const fitted = fitFollowUpRows(input.repository, input.headSha, input.findings, followUpBudget([...above, ...below]), 0)
+  // Issue triage reads this without the threads, so each row keeps its proof and fix.
+  const fitted = fitFollowUpRows(input.repository, input.headSha, input.findings, followUpBudget([...above, ...below]), 'Issue')
   return {
     title: `Follow-ups from #${input.pullRequestNumber}`,
     marker,
-    body: [...above, ...fitted.rows.map(({ row }) => row), ...(fitted.unlisted + fitted.proofsLeftOut === 0 ? [] : ['', ...fitNotes(fitted).filter(line => line !== '')]), ...below].join('\n'),
+    body: [...above, ...fitted.rows.flatMap(({ lines }) => lines), ...(fitted.unlisted + fitted.proofsLeftOut === 0 ? [] : ['', ...fitNotes(fitted).filter(line => line !== '')]), ...below].join('\n'),
   }
 }

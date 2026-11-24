@@ -2,7 +2,7 @@ import type { FollowUpControls } from '../src/logged-finding-pickup.ts'
 import type { ReviewFinding } from '../src/types.ts'
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { loggedFindingPickup, normalizeLoggedFindingControls, withLoggedFindingControls, withoutLoggedFindingControls } from '../src/logged-finding-pickup.ts'
+import { comparableCanonicalBody, loggedFindingPickup, normalizeLoggedFindingControls, withLoggedFindingControls, withoutLoggedFindingControls } from '../src/logged-finding-pickup.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, followUpSection } from '../src/review-comment.ts'
 import { reviewFindingThreadBody } from '../src/review-finding-threads.ts'
 import { createWebhookApp } from '../src/webhook.ts'
@@ -126,7 +126,9 @@ describe('logged finding pickup', () => {
     const old = { ...logged(60, 'The cache never expires.', 'e', 'existing'), details: { ...existing.details, location: { path: 'src/old.ts', line: 10 } } }
     const fresh = { ...logged(60, 'The cache never expires.', 'c', 'change'), details: { ...added.details, location: { path: 'src/new.ts', line: 20 } } }
     const decorated = withLoggedFindingControls(verdict([old, fresh]), [old, fresh], [], { controls: repairHere, baseRef: 'main' })
-    const controlUnder = (path: string) => decorated.split('\n')[decorated.split('\n').findIndex(line => line.includes(`${path}`) && line.startsWith('- `60`')) + 1]
+    const lines = decorated.split('\n')
+    // The row's detail line sits between the row and its control.
+    const controlUnder = (path: string) => lines[lines.findIndex(line => line.includes(`${path}`) && line.startsWith('- `60`')) + 2]
 
     expect(controlUnder('new.ts')).toBe(`  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fresh.details.fingerprint} -->`)
     expect(controlUnder('old.ts')).toBe(`  - [ ] File this finding as an issue <!-- logged-finding: ${old.details.fingerprint} -->`)
@@ -182,8 +184,8 @@ describe('logged finding pickup', () => {
     const decorated = withLoggedFindingControls(source, [finding, second, hidden], [], { controls: repairHere, baseRef: 'main', inline: new Map([[second.details.fingerprint, 'https://github.com/harlan-zw/example/pull/24#discussion_r7']]) })
 
     expect(decorated).toContain('<b>2 follow-ups</b> · none block merge')
-    expect(decorated).toContain(`- \`40\` The parser drops buffered bytes. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)<br>A split sequence loses bytes. <!-- follow-up: ${fingerprint} -->\n  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fingerprint} -->`)
-    expect(decorated).toContain(`The cache never expires. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42)<br>A split sequence loses bytes. <!-- follow-up: ${'e'.repeat(64)} -->\n  [Open the thread beside the code](https://github.com/harlan-zw/example/pull/24#discussion_r7) <!-- logged-finding: ${'e'.repeat(64)} -->`)
+    expect(decorated).toContain(`- \`40\` The parser drops buffered bytes. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42) <!-- follow-up: ${fingerprint} -->\n  A split sequence loses bytes. <!-- follow-up-detail: ${fingerprint} -->\n  - [ ] Ask an agent to verify and fix this finding <!-- logged-finding: ${fingerprint} -->`)
+    expect(decorated).toContain(`- \`62\` The cache never expires. · [\`parser.ts:42\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L42) <!-- follow-up: ${'e'.repeat(64)} -->\n  [Open the thread beside the code](https://github.com/harlan-zw/example/pull/24#discussion_r7) <!-- logged-finding: ${'e'.repeat(64)} -->`)
     expect(decorated.match(/Ask an agent to verify and fix this finding/g)).toHaveLength(1)
     expect(decorated).not.toContain(`logged-finding: ${hidden.details.fingerprint}`)
     expect(decorated).toContain('<sub>1 note below 40/100 not shown.</sub>')
@@ -196,7 +198,7 @@ describe('logged finding pickup', () => {
     expect(decorated).toContain('**In this change.** Tick to have Repair fix it here, before merge.')
     expect(decorated).toContain('**Already in `main`.**\n')
     expect(decorated).not.toContain('File this finding as an issue')
-    expect(withoutLoggedFindingControls(decorated)).toBe(source)
+    expect(comparableCanonicalBody(decorated)).toBe(comparableCanonicalBody(source))
   })
 
   it('still strips published comments that end with an old selection hint', () => {
@@ -227,6 +229,70 @@ describe('logged finding pickup', () => {
     await deliver()
     await deliver()
     expect(requests).toEqual(kind === 'valid' ? [expect.objectContaining({ fingerprints: [fingerprint], requestId: 'delivery' })] : [])
+  })
+})
+
+describe('a follow-up row', () => {
+  const threaded = { ...added, nextAction: 'Keep the trailing bytes.' }
+  const unthreaded = { ...existing, nextAction: 'Expire entries after an hour.' }
+  const findings = [threaded, unthreaded]
+  const thread = 'https://github.com/harlan-zw/example/pull/24#discussion_r9'
+  const options = { controls: repairHere, baseRef: 'main', inline: new Map([[threaded.details.fingerprint, thread]]) }
+  const link = (line: number) => `[\`parser.ts:${line}\`](https://github.com/harlan-zw/example/blob/${headSha}/src/parser.ts#L${line})`
+
+  it('stays one line with its thread link when its thread opened beside the code', () => {
+    const decorated = withLoggedFindingControls(verdict(findings), findings, [], options)
+
+    expect(decorated).toContain(`- \`72\` Added lines drop bytes. · ${link(72)} <!-- follow-up: ${threaded.details.fingerprint} -->\n  [Open the thread beside the code](${thread}) <!-- logged-finding: ${threaded.details.fingerprint} -->\n`)
+    expect(decorated).not.toContain('Keep the trailing bytes.')
+  })
+
+  it('keeps its proof and fix when it has no thread', () => {
+    const decorated = withLoggedFindingControls(verdict(findings), findings, [], options)
+
+    expect(decorated).toContain(`- \`55\` The cache never expires. · ${link(55)} <!-- follow-up: ${unthreaded.details.fingerprint} -->\n  It breaks.<br>Fix: Expire entries after an hour. <!-- follow-up-detail: ${unthreaded.details.fingerprint} -->\n  - [ ] File this finding as an issue <!-- logged-finding: ${unthreaded.details.fingerprint} -->`)
+  })
+
+  it('drops its proof and fix when its thread opens after an earlier decoration', () => {
+    const before = withLoggedFindingControls(verdict(findings), findings, [], { controls: repairHere, baseRef: 'main' })
+    expect(before).toContain('Fix: Keep the trailing bytes.')
+
+    expect(withLoggedFindingControls(before, findings, [], options)).toBe(withLoggedFindingControls(verdict(findings), findings, [], options))
+  })
+
+  it('renders the same body when decorated twice', () => {
+    const decorated = withLoggedFindingControls(verdict(findings), findings, [], options)
+    expect(withLoggedFindingControls(decorated, findings, [], options)).toBe(decorated)
+  })
+
+  it('compares equal to its source once the thread drops its detail', () => {
+    const source = verdict(findings)
+    expect(comparableCanonicalBody(withLoggedFindingControls(source, findings, [], options))).toBe(comparableCanonicalBody(source))
+  })
+
+  it.each([
+    ['an HTML block tag', '<head> tags render twice.', '\\<head> tags render twice.'],
+    ['a heading', '# Heading text is lost.', '\\# Heading text is lost.'],
+    ['a quote', '> The quote is lost.', '\\> The quote is lost.'],
+    ['a list marker', '- The list item is lost.', '\\- The list item is lost.'],
+    ['an ordered list marker', '1. The first step is lost.', '1\\. The first step is lost.'],
+    ['a code fence', '```ts is never closed.', '\\```ts is never closed.'],
+  ])('escapes a proof that would open %s inside the row', (_name, proof, shown) => {
+    const tagged = { ...unthreaded, details: { ...unthreaded.details, proof } }
+    const decorated = withLoggedFindingControls(verdict([tagged]), [tagged], [], { controls: repairHere, baseRef: 'main' })
+    expect(decorated).toContain(`\n  ${shown}<br>Fix: Expire entries after an hour. <!-- follow-up-detail: ${tagged.details.fingerprint} -->\n  - [ ] File this finding as an issue`)
+  })
+
+  it.each([
+    ['a code span', '`parseHeader` drops the tail.'],
+    ['bold text', '**Every** retry drops the tail.'],
+    ['emphasis', '_Every_ retry drops the tail.'],
+    ['a less than sign', '< 3 retries drop the tail.'],
+    ['a number', '3 retries drop the tail.'],
+  ])('keeps a proof that opens with %s as written', (_name, proof) => {
+    const plain = { ...unthreaded, details: { ...unthreaded.details, proof } }
+    const decorated = withLoggedFindingControls(verdict([plain]), [plain], [], { controls: repairHere, baseRef: 'main' })
+    expect(decorated).toContain(`\n  ${proof}<br>Fix: Expire entries after an hour. <!-- follow-up-detail: ${plain.details.fingerprint} -->\n`)
   })
 })
 

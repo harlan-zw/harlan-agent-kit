@@ -25,7 +25,7 @@ import { renderedMediaReferences } from './github-media.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
 import { collectJobWorkflowContext } from './job-workflow-context.ts'
-import { normalizeLoggedFindingControls, withoutLoggedFindingControls } from './logged-finding-pickup.ts'
+import { comparableCanonicalBody, normalizeLoggedFindingControls } from './logged-finding-pickup.ts'
 import { writeNativeReview } from './native-review.ts'
 import { isRedactedFormOf, publicBody, removalsByPosition, removalsBySource } from './public-text.ts'
 import { err, ok } from './result.ts'
@@ -1243,8 +1243,8 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
       const actor = options.actorLogin(repository).toLowerCase()
       return octokit.value.rest.issues.getComment({ owner, repo, comment_id: commentId, ...requestOptions })
         .then(async (existing) => {
-          const priorPublished = withoutLoggedFindingControls(normalizeReviewControl(existing.data.body ?? ''))
-          const priorSource = withoutLoggedFindingControls(normalizeReviewControl(expectedBody))
+          const priorPublished = comparableCanonicalBody(normalizeReviewControl(existing.data.body ?? ''))
+          const priorSource = comparableCanonicalBody(normalizeReviewControl(expectedBody))
           const outgoing = publicBody(options.publicText, { repository: repository.github, itemNumber: pullRequestNumber, writer: 'automated review' }, sourceBody, removalsBySource(priorPublished, priorSource))
           const body = outgoing.text
           if (existing.data.issue_url !== undefined && !existing.data.issue_url.endsWith(`/${pullRequestNumber}`))
@@ -1264,7 +1264,7 @@ export function createGitHubAgentSource(options: GitHubAgentSourceOptions): GitH
           if (existing.data.user?.login.toLowerCase() !== actor && !legacyOwned)
             return ok({ _tag: 'Foreign' as const, reason: 'The stored automated review comment belongs to another GitHub actor.' as const })
           if ((existing.data.body === body || (expectedBody === sourceBody
-            && withoutLoggedFindingControls(existing.data.body ?? '') === withoutLoggedFindingControls(body)))
+            && comparableCanonicalBody(existing.data.body ?? '') === comparableCanonicalBody(body)))
           && existing.data.html_url !== undefined) {
             return ok({ _tag: 'Edited' as const, commentId: existing.data.id, url: existing.data.html_url })
           }
