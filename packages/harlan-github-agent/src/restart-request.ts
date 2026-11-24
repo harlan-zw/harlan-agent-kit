@@ -31,6 +31,9 @@ export function createRestartController(options: {
   const maximumWaitMilliseconds = options.maximumWaitMilliseconds ?? DEFAULT_MAXIMUM_WAIT_MILLISECONDS
   let interval: ReturnType<typeof setInterval> | undefined
   let checking = false
+  // The store can refuse to begin after preparation, while a Publication that
+  // started during it finishes. Preparing again would open that window again.
+  let preparedUpdateId: string | undefined
   let resolveRestart: (() => void) | undefined
   const restart = new Promise<void>((resolve) => {
     resolveRestart = resolve
@@ -62,7 +65,7 @@ export function createRestartController(options: {
 
       if (options.ready?.() === false || !options.store.prepareForRestart(at))
         return
-      if (request.operation._tag === 'Update') {
+      if (request.operation._tag === 'Update' && preparedUpdateId !== request.id) {
         const prepared = await options.prepareUpdate(request.operation.targetCommit)
         if (prepared._tag === 'Err') {
           const required = options.store.requireRestartAction({ id: request.id, at: options.now().toISOString(), reason: prepared.error })
@@ -70,6 +73,7 @@ export function createRestartController(options: {
             options.onActionRequired(prepared.error)
           return
         }
+        preparedUpdateId = request.id
       }
       const restarting = options.store.beginRestart({ id: request.id, processId: options.processId, at: options.now().toISOString() })
       if (restarting?._tag === 'Restarting')
