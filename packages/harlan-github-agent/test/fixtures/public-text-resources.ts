@@ -10,7 +10,8 @@ const [mode, first, second] = process.argv.slice(2)
 if (mode === 'allocation') {
   const matches = Number(first)
   const lines = Number(second)
-  const source = `${'/private-root '.repeat(matches)}<!--${'\n'.repeat(lines)}-->tail`
+  // A blank line would end the paragraph and leave the opener as text, so the comment wraps text lines.
+  const source = `${'/private-root '.repeat(matches)}<!--${'x\n'.repeat(lines)}-->tail`
   const session = new Session()
   session.connect()
   await session.post('HeapProfiler.startSampling', {

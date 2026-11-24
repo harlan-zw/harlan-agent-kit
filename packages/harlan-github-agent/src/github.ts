@@ -17,7 +17,7 @@ import { createAuthenticatedClient } from './github-auth.ts'
 import { currentBaseSha } from './github-base.ts'
 import { createGitHubResponseCache } from './github-response-cache.ts'
 import { AUTOMATED_ISSUE_TRIAGE_MARKER } from './issue-triage-comment.ts'
-import { publicBody } from './public-text.ts'
+import { publicBody, publicFields } from './public-text.ts'
 import { err, ok } from './result.ts'
 import { priorAutomatedReviewForHead } from './review-comment.ts'
 import { findingDiscussions, inlineReviewComment } from './review-finding-threads.ts'
@@ -34,16 +34,14 @@ export interface GitHubReadError {
 /**
  * Guards a title and a body in one write, so an accepted item reports its hits once.
  *
- * From the Service Repair ea3f8596. `itemNumber` reads the number GitHub gave
- * a new issue or pull request, so its Incident names it.
+ * GitHub renders the title apart from the body, so each is guarded alone. A
+ * withheld body keeps its own marker lines, and the title stays the title.
+ * `itemNumber` reads the number GitHub gave a new issue or pull request, so
+ * its Incident names it.
  */
 function publicTitledBody<T>(guard: PublicTextGuard, target: PublicTextTarget, input: { title: string, body: string }, write: (fields: { title: string, body: string }) => Promise<T>, itemNumber?: (written: T) => number): Promise<T> {
-  // A GitHub title occupies one line. Keep that boundary separate from the body.
-  const title = input.title.replaceAll(/[\r\n]/g, ' ')
-  return publicBody(guard, target, `${title}\n${input.body}`).send((text) => {
-    const boundary = text.indexOf('\n')
-    return write({ title: text.slice(0, boundary), body: text.slice(boundary + 1) })
-  }, itemNumber)
+  // A GitHub title occupies one line.
+  return publicFields(guard, target, { title: input.title.replaceAll(/[\r\n]/g, ' '), body: input.body }).send(write, itemNumber)
 }
 
 /** A listed Item whose complete detail is unavailable, never a closure. */
