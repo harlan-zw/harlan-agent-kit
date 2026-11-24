@@ -55,6 +55,38 @@ function mergeMain(directory: string): string {
 }
 
 describe('readHeadAdvance', () => {
+  it('starts a fresh Review when a rewritten base moves the same edit between functions', async () => {
+    const { directory } = repositoryWithReviewedHead()
+    const permissions = (read: boolean, remove: boolean) => [
+      'export function canRead() {',
+      `  return ${read}`,
+      '}',
+      '',
+      '// Deletion requires a separate permission.',
+      '',
+      'export function canDelete() {',
+      `  return ${remove}`,
+      '}',
+      '',
+    ].join('\n')
+    const common = commitFile(directory, 'permissions.ts', permissions(false, false), 'shared permissions')
+    const earlierBaseSha = commitFile(directory, 'permissions.ts', permissions(false, true), 'base permits deletion')
+    git(directory, 'switch', '-q', 'feature')
+    git(directory, 'reset', '--hard', earlierBaseSha)
+    const reviewed = commitFile(directory, 'permissions.ts', permissions(true, true), 'permit reading')
+    git(directory, 'switch', '-q', 'main')
+    git(directory, 'reset', '--hard', common)
+    const baseSha = commitFile(directory, 'permissions.ts', permissions(true, false), 'rewritten base permits reading')
+    const headSha = mergeMain(directory)
+
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, earlierBaseSha, headSha, baseSha }, AbortSignal.timeout(10_000))
+
+    if (advance._tag !== 'Ok')
+      throw new Error(advance.error)
+    const review = await reviewAfterEarlierHead(earlierRun({ headSha: reviewed, baseSha: earlierBaseSha }), advance.value)
+    expect(review.turns).toBe(1)
+  })
+
   it('requires a fresh Review when a rewritten base exposes a previously shared commit', async () => {
     const { directory } = repositoryWithReviewedHead()
     const originalBaseSha = commitFile(directory, 'shared-change.txt', 'outside the reviewed diff\n', 'shared change')

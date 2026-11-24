@@ -207,6 +207,13 @@ export async function readHeadAdvance(
     return ok({ _tag: 'Rewritten' })
   if (ancestor.exitCode !== 0)
     return err(`Could not compare the reviewed head: ${ancestor.stderr}`)
+  // Patch normalization cannot prove identity across rewritten base history.
+  // The same edit can move between functions while keeping identical patch text.
+  const baseAncestor = await runGit(path, ['merge-base', '--is-ancestor', commits.earlierBaseSha, commits.baseSha], signal)
+  if (baseAncestor.exitCode === 1)
+    return ok({ _tag: 'ChangedDiff' })
+  if (baseAncestor.exitCode !== 0)
+    return err(`Could not compare the reviewed base: ${baseAncestor.stderr}`)
   const listed = await runGitScalar(path, ['rev-list', '--parents', commits.headSha, `^${commits.earlierHeadSha}`, `^${commits.baseSha}`], signal)
   if (listed.exitCode !== 0)
     return err(`Could not list the new commits: ${listed.stderr}`)
