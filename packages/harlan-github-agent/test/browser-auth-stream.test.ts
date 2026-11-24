@@ -49,9 +49,11 @@ async function fixture(machine = false, race = false, state = 'Running') {
         } }
       : {}),
   })
-  api.server.listen(43829, '127.0.0.1')
+  // The origin names the public host. The server takes any free port, so suites that share a host never collide.
+  api.server.listen(0, '127.0.0.1')
   await once(api.server, 'listening')
-  const socket = new WebSocket(`ws://localhost:43829/api/terminal/sessions/${id}/stream`, { headers: { origin, cookie } })
+  const port = (api.server.address() as AddressInfo).port
+  const socket = new WebSocket(`ws://localhost:${port}/api/terminal/sessions/${id}/stream`, { headers: { origin, cookie, host: new URL(origin).host } })
   return {
     socket,
     forwarded,

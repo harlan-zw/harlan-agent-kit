@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +16,29 @@ import { createWorkerMemoryLimiter } from '../src/worker-memory.ts'
 import { homeOverlayMissing } from './home-overlay.ts'
 
 const execute = promisify(execFile)
+
+/**
+ * The IDs of host processes whose arguments contain `text`.
+ *
+ * It reads each command line from /proc, as `ps` does, one process at a time.
+ * The size of the host's process table cannot overflow a buffer.
+ */
+async function processesNaming(text: string): Promise<number[]> {
+  const found: number[] = []
+  for (const entry of await readdir('/proc')) {
+    if (!/^\d+$/.test(entry))
+      continue
+    const commandLine = await readFile(`/proc/${entry}/cmdline`).catch((error: NodeJS.ErrnoException) => {
+      // A process can exit between the directory read and this read.
+      if (error.code === 'ENOENT' || error.code === 'ESRCH')
+        return undefined
+      throw error
+    })
+    if (commandLine?.includes(text))
+      found.push(Number(entry))
+  }
+  return found
+}
 
 it.skipIf(homeOverlayMissing)('runs the trusted vitals reader inside the evidence sandbox', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-vitals-reader-'))
@@ -141,8 +164,7 @@ it.skipIf(homeOverlayMissing)('runs the installed NuxtSEO package with its depen
         probe.catch(reject)
       })
       expect(ready).toBe('true')
-      const processes = await execute('/bin/ps', ['-e', '-o', 'args='])
-      expect(processes.stdout.includes('fixture-viewer')).toBe(false)
+      expect(await processesNaming('fixture-viewer')).toEqual([])
     }
     finally {
       probe.child.stdin!.end()
