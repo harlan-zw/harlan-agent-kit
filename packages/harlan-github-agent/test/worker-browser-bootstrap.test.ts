@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process'
 import { execFile } from 'node:child_process'
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -125,21 +126,41 @@ it.skipIf(homeOverlayMissing)('does not record completion after a failed install
   }
 })
 
+const setupPaused = 'Browser setup paused inside the installer.'
+
+/** Resolves when the child writes the marker to stderr, however long that takes. Rejects if the child closes first. */
+function printed(child: ChildProcess, marker: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let output = ''
+    const read = (chunk: string | Buffer) => {
+      output += String(chunk)
+      if (!output.includes(marker))
+        return
+      child.stderr!.off('data', read)
+      child.off('close', closed)
+      resolve()
+    }
+    const closed = (code: number | null, signal: NodeJS.Signals | null) => {
+      child.stderr!.off('data', read)
+      reject(new Error(`The sandbox closed with ${signal ?? code} before it printed the marker. Its stderr was: ${output}`))
+    }
+    child.stderr!.on('data', read)
+    child.once('close', closed)
+  })
+}
+
 it.skipIf(homeOverlayMissing)('releases the setup lock after a namespace dies during installation', async () => {
   const f = await fixture()
   const entry = join(f.home, 'npm/bin/cli.js')
   const original = await readFile(entry, 'utf8')
-  await writeFile(entry, `const waitFs=require('node:fs');const waitPath=require('node:path');if(waitFs.existsSync(waitPath.join(process.env.HOME,'pause-browser-setup'))){waitFs.writeFileSync(waitPath.join(process.env.HOME,'.local/state/harlan-agent-kit/setup-started'),'started');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);}${original}`)
+  await writeFile(entry, `const waitFs=require('node:fs');const waitPath=require('node:path');if(waitFs.existsSync(waitPath.join(process.env.HOME,'pause-browser-setup'))){waitFs.writeSync(2,'${setupPaused}');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60000);}${original}`)
   await writeFile(join(f.worker, 'pause-browser-setup'), 'pause')
   const sandbox = await prepareAgentSandbox({ workspace: f.workspace, environment: { HOME: f.home }, provider: 'codex', profilePath: f.profilePath, resolveBrowserRuntime: f.resolveBrowserRuntime })
-  const pending = execute(sandbox.binary, [...sandbox.args, '/run/agent/host-tools/dev-browser', '--headless'], { env: sandbox.environment, timeout: 10_000 })
+  // The test kills this run itself, so it carries no timeout that could end it with another signal.
+  const pending = execute(sandbox.binary, [...sandbox.args, '/run/agent/host-tools/dev-browser', '--headless'], { env: sandbox.environment })
   try {
     const interrupted = expect(pending).rejects.toMatchObject({ signal: 'SIGKILL' })
-    await expect.poll(() => readFile(join(f.worker, proofs, 'setup-started'), 'utf8').catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT')
-        return ''
-      throw error
-    })).toBe('started')
+    await printed(pending.child, setupPaused)
     pending.child.kill('SIGKILL')
     await interrupted
     await expect(readFile(join(f.worker, '.local/state/harlan-agent-kit/browser-bootstrap.json'))).rejects.toMatchObject({ code: 'ENOENT' })

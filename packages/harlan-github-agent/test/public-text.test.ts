@@ -6,6 +6,7 @@ import type { ReviewFinding } from '../src/types.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { candidateIssueBody, candidateIssueTitle } from '../src/candidate-issue-controller.ts'
 import { createGitHubAgentSource } from '../src/github-agent-source.ts'
@@ -1420,31 +1421,42 @@ describe('review findings on #754, follow-ups', () => {
   })
 })
 
-/** The fastest of five runs, in milliseconds, so one slow run on a busy runner cannot decide. */
-function fastest(run: () => void): number {
-  let best = Number.POSITIVE_INFINITY
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const started = performance.now()
-    run()
-    best = Math.min(best, performance.now() - started)
-  }
-  return best
+/**
+ * The CPU time that `run` uses, in milliseconds.
+ *
+ * Other processes on a busy runner delay a run, but they do not add CPU time to it.
+ * The count includes every thread of this process. The forks pool keeps other test files in other processes.
+ */
+function cpuTime(run: () => void): number {
+  const started = process.cpuUsage()
+  run()
+  const spent = process.cpuUsage(started)
+  return (spent.user + spent.system) / 1_000
 }
 
 /**
- * Asserts that redaction scales linearly, whatever the runner's speed.
+ * Asserts that redaction scales linearly, whatever the runner's speed or load.
  *
- * Four times the input costs about 4 times the work when linear and 16 times
- * when quadratic, so a ratio below 10 separates them. The absolute ceiling is
- * only a hang guard.
+ * Each attempt redacts the small input 4 times, then the large input once.
+ * Both sides do the same work when the cost is linear, so their times match.
+ * A quadratic cost makes the large side about 4 times slower, so a ratio below 2 separates them.
+ * The sides alternate, and each keeps its fastest of five attempts.
+ * The absolute ceiling is only a hang guard.
  */
 function expectLinear(build: (size: number) => string): void {
   const small = build(16_384)
   const large = build(65_536)
-  const smallTime = fastest(() => redactPrivateDetails(small, details))
-  const largeTime = fastest(() => redactPrivateDetails(large, details))
+  let smallTime = Number.POSITIVE_INFINITY
+  let largeTime = Number.POSITIVE_INFINITY
+  for (let attempt = 0; attempt < 5; attempt++) {
+    smallTime = Math.min(smallTime, cpuTime(() => {
+      for (let copy = 0; copy < 4; copy++)
+        redactPrivateDetails(small, details)
+    }))
+    largeTime = Math.min(largeTime, cpuTime(() => redactPrivateDetails(large, details)))
+  }
   expect(largeTime).toBeLessThan(2_000)
-  expect(largeTime / Math.max(smallTime, 1)).toBeLessThan(10)
+  expect(largeTime / smallTime).toBeLessThan(2)
 }
 
 describe('redaction time', () => {
