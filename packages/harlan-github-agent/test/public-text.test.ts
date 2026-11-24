@@ -1421,42 +1421,40 @@ describe('review findings on #754, follow-ups', () => {
   })
 })
 
-/**
- * The CPU time that `run` uses, in milliseconds.
- *
- * Other processes on a busy runner delay a run, but they do not add CPU time to it.
- * The count includes every thread of this process. The forks pool keeps other test files in other processes.
- */
-function cpuTime(run: () => void): number {
-  const started = process.cpuUsage()
-  run()
-  const spent = process.cpuUsage(started)
-  return (spent.user + spent.system) / 1_000
+/** The fastest of five runs, in milliseconds, so one slow run on a busy runner cannot decide. */
+function fastest(...runs: Array<() => void>): number[] {
+  const best = runs.map(() => Number.POSITIVE_INFINITY)
+  // CPU time leaves out the time that other processes take on a busy runner.
+  // It counts every thread of this process. The forks pool keeps other test files in other processes.
+  // The runs alternate, so any slowdown that remains reaches each run alike.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    runs.forEach((run, index) => {
+      const started = process.cpuUsage()
+      run()
+      const spent = process.cpuUsage(started)
+      best[index] = Math.min(best[index]!, (spent.user + spent.system) / 1_000)
+    })
+  }
+  return best
 }
 
 /**
  * Asserts that redaction scales linearly, whatever the runner's speed or load.
  *
- * Each attempt redacts the small input 4 times, then the large input once.
+ * One side redacts the small input 4 times. The other side redacts the large input once.
  * Both sides do the same work when the cost is linear, so their times match.
  * A quadratic cost makes the large side about 4 times slower, so a ratio below 2 separates them.
- * The sides alternate, and each keeps its fastest of five attempts.
  * The absolute ceiling is only a hang guard.
  */
 function expectLinear(build: (size: number) => string): void {
   const small = build(16_384)
   const large = build(65_536)
-  let smallTime = Number.POSITIVE_INFINITY
-  let largeTime = Number.POSITIVE_INFINITY
-  for (let attempt = 0; attempt < 5; attempt++) {
-    smallTime = Math.min(smallTime, cpuTime(() => {
-      for (let copy = 0; copy < 4; copy++)
-        redactPrivateDetails(small, details)
-    }))
-    largeTime = Math.min(largeTime, cpuTime(() => redactPrivateDetails(large, details)))
-  }
+  const [smallTime, largeTime] = fastest(() => {
+    for (let copy = 0; copy < 4; copy++)
+      redactPrivateDetails(small, details)
+  }, () => redactPrivateDetails(large, details))
   expect(largeTime).toBeLessThan(2_000)
-  expect(largeTime / smallTime).toBeLessThan(2)
+  expect(largeTime! / smallTime!).toBeLessThan(2)
 }
 
 describe('redaction time', () => {
