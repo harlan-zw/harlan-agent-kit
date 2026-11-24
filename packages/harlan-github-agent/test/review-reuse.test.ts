@@ -1,3 +1,5 @@
+import type { PullRequestReviewSnapshot } from '../src/github-agent-source.ts'
+import type { GitHubMediaSource } from '../src/github-media.ts'
 import type { HeadAdvance } from '../src/review-reuse.ts'
 import type { ClaimedAdversarialReviewTask, RecordReviewRunInput, ReviewFinding, ReviewGates, ReviewRun } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
@@ -55,6 +57,31 @@ function mergeMain(directory: string): string {
 }
 
 describe('readHeadAdvance', () => {
+  it('starts a fresh Review when a clean base merge repurposes a reviewed permission', async () => {
+    const { directory } = repositoryWithReviewedHead()
+    const permissions = (name: string, allowed: boolean) => [
+      `export function ${name}() {`,
+      ...Array.from({ length: 12 }, (_, index) => `  // Permission context ${index + 1}.`),
+      `  return ${allowed}`,
+      '}',
+      '',
+    ].join('\n')
+    const earlierBaseSha = commitFile(directory, 'permissions.ts', permissions('canRead', false), 'read permission')
+    git(directory, 'switch', '-q', 'feature')
+    git(directory, 'merge', '-q', '--no-edit', 'main')
+    const reviewed = commitFile(directory, 'permissions.ts', permissions('canRead', true), 'permit reading')
+    git(directory, 'switch', '-q', 'main')
+    const baseSha = commitFile(directory, 'permissions.ts', permissions('canDelete', false), 'repurpose permission for deletion')
+    const headSha = mergeMain(directory)
+
+    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, earlierBaseSha, headSha, baseSha }, AbortSignal.timeout(10_000))
+
+    if (advance._tag !== 'Ok')
+      throw new Error(advance.error)
+    const review = await reviewAfterEarlierHead(earlierRun({ headSha: reviewed, baseSha: earlierBaseSha }), advance.value)
+    expect(review.turns).toBe(1)
+  })
+
   it('starts a fresh Review when a rewritten base moves the same edit between functions', async () => {
     const { directory } = repositoryWithReviewedHead()
     const permissions = (read: boolean, remove: boolean) => [
@@ -294,11 +321,17 @@ const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { 
  * Runs one Review whose pull request has an earlier reviewed head, and reports
  * how many Agent turns started and what the Review run recorded.
  */
-async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance, rerun: ClaimedAdversarialReviewTask['rerun'] = { _tag: 'NotRequested' }) {
+async function reviewAfterEarlierHead(
+  earlier: ReviewRun,
+  advance: HeadAdvance,
+  rerun: ClaimedAdversarialReviewTask['rerun'] = { _tag: 'NotRequested' },
+  evidence: { snapshot?: Partial<PullRequestReviewSnapshot>, source?: GitHubMediaSource } = {},
+) {
   const pullRequest = pullRequestItem({ mergeState: 'clean' })
   const capture: ProviderCapture = { requests: [] }
   const recorded: RecordReviewRunInput[] = []
   const worker = createReviewWorker({
+    ...(evidence.source === undefined ? {} : { mediaSource: evidence.source }),
     runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
       checked: 'the changed files',
       notChecked: null,
@@ -330,6 +363,7 @@ async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance, 
         findingDiscussions: [],
         requiredChecks: { _tag: 'None' },
         reviews: [],
+        ...evidence.snapshot,
       })),
       upsertIssueTriageComment: () => Promise.reject(new Error('Review must not post issue triage.')),
       upsertReviewStatus: () => Promise.reject(new Error('The Worker must use the status controller.')),
@@ -390,10 +424,42 @@ async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance, 
 
   if (result._tag !== 'Ok')
     throw new Error(result.error)
-  return { turns: capture.requests.length, run: recorded.at(0) }
+  return { turns: capture.requests.length, run: recorded.at(0), requests: capture.requests }
 }
 
 describe('a Review after an earlier reviewed head', () => {
+  const image = { mime: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAABQAAAAKCAYAAAC0VX7mAAAAF0lEQVR4nGNkoDIYNZByMGog5YDqBgIAFJEAC2Vie2MAAAAASUVORK5CYII=', label: 'Current: clipped UI', source: 'https://github.com/user-attachments/assets/current' }
+  const reference = { url: image.source, label: image.label }
+  it.each<Partial<PullRequestReviewSnapshot>>([
+    { body: `![${image.label}](${image.source})` },
+    { authorComments: [`![${image.label}](${image.source})`] },
+    { imageReferences: [reference] },
+  ])('retrieves current screenshot evidence and starts a fresh Review: %j', async (snapshot) => {
+    const retrieved: unknown[] = []
+    const review = await reviewAfterEarlierHead(earlierRun(), clean, { _tag: 'NewRevision' }, {
+      snapshot,
+      source: async (_repository, references) => {
+        retrieved.push(...references)
+        return { images: [image], unavailable: [] }
+      },
+    })
+
+    expect(review.turns).toBe(1)
+    expect(retrieved).toEqual([reference])
+    expect(review.requests[0]?.media).toEqual([image])
+  })
+
+  it('starts a fresh Review with retrieval failure evidence for an inaccessible screenshot', async () => {
+    const review = await reviewAfterEarlierHead(earlierRun(), clean, { _tag: 'NewRevision' }, {
+      snapshot: { imageReferences: [reference] },
+      source: async () => ({ images: [], unavailable: [{ label: image.label, reason: 'Image retrieval returned HTTP 404.' }] }),
+    })
+
+    expect(review.turns).toBe(1)
+    expect(review.requests[0]?.prompt).toContain('Image retrieval returned HTTP 404.')
+    expect(review.requests[0]?.prompt).toContain('Return a material documentation finding for unavailable evidence.')
+  })
+
   it('runs a fresh Agent turn when the earlier Review has no recorded base', async () => {
     const review = await reviewAfterEarlierHead(earlierRun({ baseSha: null }), clean)
 

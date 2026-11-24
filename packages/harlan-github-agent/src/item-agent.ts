@@ -46,7 +46,7 @@ import { classifyFailure, REVIEW_REPAIR_REFUSALS } from './failure.ts'
 import { withFindingScopes } from './finding-scope.ts'
 import { githubAccountInstructions } from './github-account.ts'
 import { currentGitHubChecks } from './github-agent-source.ts'
-import { mediaEvidenceLines, snapshotMedia } from './github-media.ts'
+import { extractMediaReferences, mediaEvidenceLines, snapshotMedia } from './github-media.ts'
 import { parseStoredIssueTriage } from './issue-triage.ts'
 import { combineMergeRisk, mergeRiskFloor } from './merge-risk.ts'
 import { queuedReviewHistoryLine } from './queue-position-sweep.ts'
@@ -1996,6 +1996,11 @@ async function reuseEarlierReview(
 ): Promise<Result<{ evidence: string, resolution: ReviewResolution }, string> | undefined> {
   const readHeadAdvance = options.workspaces.readHeadAdvance
   if (readHeadAdvance === undefined || context.forced)
+    return undefined
+  // Earlier runs do not record which images they inspected. Any current image
+  // requires retrieval and a fresh turn, including unavailable evidence.
+  const images = snapshot.imageReferences ?? [snapshot.body, ...(snapshot.authorComments ?? [])].flatMap(extractMediaReferences)
+  if (images.length > 0)
     return undefined
   const earlier = options.store.latestReviewOfEarlierHead(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
   const advance = earlier === undefined || earlier.baseSha === undefined || earlier.baseSha === null

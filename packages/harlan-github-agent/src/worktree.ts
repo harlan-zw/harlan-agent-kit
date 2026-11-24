@@ -238,6 +238,14 @@ export async function readHeadAdvance(
   const changedPaths = changed.stdout.split('\0').filter(entry => entry !== '')
   if (resolved.length > 0)
     return ok({ _tag: 'ResolvedBaseMerges', merges: resolved, changedPaths })
+  // A clean merge can change the meaning of an earlier edit outside its hunk.
+  // Require untouched files, not just matching added and removed lines.
+  const reviewed = await runGit(path, ['diff', '--name-only', '-z', '--no-renames', `${commits.earlierBaseSha}...${commits.earlierHeadSha}`], signal)
+  if (reviewed.exitCode !== 0)
+    return err(`Could not list the reviewed paths: ${reviewed.stderr}`)
+  const reviewedPaths = new Set(reviewed.stdout.split('\0').filter(entry => entry !== ''))
+  if (changedPaths.some(path => reviewedPaths.has(path)))
+    return ok({ _tag: 'ChangedDiff' })
   // A clean merge can still move the pull request's own edit, for example
   // into a file the base branch renamed. Only the same edits at the same
   // paths keep the earlier verdict. Pin the earlier diff to its recorded base,
