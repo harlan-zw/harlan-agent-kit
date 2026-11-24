@@ -2025,6 +2025,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       const scoped = await scopeFollowUps(options, task, findings, signal)
       const { gates } = reviewGates(snapshot.value, response, repairsBaseline, { reviewStartedAt: startedAt, now: options.now() }, requiresCallerVerification)
       return settleReviewRun(options, task, snapshot.value, {
+        baseSha: workspace.value.baseSha,
         provider: reviewRuntime.profile.provider,
         sessionId: turn.value.sessionId,
         model: reviewRuntime.profile.roles.adversarial_review.model,
@@ -2082,6 +2083,7 @@ async function reviewScope(
 
 /** What one Review concluded, before the controller records and publishes it. */
 interface ReviewRunAnswer {
+  baseSha: string
   provider: ReviewRun['provider']
   sessionId: string
   model: string
@@ -2119,6 +2121,7 @@ async function settleReviewRun(
     pullRequestNumber: task.pullRequestNumber,
     revisionId: task.revisionId,
     headSha: task.pullRequest.headSha,
+    baseSha: answer.baseSha,
     provider: answer.provider,
     sessionId: answer.sessionId,
     model: answer.model,
@@ -2198,6 +2201,7 @@ async function reuseEarlierReview(
   const carried = decision.run
   const { gates } = refreshControllerGates(carried.gates, snapshot, task.repositoryMapping, { reviewStartedAt: context.startedAt, now: options.now() })
   return settleReviewRun(options, task, snapshot, {
+    baseSha: workspace.baseSha,
     provider: carried.provider,
     sessionId: carried.sessionId,
     model: carried.model,

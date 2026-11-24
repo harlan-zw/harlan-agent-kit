@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { createReviewWorker, reviewOutcome } from '../src/item-agent.ts'
@@ -230,7 +231,7 @@ const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { 
  * Runs one Review of a Repair head and reports the prompt the Agent received
  * and what the Review run recorded.
  */
-async function reviewRepairHead(input: { source: ReviewRun, callerVerification?: 'complete' | 'incomplete' | null | ((prompt: string) => 'complete' | 'incomplete'), findings?: { identity: string, impact: number, line: number, nextAction: string, path: string, proof: string, regressionTest: string, summary: string }[], notChecked?: string | null, paths?: string[], directory?: string, task?: ClaimedAdversarialReviewTask, journal?: ReturnType<typeof openJournalStore>, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
+async function reviewRepairHead(input: { source: ReviewRun, callerVerification?: 'complete' | 'incomplete' | null | ((prompt: string) => 'complete' | 'incomplete'), findings?: { identity: string, impact: number, line: number, nextAction: string, path: string, proof: string, regressionTest: string, summary: string }[], notChecked?: string | null, paths?: string[], directory?: string, task?: ClaimedAdversarialReviewTask, journal?: ReturnType<typeof openJournalStore>, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }, workspaceBaseSha?: string) {
   const pullRequest = pullRequestItem({ mergeState: 'clean', ...input.task?.pullRequest })
   const capture: ProviderCapture = { requests: [] }
   const recorded: RecordReviewRunInput[] = []
@@ -324,7 +325,7 @@ async function reviewRepairHead(input: { source: ReviewRun, callerVerification?:
     triageStatus: { publish: () => Promise.reject(new Error('Review must not publish issue triage.')) },
     workspaces: {
       prepareIssue: () => Promise.reject(new Error('Unexpected issue workspace.')),
-      prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
+      prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: workspaceBaseSha ?? pullRequest.baseSha, headSha: pullRequest.headSha })),
       verifyReview: () => Promise.resolve(ok(undefined)),
       readHeadAdvance: () => Promise.resolve(ok({ _tag: 'NewCommits' as const })),
       readRepairDelta: (_worktree, sourceHeadSha, signal, sourceBaseSha) => input.directory !== undefined
@@ -359,6 +360,39 @@ async function reviewRepairHead(input: { source: ReviewRun, callerVerification?:
 const fullDiffMandate = 'Follow nextOffset until truncated is false.'
 
 describe('a Review of a Repair head', () => {
+  it.each(['settlement', 'historical'] as const)('preserves only proven target evidence after %s', (mode) => {
+    const { directory } = repositoryWithReviewedHead()
+    const path = join(directory, '.git', 'journal.sqlite')
+    let store = openJournalStore(path)
+    try {
+      store.syncRepositories([repositoryMapping()], '2026-11-24T00:00:00.000Z')
+      store.recordObservation({ externalId: 'source', observedAt: '2026-11-24T00:00:01.000Z', source: 'poll', subject: pullRequestItem({ mergeState: 'clean', headSha: 'abc1234def', baseSha: 'observed-target' }) })
+      const task = store.claimNextAdversarialReviewTask('reviewer', '2026-11-24T00:00:02.000Z', 60_000)!
+      const run = { ...sourceRun(), revisionId: task.revisionId, baseSha: 'workspace-target' }
+      expect(store.recordReviewRun(run)._tag).toBe('Inserted')
+      if (mode === 'settlement') {
+        expect(store.supersedeReviewRun({
+          ...run,
+          id: 'settlement',
+          baseSha: 'later-target',
+          supersedesReviewRunId: run.id,
+          publication: { id: 'settled-publication', body: 'Review settled.', at: run.completedAt, result: { _tag: 'Published', githubCommentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' } },
+        })._tag).toBe('Inserted')
+      }
+      store.close()
+      if (mode === 'historical') {
+        const legacy = new DatabaseSync(path)
+        legacy.exec('ALTER TABLE review_runs DROP COLUMN base_sha; PRAGMA user_version = 112;')
+        legacy.close()
+      }
+      store = openJournalStore(path)
+      expect(store.listReviewRuns(task.repository, 24)[0]?.baseSha).toBe(mode === 'historical' ? null : 'workspace-target')
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it.each([false, true])('keeps earlier callers in scope across two Repairs, all callers verified: %s', async (allCallersVerified) => {
     const store = openJournalStore(':memory:')
     let second = 0
@@ -515,13 +549,14 @@ describe('a Review of a Repair head', () => {
     expect(review.prompt).toContain('If caller verification remains unavailable, report the verification limit.')
   })
 
-  it.each(['unchanged', 'advance', 'rewind', 'explicit'])('selects the full diff when a target rewind exposes inherited changes: %s', async (mode) => {
+  it.each(['unchanged', 'advance', 'rewind', 'rewind-during-review', 'explicit'])('selects the full diff when a target rewind exposes inherited changes: %s', async (mode) => {
     const explicit = mode === 'explicit'
     const { directory, reviewed } = repositoryWithReviewedHead()
     const originalBase = git(directory, 'rev-parse', 'main')
     git(directory, 'branch', '-f', 'main', reviewed)
     const sourceHead = commitFile(directory, 'parser.ts', 'export const limit = 3\n', 'stacked feature')
-    const store = openJournalStore(':memory:')
+    const journalPath = join(directory, '.git', 'journal.sqlite')
+    let store = openJournalStore(journalPath)
     const at = (second: number) => `2026-11-24T00:10:${String(second).padStart(2, '0')}.000Z`
     try {
       store.syncRepositories([repositoryMapping()], at(0))
@@ -529,7 +564,14 @@ describe('a Review of a Repair head', () => {
       if (observed._tag !== 'Inserted')
         throw new Error('Expected a source Revision.')
       const review = store.claimNextAdversarialReviewTask('reviewer', at(2), 60_000)!
-      expect(store.recordReviewRun({ ...sourceRun(), revisionId: observed.revisionId, headSha: review.pullRequest.headSha })._tag).toBe('Inserted')
+      if (mode === 'rewind-during-review') {
+        git(directory, 'branch', '-f', 'main', originalBase)
+        expect(store.recordObservation({ externalId: 'rewound-during-review', observedAt: at(2), source: 'poll', subject: pullRequestItem({ ...review.pullRequest, baseSha: originalBase, updatedAt: at(2) }) })._tag).toBe('Inserted')
+      }
+      expect(store.recordReviewRun({ ...sourceRun(), revisionId: observed.revisionId, headSha: review.pullRequest.headSha, baseSha: reviewed })._tag).toBe('Inserted')
+      store.close()
+      store = openJournalStore(journalPath)
+      expect(store.listReviewRuns(review.repository, 24)[0]?.baseSha).toBe(reviewed)
       expect(store.queueReviewFixTaskForReview({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at: at(3) })._tag).toBe('Queued')
       const repair = store.claimNextReviewFixTask('repairer', at(4), 60_000)!
       const headSha = commitFile(directory, 'parser.ts', 'export const limit = 4\n', 'small repair')
@@ -558,7 +600,7 @@ describe('a Review of a Repair head', () => {
       const task = store.claimNextAdversarialReviewTask('follow-up', at(10), 60_000)!
       const source = store.latestReviewOfEarlierHead(task.repository, 24, headSha)!
       const result = await reviewRepairHead({ task, source, journal: store, directory })
-      if (explicit || mode === 'rewind') {
+      if (explicit || mode === 'rewind' || mode === 'rewind-during-review') {
         expect(result.prompt).toContain(fullDiffMandate)
         expect(result.prompt).not.toContain(repairDiff)
       }
@@ -573,7 +615,7 @@ describe('a Review of a Repair head', () => {
   })
 
   it('hands the Agent the Repair delta as its focus, with the full diff still readable', async () => {
-    const review = await reviewRepairHead({ source: sourceRun() })
+    const review = await reviewRepairHead({ source: sourceRun() }, 'workspace-target')
 
     expect(review.prompt).toContain(repairDiff)
     expect(review.prompt).toContain('abc1234def')
@@ -581,6 +623,7 @@ describe('a Review of a Repair head', () => {
     expect(review.prompt).toContain('review_search')
     expect(review.prompt).toContain('caller.ts')
     expect(review.prompt).not.toContain(fullDiffMandate)
+    expect(review.run?.baseSha).toBe('workspace-target')
   })
 
   it('asks the Agent to recheck the earlier Review\'s other findings by their identity', async () => {
