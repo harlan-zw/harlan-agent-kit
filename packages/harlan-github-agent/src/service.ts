@@ -112,7 +112,7 @@ import { runCompletionTask } from './take-ownership-completion.ts'
 import { createCompletionSource } from './take-ownership-github.ts'
 import { createTaskScheduler } from './task-scheduler.ts'
 import { createControllerTerminals } from './terminal-controller.ts'
-import { createWebhookControls } from './webhook-controls.ts'
+import { COMMENT_DELIVERY_PROOF_DAYS, createWebhookControls } from './webhook-controls.ts'
 import { createReconcileHint, createWebhookApp } from './webhook.ts'
 import { createRoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
 import { createWorkerTaskScheduler } from './worker-task-scheduler.ts'
@@ -494,6 +494,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   let releaseWebhookReady = false
   const webhookControls = createWebhookControls({
     ready: () => releaseWebhookReady && userLoginKnown && config.triggers.includes('github'),
+    covered: store.recentDeliveryRepositories('issue_comment', now().getTime() - COMMENT_DELIVERY_PROOF_DAYS * 24 * 60 * 60_000),
   })
   const processId = randomUUID()
   let sessions: SessionController | undefined

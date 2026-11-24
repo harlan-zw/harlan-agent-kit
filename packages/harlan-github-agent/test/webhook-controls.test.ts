@@ -1,6 +1,8 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { createWebhookApp, createWebhookControls } from '../src/index.ts'
+import { openJournalStore } from '../src/store.ts'
+import { COMMENT_DELIVERY_PROOF_DAYS } from '../src/webhook-controls.ts'
 
 describe('repository checkbox coverage', () => {
   it('does not offer a checkbox on any repository without comment deliveries', () => {
@@ -45,5 +47,38 @@ describe('repository checkbox coverage', () => {
     }))
     expect(response.status).toBe(signed ? 204 : 401)
     expect(controls.available('nuxt/scripts')).toBe(signed)
+  })
+})
+
+describe('repository checkbox coverage across a restart', () => {
+  const secret = 'test-webhook-secret'
+  const day = 24 * 60 * 60_000
+
+  async function deliverComment(store: ReturnType<typeof openJournalStore>, at: number) {
+    const app = createWebhookApp({ secret, allowedOwners: ['harlan-zw'], logger: { info: () => undefined }, onHint: () => undefined, now: () => at, recordDelivery: delivery => store.recordDelivery(delivery) })
+    const body = JSON.stringify({ action: 'edited', repository: { full_name: 'harlan-zw/example' } })
+    const response = await app.fetch(new Request('http://localhost/webhook', {
+      method: 'POST',
+      body,
+      headers: {
+        'x-github-event': 'issue_comment',
+        'x-github-delivery': `comment-${at}`,
+        'x-hub-signature-256': `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`,
+      },
+    }))
+    expect(response.status).toBe(204)
+  }
+
+  it.each([
+    { age: 'an hour', milliseconds: 60 * 60_000, covered: true },
+    { age: 'eight days', milliseconds: 8 * day, covered: false },
+  ])('counts a comment delivery from $age before a restart: $covered', async ({ milliseconds, covered }) => {
+    const store = openJournalStore(':memory:', true)
+    const restartedAt = Date.parse('2026-11-24T08:13:00.000Z')
+    await deliverComment(store, restartedAt - milliseconds)
+
+    const controls = createWebhookControls({ ready: () => true, covered: store.recentDeliveryRepositories('issue_comment', restartedAt - COMMENT_DELIVERY_PROOF_DAYS * day) })
+    expect(controls.available('harlan-zw/example')).toBe(covered)
+    store.close()
   })
 })

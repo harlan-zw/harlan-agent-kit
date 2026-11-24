@@ -31,6 +31,8 @@ const upcomingPerRoutine = 14
 export interface TimelineStore {
   /** Counts one accepted delivery in its minute, and keeps it per item when it moves one. */
   recordDelivery: (delivery: DeliveryRecord) => void
+  /** Each repository with an accepted delivery of this event since `since`, in epoch milliseconds. */
+  recentDeliveryRepositories: (event: string, since: number) => string[]
   /** The stored history behind the Timeline for one window. */
   getTimelineHistory: (input: TimelineWindow & { now: number }) => TimelineHistory
 }
@@ -131,6 +133,7 @@ export function createTimelineStore(database: DatabaseSync): TimelineStore {
   }
 
   const deliveryCounts = database.prepare('SELECT minute, SUM(count) AS count FROM delivery_counts WHERE minute >= ? AND minute < ? GROUP BY minute')
+  const recentRepositories = database.prepare('SELECT DISTINCT repository FROM delivery_counts WHERE minute >= ? AND event = ? AND repository != \'\'')
   const itemDeliveries = database.prepare(`
     SELECT received_at, repository, item_number, event, action FROM item_deliveries
     WHERE received_at >= ? AND received_at < ?
@@ -280,6 +283,7 @@ export function createTimelineStore(database: DatabaseSync): TimelineStore {
 
   return {
     recordDelivery,
+    recentDeliveryRepositories: (event, since) => (recentRepositories.all(Math.floor(since / minute), event) as Array<{ repository: string }>).map(row => row.repository),
     getTimelineHistory: ({ from, to, now }) => ({
       generatedAt: iso(now),
       deliveries: deliveries({ from, to }, now),
