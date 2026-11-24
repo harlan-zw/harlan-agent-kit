@@ -120,9 +120,17 @@ jobs:
 
       - name: Install Agent process isolation
         if: ${{ runner.environment == 'github-hosted' }}
+        # Agent homes need overlay mounts, which arrived in bubblewrap 0.10.
+        # Ubuntu 24.04 ships 0.9, so install the Ubuntu 26.04 package. Check the archive before it runs.
+        env:
+          BUBBLEWRAP_DEB: bubblewrap_0.11.1-1ubuntu0.3_amd64.deb
+          BUBBLEWRAP_SHA256: d3a6c1b6b0e0474eaed6dbd055c0d601fd875af153976a0dc4aae75f4ea10868
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/$BUBBLEWRAP_DEB" \
+            "https://launchpad.net/ubuntu/+archive/primary/+files/$BUBBLEWRAP_DEB"
+          echo "$BUBBLEWRAP_SHA256  $RUNNER_TEMP/$BUBBLEWRAP_DEB" | sha256sum --check
+          sudo apt-get install -y "$RUNNER_TEMP/$BUBBLEWRAP_DEB"
           # Hosted Ubuntu blocks private loopback setup through its AppArmor gate.
           # Permit namespace creation on this disposable runner. Worker capabilities stay dropped.
           if [ -f /proc/sys/kernel/unprivileged_userns_clone ]; then
@@ -134,6 +142,16 @@ jobs:
           bwrap --unshare-user --unshare-pid --unshare-net --cap-drop ALL \
             --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
             --proc /proc --dev /dev /usr/bin/true
+          # Fail here, not in skipped tests, if this runner cannot mount an Agent home layer.
+          layer="$(mktemp -d)"
+          mkdir "$layer/lower" "$layer/upper" "$layer/work"
+          bwrap --unshare-user --unshare-pid --unshare-net --cap-drop ALL \
+            --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
+            --proc /proc --dev /dev \
+            --overlay-src "$layer/lower" --overlay "$layer/upper" "$layer/work" /home/agent \
+            /usr/bin/touch /home/agent/written
+          test -e "$layer/upper/written"
+          chmod -R u+rwx "$layer" && rm -rf "$layer"
           # Proof regressions require a private user scope with a fixed memory limit.
           sudo loginctl enable-linger "$(id -un)"
           sudo systemctl start "user@$(id -u).service"

@@ -161,6 +161,23 @@ describe('createCodexProvider', () => {
     expect(codexOptions?.env?.CLOUDFLARE_API_TOKEN).toBe('from-repo')
   })
 
+  it('turns off Codex account plugins, which every turn would download again', async () => {
+    let codexOptions: { config?: unknown } | undefined
+    const provider = createCodexProvider({
+      createCodex: (options) => {
+        codexOptions = options
+        return {
+          startThread: () => thread(messageEvents),
+          resumeThread: () => { throw new Error('A new turn must not resume.') },
+        }
+      },
+    })
+
+    await collect(provider.runTurn(request()))
+
+    expect(codexOptions?.config).toEqual({ features: { plugins: false, remote_plugin: false } })
+  })
+
   it('pins the model, reasoning effort, and worktree on a new thread', async () => {
     let threadOptions: ThreadOptions | undefined
     const provider = createCodexProvider({

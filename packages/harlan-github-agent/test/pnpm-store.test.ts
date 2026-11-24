@@ -7,10 +7,11 @@ import process from 'node:process'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
 import { runAgentSandboxCommand } from '../src/agent-sandbox.ts'
+import { homeOverlayMissing } from './home-overlay.ts'
 
 const execute = promisify(execFile)
 
-it('keeps offline dependency installation data outside the Agent worktree', async () => {
+it.skipIf(homeOverlayMissing)('keeps offline dependency installation data outside the Agent worktree', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-pnpm-store-'))
   const home = join(root, 'controller')
   const worker = join(root, 'worker')

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { redactSecrets } from './agent-activity.ts'
 import { parseVitalsComparisonRequest, parseVitalsComparisonResult, vitalsComparisonInstructions } from './vitals-comparison.ts'
+import { besideHomeLayer } from './worker-home-layer.ts'
 
 export const VITALS_EVIDENCE_GUEST_DIRECTORY = '/run/agent/vitals-evidence'
 export const VITALS_COMPARISON_GUEST_SCRIPT = '/run/agent/vitals-comparison.ts'
@@ -66,10 +67,10 @@ export function vitalsEvidenceInstructions(request: VitalsComparisonRequest): st
 
 /** Reads untrusted reports only inside the existing Agent boundary. No controller file path comes from a model. */
 export async function inspectVitalsComparison(sandbox: AgentSandbox, request: VitalsComparisonRequest, signal: AbortSignal): Promise<VitalsComparisonResult> {
-  // OpenCode's server still owns its scope and transport. Keep its Task slice and namespace for the helper.
-  const args = sandbox.binary === '/usr/bin/systemd-run'
+  // OpenCode's server still owns its scope, transport, and home layer. Keep its Task slice and namespace for the helper.
+  const args = besideHomeLayer(sandbox.binary === '/usr/bin/systemd-run'
     ? sandbox.args.map(argument => argument.startsWith('--unit=harlan-worker-') ? `--unit=harlan-worker-${randomUUID()}` : argument)
-    : [...sandbox.args]
+    : sandbox.args)
   const runtime = args.lastIndexOf('/run/agent/runtime.ts')
   if (runtime !== -1)
     args[runtime + 1] = 'command'

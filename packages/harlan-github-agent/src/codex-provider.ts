@@ -115,6 +115,12 @@ function definedEntries(environment: NodeJS.ProcessEnv): Record<string, string> 
   return Object.fromEntries(Object.entries(environment).filter((entry): entry is [string, string] => entry[1] !== undefined))
 }
 
+/**
+ * The worker carries no Codex account plugins. Each turn starts with an empty
+ * plugin directory, so plugin sync would download them again in every turn.
+ */
+const AGENT_CODEX_FEATURES = { plugins: false, remote_plugin: false }
+
 export function createCodexProvider(options: CodexProviderOptions = {}): AgentProvider {
   const factory = options.createCodex ?? (codexOptions => new Codex(codexOptions))
   return {
@@ -177,7 +183,7 @@ export function createCodexProvider(options: CodexProviderOptions = {}): AgentPr
                 PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
                 HARLAN_AGENT_SANDBOX_ENV: JSON.stringify(sandbox.environment),
               },
-            }), ...(review === undefined ? {} : { config: { features: REVIEW_CODEX_FEATURES, agents: { enabled: false, max_depth: 0 } } }) })
+            }), config: review === undefined ? { features: AGENT_CODEX_FEATURES } : { features: REVIEW_CODEX_FEATURES, agents: { enabled: false, max_depth: 0 } } })
         const baseOptions = {
           model: request.model,
           workingDirectory: request.workspace,

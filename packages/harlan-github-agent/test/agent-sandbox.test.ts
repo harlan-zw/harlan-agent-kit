@@ -13,10 +13,11 @@ import { createOpencodeProvider } from '../src/opencode-provider.ts'
 import { inspectVitalsComparison } from '../src/vitals-comparison-runtime.ts'
 import { parseVitalsComparisonRequest } from '../src/vitals-comparison.ts'
 import { createWorkerMemoryLimiter } from '../src/worker-memory.ts'
+import { homeOverlayMissing } from './home-overlay.ts'
 
 const execute = promisify(execFile)
 
-it('runs the trusted vitals reader inside the evidence sandbox', async () => {
+it.skipIf(homeOverlayMissing)('runs the trusted vitals reader inside the evidence sandbox', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-vitals-reader-'))
   const controller = join(root, 'controller')
   const worker = join(root, 'worker')
@@ -43,8 +44,17 @@ it('runs the trusted vitals reader inside the evidence sandbox', async () => {
     const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'vitals').worktree.path as string
     await writeFile(profile, JSON.stringify({ home: worker, tools: [], readOnlyPaths: [], codex: '/usr/bin/true', opencode: '/usr/bin/true' }))
     const request = parseVitalsComparisonRequest({ id: '12345678-1234-4123-8123-123456789012', taskId: 'task-123', revisionId: 'b'.repeat(64), baseSha: 'a'.repeat(40), issuedAt: new Date().toISOString(), targets: [{ path: '/', strategy: 'mobile', metric: 'lcp' }] })
+    await writeFile(join(worker, '.profile'), 'shared\n')
     sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex', taskId: request.taskId, routineContext: { repository: 'harlan-zw/example', routineName: 'vitals-review' }, vitalsEvidenceDirectory: evidence })
+    // The OpenCode server can still run while the reader starts. Its home writes must keep working.
+    const live = execute(sandbox.binary, [...sandbox.args, '/usr/bin/bash', '-c', 'echo started; read -r line; echo turn >> ~/.profile && cat ~/.profile'], { env: sandbox.environment, timeout: 15_000 })
+    await new Promise<void>((resolve, reject) => {
+      live.child.stdout!.once('data', () => resolve())
+      live.catch(reject)
+    })
     const result = await inspectVitalsComparison(sandbox, request, AbortSignal.timeout(10_000))
+    live.child.stdin!.end('\n')
+    expect((await live).stdout).toBe('started\nshared\nturn\n')
     expect(result).toEqual({ _tag: 'Unavailable', requestId: request.id, reason: 'Required vitals artifacts are missing, unsafe, or unreadable.' })
   }
   finally {
@@ -53,7 +63,7 @@ it('runs the trusted vitals reader inside the evidence sandbox', async () => {
   }
 }, 30_000)
 
-it('runs the installed NuxtSEO package with its dependency and bundled Skill inside a Routine', async () => {
+it.skipIf(homeOverlayMissing)('runs the installed NuxtSEO package with its dependency and bundled Skill inside a Routine', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-node-tool-'))
   const home = join(root, 'controller')
   const worker = join(root, 'worker')
@@ -224,7 +234,7 @@ it('runs the installed NuxtSEO package with its dependency and bundled Skill ins
   }
 })
 
-it('advertises readable mounted Skills and References without granting write access or leaking Review context', async () => {
+it.skipIf(homeOverlayMissing)('advertises readable mounted Skills and References without granting write access or leaking Review context', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-skills-'))
   const home = join(root, 'controller')
   const worker = join(root, 'worker')
@@ -302,7 +312,7 @@ it('advertises readable mounted Skills and References without granting write acc
   }
 })
 
-it('blocks controller credentials, Git helpers, and parent process reads while preserving worker tools', async () => {
+it.skipIf(homeOverlayMissing)('blocks controller credentials, Git helpers, and parent process reads while preserving worker tools', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-boundary-'))
   // Large trusted tool closures exceed Linux's per-environment-entry limit.
   // Each individual mount path remains small enough for a normal argv entry.
@@ -583,7 +593,7 @@ if (process.argv[2] === 'serve') {
   }
 }, 30_000)
 
-it('follows a pnpm upgrade to its current package instead of refusing the next deploy', async () => {
+it.skipIf(homeOverlayMissing)('follows a pnpm upgrade to its current package instead of refusing the next deploy', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-pnpm-'))
   const home = join(root, 'controller')
   const shims = join(home, '.local/share/pnpm/bin')
@@ -640,7 +650,7 @@ async function pnpmRuntimeWorkspace(root: string) {
   return { home, profile, runtime, workspace }
 }
 
-it('runs the pnpm managed Node runtime that the mounted node shim targets', async () => {
+it.skipIf(homeOverlayMissing)('runs the pnpm managed Node runtime that the mounted node shim targets', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-pnpm-runtime-'))
   try {
     const { home, profile, workspace } = await pnpmRuntimeWorkspace(root)
@@ -654,7 +664,7 @@ it('runs the pnpm managed Node runtime that the mounted node shim targets', asyn
   }
 }, 30_000)
 
-it('saves worker commits after an upgrade prunes a mounted executable', async () => {
+it.skipIf(homeOverlayMissing)('saves worker commits after an upgrade prunes a mounted executable', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-pnpm-runtime-prune-'))
   const serviceNode = process.execPath
   let sandbox: Awaited<ReturnType<typeof prepareAgentSandbox>> | undefined
@@ -702,7 +712,7 @@ it('refuses a missing worker configuration instead of launching outside isolatio
   await expect(prepareAgentSandbox({ workspace: '/tmp', environment: {}, profilePath: '/does-not-exist/worker.json', provider: 'opencode' })).rejects.toThrow()
 })
 
-it('keeps Git administrative settings immutable while preserving atomic index writes', async () => {
+it.skipIf(homeOverlayMissing)('keeps Git administrative settings immutable while preserving atomic index writes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-git-settings-'))
   const primary = join(root, 'primary')
   const controller = join(root, 'controller')
@@ -834,7 +844,7 @@ it.each(['directory', 'file', 'directory-alias', 'file-alias', 'external-directo
   }
 }, 30_000)
 
-it('mounts worker PATH directories inside the shared home read only, from trusted sources', async () => {
+it.skipIf(homeOverlayMissing)('mounts worker PATH directories inside the shared home read only, from trusted sources', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-home-path-'))
   const controller = join(root, 'controller')
   const worker = join(root, 'worker')
@@ -864,9 +874,10 @@ it('mounts worker PATH directories inside the shared home read only, from truste
     expect(listed.stdout.split('\n').filter(Boolean)).toEqual(['check', 'gh', 'trusted-check'])
     for (const path of ['/home/agent/.local/share/harlan-agent-kit/github-bin/git', '/home/agent/.cargo/bin/node', '/home/agent/.cargo/bin/rg'])
       await expect(execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', `echo planted > ${path}`], { env: sandbox.environment })).rejects.toMatchObject({ stderr: expect.stringContaining('Read-only') })
-    // The rest of the home stays writable for caches and provider state.
-    await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'echo cache > /home/agent/cache-entry'], { env: sandbox.environment })
-    expect(await readFile(join(worker, 'cache-entry'), 'utf8')).toBe('cache\n')
+    // The rest of the home stays writable. Only the persisted caches reach the shared home.
+    await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'echo turn > /home/agent/turn-entry && mkdir -p /home/agent/.cache/pnpm/v11 && echo cache > /home/agent/.cache/pnpm/v11/entry'], { env: sandbox.environment })
+    await expect(readFile(join(worker, 'turn-entry'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(join(worker, '.cache/pnpm/v11/entry'), 'utf8')).toBe('cache\n')
   }
   finally {
     await sandbox?.release()

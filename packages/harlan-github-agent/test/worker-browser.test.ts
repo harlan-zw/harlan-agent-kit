@@ -5,10 +5,11 @@ import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
 import { prepareAgentSandbox } from '../src/agent-sandbox.ts'
+import { homeOverlayMissing } from './home-overlay.ts'
 
 const execute = promisify(execFile)
 
-it('starts the current installed browser command with adjacent files and dependencies inside the sandbox', async () => {
+it.skipIf(homeOverlayMissing)('starts the current installed browser command with adjacent files and dependencies inside the sandbox', async () => {
   const root = await mkdtemp(join(tmpdir(), 'worker-browser-'))
   const home = join(root, 'controller')
   const worker = join(root, 'worker')
