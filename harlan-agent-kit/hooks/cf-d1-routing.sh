@@ -63,6 +63,8 @@ done
 # A database id is safe to name only from the config and environment wrangler would read.
 # Any doubt about either leaves `unclear` set, and the reason then names no id.
 unclear=false
+# Preview selects another database. Do not suggest the primary database ID.
+[[ "$call" =~ [[:space:]]--preview([[:space:]=]|$) ]] && unclear=true
 
 # Prints a directory joined to a base. Fails for a value the shell would expand.
 join_dir() {
@@ -77,14 +79,19 @@ join_dir() {
 
 dir=$(printf '%s' "$input" | jq -r '.cwd // empty')
 dir=${dir:-$PWD}
+flow=${code//&&/;}
 # Earlier `cd` calls move the call. A subshell or `popd` hides where it lands.
 for ((j = 0; j < index; j++)); do
   [[ "${calls[$j]}" == *')'* || "${calls[$j]}" =~ (^|[[:space:]])popd([[:space:]]|$) ]] && unclear=true
   [[ "${calls[$j]}" =~ ^[[:space:]\(]*(cd|pushd)([[:space:]]|$) ]] || continue
-  if [[ "${kept_calls[$j]}" =~ ^[[:space:]\(]*(cd|pushd)[[:space:]]+([^[:space:]]+) ]]; then
+  # Splitting commands loses control flow. A directory change may be skipped,
+  # or run in a pipeline or background shell without moving the parent shell.
+  [[ "$flow" == *'|'* || "$flow" == *'&'* ]] && unclear=true
+  if [[ "${kept_calls[$j]}" =~ ^[[:space:]\(]*(cd|pushd)[[:space:]]+([^[:space:]]+)[[:space:]]*$ ]]; then
     dir=$(join_dir "$dir" "${BASH_REMATCH[2]}") || unclear=true
   else
-    dir=$HOME
+    # Quote removal loses word boundaries. Never use a truncated path.
+    unclear=true
   fi
 done
 
@@ -103,6 +110,9 @@ for ((k = 0; k < ${#args[@]}; k++)); do
   name=${word%%=*}
   if [[ "$word" == *=* ]]; then value=${word#*=}; else value=${args[$((k + 1))]:-}; fi
   case "$name" in
+    # Wrapper options and assignments can change the effective environment.
+    # Their full shell semantics are outside this resolver.
+    env) unclear=true ;;
     --config | -c) in_plain "$name" && { config=$value; configs=$((configs + 1)); } ;;
     --env | -e) in_plain "$name" && { env=$value; envs=$((envs + 1)); } ;;
     --cwd) in_plain "$name" && cwd_flag=$value ;;
@@ -146,6 +156,10 @@ fi
 # Prints "id<TAB>name<TAB>binding" for each D1 database of one environment in a TOML config.
 # Wrangler does not inherit d1_databases into an environment, so each scope stands alone.
 toml_databases() {
+  # This reader supports double-quoted, single-line values only. Literal and
+  # multiline strings need a TOML parser. Omit IDs rather than reading sample
+  # tables inside those strings as configuration. Check before emitting entries.
+  if LC_ALL=C grep -qE "'|\"\"\"" "$1"; then return 1; fi
   awk -v want="${2:+env.$2}" '
     function value(line) { sub(/^[^=]*=[[:space:]]*"/, "", line); sub(/".*$/, "", line); return line }
     function field(object, key,   text) {

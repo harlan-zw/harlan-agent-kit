@@ -7,6 +7,7 @@ trap 'rm -rf "$work"' EXIT
 # Hook decisions append to the hit log. Keep test runs out of the real one.
 export XDG_STATE_HOME="$work/state"
 unset CLOUDFLARE_API_TOKEN
+unset CLOUDFLARE_ENV
 
 hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cf-d1-routing.sh"
 fail=0
@@ -116,6 +117,16 @@ expect_reason() {
   fi
 }
 
+# A correct target or an unresolved target is safe. A wrong target is not.
+expect_not_id() {
+  local dir=$1 wrong=$2 cmd=$3 got
+  got="$(run "$with_cf" "$cmd" "$dir")"
+  if [[ "$got" != deny* || "$got" == *"$wrong"* ]]; then
+    printf 'FAIL  expected denial without %s, got %s for: %s (in %s)\n' "$wrong" "$got" "$cmd" "$dir"
+    fail=1
+  fi
+}
+
 # Remote queries with --command, through every runner.
 expect deny 'wrangler d1 execute pro-db --remote --command "SELECT 1"'
 expect deny 'pnpm exec wrangler d1 execute pro-db --remote --json --config wrangler.prod.toml --command "SELECT 1"'
@@ -162,6 +173,35 @@ expect_reason apps/pro 'cf d1 query 66666666-6666-6666-6666-666666666666 -q --sq
 
 # Without a certain config and environment, the reason names no id.
 unknown='cf d1 query <database_id> -q --sql'
+# Preview must never select the primary database.
+expect_not_id apps/pro 11111111-1111-1111-1111-111111111111 'wrangler d1 execute PRO_DB --remote --preview --config wrangler.prod.toml --command "SELECT 1"'
+# Wrapper assignments must never select the default environment.
+expect_not_id apps/pro 12121212-1212-1212-1212-121212121212 'env CLOUDFLARE_ENV=staging wrangler d1 execute PRO_DB --remote --command "SELECT 1"'
+
+mkdir -p "$repo/staging" "$repo/apps/pro staging"
+cp "$repo/.generated/wrangler.json" "$repo/staging/wrangler.json"
+cat > "$repo/apps/pro staging/wrangler.json" <<'JSON'
+{ "d1_databases": [{ "binding": "PRO_DB", "database_id": "88888888-8888-8888-8888-888888888888" }] }
+JSON
+# A skipped directory change must never supply its database ID.
+expect_not_id '' 88888888-8888-8888-8888-888888888888 'true || cd staging; wrangler d1 execute DB --remote --command "SELECT 1"'
+# A quoted directory must never resolve to its first word.
+expect_not_id '' 12121212-1212-1212-1212-121212121212 "cd 'apps/pro staging' && wrangler d1 execute PRO_DB --remote --command 'SELECT 1'"
+
+cat > "$repo/sample.toml" <<'TOML'
+[[d1_databases]]
+binding = 'DB'
+database_id = '55555555-5555-5555-5555-555555555555'
+[vars]
+SAMPLE = '''
+[[d1_databases]]
+binding = "DB"
+database_id = "88888888-8888-8888-8888-888888888888"
+'''
+TOML
+# TOML sample text must never supply a live binding.
+expect_not_id '' 88888888-8888-8888-8888-888888888888 'wrangler d1 execute DB --remote --config sample.toml --command "SELECT 1"'
+
 expect_reason apps/pro "$unknown" 'wrangler d1 execute pro-db --remote --config wrangler.dev.toml --command "SELECT 1"'
 expect_reason apps/pro "$unknown" 'wrangler d1 execute pro-db --remote --env production --command "SELECT 1"'
 expect_reason apps/pro "$unknown" 'wrangler d1 execute pages-db --remote --command "SELECT 1"'
