@@ -155,6 +155,7 @@ Codex reads `~/.codex/hooks.json`, which `pnpm sync:context` renders from
 | WorktreeRemove | [`wt-worktree-remove.sh`](./harlan-agent-kit/hooks/wt-worktree-remove.sh) | Remove them with `wt`, never with force |
 | PreToolUse (Bash) | [`himalaya-read-only.sh`](./harlan-agent-kit/hooks/himalaya-read-only.sh) | Keep every agent's email access read only |
 | PreToolUse (Bash) | [`pr-skill-only.sh`](./harlan-agent-kit/hooks/pr-skill-only.sh) | Require the `pr` Skill to open a pull request or edit its description |
+| PreToolUse (Bash) | [`cf-d1-routing.sh`](./harlan-agent-kit/hooks/cf-d1-routing.sh) | Send remote D1 queries to `cf`, which keeps its login when the wrangler login expires |
 | PreToolUse (Bash) | [`merged-branch-guard.sh`](./harlan-agent-kit/hooks/merged-branch-guard.sh) | Block commits on an already merged branch |
 | PreToolUse (Bash) | [`pre-commit-push.sh`](./harlan-agent-kit/hooks/pre-commit-push.sh) | Run `check` before a commit, push, or pull request |
 | PostToolUse (Write, Edit) | [`eslint.sh`](./harlan-agent-kit/hooks/eslint.sh) | Autofix lint on the file that changed |

@@ -208,6 +208,7 @@ jobs:
         run: |
           pnpm test:wt-only
           pnpm test:pr-skill-only
+          pnpm test:cf-d1-routing
           pnpm test:hook-output
           pnpm test:hit-log
           pnpm test:wt-worktree

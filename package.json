@@ -39,6 +39,7 @@
     "test:service": "bash scripts/service.test.sh && bash scripts/repository-env.test.sh && bash scripts/worktrunk-config.test.sh && bash scripts/worktrunk-pre-switch.test.sh && bash scripts/worktrunk-pre-start.test.sh && pnpm exec vitest run scripts/worktrunk-state.test.ts && bash scripts/worktree-sweep.test.sh && bash scripts/worktree-sweep-service.test.sh && bash scripts/hogwild-service.test.sh",
     "test:worktree-claim": "bash harlan-agent-kit/scripts/worktree-claim.test.sh",
     "test:pr-skill-only": "bash harlan-agent-kit/hooks/pr-skill-only.test.sh",
+    "test:cf-d1-routing": "bash harlan-agent-kit/hooks/cf-d1-routing.test.sh",
     "test:wt-only": "bash harlan-agent-kit/hooks/wt-only.test.sh",
     "test:agent-retro": "python3 -m unittest discover -s harlan-agent-kit/skills/agent-retro/scripts -p 'test_*.py' && vitest run harlan-agent-kit/skills/agent-retro/scripts/codex-sessions.test.ts harlan-agent-kit/skills/agent-retro/scripts/opencode-sessions.test.ts",
     "test:sentry-checkin": "python3 -m unittest discover -s harlan-agent-kit/skills/sentry-checkin/scripts -p 'test_*.py'",
