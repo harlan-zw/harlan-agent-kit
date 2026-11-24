@@ -133,6 +133,9 @@ it.each(['logout', 'credentials/remove', 'expiry'])('revokes established termina
     await delay(80)
     expect(proof.forwarded).toEqual([])
     expect(screens).toEqual([])
+    // The server closes the revoked socket. On a busy host the close can finish after the pause above.
+    if (proof.socket.readyState !== WebSocket.CLOSED)
+      await once(proof.socket, 'close')
     expect(proof.socket.readyState).toBe(WebSocket.CLOSED)
   }
   finally {
