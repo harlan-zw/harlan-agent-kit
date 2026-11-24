@@ -208,7 +208,7 @@ const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { 
  * Runs one Review of a Repair head and reports the prompt the Agent received
  * and what the Review run recorded.
  */
-async function reviewRepairHead(input: { source: ReviewRun, task?: ClaimedAdversarialReviewTask, journal?: ReturnType<typeof openJournalStore>, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
+async function reviewRepairHead(input: { source: ReviewRun, paths?: string[], task?: ClaimedAdversarialReviewTask, journal?: ReturnType<typeof openJournalStore>, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
   const pullRequest = pullRequestItem({ mergeState: 'clean', ...input.task?.pullRequest })
   const capture: ProviderCapture = { requests: [] }
   const recorded: RecordReviewRunInput[] = []
@@ -258,7 +258,7 @@ async function reviewRepairHead(input: { source: ReviewRun, task?: ClaimedAdvers
       repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 2 }),
       getWorkerSession: () => null,
       storedReviewForHead: () => ({ _tag: 'None' }),
-      getRevisionFiles: () => ({ files: [{ path: 'parser.ts', status: 'modified', additions: 4, deletions: 2, previousFilename: null }, { path: 'caller.ts', status: 'added', additions: 1, deletions: 0, previousFilename: null }], headSha: pullRequest.headSha }),
+      getRevisionFiles: () => ({ files: [{ path: 'parser.ts', status: 'modified' as const, additions: 4, deletions: 2, previousFilename: null }, { path: 'caller.ts', status: 'added' as const, additions: 1, deletions: 0, previousFilename: null }].filter(file => input.paths === undefined || input.paths.includes(file.path)), headSha: pullRequest.headSha }),
       supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
@@ -321,25 +321,33 @@ async function reviewRepairHead(input: { source: ReviewRun, task?: ClaimedAdvers
 const fullDiffMandate = 'Follow nextOffset until truncated is false.'
 
 describe('a Review of a Repair head', () => {
-  it('requires a fallback scan when bounded search misses a changed caller beyond byte 16000', async () => {
+  it('requires unchanged caller verification when bounded search misses a use beyond byte 16000', async () => {
     const { directory } = repositoryWithReviewedHead()
-    commitFile(directory, 'parser.ts', 'export const limit = () => 1\n', 'original callee')
-    const reviewed = commitFile(directory, 'caller.ts', `${'// padding\n'.repeat(1700)}import { limit } from './parser'\nexport const result = limit()\n`, 'change caller')
-    const headSha = commitFile(directory, 'parser.ts', 'export const limit = () => 2\n', 'repair callee')
+    git(directory, 'switch', '-q', 'main')
+    commitFile(directory, 'parser.ts', 'export const limit = (value: number) => value\n', 'original callee')
+    const baseSha = commitFile(directory, 'caller.ts', `${'// padding\n'.repeat(1700)}import { limit } from './parser'\nexport const result = limit(1)\n`, 'original caller')
+    git(directory, 'switch', '-q', '-C', 'feature')
+    const reviewed = commitFile(directory, 'parser.ts', 'export const limit = (value: number) => value + 1\n', 'change callee')
+    const headSha = commitFile(directory, 'parser.ts', 'export const limit = (value: { count: number }) => value.count + 1\n', 'repair callee')
+    const paths = git(directory, 'diff', '--name-only', `${baseSha}...${headSha}`).split('\n')
+    expect(paths).toEqual(['parser.ts'])
     const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha }, 32_000, AbortSignal.timeout(10_000))
     if (delta._tag !== 'Ok')
       throw new Error(delta.error)
     const reader = createReviewStaticReader(directory)
-    expect(await reader.search('limit()')).toEqual({ _tag: 'Matches', matches: [], truncated: true })
+    expect(await reader.search('limit(1)')).toEqual({ _tag: 'Matches', matches: [], truncated: true })
     const caller = await reader.read('caller.ts', 16_000)
     expect(caller).toMatchObject({ _tag: 'Read', truncated: false })
     if (caller._tag === 'Read')
-      expect(caller.text).toContain('limit()')
+      expect(caller.text).toContain('limit(1)')
 
-    const review = await reviewRepairHead({ source: sourceRun({ headSha: reviewed }), delta: delta.value })
+    const review = await reviewRepairHead({ source: sourceRun({ headSha: reviewed }), delta: delta.value, paths })
 
     expect(review.prompt).toContain('If it returns truncated: true or refuses the search, its matches are incomplete, and zero matches prove nothing.')
-    expect(review.prompt).toContain('page each file this pull request changes that may use the symbol, at revision head, past byte 16000 to its end')
+    expect(review.prompt).toContain('including unchanged callers and dependants outside the pull request files')
+    expect(review.prompt).toContain('Use revision workspace for unchanged files')
+    expect(review.prompt).toContain('If caller coverage cannot be established, perform a full Review with explicit caller verification')
+    expect(review.prompt).toContain('If caller verification remains unavailable, report the verification limit and do not return READY')
   })
 
   it.each([false, true])('uses the published Repair delta unless a full Review was explicitly requested: %s', async (explicit) => {
