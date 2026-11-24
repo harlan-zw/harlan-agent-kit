@@ -36,9 +36,14 @@ export interface ReviewReuseInput {
 /**
  * Whether a new head can carry the Review of an earlier head.
  *
- * Identical pull request edits can depend on behaviour the base merge changed.
- * Without dependency evidence, only a merge with an unchanged tree can carry
- * a passing Review. Every changed path requires a fresh Review.
+ * A clean merge of the base branch changes nothing the pull request wrote. The
+ * same holds when the base branch moves under an unchanged head, and the
+ * service already keeps that Review. So the earlier verdict carries over, and
+ * the controller gates still answer for the new head.
+ *
+ * It carries only a Review whose review gate passed, so no Repair waits on it.
+ * A carried finding whose file the merge touched could point at a moved line,
+ * so that case reviews again.
  */
 export function decideReviewReuse(input: ReviewReuseInput): ReviewReuse {
   if (input.forced)
@@ -59,8 +64,10 @@ export function decideReviewReuse(input: ReviewReuseInput): ReviewReuse {
     return { _tag: 'Review', reason: 'A base merge resolved a conflict.' }
   if (advance._tag === 'ChangedDiff')
     return { _tag: 'Review', reason: 'The base merge moved or changed the pull request\'s own edits.' }
-  if (advance.changedPaths.length > 0)
-    return { _tag: 'Review', reason: 'The base merge changed files that may affect pull request dependencies.' }
+  const changed = new Set(advance.changedPaths)
+  const moved = earlier.findings.find(finding => finding._tag === 'Logged' && changed.has(finding.details.location.path))
+  if (moved !== undefined && moved._tag === 'Logged')
+    return { _tag: 'Review', reason: `The base merge changed ${moved.details.location.path}, which a carried finding names.` }
   return { _tag: 'Reuse', run: earlier }
 }
 

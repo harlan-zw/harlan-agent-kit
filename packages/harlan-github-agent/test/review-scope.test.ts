@@ -338,8 +338,8 @@ describe('a Review of a Repair head', () => {
 
     const review = await reviewRepairHead({ source: sourceRun({ headSha: reviewed }), delta: delta.value })
 
-    expect(review.prompt).toContain('If review_search returns truncated: true or refuses the search, scan the full base-to-head diff.')
-    expect(review.prompt).toContain('Page each changed file that may use the symbol, including beyond byte 16000, until truncated is false.')
+    expect(review.prompt).toContain('If it returns truncated: true or refuses the search, its matches are incomplete, and zero matches prove nothing.')
+    expect(review.prompt).toContain('page each file this pull request changes that may use the symbol, at revision head, past byte 16000 to its end')
   })
 
   it.each([false, true])('uses the published Repair delta unless a full Review was explicitly requested: %s', async (explicit) => {
@@ -394,6 +394,7 @@ describe('a Review of a Repair head', () => {
     expect(review.prompt).toContain('review_read with revision diff and an empty path')
     expect(review.prompt).toContain('review_search')
     expect(review.prompt).toContain('caller.ts')
+    expect(review.prompt).not.toContain(fullDiffMandate)
   })
 
   it('asks the Agent to recheck the earlier Review\'s other findings by their identity', async () => {

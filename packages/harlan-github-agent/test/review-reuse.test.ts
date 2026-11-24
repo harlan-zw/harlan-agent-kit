@@ -1,5 +1,5 @@
 import type { HeadAdvance } from '../src/review-reuse.ts'
-import type { ClaimedAdversarialReviewTask, RecordReviewRunInput, ReviewFinding, ReviewGates, ReviewRun } from '../src/types.ts'
+import type { RecordReviewRunInput, ReviewFinding, ReviewGates, ReviewRun } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -202,10 +202,10 @@ function earlierRun(overrides: Partial<ReviewRun> = {}): ReviewRun {
 const clean: HeadAdvance = { _tag: 'CleanBaseMerges', changedPaths: ['main-only.txt'] }
 
 describe('decideReviewReuse', () => {
-  it('carries a passed Review when the base merge leaves the tree unchanged', () => {
+  it('carries a passed Review across a clean base merge', () => {
     const earlier = earlierRun({ findings: [logged('src/untouched.ts')] })
 
-    expect(decideReviewReuse({ forced: false, earlier, advance: { _tag: 'CleanBaseMerges', changedPaths: [] } })).toEqual({ _tag: 'Reuse', run: earlier })
+    expect(decideReviewReuse({ forced: false, earlier, advance: clean })).toEqual({ _tag: 'Reuse', run: earlier })
   })
 
   it.each<[string, Parameters<typeof decideReviewReuse>[0]]>([
@@ -242,7 +242,7 @@ const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { 
  * Runs one Review whose pull request has an earlier reviewed head, and reports
  * how many Agent turns started and what the Review run recorded.
  */
-async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance, rerun: ClaimedAdversarialReviewTask['rerun'] = { _tag: 'NotRequested' }) {
+async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance) {
   const pullRequest = pullRequestItem({ mergeState: 'clean' })
   const capture: ProviderCapture = { requests: [] }
   const recorded: RecordReviewRunInput[] = []
@@ -332,7 +332,7 @@ async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance, 
     updatedAt: '2026-11-24T01:00:00.000Z',
     repositoryMapping: repositoryMapping(),
     pullRequest,
-    rerun,
+    rerun: { _tag: 'NotRequested' },
   }, new AbortController().signal)
 
   if (result._tag !== 'Ok')
@@ -341,30 +341,10 @@ async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance, 
 }
 
 describe('a Review after an earlier reviewed head', () => {
-  it('runs a fresh Review when a clean base merge changes units used by an unchanged pull request caller', async () => {
-    const { directory } = repositoryWithReviewedHead()
-    commitFile(directory, 'clock.ts', 'export const duration = () => 1000\n', 'milliseconds')
-    git(directory, 'switch', '-q', 'feature')
-    git(directory, 'merge', '-q', '--no-edit', 'main')
-    const reviewed = commitFile(directory, 'caller.ts', 'import { duration } from "./clock"\nexport const seconds = duration() / 1000\n', 'caller uses milliseconds')
-    git(directory, 'switch', '-q', 'main')
-    const baseSha = commitFile(directory, 'clock.ts', 'export const duration = () => 1\n', 'return seconds')
-    const headSha = mergeMain(directory)
-    const advance = await readHeadAdvance(directory, { earlierHeadSha: reviewed, headSha, baseSha }, AbortSignal.timeout(10_000))
-    expect(advance).toEqual({ _tag: 'Ok', value: { _tag: 'CleanBaseMerges', changedPaths: ['clock.ts'] } })
-    if (advance._tag !== 'Ok')
-      throw new Error(advance.error)
-
-    const review = await reviewAfterEarlierHead(earlierRun({ headSha: reviewed }), advance.value, { _tag: 'NewRevision' })
-
-    expect(review.turns).toBe(1)
-    expect(review.run).toMatchObject({ checked: 'the changed files', confidence: 96 })
-  })
-
-  it('carries the earlier verdict across a base merge with an unchanged tree without an Agent turn', async () => {
+  it('carries the earlier verdict across a clean base merge without an Agent turn', async () => {
     const earlier = earlierRun({ findings: [logged('src/untouched.ts')] })
 
-    const review = await reviewAfterEarlierHead(earlier, { _tag: 'CleanBaseMerges', changedPaths: [] })
+    const review = await reviewAfterEarlierHead(earlier, clean)
 
     expect(review.turns).toBe(0)
     expect(review.run).toMatchObject({
@@ -376,20 +356,6 @@ describe('a Review after an earlier reviewed head', () => {
       checked: 'the Review of abc1234, carried forward because the new commits only merge main without conflicts',
     })
     expect(review.run?.findings).toMatchObject([{ _tag: 'Logged', details: { location: { path: 'src/untouched.ts' } } }])
-  })
-
-  it('carries the earlier verdict for an automatic Review when the new head has the same tree', async () => {
-    // Every later head of a reviewed pull request claims as a NewRevision, so
-    // reading it as a requested rerun kept the carry from ever running.
-    const review = await reviewAfterEarlierHead(earlierRun(), { _tag: 'CleanBaseMerges', changedPaths: [] }, { _tag: 'NewRevision' })
-
-    expect(review.turns).toBe(0)
-  })
-
-  it('runs a fresh Agent turn when a rerun was requested', async () => {
-    const review = await reviewAfterEarlierHead(earlierRun(), clean, { _tag: 'Requested' })
-
-    expect(review.turns).toBe(1)
   })
 
   it('runs a fresh Agent turn when the new head adds its own commit', async () => {

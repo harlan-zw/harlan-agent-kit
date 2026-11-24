@@ -1504,9 +1504,9 @@ The Repair delta below holds every change since that head. Start there:
 - Check each finding the Repair targeted against this head.
 - Find defects the delta adds. For each removed line, confirm nothing still depends on it.
 - For each symbol the delta adds, removes, renames, or changes, use review_search to find its uses. Read each use this pull request changed or that relied on the old behaviour.
-- If review_search returns truncated: true or refuses the search, scan the full base-to-head diff. Use review_read with revision diff and an empty path. Follow nextOffset until truncated is false, including all changed-file paths.
-- Page each changed file that may use the symbol, including beyond byte 16000, until truncated is false. Treat every source file as a possible use until fully scanned. This fallback overrides the 300-line reading limit. Read uses against the Repair's new behaviour.
-- An incomplete search with zero matches proves no absence of uses. If fallback evidence is unavailable, report the verification limit.
+- review_search reads only the first 16000 bytes of each file and stops early in a large worktree. If it returns truncated: true or refuses the search, its matches are incomplete, and zero matches prove nothing.
+- Then page each file this pull request changes that may use the symbol, at revision head, past byte 16000 to its end. This overrides the 300-line reading limit. Read each use against the Repair's new behaviour.
+- If that evidence is unavailable, report the verification limit.
 - When the delta changes behaviour that other parts of this pull request rely on, use review_read with revision diff and an empty path to page the full base-to-head diff.
 Leave the hunks the delta does not reach to the earlier Review.
 Answer premise, confidence, and mergeRisk for the whole pull request, not the delta alone.
@@ -1890,14 +1890,16 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // files are read once too: the Reasoning effort band needs them before
       // the turn, and Merge risk needs the same list after it.
       const changedFiles = await reviewChangedFiles(options, task, signal)
-      // Only an explicit request forces a fresh, full Review: a rerun or the
-      // Review label. Every later head claims as a NewRevision, and reading
-      // that as forced kept the carry and the Repair focus from ever running.
-      const forced = manualReview || task.rerun._tag === 'Requested'
-      const reused = await reuseEarlierReview(options, task, snapshot.value, workspace.value, changedFiles, { forced, startedAt }, signal)
+      // The carry of a clean base merge still treats the automatic Review of a
+      // later head as forced, so it keeps the behaviour it shipped with. A
+      // Service Review found the carry can miss a base change that breaks a
+      // caller in this pull request, so whether it should run is its own decision.
+      const reused = await reuseEarlierReview(options, task, snapshot.value, workspace.value, changedFiles, { forced: manualReview || task.rerun._tag !== 'NotRequested', startedAt }, signal)
       if (reused !== undefined)
         return reused
-      const scope = await reviewScope(options, task, workspace.value, forced, signal)
+      // Every later head of a reviewed pull request claims as a NewRevision.
+      // Only an explicit rerun or the Review label forces a full Review here.
+      const scope = await reviewScope(options, task, workspace.value, manualReview || task.rerun._tag === 'Requested', signal)
       const focus: RepairFocusPrompt | null = scope._tag === 'Full'
         ? null
         : { source: scope.source, diff: scope.diff, pullRequestPaths: changedFiles._tag === 'Ok' ? changedFiles.value.map(file => file.path) : null }

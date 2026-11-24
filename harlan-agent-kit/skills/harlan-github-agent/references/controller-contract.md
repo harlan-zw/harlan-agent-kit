@@ -219,6 +219,7 @@ A head that the controller's own Repair pushed gets a Repair focus Review. It is
 - The prompt carries the Repair delta and the paths of the whole pull request. The Agent starts from the delta.
 - The Agent checks each targeted finding and the defects the delta adds. It checks every removed line.
 - The Agent searches for every use of a symbol the delta adds, removes, renames, or changes.
+- `review_search` reads only the first 16,000 bytes of each file. If a search is incomplete, the Agent pages each changed file that may use the symbol to its end.
 - The whole base-to-head diff stays readable through `review_read`. The Agent pages it when the delta changes behaviour that other parts of the pull request rely on.
 - The answered Review's other findings go to the Agent by identity. The Agent returns each one that still stands.
 - The Agent answers premise, confidence, and Merge risk for the whole pull request. The prompt gives it the answered Review's Merge risk and confidence as the starting point.
@@ -226,7 +227,7 @@ A head that the controller's own Repair pushed gets a Repair focus Review. It is
 - The Merge risk claim is the more severe of this turn's claim and the answered Review's claim. A focused Agent did not reread the whole diff, so it can raise the claim but never lower it.
 - The run records its own policy digest. Its `Checked` clause names the head the focus started from.
 
-A rerun, the manual Review label, or a rebase starts a full Review. A rerun is an explicit request from the dashboard, a comment, the Review check run, or a Repair that disputes a finding. The automatic Review of a later head is not a rerun, so it can carry an earlier Review or focus on a Repair delta. A Repair focus Review can answer a Repair of another Repair focus Review. The Repair round limit bounds that chain. A contributor commit ends the chain, so its head gets a full Review.
+A rerun, the manual Review label, or a rebase starts a full Review. A rerun is an explicit request from the dashboard, a comment, the Review check run, or a Repair that disputes a finding. The automatic Review of a later head is not a rerun, so it can focus on a Repair delta. A Repair focus Review can answer a Repair of another Repair focus Review. The Repair round limit bounds that chain. A contributor commit ends the chain, so its head gets a full Review.
 
 Preflight Repair authority before Review. Keep Review read only, and reject a Review worktree that changed.
 
