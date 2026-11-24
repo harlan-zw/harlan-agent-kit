@@ -11434,10 +11434,10 @@ export function openJournalStore(
           worker_tasks.updated_at,
           repositories.policy_json,
           revisions.payload AS subject_payload,
-          EXISTS (
+          CASE WHEN EXISTS (
             SELECT 1 FROM review_rerun_requests
             WHERE review_rerun_requests.task_id = worker_tasks.id
-          ) OR (
+          ) THEN 1 WHEN (
             worker_tasks.kind = 'adversarial_review'
             AND EXISTS (SELECT 1 FROM review_runs WHERE review_runs.subject_id = worker_tasks.subject_id)
             AND NOT EXISTS (
@@ -11445,7 +11445,7 @@ export function openJournalStore(
               WHERE review_runs.subject_id = worker_tasks.subject_id
                 AND review_runs.revision_id = worker_tasks.revision_id
             )
-          ) AS rerun_requested
+          ) THEN 2 ELSE 0 END AS rerun_requested
         FROM worker_tasks
         JOIN subjects ON subjects.id = worker_tasks.subject_id
         JOIN repositories ON repositories.id = subjects.repository_id
@@ -11583,7 +11583,7 @@ export function openJournalStore(
         updatedAt: now,
         repositoryMapping,
         pullRequest: subject,
-        rerun: row.rerun_requested === 1 ? { _tag: 'Requested' } : { _tag: 'NotRequested' },
+        rerun: row.rerun_requested === 1 ? { _tag: 'Requested' } : row.rerun_requested === 2 ? { _tag: 'FollowUp' } : { _tag: 'NotRequested' },
       }
     }
     catch (error) {

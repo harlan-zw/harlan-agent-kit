@@ -383,7 +383,7 @@ export function createReviewStatusController(options: ReviewStatusControllerOpti
         task,
         { taskKind: 'adversarial_review', phase },
         body,
-        task.rerun._tag === 'Requested',
+        task.rerun._tag !== 'NotRequested',
         signal,
       )
     },

@@ -1891,7 +1891,9 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       const reused = await reuseEarlierReview(options, task, snapshot.value, workspace.value, changedFiles, { forced, startedAt }, signal)
       if (reused !== undefined)
         return reused
-      const scope = await reviewScope(options, task, workspace.value, forced, signal)
+      // Automatic follow-ups need a fresh answer, but only explicit requests
+      // and the Review label require the full pull request scope.
+      const scope = await reviewScope(options, task, workspace.value, manualReview || task.rerun._tag === 'Requested', signal)
       const focus: RepairFocusPrompt | null = scope._tag === 'Full'
         ? null
         : { source: scope.source, diff: scope.diff, pullRequestPaths: changedFiles._tag === 'Ok' ? changedFiles.value.map(file => file.path) : null }

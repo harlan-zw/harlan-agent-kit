@@ -769,7 +769,7 @@ export interface ClaimedAdversarialReviewTask extends AdversarialReviewTask {
   state: Extract<TaskState, { _tag: 'Running' }>
   repositoryMapping: RepositoryMapping
   pullRequest: GitHubPullRequestItem
-  rerun: { _tag: 'NotRequested' } | { _tag: 'Requested' }
+  rerun: { _tag: 'NotRequested' } | { _tag: 'Requested' } | { _tag: 'FollowUp' }
 }
 
 export interface IssueTriageTask {

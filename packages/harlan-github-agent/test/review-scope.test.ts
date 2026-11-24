@@ -1,5 +1,5 @@
 import type { RepairDelta } from '../src/review-scope.ts'
-import type { RecordReviewRunInput, RepositoryAutoMergeScope, ReviewFinding, ReviewGates, ReviewRun } from '../src/types.ts'
+import type { ClaimedAdversarialReviewTask, RecordReviewRunInput, RepositoryAutoMergeScope, ReviewFinding, ReviewGates, ReviewRun } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -10,6 +10,7 @@ import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { createReviewWorker } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
 import { repairFocusCoverage, repairFocusScope, repairFocusSource } from '../src/review-scope.ts'
+import { openJournalStore } from '../src/store.ts'
 import { readRepairDelta } from '../src/worktree.ts'
 import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
@@ -206,8 +207,8 @@ const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { 
  * Runs one Review of a Repair head and reports the prompt the Agent received
  * and what the Review run recorded.
  */
-async function reviewRepairHead(input: { source: ReviewRun, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
-  const pullRequest = pullRequestItem({ mergeState: 'clean' })
+async function reviewRepairHead(input: { source: ReviewRun, task?: ClaimedAdversarialReviewTask, journal?: ReturnType<typeof openJournalStore>, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
+  const pullRequest = pullRequestItem({ mergeState: 'clean', ...input.task?.pullRequest })
   const capture: ProviderCapture = { requests: [] }
   const recorded: RecordReviewRunInput[] = []
   const worker = createReviewWorker({
@@ -256,7 +257,7 @@ async function reviewRepairHead(input: { source: ReviewRun, rerun?: boolean, rep
       repairRoundPlan: () => ({ _tag: 'Allowed' as const, number: 2 }),
       getWorkerSession: () => null,
       storedReviewForHead: () => ({ _tag: 'None' }),
-      getRevisionFiles: () => ({ files: [{ path: 'parser.ts', status: 'modified', additions: 4, deletions: 2, previousFilename: null }, { path: 'caller.ts', status: 'added', additions: 1, deletions: 0, previousFilename: null }], headSha: 'abc123' }),
+      getRevisionFiles: () => ({ files: [{ path: 'parser.ts', status: 'modified', additions: 4, deletions: 2, previousFilename: null }, { path: 'caller.ts', status: 'added', additions: 1, deletions: 0, previousFilename: null }], headSha: pullRequest.headSha }),
       supersedeReviewRun: input => ({ _tag: 'Inserted', reviewRunId: input.id }),
       recordIncident: () => { throw new Error('Unexpected Incident.') },
       queueBaselineRepairForReview: () => { throw new Error('Healthy base CI must not queue Baseline repair.') },
@@ -272,6 +273,13 @@ async function reviewRepairHead(input: { source: ReviewRun, rerun?: boolean, rep
         return { _tag: 'Inserted', reviewRunId: run.id }
       },
       recordReviewPublication: publication => ({ _tag: 'Inserted', publicationId: publication.id }),
+      ...(input.journal === undefined
+        ? {}
+        : {
+            repairSource: input.journal.repairSource,
+            latestReviewOfEarlierHead: input.journal.latestReviewOfEarlierHead,
+            getRepairedHeadFindings: input.journal.getRepairedHeadFindings,
+          }),
     },
     status: {
       publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -288,7 +296,7 @@ async function reviewRepairHead(input: { source: ReviewRun, rerun?: boolean, rep
     },
   })
 
-  const result = await worker.run({
+  const result = await worker.run(input.task ?? {
     id: 'review-task',
     kind: 'adversarial_review',
     repository: 'harlan-zw/example',
@@ -312,6 +320,50 @@ async function reviewRepairHead(input: { source: ReviewRun, rerun?: boolean, rep
 const fullDiffMandate = 'Follow nextOffset until truncated is false.'
 
 describe('a Review of a Repair head', () => {
+  it.each([false, true])('uses the published Repair delta unless a full Review was explicitly requested: %s', async (explicit) => {
+    const store = openJournalStore(':memory:')
+    const at = (second: number) => `2026-11-24T00:10:${String(second).padStart(2, '0')}.000Z`
+    try {
+      store.syncRepositories([repositoryMapping()], at(0))
+      const observed = store.recordObservation({ externalId: 'source', observedAt: at(1), source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
+      if (observed._tag !== 'Inserted')
+        throw new Error('Expected a source Revision.')
+      const review = store.claimNextAdversarialReviewTask('reviewer', at(2), 60_000)!
+      expect(store.recordReviewRun({ ...sourceRun(), revisionId: observed.revisionId, headSha: review.pullRequest.headSha })._tag).toBe('Inserted')
+      expect(store.queueReviewFixTaskForReview({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at: at(3) })._tag).toBe('Queued')
+      const repair = store.claimNextReviewFixTask('repairer', at(4), 60_000)!
+      const headSha = 'e'.repeat(40)
+      expect(store.stagePublication({
+        taskId: repair.id,
+        workerId: repair.state.workerId,
+        fence: repair.state.fence,
+        at: at(5),
+        publication: { _tag: 'UpdatePullRequest', taskKind: 'review_fix', baseRef: 'main', pullRequestNumber: 24, commitSha: headSha, baseSha: repair.pullRequest.baseSha, expectedHeadSha: repair.pullRequest.headSha, headRef: repair.pullRequest.headRef, artifactRef: 'refs/test/repair', patchDigest: 'repair-patch', changedFiles: 1 },
+      })._tag).toBe('Staged')
+      const publication = store.claimNextPublication('publisher', at(6), 60_000)!
+      expect(store.completePublication({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at: at(7), evidence: 'Published Repair.' })).toBe(true)
+      const repaired = store.recordObservation({ externalId: 'repaired', observedAt: at(8), source: 'poll', subject: pullRequestItem({ ...review.pullRequest, headSha, updatedAt: at(8) }) })
+      if (repaired._tag !== 'Inserted')
+        throw new Error('Expected a repaired Revision.')
+      if (explicit)
+        expect(store.requestReviewRerun({ repository: review.repository, pullRequestNumber: 24, revisionId: repaired.revisionId, requestId: 'explicit', source: 'dashboard', requestedBy: 'harlan-zw', at: at(9) })._tag).toBe('AlreadyQueued')
+      const task = store.claimNextAdversarialReviewTask('follow-up', at(10), 60_000)!
+      const source = store.latestReviewOfEarlierHead(task.repository, 24, headSha)!
+      const result = await reviewRepairHead({ task, source, journal: store })
+      if (explicit) {
+        expect(result.prompt).toContain(fullDiffMandate)
+        expect(result.prompt).not.toContain(repairDiff)
+      }
+      else {
+        expect(result.prompt).toContain(repairDiff)
+        expect(result.run?.checked).toContain('focused on the Repair delta')
+      }
+    }
+    finally {
+      store.close()
+    }
+  })
+
   it('hands the Agent the Repair delta as its focus, with the full diff still readable', async () => {
     const review = await reviewRepairHead({ source: sourceRun() })
 
