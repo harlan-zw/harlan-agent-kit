@@ -87,7 +87,9 @@ After a handoff, read the recorded target's current remote state when Harlan rep
 Confirm the merge commit before Completion. If the head changed, repeat the PR Skill's current-head checks.
 Acquire the task's worktree claim before mutation. Preserve unintegrated work until integration is confirmed.
 
-If the Service restarts or the connection fails, run the same command again.
+If the Service restarts or the connection drops, the watch reconnects by itself for up to 3 minutes.
+Each reconnect writes one `reconnect` line to stderr and resumes from stored state.
+If the watch then fails, run the same command again.
 The initial event reads the Journal, so a merge during disconnection still returns immediately.
 A pull request absent from the Journal receives one bootstrap reconciliation.
 A pull request already closed before observation receives one exact GitHub read.

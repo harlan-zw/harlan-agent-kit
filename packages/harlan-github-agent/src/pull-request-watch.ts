@@ -26,7 +26,31 @@ export interface PullRequestWatchOptions {
   /** `merged` keeps waiting through actionable findings. Closure and Dismissal always finish. */
   until?: 'attention' | 'merged' | 'review'
   onUpdate?: (state: PullRequestWatchState) => void
+  /** Runs before each wait to reconnect after a dropped stream or a gateway error. */
+  onReconnect?: (reconnect: PullRequestWatchReconnect) => void
 }
+
+export interface PullRequestWatchReconnect {
+  attempt: number
+  delayMilliseconds: number
+  error: ControlApiError
+}
+
+/** One outage may last this long. A Service Restart or Update takes under a minute. */
+const reconnectWindowMilliseconds = 180_000
+/** A stream that stays connected this long ends the outage. Keepalives arrive every 15 seconds. */
+const stableConnectionMilliseconds = 30_000
+const reconnectDelaysMilliseconds = [1_000, 2_000, 4_000, 8_000, 15_000]
+/** Caddy returns these while the Service is down. The route's own 503 means watching is not configured. */
+const gatewayStatuses = new Set([502, 504])
+
+type WatchAttempt
+  = | { _tag: 'Finished', state: PullRequestWatchState }
+    | { _tag: 'Cancelled' }
+    | { _tag: 'Failed', error: ControlApiError }
+    | { _tag: 'Dropped', error: ControlApiError, connectedMilliseconds: number }
+
+const cancelled: ControlApiError = { _tag: 'NetworkFailure', message: 'The pull request watch was cancelled.' }
 
 function validTask(value: unknown, repository: string, number: number): boolean {
   if (typeof value !== 'object' || value === null)
@@ -101,16 +125,71 @@ export function pullRequestWatchFinished(state: PullRequestWatchState, until: 'a
     || (until === 'review' && state._tag === 'Ready')
 }
 
-/** Reads service events only. This function never contacts GitHub. */
-export async function watchPullRequestStream(input: {
+interface WatchInput {
   url: URL
   target: PullRequestWatchTarget
   authorization: string
   fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
   options: PullRequestWatchOptions
-}): Promise<Result<PullRequestWatchState, ControlApiError>> {
+}
+
+/**
+ * Reads service events only. This function never contacts GitHub.
+ * A dropped stream or a gateway error reconnects with backoff. Each reconnect resumes from stored state.
+ */
+export async function watchPullRequestStream(input: WatchInput): Promise<Result<PullRequestWatchState, ControlApiError>> {
+  const seen = { previous: '' }
+  let outageStartedAt: number | undefined
+  let attempt = 0
+  while (true) {
+    const result = await watchPullRequestOnce(input, seen)
+    if (result._tag === 'Finished')
+      return ok(result.state)
+    if (result._tag === 'Cancelled')
+      return err(cancelled)
+    if (result._tag === 'Failed')
+      return err(result.error)
+    const now = Date.now()
+    if (outageStartedAt === undefined || result.connectedMilliseconds >= stableConnectionMilliseconds) {
+      outageStartedAt = now
+      attempt = 0
+    }
+    attempt++
+    const delayMilliseconds = reconnectDelaysMilliseconds[Math.min(attempt, reconnectDelaysMilliseconds.length) - 1]!
+    if (now + delayMilliseconds - outageStartedAt > reconnectWindowMilliseconds)
+      return err({ ...result.error, message: `${result.error.message} The watch stopped reconnecting after ${reconnectWindowMilliseconds / 60_000} minutes. Run watch-pr again to resume from stored state.` })
+    input.options.onReconnect?.({ attempt, delayMilliseconds, error: result.error })
+    if (!await wait(delayMilliseconds, input.options.signal))
+      return err(cancelled)
+  }
+}
+
+function wait(milliseconds: number, signal: AbortSignal | undefined): Promise<boolean> {
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const abort = () => {
+      clearTimeout(timer)
+      resolve(false)
+    }
+    if (signal?.aborted) {
+      resolve(false)
+      return
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort)
+      resolve(true)
+    }, milliseconds)
+  })
+}
+
+/** Reads one connection. `seen` spans reconnects, so a replayed stored state is not reported twice. */
+async function watchPullRequestOnce(input: WatchInput, seen: { previous: string }): Promise<WatchAttempt> {
   const controller = new AbortController()
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+  let connectedAt: number | undefined
+  const dropped = (message: string): WatchAttempt => ({ _tag: 'Dropped', error: { _tag: 'NetworkFailure', message }, connectedMilliseconds: connectedAt === undefined ? 0 : Date.now() - connectedAt })
+  const invalid = (message: string): WatchAttempt => ({ _tag: 'Failed', error: { _tag: 'InvalidResponse', message } })
   const abort = () => {
     controller.abort()
     void reader?.cancel().catch(() => {
@@ -122,7 +201,7 @@ export async function watchPullRequestStream(input: {
     controller.abort()
   try {
     if (controller.signal.aborted)
-      return err({ _tag: 'NetworkFailure', message: 'The pull request watch was cancelled.' })
+      return { _tag: 'Cancelled' }
     const response = await input.fetch(input.url, {
       headers: { authorization: input.authorization, accept: 'text/event-stream' },
       signal: controller.signal,
@@ -132,25 +211,26 @@ export async function watchPullRequestStream(input: {
         // Non-JSON proxy errors retain their HTTP status below.
         return undefined
       }) as { message?: unknown } | undefined
-      return err({ _tag: 'HttpFailure', status: response.status, message: typeof body?.message === 'string' ? body.message : `The service returned HTTP ${response.status}.` })
+      const error: ControlApiError = { _tag: 'HttpFailure', status: response.status, message: typeof body?.message === 'string' ? body.message : `The service returned HTTP ${response.status}.` }
+      return gatewayStatuses.has(response.status) ? { _tag: 'Dropped', error, connectedMilliseconds: 0 } : { _tag: 'Failed', error }
     }
     if (!response.headers.get('content-type')?.includes('text/event-stream') || response.body === null)
-      return err({ _tag: 'InvalidResponse', message: 'The service did not return a pull request event stream.' })
+      return invalid('The service did not return a pull request event stream.')
     reader = response.body.getReader()
+    connectedAt = Date.now()
     const decoder = new TextDecoder()
     let buffer = ''
     let event = ''
     let data: string[] = []
-    let previous = ''
     while (!controller.signal.aborted) {
       const chunk = await reader.read()
       if (controller.signal.aborted)
-        return err({ _tag: 'NetworkFailure', message: 'The pull request watch was cancelled.' })
+        return { _tag: 'Cancelled' }
       if (chunk.done)
-        return err({ _tag: 'NetworkFailure', message: 'The watch disconnected. Run watch-pr again to resume from stored state.' })
+        return dropped('The watch disconnected.')
       buffer += decoder.decode(chunk.value, { stream: true })
       if (buffer.length + data.join('\n').length > 1_000_000)
-        return err({ _tag: 'InvalidResponse', message: 'The pull request event exceeded one megabyte.' })
+        return invalid('The pull request event exceeded one megabyte.')
       let newline = buffer.indexOf('\n')
       while (newline !== -1) {
         const line = buffer.slice(0, newline).replace(/\r$/, '')
@@ -160,19 +240,19 @@ export async function watchPullRequestStream(input: {
             const json = data.join('\n')
             const value = await Promise.resolve().then(() => JSON.parse(json) as unknown).then(value => ok(value), () => err('The service returned invalid event JSON.'))
             if (value._tag === 'Err')
-              return err({ _tag: 'InvalidResponse', message: value.error })
+              return invalid(value.error)
             const state = parsePullRequestWatchState(value.value)
             if (state._tag === 'Err')
-              return err({ _tag: 'InvalidResponse', message: state.error })
+              return invalid(state.error)
             const target = state.value._tag === 'NotObserved' ? state.value : state.value.pullRequest
             if (target.repository.toLowerCase() !== input.target.repository.toLowerCase() || target.number !== input.target.number)
-              return err({ _tag: 'InvalidResponse', message: 'The service returned another pull request.' })
-            if (json !== previous) {
+              return invalid('The service returned another pull request.')
+            if (json !== seen.previous) {
               input.options.onUpdate?.(state.value)
-              previous = json
+              seen.previous = json
             }
             if (pullRequestWatchFinished(state.value, input.options.until))
-              return state
+              return { _tag: 'Finished', state: state.value }
           }
           event = ''
           data = []
@@ -186,12 +266,12 @@ export async function watchPullRequestStream(input: {
         newline = buffer.indexOf('\n')
       }
     }
-    return err({ _tag: 'NetworkFailure', message: 'The pull request watch was cancelled.' })
+    return { _tag: 'Cancelled' }
   }
   catch (error) {
-    return err({ _tag: 'NetworkFailure', message: controller.signal.aborted
-      ? 'The pull request watch was cancelled.'
-      : error instanceof Error ? error.message : 'The pull request event stream failed.' })
+    if (controller.signal.aborted)
+      return { _tag: 'Cancelled' }
+    return dropped(error instanceof Error ? error.message : 'The pull request event stream failed.')
   }
   finally {
     controller.abort()

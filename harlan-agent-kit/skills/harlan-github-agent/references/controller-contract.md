@@ -109,7 +109,9 @@ Every command prints one JSON value. A tagged JSON error exits with status 1.
 It uses the authenticated Service stream, without polling GitHub.
 Use `--until review` for published current-Revision Review readiness, or `--until merged` to wait through actionable findings.
 The default returns actionable work only after Service Tasks stop owning that head.
-Use `--timeout-seconds` for a bounded wait. Reconnect with the same command after a Service restart.
+Use `--timeout-seconds` for a bounded wait.
+A dropped stream or an HTTP 502 or 504 reconnects by itself for up to 3 minutes, inside that timeout.
+Each reconnect writes one `reconnect` line to stderr. If the watch still fails, run the same command again.
 Follow [pull request watching](../../pr/references/pull-request-watch.md) for the submitting Agent's completion contract.
 
 Workers run as normal local agent sessions inside disposable Git worktrees. They inherit Harlan's global agent context, installed skills, environment, provider login, and a public-read-only `gh` wrapper. Private reads and GitHub writes stay in the controller.
