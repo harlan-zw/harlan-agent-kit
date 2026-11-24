@@ -84,6 +84,21 @@ export function isProtectedPath(path: string): boolean {
   return isInstructionPath(path) || REPOSITORY_POLICY_PATTERN.test(path)
 }
 
+/** CI runs these. They sit in `.github/` beside agent instructions, but no agent reads them as instructions. */
+const CI_PATTERN = /(?:^|\/)\.github\/(?:workflows|actions)\//
+
+/** Why a Protected path never merges unread, as one sentence that names it. Null for any other path. */
+export function protectedPathReason(path: string): string | null {
+  const name = `\`${path}\``
+  if (CI_PATTERN.test(path))
+    return `${name} runs in CI.`
+  if (isInstructionPath(path))
+    return `${name} is read as instructions by an agent.`
+  if (REPOSITORY_POLICY_PATTERN.test(path))
+    return `${name} is a Protected path.`
+  return null
+}
+
 export function isProsePath(path: string): boolean {
   if (isProtectedPath(path))
     return false

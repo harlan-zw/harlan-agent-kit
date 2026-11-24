@@ -60,7 +60,7 @@ import { cleanLine, cleanText } from './text.ts'
 import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
 
 interface ReviewResponse {
-  /** What the Review exercised, as one clause. The canonical comment reads `Checked …`. */
+  /** What the Review exercised, as one clause. The canonical comment reads `Checked: …`. */
   checked: string
   /** The largest part the Review did not exercise, or null when it skipped nothing. */
   notChecked: string | null
@@ -1202,7 +1202,7 @@ function coverageClause(text: string, prefix: RegExp): string {
   return cleanLine(text).replace(prefix, '').replace(/[.;,\s]+$/, '')
 }
 
-/** `Checked … Not checked: …`, the line only the Review knows. Null for a run without the field. */
+/** `Checked: … Not checked: …`, the line only the Review knows. Null for a run without the field. */
 export function reviewCoverageLine(checkedText: string | null | undefined, notCheckedText: string | null | undefined): string | null {
   if (checkedText === null || checkedText === undefined)
     return null
@@ -1210,7 +1210,7 @@ export function reviewCoverageLine(checkedText: string | null | undefined, notCh
   if (checked === '')
     return null
   const notChecked = notCheckedText === null || notCheckedText === undefined ? '' : coverageClause(notCheckedText, /^not checked:?\s+/i)
-  return `Checked ${checked}.${notChecked === '' ? '' : ` Not checked: ${notChecked}.`}`
+  return `Checked: ${checked}.${notChecked === '' ? '' : ` Not checked: ${notChecked}.`}`
 }
 
 /** The gates that fail, named in two or three words, for a BLOCKED Review that found nothing. */

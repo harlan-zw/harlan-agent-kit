@@ -556,7 +556,7 @@ export interface ReviewRun {
    * What this Review exercised, in one clause the Agent wrote.
    *
    * Only the Review knows it, so the canonical comment reads
-   * `Checked … Not checked: …`. Absent or null covers every run recorded
+   * `Checked: … Not checked: …`. Absent or null covers every run recorded
    * before the field existed, and the comment falls back to a plain line.
    */
   checked?: string | null

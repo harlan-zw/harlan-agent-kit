@@ -973,7 +973,7 @@ describe('refreshReviewGates against the journal store', () => {
       body: expect.stringContaining('🟢 **Ready**'),
     })
     // The restated comment keeps what the Review checked, read back from the Journal.
-    expect(publication?.body).toContain('Checked the parser against split chunks. Not checked: Windows line endings.')
+    expect(publication?.body).toContain('Checked: the parser against split chunks. Not checked: Windows line endings.')
     expect(store.listReviewRuns('harlan-zw/example', 24).every(run => run.checked === 'the parser against split chunks')).toBe(true)
   })
 
