@@ -182,7 +182,7 @@ Dismiss an Item to stop every planner for it. A Dismissal is durable and belongs
 
 Treat the SQLite journal as service-owned state. Do not edit it manually.
 
-Restart through a durable Restart request. The service stops new Task claims, lets active Agents and controller writes finish, then exits. Systemd starts the next process. The new process completes the request after its health listener starts. The requesting client may disconnect after the API accepts the request. Never use Pause to coordinate a restart.
+Restart through a durable Restart request. The service stops new Task claims, lets active Agents and controller writes finish, then exits. It waits only for terminal comments queued before the request. The next process publishes comments queued later. Systemd starts the next process. The new process completes the request after its health listener starts. The requesting client may disconnect after the API accepts the request. Never use Pause to coordinate a restart.
 
 ```bash
 agent_config=/absolute/path/to/harlan-github-agent.yml

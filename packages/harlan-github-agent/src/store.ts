@@ -14537,7 +14537,17 @@ export function openJournalStore(
     return getAgentControl()
   }
 
+  /**
+   * A Restart drains the terminal comments queued before it was requested.
+   *
+   * Gate refreshes keep queueing comments while CI results arrive. A wait for
+   * an empty queue held one Update for 22 minutes. A comment queued later
+   * stays Pending in the journal, and the next process publishes it.
+   * `updated_at` moves on every return to Pending, so a requeued comment
+   * counts as new too.
+   */
   const isSafeToRestart: JournalStore['isSafeToRestart'] = (at = '') => {
+    const queuedBefore = activeRestartRequest()?.requestedAt ?? null
     const row = database.prepare(`
       SELECT (
         EXISTS (
@@ -14561,7 +14571,7 @@ export function openJournalStore(
         OR EXISTS (
           SELECT 1 FROM review_status_commands
           WHERE (state_tag = 'Running' AND (lease_expires_at IS NULL OR lease_expires_at > ?))
-            OR (state_tag = 'Pending' AND phase = 'terminal')
+            OR (state_tag = 'Pending' AND phase = 'terminal' AND (? IS NULL OR updated_at <= ?))
         )
         OR EXISTS (
           SELECT 1 FROM issue_triage_comment_commands
@@ -14580,7 +14590,7 @@ export function openJournalStore(
           WHERE json_extract(state, '$._tag') = 'Running' AND json_extract(state, '$.leaseExpiresAt') > ?
         )
       ) AS busy
-    `).get(at, at, at, at, at, at, at, at, at) as { busy: number }
+    `).get(at, at, at, at, at, queuedBefore, queuedBefore, at, at, at, at) as { busy: number }
     return row.busy === 0
   }
 
