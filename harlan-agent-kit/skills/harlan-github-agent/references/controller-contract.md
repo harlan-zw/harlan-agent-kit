@@ -122,7 +122,7 @@ A pinned Agent selection overrides it. Harlan switches the Agent provider, model
 
 Automatic selection picks the Agent provider by remaining capacity. It walks `order` and takes the first provider whose window has more than its own Reserve left. `order` defaults to opencode first, because opencode answers on the GLM Coding Plan. Codex publishes a seven-day window. opencode publishes the GLM Coding Plan five-hour and weekly windows, and the fuller window decides. When no provider may spend, the service stops claiming new agent Tasks and shows `Reserve reached` in the System pane. Active agents and Publications finish. Reaching a Reserve is normal state, not an Incident.
 
-For `codex`, use `gpt-6.1-sol` with high reasoning for adversarial review. Use `gpt-6.1-sol` with medium reasoning for Repair, conflict resolution, issue triage, issue work, and Baseline repair. Pull request triage needs no Agent: Classification answers it through the `advocaat` package over the Cloudflare AI endpoint.
+For `codex`, use `gpt-6.2-sol` with high reasoning for adversarial review. Use `gpt-6.1-sol` with medium reasoning for Repair, conflict resolution, issue triage, issue work, and Baseline repair. Pull request triage needs no Agent: Classification answers it through the `advocaat` package over the Cloudflare AI endpoint.
 
 For `opencode`, use `zai-coding-plan/glm-5.3-flash` at the `high` Reasoning effort for every role. `agent.reasoning_effort.<provider>.<role>` in the configuration replaces one role's default, for example `agent.reasoning_effort.opencode.review_fix: medium`. A pinned Agent selection with an explicit Reasoning effort still wins over the file.
 
@@ -206,6 +206,8 @@ Use the exact issue state or pull request head commit for every dispatch.
 - Regression repair: apply `../../unit-tests/SKILL.md` before the fix.
 
 Keep one implementation Agent for an issue and its resulting pull request. Start one fresh Review Agent per head SHA.
+
+A head can carry the Review of an earlier head instead. Every new commit after the earlier head must merge the base branch. Git must merge its two parents without a conflict, and its tree must equal that merge. The pull request must still add and remove the same lines at the same paths. The earlier Review must pass its review gate and match the current base branch and repository policy. If the merge changed the file of a carried finding, start a fresh Review. A rerun or the manual Review label also starts a fresh Review. The carried run records zero usage. Its merge and CI gates read the new head.
 
 Preflight Repair authority before Review. Keep Review read only, and reject a Review worktree that changed.
 

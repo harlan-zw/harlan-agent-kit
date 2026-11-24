@@ -21,6 +21,7 @@ import type {
   ClaimedAdversarialReviewTask,
   ClaimedAgentTask,
   ClaimedIssueTriageTask,
+  CodexReasoningEffort,
   GitHubIssueItem,
   GitHubPullRequestItem,
   MergeRiskRecord,
@@ -33,7 +34,7 @@ import type {
   ReviewRun,
 } from './types.ts'
 import type { RoutineGitHubEvidenceSource } from './worker-github-evidence.ts'
-import type { AgentWorkspaceManager } from './worktree.ts'
+import type { AgentWorkspaceManager, PreparedWorkerWorkspace } from './worktree.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { findRepositoryMemory, GITHUB_MEDIA_LINES, repositoryMemoryLine, TOOLCHAIN_LINES } from './agent-context.ts'
 import { reviewVerdictLabel } from './agent-label.ts'
@@ -54,6 +55,7 @@ import { acceptedPullRequestCommands, canRepairBaseline, canRepairPullRequestHea
 import { err, ok } from './result.ts'
 import { AUTOMATED_REVIEW_MARKER, automatedDisclosure, commitLink, findingNextAction, fixedRows, followUpBudget, followUpSection, issueRows, plural, statusLine } from './review-comment.ts'
 import { applyReviewReasoningEffortBand, DEFAULT_REVIEW_REASONING_EFFORT_POLICY, reviewReasoningEffortBand } from './review-effort.ts'
+import { carriedCoverage, decideReviewReuse } from './review-reuse.ts'
 import { cleanLine, cleanText } from './text.ts'
 import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
 
@@ -125,8 +127,12 @@ export interface ReviewWorkerOptions extends Omit<ItemAgentOptions, 'workspaces'
    */
   changedLines?: ChangedLinesReader
   preflightRepair: (repository: string, signal: AbortSignal) => Promise<Result<void, string>>
-  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress' | 'priorReviewHistory' | 'repairSource'>
-  workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'>
+  store: Pick<JournalStore, 'recordExactPullRequestObservation' | 'getRepairedHeadFindings' | 'repairRoundPlan' | 'getRevisionFiles' | 'getWorkerSession' | 'storedReviewForHead' | 'queueReviewFixTaskForReview' | 'recordIncident' | 'recordReviewRun' | 'recordReviewPublication' | 'saveWorkerSession' | 'recordAgentTurn' | 'agentSessionTotal' | 'queueBaselineRepairForReview' | 'retireBaselineRepairForReview' | 'supersedeReviewRun' | 'updateAgentProgress' | 'priorReviewHistory' | 'repairSource' | 'latestReviewOfEarlierHead'>
+  /**
+   * `readHeadAdvance` lets a clean base merge carry the Review of an earlier
+   * head. Absent reviews every head afresh, which is how most tests run.
+   */
+  workspaces: Pick<AgentWorkspaceManager, 'prepareIssue' | 'prepareReview' | 'verifyReview'> & Partial<Pick<AgentWorkspaceManager, 'readHeadAdvance'>>
 }
 
 const reviewPolicy = `Review the prepared Git worktree using only controller Review tools and supplied context.
@@ -1776,6 +1782,9 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // files are read once too: the Reasoning effort band needs them before
       // the turn, and Merge risk needs the same list after it.
       const changedFiles = await reviewChangedFiles(options, task, signal)
+      const reused = await reuseEarlierReview(options, task, snapshot.value, workspace.value, changedFiles, { forced: manualReview || task.rerun._tag !== 'NotRequested', startedAt }, signal)
+      if (reused !== undefined)
+        return reused
       const band = reviewReasoningEffortBand(changedFiles._tag === 'Ok' ? changedFiles.value : null, reviewReasoningEffortPolicy(task))
       const reviewRuntime = bandedReviewRuntime(options.runtime(task.repository), band.effort)
       const preflight = repairPreflight(task.repositoryMapping, snapshot.value, repairAccess, repairRounds(options, snapshot.value))
@@ -1830,86 +1839,176 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
             }
       })
       const scoped = await scopeFollowUps(options, task, findings, signal)
-      // Persist the expensive Agent report before any later GitHub read or
-      // write. A retry can now resume at the controller boundary.
       const { gates } = reviewGates(snapshot.value, response, repairsBaseline, { reviewStartedAt: startedAt, now: options.now() })
-      const outcome = reviewOutcome(gates)
-      const mergeRisk = resolveMergeRisk(task, response, changedFiles)
-      const reviewRunId = randomUUID()
-      const completedAt = options.now().toISOString()
-      const recorded = options.store.recordReviewRun({
-        id: reviewRunId,
-        repository: task.repository,
-        pullRequestNumber: task.pullRequestNumber,
-        revisionId: task.revisionId,
-        headSha: task.pullRequest.headSha,
+      return settleReviewRun(options, task, snapshot.value, {
         provider: reviewRuntime.profile.provider,
         sessionId: turn.value.sessionId,
         model: reviewRuntime.profile.roles.adversarial_review.model,
         reasoningEffort: reviewRuntime.profile.roles.adversarial_review.reasoningEffort ?? null,
-        agentVersion: '0.0.0',
         skillDigest,
         startedAt,
-        completedAt,
         usage: turn.value.usage,
         gates,
         confidence: response.confidence,
         findings: scoped,
-        mergeRisk,
+        mergeRisk: resolveMergeRisk(task, response, changedFiles),
         checked: response.checked,
         notChecked: response.notChecked,
-      })
-      if (recorded._tag === 'Rejected')
-        return err(`The review result could not be saved: ${recorded.reason._tag}.`)
-      if (recorded._tag === 'Conflict')
-        return err('A different review result already uses this ID.')
-
-      const frozen = await options.github.getPullRequestReviewSnapshot(task.repositoryMapping, task.pullRequestNumber, signal)
-      if (frozen._tag === 'Err')
-        return frozen
-      // A review describes one diff, so only the diff has to hold still. The
-      // stored report remains valid history if this head moved meanwhile.
-      if (frozen.value.pullRequest.headSha !== snapshot.value.pullRequest.headSha || frozen.value.pullRequest.baseRef !== snapshot.value.pullRequest.baseRef || (frozen.value.pullRequest.state !== 'open' && frozen.value.pullRequest.mergedAt === null))
-        return err('The pull request changed before the review completed.')
-      // Saved, never published. The terminal comment replaces this line within
-      // seconds, so publishing it spent a GitHub write nobody read.
-      const checked = saveAgentProgress(options, task, agentPhase('Checked', 'Head commit and CI checked'))
-      if (checked._tag === 'Err')
-        return checked
-
-      const storedOutcome = outcome === 'READY'
-        ? { _tag: 'Ready' as const, confidence: response.confidence }
-        : outcome === 'PENDING'
-          ? { _tag: 'Pending' as const, confidence: response.confidence }
-          : { _tag: 'Blocked' as const, confidence: response.confidence }
-      return projectReviewRun(options, task, frozen.value, {
-        id: reviewRunId,
-        gatePublication: { _tag: 'Unpublished' },
-        baseRef: task.pullRequest.baseRef ?? null,
-        repository: task.repository,
-        pullRequestNumber: task.pullRequestNumber,
-        revisionId: task.revisionId,
-        headSha: task.pullRequest.headSha,
-        provider: reviewRuntime.profile.provider,
-        sessionId: turn.value.sessionId,
-        model: reviewRuntime.profile.roles.adversarial_review.model,
-        reasoningEffort: reviewRuntime.profile.roles.adversarial_review.reasoningEffort ?? null,
-        agentVersion: '0.0.0',
-        skillDigest,
-        startedAt,
-        completedAt,
-        usage: turn.value.usage,
-        gates,
-        outcome: storedOutcome,
-        findings: scoped,
-        mergeRisk,
-        checked: response.checked,
-        notChecked: response.notChecked,
-        feedback: null,
-        publications: [],
-      }, repairPreflight(task.repositoryMapping, frozen.value, await options.preflightRepair(task.repository, signal), repairRounds(options, frozen.value)), signal)
+      }, signal)
     },
   }
+}
+
+/** What one Review concluded, before the controller records and publishes it. */
+interface ReviewRunAnswer {
+  provider: ReviewRun['provider']
+  sessionId: string
+  model: string
+  reasoningEffort: CodexReasoningEffort | null
+  skillDigest: string
+  startedAt: string
+  usage: AgentTokenUsage
+  gates: ReviewGates
+  confidence: number
+  findings: ReviewFinding[]
+  mergeRisk: MergeRiskRecord | null
+  checked: string | null
+  notChecked: string | null
+}
+
+/**
+ * Records a Review answer for the claimed head, then publishes it.
+ *
+ * The answer is persisted before any later GitHub read or write, so a retry
+ * resumes at the controller boundary instead of paying for another Agent turn.
+ */
+async function settleReviewRun(
+  options: ReviewWorkerOptions,
+  task: ClaimedAdversarialReviewTask,
+  snapshot: PullRequestReviewSnapshot,
+  answer: ReviewRunAnswer,
+  signal: AbortSignal,
+): Promise<Result<{ evidence: string, resolution: ReviewResolution }, string>> {
+  const outcome = reviewOutcome(answer.gates)
+  const reviewRunId = randomUUID()
+  const completedAt = options.now().toISOString()
+  const run = {
+    id: reviewRunId,
+    repository: task.repository,
+    pullRequestNumber: task.pullRequestNumber,
+    revisionId: task.revisionId,
+    headSha: task.pullRequest.headSha,
+    provider: answer.provider,
+    sessionId: answer.sessionId,
+    model: answer.model,
+    reasoningEffort: answer.reasoningEffort,
+    agentVersion: '0.0.0',
+    skillDigest: answer.skillDigest,
+    startedAt: answer.startedAt,
+    completedAt,
+    usage: answer.usage,
+    gates: answer.gates,
+    findings: answer.findings,
+    mergeRisk: answer.mergeRisk,
+    checked: answer.checked,
+    notChecked: answer.notChecked,
+  }
+  const recorded = options.store.recordReviewRun({ ...run, confidence: answer.confidence })
+  if (recorded._tag === 'Rejected')
+    return err(`The review result could not be saved: ${recorded.reason._tag}.`)
+  if (recorded._tag === 'Conflict')
+    return err('A different review result already uses this ID.')
+
+  const frozen = await options.github.getPullRequestReviewSnapshot(task.repositoryMapping, task.pullRequestNumber, signal)
+  if (frozen._tag === 'Err')
+    return frozen
+  // A review describes one diff, so only the diff has to hold still. The
+  // stored report remains valid history if this head moved meanwhile.
+  if (frozen.value.pullRequest.headSha !== snapshot.pullRequest.headSha || frozen.value.pullRequest.baseRef !== snapshot.pullRequest.baseRef || (frozen.value.pullRequest.state !== 'open' && frozen.value.pullRequest.mergedAt === null))
+    return err('The pull request changed before the review completed.')
+  // Saved, never published. The terminal comment replaces this line within
+  // seconds, so publishing it spent a GitHub write nobody read.
+  const checked = saveAgentProgress(options, task, agentPhase('Checked', 'Head commit and CI checked'))
+  if (checked._tag === 'Err')
+    return checked
+
+  const storedOutcome = outcome === 'READY'
+    ? { _tag: 'Ready' as const, confidence: answer.confidence }
+    : outcome === 'PENDING'
+      ? { _tag: 'Pending' as const, confidence: answer.confidence }
+      : { _tag: 'Blocked' as const, confidence: answer.confidence }
+  return projectReviewRun(options, task, frozen.value, {
+    ...run,
+    gatePublication: { _tag: 'Unpublished' },
+    baseRef: task.pullRequest.baseRef ?? null,
+    outcome: storedOutcome,
+    feedback: null,
+    publications: [],
+  }, repairPreflight(task.repositoryMapping, frozen.value, await options.preflightRepair(task.repository, signal), repairRounds(options, frozen.value)), signal)
+}
+
+/**
+ * Answers this head with the Review of an earlier head, when the new commits
+ * only merge the base branch without conflicts.
+ *
+ * Undefined means a fresh Review runs, which is also the answer when Git could
+ * not compare the two heads. No Agent turn starts here, so the run records zero
+ * usage. The merge and CI gates read the new head, as a fresh Review's would.
+ */
+async function reuseEarlierReview(
+  options: ReviewWorkerOptions,
+  task: ClaimedAdversarialReviewTask,
+  snapshot: PullRequestReviewSnapshot,
+  workspace: PreparedWorkerWorkspace,
+  changedFiles: Result<PullRequestFile[], string>,
+  context: { forced: boolean, startedAt: string },
+  signal: AbortSignal,
+): Promise<Result<{ evidence: string, resolution: ReviewResolution }, string> | undefined> {
+  const readHeadAdvance = options.workspaces.readHeadAdvance
+  if (readHeadAdvance === undefined || context.forced)
+    return undefined
+  const earlier = options.store.latestReviewOfEarlierHead(task.repository, task.pullRequestNumber, task.pullRequest.headSha)
+  const advance = earlier === undefined
+    ? null
+    : await readHeadAdvance(workspace, earlier.headSha, signal).then(read => read._tag === 'Ok' ? read.value : null)
+  const decision = decideReviewReuse({ forced: context.forced, earlier, advance })
+  if (decision._tag === 'Review')
+    return undefined
+  const carried = decision.run
+  const { gates } = refreshControllerGates(carried.gates, snapshot, task.repositoryMapping, { reviewStartedAt: context.startedAt, now: options.now() })
+  return settleReviewRun(options, task, snapshot, {
+    provider: carried.provider,
+    sessionId: carried.sessionId,
+    model: carried.model,
+    reasoningEffort: carried.reasoningEffort ?? null,
+    skillDigest: carried.skillDigest,
+    startedAt: context.startedAt,
+    usage: { _tag: 'Available', input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 },
+    gates,
+    // A run recorded before confidence existed carries none. Zero keeps such a
+    // carried Review away from Auto merge, which reads confidence as a bar.
+    confidence: carried.outcome.confidence ?? 0,
+    findings: await scopeFollowUps(options, task, carried.findings, signal),
+    mergeRisk: carriedMergeRisk(task, carried.mergeRisk ?? null, changedFiles),
+    checked: carriedCoverage(carried, task.pullRequest.baseRef ?? null),
+    notChecked: carried.notChecked ?? null,
+  }, signal)
+}
+
+/** The Merge risk of a carried Review: the earlier Agent claim over this head's own floor. */
+function carriedMergeRisk(
+  task: ClaimedAdversarialReviewTask,
+  earlier: MergeRiskRecord | null,
+  files: Result<PullRequestFile[], string>,
+): MergeRiskRecord | null {
+  const scope = task.repositoryMapping.autoMerge
+  if (scope._tag !== 'Contained')
+    return null
+  const floor: MergeRisk = files._tag === 'Err'
+    ? { _tag: 'Reviewable', reason: `The changed files could not be read: ${files.error}` }
+    : mergeRiskFloor(files.value, scope.policy)
+  const claim: MergeRisk = earlier?.claim ?? { _tag: 'Reviewable', reason: 'The carried Review recorded no Merge risk.' }
+  return { claim, combined: combineMergeRisk(floor, claim), floor }
 }
 
 /**

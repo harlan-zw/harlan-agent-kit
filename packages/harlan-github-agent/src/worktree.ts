@@ -6,6 +6,7 @@ import type { ClaimedReleaseNote } from './package-release-store.ts'
 import type { PublicationRemote } from './publication-scheduler.ts'
 import type { RepairRecoveryArtifact, RepairRecoveryWorktrees } from './repair-recovery.ts'
 import type { Result } from './result.ts'
+import type { HeadAdvance } from './review-reuse.ts'
 import type { ClaimedAdversarialReviewTask, ClaimedBaselineRepairTask, ClaimedBatch, ClaimedConflictResolutionTask, ClaimedIssueTriageTask, ClaimedIssueWorkTask, ClaimedPublicationCommand, ClaimedReviewFixTask, ClaimedRoutineRun, PullRequestBase, RepositoryMapping, RoutineIssueSource } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
@@ -137,6 +138,83 @@ export interface AgentWorkspaceManager {
   /** Checks out the published commit. `baseSha` is the previous release, so the range is exact. */
   prepareReleaseNote: (task: ReleaseNoteWorkspaceTask, signal: AbortSignal) => Promise<Result<PreparedWorkerWorkspace, string>>
   verifyReview: (task: ClaimedAdversarialReviewTask, worktree: PreparedWorkerWorkspace, signal: AbortSignal) => Promise<Result<void, string>>
+  /** Reads what the commits after an earlier reviewed head contain. Read only. */
+  readHeadAdvance: (worktree: PreparedWorkerWorkspace, earlierHeadSha: string, signal: AbortSignal) => Promise<Result<HeadAdvance, string>>
+}
+
+/**
+ * Reads what the commits between an earlier reviewed head and this head contain.
+ *
+ * A merge counts as clean when its tree equals the tree `git merge-tree`
+ * writes for its two parents. Comparing trees, rather than reading an empty
+ * remerge diff, also catches a merge that edits a file Git merged cleanly.
+ */
+export async function readHeadAdvance(
+  path: string,
+  commits: { earlierHeadSha: string, headSha: string, baseSha: string },
+  signal: AbortSignal,
+): Promise<Result<HeadAdvance, string>> {
+  const ancestor = await runGit(path, ['merge-base', '--is-ancestor', commits.earlierHeadSha, commits.headSha], signal)
+  if (ancestor.exitCode === 1)
+    return ok({ _tag: 'Rewritten' })
+  if (ancestor.exitCode !== 0)
+    return err(`Could not compare the reviewed head: ${ancestor.stderr}`)
+  const listed = await runGitScalar(path, ['rev-list', '--parents', commits.headSha, `^${commits.earlierHeadSha}`, `^${commits.baseSha}`], signal)
+  if (listed.exitCode !== 0)
+    return err(`Could not list the new commits: ${listed.stderr}`)
+  const added = listed.stdout === '' ? [] : listed.stdout.split('\n').map(line => line.split(' '))
+  if (added.some(parents => parents.length !== 3))
+    return ok({ _tag: 'NewCommits' })
+  const resolved: string[] = []
+  for (const [merge, first, second] of added) {
+    const tree = await runGitScalar(path, ['rev-parse', `${merge}^{tree}`], signal)
+    const automatic = await runGitScalar(path, ['merge-tree', '--write-tree', '--no-messages', first!, second!], signal)
+    if (tree.exitCode !== 0 || (automatic.exitCode !== 0 && automatic.exitCode !== 1))
+      return err(`Could not recreate base merge ${merge}: ${tree.stderr || automatic.stderr}`)
+    // Exit 1 means Git's own merge conflicted. A modify/delete conflict leaves
+    // the kept file in that tree with no markers, so a matching tree is not
+    // proof that nobody resolved anything.
+    if (automatic.exitCode !== 0 || automatic.stdout.split('\n')[0] !== tree.stdout)
+      resolved.push(merge!)
+  }
+  const changed = await runGit(path, ['diff', '--name-only', '-z', '--no-renames', commits.earlierHeadSha, commits.headSha], signal)
+  if (changed.exitCode !== 0)
+    return err(`Could not list the merged paths: ${changed.stderr}`)
+  const changedPaths = changed.stdout.split('\0').filter(entry => entry !== '')
+  if (resolved.length > 0)
+    return ok({ _tag: 'ResolvedBaseMerges', merges: resolved, changedPaths })
+  // A clean merge can still move the pull request's own edit, for example
+  // into a file the base branch renamed. Only the same edits at the same
+  // paths keep the earlier verdict.
+  const earlier = await pullRequestEdits(path, commits.baseSha, commits.earlierHeadSha, signal)
+  const current = await pullRequestEdits(path, commits.baseSha, commits.headSha, signal)
+  if (earlier._tag === 'Err')
+    return earlier
+  if (current._tag === 'Err')
+    return current
+  return earlier.value === current.value
+    ? ok({ _tag: 'CleanBaseMerges', changedPaths })
+    : ok({ _tag: 'ChangedDiff' })
+}
+
+/**
+ * The lines a head adds and removes against its merge base, with paths.
+ *
+ * Line numbers and hunk context drop out, because a base merge moves them
+ * without changing what the pull request edits.
+ */
+async function pullRequestEdits(path: string, baseSha: string, headSha: string, signal: AbortSignal): Promise<Result<string, string>> {
+  const mergeBase = await runGitScalar(path, ['merge-base', baseSha, headSha], signal)
+  if (mergeBase.exitCode !== 0)
+    return err(`Could not find the merge base of ${headSha}: ${mergeBase.stderr}`)
+  const diff = await runGit(path, ['diff', '-U0', '--no-color', '--no-ext-diff', '--find-renames', mergeBase.stdout, headSha], signal)
+  if (diff.exitCode !== 0)
+    return err(`Could not read the edits of ${headSha}: ${diff.stderr}`)
+  return ok(diff.stdout
+    .split('\n')
+    .filter(line => !line.startsWith('index '))
+    .map(line => line.startsWith('@@') ? '@@' : line)
+    .join('\n'))
 }
 
 export interface BaselineRepairWorktreeManager {
@@ -1054,6 +1132,10 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       return tracked.stdout.length === 0
         ? ok(undefined)
         : err('The Review Agent changed files. Review must stay read only.')
+    },
+
+    readHeadAdvance(worktree, earlierHeadSha, signal) {
+      return readHeadAdvance(worktree.path, { earlierHeadSha, headSha: worktree.headSha, baseSha: worktree.baseSha }, signal)
     },
   }
 }

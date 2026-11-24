@@ -142,6 +142,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
         recordReviewRun: (input) => {
           attempt = input
@@ -260,6 +261,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
         recordReviewRun: () => { throw new Error('A second review must not be recorded.') },
         recordReviewPublication: () => { throw new Error('A second comment must not be recorded.') },
@@ -384,6 +386,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
       },
       status: {
@@ -524,6 +527,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
       },
       status: {
@@ -639,6 +643,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        latestReviewOfEarlierHead: () => undefined,
       },
       status: {
         publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
@@ -745,6 +750,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
       },
       status: {
@@ -873,6 +879,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
       },
       status: {
@@ -964,6 +971,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
       },
       status: {
@@ -1067,6 +1075,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
       },
       status: {
@@ -1164,6 +1173,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
       },
       status: {
@@ -1260,6 +1270,7 @@ describe('subject Workers', () => {
         ...agentTurnLedger,
         updateAgentProgress: () => true,
         priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
+        latestReviewOfEarlierHead: () => undefined,
         repairSource: () => null,
       },
       status: {
