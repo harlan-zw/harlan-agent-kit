@@ -978,6 +978,7 @@ Evidence that a skill, policy, or workflow should change.
 | restart queue, drain mode | Restart request | Queue and Pause already name different service concepts |
 | upgrade, refresh, sync | Service update | These words name different package and data operations |
 | journal, lease, fence, mutation, publication, revision, snapshot, item, agent role | Name the issue, pull request, commit, or action the reader can see | These words name internal Service details in this context |
+| incremental review, delta review, scoped review, partial review | Repair focus, or Repair delta for the diff | One Review scope. The whole diff stays readable, so the Review is never partial |
 
 ## Open questions
 
