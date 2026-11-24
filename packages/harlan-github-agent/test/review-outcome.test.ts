@@ -157,8 +157,11 @@ describe('reviewOutcome', () => {
   it('says what the Review checked and did not, and falls back for a run recorded before the fields', () => {
     const input = { headSha: 'abc123', baseSha: 'base123', gates: gates(), findings: [], confidence: 95, reportedChecks: [], repository: 'harlan-zw/example' }
     expect(terminalComment({ ...input, checked: 'Checked timeline reads against dense windows.', notChecked: 'the dashboard in a browser' }))
-      .toContain('🟢 **Ready** · \`95/100\`\n\nChecked timeline reads against dense windows. Not checked: the dashboard in a browser.')
-    expect(terminalComment({ ...input, checked: 'every changed file', notChecked: null })).toContain('Checked every changed file.\n')
+      .toContain('🟢 **Ready** · \`95/100\`\n\nChecked: timeline reads against dense windows. Not checked: the dashboard in a browser.')
+    expect(terminalComment({ ...input, checked: 'every changed file', notChecked: null })).toContain('Checked: every changed file.\n')
+    // The Agent often starts its clause with a capital. A colon keeps that from reading as a typo.
+    expect(terminalComment({ ...input, checked: 'The full base-to-head diff', notChecked: 'Live Worker startup' }))
+      .toContain('Checked: The full base-to-head diff. Not checked: Live Worker startup.')
     expect(terminalComment({ ...input, checked: null, notChecked: null })).toContain('No issues found in [\`abc123\`](https://github.com/harlan-zw/example/commit/abc123).')
   })
 

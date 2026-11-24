@@ -35,7 +35,23 @@ describe('the deterministic floor', () => {
 
   it('never contains a rename away from agent instructions', () => {
     const risk = mergeRiskFloor([file('NOTES.md', { previousFilename: 'CLAUDE.md', status: 'renamed' })], policy)
-    expect(risk).toEqual({ _tag: 'Sensitive', reason: 'CLAUDE.md is read as instructions by an agent.' })
+    expect(risk).toEqual({ _tag: 'Sensitive', reason: '`CLAUDE.md` is read as instructions by an agent.' })
+  })
+
+  it('names a CI workflow as one, not as agent instructions', () => {
+    for (const path of ['.github/workflows/deploy-cloudflare.yml', '.github/actions/setup/action.yml']) {
+      expect(mergeRiskFloor([file(path)], policy), path).toEqual({ _tag: 'Sensitive', reason: `\`${path}\` runs in CI.` })
+    }
+    expect(mergeRiskFloor([file('.github/copilot-instructions.md')], policy))
+      .toEqual({ _tag: 'Sensitive', reason: '`.github/copilot-instructions.md` is read as instructions by an agent.' })
+  })
+
+  it('quotes the path a Protected path or sensitive path reason names', () => {
+    expect(mergeRiskFloor([file('.gitattributes')], policy)).toEqual({ _tag: 'Sensitive', reason: '`.gitattributes` is a Protected path.' })
+    expect(mergeRiskFloor([file('migrations/001.sql')], { ...policy, sensitivePaths: ['migrations/**'] }))
+      .toEqual({ _tag: 'Sensitive', reason: '`migrations/001.sql` is a sensitive path for this repository.' })
+    expect(mergeRiskFloor([file('.env.example', { status: 'removed' })], policy))
+      .toEqual({ _tag: 'Reviewable', reason: '`.env.example` is removed, so something outside the diff may still reference it.' })
   })
 
   it('holds the instruction floor even when a repository allows the path', () => {

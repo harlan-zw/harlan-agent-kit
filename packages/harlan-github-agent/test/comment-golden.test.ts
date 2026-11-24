@@ -70,7 +70,7 @@ describe('review verdict', () => {
       <!-- workflow-state: {"_tag":"Review","headSha":"6aa6d8e1520848daef9646d402ea16ee3f9a4221","baseSha":"70edfe5f32699f7f6042c0bd66e8a68e3b282fc5","outcome":"READY","gates":{"merge":"Passed","review":"Passed","ci":"Passed"}} -->
       🟢 **Ready** · \`90/100\`
 
-      Repair fixed 2 issues from \`19c6342\`. Checked Timeline reads against dense windows. Not checked: the dashboard in a browser.
+      Repair fixed 2 issues from \`19c6342\`. Checked: Timeline reads against dense windows. Not checked: the dashboard in a browser.
 
       <details><summary><b>2 follow-ups</b> · none block merge</summary>
 
@@ -134,7 +134,7 @@ describe('review verdict', () => {
       <!-- workflow-state: {"_tag":"Review","headSha":"6aa6d8e1520848daef9646d402ea16ee3f9a4221","baseSha":"70edfe5f32699f7f6042c0bd66e8a68e3b282fc5","outcome":"BLOCKED","gates":{"merge":"Failed","review":"Passed","ci":"Passed"}} -->
       🟠 **Blocked** · merge conflict; the review itself passed
 
-      Checked the catalog bumps and the codex-sdk changelog.
+      Checked: the catalog bumps and the codex-sdk changelog.
 
       <sub><relative-time datetime="2026-11-23T15:03:00.000Z">2026-11-23 15:03 UTC</relative-time> · [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) automated review, not Harlan's; a person merges · [AI policy](https://harlanzw.com/blog/ai-in-open-source)</sub>"
     `)
