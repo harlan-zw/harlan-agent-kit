@@ -36,11 +36,13 @@ The Protected paths are fixed in code. A repository cannot change them.
 - `.gitattributes`, in any directory
 - `.gitmodules` at the root
 
-An edit, an add, a delete, and a rename away from a Protected path all count.
+An edit, an add, and a delete of a Protected path count. A rename away from one counts too, unless GitHub sends no patch for the file, as for a binary file.
 
-Before the handover, the service reads the changed files of the exact head commit. It uses the list recorded for the reviewed Revision. If none is recorded, it asks GitHub. If the list is unavailable or empty, the pull request waits for Harlan. GitHub lists at most 3000 files, so a list of 3000 may be incomplete, and that pull request waits for Harlan too.
+Before the handover, the service asks GitHub to compare two exact commits: the last observed base branch commit and the reviewed head commit. Both SHAs bind the result, so a list from another head or base never counts. A new base commit gets a new comparison, because it can move the merge base. If the comparison is unavailable or empty, the pull request waits for Harlan. GitHub lists at most 300 files in one comparison, so a list of 300 may be incomplete, and that pull request waits for Harlan too.
 
-GitHub's file list carries no file mode. So the service cannot see a symlink or a submodule pointer bump outside these paths. A change to `.gitmodules` still catches a submodule that is added or removed.
+The check runs before each handover. After GitHub's auto-merge takes over, a later base commit is not checked again.
+
+GitHub's comparison carries no file mode. So the service cannot see a symlink or a submodule pointer bump outside these paths. A change to `.gitmodules` still catches a submodule that is added or removed.
 
 ## Dependency updates
 
@@ -112,7 +114,7 @@ condition holds:
 4. Automated review returned `READY` for the exact current head commit.
 5. Review confidence meets the configured minimum: the repository's own with `pull_requests: every`, else `auto_merge.minimum_confidence`.
 6. The pull request is open, is not a draft, and GitHub reports it mergeable.
-7. The exact head commit changes no [Protected path](#protected-paths), and the service read its complete file list.
+7. A complete comparison of the observed base commit and the exact head commit changes no [Protected path](#protected-paths).
 
 The handover pins the reviewed head commit as `expectedHeadOid`, so GitHub
 cancels its own auto-merge when a new commit lands. A review can never merge a

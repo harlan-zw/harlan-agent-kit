@@ -861,7 +861,7 @@ Use Merge risk. Do not use risk level, merge tier, risk score, or risk rating.
 
 A changed path that Auto merge never merges, in any scope. The label never overrides it. A `Contained` Merge risk never overrides it either.
 
-It covers agent instruction files, every file under `.github/`, `CODEOWNERS`, `.gitattributes`, and `.gitmodules`. A rename away from one counts. The list is fixed in code, so a repository cannot change it. Merge risk always marks a Protected path `Sensitive`.
+It covers agent instruction files, every file under `.github/`, `CODEOWNERS`, `.gitattributes`, and `.gitmodules`. The list is fixed in code, so a repository cannot change it. Merge risk always marks a Protected path `Sensitive`.
 
 A repository's `sensitive_paths` is a different list. It marks Merge risk `Sensitive`, and the label can still override that. The terminal's `protectedPaths` setting is unrelated: it names local paths the terminal sandbox hides.
 

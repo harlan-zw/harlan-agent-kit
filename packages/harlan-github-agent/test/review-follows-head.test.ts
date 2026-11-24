@@ -8,7 +8,7 @@ import { createAutoMergeController } from '../src/auto-merge-controller.ts'
 import { ok } from '../src/result.ts'
 import { publishClaimedReviewStatus } from '../src/review-status-controller.ts'
 import { openJournalStore } from '../src/store.ts'
-import { changedFilesSource, pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { changedLinesSource, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 
@@ -332,7 +332,7 @@ describe('review work follows the head commit', () => {
       store.syncRepositories([repositoryMapping({ writablePullRequestHeadPrefixes: ['different/'] })], '2026-08-13T02:02:02.000Z')
     const merges: string[] = []
     const controller = createAutoMergeController({
-      github: changedFilesSource(),
+      changedLines: changedLinesSource(),
       policy: { _tag: 'Enabled', minimumConfidence: 90, method: 'squash' },
       store,
       report: () => undefined,

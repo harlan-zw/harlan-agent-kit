@@ -1,9 +1,10 @@
 import type { AutoMergePolicy } from '../src/auto-merge.ts'
-import type { MergeRisk, PullRequestFile } from '../src/merge-risk.ts'
+import type { ChangedFile } from '../src/finding-scope.ts'
+import type { MergeRisk } from '../src/merge-risk.ts'
 import type { MergeRiskRecord, RepositoryAutoMergeScope, ReviewGates, ReviewGateState, ReviewPublication, ReviewRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { autoMergeDecision } from '../src/auto-merge.ts'
-import { changedFile, headChangedFiles, pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { comparedFile, headChangedFiles, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const passed: ReviewGateState = { _tag: 'Passed', evidence: [] }
 const gates: ReviewGates = { ci: passed, merge: passed, review: passed }
@@ -66,7 +67,7 @@ const policy: AutoMergePolicy = { _tag: 'Enabled', method: 'squash', minimumConf
 
 function decide(input: {
   autoMerge?: RepositoryAutoMergeScope
-  changedFiles?: PullRequestFile[]
+  changedFiles?: ChangedFile[]
   confidence?: number
   labelled?: boolean
   mergeRisk?: MergeRiskRecord | null
@@ -123,7 +124,7 @@ describe('merge risk at the Auto merge gate', () => {
     // file that changes what CI, an agent, or GitHub itself enforces.
     const decision = decide({
       autoMerge: containedScope({ labelOverridesRisk: true }),
-      changedFiles: [changedFile('src/index.ts'), changedFile('AGENTS.md')],
+      changedFiles: [comparedFile('src/index.ts'), comparedFile('AGENTS.md')],
       labelled: true,
       mergeRisk: agreed({ _tag: 'Sensitive', reason: 'AGENTS.md is read as instructions by an agent.' }),
     })

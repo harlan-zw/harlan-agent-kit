@@ -1,10 +1,9 @@
 import type { AutoMergePolicy, HeadChangedFiles } from './auto-merge.ts'
-import type { GitHubAgentSource } from './github-agent-source.ts'
+import type { ChangedLinesReader } from './github-changed-lines.ts'
 import type { GitHubPullRequestMerger } from './github.ts'
-import type { PullRequestFile } from './merge-risk.ts'
 import type { JournalStore } from './store.ts'
-import type { GitHubItem, RepositoryMapping, ReviewRun } from './types.ts'
-import { autoMergeCandidate, autoMergeDecision, hasCurrentPublishedReadyReview, latestReviewForHead } from './auto-merge.ts'
+import type { GitHubItem, RepositoryMapping } from './types.ts'
+import { autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasCurrentPublishedReadyReview } from './auto-merge.ts'
 import { err, ok } from './result.ts'
 
 export type AutoMergeEvent
@@ -20,54 +19,45 @@ export interface AutoMergeController {
 }
 
 export interface AutoMergeControllerOptions {
-  /** Lists the changed files when none are recorded for the reviewed Revision. */
-  github: Pick<GitHubAgentSource, 'listPullRequestFiles'>
+  /** Compares two exact commits, so the changed files belong to the head and base the decision names. */
+  changedLines: ChangedLinesReader
   merger: GitHubPullRequestMerger
   policy: AutoMergePolicy
   /** Every merge and every refusal is reported. A refusal never fails the poll. */
   report: (event: AutoMergeEvent) => void
-  store: Pick<JournalStore, 'getAutoMergeContext' | 'getRevisionFiles' | 'listReviewRuns'>
-}
-
-interface ListedFiles {
-  headSha: string
-  baseRef: string
-  files: readonly PullRequestFile[]
+  store: Pick<JournalStore, 'getAutoMergeContext' | 'listReviewRuns'>
 }
 
 export function createAutoMergeController(options: AutoMergeControllerOptions): AutoMergeController {
-  /** The last list GitHub returned for each pull request, so a head GitHub has not merged yet costs one read. */
-  const listed = new Map<string, ListedFiles>()
+  /**
+   * The last complete comparison for each pull request.
+   *
+   * Two fixed commits always compare the same, so a head that waits for
+   * GitHub's merge costs one read for each base commit it meets.
+   */
+  const compared = new Map<string, Extract<HeadChangedFiles, { _tag: 'Read' }>>()
 
   /**
-   * The changed files of the reviewed head commit.
+   * The changed files of the exact observed base and head commits.
    *
-   * The files recorded for the reviewed Revision cost no GitHub call, and they
-   * are the list the Review read. Otherwise GitHub lists the pull request's
-   * files. That list names no commit, so the pinned merge binds it: a list
-   * read while GitHub held another head can only precede a merge GitHub
-   * refuses at `expectedHeadSha`.
+   * The comparison names both commits by SHA, so its files can belong to no
+   * other head. A new base commit can move the merge base and change what the
+   * merge brings in, so it gets a new comparison.
    */
   const headChangedFiles = async (
     repository: RepositoryMapping,
     pullRequestNumber: number,
-    head: { headSha: string, baseRef: string },
-    attempts: ReviewRun[],
+    commits: { baseSha: string, headSha: string },
     signal: AbortSignal,
   ): Promise<HeadChangedFiles> => {
     const key = `${repository.github}#${pullRequestNumber}`
-    const remembered = listed.get(key)
-    if (remembered !== undefined && remembered.headSha === head.headSha && remembered.baseRef === head.baseRef)
-      return { _tag: 'Read', headSha: head.headSha, files: remembered.files }
-    const reviewed = latestReviewForHead(attempts, head.headSha, head.baseRef)
-    const recorded = reviewed === undefined ? null : options.store.getRevisionFiles(repository.github, pullRequestNumber, reviewed.revisionId)
-    if (recorded !== null && recorded.headSha === head.headSha)
-      return { _tag: 'Read', headSha: head.headSha, files: recorded.files }
-    const read = await options.github.listPullRequestFiles(repository, pullRequestNumber, signal)
-    if (read._tag === 'Err')
-      return { _tag: 'Unavailable', reason: read.error }
-    listed.set(key, { ...head, files: read.value })
-    return { _tag: 'Read', headSha: head.headSha, files: read.value }
+    const remembered = compared.get(key)
+    if (remembered !== undefined && remembered.baseSha === commits.baseSha && remembered.headSha === commits.headSha)
+      return remembered
+    const reading = comparedChangedFiles(commits, await options.changedLines(repository, commits.baseSha, commits.headSha, signal))
+    if (reading._tag === 'Read')
+      compared.set(key, reading)
+    return reading
   }
 
   return {
@@ -118,7 +108,9 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
       // only a head that has one spends a read on its changed files.
       if (!hasCurrentPublishedReadyReview(attempts, subject.headSha, subject.baseRef))
         return
-      const changedFiles = await headChangedFiles(repository, subject.number, { headSha: subject.headSha, baseRef: subject.baseRef }, attempts, signal)
+      // The decision reads the stored context, so the comparison uses its
+      // commits. The subject can name an older base commit.
+      const changedFiles = await headChangedFiles(repository, subject.number, { baseSha: context.pullRequest.baseSha, headSha: context.pullRequest.headSha }, signal)
       const decision = autoMergeDecision({
         attempts,
         changedFiles,
