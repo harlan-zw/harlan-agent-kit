@@ -219,7 +219,9 @@ A head that the controller's own Repair pushed gets a Repair focus Review. It is
 - The prompt carries the Repair delta and the paths of the whole pull request. The Agent starts from the delta.
 - The Agent checks each targeted finding and the defects the delta adds. It checks every removed line.
 - The Agent searches for every use of a symbol the delta adds, removes, renames, or changes.
-- `review_search` reads only the first 16,000 bytes of each file. If a search is incomplete, the Agent pages each changed file that may use the symbol to its end.
+- `review_search` reads only the first 16,000 bytes of each file. If a search is incomplete, the Agent pages every file that may use the symbol to its end, unchanged callers included.
+- If the Agent cannot establish caller coverage that way, it reviews the full diff and verifies the affected callers in the same turn.
+- The Agent returns `callerVerification`. If it is `incomplete` or missing, the review gate stays Pending, and only a rerun moves it. A `notChecked` gap elsewhere does not hold the gate.
 - The whole base-to-head diff stays readable through `review_read`. The Agent pages it when the delta changes behaviour that other parts of the pull request rely on.
 - The answered Review's other findings go to the Agent by identity. The Agent returns each one that still stands.
 - The Agent answers premise, confidence, and Merge risk for the whole pull request. The prompt gives it the answered Review's Merge risk and confidence as the starting point.

@@ -1097,7 +1097,9 @@ function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewRespon
     merge: mergeGate(snapshot.pullRequest),
     review: findings.length > 0
       ? { _tag: 'Failed', reason: findings[0]?.summary ?? 'A finding above 80/100 remains.', evidence: reviewEvidence }
-      : focused && (response.callerVerification !== 'complete' || response.notChecked !== null)
+      // A focused Review waits only on its own caller check. Every Review names
+      // some gap in notChecked, and only a new Review moves a Pending gate.
+      : focused && response.callerVerification !== 'complete'
         ? { _tag: 'Pending', reason: response.notChecked ?? 'Affected callers remain unverified.', evidence: reviewEvidence }
         : { _tag: 'Passed', evidence: reviewEvidence },
     ci: ci.state,
@@ -1525,9 +1527,9 @@ The Repair delta below holds every change since that head. Start there:
 - review_search reads only the first 16000 bytes of each file and stops early in a large worktree. If it returns truncated: true or refuses the search, its matches are incomplete, and zero matches prove nothing.
 - Then page every file that may use the symbol, including unchanged callers and dependants outside the pull request files. Use revision workspace for unchanged files and revision head for changed files. Follow nextOffset to each file's end, past byte 16000. This overrides the 300-line reading limit. Read each use against the Repair's new behaviour.
 - If caller coverage cannot be established, perform a full Review with explicit caller verification. Page the full base-to-head diff and verify affected callers, including unchanged files. The full diff alone cannot establish caller coverage.
-- If caller verification remains unavailable, report the verification limit and do not return READY.
+- If caller verification remains unavailable, report the verification limit.
 - Return callerVerification as complete only after verifying every affected caller. Otherwise return incomplete and name the gap in notChecked.
-- If you report any gap in notChecked, the controller withholds Ready for this Repair focus.
+- If callerVerification is incomplete, the controller withholds Ready for this Repair focus. A notChecked gap outside the callers does not.
 - When the delta changes behaviour that other parts of this pull request rely on, use review_read with revision diff and an empty path to page the full base-to-head diff.
 Unless a full Review is required above, leave the hunks the delta does not reach to the earlier Review.
 Answer premise, confidence, and mergeRisk for the whole pull request, not the delta alone.

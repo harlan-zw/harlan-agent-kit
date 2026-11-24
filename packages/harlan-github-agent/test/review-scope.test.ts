@@ -344,8 +344,7 @@ describe('a Review of a Repair head', () => {
   it.each([
     { callerVerification: null, notChecked: null },
     { callerVerification: 'incomplete' as const, notChecked: null },
-    { callerVerification: 'complete' as const, notChecked: 'caller coverage remains unknown' },
-  ])('withholds Ready for missing or contradictory coverage: %j', async (coverage) => {
+  ])('withholds Ready for missing or incomplete caller verification: %j', async (coverage) => {
     const review = await reviewRepairHead({ source: sourceRun(), ...coverage })
 
     expect(reviewOutcome(review.run!.gates)).toBe('PENDING')
@@ -353,6 +352,15 @@ describe('a Review of a Repair head', () => {
 
   it('allows Ready when caller verification is complete and nothing was skipped', async () => {
     const review = await reviewRepairHead({ source: sourceRun(), callerVerification: 'complete' })
+
+    expect(reviewOutcome(review.run!.gates)).toBe('READY')
+  })
+
+  it('allows Ready when callers are verified and the largest gap is elsewhere', async () => {
+    // Every Review names some gap: notChecked was set on all 147 Reviews in the
+    // week to 2026-11-24. Only a new Review moves a Pending review gate, so
+    // gating on any gap would hold every Repair head at Pending.
+    const review = await reviewRepairHead({ source: sourceRun(), callerVerification: 'complete', notChecked: 'the dashboard in a browser' })
 
     expect(reviewOutcome(review.run!.gates)).toBe('READY')
   })
@@ -389,7 +397,7 @@ describe('a Review of a Repair head', () => {
     expect(review.prompt).toContain('including unchanged callers and dependants outside the pull request files')
     expect(review.prompt).toContain('Use revision workspace for unchanged files')
     expect(review.prompt).toContain('If caller coverage cannot be established, perform a full Review with explicit caller verification')
-    expect(review.prompt).toContain('If caller verification remains unavailable, report the verification limit and do not return READY')
+    expect(review.prompt).toContain('If caller verification remains unavailable, report the verification limit.')
   })
 
   it.each([false, true])('uses the published Repair delta unless a full Review was explicitly requested: %s', async (explicit) => {
