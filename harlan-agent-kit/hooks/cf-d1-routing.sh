@@ -27,8 +27,14 @@ command -v cf >/dev/null 2>&1 || exit 0
 [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && exit 0
 [[ "$command" == *CLOUDFLARE_API_TOKEN* ]] && exit 0
 
+# Preview can select preview_database_id, and the cf guidance names database_id.
+# A quoted flag still reaches wrangler, so any --preview token keeps the whole
+# command with wrangler. A false match only leaves the call as it is today.
+[[ "$command" =~ (^|[^A-Za-z0-9_-])--preview([^A-Za-z0-9_-]|$) ]] && exit 0
+
 # Quoted spans drop out, so SQL text and prose never read as flags.
-code=$(command_code "$command")
+# A shell comment passes nothing to wrangler, so it drops out per command line.
+code=$(printf '%s\n' "$command" | drop_prose | sed -E 's/(^|[[:space:]])#.*$//' | tr '\n' ';')
 lead_item='[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|env|command|exec|time|timeout[[:space:]]+[^[:space:]]+|do|then|else|!'
 runner='(pnpm([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*([[:space:]]+(exec|dlx))?|pnpx|npx([[:space:]]+-[^[:space:]]+)*|bunx|bun[[:space:]]+x|yarn)[[:space:]]+'
 call_re="^[[:space:]\(\`]*((${lead_item})[[:space:]]+)*(${runner})?([^[:space:]]*/)?wrangler(@[^[:space:]]+)?[[:space:]]+([^[:space:]]+[[:space:]]+)*d1[[:space:]]+execute([[:space:]]|$)"
@@ -39,8 +45,6 @@ for call in "${calls[@]}"; do
   # Local queries need no login. cf d1 query has no --file, so files stay with wrangler.
   [[ "$call" =~ [[:space:]]--remote(=true)?([[:space:]]|$) ]] || continue
   [[ "$call" =~ [[:space:]]--command([[:space:]=]|$) ]] || continue
-  # Preview can select preview_database_id. The cf retry guidance selects database_id.
-  [[ "$call" =~ [[:space:]]--preview([[:space:]=]|$) ]] && continue
   deny 'The wrangler login expires, and an agent cannot renew it. Query remote D1 with cf, which keeps its own login. Run: cf d1 query <database_id> -q --sql "<SQL>". Read database_id from the d1_databases entry in the wrangler config and environment this call uses. The output is one JSON result set per statement, as with wrangler --json. If you set CLOUDFLARE_API_TOKEN, wrangler works as written.'
 done
 exit 0

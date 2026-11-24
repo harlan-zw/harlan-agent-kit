@@ -61,6 +61,15 @@ expect deny 'git status; wrangler d1 execute app-db --remote --command "SELECT 1
 expect allow 'wrangler d1 execute DB --remote --preview --config wrangler.toml --command "DELETE FROM sessions"'
 expect allow 'pnpm exec wrangler d1 execute DB --remote --preview=true --config wrangler.toml --command "DELETE FROM sessions"'
 expect allow 'pnpm dlx wrangler@4 d1 execute DB --preview --remote --command="SELECT 1"'
+# The shell passes a quoted flag to wrangler unchanged.
+expect allow 'wrangler d1 execute DB --remote "--preview" --command "SELECT 1"'
+expect allow "wrangler d1 execute DB --remote --command \"SELECT 1\" '--preview=true'"
+
+# A shell comment passes nothing to wrangler.
+expect allow "wrangler d1 execute DB --local --command 'SELECT 1' # --remote"
+expect allow "$(printf 'wrangler d1 execute DB --command "SELECT 1" # --remote\necho done\n')"
+expect deny 'wrangler d1 execute DB --remote --command "SELECT 1" # read only'
+expect deny 'echo $# && wrangler d1 execute DB --remote --command "SELECT 1"'
 
 # Calls that cf does not replace, or that need no login.
 expect allow 'wrangler d1 execute app-db --local --command "SELECT 1"'
