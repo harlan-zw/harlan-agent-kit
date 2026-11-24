@@ -833,3 +833,43 @@ it.each(['directory', 'file', 'directory-alias', 'file-alias', 'external-directo
     await rm(root, { recursive: true, force: true })
   }
 }, 30_000)
+
+it('mounts worker PATH directories inside the shared home read only, from trusted sources', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-home-path-'))
+  const controller = join(root, 'controller')
+  const worker = join(root, 'worker')
+  const primary = join(root, 'primary')
+  const profile = join(root, 'worker.json')
+  const workerBin = join(worker, '.local/share/harlan-agent-kit/github-bin')
+  const workerTools = join(worker, '.cargo/bin')
+  let sandbox: Awaited<ReturnType<typeof prepareAgentSandbox>> | undefined
+  try {
+    await Promise.all([mkdir(join(controller, '.local/share/harlan-agent-kit/github-bin'), { recursive: true }), mkdir(workerBin, { recursive: true }), mkdir(workerTools, { recursive: true }), mkdir(primary)])
+    await writeFile(join(controller, '.local/share/harlan-agent-kit/github-bin/gh'), '#!/bin/sh\necho trusted-gh\n', { mode: 0o755 })
+    await writeFile(join(controller, '.local/share/harlan-agent-kit/github-bin/check'), '#!/bin/sh\necho trusted-check\n', { mode: 0o755 })
+    // A stale file in the worker copy. The trusted directory replaces it.
+    await writeFile(join(workerBin, 'node'), '#!/bin/sh\necho planted\n', { mode: 0o755 })
+    await writeFile(join(workerTools, 'rg'), '#!/bin/sh\necho trusted-rg\n', { mode: 0o755 })
+    await execute('git', ['init', primary])
+    await execute('git', ['-C', primary, '-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '--allow-empty', '-m', 'test: seed fixture'])
+    const wtConfig = join(root, 'wt.toml')
+    await writeFile(wtConfig, '[list]\njson-schema = 2\n')
+    await execute('wt', ['--config', wtConfig, '-C', primary, 'switch', '--create', 'paths', '--base', 'HEAD', '--yes'])
+    const worktrees = JSON.parse((await execute('wt', ['--config', wtConfig, '-C', primary, 'list', '--format=json'])).stdout)
+    const workspace = worktrees.items.find((item: { branch: string }) => item.branch === 'paths').worktree.path as string
+    await writeFile(profile, JSON.stringify({ home: worker, tools: [workerTools], readOnlyPaths: [], codex: '/usr/bin/true', opencode: '/usr/bin/true' }))
+    sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex', taskId: 'opaque-issue-work-task' })
+
+    const listed = await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'ls /home/agent/.local/share/harlan-agent-kit/github-bin; check'], { env: sandbox.environment })
+    expect(listed.stdout.split('\n').filter(Boolean)).toEqual(['check', 'gh', 'trusted-check'])
+    for (const path of ['/home/agent/.local/share/harlan-agent-kit/github-bin/git', '/home/agent/.cargo/bin/node', '/home/agent/.cargo/bin/rg'])
+      await expect(execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', `echo planted > ${path}`], { env: sandbox.environment })).rejects.toMatchObject({ stderr: expect.stringContaining('Read-only') })
+    // The rest of the home stays writable for caches and provider state.
+    await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'echo cache > /home/agent/cache-entry'], { env: sandbox.environment })
+    expect(await readFile(join(worker, 'cache-entry'), 'utf8')).toBe('cache\n')
+  }
+  finally {
+    await sandbox?.release()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)

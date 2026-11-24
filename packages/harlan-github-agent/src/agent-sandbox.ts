@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { mkdir, mkdtemp, open, readdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { createAgentEgress } from './agent-egress.ts'
@@ -393,6 +393,15 @@ export async function prepareAgentSandbox(input: {
       if (profile.readOnlyPaths.includes(path))
         skillRoots.push({ path: join(canonical, 'skills'), agentPath: join(path, 'skills') })
     }
+    // A tool directory inside the shared home is also reachable through the
+    // home mount. Without this, one turn could replace a command that every
+    // later turn runs from PATH.
+    if (input.reviewHome === undefined) {
+      for (const path of profile.tools) {
+        if (within(path, profile.home) && path !== profile.home)
+          args.push('--ro-bind', await permittedPath(path, controllerHome), join(workerHome, relative(profile.home, path)))
+      }
+    }
     // A pnpm shim names its runtime through a hashed alias. Mount the package at that exact path.
     for (const path of runtimePackages)
       args.push('--ro-bind', await permittedPath(path, controllerHome), path)
@@ -411,14 +420,17 @@ export async function prepareAgentSandbox(input: {
       // Preserve installation paths for scripts that resolve adjacent package files.
       args.push('--ro-bind', canonical, canonical, '--ro-bind', canonical, `/run/agent/host-tools/${name}`)
     }
-    const publicWrapper = join(controllerHome, '.local/share/harlan-agent-kit/github-bin/gh')
-    if (await stat(publicWrapper).then(() => true).catch((error: NodeJS.ErrnoException) => {
+    // The first PATH entry. Mount the controller's directory read only, so the
+    // worker sees its current commands and nothing an earlier turn left there.
+    const publicBin = join(controllerHome, '.local/share/harlan-agent-kit/github-bin')
+    const trustedBin = await stat(publicBin).then(metadata => metadata.isDirectory()).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT')
         return false
       throw error
-    })) {
-      args.push('--ro-bind', await permittedPath(publicWrapper, controllerHome), `${workerHome}/.local/share/harlan-agent-kit/github-bin/gh`)
-    }
+    })
+      ? await permittedPath(publicBin, controllerHome)
+      : await mkdir(join(scratch, 'github-bin'), { mode: 0o700 }).then(() => join(scratch, 'github-bin'))
+    args.push('--ro-bind', trustedBin, `${workerHome}/.local/share/harlan-agent-kit/github-bin`)
     for (const path of input.readOnlyPaths ?? []) {
       const metadata = await stat(path)
       // A memory index links to sibling notes. Grant that memory directory,
