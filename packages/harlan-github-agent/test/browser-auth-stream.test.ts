@@ -49,9 +49,11 @@ async function fixture(machine = false, race = false, state = 'Running') {
         } }
       : {}),
   })
-  api.server.listen(43829, '127.0.0.1')
+  // The origin names the public host. The server takes any free port, so suites that share a host never collide.
+  api.server.listen(0, '127.0.0.1')
   await once(api.server, 'listening')
-  const socket = new WebSocket(`ws://localhost:43829/api/terminal/sessions/${id}/stream`, { headers: { origin, cookie } })
+  const port = (api.server.address() as AddressInfo).port
+  const socket = new WebSocket(`ws://localhost:${port}/api/terminal/sessions/${id}/stream`, { headers: { origin, cookie, host: new URL(origin).host } })
   return {
     socket,
     forwarded,
@@ -131,6 +133,9 @@ it.each(['logout', 'credentials/remove', 'expiry'])('revokes established termina
     await delay(80)
     expect(proof.forwarded).toEqual([])
     expect(screens).toEqual([])
+    // The server closes the revoked socket. On a busy host the close can finish after the pause above.
+    if (proof.socket.readyState !== WebSocket.CLOSED)
+      await once(proof.socket, 'close')
     expect(proof.socket.readyState).toBe(WebSocket.CLOSED)
   }
   finally {
