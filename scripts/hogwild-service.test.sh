@@ -29,6 +29,10 @@ export HOGWILD_SERVICE_TEST_RESTART_FILED="$test_root/restart-filed"
 export HOGWILD_SERVICE_TEST_UPDATE_PENDING="$test_root/update-pending"
 export HOGWILD_SERVICE_TEST_UPDATE_READY="$test_root/update-ready"
 export HOGWILD_SERVICE_TEST_DEPLOYED_SHA=1c2b3a49f5d60e7b8a9c0d1e2f3a4b5c6d7e8f90
+# The commit the Service runs now, and the paths from it to the target. A
+# paired file by default, so the update tests below reach the Service.
+export HOGWILD_SERVICE_TEST_RUNNING_SHA=0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d
+export HOGWILD_SERVICE_TEST_CHANGED_PATHS=$'packages/harlan-github-agent/src/service.ts\nscripts/desktop-agent.service'
 export HOGWILD_SERVICE_TEST_LEGACY=false
 export HOGWILD_SERVICE_TEST_LEGACY_SAFE_AFTER=1
 export HOGWILD_SERVICE_TEST_LEGACY_STATE="$test_root/legacy-state"
@@ -98,6 +102,10 @@ if [[ "$*" == *"-- 'revision'"* || "$*" == *"-- 'resolve-update'"* ]]; then
   printf '%s\n' "$HOGWILD_SERVICE_TEST_DEPLOYED_SHA"
   exit
 fi
+if [[ "$*" == *"-- 'changed-paths'"* ]]; then
+  printf '%s\n' "$HOGWILD_SERVICE_TEST_CHANGED_PATHS"
+  exit
+fi
 FAKE_SSH
 cat >> "$test_root/bin/ssh" <<'FAKE_SSH'
 # Context sync also verifies the commit hook and the installed opencode files.
@@ -164,7 +172,7 @@ printf '%s\n' \
   'if [[ "$*" == *api/service/update* ]]; then : > "$HOGWILD_SERVICE_TEST_RESTART_FILED"; : > "$HOGWILD_SERVICE_TEST_UPDATE_PENDING"; printf '\''{"_tag":"Requested","id":"restart-1","operation":{"_tag":"Update","targetCommit":"%s","preparation":"Pending"}}\n'\'' "$HOGWILD_SERVICE_TEST_DEPLOYED_SHA"; exit; fi' \
   'if [[ "$*" == *api/service/restart* ]]; then : > "$HOGWILD_SERVICE_TEST_RESTART_FILED"; printf '\''{"_tag":"Requested","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}\n'\''; exit; fi' \
   'if [[ "$*" == *api/state* && ! -e "$HOGWILD_SERVICE_TEST_RESTART_FILED" ]]; then' \
-  '  printf '\''{"agentControl":{"_tag":"Running"},"restartRequest":{"_tag":"%s","id":"restart-0","source":"helper","requestedAt":"2026-08-29T00:00:00.000Z"}}\n'\'' "${HOGWILD_SERVICE_TEST_PRIOR_RESTART:-Completed}"' \
+  '  printf '\''{"agentControl":{"_tag":"Running"},"serviceUpdate":{"_tag":"Current","deployedCommit":"%s"},"restartRequest":{"_tag":"%s","id":"restart-0","source":"helper","requestedAt":"2026-08-29T00:00:00.000Z"}}\n'\'' "$HOGWILD_SERVICE_TEST_RUNNING_SHA" "${HOGWILD_SERVICE_TEST_PRIOR_RESTART:-Completed}"' \
   '  exit' \
   'fi' \
   'if [[ "$*" == *api/state* ]]; then' \
@@ -177,7 +185,7 @@ printf '%s\n' \
   '  tasks=$HOGWILD_SERVICE_TEST_TASKS' \
   '  if [[ "${HOGWILD_SERVICE_TEST_TASK_CHANGE:-}" == replace ]] && ((polls >= 2)); then tasks=$(jq '\''.[0].id="task-new" | .[0].pullRequestNumber=288'\'' <<< "$tasks"); fi' \
   '  if [[ "${HOGWILD_SERVICE_TEST_TASK_CHANGE:-}" == reorder ]] && ((polls % 2 == 0)); then tasks=$(jq '\''reverse'\'' <<< "$tasks"); fi' \
-  '  printf '\''{"desktop":{"connected":true,"current":true,"seenAt":%s},"agentControl":{"_tag":"Running"},"hostCapacity":{"localActive":2,"desktopActive":1},"tasks":%s,"restartRequest":{"_tag":"%s","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}}\n'\'' "$polls" "$tasks" "$status"' \
+  '  printf '\''{"desktop":{"connected":true,"current":true,"seenAt":%s},"agentControl":{"_tag":"Running"},"serviceUpdate":{"_tag":"Current","deployedCommit":"%s"},"hostCapacity":{"localActive":2,"desktopActive":1},"tasks":%s,"restartRequest":{"_tag":"%s","id":"restart-1","source":"helper","requestedAt":"2026-08-29T01:00:00.000Z"}}\n'\'' "$polls" "$HOGWILD_SERVICE_TEST_RUNNING_SHA" "$tasks" "$status"' \
   'fi' \
   > "$test_root/bin/curl"
 printf '%s\n' '#!/usr/bin/env bash' \
@@ -205,6 +213,8 @@ fi
 FAKE_SERVICE
 chmod +x "$test_root/bin/systemctl" "$test_root/bin/service-fixture.sh"
 chmod +x "$test_root/bin/ssh" "$test_root/bin/scp" "$test_root/bin/rsync" "$test_root/bin/curl" "$test_root/bin/sleep"
+# The Update gate runs in Node, which the narrowed PATH below may not reach.
+ln -s "$(node --print process.execPath)" "$test_root/bin/node"
 
 PATH="$test_root/bin:/usr/bin:/bin" bash "$script_dir/hogwild-service.sh" update > "$test_root/update.log"
 grep -Fx "Desktop client: $(git -C "$test_home/sites/example" log --oneline -1)" "$test_root/update.log" >/dev/null
@@ -220,6 +230,7 @@ worktrunk_install_line=$(grep -nE "mv '/home/harlan/.config/worktrunk/config.tom
 env_copy_line=$(grep -n '^rsync ' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 env_install_line=$(grep -nF "install-staged '/home/harlan/.cache/harlan-repository-env.fixture'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 resolve_line=$(grep -nF "bash -s -- 'resolve-update' 'origin/main'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
+compare_line=$(grep -nF "bash -s -- 'changed-paths' '$HOGWILD_SERVICE_TEST_RUNNING_SHA..$HOGWILD_SERVICE_TEST_DEPLOYED_SHA'" "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 prepare_line=$(grep -n '^controller prepare-update$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 restart_line=$(grep -n 'api/service/update$' "$HOGWILD_SERVICE_TEST_CALLS" | cut -d: -f1)
 
@@ -227,13 +238,13 @@ restart_line=$(grep -n 'api/service/update$' "$HOGWILD_SERVICE_TEST_CALLS" | cut
 # would still satisfy the ordering below. Refuse that before comparing.
 for step in claude_copy_line codex_copy_line install_line limits_copy_line limits_install_line \
   env_tool_install_line env_manifest_install_line worktrunk_install_line env_copy_line \
-  env_install_line resolve_line prepare_line restart_line; do
+  env_install_line resolve_line compare_line prepare_line restart_line; do
   if [ -z "${!step}" ]; then
     printf '%s\n' "Hogwild update never logged the step this test orders: $step." >&2
     exit 1
   fi
 done
-if ! ((resolve_line < restart_line && restart_line < claude_copy_line && claude_copy_line < codex_copy_line && codex_copy_line < install_line && install_line < limits_copy_line && limits_copy_line < limits_install_line && limits_install_line < env_tool_install_line && env_tool_install_line < env_manifest_install_line && env_manifest_install_line < worktrunk_install_line && worktrunk_install_line < env_copy_line && env_copy_line < env_install_line && env_install_line < prepare_line)); then
+if ! ((resolve_line < compare_line && compare_line < restart_line && restart_line < claude_copy_line && claude_copy_line < codex_copy_line && codex_copy_line < install_line && install_line < limits_copy_line && limits_copy_line < limits_install_line && limits_install_line < env_tool_install_line && env_tool_install_line < env_manifest_install_line && env_manifest_install_line < worktrunk_install_line && worktrunk_install_line < env_copy_line && env_copy_line < env_install_line && env_install_line < prepare_line)); then
   printf '%s\n' 'Hogwild prepared the checkout before its durable Update request.' >&2
   exit 1
 fi
@@ -275,6 +286,47 @@ if ! grep -qx "service prepare-update $HOGWILD_SERVICE_TEST_DEPLOYED_SHA" "$HOGW
 fi
 if [ ! -f "$XDG_CONFIG_HOME/systemd/user/$HARLAN_GITHUB_AGENT_DESKTOP_UNIT.service" ]; then
   printf '%s\n' 'The deploy did not install the desktop unit.' >&2
+  exit 1
+fi
+if ! grep -Fx 'Paired files changed: scripts/desktop-agent.service' "$test_root/update.log" >/dev/null; then
+  printf '%s\n' 'The deploy did not name the paired file that let it run.' >&2
+  exit 1
+fi
+
+# The nightly Update ships controller code. On 2026-11-24 eight helper Updates
+# changed no paired file, and each drained new Tasks for minutes.
+rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED" "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED"
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+: > "$HOGWILD_SERVICE_TEST_CALLS"
+if HOGWILD_SERVICE_TEST_CHANGED_PATHS=packages/harlan-github-agent/src/service.ts PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/hogwild-service.sh" update > "$test_root/unpaired.log" 2>&1; then
+  printf '%s\n' 'Hogwild update shipped a range that changes no paired file.' >&2
+  exit 1
+fi
+if ! grep -F 'the nightly Update ships this commit' "$test_root/unpaired.log" >/dev/null \
+  || ! grep -F -- "--reason 'WHY'" "$test_root/unpaired.log" >/dev/null; then
+  printf '%s\n' 'Hogwild refused an unpaired update, but did not name the nightly Update and the override.' >&2
+  cat "$test_root/unpaired.log" >&2
+  exit 1
+fi
+if grep -E 'api/service/update$|^(scp|rsync) ' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+  printf '%s\n' 'Hogwild update filed an Update or copied files before it refused.' >&2
+  exit 1
+fi
+
+# The override ships the same range and prints why, so the reason is on record.
+rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED" "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED"
+printf '%s\n' '0' > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+: > "$HOGWILD_SERVICE_TEST_CALLS"
+HOGWILD_SERVICE_TEST_CHANGED_PATHS=packages/harlan-github-agent/src/service.ts PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/hogwild-service.sh" update --reason 'Harlan asked' origin/main > "$test_root/override.log"
+if ! grep -Fx 'Update override: Harlan asked' "$test_root/override.log" >/dev/null; then
+  printf '%s\n' 'The override Update did not print its reason.' >&2
+  exit 1
+fi
+if ! grep -F "bash -s -- 'resolve-update' 'origin/main'" "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null \
+  || ! grep -E 'api/service/update$' "$HOGWILD_SERVICE_TEST_CALLS" >/dev/null; then
+  printf '%s\n' 'The override Update did not file the Update for its ref.' >&2
   exit 1
 fi
 

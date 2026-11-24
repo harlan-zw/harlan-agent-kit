@@ -111,6 +111,32 @@ refuse_while_restart_pending() {
   esac
 }
 
+# Refuses an Update the nightly Update ships anyway. Each Update drains new
+# Tasks and drops control connections, and the nightly Update moves only the
+# Hogwild checkout. So the helper runs when the range from the deployed commit
+# changes a paired file, or when the caller passes --reason.
+require_update_basis() {
+  local target_commit=$1 state running_commit paths
+  if [ "$update_reason_given" = true ]; then
+    node --experimental-strip-types "$SCRIPT_DIR/hogwild-update-gate.ts" --reason "$update_reason"
+    return
+  fi
+  if ! state=$(controller_request "$HOGWILD_ORIGIN/api/state"); then
+    echo "Hogwild did not answer while checking its deployed commit." >&2
+    exit 1
+  fi
+  running_commit=$(jq --raw-output '.serviceUpdate.deployedCommit // ""' <<< "$state" 2>/dev/null || true)
+  if [[ ! "$running_commit" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Hogwild did not report its deployed commit. If the Update must ship now, add --reason 'WHY'." >&2
+    exit 1
+  fi
+  if ! paths=$(remote_service changed-paths "$running_commit..$target_commit"); then
+    echo "Hogwild could not compare its deployed commit with the target." >&2
+    exit 1
+  fi
+  printf '%s\n' "$paths" | node --experimental-strip-types "$SCRIPT_DIR/hogwild-update-gate.ts"
+}
+
 request_restart() {
   controller_request \
     --header 'Content-Type: application/json' \
@@ -513,7 +539,43 @@ case "$command" in
 esac
 case "$command" in
   update)
-    ref="${2:-origin/main}"
+    # Usage: update [--reason WHY] [REF]
+    ref=''
+    update_reason_given=false
+    update_reason=''
+    if [ $# -gt 0 ]; then shift; fi
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --reason)
+          if [ $# -lt 2 ]; then
+            echo "Add the reason after --reason." >&2
+            exit 1
+          fi
+          update_reason_given=true
+          update_reason=$2
+          shift 2
+          ;;
+        --reason=*)
+          update_reason_given=true
+          update_reason=${1#--reason=}
+          shift
+          ;;
+        --) shift ;;
+        -*)
+          echo "Unknown update option: $1. Use update [--reason WHY] [REF]." >&2
+          exit 1
+          ;;
+        *)
+          if [ -n "$ref" ]; then
+            echo "Name one Git ref. Use update [--reason WHY] [REF]." >&2
+            exit 1
+          fi
+          ref=$1
+          shift
+          ;;
+      esac
+    done
+    ref=${ref:-origin/main}
     if [[ ! "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
       echo "The Git ref contains unsupported characters." >&2
       exit 1
@@ -528,6 +590,7 @@ case "$command" in
       echo "Hogwild did not resolve a full commit SHA." >&2
       exit 1
     fi
+    require_update_basis "$deployed_revision"
     pending_update_id=$(request_update "$deployed_revision")
     restart_id=$pending_update_id
     # Running Agents keep their current tools. Service preparation installs new tools after the drain.

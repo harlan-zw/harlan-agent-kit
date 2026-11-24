@@ -64,7 +64,7 @@ Public routes go internet, Cloudflare tunnel, Caddy `:8080`, then the loopback p
 
 | Part | Repo | Local checkout | Deploy |
 | --- | --- | --- | --- |
-| Agent service code | `harlan-zw/harlan-agent-kit` `packages/harlan-github-agent` | `~/pkg/harlan-agent-kit` | `pnpm service:hogwild:update` from the repo root |
+| Agent service code | `harlan-zw/harlan-agent-kit` `packages/harlan-github-agent` | `~/pkg/harlan-agent-kit` | the nightly scheduled Update; `pnpm service:hogwild:update` from the repo root only for paired files or with `--reason 'WHY'` |
 | Agent context, worktrunk, env files | same repo, `scripts/` | same | `pnpm sync:context:hogwild`, `pnpm service:hogwild:sync-env`, `pnpm service:hogwild:sync-worktrunk` |
 | Agent config | not in git | `hogwild:~/.config/harlan-github-agent/config.yml` | edit, then request durable Restart |
 | Agent state | not in git | `hogwild:~/.local/share/harlan-github-agent/state.sqlite`, `journal.sqlite`, `worktrees/` | back up before a migration |

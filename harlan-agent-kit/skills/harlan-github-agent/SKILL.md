@@ -101,8 +101,11 @@ For paired Service updates, run `pnpm service:hogwild:update`.
 Most merges need no update. The nightly scheduled Update ships merged controller code.
 Each update drains Agents for 8 to 12 minutes, then drops control connections for about 25 seconds.
 The nightly Update moves only the Hogwild checkout. It does not update the desktop client, systemd units, or synced env files.
-Run the paired helper after a merge that changes any `packages/harlan-github-agent/src/desktop-*.ts` file, `scripts/desktop-agent.service`, `scripts/hogwild-service.conf`, or the repository env files.
-Otherwise run it only when Harlan asks, or when a merged fix must ship before the nightly Update.
+Run the paired helper after a merge that changes any `packages/harlan-github-agent/src/desktop-*.ts` file, `scripts/desktop-agent.service`, `scripts/hogwild-service.conf`, `scripts/repository-env-files`, or `scripts/repository-env.sh`.
+The helper compares the deployed commit with the target. It refuses a range that changes none of these files.
+If Harlan asks, or a merged fix must ship before the nightly Update, add the reason: `pnpm service:hogwild:update --reason 'Harlan asked'`.
+The helper prints the reason, so the session output records why the Update ran.
+If only env file contents changed, run `pnpm service:hogwild:sync-env`. It syncs them without an Update.
 The helper holds one local lock through the desktop update.
 Another update or restart on that host fails before it reaches the Service.
 During drain, the helper reports active Tasks, occupied Agent slots, and elapsed seconds.
