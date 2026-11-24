@@ -366,8 +366,28 @@ describe('a Review of a Repair head', () => {
     expect(reviewOutcome(review.run!.gates)).toBe('READY')
   })
 
-  it('keeps full Review coverage gaps outside the Repair focus gate', async () => {
-    const review = await reviewRepairHead({ source: sourceRun(), rerun: true, callerVerification: null, notChecked: 'the dashboard in a browser' })
+  it.each([null, 'incomplete'] as const)('keeps unverified callers Pending after a full rerun: %s', async (callerVerification) => {
+    const source = sourceRun()
+    const first = await reviewRepairHead({ source, callerVerification: 'incomplete', notChecked: 'unchanged callers beyond byte 16000' })
+    expect(reviewOutcome(first.run!.gates)).toBe('PENDING')
+
+    const rerun = await reviewRepairHead({ source, rerun: true, callerVerification })
+
+    expect(rerun.run?.headSha).toBe(first.run?.headSha)
+    expect(rerun.run?.findings).toEqual([])
+    expect(reviewOutcome(rerun.run!.gates)).toBe('PENDING')
+  })
+
+  it('allows a full rerun to clear caller verification after verifying affected callers', async () => {
+    const review = await reviewRepairHead({ source: sourceRun(), rerun: true, callerVerification: 'complete', notChecked: 'the dashboard in a browser' })
+
+    expect(reviewOutcome(review.run!.gates)).toBe('READY')
+    expect(review.prompt).toContain(fullDiffMandate)
+    expect(review.prompt).toContain('Return callerVerification as complete only after verifying every affected caller')
+  })
+
+  it('keeps ordinary full Review coverage gaps outside the caller gate', async () => {
+    const review = await reviewRepairHead({ source: sourceRun(), repaired: false, rerun: true, callerVerification: null, notChecked: 'the dashboard in a browser' })
 
     expect(reviewOutcome(review.run!.gates)).toBe('READY')
   })
