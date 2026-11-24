@@ -127,6 +127,20 @@ requirement it knows about is met.
 
 Everything else waits for Harlan.
 
+## When Auto merge holds
+
+A candidate is a pull request with the label, or any pull request in a repository on `every` or `contained`.
+If a candidate head has a published `READY` review and Auto merge still holds it, the service records why.
+
+- It records one `auto_merge_hold` workflow event for each head commit and reason.
+- A later check of the same head and reason records nothing.
+- A merge records nothing. A pull request outside Auto merge records nothing.
+- The record keeps a fixed reason name, such as `BelowConfidence` or `ProtectedPath`.
+- It never keeps the reason text, because that text can name a path, a GitHub error, or review prose.
+- For an unlabelled head, it also records whether the label alone would have merged it.
+
+Trial 9 of the weekly trial report reads these records. Each week, it counts the heads newly held, the heads for each reason, and the heads held only by the confidence bar or only by the label. A head counts once for each reason. The trial only measures. It never changes what Auto merge merges.
+
 ## Label
 
 ```bash

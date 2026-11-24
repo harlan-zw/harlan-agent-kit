@@ -333,6 +333,7 @@ describe('review work follows the head commit', () => {
     const merges: string[] = []
     const controller = createAutoMergeController({
       changedLines: changedLinesSource(),
+      now: () => new Date('2026-08-13T02:00:00.000Z'),
       policy: { _tag: 'Enabled', minimumConfidence: 90, method: 'squash' },
       store,
       report: () => undefined,

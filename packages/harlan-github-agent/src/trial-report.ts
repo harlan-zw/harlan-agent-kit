@@ -1,7 +1,9 @@
+import type { AutoMergeHoldCause } from './auto-merge.ts'
 import type { JournalStore } from './store.ts'
-import type { ReadyPullRequest, ReviewGateName, TrialIssueRoute, TrialRange, TrialRetroCandidate, TrialReviewedHead, TrialReviewedMerge, TrialRoutineRun } from './trial-store.ts'
+import type { ReadyPullRequest, ReviewGateName, TrialAutoMergeHold, TrialIssueRoute, TrialRange, TrialRetroCandidate, TrialReviewedHead, TrialReviewedMerge, TrialRoutineRun } from './trial-store.ts'
 import type { ReadyWait, Trial, TrialMeasure, TrialMiss } from './trials.ts'
 import type { ReviewOutcome, Routine } from './types.ts'
+import { AUTO_MERGE_HOLD_CAUSES } from './auto-merge.ts'
 import { TRIALS } from './trials.ts'
 
 const dayMilliseconds = 24 * 60 * 60 * 1000
@@ -129,6 +131,30 @@ export interface RevertedMerge {
   revertedBy: number
 }
 
+/**
+ * The candidate heads Auto merge newly held in one window.
+ *
+ * A record is the first hold of one head for one reason. A head still held for
+ * that reason a week later does not count again. A head held for a new reason does.
+ */
+export interface AutoMergeHoldWindow {
+  window: TrialWindow
+  heldHeads: number
+  /** Held heads whose only reason was Review confidence below the bar. */
+  heldOnlyByConfidenceBar: number
+  /** Held heads without the label that the label alone would have merged. */
+  heldOnlyByLabel: number
+  /** Held heads with either answer, each counted once. */
+  heldOnly: number
+}
+
+/** How many heads one reason held in each trial week and to date. */
+export interface AutoMergeHoldReasonRow {
+  cause: AutoMergeHoldCause
+  weeks: number[]
+  toDate: number
+}
+
 export interface RetroToDate {
   window: TrialWindow
   candidates: number
@@ -187,6 +213,14 @@ export type TrialMetrics
     rows: ReviewRevertRow[]
     reverted: RevertedMerge[]
   }
+  | {
+    _tag: 'AutoMergeHolds'
+    weeks: Array<AutoMergeHoldWindow & { week: number }>
+    toDate: AutoMergeHoldWindow & { heldOnlyShare: number | null }
+    /** The most frequent reason first. Reasons are fixed names, so no path or Review prose reaches the public run log. */
+    reasons: AutoMergeHoldReasonRow[]
+    unreadableRecords: number
+  }
 
 export type TrialReading
   = | { _tag: 'Parked', id: string, title: string, reason: string, markdown: string }
@@ -212,7 +246,7 @@ export interface TrialReportEvidence {
   trials: TrialReading[]
 }
 
-export type TrialReportSource = Pick<JournalStore, 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt' | 'listReadyPullRequests' | 'listTrialRetroCandidates' | 'listTrialReviewedMerges'>
+export type TrialReportSource = Pick<JournalStore, 'listRoutines' | 'listTrialRoutineRuns' | 'listTrialIssueRoutes' | 'listTrialReviewedHeads' | 'firstTrialEventAt' | 'listReadyPullRequests' | 'listTrialRetroCandidates' | 'listTrialReviewedMerges' | 'listTrialAutoMergeHolds'>
 
 function iso(milliseconds: number): string {
   return new Date(milliseconds).toISOString()
@@ -620,6 +654,70 @@ export function readReviewRevertTrial(input: {
   return { metrics: { _tag: 'ReviewReverts', revertDays: measure.revertDays, rows, reverted }, keep, kill: [] }
 }
 
+function heldHeadKey(hold: TrialAutoMergeHold): string {
+  return `${hold.repository}#${hold.pullRequestNumber}@${hold.headSha}`
+}
+
+function heldOnlyByConfidenceBar(hold: TrialAutoMergeHold): boolean {
+  // The confidence bar is the decision's last check, so every other condition held.
+  return hold.cause === 'BelowConfidence'
+}
+
+function autoMergeHoldWindow(holds: readonly TrialAutoMergeHold[], span: TrialWindow): AutoMergeHoldWindow {
+  const inside = holds.filter(hold => Date.parse(hold.occurredAt) >= Date.parse(span.from) && Date.parse(hold.occurredAt) < Date.parse(span.to))
+  const heads = (counts: (hold: TrialAutoMergeHold) => boolean) => new Set(inside.filter(counts).map(heldHeadKey)).size
+  return {
+    window: span,
+    heldHeads: heads(() => true),
+    heldOnlyByConfidenceBar: heads(heldOnlyByConfidenceBar),
+    heldOnlyByLabel: heads(hold => hold.heldOnlyByLabel),
+    heldOnly: heads(hold => heldOnlyByConfidenceBar(hold) || hold.heldOnlyByLabel),
+  }
+}
+
+/**
+ * Reads the Auto merge hold trial from its records. Pure.
+ *
+ * A record names one head and one reason, so a head counts once per reason.
+ * A head Auto merge hands to GitHub leaves no record.
+ */
+export function readAutoMergeHoldTrial(input: {
+  measure: Extract<TrialMeasure, { _tag: 'AutoMergeHolds' }>
+  holds: readonly TrialAutoMergeHold[]
+  unreadable: number
+  toDate: TrialWindow
+}): { metrics: Extract<TrialMetrics, { _tag: 'AutoMergeHolds' }>, keep: RuleReading[], kill: RuleReading[] } {
+  const { measure } = input
+  const start = Date.parse(input.toDate.from)
+  const end = Date.parse(input.toDate.to)
+  const spans = Array.from({ length: Math.ceil((end - start) / weekMilliseconds) }, (_, index) =>
+    window(start + index * weekMilliseconds, Math.min(end, start + (index + 1) * weekMilliseconds)))
+  const totals = autoMergeHoldWindow(input.holds, input.toDate)
+  const toDate = { ...totals, heldOnlyShare: share(totals.heldOnly, totals.heldHeads) }
+  const heldFor = (cause: AutoMergeHoldCause, span: TrialWindow) => autoMergeHoldWindow(input.holds.filter(hold => hold.cause === cause), span).heldHeads
+  const reasons = [...new Set(input.holds.map(hold => hold.cause))]
+    .map(cause => ({ cause, weeks: spans.map(span => heldFor(cause, span)), toDate: heldFor(cause, input.toDate) }))
+    .sort((left, right) => right.toDate - left.toDate || left.cause.localeCompare(right.cause))
+  const detail = `${toDate.heldOnly} of ${plural(toDate.heldHeads, 'held head')} waited only on the confidence bar or only on the label (${percent(toDate.heldOnlyShare)}).`
+  const keep: RuleReading[] = [toDate.heldOnlyShare === null
+    ? { _tag: 'NotYetMeasurable', detail: 'Auto merge has held no candidate head with a published READY review yet.' }
+    : toDate.heldOnlyShare <= measure.maximumHeldOnlyShare
+      ? { _tag: 'Met', detail }
+      : { _tag: 'NotMet', detail: `${detail} Keep allows ${percent(measure.maximumHeldOnlyShare)}.` }]
+  // Measurement only: nothing about this trial can end it.
+  return {
+    metrics: {
+      _tag: 'AutoMergeHolds',
+      weeks: spans.map((span, index) => ({ week: index + 1, ...autoMergeHoldWindow(input.holds, span) })),
+      toDate,
+      reasons,
+      unreadableRecords: input.unreadable,
+    },
+    keep,
+    kill: [],
+  }
+}
+
 /** Keep, kill, revise, or continue, from the state and the rule readings. Pure. */
 export function suggestVerdict(state: TrialState, keep: readonly RuleReading[], kill: readonly RuleReading[], onMiss: TrialMiss): TrialSuggestion {
   if (state._tag === 'NotStarted')
@@ -756,6 +854,24 @@ function metricLines(metrics: TrialMetrics): string[] {
             ],
       ]
     }
+    case 'AutoMergeHolds': {
+      const row = (label: string, window: AutoMergeHoldWindow) => `| ${label} | ${window.heldHeads} | ${window.heldOnlyByConfidenceBar} | ${window.heldOnlyByLabel} |`
+      return [
+        '| Week | Heads newly held | Held only by the confidence bar | Held only by the label |',
+        '| --- | ---: | ---: | ---: |',
+        ...metrics.weeks.map(week => row(`Week ${week.week}`, week)),
+        row('Trial to date', metrics.toDate),
+        ...metrics.reasons.length === 0
+          ? []
+          : [
+              '',
+              `| Why Auto merge held | ${metrics.weeks.map(week => `Week ${week.week}`).join(' | ')} | Trial to date |`,
+              `| --- | ${metrics.weeks.map(() => '---:').join(' | ')} | ---: |`,
+              ...metrics.reasons.map(reason => `| ${AUTO_MERGE_HOLD_CAUSES[reason.cause]} | ${reason.weeks.join(' | ')} | ${reason.toDate} |`),
+            ],
+        ...metrics.unreadableRecords === 0 ? [] : ['', `${plural(metrics.unreadableRecords, 'hold record')} could not be read.`],
+      ]
+    }
   }
 }
 
@@ -842,6 +958,11 @@ function readMeasuredTrial(store: TrialReportSource, trial: MeasuredTrial, now: 
     }
     case 'ReviewReverts': {
       const read = readReviewRevertTrial({ measure, merges: store.listTrialReviewedMerges(toDate), now })
+      return finish(read.metrics, read.keep, read.kill)
+    }
+    case 'AutoMergeHolds': {
+      const records = store.listTrialAutoMergeHolds(toDate)
+      const read = readAutoMergeHoldTrial({ measure, holds: records.holds, unreadable: records.unreadable, toDate })
       return finish(read.metrics, read.keep, read.kill)
     }
   }

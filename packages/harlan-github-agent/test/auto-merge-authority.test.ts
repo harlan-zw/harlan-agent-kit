@@ -96,6 +96,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, co
       comparisons.push([baseSha, headSha])
       return compare(baseSha, headSha)
     },
+    now: () => new Date(changed),
     policy: { _tag: 'Enabled', minimumConfidence: 90, method: 'squash' },
     store,
     report: event => events.push(event),

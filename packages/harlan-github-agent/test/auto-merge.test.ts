@@ -85,6 +85,7 @@ describe('auto merge decision', () => {
   it('holds a reviewed stack until it targets the default branch', () => {
     expect(decide({ pullRequest: { baseRef: 'fix/parent' } })).toEqual({
       _tag: 'Hold',
+      cause: 'NotDefaultBranch',
       reason: 'The pull request must target the default branch before Auto merge.',
     })
   })
@@ -94,7 +95,7 @@ describe('auto merge decision', () => {
   })
 
   it('holds when the policy is disabled', () => {
-    expect(decide({ policy: { _tag: 'Disabled' } })).toEqual({ _tag: 'Hold', reason: 'Auto merge is disabled.' })
+    expect(decide({ policy: { _tag: 'Disabled' } })).toEqual({ _tag: 'Hold', cause: 'Disabled', reason: 'Auto merge is disabled.' })
   })
 
   it('holds when the pull request has no label', () => {
@@ -104,6 +105,7 @@ describe('auto merge decision', () => {
   it('holds for a repository Harlan does not own', () => {
     expect(decide({ repository: { ownership: 'maintained' } })).toEqual({
       _tag: 'Hold',
+      cause: 'NotOwned',
       reason: 'Auto merge covers owned repositories only.',
     })
   })
@@ -111,6 +113,7 @@ describe('auto merge decision', () => {
   it('holds for an author outside the trusted authors', () => {
     expect(decide({ pullRequest: { author: 'contributor' } })).toEqual({
       _tag: 'Hold',
+      cause: 'UntrustedAuthor',
       reason: 'The pull request author is not a trusted author.',
     })
   })
@@ -129,6 +132,7 @@ describe('auto merge decision', () => {
   it('holds when the READY review covers an older head commit', () => {
     expect(decide({ attempts: [attempt({ headSha: 'older' })] })).toEqual({
       _tag: 'Hold',
+      cause: 'NoReadyReview',
       reason: 'The current head commit has no READY review.',
     })
   })
@@ -141,6 +145,7 @@ describe('auto merge decision', () => {
   it('holds until the READY review is published', () => {
     expect(decide({ attempts: [attempt({ publications: [] })] })).toEqual({
       _tag: 'Hold',
+      cause: 'NoPublishedReadyReview',
       reason: 'The current head commit has no published READY review.',
     })
   })
@@ -148,18 +153,24 @@ describe('auto merge decision', () => {
   it('holds when confidence is below the minimum', () => {
     expect(decide({ attempts: [attempt({ outcome: { _tag: 'Ready', confidence: 95 } })] })).toEqual({
       _tag: 'Hold',
+      cause: 'BelowConfidence',
       reason: 'Review confidence is below 100.',
     })
   })
 
-  it('holds when the review reported no confidence', () => {
-    expect(decide({ attempts: [attempt({ outcome: { _tag: 'Ready' } })] })._tag).toBe('Hold')
+  it('holds when the review reported no confidence, apart from the confidence bar', () => {
+    expect(decide({ attempts: [attempt({ outcome: { _tag: 'Ready' } })] })).toEqual({
+      _tag: 'Hold',
+      cause: 'NoConfidence',
+      reason: 'The review reported no confidence.',
+    })
   })
 
   it('holds when the review left an open finding', () => {
     const findings: ReviewFinding[] = [{ _tag: 'Open', summary: 'Race condition', nextAction: 'Guard the write' }]
     expect(decide({ attempts: [attempt({ findings })] })).toEqual({
       _tag: 'Hold',
+      cause: 'OpenFinding',
       reason: 'The review left an open finding.',
     })
   })
@@ -202,16 +213,18 @@ describe('auto merge scoped to every pull request', () => {
       attempts: [attempt({ outcome: { _tag: 'Ready', confidence: 79 } })],
       pullRequest: { autoMerge: true },
       repository: every,
-    })).toEqual({ _tag: 'Hold', reason: 'Review confidence is below 80.' })
+    })).toEqual({ _tag: 'Hold', cause: 'BelowConfidence', reason: 'Review confidence is below 80.' })
   })
 
   it('still needs a trusted author and a READY review', () => {
     expect(decide({ pullRequest: { autoMerge: false, author: 'stranger' }, repository: every })).toEqual({
       _tag: 'Hold',
+      cause: 'UntrustedAuthor',
       reason: 'The pull request author is not a trusted author.',
     })
     expect(decide({ attempts: [], pullRequest: { autoMerge: false }, repository: every })).toEqual({
       _tag: 'Hold',
+      cause: 'NoReadyReview',
       reason: 'The current head commit has no READY review.',
     })
   })
@@ -241,6 +254,7 @@ describe('auto merge and Protected paths', () => {
   ])('holds a labelled pull request that changes %s', (_name, path) => {
     expect(decide({ changedFiles: headChangedFiles([ordinary, comparedFile(path)]) })).toEqual({
       _tag: 'Hold',
+      cause: 'ProtectedPath',
       reason: `${path} is a Protected path. Auto merge never merges it.`,
     })
   })
@@ -261,6 +275,7 @@ describe('auto merge and Protected paths', () => {
   it('holds a rename away from a Protected path', () => {
     expect(decide({ changedFiles: headChangedFiles([comparedFile('ci.yml.bak', '.github/workflows/ci.yml')]) })).toEqual({
       _tag: 'Hold',
+      cause: 'ProtectedPath',
       reason: '.github/workflows/ci.yml is a Protected path. Auto merge never merges it.',
     })
   })
@@ -268,6 +283,7 @@ describe('auto merge and Protected paths', () => {
   it('holds when the comparison could not be read', () => {
     expect(decide({ changedFiles: comparedChangedFiles(commits, err('GitHub returned 502.')) })).toEqual({
       _tag: 'Hold',
+      cause: 'ChangedFilesUnavailable',
       reason: 'The changed files of the head commit are unavailable: GitHub returned 502.',
     })
   })
@@ -281,6 +297,7 @@ describe('auto merge and Protected paths', () => {
   it('holds a comparison of another head commit', () => {
     expect(decide({ changedFiles: headChangedFiles([ordinary], { baseSha: 'base123', headSha: 'older' }) })).toEqual({
       _tag: 'Hold',
+      cause: 'ChangedFilesStale',
       reason: 'The changed files were compared for another head commit.',
     })
   })
@@ -289,6 +306,7 @@ describe('auto merge and Protected paths', () => {
     // A new base commit can move the merge base and change what the merge brings in.
     expect(decide({ changedFiles: headChangedFiles([ordinary], { baseSha: 'older-base', headSha: 'abc123' }) })).toEqual({
       _tag: 'Hold',
+      cause: 'ChangedFilesStale',
       reason: 'The changed files were compared against another base commit.',
     })
   })

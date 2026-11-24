@@ -64,6 +64,11 @@ export type TrialMeasure
     /** The largest share of judged READY merges that a revert may reach. */
     maximumReadyRevertedShare: number
   }
+  | {
+    _tag: 'AutoMergeHolds'
+    /** The largest share of held heads that may wait only on the confidence bar or only on the label. */
+    maximumHeldOnlyShare: number
+  }
 
 /** Open pull requests whose current head is READY with passing CI, at one instant. */
 export interface ReadyWait {
@@ -192,5 +197,18 @@ export const TRIALS: readonly Trial[] = [
     before: 'No revert was recorded. In the 120 days to 24 November, default branch history across the trusted checkouts shows 14 commits that undo earlier work. 4 went through a pull request, and 2 of those name the pull request they revert. Expect about one countable revert every two months, so a met keep rule says little on its own.',
     onMiss: { _tag: 'Revise', what: 'The `adversarial-review` Skill' },
     measure: { _tag: 'ReviewReverts', revertDays: 30, maximumReadyRevertedShare: 0.05 },
+  },
+  {
+    _tag: 'Measured',
+    id: 'auto-merge-holds',
+    title: '9. Why Auto merge holds a READY pull request',
+    start: { _tag: 'FirstEvent', stream: 'review_run', event: 'auto_merge_hold' },
+    weeks: 4,
+    metric: 'Each week, the candidate heads with a published READY review that Auto merge newly held, the heads for each reason, and those held only by the confidence bar or only by the label. A head counts once per reason. A head Auto merge hands to GitHub leaves no record.',
+    keepRule: 'At most 25% of held heads wait only on the confidence bar or only on the label.',
+    killRule: 'None. This trial only measures, so a miss means the Auto merge scope needs review.',
+    before: 'No hold was recorded. Auto merge held a pull request without saying why.',
+    onMiss: { _tag: 'Revise', what: 'The Auto merge scope' },
+    measure: { _tag: 'AutoMergeHolds', maximumHeldOnlyShare: 0.25 },
   },
 ]

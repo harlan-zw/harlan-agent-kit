@@ -1,5 +1,6 @@
 import type { AgentProviderName, AgentTokenUsage } from './agent-provider.ts'
 import type { AgentTurnStore } from './agent-turn-store.ts'
+import type { AutoMergeHoldRecord } from './auto-merge.ts'
 import type { BatchStore } from './batch-store.ts'
 import type { TransientKind } from './failure.ts'
 import type { FindingThreadSyncStore } from './finding-thread-sync-store.ts'
@@ -1303,6 +1304,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   hasCurrentReviewAuthority: (repository: string, pullRequestNumber: number) => boolean
   /** Reads current Auto merge inputs only while operator authority remains active. */
   getAutoMergeContext: (repository: string, pullRequestNumber: number) => { repository: RepositoryMapping, pullRequest: Omit<GitHubPullRequestItem, 'approvalLabels' | 'autoMerge'> } | null
+  /** Records why Auto merge held one candidate head, once per head and reason. A repeat records nothing. */
+  recordAutoMergeHold: (input: AutoMergeHoldRecord) => void
   /** What this service already holds for one head commit. */
   storedReviewForHead: (repository: string, pullRequestNumber: number, headSha: string) => StoredReviewForHead
   /**
@@ -3610,11 +3613,12 @@ function telemetryReason(reason: string | null | undefined): string | null {
 }
 
 /**
- * A shadow trial event stores its reading as JSON in `reason`. It is a
- * measurement, never a failure, so the failure queries leave it out.
+ * A trial event stores its reading as JSON in `reason`: a shadow reading, or
+ * an Auto merge hold. It is a measurement, never a failure, so the failure
+ * queries leave it out.
  */
-const shadowTrialEvent = 'event GLOB \'*_shadow\''
-const workflowFailureCondition = `((reason IS NOT NULL OR attempt > 1) AND NOT ${shadowTrialEvent})`
+const trialEvent = '(event GLOB \'*_shadow\' OR event = \'auto_merge_hold\')'
+const workflowFailureCondition = `((reason IS NOT NULL OR attempt > 1) AND NOT ${trialEvent})`
 
 function recordWorkflowEvent(database: DatabaseSync, input: WorkflowEventInput): void {
   const previous = database.prepare(`
@@ -4995,6 +4999,43 @@ function recordPathRuleShadow(database: DatabaseSync, input: {
     from: null,
     to: input.reading.verdict,
     reason: JSON.stringify({ verdict: input.reading.verdict, fileCount: input.reading.fileCount }),
+    at: input.at,
+  })
+}
+
+/**
+ * Counts one reason Auto merge held one candidate head, once per head and reason.
+ *
+ * The entity carries the head and the reason, so a later reconcile of the same
+ * hold finds the first event and records nothing. The reason is a fixed name,
+ * so the record carries no path, GitHub error, or Review prose.
+ */
+function recordAutoMergeHold(database: DatabaseSync, input: AutoMergeHoldRecord): void {
+  const subject = database.prepare(`
+    SELECT subjects.id, subjects.current_revision_id
+    FROM subjects
+    JOIN repositories ON repositories.id = subjects.repository_id
+    WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+  `).get(input.repository, input.pullRequestNumber) as { id: number, current_revision_id: string | null } | undefined
+  if (subject === undefined)
+    throw new Error(`Auto merge held ${input.repository}#${input.pullRequestNumber}, which the Service never observed.`)
+  const entityId = `auto-merge-hold:${subject.id}:${input.headSha}:${input.cause}`
+  const recorded = database.prepare(`
+    SELECT 1 FROM workflow_events WHERE stream = 'review_run' AND entity_id = ? LIMIT 1
+  `).get(entityId) !== undefined
+  if (recorded)
+    return
+  recordWorkflowEvent(database, {
+    stream: 'review_run',
+    event: 'auto_merge_hold',
+    entityId,
+    repository: input.repository,
+    itemNumber: input.pullRequestNumber,
+    revisionId: subject.current_revision_id,
+    from: null,
+    to: input.cause,
+    reason: JSON.stringify({ headSha: input.headSha, heldOnlyByLabel: input.heldOnlyByLabel }),
+    durationMilliseconds: null,
     at: input.at,
   })
 }
@@ -18100,7 +18141,7 @@ export function openJournalStore(
     groupWorkflowFailures,
     summarizeWorkflowEvents: ({ since }) => (database.prepare(`
       SELECT stream, event, to_state AS "to", COUNT(*) AS count,
-        SUM(CASE WHEN reason IS NOT NULL AND NOT ${shadowTrialEvent} THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN reason IS NOT NULL AND NOT ${trialEvent} THEN 1 ELSE 0 END) AS failed,
         SUM(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) AS retried
       FROM workflow_events WHERE occurred_at >= ?
       GROUP BY stream, event, to_state ORDER BY count DESC
@@ -18127,6 +18168,7 @@ export function openJournalStore(
     readReviewFindings,
     hasCurrentReviewAuthority,
     getAutoMergeContext,
+    recordAutoMergeHold: input => recordAutoMergeHold(database, input),
     storedReviewForHead,
     latestReviewOfEarlierHead,
     recordAgentFeedback,
