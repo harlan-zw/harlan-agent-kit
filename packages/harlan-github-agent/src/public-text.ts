@@ -491,6 +491,26 @@ const POSSIBLE_BLOCK_START = /^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])(?:\s|$)|#{1,6}(?:\
 /** A block that is always one line long, so the next line starts another block. */
 const POSSIBLE_ONE_LINE_BLOCK = /^[ \t]*(?:#{1,6}(?:\s|$)|([-*_])(?:[ \t]*\1){2,}\s*$|(?:=+|-+)\s*$)/
 
+/** Block HTML continues through Markdown markers until a blank line. */
+const HTML_BLOCK = /^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?=[\s/>])/i
+const HTML_BLOCK_TAG = new RegExp(`^ {0,3}${HTML_TAG.source}[ \\t]*$`, 'i')
+
+type HtmlBlockEnd = { _tag: 'Blank' } | { _tag: 'Closing', pattern: RegExp }
+
+/** Raw HTML owns its lines, including lines that resemble Markdown fences or quotes. */
+function htmlBlockEnd(rest: string): HtmlBlockEnd | null {
+  const literal = /^ {0,3}<(script|pre|style|textarea)(?=[\s>])/i.exec(rest)
+  if (literal !== null)
+    return { _tag: 'Closing', pattern: new RegExp(`</${literal[1]}[ \\t]*>`, 'i') }
+  for (const [start, end] of [['<!--', /-->/], ['<?', /\?>/], ['<![CDATA[', /\]\]>/]] as const) {
+    if (rest.trimStart().startsWith(start))
+      return { _tag: 'Closing', pattern: end }
+  }
+  if (/^ {0,3}<![A-Z]/.test(rest))
+    return { _tag: 'Closing', pattern: />/ }
+  return HTML_BLOCK.test(rest) || HTML_BLOCK_TAG.test(rest) ? { _tag: 'Blank' } : null
+}
+
 /** An open paragraph: its blockquote depth, and the content column of the list item it starts in. */
 interface OpenParagraph {
   depth: number
@@ -543,7 +563,7 @@ function opensParagraph(rest: string, depth: number): OpenParagraph | null {
   return { depth, item }
 }
 
-function layoutOf(text: string): Layout {
+function layoutOf(text: string, removed: ReadonlySet<number> = new Set()): Layout {
   const lines = text.split('\n')
   const starts: number[] = []
   const contentStarts: number[] = []
@@ -557,7 +577,10 @@ function layoutOf(text: string): Layout {
   let paragraph: OpenParagraph | null = null
   let previousQuotes: string | null = null
   let previousOneLine = false
-  for (const line of lines) {
+  let html: HtmlBlockEnd | null = null
+  for (const [index, original] of lines.entries()) {
+    // Read the outgoing structure without discarding the original attribute evidence.
+    const line = removed.has(index) ? `${LINE_STRUCTURE.exec(original)?.[0] ?? ''}${REMOVED_LINE}` : original
     starts.push(offset)
     contentStarts.push(offset + (CONTENT_START.exec(line)?.[0].length ?? 0))
     const container = CONTAINER.exec(line)?.[0] ?? ''
@@ -570,7 +593,19 @@ function layoutOf(text: string): Layout {
     }
     const anyQuotes = ANY_QUOTE_MARKERS.exec(line)?.[0] ?? ''
     const anyRest = line.slice(anyQuotes.length)
-    if (fence !== null || (marker?.[1] !== undefined && !(marker[1].startsWith('`') && marker[2]?.includes('`')))) {
+    if (fence === null)
+      html ??= htmlBlockEnd(anyRest)
+    if (html !== null && fence === null) {
+      const blank = line.trim() === ''
+      fenced.push(!blank)
+      definite.push(blank)
+      possible.push(true)
+      deeper.push(false)
+      paragraph = null
+      if ((html._tag === 'Blank' && blank) || (html._tag === 'Closing' && html.pattern.test(line)))
+        html = null
+    }
+    else if (fence !== null || (marker?.[1] !== undefined && !(marker[1].startsWith('`') && marker[2]?.includes('`')))) {
       if (fence === null && marker?.[1] !== undefined) {
         fence = { char: marker[1].charAt(0), length: marker[1].length, depth: fenceDepth, start: offset }
       }
@@ -602,7 +637,7 @@ function layoutOf(text: string): Layout {
     }
     previousQuotes = anyQuotes
     previousOneLine = POSSIBLE_ONE_LINE_BLOCK.test(anyRest)
-    offset += line.length + 1
+    offset += original.length + 1
   }
   if (fence !== null)
     code.push({ start: fence.start, end: text.length })
@@ -614,7 +649,7 @@ function layoutOf(text: string): Layout {
   const runs: Array<{ start: number, end: number, line: number }> = []
   for (const run of text.matchAll(/`+/g)) {
     const line = lineAt(starts, run.index)
-    if (!fenced[line])
+    if (!fenced[line] && !removed.has(line))
       runs.push({ start: run.index, end: run.index + run[0].length, line })
   }
   const partner = Array.from<number>({ length: runs.length }).fill(-1)
@@ -743,7 +778,7 @@ function htmlLines(text: string, layout: Layout): Array<{ text: string, first: n
 }
 
 /** Parse HTML before decoding attribute entities, including each encoded transport layer. */
-function detailsIn(detect: Detectors, text: string): { spans: Array<{ first: number, last: number }>, hits: PrivateDetailHit[] } {
+function detailsIn(detect: Detectors, text: string, removed: ReadonlySet<number> = new Set()): { spans: Array<{ first: number, last: number }>, hits: PrivateDetailHit[] } {
   const spans: Array<{ first: number, last: number }> = []
   const hits = new Map<string, PrivateDetailHit>()
   const remember = (hit: PrivateDetailHit) => hits.set(`${hit._tag}:${hit.entry}`, hit)
@@ -768,7 +803,7 @@ function detailsIn(detect: Detectors, text: string): { spans: Array<{ first: num
     }
   }
   for (const view of views) {
-    for (const rendered of htmlLines(view, layoutOf(view))) {
+    for (const rendered of htmlLines(view, layoutOf(view, removed))) {
       const found = detailsInAligned(detect, rendered.text)
       if (found.length > 0)
         spans.push({ first: rendered.first, last: rendered.last })
@@ -833,21 +868,32 @@ interface Guarded extends Redaction {
   withheld: boolean
 }
 
-function guarded(detect: Detectors, text: string): Guarded {
-  const found = detailsIn(detect, text)
-  const removed = new Set<number>()
-  for (const { first, last } of found.spans) {
-    for (let line = first; line <= last; line++)
-      removed.add(line)
+function guarded(detect: Detectors, text: string, initial: ReadonlySet<number> = new Set()): Guarded {
+  const removed = new Set(initial)
+  const hits: PrivateDetailHit[] = []
+  // Each pass retains source evidence and reads the structure after earlier removals.
+  // Bound repeated parsing. If structure keeps changing, withhold the body.
+  let settled = false
+  for (let pass = 0; pass < 4; pass++) {
+    const found = detailsIn(detect, text, removed)
+    const before = removed.size
+    for (const { first, last } of found.spans) {
+      for (let line = first; line <= last; line++)
+        removed.add(line)
+    }
+    if (removed.size === before) {
+      settled = true
+      break
+    }
+    hits.push(...found.hits)
   }
-  const hits = found.hits
-  const lines = hits.length === 0
+  const lines = removed.size === 0
     ? text
     : text.split('\n').map((line, index) => removed.has(index) ? `${removedLine(detect, line)}${line.endsWith('\r') ? '\r' : ''}` : line).join('\n')
   const residue = joinedHits(detect, lines)
-  if (residue.length > 0)
+  if (!settled || residue.length > 0)
     return { text: withheldBody(detect, lines), hits: [...new Map([...hits, ...residue].map(hit => [`${hit._tag}:${hit.entry}`, hit])).values()], removed, withheld: true }
-  return { text: lines, hits, removed, withheld: false }
+  return { text: lines, hits: [...new Map(hits.map(hit => [`${hit._tag}:${hit.entry}`, hit])).values()], removed, withheld: false }
 }
 
 /** The text that replaces a whole body when a private detail spans its lines. */
@@ -1154,8 +1200,18 @@ export function publicBody(guard: PublicTextGuard, target: PublicTextTarget, sou
     return { text: redaction.text, send: reportingSend(guard, target, redaction.text, redaction.hits) }
   }
   const carried = guarded(detect, source.split('\n').map((line, index) => kept(line, index) ?? line).join('\n'))
-  const text = carried.withheld ? carried.text : withKeptRemovals(guarded(detect, source).text, source, kept, carried)
-  return { text, send: reportingSend(guard, target, text, carried.hits) }
+  const combined = carried.withheld ? carried.text : withKeptRemovals(guarded(detect, source).text, source, kept, carried)
+  if (carried.withheld)
+    return { text: combined, send: reportingSend(guard, target, combined, carried.hits) }
+  const sourceLines = source.split('\n')
+  const removed = new Set(combined.split('\n').flatMap((line, index) => line !== sourceLines[index] ? [index] : []))
+  const checked = guarded(detect, source, removed)
+  const text = checked.withheld
+    ? checked.text
+    : combined.split('\n').map((line, index) =>
+        checked.removed.has(index) && !removed.has(index) ? removedLine(detect, sourceLines[index] ?? line) : line).join('\n')
+  const hits = [...new Map([...carried.hits, ...checked.hits].map(hit => [`${hit._tag}:${hit.entry}`, hit])).values()]
+  return { text, send: reportingSend(guard, target, text, hits) }
 }
 
 export const PRIVATE_DETAIL_OPERATION = 'public_text'

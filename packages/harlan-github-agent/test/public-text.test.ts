@@ -13,7 +13,7 @@ import { createGitHubIssuePublisher } from '../src/github.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
 import { packageReleaseStatus } from '../src/package-release-controller.ts'
 import { releaseNoteApproval } from '../src/package-release.ts'
-import { createPublicTextGuard, encodeEntities, isPublishedForm, privateDetailsFor, publicBody, redactPrivateDetails, removalsByPosition } from '../src/public-text.ts'
+import { createPublicTextGuard, encodeEntities, isPublishedForm, privateDetailsFor, publicBody, publicFields, redactPrivateDetails, removalsByPosition } from '../src/public-text.ts'
 import { ok } from '../src/result.ts'
 import { mirrorReviewFindingThreads, reviewFindingThreadBody, reviewFindingThreadFingerprint, reviewFindingThreadMarker } from '../src/review-finding-threads.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -1421,6 +1421,31 @@ describe('review findings on #754, follow-ups', () => {
 })
 
 describe('review findings on #759', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes a private multiline href inside raw HTML before sending a %s', async (writer) => {
+    for (const opening of ['<div>', '<custom>', '<pre>\n', '<div>\n>\n```html']) {
+      const source = `${opening}\nPublic prose.\nSee <a href="https://notes.localhost/\n> acquisition.pdf">docs</a>.\n</div>`
+      const input = writer === 'review' ? encodeEntities(source) : source
+      const guard = { details, report: () => {} }
+      const target = { repository: 'harlan-zw/example', itemNumber: 24, writer }
+      const sent = await publicBody(guard, target, input).send(async body => body)
+      const fields = await publicFields(guard, target, { title: 'Public title', body: input }).send(async fields => fields)
+
+      expectNoFragment(sent)
+      expect(sent).toContain(removed)
+      expect(fields).toEqual({ title: 'Public title', body: sent })
+    }
+  })
+
+  it.each([false, true])('removes filenames exposed by newly redacted fence openers with kept removals: %s', async (keep) => {
+    const source = 'Old private line.\n\n```html ~/notes\nSee <a href="https://notes.localhost/\nacquisition.pdf">docs</a>.\n```'
+    const published = source.replace('Old private line.', removed)
+    const outgoing = publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'review comment' }, source, keep ? removalsByPosition(published) : undefined)
+    const sent = await outgoing.send(async body => body)
+
+    expectNoFragment(sent)
+    expect(sent).toBe(`${keep ? removed : 'Old private line.'}\n\n${removed}\n${removed}\n${removed}\n\`\`\``)
+  })
+
   it.each([
     ['an ordered item that does not start at one', '2. acquisition.pdf">docs</a>.', `2. ${removed}`],
     ['an ordered item with a parenthesis', '3) acquisition.pdf">docs</a>.', `3) ${removed}`],
