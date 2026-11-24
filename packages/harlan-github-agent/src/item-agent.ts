@@ -1516,7 +1516,7 @@ function answeredVerdict(source: ReviewRun): string {
   const claim = source.mergeRisk?.claim
   const risk = claim === undefined ? 'no merge risk' : `merge risk ${claim._tag.toLowerCase()}`
   const confidence = source.outcome.confidence === undefined ? '' : ` and confidence ${source.outcome.confidence}`
-  return `The Review of ${source.headSha} answered ${risk}${confidence}, with its findings still open.`
+  return `The Review of ${source.headSha} answered ${risk}${confidence} before this Repair.`
 }
 
 function repairFocusEvidence(task: ClaimedAdversarialReviewTask, focus: RepairFocusPrompt, targeted: readonly ReviewFinding[]): string {
