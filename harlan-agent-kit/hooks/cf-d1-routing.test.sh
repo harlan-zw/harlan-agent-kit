@@ -26,6 +26,7 @@ cat > "$work/app/wrangler.toml" <<'TOML'
 binding = "DB"
 database_name = "app-db"
 database_id = "11111111-1111-1111-1111-111111111111"
+preview_database_id = "22222222-2222-2222-2222-222222222222"
 TOML
 
 # Prints the decision, then the reason when the hook denies.
@@ -55,6 +56,11 @@ expect deny 'npx -y wrangler d1 execute app-db --command "SELECT 1" --remote'
 expect deny './node_modules/.bin/wrangler d1 execute app-db --remote --command "SELECT 1"'
 expect deny 'CLOUDFLARE_ACCOUNT_ID=abc wrangler --config wrangler.prod.toml d1 execute app-db --remote --command "SELECT 1"'
 expect deny 'git status; wrangler d1 execute app-db --remote --command "SELECT 1" | jq .'
+
+# Preview retries must not select the primary database_id from this fixture.
+expect allow 'wrangler d1 execute DB --remote --preview --config wrangler.toml --command "DELETE FROM sessions"'
+expect allow 'pnpm exec wrangler d1 execute DB --remote --preview=true --config wrangler.toml --command "DELETE FROM sessions"'
+expect allow 'pnpm dlx wrangler@4 d1 execute DB --preview --remote --command="SELECT 1"'
 
 # Calls that cf does not replace, or that need no login.
 expect allow 'wrangler d1 execute app-db --local --command "SELECT 1"'

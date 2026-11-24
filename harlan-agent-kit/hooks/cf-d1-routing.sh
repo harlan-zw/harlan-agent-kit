@@ -39,6 +39,8 @@ for call in "${calls[@]}"; do
   # Local queries need no login. cf d1 query has no --file, so files stay with wrangler.
   [[ "$call" =~ [[:space:]]--remote(=true)?([[:space:]]|$) ]] || continue
   [[ "$call" =~ [[:space:]]--command([[:space:]=]|$) ]] || continue
+  # Preview can select preview_database_id. The cf retry guidance selects database_id.
+  [[ "$call" =~ [[:space:]]--preview([[:space:]=]|$) ]] && continue
   deny 'The wrangler login expires, and an agent cannot renew it. Query remote D1 with cf, which keeps its own login. Run: cf d1 query <database_id> -q --sql "<SQL>". Read database_id from the d1_databases entry in the wrangler config and environment this call uses. The output is one JSON result set per statement, as with wrangler --json. If you set CLOUDFLARE_API_TOKEN, wrangler works as written.'
 done
 exit 0
