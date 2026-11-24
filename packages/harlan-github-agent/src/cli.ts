@@ -24,7 +24,7 @@ import { describePreflightIssues, loadServiceInputs } from './service-preflight.
 import { combineServiceState } from './service-state.ts'
 import { createGitServiceUpdateSource } from './service-update.ts'
 import { startAgentService } from './service.ts'
-import { stopWithin } from './shutdown.ts'
+import { describeStopOutcome, stopWithin } from './shutdown.ts'
 import { openJournalStore } from './store.ts'
 import { replayStoredIssueTriage, replayStoredTriage } from './triage-evaluation.ts'
 import { agentWorktreeLeaseKey, listSweepableAgentWorktrees, sweepAgentWorktrees } from './worktree.ts'
@@ -725,11 +725,12 @@ const command = defineCommand({
     if (webhook._tag === 'Enabled')
       consola.success(`Webhooks: http://${webhook.host}:${webhook.port}/webhook`)
     await Promise.race([waitForShutdown(), service.waitForRestart()])
-    const stopped = await stopWithin(service.stop, 10_000)
-    if (!stopped) {
-      consola.warn('An agent ignored shutdown for 10 seconds. The next start will recover its task.')
+    const stopped = await stopWithin(service.stop, { timeoutMilliseconds: 10_000 })
+    if (stopped._tag === 'Overran') {
+      consola.warn(describeStopOutcome(stopped))
       process.exit(0)
     }
+    consola.info(describeStopOutcome(stopped))
   },
 })
 
