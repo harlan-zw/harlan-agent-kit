@@ -144,6 +144,20 @@ it.skipIf(homeOverlayMissing)('refuses a persisted path that aliases a directory
   }
 })
 
+it.skipIf(homeOverlayMissing)('starts concurrent first turns on a home that predates the layer', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-home-concurrent-'))
+  try {
+    const { controller, workspace, profile, layers } = await fixture(root)
+    // A Service restart starts several Agents at once, before any turn created the Codex mount points.
+    const sandboxes = await Promise.all(Array.from({ length: 4 }, (_, index) => prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex', taskId: `concurrent-${index}`, readOnly: true })))
+    await Promise.all(sandboxes.map(sandbox => sandbox.release()))
+    await expect(readdir(layers)).resolves.toEqual([])
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 it('refuses Agent turns on a host whose bubblewrap cannot mount the home layer', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-home-refusal-'))
   try {

@@ -1,3 +1,4 @@
+import type { Stats } from 'node:fs'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -131,37 +132,51 @@ function routineStatePaths(taskId: string | undefined): string[] {
   ]
 }
 
-/** Creates bwrap mount points on purpose, so no alias left by an older turn decides where a mask lands. */
+async function entry(path: string): Promise<Stats | null> {
+  return lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT')
+      return null
+    throw error
+  })
+}
+
+/** Creates one bwrap mount point on purpose, so no alias left by an older turn decides where a mask lands. */
+async function maskPoint(path: string, name: string, kind: 'File' | 'Directory'): Promise<void> {
+  const ordinary = (metadata: Stats | null) => metadata !== null && (kind === 'File' ? metadata.isFile() : metadata.isDirectory())
+  const current = await entry(path)
+  if (ordinary(current))
+    return
+  if (current?.isDirectory())
+    throw new Error(`The Agent worker home has a directory where Codex expects the file .codex/${name}.`)
+  // An alias or special file here predates the home layer. Replace it with an ordinary mount point.
+  if (current !== null) {
+    await unlink(path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT')
+        throw error
+    })
+  }
+  // A rollback to code without masks reads these stubs. Codex warns on an empty hooks file.
+  const created = kind === 'File'
+    ? writeFile(path, name === 'hooks.json' ? '{}' : '', { flag: 'wx', mode: 0o600 })
+    : mkdir(path, { mode: 0o700 })
+  // Turns that start together create the same mount point. Keep the other turn's entry when its type matches.
+  await created.catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'EEXIST')
+      throw error
+  })
+  if (!ordinary(await entry(path)))
+    throw new Error(`The Agent worker home must keep .codex/${name} as an ordinary ${kind === 'File' ? 'file' : 'directory'}.`)
+}
+
 async function prepareCodexMasks(codex: string): Promise<string> {
   const directory = await open(codex, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   try {
     const pinned = `/proc/self/fd/${directory.fd}`
-    let instructions = ''
-    const masks = [...codexFileMasks.map(name => ({ name, kind: 'File' as const })), ...codexDirectoryMasks.map(name => ({ name, kind: 'Directory' as const }))]
-    for (const { name, kind } of masks) {
-      const path = `${pinned}/${name}`
-      const metadata = await lstat(path).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === 'ENOENT')
-          return null
-        throw error
-      })
-      if (metadata !== null && (kind === 'File' ? metadata.isFile() : metadata.isDirectory())) {
-        if (name === 'AGENTS.md')
-          instructions = await boundedFile(path)
-        continue
-      }
-      if (metadata?.isDirectory())
-        throw new Error(`The Agent worker home has a directory where Codex expects the file .codex/${name}.`)
-      // An alias or special file here predates the home layer. Replace it with an ordinary mount point.
-      if (metadata !== null)
-        await unlink(path)
-      // A rollback to code without masks reads these stubs. Codex warns on an empty hooks file.
-      if (kind === 'File')
-        await writeFile(path, name === 'hooks.json' ? '{}' : '', { flag: 'wx', mode: 0o600 })
-      else
-        await mkdir(path, { mode: 0o700 })
-    }
-    return instructions
+    for (const name of codexFileMasks)
+      await maskPoint(`${pinned}/${name}`, name, 'File')
+    for (const name of codexDirectoryMasks)
+      await maskPoint(`${pinned}/${name}`, name, 'Directory')
+    return await boundedFile(`${pinned}/AGENTS.md`)
   }
   finally {
     await directory.close()
