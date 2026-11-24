@@ -769,7 +769,14 @@ export interface ClaimedAdversarialReviewTask extends AdversarialReviewTask {
   state: Extract<TaskState, { _tag: 'Running' }>
   repositoryMapping: RepositoryMapping
   pullRequest: GitHubPullRequestItem
-  rerun: { _tag: 'NotRequested' } | { _tag: 'Requested' }
+  /**
+   * Why this head needs a Review although the pull request had one.
+   *
+   * `Requested` is an explicit rerun request. `NewHead` is the automatic
+   * Review of a head this service has not reviewed yet, on a pull request it
+   * already reviewed. Only an explicit request rules out carrying a Review.
+   */
+  rerun: { _tag: 'NotRequested' } | { _tag: 'Requested' } | { _tag: 'NewHead' }
 }
 
 export interface IssueTriageTask {

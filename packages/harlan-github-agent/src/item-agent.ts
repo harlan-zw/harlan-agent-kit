@@ -1811,7 +1811,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // files are read once too: the Reasoning effort band needs them before
       // the turn, and Merge risk needs the same list after it.
       const changedFiles = await reviewChangedFiles(options, task, signal)
-      const reused = await reuseEarlierReview(options, task, snapshot.value, workspace.value, changedFiles, { forced: manualReview || task.rerun._tag !== 'NotRequested', startedAt }, signal)
+      const reused = await reuseEarlierReview(options, task, snapshot.value, workspace.value, changedFiles, { forced: manualReview || task.rerun._tag === 'Requested', startedAt }, signal)
       if (reused !== undefined)
         return reused
       const band = reviewReasoningEffortBand(changedFiles._tag === 'Ok' ? changedFiles.value : null, reviewReasoningEffortPolicy(task))

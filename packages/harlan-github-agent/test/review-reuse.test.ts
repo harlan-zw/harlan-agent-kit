@@ -1,5 +1,5 @@
 import type { HeadAdvance } from '../src/review-reuse.ts'
-import type { RecordReviewRunInput, ReviewFinding, ReviewGates, ReviewRun } from '../src/types.ts'
+import type { ClaimedAdversarialReviewTask, RecordReviewRunInput, ReviewFinding, ReviewGates, ReviewRun } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -242,7 +242,7 @@ const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { 
  * Runs one Review whose pull request has an earlier reviewed head, and reports
  * how many Agent turns started and what the Review run recorded.
  */
-async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance) {
+async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance, rerun: ClaimedAdversarialReviewTask['rerun'] = { _tag: 'NotRequested' }) {
   const pullRequest = pullRequestItem({ mergeState: 'clean' })
   const capture: ProviderCapture = { requests: [] }
   const recorded: RecordReviewRunInput[] = []
@@ -333,7 +333,7 @@ async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance) 
     updatedAt: '2026-11-24T01:00:00.000Z',
     repositoryMapping: repositoryMapping(),
     pullRequest,
-    rerun: { _tag: 'NotRequested' },
+    rerun,
   }, new AbortController().signal)
 
   if (result._tag !== 'Ok')
@@ -364,6 +364,38 @@ describe('a Review after an earlier reviewed head', () => {
 
     expect(review.turns).toBe(1)
     expect(review.run).toMatchObject({ checked: 'the changed files', confidence: 96 })
+  })
+})
+
+/** The rerun value the store's own claim gives the Review of a second head. */
+function claimedRerunOfSecondHead(): ClaimedAdversarialReviewTask['rerun'] {
+  const store = openJournalStore(':memory:')
+  try {
+    const repository = repositoryMapping()
+    store.syncRepositories([repository], '2026-11-24T00:00:00.000Z')
+    store.setRepositoryWritesEnabled(repository.github, true)
+    store.recordObservation({ externalId: 'first-head', observedAt: '2026-11-24T00:01:00.000Z', source: 'poll', subject: pullRequestItem({ mergeState: 'clean', headSha: 'abc123' }) })
+    const first = store.claimNextAdversarialReviewTask('reviewer', '2026-11-24T00:01:30.000Z', 60 * 60_000)!
+    store.recordReviewRun({ ...earlierRun({ id: 'first-review', headSha: 'abc123', revisionId: first.revisionId }), confidence: 92 })
+    store.recordObservation({ externalId: 'merged-main', observedAt: '2026-11-24T00:10:00.000Z', source: 'poll', subject: pullRequestItem({ mergeState: 'clean', headSha: 'def456', baseSha: 'base456' }) })
+    return store.claimNextAdversarialReviewTask('reviewer', '2026-11-24T00:10:30.000Z', 60 * 60_000)!.rerun
+  }
+  finally {
+    store.close()
+  }
+}
+
+describe('a Review the store claims for a new head', () => {
+  it('carries the earlier verdict across a clean base merge', async () => {
+    const review = await reviewAfterEarlierHead(earlierRun(), clean, claimedRerunOfSecondHead())
+
+    expect(review.turns).toBe(0)
+  })
+
+  it('runs a fresh Agent turn when a person asked for a rerun', async () => {
+    const review = await reviewAfterEarlierHead(earlierRun(), clean, { _tag: 'Requested' })
+
+    expect(review.turns).toBe(1)
   })
 })
 
