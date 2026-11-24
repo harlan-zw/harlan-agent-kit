@@ -75,6 +75,7 @@ function decide(input: {
   return autoMergeDecision({
     attempts: [attempt(input.mergeRisk ?? null, input.confidence ?? 100)],
     changedFiles: headChangedFiles(input.changedFiles),
+    mergedWithFailingChecks: null,
     policy,
     pullRequest: pullRequestItem({ autoMerge: input.labelled ?? false, headSha: 'abc123', mergeState: 'clean' }),
     repository: { ...repositoryMapping(), autoMerge: input.autoMerge ?? containedScope() },

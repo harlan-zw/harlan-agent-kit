@@ -129,7 +129,7 @@ export async function refreshReviewGates(
       checked: review.checked,
       notChecked: review.notChecked,
       repairedFrom: options.store.repairSource(review.revisionId),
-      mergedWithFailingChecks: options.store.mergedWithFailingChecks(review.revisionId),
+      mergedWithFailingChecks: options.store.mergedWithFailingChecks(review.repository, review.pullRequestNumber, review.headSha),
     })
     // A red default branch holds this review PENDING until someone repairs
     // it. No review lease exists here, so this is the only place that can

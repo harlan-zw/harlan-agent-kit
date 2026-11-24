@@ -137,31 +137,77 @@ async function pushedMergeUnderReview() {
   return { mapping, observed, pushed, store }
 }
 
-describe('a conflict merge pushed with a failing check', () => {
-  it.each(['no checks', 'unrelated passing check'] as const)('holds Auto merge after a fresh passing Review with %s', async (checks) => {
-    const { mapping, pushed, store } = await pushedMergeUnderReview()
-    const snapshot = reviewSnapshot(pushed, 'success')
-    if (checks === 'no checks') {
-      snapshot.checks = { _tag: 'Available', checks: [] }
-      snapshot.requiredChecks = { _tag: 'Declared', contexts: [] }
-    }
-    await refreshReviewGates({
-      preflightRepair: () => Promise.resolve(ok(undefined)),
-      github: {
-        getPullRequestReviewSnapshot: () => Promise.resolve(ok(snapshot)),
-        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Changed' })),
-        stampAgentLabel: () => Promise.resolve(ok(undefined)),
-      },
-      now: () => new Date(at(40)),
-      repositories: [mapping],
-      store,
-    }, new AbortController().signal)
-    const status = store.claimNextTerminalReviewStatus('status-publisher', at(41), 60_000)
-    if (status === null)
-      throw new Error('Expected the finished Review status.')
-    expect(store.completeReviewStatus({ commandId: status.id, workerId: status.workerId, fence: status.fence, at: at(42), commentId: 42, url: pushed.url })).toBe(true)
-    expect(store.listReviewRuns(mapping.github, pushed.number)[0]?.outcome._tag).toBe('Ready')
+/** Settles the Review of the pushed head against one GitHub snapshot and publishes its comment. */
+async function settleReview(setup: Awaited<ReturnType<typeof pushedMergeUnderReview>>, live: PullRequestReviewSnapshot) {
+  const { mapping, store } = setup
+  const results = await refreshReviewGates({
+    preflightRepair: () => Promise.resolve(ok(undefined)),
+    github: {
+      getPullRequestReviewSnapshot: () => Promise.resolve(ok(live)),
+      editReviewStatus: () => Promise.resolve(ok({ _tag: 'Changed' })),
+      stampAgentLabel: () => Promise.resolve(ok(undefined)),
+    },
+    now: () => new Date(at(40)),
+    repositories: [mapping],
+    store,
+  }, new AbortController().signal)
+  const status = store.claimNextTerminalReviewStatus('status-publisher', at(41), 60_000)
+  if (status === null)
+    throw new Error('Expected the Review status.')
+  expect(store.completeReviewStatus({
+    commandId: status.id,
+    workerId: status.workerId,
+    fence: status.fence,
+    at: at(42),
+    commentId: 42,
+    url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
+  })).toBe(true)
+  return { body: status.body, results }
+}
 
+describe('a conflict merge pushed with a failing check', () => {
+  it('names the failing check on the pushed head and on no later head', async () => {
+    const { mapping, pushed, store } = await pushedMergeUnderReview()
+
+    expect(store.mergedWithFailingChecks(mapping.github, pushed.number, 'merge-commit')).toEqual({
+      _tag: 'MergedWithFailingChecks',
+      commitSha: 'merge-commit',
+      baseRef: 'main',
+      failures: [{ command: renderCheck, paths: ['test/render.test.ts'] }],
+    })
+    expect(store.mergedWithFailingChecks(mapping.github, pushed.number, 'repair-commit')).toBeNull()
+  })
+
+  it('reads BLOCKED, queues head CI Repair, and holds Auto merge while its check fails on GitHub', async () => {
+    const setup = await pushedMergeUnderReview()
+    const { mapping, pushed, store } = setup
+
+    const { body, results } = await settleReview(setup, reviewSnapshot(pushed, 'failure'))
+
+    expect(results).toEqual([ok(expect.objectContaining({ _tag: 'PublicationQueued', outcome: 'BLOCKED' }))])
+    expect(body).toContain(failingSentence)
+    expect(body).toContain('Required check "test" fails on the pull request head commit.')
+    expect(body).toContain('Repair round 1 of 3 starts.')
+    expect(autoMergeDecision({
+      attempts: store.listReviewRuns(mapping.github, pushed.number),
+      changedFiles: headChangedFiles(undefined, { baseSha: 'base-1', headSha: 'merge-commit' }),
+      mergedWithFailingChecks: store.mergedWithFailingChecks(mapping.github, pushed.number, 'merge-commit'),
+      policy: { _tag: 'Enabled', minimumConfidence: 80, method: 'squash' },
+      pullRequest: pushed,
+      repository: mapping,
+    })).toEqual(expect.objectContaining({ _tag: 'Hold', cause: 'NoReadyReview' }))
+  })
+
+  it.each(['no checks', 'a passing check'] as const)('holds Auto merge on the pushed merge after a READY Review with %s, and merges the next head', async (checks) => {
+    const setup = await pushedMergeUnderReview()
+    const { mapping, pushed, store } = setup
+    const live = reviewSnapshot(pushed, 'success')
+    if (checks === 'no checks') {
+      live.checks = { _tag: 'Available', checks: [] }
+      live.requiredChecks = { _tag: 'Declared', contexts: [] }
+    }
+    const { results } = await settleReview(setup, live)
+    expect(results).toEqual([ok(expect.objectContaining({ _tag: 'PublicationQueued', outcome: 'READY' }))])
     const merges: string[] = []
     const controller = createAutoMergeController({
       changedLines: changedLinesSource(),
@@ -177,79 +223,30 @@ describe('a conflict merge pushed with a failing check', () => {
       report: () => undefined,
       store,
     })
+
     await controller.reconcile(mapping, pushed, new AbortController().signal)
 
     expect(merges).toEqual([])
     expect(store.listTrialAutoMergeHolds({ from: at(0), to: at(60) }).holds).toEqual([
-      expect.objectContaining({ cause: 'KnownLocalCheckFailure', heldOnlyByLabel: false }),
+      expect.objectContaining({ headSha: 'merge-commit', cause: 'MergedWithFailingChecks', heldOnlyByLabel: false }),
     ])
 
-    // A repaired head needs its own published passing Review before Auto merge resumes.
+    // The next head commit, such as a Repair push, needs only its own published READY Review.
     const repaired = { ...pushed, headSha: 'repair-commit', updatedAt: at(44) }
     const observation = store.recordObservation({ externalId: 'repaired', observedAt: at(44), source: 'poll', subject: repaired })
     if (observation._tag !== 'Inserted')
       throw new Error('Expected the repaired head Revision.')
     const prior = store.listReviewRuns(mapping.github, pushed.number)[0]!
-    const gates = prior.gates
     expect(store.recordReviewRun({ ...prior, id: 'review-of-repair', headSha: repaired.headSha, revisionId: observation.revisionId, startedAt: at(45), completedAt: at(46), confidence: 95 })).toEqual({ _tag: 'Inserted', reviewRunId: 'review-of-repair' })
-    store.stageReviewGateStatus({ reviewRunId: 'review-of-repair', repository: mapping.github, pullRequestNumber: repaired.number, revisionId: observation.revisionId, expectedHeadSha: repaired.headSha, gates, body: 'READY', desiredOutcome: 'READY', at: at(47) })
+    store.stageReviewGateStatus({ reviewRunId: 'review-of-repair', repository: mapping.github, pullRequestNumber: repaired.number, revisionId: observation.revisionId, expectedHeadSha: repaired.headSha, gates: prior.gates, body: 'READY', desiredOutcome: 'READY', at: at(47) })
     const repairedStatus = store.claimNextTerminalReviewStatus('status-publisher', at(48), 60_000)
     if (repairedStatus === null)
       throw new Error('Expected the repaired head Review status.')
     expect(store.completeReviewStatus({ commandId: repairedStatus.id, workerId: repairedStatus.workerId, fence: repairedStatus.fence, at: at(49), commentId: 42, url: repaired.url })).toBe(true)
+
     await controller.reconcile(mapping, repaired, new AbortController().signal)
+
     expect(merges).toEqual(['repair-commit'])
-  })
-
-  it('names the failing check on the pushed head', async () => {
-    const { observed, store } = await pushedMergeUnderReview()
-
-    expect(store.mergedWithFailingChecks(observed.revisionId)).toEqual({
-      _tag: 'MergedWithFailingChecks',
-      commitSha: 'merge-commit',
-      baseRef: 'main',
-      failures: [{ command: renderCheck, paths: ['test/render.test.ts'] }],
-    })
-  })
-
-  it('reads BLOCKED, queues head CI Repair, and holds Auto merge while its check fails on GitHub', async () => {
-    const { mapping, pushed, store } = await pushedMergeUnderReview()
-
-    const results = await refreshReviewGates({
-      preflightRepair: () => Promise.resolve(ok(undefined)),
-      github: {
-        getPullRequestReviewSnapshot: () => Promise.resolve(ok(reviewSnapshot(pushed, 'failure'))),
-        editReviewStatus: () => Promise.resolve(ok({ _tag: 'Changed' })),
-        stampAgentLabel: () => Promise.resolve(ok(undefined)),
-      },
-      now: () => new Date(at(40)),
-      repositories: [mapping],
-      store,
-    }, new AbortController().signal)
-
-    expect(results).toEqual([ok(expect.objectContaining({ _tag: 'PublicationQueued', outcome: 'BLOCKED' }))])
-    const status = store.claimNextTerminalReviewStatus('status-publisher', at(41), 60_000)
-    if (status === null)
-      throw new Error('Expected the BLOCKED Review status.')
-    expect(status.body).toContain(failingSentence)
-    expect(status.body).toContain('Required check "test" fails on the pull request head commit.')
-    expect(status.body).toContain('Repair round 1 of 3 starts.')
-    expect(store.completeReviewStatus({
-      commandId: status.id,
-      workerId: status.workerId,
-      fence: status.fence,
-      at: at(42),
-      commentId: 42,
-      url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42',
-    })).toBe(true)
-
-    expect(autoMergeDecision({
-      attempts: store.listReviewRuns(mapping.github, pushed.number),
-      changedFiles: headChangedFiles(undefined, { baseSha: 'base-1', headSha: 'merge-commit' }),
-      policy: { _tag: 'Enabled', minimumConfidence: 80, method: 'squash' },
-      pullRequest: pushed,
-      repository: mapping,
-    })).toEqual(expect.objectContaining({ _tag: 'Hold', cause: 'NoReadyReview' }))
   })
 })
 

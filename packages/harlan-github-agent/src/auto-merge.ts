@@ -1,6 +1,7 @@
 import type { ChangedLines } from './finding-scope.ts'
 import type { Result } from './result.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewRun } from './types.ts'
+import type { ConflictMergeWithFailingChecks } from './worktree.ts'
 import { isProtectedPath } from './pull-request-triage.ts'
 
 /**
@@ -58,7 +59,6 @@ export const AUTO_MERGE_HOLD_CAUSES = {
   NoReadyReview: 'The head has no READY review.',
   NoPublishedReadyReview: 'The READY review is not published.',
   OpenFinding: 'The review left an open finding.',
-  KnownLocalCheckFailure: 'Conflict resolution recorded a failing local check on this head.',
   ChangedFilesUnavailable: 'Its changed files are unavailable.',
   ChangedFilesStale: 'Its changed files were compared for other commits.',
   ProtectedPath: 'It changes a Protected path.',
@@ -67,6 +67,7 @@ export const AUTO_MERGE_HOLD_CAUSES = {
   MergeRiskNotContained: 'Merge risk is not Contained, and it has no label.',
   NoConfidence: 'The review reported no confidence.',
   BelowConfidence: 'Review confidence is below the bar.',
+  MergedWithFailingChecks: 'A conflict resolution pushed this head with checks failing.',
 } as const
 
 export type AutoMergeHoldCause = keyof typeof AUTO_MERGE_HOLD_CAUSES
@@ -121,6 +122,13 @@ export interface AutoMergeInput {
   attempts: ReviewRun[]
   /** Required in every scope: no label and no Merge risk verdict skips the Protected path check. */
   changedFiles: HeadChangedFiles
+  /**
+   * The failing checks a conflict resolution recorded when it pushed the head commit, or null.
+   *
+   * GitHub CI may never run those commands, so a green head and a READY
+   * Review cannot clear them. Only a later head commit does.
+   */
+  mergedWithFailingChecks: ConflictMergeWithFailingChecks | null
   policy: AutoMergePolicy
   pullRequest: GitHubPullRequestItem
   repository: RepositoryMapping
@@ -191,6 +199,10 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
   }
   if (attempt.findings.some(finding => finding._tag === 'Open'))
     return hold('OpenFinding', 'The review left an open finding.')
+  // Before any scope rule, so neither the label nor a Merge risk verdict can
+  // merge a head whose local checks failed where CI may never look.
+  if (input.mergedWithFailingChecks?.commitSha === pullRequest.headSha)
+    return hold('MergedWithFailingChecks', AUTO_MERGE_HOLD_CAUSES.MergedWithFailingChecks)
   // Before any scope rule, so neither the label nor a Merge risk verdict can
   // reach around it.
   const filesHold = changedFilesHold(changedFiles, pullRequest)

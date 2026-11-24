@@ -1217,12 +1217,13 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
    */
   repairSource: (revisionId: string) => RepairSource | null
   /**
-   * The failing checks a conflict resolution named when it pushed this head.
+   * The failing checks a conflict resolution named when it pushed this exact head commit.
    *
    * Null for a head no conflict resolution pushed, and for a merge it pushed
-   * with every check passing.
+   * with every check passing. A later head commit reads null, because no
+   * conflict resolution published it.
    */
-  mergedWithFailingChecks: (revisionId: string) => ConflictMergeWithFailingChecks | null
+  mergedWithFailingChecks: (repository: string, pullRequestNumber: number, headSha: string) => ConflictMergeWithFailingChecks | null
   /** Reviews that stopped without a final comment, so the pull request still claims one is running. */
   listReviewGateRefreshes: () => ReviewGateRefresh[]
   listStoppedReviews: () => StoppedReview[]
@@ -1311,7 +1312,7 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   /** Answers whether the current pull request remains eligible for Review writes. */
   hasCurrentReviewAuthority: (repository: string, pullRequestNumber: number) => boolean
   /** Reads current Auto merge inputs only while operator authority remains active. */
-  getAutoMergeContext: (repository: string, pullRequestNumber: number) => { repository: RepositoryMapping, pullRequest: Omit<GitHubPullRequestItem, 'approvalLabels' | 'autoMerge'>, mergedWithFailingChecks: ConflictMergeWithFailingChecks | null } | null
+  getAutoMergeContext: (repository: string, pullRequestNumber: number) => { repository: RepositoryMapping, pullRequest: Omit<GitHubPullRequestItem, 'approvalLabels' | 'autoMerge'> } | null
   /** Records why Auto merge held one candidate head, once per head and reason. A repeat records nothing. */
   recordAutoMergeHold: (input: AutoMergeHoldRecord) => void
   /** What this service already holds for one head commit. */
@@ -10548,18 +10549,17 @@ export function openJournalStore(
     if (getAgentControl()._tag === 'Paused' || !hasCurrentReviewAuthority(repository, pullRequestNumber))
       return null
     const row = database.prepare(`
-      SELECT repositories.policy_json, revisions.payload, revisions.id AS revision_id
+      SELECT repositories.policy_json, revisions.payload
       FROM subjects
       JOIN repositories ON repositories.id = subjects.repository_id
       JOIN revisions ON revisions.id = subjects.current_revision_id
       WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
-    `).get(repository, pullRequestNumber) as { policy_json: string, payload: string, revision_id: string } | undefined
+    `).get(repository, pullRequestNumber) as { policy_json: string, payload: string } | undefined
     return row === undefined
       ? null
       : {
           repository: JSON.parse(row.policy_json) as RepositoryMapping,
           pullRequest: JSON.parse(row.payload) as Omit<GitHubPullRequestItem, 'approvalLabels' | 'autoMerge'>,
-          mergedWithFailingChecks: mergedWithFailingChecks(row.revision_id),
         }
   }
 
@@ -15998,19 +15998,19 @@ export function openJournalStore(
     return { headSha: row.head_sha, fingerprints }
   }
 
-  const mergedWithFailingChecks: JournalStore['mergedWithFailingChecks'] = (revisionId) => {
+  const mergedWithFailingChecks: JournalStore['mergedWithFailingChecks'] = (repository, pullRequestNumber, headSha) => {
     const row = database.prepare(`
       SELECT conflict.evidence, publication_commands.commit_sha
-      FROM revisions
-      JOIN publication_commands ON publication_commands.state_tag = 'Published'
-        AND publication_commands.commit_sha = json_extract(revisions.payload, '$.headSha')
+      FROM publication_commands
       JOIN tasks AS conflict ON conflict.id = publication_commands.task_id
-        AND conflict.kind = 'resolve_conflict' AND conflict.subject_id = revisions.subject_id
-        AND conflict.state_tag = 'Completed'
-      WHERE revisions.id = ?
+        AND conflict.kind = 'resolve_conflict' AND conflict.state_tag = 'Completed'
+      JOIN subjects ON subjects.id = conflict.subject_id
+      JOIN repositories ON repositories.id = subjects.repository_id
+      WHERE repositories.github = ? AND subjects.github_number = ? AND subjects.kind = 'pull_request'
+        AND publication_commands.state_tag = 'Published' AND publication_commands.commit_sha = ?
       ORDER BY publication_commands.published_at DESC, publication_commands.id DESC
       LIMIT 1
-    `).get(revisionId) as { evidence: string | null, commit_sha: string } | undefined
+    `).get(repository, pullRequestNumber, headSha) as { evidence: string | null, commit_sha: string } | undefined
     const merge = row === undefined ? undefined : parseConflictMergeWithFailingChecks(row.evidence)
     // The evidence names its own commit, so it never describes another push.
     return merge !== undefined && merge.commitSha === row?.commit_sha ? merge : null

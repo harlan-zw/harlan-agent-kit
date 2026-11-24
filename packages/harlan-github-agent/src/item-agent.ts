@@ -1670,7 +1670,7 @@ async function projectReviewRun(
     checked: run.checked,
     notChecked: run.notChecked,
     repairedFrom: options.store.repairSource(task.revisionId),
-    mergedWithFailingChecks: options.store.mergedWithFailingChecks(task.revisionId),
+    mergedWithFailingChecks: options.store.mergedWithFailingChecks(task.repository, task.pullRequestNumber, task.pullRequest.headSha),
   })
   const durablePublication = options.status.stageTerminal !== undefined
   const staged = !durablePublication

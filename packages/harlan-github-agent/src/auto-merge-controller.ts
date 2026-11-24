@@ -1,9 +1,9 @@
-import type { AutoMergeDecision, AutoMergeInput, AutoMergePolicy, HeadChangedFiles } from './auto-merge.ts'
+import type { AutoMergeInput, AutoMergePolicy, HeadChangedFiles } from './auto-merge.ts'
 import type { ChangedLinesReader } from './github-changed-lines.ts'
 import type { GitHubPullRequestMerger } from './github.ts'
 import type { JournalStore } from './store.ts'
 import type { GitHubItem, RepositoryMapping } from './types.ts'
-import { AUTO_MERGE_HOLD_CAUSES, autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasCurrentPublishedReadyReview, heldOnlyByLabel } from './auto-merge.ts'
+import { autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasCurrentPublishedReadyReview, heldOnlyByLabel } from './auto-merge.ts'
 import { err, ok } from './result.ts'
 
 export type AutoMergeEvent
@@ -27,7 +27,7 @@ export interface AutoMergeControllerOptions {
   policy: AutoMergePolicy
   /** Every merge and every refusal is reported. A refusal never fails the poll. */
   report: (event: AutoMergeEvent) => void
-  store: Pick<JournalStore, 'getAutoMergeContext' | 'listReviewRuns' | 'recordAutoMergeHold'>
+  store: Pick<JournalStore, 'getAutoMergeContext' | 'listReviewRuns' | 'mergedWithFailingChecks' | 'recordAutoMergeHold'>
 }
 
 export function createAutoMergeController(options: AutoMergeControllerOptions): AutoMergeController {
@@ -116,16 +116,14 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
       const input: AutoMergeInput = {
         attempts,
         changedFiles,
+        mergedWithFailingChecks: options.store.mergedWithFailingChecks(repository.github, subject.number, context.pullRequest.headSha),
         policy: options.policy,
         pullRequest: context.pullRequest,
         repository: context.repository,
       }
-      // Review and unrelated green CI cannot clear a recorded local failure.
-      // Re-read this evidence in authorize, immediately before either GitHub merge path.
-      const decide = (candidate: AutoMergeInput, current: typeof context): AutoMergeDecision => current.mergedWithFailingChecks === null
-        ? autoMergeDecision(candidate)
-        : { _tag: 'Hold', cause: 'KnownLocalCheckFailure', reason: AUTO_MERGE_HOLD_CAUSES.KnownLocalCheckFailure }
-      const decision = decide(input, context)
+      // A recorded local failure holds inside the decision, which authorize
+      // reads again immediately before either GitHub merge path.
+      const decision = autoMergeDecision(input)
       if (decision._tag === 'Hold') {
         // Only a head that reached a published READY Review gets here, so the
         // record says why a reviewed candidate waited for Harlan.
@@ -135,7 +133,7 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
             pullRequestNumber: subject.number,
             headSha: context.pullRequest.headSha,
             cause: decision.cause,
-            heldOnlyByLabel: decision.cause !== 'KnownLocalCheckFailure' && heldOnlyByLabel(input),
+            heldOnlyByLabel: heldOnlyByLabel(input),
             at: options.now().toISOString(),
           })
         }
@@ -155,13 +153,14 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
           if (current === null)
             return err('Auto merge lost its current authority before the GitHub write.')
           const currentAttempts = options.store.listReviewRuns(repository.github, subject.number)
-          const currentDecision = decide({
+          const currentDecision = autoMergeDecision({
             attempts: currentAttempts,
             changedFiles,
+            mergedWithFailingChecks: options.store.mergedWithFailingChecks(repository.github, subject.number, current.pullRequest.headSha),
             policy: options.policy,
             pullRequest: current.pullRequest,
             repository: current.repository,
-          }, current)
+          })
           const currentPublication = currentAttempts.find(attempt => attempt.id === decision.reviewRunId)?.gatePublication
           return currentDecision._tag === 'Merge' && currentDecision.headSha === decision.headSha
             && currentDecision.method === decision.method && currentDecision.reviewRunId === decision.reviewRunId
