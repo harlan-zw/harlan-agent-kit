@@ -1887,13 +1887,14 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
       // files are read once too: the Reasoning effort band needs them before
       // the turn, and Merge risk needs the same list after it.
       const changedFiles = await reviewChangedFiles(options, task, signal)
-      const forced = manualReview || task.rerun._tag !== 'NotRequested'
+      // Only an explicit request forces a fresh, full Review: a rerun or the
+      // Review label. Every later head claims as a NewRevision, and reading
+      // that as forced kept the carry and the Repair focus from ever running.
+      const forced = manualReview || task.rerun._tag === 'Requested'
       const reused = await reuseEarlierReview(options, task, snapshot.value, workspace.value, changedFiles, { forced, startedAt }, signal)
       if (reused !== undefined)
         return reused
-      // Automatic follow-ups need a fresh answer, but only explicit requests
-      // and the Review label require the full pull request scope.
-      const scope = await reviewScope(options, task, workspace.value, manualReview || task.rerun._tag === 'Requested', signal)
+      const scope = await reviewScope(options, task, workspace.value, forced, signal)
       const focus: RepairFocusPrompt | null = scope._tag === 'Full'
         ? null
         : { source: scope.source, diff: scope.diff, pullRequestPaths: changedFiles._tag === 'Ok' ? changedFiles.value.map(file => file.path) : null }

@@ -769,7 +769,12 @@ export interface ClaimedAdversarialReviewTask extends AdversarialReviewTask {
   state: Extract<TaskState, { _tag: 'Running' }>
   repositoryMapping: RepositoryMapping
   pullRequest: GitHubPullRequestItem
-  rerun: { _tag: 'NotRequested' } | { _tag: 'Requested' } | { _tag: 'FollowUp' }
+  /**
+   * `Requested` is an explicit rerun. `NewRevision` is the automatic Review of a
+   * later head of a reviewed pull request. Both replace the earlier verdict
+   * comment, but only `Requested` forces a fresh, full Review.
+   */
+  rerun: { _tag: 'NotRequested' } | { _tag: 'Requested' } | { _tag: 'NewRevision' }
 }
 
 export interface IssueTriageTask {

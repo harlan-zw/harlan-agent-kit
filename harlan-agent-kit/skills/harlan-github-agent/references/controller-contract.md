@@ -226,7 +226,7 @@ A head that the controller's own Repair pushed gets a Repair focus Review. It is
 - The Merge risk claim is the more severe of this turn's claim and the answered Review's claim. A focused Agent did not reread the whole diff, so it can raise the claim but never lower it.
 - The run records its own policy digest. Its `Checked` clause names the head the focus started from.
 
-A rerun, the manual Review label, or a rebase starts a full Review. A Repair focus Review can answer a Repair of another Repair focus Review. The Repair round limit bounds that chain. A contributor commit ends the chain, so its head gets a full Review.
+A rerun, the manual Review label, or a rebase starts a full Review. A rerun is an explicit request from the dashboard, a comment, the Review check run, or a Repair that disputes a finding. The automatic Review of a later head is not a rerun, so it can carry an earlier Review or focus on a Repair delta. A Repair focus Review can answer a Repair of another Repair focus Review. The Repair round limit bounds that chain. A contributor commit ends the chain, so its head gets a full Review.
 
 Preflight Repair authority before Review. Keep Review read only, and reject a Review worktree that changed.
 

@@ -1,5 +1,5 @@
 import type { HeadAdvance } from '../src/review-reuse.ts'
-import type { RecordReviewRunInput, ReviewFinding, ReviewGates, ReviewRun } from '../src/types.ts'
+import type { ClaimedAdversarialReviewTask, RecordReviewRunInput, ReviewFinding, ReviewGates, ReviewRun } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -242,7 +242,7 @@ const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { 
  * Runs one Review whose pull request has an earlier reviewed head, and reports
  * how many Agent turns started and what the Review run recorded.
  */
-async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance) {
+async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance, rerun: ClaimedAdversarialReviewTask['rerun'] = { _tag: 'NotRequested' }) {
   const pullRequest = pullRequestItem({ mergeState: 'clean' })
   const capture: ProviderCapture = { requests: [] }
   const recorded: RecordReviewRunInput[] = []
@@ -332,7 +332,7 @@ async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance) 
     updatedAt: '2026-11-24T01:00:00.000Z',
     repositoryMapping: repositoryMapping(),
     pullRequest,
-    rerun: { _tag: 'NotRequested' },
+    rerun,
   }, new AbortController().signal)
 
   if (result._tag !== 'Ok')
@@ -356,6 +356,20 @@ describe('a Review after an earlier reviewed head', () => {
       checked: 'the Review of abc1234, carried forward because the new commits only merge main without conflicts',
     })
     expect(review.run?.findings).toMatchObject([{ _tag: 'Logged', details: { location: { path: 'src/untouched.ts' } } }])
+  })
+
+  it('carries the earlier verdict for the automatic Review of a new head', async () => {
+    // Every later head of a reviewed pull request claims as a NewRevision, so
+    // reading it as a requested rerun kept the carry from ever running.
+    const review = await reviewAfterEarlierHead(earlierRun(), clean, { _tag: 'NewRevision' })
+
+    expect(review.turns).toBe(0)
+  })
+
+  it('runs a fresh Agent turn when a rerun was requested', async () => {
+    const review = await reviewAfterEarlierHead(earlierRun(), clean, { _tag: 'Requested' })
+
+    expect(review.turns).toBe(1)
   })
 
   it('runs a fresh Agent turn when the new head adds its own commit', async () => {

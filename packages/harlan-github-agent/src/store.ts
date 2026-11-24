@@ -11583,7 +11583,7 @@ export function openJournalStore(
         updatedAt: now,
         repositoryMapping,
         pullRequest: subject,
-        rerun: row.rerun_requested === 1 ? { _tag: 'Requested' } : row.rerun_requested === 2 ? { _tag: 'FollowUp' } : { _tag: 'NotRequested' },
+        rerun: row.rerun_requested === 1 ? { _tag: 'Requested' } : row.rerun_requested === 2 ? { _tag: 'NewRevision' } : { _tag: 'NotRequested' },
       }
     }
     catch (error) {
