@@ -96,6 +96,9 @@ After configuration changes, use a durable Restart request.
 It lets active Agents and controller writes finish before systemd starts the next process.
 Never use Pause or raw unit restart to coordinate a routine restart.
 For paired Service updates, run `pnpm service:hogwild:update`.
+A merge does not need an update. The nightly scheduled Update ships merged code.
+Each update drains Agents for 8 to 12 minutes, then drops control connections for about 25 seconds.
+Run the helper only when Harlan asks, or when a merged fix must ship before the nightly Update.
 The helper holds one local lock through the desktop update.
 Another update or restart on that host fails before it reaches the Service.
 During drain, the helper reports active Tasks, occupied Agent slots, and elapsed seconds.
