@@ -1481,7 +1481,27 @@ describe('review findings on #759', () => {
     expect(redactPrivateDetails(text, details).text).toBe(`${structure}${removed}\n${quoted}`)
   })
 
-  it('keeps the removals a carried fence removal exposes in a finding comment edit', () => {
+  it.each([
+    ['a quote inside a list item that starts four spaces in', '- a\n    > x <a href="https://notes.\n  > localhost/acquisition.pdf">y</a>', `- a\n    > ${removed}\n  > ${removed}`],
+    ['an HTML block before a quote marker', '<details>\nSee <a href="https://notes.localhost/\n> acquisition.pdf">docs</a>.\n</details>', `<details>\n${removed}\n> ${removed}\n</details>`],
+    ['an HTML block holding a heading marker', '<div>\n# Title <a href="https://notes.localhost/\nacquisition.pdf">docs</a>\n</div>', `<div>\n${removed}\n${removed}\n</div>`],
+    ['an HTML block holding a list marker', '<div>\nSee <a href="https://notes.localhost/\n- acquisition.pdf">docs</a>\n</div>', `<div>\n${removed}\n- ${removed}\n</div>`],
+  ])('removes every line of a private tag that continues through %s', (_name, text, expected) => {
+    const redacted = redactPrivateDetails(text, details)
+
+    expect(redacted.text).toBe(expected)
+    expectNoFragment(redacted.text)
+  })
+
+  it.each(['<br>', '<span class="x">', '</kbd>'])('removes a private tag after a fence that a lone %s inside a paragraph cannot hide', (tag) => {
+    const fence = '\`\`\`\ncode\n\nmore code\n\`\`\`'
+    const redacted = redactPrivateDetails(`Some prose\n${tag}\n${fence}\nSee <a href="https://notes.localhost/\nacquisition.pdf">docs</a>.`, details)
+
+    expect(redacted.text).toBe(`Some prose\n${tag}\n${fence}\n${removed}\n${removed}`)
+    expectNoFragment(redacted.text)
+  })
+
+  it('keeps the removals a carried fence removal exposes in a finding comment edit', async () => {
     const header = '<!-- harlan-agent-kit:pr-triage -->\n**Minor (40/100): The cache leaks**\n'
     const published = `${header}\n${removed}\nProof line two.`
     const source = `${header}\n\`\`\`html\n<a href="https://notes.localhost/\nacquisition.pdf">docs</a>\n\`\`\``
@@ -1489,8 +1509,11 @@ describe('review findings on #759', () => {
 
     const outgoing = publicBody({ details, report: leak => reports.push(leak) }, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'review comment' }, source, removalsByPosition(published))
 
-    expect(outgoing.text).toBe(`${header}\n${removed}\n${removed}\n${removed}\n\`\`\``)
-    expectNoFragment(outgoing.text)
+    const sent = await outgoing.send(async body => body)
+
+    expect(sent).toBe(`${header}\n${removed}\n${removed}\n${removed}\n\`\`\``)
+    expectNoFragment(sent)
+    expect(reports).toEqual([expect.objectContaining({ itemNumber: 24, hits: [{ _tag: 'Link', entry: 'notes.localhost' }] })])
   })
 
   it.each([

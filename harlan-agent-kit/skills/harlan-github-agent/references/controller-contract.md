@@ -513,7 +513,8 @@ Replace each line that names a private detail with one fixed line. Never cut out
 Keep the removed line's indentation, blockquote, list or checkbox marker, a leading `Repair:`, and its HTML comment markers, so parsers and Markdown structure still hold. Remove every other word. Drop a marker that itself names a private detail.
 A control line whose label held a private detail keeps its marker, and its parser ignores the changed label.
 Multi-line markup inside code, a comment opener with no closer, and markup that would cross into another block render as text. They join no lines, so they never remove another line.
-A line starts another block only where CommonMark always ends the paragraph. A list item that cannot interrupt a paragraph continues it, such as an item numbered above 1, an empty item, or a marker after four spaces. A code span never pairs across a line that might start a block.
+A line starts another block only where CommonMark always ends the paragraph. A list item that cannot interrupt a paragraph continues it, such as an item numbered above 1, an empty item, or a marker after four spaces. A blockquote marker starts a block only past the most markers the paragraph's lines hold. Inside a raw HTML block, no Markdown marker starts a block. A code span never pairs across a line that might start a block.
+A removed line can change the Markdown around it, such as a fence opener. Read the structure again with the removed lines in place, and remove what it exposes.
 Guard a title and its body apart. A withheld body then keeps its own marker lines, and the title stays the title.
 Match entries glued to any option or assignment, such as `-I`, `CFLAGS=`, `-Wp,`, and `PATH=`, after removing every URL from the text.
 After line removal, check the body with its lines joined. If a private detail appears only across lines, withhold the whole body: keep the marker lines that name nothing private, then one fixed withheld line.

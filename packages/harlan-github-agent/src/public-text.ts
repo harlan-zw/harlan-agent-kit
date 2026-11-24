@@ -497,8 +497,13 @@ const HTML_BLOCK_TAG = new RegExp(`^ {0,3}${HTML_TAG.source}[ \\t]*$`, 'i')
 
 type HtmlBlockEnd = { _tag: 'Blank' } | { _tag: 'Closing', pattern: RegExp }
 
-/** Raw HTML owns its lines, including lines that resemble Markdown fences or quotes. */
-function htmlBlockEnd(rest: string): HtmlBlockEnd | null {
+/**
+ * Raw HTML owns its lines, including lines that resemble Markdown fences or quotes.
+ *
+ * A lone complete tag opens a block only where no paragraph continues. Inside
+ * a paragraph it is inline HTML, and a fence on the next line is still a fence.
+ */
+function htmlBlockEnd(rest: string, inParagraph: boolean): HtmlBlockEnd | null {
   const literal = /^ {0,3}<(script|pre|style|textarea)(?=[\s>])/i.exec(rest)
   if (literal !== null)
     return { _tag: 'Closing', pattern: new RegExp(`</${literal[1]}[ \\t]*>`, 'i') }
@@ -508,12 +513,18 @@ function htmlBlockEnd(rest: string): HtmlBlockEnd | null {
   }
   if (/^ {0,3}<![A-Z]/.test(rest))
     return { _tag: 'Closing', pattern: />/ }
-  return HTML_BLOCK.test(rest) || HTML_BLOCK_TAG.test(rest) ? { _tag: 'Blank' } : null
+  return HTML_BLOCK.test(rest) || (!inParagraph && HTML_BLOCK_TAG.test(rest)) ? { _tag: 'Blank' } : null
 }
 
 /** An open paragraph: its blockquote depth, and the content column of the list item it starts in. */
 interface OpenParagraph {
   depth: number
+  /**
+   * The most blockquote markers any of its lines holds, at any indentation.
+   * Inside a list item, a marker four spaces in can still open a blockquote,
+   * so only a line past this count opens a deeper one for certain.
+   */
+  widest: number
   item: number | null
 }
 
@@ -545,8 +556,13 @@ function endsParagraph(rest: string, paragraph: OpenParagraph, lazy: boolean): b
  */
 const NESTED_LIST_MARKERS = 8
 
+/** `paragraph` after a line that continues it and holds `depth` blockquote markers at any indentation. */
+function continued(paragraph: OpenParagraph | null, depth: number): OpenParagraph | null {
+  return paragraph === null ? null : { ...paragraph, widest: Math.max(paragraph.widest, depth) }
+}
+
 /** The paragraph that `rest` opens, or null for a heading, a thematic break, or a list item with no text yet. */
-function opensParagraph(rest: string, depth: number): OpenParagraph | null {
+function opensParagraph(rest: string, depth: number, widest: number): OpenParagraph | null {
   let item: number | null = null
   let content = rest
   for (let nested = 0; nested < NESTED_LIST_MARKERS; nested++) {
@@ -554,13 +570,13 @@ function opensParagraph(rest: string, depth: number): OpenParagraph | null {
       return null
     const marker = LIST_MARKER.exec(content)
     if (marker === null)
-      return { depth, item }
+      return { depth, widest, item }
     if (content.slice(marker[0].length).trim() === '')
       return null
     item = (item ?? 0) + marker[0].length
     content = content.slice(marker[0].length)
   }
-  return { depth, item }
+  return { depth, widest, item }
 }
 
 function layoutOf(text: string, removed: ReadonlySet<number> = new Set()): Layout {
@@ -593,8 +609,10 @@ function layoutOf(text: string, removed: ReadonlySet<number> = new Set()): Layou
     }
     const anyQuotes = ANY_QUOTE_MARKERS.exec(line)?.[0] ?? ''
     const anyRest = line.slice(anyQuotes.length)
+    // A lazy line closes the containers of the paragraph, so a lone tag there opens a block.
+    const lineDepth = (QUOTE_MARKERS.exec(line)?.[0] ?? '').split('>').length - 1
     if (fence === null)
-      html ??= htmlBlockEnd(anyRest)
+      html ??= htmlBlockEnd(anyRest, paragraph !== null && lineDepth >= paragraph.depth)
     if (html !== null && fence === null) {
       const blank = line.trim() === ''
       fenced.push(!blank)
@@ -622,18 +640,16 @@ function layoutOf(text: string, removed: ReadonlySet<number> = new Set()): Layou
     else {
       const quotes = QUOTE_MARKERS.exec(line)?.[0] ?? ''
       const depth = quotes.split('>').length - 1
+      const anyDepth = anyQuotes.split('>').length - 1
       const rest = line.slice(quotes.length)
       const blank = rest.trim() === ''
-      const goesDeeper = paragraph !== null && depth > paragraph.depth
-      const ends = blank || paragraph === null || goesDeeper || endsParagraph(rest, paragraph, depth < paragraph.depth)
+      const goesDeeper: boolean = paragraph !== null && depth > paragraph.widest
+      const ends: boolean = blank || paragraph === null || goesDeeper || endsParagraph(rest, paragraph, depth < paragraph.depth)
       fenced.push(false)
       definite.push(ends)
       deeper.push(goesDeeper)
       possible.push(ends || anyQuotes !== previousQuotes || anyRest.trim() === '' || POSSIBLE_BLOCK_START.test(anyRest) || previousOneLine)
-      if (blank)
-        paragraph = null
-      else if (ends)
-        paragraph = opensParagraph(rest, depth)
+      paragraph = blank ? null : ends ? opensParagraph(rest, depth, anyDepth) : continued(paragraph, anyDepth)
     }
     previousQuotes = anyQuotes
     previousOneLine = POSSIBLE_ONE_LINE_BLOCK.test(anyRest)
