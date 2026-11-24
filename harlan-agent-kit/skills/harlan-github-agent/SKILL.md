@@ -83,7 +83,9 @@ harlan-github-agent control watch-pr --repository OWNER/REPOSITORY --number NUMB
 Use `--until merged` to wait through actionable findings.
 The default stops for attention after Service Tasks stop owning the head.
 Changed states go to stderr. Terminal state goes to stdout.
-Reconnect with the same command after a Service restart.
+After a Service restart, the watch reconnects by itself for up to 3 minutes.
+Each reconnect writes one `reconnect` line to stderr.
+If the watch still fails, run the same command again.
 Follow [pull request watching](../pr/references/pull-request-watch.md) for submission completion.
 
 ## Control the Service

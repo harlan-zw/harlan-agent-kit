@@ -23,6 +23,35 @@ function streamClient(states: unknown[]) {
   return client.value
 }
 
+type ScriptedResponse
+  = | { _tag: 'Stream', states: unknown[], closeAfterMilliseconds?: number }
+    | { _tag: 'Status', status: number }
+    | { _tag: 'Throw' }
+
+/** Plays one step per request and repeats the last step. A Caddy 502 has an empty body. */
+function scriptedClient(steps: ScriptedResponse[]) {
+  const calls = { count: 0 }
+  const client = createControlClient({ baseUrl: 'https://agent.example.test', authentication: { _tag: 'Basic', password: 'secret' }, fetch: async () => {
+    const step = steps[Math.min(calls.count++, steps.length - 1)]!
+    if (step._tag === 'Throw')
+      throw new TypeError('fetch failed')
+    if (step._tag === 'Status')
+      return new Response('', { status: step.status })
+    const body = new TextEncoder().encode(step.states.map(state => `event: pull-request\ndata: ${JSON.stringify(state)}\n\n`).join(''))
+    let cancelled = false
+    return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(body)
+      setTimeout(() => {
+        if (!cancelled)
+          controller.close()
+      }, step.closeAfterMilliseconds ?? 0)
+    }, cancel() { cancelled = true } }), { headers: { 'content-type': 'text/event-stream' } })
+  } })
+  if (client._tag === 'Err')
+    throw new Error(client.error.message)
+  return { client: client.value, calls }
+}
+
 describe('pull request watch', () => {
   it.each(['RestartRequested', 'Paused', 'WritesDisabled', 'CapacityUnavailable'] as const)('reports %s and clears a hold without changing the queued Task', async (initialStart) => {
     const store = openJournalStore(':memory:', true)
@@ -192,8 +221,78 @@ describe('pull request watch', () => {
     expect(await streamClient([{ ...open, _tag: 'Merged' }]).watchPullRequest(target)).toMatchObject({ _tag: 'Err', error: { _tag: 'InvalidResponse' } })
   })
 
-  it('reports disconnects so the caller can resume the same stored pull request', async () => {
-    expect(await streamClient([open]).watchPullRequest(target)).toMatchObject({ _tag: 'Err', error: { _tag: 'NetworkFailure' } })
+  it('reconnects through a Service restart and resumes from stored state', async () => {
+    vi.useFakeTimers()
+    const { client, calls } = scriptedClient([
+      { _tag: 'Stream', states: [open] },
+      { _tag: 'Throw' },
+      { _tag: 'Status', status: 502 },
+      { _tag: 'Stream', states: [open, merged] },
+    ])
+    const updates: string[] = []
+    const reconnects: unknown[] = []
+    const watching = client.watchPullRequest(target, { onUpdate: state => updates.push(state._tag), onReconnect: reconnect => reconnects.push(reconnect) })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await watching).toEqual({ _tag: 'Ok', value: merged })
+    expect(updates).toEqual(['Open', 'Merged'])
+    expect(calls.count).toBe(4)
+    expect(reconnects).toMatchObject([
+      { attempt: 1, delayMilliseconds: 1_000, error: { _tag: 'NetworkFailure' } },
+      { attempt: 2, delayMilliseconds: 2_000, error: { _tag: 'NetworkFailure', message: 'fetch failed' } },
+      { attempt: 3, delayMilliseconds: 4_000, error: { _tag: 'HttpFailure', status: 502 } },
+    ])
+  })
+
+  it('stops reconnecting after three minutes and names the rerun', async () => {
+    vi.useFakeTimers()
+    const { client, calls } = scriptedClient([{ _tag: 'Stream', states: [open] }, { _tag: 'Status', status: 502 }])
+    const watching = client.watchPullRequest(target)
+    await vi.advanceTimersByTimeAsync(181_000)
+    const result = await watching
+    expect(result).toMatchObject({ _tag: 'Err', error: { _tag: 'HttpFailure', status: 502 } })
+    expect(result._tag === 'Err' && result.error.message).toContain('Run watch-pr again')
+    expect(calls.count).toBe(16)
+  })
+
+  it('stops reconnecting when a Service keeps dropping a fresh stream', async () => {
+    vi.useFakeTimers()
+    const { client } = scriptedClient([{ _tag: 'Stream', states: [open] }])
+    const watching = client.watchPullRequest(target)
+    await vi.advanceTimersByTimeAsync(181_000)
+    expect(await watching).toMatchObject({ _tag: 'Err', error: { _tag: 'NetworkFailure' } })
+  })
+
+  it('gives each outage its own window after a stable reconnect', async () => {
+    vi.useFakeTimers()
+    // 13 failed reconnects take 165 seconds, so two outages exceed one three-minute window.
+    const outage = Array.from({ length: 13 }, () => ({ _tag: 'Status' as const, status: 502 }))
+    const { client } = scriptedClient([
+      { _tag: 'Stream', states: [open], closeAfterMilliseconds: 60_000 },
+      ...outage,
+      { _tag: 'Stream', states: [open], closeAfterMilliseconds: 60_000 },
+      ...outage,
+      { _tag: 'Stream', states: [merged] },
+    ])
+    const watching = client.watchPullRequest(target)
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(await watching).toEqual({ _tag: 'Ok', value: merged })
+  })
+
+  it.each([401, 404, 503])('fails at once on HTTP %i', async (status) => {
+    const { client, calls } = scriptedClient([{ _tag: 'Status', status }])
+    expect(await client.watchPullRequest(target)).toMatchObject({ _tag: 'Err', error: { _tag: 'HttpFailure', status } })
+    expect(calls.count).toBe(1)
+  })
+
+  it('returns cancellation at once while waiting to reconnect', async () => {
+    vi.useFakeTimers()
+    const { client, calls } = scriptedClient([{ _tag: 'Status', status: 502 }])
+    const cancel = new AbortController()
+    const watching = client.watchPullRequest(target, { signal: cancel.signal })
+    await vi.advanceTimersByTimeAsync(0)
+    cancel.abort()
+    expect(await watching).toEqual({ _tag: 'Err', error: { _tag: 'NetworkFailure', message: 'The pull request watch was cancelled.' } })
+    expect(calls.count).toBe(1)
   })
 
   it.each(['NotObserved', 'PendingClosure'] as const)('confirms %s once and requires dashboard authentication', async (_tag) => {
@@ -304,9 +403,13 @@ describe('pull request watch', () => {
     const shutdown = new AbortController()
     let app: ReturnType<typeof createAgentApp> | undefined
     const gateway = new H3()
+    let gatewayRequests = 0
     gateway.get('/api/items/pull-request-events', (event) => {
       if (app === undefined)
         throw new Error('The test service is not ready.')
+      // The first request meets a restarting Service behind Caddy.
+      if (gatewayRequests++ === 0)
+        return new Response('', { status: 502 })
       return app.fetch(event.req)
     })
     const server = await startAgentServer({ app: gateway, hostname: '127.0.0.1', port: 0 })
@@ -317,8 +420,9 @@ describe('pull request watch', () => {
     let reads = 0
     app = createAgentApp({ allowedOrigin: url, dashboardPassword: password, now: () => new Date(), store: { ...store, getDashboardSnapshot: at => ({ ...store.getDashboardSnapshot(at), agentStart: { _tag: 'ReserveReached' } }) }, eventIntervalMilliseconds: 1, shutdownSignal: shutdown.signal, pullRequestWatch: { state: () => reads++ === 0 ? store.getPullRequestWatchState(target.repository, target.number) : merged, observe: async () => ok(undefined) } })
     try {
-      const result = await promisify(execFile)(process.execPath, ['--experimental-strip-types', join(import.meta.dirname, '..', 'src', 'cli.ts'), 'control', 'watch-pr', '--repository', target.repository, '--number', '24', '--url', url, '--password-file', passwordPath, '--timeout-seconds', '2'], { timeout: 15_000 })
+      const result = await promisify(execFile)(process.execPath, ['--experimental-strip-types', join(import.meta.dirname, '..', 'src', 'cli.ts'), 'control', 'watch-pr', '--repository', target.repository, '--number', '24', '--url', url, '--password-file', passwordPath, '--timeout-seconds', '10'], { timeout: 15_000 })
       expect(JSON.parse(result.stdout)).toMatchObject({ _tag: 'Merged', pullRequest: { number: 24, headSha: 'abc123' } })
+      expect(result.stderr.split('\n').filter(line => line.includes('"event":"reconnect"')).map(line => JSON.parse(line))).toEqual([{ event: 'reconnect', attempt: 1, delaySeconds: 1, error: { _tag: 'HttpFailure', status: 502, message: 'The service returned HTTP 502.' } }])
       expect(result.stderr).toContain('"status":"Merged"')
       expect(result.stderr).toContain('"agentStart":{"_tag":"ReserveReached"}')
     }

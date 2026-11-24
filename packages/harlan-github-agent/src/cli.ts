@@ -236,6 +236,7 @@ const controlCommand = defineCommand({
             onUpdate: state => writeJson({ event: 'pull-request', status: state._tag, ...(state._tag === 'NotObserved'
               ? {}
               : { headSha: state.pullRequest.headSha, tasks: state.tasks.map(task => ({ id: task.id, kind: task.kind, state: task.state._tag })), ...(state.agentStart === undefined ? {} : { agentStart: state.agentStart }) }) }, process.stderr),
+            onReconnect: reconnect => writeJson({ event: 'reconnect', attempt: reconnect.attempt, delaySeconds: reconnect.delayMilliseconds / 1_000, error: reconnect.error }, process.stderr),
           }))
         }
         finally {
