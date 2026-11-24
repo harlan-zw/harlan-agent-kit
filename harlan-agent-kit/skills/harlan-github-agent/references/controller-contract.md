@@ -488,6 +488,7 @@ Otherwise the controller pushes the merge through the same verification, authori
 The canonical comment of the pushed head names the failing checks in one sentence.
 CI, a fresh Review, and head CI Repair then follow, as for any head. The controller never queues Repair itself.
 While a required check fails on GitHub, that head reads BLOCKED, so Auto merge cannot merge it.
+If CI never runs the failing command, only the fresh Review stands between that head and READY.
 
 The Agent returns `blocked` for everything else: a conflict it could not resolve, an edit outside the merge, a failure whose fix needs a path the merge changed, or any doubt.
 

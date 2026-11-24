@@ -52,9 +52,10 @@ interface CheckReport {
  * command and error instead of a blocker Harlan has to decode.
  *
  * `ResolvedWithFailures` is a resolved merge whose checks all ran, where a
- * failing check needs a fix outside the merge. On 2026-11-23 three such merges
- * stopped for a merge by hand. The controller now pushes it, and CI, a fresh
- * Review, and head CI Repair answer the failure, as for any other head.
+ * failing check needs a fix outside the merge. Such merges used to stop for a
+ * merge by hand, which threw the resolution away. The controller now pushes
+ * it, and CI, a fresh Review, and head CI Repair answer the failure, as for
+ * any other head.
  */
 type AgentResult
   = | { _tag: 'Resolved', summary: string, checks: CheckReport[], commitMessage: string }
@@ -265,8 +266,9 @@ function parseAgentResponse(text: string): Result<AgentResult, string> {
     || ((outcome === 'resolved' || outcome === 'resolved_with_failures') && (unavailable.command !== '' || unavailable.error !== ''))
     || !Array.isArray(value.failures)
     || !value.failures.every(isFailureReport)
-    // Only a failing merge names failures. A blocked answer may describe them.
-    || ((outcome === 'resolved' || outcome === 'checks_unavailable') && value.failures.length > 0)
+    // A fully passing merge names no failure. A blocked or checks_unavailable
+    // answer may describe one, and still stops with its own reason.
+    || (outcome === 'resolved' && value.failures.length > 0)
   ) {
     return err('The agent returned an invalid conflict resolution result.')
   }
@@ -409,10 +411,11 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       }
       if (result._tag === 'ResolvedWithFailures') {
         // The Agent may edit every file the merge changed, so a failure whose
-        // fix needs one belongs to the resolution and stops like blocked.
-        const writable = new Set(worktree.writablePaths)
+        // fix needs one belongs to the resolution and stops like blocked. A
+        // named directory that holds such a file counts as that file.
+        const touchesMerge = (path: string): boolean => worktree.writablePaths.some(writable => writable === path || writable.startsWith(`${path}/`))
         const inside = result.failures
-          .flatMap(failure => failure.paths.filter(path => writable.has(path)).map(path => ({ command: failure.command, path })))
+          .flatMap(failure => failure.paths.filter(touchesMerge).map(path => ({ command: failure.command, path })))
           .at(0)
         if (inside !== undefined) {
           return ok({

@@ -644,25 +644,28 @@ describe('conflict worker with a failing check outside the merge', () => {
     expect(result._tag === 'Ok' && result.value._tag === 'Publish' ? result.value.evidence : 'missing').toBeUndefined()
   })
 
-  it('stops like blocked when a failing check needs a path the merge touched', async () => {
+  it.each([
+    ['a file', 'src/shared.ts:12', 'src/shared.ts'],
+    ['a directory holding a file', 'src', 'src'],
+  ])('stops like blocked when a failing check needs %s the merge touched', async (_name, named, reported) => {
     const { attempts, result } = await run({
       ...withFailures,
-      failures: [{ command: renderCheck, paths: ['test/render.test.ts', 'src/shared.ts:12'] }],
+      failures: [{ command: renderCheck, paths: ['test/render.test.ts', named] }],
     })
 
     expect(result).toEqual(ok(expect.objectContaining({
       _tag: 'ActionRequired',
-      reason: `The agent resolved the merge conflict, but ${renderCheck} fails, and its fix needs src/shared.ts, which the merge changed. Merge main into fix/broken-thing by hand.`,
+      reason: `The agent resolved the merge conflict, but ${renderCheck} fails, and its fix needs ${reported}, which the merge changed. Merge main into fix/broken-thing by hand.`,
     })))
     expect(attempts).toEqual([])
   })
 
-  it('still stops when a required check could not start beside a failing one', async () => {
+  it.each([[], [{ command: renderCheck, paths: ['test/render.test.ts'] }]])('still stops when a required check could not start beside a failing one, with failures %j', async (...failures) => {
     const { attempts, result } = await run({
       ...withFailures,
       outcome: 'checks_unavailable',
       checks: [...withFailures.checks, { command: 'pnpm typecheck', outcome: 'unavailable', details: 'tsc is missing.' }],
-      failures: [],
+      failures,
       unavailableCheck: { command: 'pnpm typecheck', error: 'tsc: command not found' },
     })
 
@@ -700,7 +703,6 @@ describe('conflict worker with a failing check outside the merge', () => {
     ['a failure names a parent path', { failures: [{ command: renderCheck, paths: ['../render.test.ts'] }] }],
     ['the commit message is empty', { commitMessage: ' ' }],
     ['a resolved merge lists failures', { outcome: 'resolved', checks: [{ command: renderCheck, outcome: 'passed', details: 'Passed.' }] }],
-    ['an unavailable check lists failures', { outcome: 'checks_unavailable', unavailableCheck: { command: 'pnpm typecheck', error: 'tsc: command not found' } }],
   ])('rejects the result before verification or commit when %s', async (_name, change) => {
     const { attempts, result } = await run({ ...withFailures, ...change })
 
