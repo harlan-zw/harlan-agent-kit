@@ -17,6 +17,7 @@ import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
 import { VITALS_COMPARISON_GUEST_SCRIPT, VITALS_EVIDENCE_GUEST_DIRECTORY, vitalsComparisonScript } from './vitals-comparison-runtime.ts'
 import { resolveBrowserSetupRuntime } from './worker-browser-runtime.ts'
+import { resolveCodexKit } from './worker-codex-kit.ts'
 import { homeOverlaySupport, prepareHomeLayer } from './worker-home-layer.ts'
 import { isPnpmPackagePath, resolvePnpmPackage, resolvePnpmRuntimePackages, resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
@@ -333,8 +334,12 @@ export async function prepareAgentSandbox(input: {
     }
     // Git export needs no home. Omitting it also keeps the export from mounting this turn's layer a second time.
     const homeMountsFrom = args.length
+    // The kit comes only from the controller's read-only mounts, never from the shared worker home.
+    const codexKit = input.reviewHome === undefined && input.provider === 'codex'
+      ? await resolveCodexKit(await Promise.all(profile.readOnlyPaths.map(async path => ({ path, source: await permittedPath(path, controllerHome) }))))
+      : undefined
     if (input.reviewHome === undefined) {
-      homeLayer = await prepareHomeLayer({ controllerHome, sharedHome: isolatedHome, ...(input.taskId === undefined ? {} : { taskId: input.taskId }) })
+      homeLayer = await prepareHomeLayer({ controllerHome, sharedHome: isolatedHome, ...(input.taskId === undefined ? {} : { taskId: input.taskId }), ...(codexKit === undefined ? {} : { codexKit }) })
       args.push(...homeLayer.args)
     }
     else {
@@ -349,6 +354,20 @@ export async function prepareAgentSandbox(input: {
       args.push('--bind', databaseDirectory, '/run/agent/opencode-database')
     }
     const toolMountsFrom = args.length
+    // The sandbox omits /etc/alternatives, so `awk` resolves nowhere. Lighthouse and the kit guards parse with it.
+    let awkMounted = false
+    const mountAwk = async () => {
+      if (awkMounted)
+        return
+      const awk = await realpath('/usr/bin/awk')
+      if (!awk.startsWith('/usr/'))
+        throw new Error('The awk command must stay inside system tools.')
+      args.push('--ro-bind', awk, '/run/agent/host-tools/awk')
+      awkMounted = true
+    }
+    // A guard that cannot parse its command allows it, so the guards need awk.
+    if (codexKit !== undefined)
+      await mountAwk()
     const skillRoots = []
     const packageTools = []
     if (input.reviewHome === undefined && input.networkMode !== 'opencode-client'
@@ -360,10 +379,7 @@ export async function prepareAgentSandbox(input: {
         const lighthouse = await resolveWorkerPackage(controllerHome, { name: 'lighthouse', package: 'lighthouse', label: 'Lighthouse', maximumPackages: 256 })
         if (lighthouse !== undefined) {
           packageTools.push({ ...lighthouse, command: 'lighthouse' })
-          const awk = await realpath('/usr/bin/awk')
-          if (!awk.startsWith('/usr/'))
-            throw new Error('The Lighthouse awk command must stay inside system tools.')
-          args.push('--ro-bind', awk, '/run/agent/host-tools/awk')
+          await mountAwk()
         }
       }
     }
