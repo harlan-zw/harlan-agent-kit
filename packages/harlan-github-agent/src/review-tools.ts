@@ -5,7 +5,7 @@ import { open, realpath } from 'node:fs/promises'
 import { createReviewStaticReader } from './review-static.ts'
 
 export const REVIEW_TOOLS = [
-  { name: 'review_read', description: 'Page workspace files or immutable exact revision evidence. Use revision diff with empty path for text patches and all changed-file metadata. Base means the triple-dot merge base. Follow nextOffset until truncated is false. Binary and symlink revisions return metadata instead of text.', inputSchema: { type: 'object', properties: { path: { type: 'string', maxLength: 500 }, revision: { type: 'string', enum: ['workspace', 'diff', 'base', 'head'] }, offset: { type: 'integer', minimum: 0, maximum: 32_000_000 } }, required: ['path'], additionalProperties: false } },
+  { name: 'review_read', description: 'Page workspace files or immutable exact revision evidence. Revision tree lists workspace directory entries. Start with an empty path, page each directory, then recurse into listed directories. Tree offsets count entries; source offsets count bytes. Use revision diff with empty path for text patches and all changed-file metadata. Base means the triple-dot merge base. Follow nextOffset until truncated is false. Binary and symlink revisions return metadata instead of text.', inputSchema: { type: 'object', properties: { path: { type: 'string', maxLength: 500 }, revision: { type: 'string', enum: ['workspace', 'tree', 'diff', 'base', 'head'] }, offset: { type: 'integer', minimum: 0, maximum: 32_000_000 } }, required: ['path'], additionalProperties: false } },
   { name: 'review_search', description: 'Search bounded worktree files for literal text.', inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 200 } }, required: ['text'], additionalProperties: false } },
   { name: 'review_proof', description: 'Spend this Review Task one controller Node invocation. Failure cannot be edited or retried. Use a standalone TypeScript probe of a workspace exported API. Setup and other runtimes are unsupported.', inputSchema: { type: 'object', properties: { planId: { const: 'node-typescript', type: 'string' }, source: { type: 'string', minLength: 1, maxLength: 20_000 } }, required: ['planId', 'source'], additionalProperties: false } },
 ] as const
@@ -30,6 +30,8 @@ export function createReviewTools(options: { workspace: string, evidencePath?: s
         return { _tag: 'Refused', reason: 'The Review tool requires an object.' }
       const record = input as Record<string, unknown>
       if (name === 'review_read') {
+        if (record.revision === 'tree')
+          return reader.tree(record.path, record.offset)
         if (record.revision === undefined || record.revision === 'workspace')
           return reader.read(record.path, record.offset)
         if (!['diff', 'base', 'head'].includes(String(record.revision)) || typeof record.path !== 'string' || record.path.length > 500 || record.path.startsWith('/') || record.path.split('/').includes('..'))

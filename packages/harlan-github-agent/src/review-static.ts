@@ -5,6 +5,7 @@ import { lstat, open, opendir, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 export type ReviewStaticRead = { _tag: 'Read', text: string, truncated: boolean, nextOffset?: number } | { _tag: 'Refused', reason: string }
+export type ReviewStaticTree = { _tag: 'Listed', entries: { path: string, kind: 'file' | 'directory' }[], truncated: boolean, nextOffset?: number } | { _tag: 'Refused', reason: string }
 export type ReviewStaticSearch = { _tag: 'Matches', matches: { path: string, line: number, text: string }[], truncated: boolean } | { _tag: 'Refused', reason: string }
 const maximumFileBytes = 16_000
 const maximumFiles = 400
@@ -16,7 +17,7 @@ function contained(path: string, root: string): boolean {
 }
 
 /** Run this reader inside the worker namespace. It never reads controller paths. */
-export function createReviewStaticReader(workspace: string): { read: (path: unknown, offset?: unknown) => Promise<ReviewStaticRead>, search: (text: unknown) => Promise<ReviewStaticSearch> } {
+export function createReviewStaticReader(workspace: string): { read: (path: unknown, offset?: unknown) => Promise<ReviewStaticRead>, tree: (path: unknown, offset?: unknown) => Promise<ReviewStaticTree>, search: (text: unknown) => Promise<ReviewStaticSearch> } {
   const root = resolve(workspace)
   const read = async (input: unknown, offset: unknown = 0): Promise<ReviewStaticRead> => {
     if (!Number.isSafeInteger(offset) || Number(offset) < 0 || Number(offset) > 32_000_000)
@@ -62,6 +63,52 @@ export function createReviewStaticReader(workspace: string): { read: (path: unkn
   }
   return {
     read,
+    async tree(input, offset = 0) {
+      if (!Number.isSafeInteger(offset) || Number(offset) < 0 || Number(offset) > 32_000_000)
+        return { _tag: 'Refused', reason: 'The tree offset must be between 0 and 32000000 entries.' }
+      if (typeof input !== 'string' || input.length > 500 || isAbsolute(input) || input.split(sep).some(part => ['..', '.git', 'node_modules'].includes(part)))
+        return { _tag: 'Refused', reason: 'Use a relative source directory inside the Review worktree.' }
+      const path = resolve(root, input)
+      let component = root
+      for (const part of relative(root, path).split(sep)) {
+        component = join(component, part)
+        const metadata = await lstat(component).catch((error: NodeJS.ErrnoException) => {
+          if (['ENOENT', 'ENOTDIR'].includes(error.code ?? ''))
+            return null
+          throw error
+        })
+        if (metadata === null || metadata.isSymbolicLink() || !metadata.isDirectory())
+          return { _tag: 'Refused', reason: 'The directory is missing or uses a symlink.' }
+      }
+      const directory = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW).catch((error: NodeJS.ErrnoException) => {
+        if (['ENOENT', 'ELOOP', 'ENOTDIR'].includes(error.code ?? ''))
+          return null
+        throw error
+      })
+      if (directory === null)
+        return { _tag: 'Refused', reason: 'The directory is missing or uses a symlink.' }
+      try {
+        const descriptorPath = `/proc/self/fd/${directory.fd}`
+        if (!contained(await realpath(descriptorPath), root))
+          return { _tag: 'Refused', reason: 'The opened directory leaves the Review worktree.' }
+        const entries: { path: string, kind: 'file' | 'directory' }[] = []
+        const cursor = await opendir(descriptorPath, { bufferSize: 32 })
+        let index = 0
+        for await (const entry of cursor) {
+          if (index++ < Number(offset))
+            continue
+          // Count ignored entries too, so every page advances through wide directories.
+          if (index > Number(offset) + maximumFiles)
+            return { _tag: 'Listed', entries, truncated: true, nextOffset: Number(offset) + maximumFiles }
+          if (['.git', 'node_modules'].includes(entry.name) || entry.isSymbolicLink())
+            continue
+          if (entry.isFile() || entry.isDirectory())
+            entries.push({ path: relative(root, join(path, entry.name)), kind: entry.isDirectory() ? 'directory' : 'file' })
+        }
+        return { _tag: 'Listed', entries, truncated: false }
+      }
+      finally { await directory.close() }
+    },
     async search(input) {
       if (typeof input !== 'string' || input.length === 0 || input.length > 200)
         return { _tag: 'Refused', reason: 'Search requires 1 to 200 literal characters.' }

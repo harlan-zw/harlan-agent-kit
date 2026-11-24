@@ -1553,6 +1553,7 @@ The Repair delta below holds every change since that head. Start there:
 - Find defects the delta adds. For each removed line, confirm nothing still depends on it.
 - For each symbol the delta adds, removes, renames, or changes, use review_search to find its uses. Read each use this pull request changed or that relied on the old behaviour.
 - review_search reads only the first 16000 bytes of each file and stops early in a large worktree. If it returns truncated: true or refuses the search, its matches are incomplete, and zero matches prove nothing.
+- To discover paths beyond the search cap, use review_read with revision tree and an empty path. Follow nextOffset for each directory. Recurse into every listed directory. Tree offsets count entries. This lists the exact Review workspace, excluding .git, node_modules, and symlinks.
 - Then page every file that may use the symbol, including unchanged callers and dependants outside the pull request files. Use revision workspace for unchanged files and revision head for changed files. Follow nextOffset to each file's end, past byte 16000. This overrides the 300-line reading limit. Read each use against the Repair's new behaviour.
 - If caller coverage cannot be established, perform a full Review with explicit caller verification. Page the full base-to-head diff and verify affected callers, including unchanged files. The full diff alone cannot establish caller coverage.
 - If caller verification remains unavailable, report the verification limit.
@@ -1626,6 +1627,7 @@ If the finding still stands, return it with its identity value exactly and answe
 This full Review covers a Repair head. Verify every affected caller, including unchanged callers and dependants.
 For each changed symbol, use review_search to find its uses and read each affected use against the new behaviour.
 review_search reads only the first 16000 bytes of each file and can stop early. An incomplete search proves no caller coverage.
+To discover paths beyond the search cap, use review_read with revision tree and an empty path. Follow nextOffset for each directory. Recurse into every listed directory. Tree offsets count entries. This lists the exact Review workspace, excluding .git, node_modules, and symlinks.
 Page every file that may use the symbol to its end, following nextOffset, including beyond byte 16000.
 Use revision workspace for unchanged files and revision head for changed files. This overrides the 300-line reading limit.
 Return callerVerification as complete only after verifying every affected caller. Otherwise return incomplete and name the gap in notChecked.
