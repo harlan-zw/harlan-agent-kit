@@ -8,7 +8,8 @@ The desktop helper runs the same check before advertising capacity.
 
 ## Provision a host
 
-Install `bubblewrap` through the host's administrator account.
+Install `bubblewrap` 0.10 or later through the host's administrator account.
+The Service update check refuses an older version, because it cannot mount the worker home overlay.
 On Hogwild, use `hogwild-admin` for installation.
 Run the following command as the Service account, from the new checkout.
 It copies provider logins, the public [GitHub](https://github.com) token, Agent instructions, Skills, and Hooks.
@@ -36,8 +37,25 @@ For example, mount pnpm's installation directory if its executable imports sibli
 A native [pnpm](https://pnpm.io) shim, such as `node`, runs a runtime from pnpm's global directory.
 If a tool directory holds such a shim, each turn mounts that runtime package read only.
 Mount exact installation directories; never mount a complete home, configuration directory, or Service state directory.
-Host mounts are read only, except the worker home, worktree files, and selected temporary evidence directories.
+Host mounts are read only, except the persisted worker home paths, worktree files, and selected temporary evidence directories.
 Do not place controller credentials in the worker home or tool directories.
+
+## Worker home
+
+Every Agent turn except Review mounts the worker home as an overlay.
+Reads come from the shared worker home, so caches stay warm.
+Writes outside the persisted paths go to a directory that the turn owns.
+The Service deletes that directory when the turn ends.
+
+These persisted paths write through to the shared worker home:
+`.codex`, `.local/share/opencode`, `.local/share/pnpm/store`, `.cache/pnpm`, `.npm/_cacache`, `.bun/install/cache`, `.cargo/registry`, `.cargo/git`, `.cache/ms-playwright`, `.dev-browser`, and `.local/state/harlan-agent-kit`.
+A check-in Routine also keeps the state directory of its own repository.
+The sentry-checkin Routine also keeps `.local/state/sentry-checkin`.
+
+Inside `.codex`, Codex reads some files as configuration, instructions, or code.
+Each turn gets its own copy of `config.toml`, `.env`, `AGENTS.override.md`, `AGENTS.md`, `hooks.json`, `plugins`, `skills`, `rules`, `prompts`, `shell_snapshots`, and `agents`.
+Changes to these paths last one turn.
+Codex account plugins are off for Agent turns.
 
 ## Keep Agent tools current
 

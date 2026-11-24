@@ -1,5 +1,6 @@
 import type { AgentTurnRequest } from './agent-provider.ts'
 import type { BrowserSetupRuntime } from './worker-browser-runtime.ts'
+import type { HomeLayer, HomeOverlaySupport } from './worker-home-layer.ts'
 import type { WorkerPackage } from './worker-package.ts'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
@@ -16,6 +17,7 @@ import { checkinEnvironment } from './checkin-environment.ts'
 import { opencodeTaskKey, prepareOpencodeTaskDirectory } from './opencode-storage.ts'
 import { VITALS_COMPARISON_GUEST_SCRIPT, VITALS_EVIDENCE_GUEST_DIRECTORY, vitalsComparisonScript } from './vitals-comparison-runtime.ts'
 import { resolveBrowserSetupRuntime } from './worker-browser-runtime.ts'
+import { homeOverlaySupport, prepareHomeLayer } from './worker-home-layer.ts'
 import { isPnpmPackagePath, resolvePnpmPackage, resolvePnpmRuntimePackages, resolveWorkerHostTools } from './worker-host-tools.ts'
 import { workerMemoryCommand } from './worker-memory.ts'
 import { resolveWorkerNuxtseo, workerNuxtseoEnvironment, workerNuxtseoRoutine } from './worker-nuxtseo.ts'
@@ -141,6 +143,10 @@ interface WorkerConfiguration {
 
 export interface AgentSandbox {
   binary: string
+  /**
+   * Mounts this sandbox's own home layer. Start its processes one at a time.
+   * A helper beside a live process uses `besideHomeLayer(args)`.
+   */
   args: string[]
   environment: NodeJS.ProcessEnv
   /** The worker's state root, separate from the host process environment. */
@@ -239,7 +245,10 @@ export async function agentWorkerHomes(environment: NodeJS.ProcessEnv, profilePa
 }
 
 /** Refuse an update before restarting a host that cannot isolate its Agents. */
-export async function checkAgentWorker(environment: NodeJS.ProcessEnv, profilePath?: string): Promise<void> {
+export async function checkAgentWorker(environment: NodeJS.ProcessEnv, profilePath?: string, options: {
+  /** Overrides the cached probe of this host's overlay support. */
+  homeOverlay?: HomeOverlaySupport
+} = {}): Promise<void> {
   const controllerHome = resolve(environment.HOME ?? '/home/harlan')
   const { profile, runtimePackages } = await currentWorkerConfiguration(controllerHome, profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json'))
   for (const path of [profile.home, ...profile.tools, ...profile.readOnlyPaths, ...runtimePackages, profile.codex, profile.opencode])
@@ -250,6 +259,9 @@ export async function checkAgentWorker(environment: NodeJS.ProcessEnv, profilePa
       throw new Error(`The Agent provider binary must be executable: ${path}`)
   }
   await execute('/usr/bin/bwrap', ['--die-with-parent', '--new-session', '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup', '--unshare-net', '--cap-drop', 'ALL', '--ro-bind', '/usr', '/usr', '--ro-bind', '/lib', '/lib', '--ro-bind', '/lib64', '/lib64', '--proc', '/proc', '--dev', '/dev', '/usr/bin/true'], { timeout: 10_000, env: { PATH: '/usr/bin:/bin' } })
+  const overlay = options.homeOverlay ?? await homeOverlaySupport(controllerHome)
+  if (overlay._tag === 'Unsupported')
+    throw new Error(overlay.reason)
 }
 
 /**
@@ -276,6 +288,8 @@ export async function prepareAgentSandbox(input: {
   reviewHome?: string
   /** Finds the managed Node 24 runtime for browser setup. Defaults to the controller tool receipt. */
   resolveBrowserRuntime?: (home: string) => Promise<BrowserSetupRuntime>
+  /** Overrides the cached probe of this host's overlay support. */
+  homeOverlay?: HomeOverlaySupport
 }): Promise<AgentSandbox> {
   const controllerHome = resolve(input.environment.HOME ?? '/home/harlan')
   const profilePath = input.profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json')
@@ -284,10 +298,17 @@ export async function prepareAgentSandbox(input: {
   const isolatedHome = await permittedPath(input.reviewHome ?? profile.home, controllerHome)
   if (within(controllerHome, isolatedHome) || isolatedHome === '/home' || isolatedHome === '/')
     throw new Error('The Agent worker home must not contain the controller home.')
+  // Never fall back to the writable shared home.
+  if (input.reviewHome === undefined) {
+    const overlay = input.homeOverlay ?? await homeOverlaySupport(controllerHome)
+    if (overlay._tag === 'Unsupported')
+      throw new Error(overlay.reason)
+  }
   const scratch = await mkdtemp(join(tmpdir(), 'agent-sandbox-'))
   const egressDirectory = join(scratch, 'egress')
   await mkdir(egressDirectory, { mode: 0o700 })
   const egress = await createAgentEgress(join(egressDirectory, 'proxy.sock'))
+  let homeLayer: HomeLayer | undefined
   try {
     const args = ['--die-with-parent', '--new-session', '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup', '--unshare-net', '--cap-drop', 'ALL']
     for (const path of ['/usr', '/lib', '/lib64', '/bin', '/sbin']) {
@@ -310,7 +331,16 @@ export async function prepareAgentSandbox(input: {
       if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
         args.push('--ro-bind', path, path)
     }
-    args.push('--bind', isolatedHome, workerHome)
+    // Git export needs no home. Omitting it also keeps the export from mounting this turn's layer a second time.
+    const homeMountsFrom = args.length
+    if (input.reviewHome === undefined) {
+      homeLayer = await prepareHomeLayer({ controllerHome, sharedHome: isolatedHome, ...(input.taskId === undefined ? {} : { taskId: input.taskId }) })
+      args.push(...homeLayer.args)
+    }
+    else {
+      args.push('--bind', isolatedHome, workerHome)
+    }
+    const homeMountsTo = args.length
     if (input.provider === 'opencode') {
       // Attached clients use no local conversation data. Their incidental writes stay disposable.
       const databaseDirectory = input.networkMode === 'opencode-client'
@@ -519,7 +549,7 @@ export async function prepareAgentSandbox(input: {
     await writeFile(join(privateGit.directory, 'config.worktree'), '', { mode: 0o600 })
     args.push('--ro-bind', gitConfig, join(common, 'config'))
     args.push('--ro-bind', gitConfig, join(taskDirectory, 'config.worktree'))
-    const omittedFromExport = [[serviceMountsFrom, serviceMountsTo], [toolMountsFrom, toolMountsTo]] as const
+    const omittedFromExport = [[serviceMountsFrom, serviceMountsTo], [homeMountsFrom, homeMountsTo], [toolMountsFrom, toolMountsTo]] as const
     const exportArgs = [...args.filter((_, index) => !omittedFromExport.some(([from, to]) => index >= from && index < to)), '--chdir', workspace, '--']
     args.push('--chdir', workspace, '--', '/run/agent/node', '--experimental-strip-types', '/run/agent/runtime.ts', input.networkMode ?? 'command')
     const baseEnvironment: NodeJS.ProcessEnv = {
@@ -595,7 +625,12 @@ export async function prepareAgentSandbox(input: {
               await rm(scratch, { recursive: true, force: true })
             }
             finally {
-              await memory?.release()
+              try {
+                await memory?.release()
+              }
+              finally {
+                await homeLayer?.release()
+              }
             }
           }
         }
@@ -606,6 +641,7 @@ export async function prepareAgentSandbox(input: {
   catch (error) {
     await egress.close()
     await rm(scratch, { recursive: true, force: true })
+    await homeLayer?.release()
     throw error
   }
 }
