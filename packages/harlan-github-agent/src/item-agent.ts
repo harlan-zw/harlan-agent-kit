@@ -62,6 +62,8 @@ import { cleanLine, cleanText } from './text.ts'
 import { issueGitHubOwnershipLines } from './worker-github-evidence.ts'
 
 interface ReviewResponse {
+  /** Required for Repair focus. Missing answers cannot pass its Review gate. */
+  callerVerification?: 'complete' | 'incomplete'
   /** What the Review exercised, as one clause. The canonical comment reads `Checked …`. */
   checked: string
   /** The largest part the Review did not exercise, or null when it skipped nothing. */
@@ -421,6 +423,15 @@ const reviewSchema = {
   },
 }
 
+const repairFocusSchema = {
+  ...reviewSchema,
+  required: [...reviewSchema.required, 'callerVerification'],
+  properties: {
+    ...reviewSchema.properties,
+    callerVerification: { type: 'string', enum: ['complete', 'incomplete'] },
+  },
+}
+
 const issueTriageSchema = {
   type: 'object',
   additionalProperties: false,
@@ -632,10 +643,12 @@ function findingViolation(finding: unknown, index: number): string | undefined {
  * the agent the same answer on every retry, so the two must never disagree.
  */
 function reviewViolation(value: Record<string, unknown>): string | undefined {
-  const allowed = new Set(['premise', 'findings', 'confidence', 'mergeRisk', 'checked', 'notChecked'])
+  const allowed = new Set(['premise', 'findings', 'confidence', 'mergeRisk', 'checked', 'notChecked', 'callerVerification'])
   const extra = Object.keys(value).find(key => !allowed.has(key))
   if (extra !== undefined)
     return `${extra} is not a schema field.`
+  if (Object.hasOwn(value, 'callerVerification') && value.callerVerification !== 'complete' && value.callerVerification !== 'incomplete')
+    return 'callerVerification must be complete or incomplete.'
   const premise = value.premise as Record<string, unknown> | null | undefined
   if (typeof premise !== 'object' || premise === null)
     return 'premise must be an object.'
@@ -692,6 +705,7 @@ export function parseReviewResponse(text: string): Promise<Result<ReviewResponse
       // claim at Reviewable, so a missing answer can never merge anything.
       const mergeRisk = response.mergeRisk
       return ok({
+        ...(response.callerVerification === undefined ? {} : { callerVerification: response.callerVerification }),
         premise: { verdict: response.premise.verdict, reason: cleanLine(response.premise.reason) },
         ...(mergeRisk === undefined ? {} : { mergeRisk: { verdict: mergeRisk.verdict, reason: cleanLine(mergeRisk.reason) } }),
         confidence: response.confidence,
@@ -1075,7 +1089,7 @@ function mergeGate(pullRequest: GitHubPullRequestItem): ReviewGateState {
       : { _tag: 'Failed', reason: 'The pull request has merge conflicts.', evidence: [evidence('mergeability', 'conflicting')] }
 }
 
-function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewResponse, repairsBaseline: boolean, clock: CiGateClock): { gates: ReviewGates, reportedChecks: string[] } {
+function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewResponse, repairsBaseline: boolean, clock: CiGateClock, focused: boolean): { gates: ReviewGates, reportedChecks: string[] } {
   const findings = response.findings.filter(finding => finding.impact > 80)
   const ci = ciGate(snapshot, repairsBaseline, clock)
   const reviewEvidence = [evidence('agent-report', JSON.stringify(response))]
@@ -1083,7 +1097,9 @@ function reviewGates(snapshot: PullRequestReviewSnapshot, response: ReviewRespon
     merge: mergeGate(snapshot.pullRequest),
     review: findings.length > 0
       ? { _tag: 'Failed', reason: findings[0]?.summary ?? 'A finding above 80/100 remains.', evidence: reviewEvidence }
-      : { _tag: 'Passed', evidence: reviewEvidence },
+      : focused && (response.callerVerification !== 'complete' || response.notChecked !== null)
+        ? { _tag: 'Pending', reason: response.notChecked ?? 'Affected callers remain unverified.', evidence: reviewEvidence }
+        : { _tag: 'Passed', evidence: reviewEvidence },
     ci: ci.state,
   }
   return { gates, reportedChecks: ci.reported }
@@ -1267,6 +1283,8 @@ function repairFixedCount(source: Pick<RepairSource, 'fingerprints'>, findings: 
 
 /** What a PENDING verdict waits for. */
 function pendingDetail(gates: ReviewGates): string {
+  if (gates.review._tag === 'Pending')
+    return gates.review.reason
   return gates.ci._tag === 'Pending'
     ? 'the review passed; the verdict waits for CI'
     : 'the review passed; the verdict waits for GitHub to check mergeability'
@@ -1508,6 +1526,8 @@ The Repair delta below holds every change since that head. Start there:
 - Then page every file that may use the symbol, including unchanged callers and dependants outside the pull request files. Use revision workspace for unchanged files and revision head for changed files. Follow nextOffset to each file's end, past byte 16000. This overrides the 300-line reading limit. Read each use against the Repair's new behaviour.
 - If caller coverage cannot be established, perform a full Review with explicit caller verification. Page the full base-to-head diff and verify affected callers, including unchanged files. The full diff alone cannot establish caller coverage.
 - If caller verification remains unavailable, report the verification limit and do not return READY.
+- Return callerVerification as complete only after verifying every affected caller. Otherwise return incomplete and name the gap in notChecked.
+- If you report any gap in notChecked, the controller withholds Ready for this Repair focus.
 - When the delta changes behaviour that other parts of this pull request rely on, use review_read with revision diff and an empty path to page the full base-to-head diff.
 Unless a full Review is required above, leave the hunks the delta does not reach to the earlier Review.
 Answer premise, confidence, and mergeRisk for the whole pull request, not the delta alone.
@@ -1928,7 +1948,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         repository: task.repository,
         role: 'adversarial_review',
         taskId: task.id,
-        schema: reviewSchema,
+        schema: focus === null ? reviewSchema : repairFocusSchema,
         scopeDigest: reviewSnapshotDigest(snapshot.value),
         workspace: workspace.value.path,
       }, signal)
@@ -1958,7 +1978,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
             }
       })
       const scoped = await scopeFollowUps(options, task, findings, signal)
-      const { gates } = reviewGates(snapshot.value, response, repairsBaseline, { reviewStartedAt: startedAt, now: options.now() })
+      const { gates } = reviewGates(snapshot.value, response, repairsBaseline, { reviewStartedAt: startedAt, now: options.now() }, focus !== null)
       return settleReviewRun(options, task, snapshot.value, {
         provider: reviewRuntime.profile.provider,
         sessionId: turn.value.sessionId,

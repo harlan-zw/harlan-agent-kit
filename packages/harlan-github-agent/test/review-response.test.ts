@@ -77,6 +77,18 @@ describe('parseReviewResponse', () => {
 describe('what the Review checked', () => {
   const answer = (coverage: Record<string, unknown>) => JSON.stringify({ premise: { verdict: 'sound', reason: 'The change keeps its intent.' }, findings: [], confidence: 90, ...coverage })
 
+  it.each(['complete', 'incomplete'])('preserves the caller verification answer: %s', async (callerVerification) => {
+    const result = await parseReviewResponse(answer({ checked: 'affected callers', notChecked: null, callerVerification }))
+
+    expect(result._tag === 'Ok' && result.value.callerVerification).toBe(callerVerification)
+  })
+
+  it.each([null, true, 'unknown', {}])('rejects an invalid caller verification answer: %j', async (callerVerification) => {
+    const result = await parseReviewResponse(answer({ checked: 'affected callers', notChecked: null, callerVerification }))
+
+    expect(result._tag === 'Err' && result.error).toContain('callerVerification must be complete or incomplete')
+  })
+
   it('keeps what the Review exercised and its largest gap, on one line each', async () => {
     const result = await parseReviewResponse(answer({ checked: 'Timeline reads against\ndense windows', notChecked: 'the dashboard in a browser' }))
 

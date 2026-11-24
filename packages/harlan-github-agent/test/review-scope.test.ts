@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
-import { createReviewWorker } from '../src/item-agent.ts'
+import { createReviewWorker, reviewOutcome } from '../src/item-agent.ts'
 import { ok } from '../src/result.ts'
 import { repairFocusCoverage, repairFocusScope, repairFocusSource } from '../src/review-scope.ts'
 import { createReviewStaticReader } from '../src/review-static.ts'
@@ -208,14 +208,16 @@ const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { 
  * Runs one Review of a Repair head and reports the prompt the Agent received
  * and what the Review run recorded.
  */
-async function reviewRepairHead(input: { source: ReviewRun, paths?: string[], task?: ClaimedAdversarialReviewTask, journal?: ReturnType<typeof openJournalStore>, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
+async function reviewRepairHead(input: { source: ReviewRun, callerVerification?: 'complete' | 'incomplete' | null, notChecked?: string | null, paths?: string[], task?: ClaimedAdversarialReviewTask, journal?: ReturnType<typeof openJournalStore>, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
   const pullRequest = pullRequestItem({ mergeState: 'clean', ...input.task?.pullRequest })
   const capture: ProviderCapture = { requests: [] }
   const recorded: RecordReviewRunInput[] = []
+  const publications: string[] = []
   const worker = createReviewWorker({
     runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents({
       checked: 'the limit in parser.ts and its caller',
-      notChecked: null,
+      notChecked: input.notChecked ?? null,
+      ...(input.callerVerification === null ? {} : { callerVerification: input.callerVerification ?? 'complete' }),
       premise: { verdict: 'sound', reason: 'The change keeps its intent.' },
       findings: [],
       confidence: 96,
@@ -283,7 +285,10 @@ async function reviewRepairHead(input: { source: ReviewRun, paths?: string[], ta
           }),
     },
     status: {
-      publish: () => Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' })),
+      publish: (_task, _phase, body) => {
+        publications.push(body)
+        return Promise.resolve(ok({ commentId: 42, url: 'https://github.com/harlan-zw/example/pull/24#issuecomment-42' }))
+      },
     },
     triageStatus: { publish: () => Promise.reject(new Error('Review must not publish issue triage.')) },
     workspaces: {
@@ -315,12 +320,49 @@ async function reviewRepairHead(input: { source: ReviewRun, paths?: string[], ta
   const prompt = capture.requests.at(0)?.prompt
   if (prompt === undefined)
     throw new Error('Expected one Agent turn.')
-  return { prompt, run: recorded.at(0) }
+  return { prompt, run: recorded.at(0), publication: publications.at(-1) }
 }
 
 const fullDiffMandate = 'Follow nextOffset until truncated is false.'
 
 describe('a Review of a Repair head', () => {
+  it('withholds Ready when caller verification remains incomplete after a truncated search', async () => {
+    const review = await reviewRepairHead({
+      source: sourceRun(),
+      callerVerification: 'incomplete',
+      notChecked: 'affected callers after review_search returned truncated: true',
+    })
+
+    expect(review.run?.gates.merge._tag).toBe('Passed')
+    expect(review.run?.gates.ci._tag).toBe('Passed')
+    expect(review.run?.findings).toEqual([])
+    expect(reviewOutcome(review.run!.gates)).toBe('PENDING')
+    expect(review.publication).toContain('affected callers after review_search returned truncated: true')
+    expect(review.publication).not.toContain('the review passed')
+  })
+
+  it.each([
+    { callerVerification: null, notChecked: null },
+    { callerVerification: 'incomplete' as const, notChecked: null },
+    { callerVerification: 'complete' as const, notChecked: 'caller coverage remains unknown' },
+  ])('withholds Ready for missing or contradictory coverage: %j', async (coverage) => {
+    const review = await reviewRepairHead({ source: sourceRun(), ...coverage })
+
+    expect(reviewOutcome(review.run!.gates)).toBe('PENDING')
+  })
+
+  it('allows Ready when caller verification is complete and nothing was skipped', async () => {
+    const review = await reviewRepairHead({ source: sourceRun(), callerVerification: 'complete' })
+
+    expect(reviewOutcome(review.run!.gates)).toBe('READY')
+  })
+
+  it('keeps full Review coverage gaps outside the Repair focus gate', async () => {
+    const review = await reviewRepairHead({ source: sourceRun(), rerun: true, callerVerification: null, notChecked: 'the dashboard in a browser' })
+
+    expect(reviewOutcome(review.run!.gates)).toBe('READY')
+  })
+
   it('requires unchanged caller verification when bounded search misses a use beyond byte 16000', async () => {
     const { directory } = repositoryWithReviewedHead()
     git(directory, 'switch', '-q', 'main')
