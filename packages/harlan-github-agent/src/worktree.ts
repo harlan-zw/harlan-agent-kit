@@ -754,6 +754,116 @@ async function conflictWritablePaths(
   return ok([...new Set([...worktree.conflictedFiles, ...merged.stdout.split('\0').filter(Boolean)])].sort())
 }
 
+/** One problem that `git diff --check` reports. */
+interface DiffCheckProblem {
+  /** `path:line: message`. Line numbers count in the result, so both parents name a problem the same way. */
+  header: string
+  /** The header and the line Git quotes under it. */
+  report: string
+}
+
+type DiffCheckOutcome
+  = | { _tag: 'Clean' }
+    | { _tag: 'Problems', output: string }
+
+/**
+ * Whitespace problems that the conflict resolution itself adds to the merge.
+ *
+ * Checking the result against the pull request head alone also reports every
+ * line the base branch brought in. A resolution that kept the deliberate
+ * Markdown hard line breaks of the base branch failed that way. A line belongs
+ * to the resolution only when it is new against both parents. So the check
+ * runs against each parent and keeps the problems that both report.
+ *
+ * A combined diff states the same rule, but Git ignores `--check` there.
+ * `git diff-tree --check --cc` and `git show --check` report nothing for a
+ * merge, even when the resolution adds trailing whitespace.
+ */
+async function resolutionWhitespaceProblems(worktree: PreparedConflictWorktree, signal: AbortSignal): Promise<Result<DiffCheckProblem[], string>> {
+  const head = await diffCheckAgainst(worktree.path, worktree.headSha, signal)
+  if (head._tag === 'Err')
+    return head
+  if (head.value._tag === 'Clean')
+    return ok([])
+  const base = await diffCheckAgainst(worktree.path, worktree.baseSha, signal)
+  if (base._tag === 'Err')
+    return base
+  if (base.value._tag === 'Clean')
+    return ok([])
+
+  const headPaths = await runGit(worktree.path, ['diff', '--name-only', '--no-renames', '-z', worktree.headSha], signal)
+  if (headPaths.exitCode !== 0)
+    return err(`Could not inspect what the resolution changed: ${headPaths.stderr}`)
+  const basePaths = await runGit(worktree.path, ['diff', '--name-only', '--no-renames', '-z', worktree.baseSha], signal)
+  if (basePaths.exitCode !== 0)
+    return err(`Could not inspect what the resolution changed: ${basePaths.stderr}`)
+  const paths = [...new Set([...headPaths.stdout.split('\0'), ...basePaths.stdout.split('\0')])].filter(Boolean)
+  const headProblems = readDiffCheck(head.value.output, paths)
+  if (headProblems._tag === 'Err')
+    return headProblems
+  const baseProblems = readDiffCheck(base.value.output, paths)
+  if (baseProblems._tag === 'Err')
+    return baseProblems
+  const againstBoth = new Set(baseProblems.value.map(problem => problem.header))
+  return ok(headProblems.value.filter(problem => againstBoth.has(problem.header)))
+}
+
+async function diffCheckAgainst(checkout: string, parent: string, signal: AbortSignal): Promise<Result<DiffCheckOutcome, string>> {
+  // A base branch can bring in thousands of problems, so stream the output
+  // instead of applying execFile's 1 MiB limit.
+  const check = await runGitPathOutput(checkout, ['diff', '--check', '--no-color', '--no-renames', parent], signal)
+  if (check.exitCode === 0)
+    return ok({ _tag: 'Clean' })
+  // `--check` exits 2 when it finds a problem. Any other failure must not read as clean.
+  return check.exitCode === 2 && check.stdout.length > 0
+    ? ok({ _tag: 'Problems', output: check.stdout })
+    : err(`Could not run git diff check: ${check.stderr || check.stdout}`)
+}
+
+/**
+ * Reads `git diff --check` output into its problems.
+ *
+ * Git prints each raw path, which may hold a colon, a newline, or a leading
+ * `+`. So only an exact changed path starts a header, and every other line
+ * must be a `+` line that Git quotes under the header before it. Output in any
+ * other shape fails, so no problem disappears unread.
+ */
+function readDiffCheck(output: string, paths: readonly string[]): Result<DiffCheckProblem[], string> {
+  // The longest path wins, so `notes` never claims the header of `notes:2: draft.md`.
+  const anchors = [...paths].sort((left, right) => right.length - left.length)
+  const headers: Array<{ start: number, end: number }> = []
+  let position = 0
+  while (position < output.length) {
+    const headerEnd = diffCheckHeaderEnd(output, position, anchors)
+    if (headerEnd !== undefined) {
+      headers.push({ start: position, end: headerEnd })
+      position = headerEnd
+      continue
+    }
+    const newline = output.indexOf('\n', position)
+    const lineEnd = newline === -1 ? output.length : newline + 1
+    if (headers.length === 0 || output[position] !== '+')
+      return err(`Could not read git diff check output: ${cleanLine(output.slice(position, lineEnd))}`)
+    position = lineEnd
+  }
+  return ok(headers.map((header, index) => ({
+    header: output.slice(header.start, header.end),
+    report: output.slice(header.start, headers[index + 1]?.start ?? output.length),
+  })))
+}
+
+function diffCheckHeaderEnd(output: string, start: number, paths: readonly string[]): number | undefined {
+  for (const path of paths) {
+    if (!output.startsWith(`${path}:`, start))
+      continue
+    const location = /\d+: [^\n]+(?:\n|$)/y
+    location.lastIndex = start + path.length + 1
+    if (location.test(output))
+      return location.lastIndex
+  }
+  return undefined
+}
+
 export function createConflictWorktreeManager(options: ConflictWorktreeManagerOptions): ConflictWorktreeManager {
   if (options.gitIdentity === undefined)
     throw new Error('A Git commit identity is required.')
@@ -910,9 +1020,11 @@ export function createConflictWorktreeManager(options: ConflictWorktreeManagerOp
     if (untracked.stdout.length > 0)
       return err(`The worker created an untracked file: ${untracked.stdout.split('\0')[0]}.`)
 
-    const diffCheck = await runGit(worktree.path, ['diff', '--check', 'HEAD'], signal)
-    if (diffCheck.exitCode !== 0)
-      return err(`Resolved patch failed git diff check: ${diffCheck.stdout || diffCheck.stderr}`)
+    const whitespace = await resolutionWhitespaceProblems(worktree, signal)
+    if (whitespace._tag === 'Err')
+      return whitespace
+    if (whitespace.value.length > 0)
+      return err(`Resolved patch failed git diff check: ${whitespace.value.map(problem => problem.report).join('')}`)
 
     // Stage only verified paths still in the index. A worker's `git rm` already
     // stages a deletion and removes its index entry, so naming it fails git add.

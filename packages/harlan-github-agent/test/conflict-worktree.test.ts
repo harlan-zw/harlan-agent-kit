@@ -519,6 +519,91 @@ describe('conflict worktree', () => {
     expect(git(prepared.path, 'diff', '--cached', '--name-only', 'HEAD').split('\n').sort()).toEqual(['file.txt', 'helper.ts'])
   })
 
+  describe('whitespace check', () => {
+    // A Markdown hard line break ends in two spaces on purpose.
+    const hardBreak = '1. **CONSEQUENCE_TITLE** `IMPACT/100`  \nWhy it matters.\n'
+    // Git prints raw paths in check output, so the reader must not split on `:` or a leading `+`.
+    const markdownPaths = ['review-contract.md', '+review-contract.md', '\nreview-contract.md', 'notes:2: draft.md']
+
+    function conflictManager(remote: string, root: string): ConflictWorktreeManager {
+      return createConflictWorktreeManager({
+        gitIdentity: { name: 'Test Agent', email: 'agent@example.com' },
+        remoteUrl: () => remote,
+        root,
+        tokens: { getToken: () => Promise.resolve(ok({ token: 'unused', expiresAt: '2026-08-13T02:00:00.000Z' })), invalidate: () => undefined },
+      })
+    }
+
+    function commitToBase(checkout: string, path: string, content: string): void {
+      writeFileSync(join(checkout, path), content)
+      git(checkout, 'add', '--', path)
+      git(checkout, 'commit', '-m', 'base change')
+      git(checkout, 'push', 'origin', 'main')
+    }
+
+    it.each(markdownPaths)('accepts a hard line break the base branch added to %j', async (path) => {
+      // The check compared the merge with the pull request head alone, so it
+      // flagged every line main brought in and threw a correct resolution away.
+      const { checkout, remote, root, task } = fixture()
+      commitToBase(checkout, path, hardBreak)
+      const manager = conflictManager(remote, root)
+      const prepared = await conflicted(manager, task)
+      writeFileSync(join(prepared.path, 'file.txt'), 'resolved\n')
+
+      const verified = await manager.verify(task, prepared, new AbortController().signal)
+
+      expect(verified).toEqual(expect.objectContaining({ _tag: 'Ok', value: expect.objectContaining({ changedFiles: 2 }) }))
+    })
+
+    it.each(markdownPaths)('rejects only the trailing whitespace the resolution adds beside %j', async (path) => {
+      const { checkout, remote, root, task } = fixture()
+      commitToBase(checkout, path, hardBreak)
+      const manager = conflictManager(remote, root)
+      const prepared = await conflicted(manager, task)
+      writeFileSync(join(prepared.path, 'file.txt'), 'resolved  \n')
+
+      const verified = await manager.verify(task, prepared, new AbortController().signal)
+
+      expect(verified).toEqual({ _tag: 'Err', error: 'Resolved patch failed git diff check: file.txt:1: trailing whitespace.\n+resolved  \n' })
+    })
+
+    it.each(['base', 'pull request'] as const)('accepts a hard line break the %s side carries into the conflicted file', async (side) => {
+      const { checkout, remote, root, task } = fixture()
+      let current = task
+      if (side === 'base') {
+        commitToBase(checkout, 'file.txt', 'current base  \n')
+      }
+      else {
+        git(checkout, 'checkout', 'fix/conflict')
+        writeFileSync(join(checkout, 'file.txt'), 'pull request  \n')
+        git(checkout, 'commit', '-am', 'pull request hard break')
+        git(checkout, 'push', 'origin', 'HEAD:refs/pull/1/head')
+        current = { ...task, pullRequest: { ...task.pullRequest, headSha: git(checkout, 'rev-parse', 'HEAD') } }
+      }
+      const manager = conflictManager(remote, root)
+      const prepared = await conflicted(manager, current)
+      writeFileSync(join(prepared.path, 'file.txt'), side === 'base' ? 'pull request\ncurrent base  \n' : 'pull request  \ncurrent base\n')
+
+      const verified = await manager.verify(current, prepared, new AbortController().signal)
+
+      expect(verified).toEqual(expect.objectContaining({ _tag: 'Ok' }))
+    })
+
+    it('rejects conflict markers left in the resolution', async () => {
+      const { checkout, remote, root, task } = fixture()
+      commitToBase(checkout, 'review-contract.md', hardBreak)
+      const manager = conflictManager(remote, root)
+      const prepared = await conflicted(manager, task)
+
+      const verified = await manager.verify(task, prepared, new AbortController().signal)
+
+      expect(verified).toEqual({
+        _tag: 'Err',
+        error: 'Resolved patch failed git diff check: file.txt:1: leftover conflict marker\nfile.txt:3: leftover conflict marker\nfile.txt:5: leftover conflict marker\n',
+      })
+    })
+  })
+
   it('refuses a resolution that edits a file the merge never touched', async () => {
     const { remote, root, task } = fixture()
     const manager = createConflictWorktreeManager({
