@@ -92,18 +92,18 @@ function publishedReview(store: ReturnType<typeof openJournalStore>) {
     throw new Error('Expected the published Review to take gate refreshes.')
 
   /** One gate refresh pass, as the sweep stages it after a CI result. */
-  const refreshGates = (input: { ci: 'Passed' | 'Pending', body: string, at: string, reconciliationId?: string }) => {
+  const refreshGates = ({ ci, body, at, ...reconciliation }: { ci: 'Passed' | 'Pending', body: string, at: string, reconciliationId?: string }) => {
     const refreshed = store.stageReviewGateStatus({
       reviewRunId: run.id,
       repository: repository.github,
       pullRequestNumber: pullRequest.number,
       revisionId: refresh.revisionId,
       expectedHeadSha: pullRequest.headSha,
-      gates: gates(input.ci),
-      body: input.body,
-      desiredOutcome: input.ci === 'Passed' ? 'READY' : 'PENDING',
-      reconciliationId: input.reconciliationId,
-      at: input.at,
+      gates: gates(ci),
+      body,
+      desiredOutcome: ci === 'Passed' ? 'READY' : 'PENDING',
+      ...reconciliation,
+      at,
     })
     if (refreshed._tag === 'Rejected')
       throw new Error(refreshed.reason)
