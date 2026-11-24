@@ -1,4 +1,5 @@
 import type { Stats } from 'node:fs'
+import type { CodexKit } from './worker-codex-kit.ts'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -223,7 +224,13 @@ export interface HomeLayer {
  * Reads come from the shared home, so caches stay warm. Writes outside the
  * persisted paths land in a layer owned by this sandbox and last one turn.
  */
-export async function prepareHomeLayer(input: { controllerHome: string, sharedHome: string, taskId?: string }): Promise<HomeLayer> {
+export async function prepareHomeLayer(input: {
+  controllerHome: string
+  sharedHome: string
+  taskId?: string
+  /** The kit Codex Skills and guards, from a trusted read-only mount. */
+  codexKit?: CodexKit
+}): Promise<HomeLayer> {
   const layer = await privateDirectory(input.controllerHome, [...layerParent, randomUUID()])
   let released: Promise<void> | undefined
   const release = () => {
@@ -244,6 +251,7 @@ export async function prepareHomeLayer(input: { controllerHome: string, sharedHo
     }
     const instructions = await prepareCodexMasks(join(input.sharedHome, '.codex'))
     const codex = join(layer, 'codex')
+    const kit = input.codexKit
     await Promise.all([
       // Codex may record project trust during the turn. Those writes stay in this copy.
       writeFile(join(codex, 'config.toml'), '', { mode: 0o600 }),
@@ -273,6 +281,18 @@ export async function prepareHomeLayer(input: { controllerHome: string, sharedHo
     )
     for (const name of codexDirectoryMasks)
       args.push('--tmpfs', `${workerHome}/.codex/${name}`)
+    if (kit !== undefined) {
+      // User Skills need no Codex plugin. With plugins on, Codex downloads account plugins in every turn.
+      args.push('--ro-bind', kit.skills, `${workerHome}/.codex/skills/${kit.name}`)
+      // Codex runs hooks from its system layer without a stored trust, and a turn cannot change them.
+      const system = join(layer, 'codex-system')
+      await mkdir(system, { mode: 0o700 })
+      await Promise.all([
+        writeFile(join(system, 'config.toml'), '', { mode: 0o400 }),
+        writeFile(join(system, 'hooks.json'), kit.hooks, { mode: 0o400 }),
+      ])
+      args.push('--ro-bind', system, '/etc/codex')
+    }
     return { args, release }
   }
   catch (error) {

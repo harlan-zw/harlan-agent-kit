@@ -163,6 +163,57 @@ it.skipIf(homeOverlayMissing)('starts concurrent first turns on a home that pred
   }
 })
 
+it.skipIf(homeOverlayMissing)('loads the kit Codex Skills and guards from the read-only Service checkout', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-home-kit-'))
+  try {
+    const { controller, worker, workspace, profile } = await fixture(root)
+    const kit = join(root, 'service/harlan-agent-kit')
+    await Promise.all([mkdir(join(kit, '.codex-plugin'), { recursive: true }), mkdir(join(kit, 'hooks'), { recursive: true }), mkdir(join(kit, 'skills/fixture'), { recursive: true })])
+    await writeFile(join(kit, '.codex-plugin/plugin.json'), JSON.stringify({ name: 'harlan-agent-kit', version: '9.9.9', skills: './skills/' }))
+    await writeFile(join(kit, 'skills/fixture/SKILL.md'), '---\nname: fixture\ndescription: Fixture Skill.\n---\n')
+    // The real guards parse commands with awk. A guard that cannot run it allows the command.
+    await writeFile(join(kit, 'hooks/guard.sh'), '#!/bin/bash\nawk \'/worktree add/ { print "deny" }\'\n', { mode: 0o755 })
+    // eslint-disable-next-line no-template-curly-in-string -- Codex hook files name the plugin root literally.
+    await writeFile(join(kit, 'hooks/codex.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: '^Bash$', hooks: [{ type: 'command', command: '${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh', timeout: 10 }] }] } }))
+    // A Skill copy in the shared home is not the trusted source.
+    await mkdir(join(worker, '.codex/skills/harlan-agent-kit/fixture'), { recursive: true })
+    await writeFile(join(worker, '.codex/skills/harlan-agent-kit/planted'), 'shared copy')
+    await writeFile(profile, JSON.stringify({ home: worker, tools: ['/usr/bin'], readOnlyPaths: [kit], codex: '/usr/bin/true', opencode: '/usr/bin/true' }))
+    const sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex', taskId: 'opaque-issue-work-task' })
+    try {
+      const result = await run(sandbox, `
+        test ! -s ~/.codex/config.toml || exit 10
+        test -f ~/.codex/skills/harlan-agent-kit/fixture/SKILL.md || exit 11
+        test ! -e ~/.codex/skills/harlan-agent-kit/planted || exit 12
+        if echo planted > ~/.codex/skills/harlan-agent-kit/fixture/SKILL.md; then exit 13; fi
+        grep -qF '${kit}/hooks/guard.sh' /etc/codex/hooks.json || exit 14
+        if echo '{}' > /etc/codex/hooks.json; then exit 15; fi
+        test "$(printf 'git worktree add x' | ${kit}/hooks/guard.sh)" = deny || exit 16
+        echo loaded
+      `)
+      expect(result.stdout.trim()).toBe('loaded')
+    }
+    finally {
+      await sandbox.release()
+    }
+    const reviewHome = join(root, 'review')
+    await mkdir(reviewHome)
+    for (const context of [{ provider: 'codex', reviewHome }, { provider: 'opencode' }] as const) {
+      const other = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, readOnly: true, ...context })
+      try {
+        const result = await run(other, 'test ! -e /etc/codex && test ! -e ~/.codex/skills/harlan-agent-kit/fixture && echo absent')
+        expect(result.stdout.trim()).toBe('absent')
+      }
+      finally {
+        await other.release()
+      }
+    }
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 it('refuses Agent turns on a host whose bubblewrap cannot mount the home layer', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-home-refusal-'))
   try {

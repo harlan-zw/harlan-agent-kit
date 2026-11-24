@@ -499,7 +499,19 @@ A missing toolchain, setup step, or generated output stops a check from starting
 Never push a merge whose required check did not run. CI can pass without running that check.
 Mark Action required with the command, the error, and the merge-by-hand step.
 If a prerequisite ran and found a code failure, the Agent returns `blocked`.
-If a check ran and failed, and the fix needs a path outside the merge, the Agent returns `blocked`.
+
+If the merge is resolved, every check ran, and a failing check's fix needs a path outside the merge, the Agent returns `resolved_with_failures`.
+It names each failed check's exact command and the paths its fix needs, relative to the repository root.
+The controller accepts it only when no check is unavailable and every failed check names its paths.
+If any named path is one the merge changed, the controller stops as for `blocked`. The Agent may edit that path.
+Otherwise the controller pushes the merge through the same verification, authority, and publication checks as a resolved merge.
+The canonical comment of the pushed head names the failing checks in one sentence.
+CI, a fresh Review, and head CI Repair then follow, as for any head. The controller never queues Repair itself.
+While a required check fails on GitHub, that head reads BLOCKED.
+Auto merge never merges that head, even when CI passes and its Review reads READY, because CI may never run the failing command.
+It holds with the `MergedWithFailingChecks` reason. A later head commit clears the hold.
+
+The Agent returns `blocked` for everything else: a conflict it could not resolve, an edit outside the merge, a failure whose fix needs a path the merge changed, or any doubt.
 
 After the push, invalidate old evidence and run `adversarial-review` again against the new remote SHA.
 

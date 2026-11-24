@@ -27,7 +27,7 @@ export interface AutoMergeControllerOptions {
   policy: AutoMergePolicy
   /** Every merge and every refusal is reported. A refusal never fails the poll. */
   report: (event: AutoMergeEvent) => void
-  store: Pick<JournalStore, 'getAutoMergeContext' | 'listReviewRuns' | 'recordAutoMergeHold'>
+  store: Pick<JournalStore, 'getAutoMergeContext' | 'listReviewRuns' | 'mergedWithFailingChecks' | 'recordAutoMergeHold'>
 }
 
 export function createAutoMergeController(options: AutoMergeControllerOptions): AutoMergeController {
@@ -116,10 +116,13 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
       const input: AutoMergeInput = {
         attempts,
         changedFiles,
+        mergedWithFailingChecks: options.store.mergedWithFailingChecks(repository.github, subject.number, context.pullRequest.headSha),
         policy: options.policy,
         pullRequest: context.pullRequest,
         repository: context.repository,
       }
+      // A recorded local failure holds inside the decision, which authorize
+      // reads again immediately before either GitHub merge path.
       const decision = autoMergeDecision(input)
       if (decision._tag === 'Hold') {
         // Only a head that reached a published READY Review gets here, so the
@@ -153,6 +156,7 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
           const currentDecision = autoMergeDecision({
             attempts: currentAttempts,
             changedFiles,
+            mergedWithFailingChecks: options.store.mergedWithFailingChecks(repository.github, subject.number, current.pullRequest.headSha),
             policy: options.policy,
             pullRequest: current.pullRequest,
             repository: current.repository,

@@ -302,6 +302,7 @@ async function reviewAfterEarlierHead(earlier: ReviewRun, advance: HeadAdvance) 
       priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       latestReviewOfEarlierHead: () => earlier,
       repairSource: () => null,
+      mergedWithFailingChecks: () => null,
       recordReviewRun: (input) => {
         recorded.push(input)
         return { _tag: 'Inserted', reviewRunId: input.id }

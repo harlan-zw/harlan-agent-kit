@@ -98,6 +98,7 @@ function reviewWith(input: { headChecks: GitHubCheck[], requiredChecks: Required
       priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       latestReviewOfEarlierHead: () => undefined,
       repairSource: () => null,
+      mergedWithFailingChecks: () => null,
       recordReviewRun: (run) => {
         runs.push(run)
         return { _tag: 'Inserted', reviewRunId: run.id }

@@ -238,6 +238,7 @@ function harness(options: {
     store: {
       listReviewGateRefreshes: () => [options.review ?? gateRefresh()],
       repairSource: () => null,
+      mergedWithFailingChecks: () => null,
       repairRoundPlan: () => options.rounds ?? { _tag: 'Allowed', number: 1 },
       queueReviewFixForGate: ({ at: _at, ...input }) => {
         recorded.fixQueued.push(input)
@@ -973,7 +974,7 @@ describe('refreshReviewGates against the journal store', () => {
       body: expect.stringContaining('🟢 **Ready**'),
     })
     // The restated comment keeps what the Review checked, read back from the Journal.
-    expect(publication?.body).toContain('Checked the parser against split chunks. Not checked: Windows line endings.')
+    expect(publication?.body).toContain('Checked: the parser against split chunks. Not checked: Windows line endings.')
     expect(store.listReviewRuns('harlan-zw/example', 24).every(run => run.checked === 'the parser against split chunks')).toBe(true)
   })
 

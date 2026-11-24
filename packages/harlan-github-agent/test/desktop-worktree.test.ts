@@ -1,8 +1,9 @@
 import type { AgentEvent } from '../src/agent-provider.ts'
-import type { DesktopTurn } from '../src/desktop-broker.ts'
+import type { DesktopBroker, DesktopTurn } from '../src/desktop-broker.ts'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createCodexProvider } from '../src/codex-provider.ts'
 import { createDesktopBroker } from '../src/desktop-broker.ts'
@@ -15,6 +16,21 @@ const directories: string[] = []
 afterEach(async () => {
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
+
+/**
+ * Claims the next turn, however long the broker takes to queue it.
+ *
+ * The broker queues a turn only after its Git export, and nothing announces that moment.
+ * So this polls with no deadline of its own. The test timeout aborts `signal`.
+ */
+async function queuedTurn(broker: DesktopBroker, signal: AbortSignal): Promise<DesktopTurn> {
+  for (;;) {
+    const turn = broker.claim()
+    if (turn !== null)
+      return turn
+    await delay(10, undefined, { signal })
+  }
+}
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'desktop-worktree-test-'))
@@ -146,18 +162,13 @@ it('round trips a pending merge with a base-added file and retains its merge par
   }
 })
 
-it('imports one desktop result and rejects late duplicate completion', async () => {
+it('imports one desktop result and rejects late duplicate completion', async (context) => {
   const f = await fixture()
   const broker = createDesktopBroker({ now: () => 1 })
   broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
   const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: 'test', sessionId: null, signal: new AbortController().signal, workspace: f.repository })[Symbol.asyncIterator]()
   const response = iterator.next()
-  let turn: ReturnType<typeof broker.claim> = null
-  await vi.waitFor(() => {
-    turn = broker.claim()
-    expect(turn).not.toBeNull()
-  })
-  const claimed = turn as unknown as DesktopTurn
+  const claimed = await queuedTurn(broker, context.signal)
   expect(broker.claim()).toBeNull()
   expect(broker.events(claimed.id, [{ _tag: 'Message', text: 'finished' }], 0)).toBe(true)
   expect(broker.complete(claimed.id, claimed.worktree, null)).toBe(true)
@@ -166,7 +177,7 @@ it('imports one desktop result and rejects late duplicate completion', async () 
   expect(broker.complete(claimed.id, claimed.worktree, null)).toBe(false)
 })
 
-it('fences the previous desktop identity after a capacity deferral', async () => {
+it('fences the previous desktop identity after a capacity deferral', async (context) => {
   const f = await fixture()
   const broker = createDesktopBroker({ now: () => 1 })
   broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
@@ -174,12 +185,7 @@ it('fences the previous desktop identity after a capacity deferral', async () =>
   const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: '', sessionId: null, signal: controller.signal, workspace: f.repository })[Symbol.asyncIterator]()
   const response = iterator.next()
   const stopped = expect(response).rejects.toThrow()
-  let first: DesktopTurn | null = null
-  await vi.waitFor(() => {
-    first = broker.claim()
-    expect(first).not.toBeNull()
-  })
-  const previous = first as unknown as DesktopTurn
+  const previous = await queuedTurn(broker, context.signal)
   expect(broker.defer(previous.id)).toBe(true)
   const next = broker.claim()!
   expect(next.id).not.toBe(previous.id)
@@ -193,19 +199,15 @@ it('fences the previous desktop identity after a capacity deferral', async () =>
   expect(broker.active(next.id)).toBe(false)
 })
 
-it('keeps an active turn through stale inventory and fences duplicated event delivery', async () => {
+it('keeps an active turn through stale inventory and fences duplicated event delivery', async (context) => {
   const f = await fixture()
   let now = 1
   const broker = createDesktopBroker({ now: () => now })
   broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
   const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: '', sessionId: null, signal: new AbortController().signal, workspace: f.repository })[Symbol.asyncIterator]()
   const first = iterator.next()
-  let turn: DesktopTurn | null = null
-  await vi.waitFor(() => {
-    turn = broker.claim()
-    expect(turn).not.toBeNull()
-  })
-  const id = (turn as unknown as DesktopTurn).id
+  const turn = await queuedTurn(broker, context.signal)
+  const id = turn.id
   now = 10_001
   expect(broker.active(id)).toBe(true)
   now = 20_001
@@ -214,12 +216,12 @@ it('keeps an active turn through stale inventory and fences duplicated event del
   const message = [{ _tag: 'Message' as const, text: 'once' }]
   expect(broker.events(id, message, 0)).toBe(true)
   expect(broker.events(id, message, 0)).toBe(true)
-  expect(broker.complete(id, (turn as unknown as DesktopTurn).worktree, null)).toBe(true)
+  expect(broker.complete(id, turn.worktree, null)).toBe(true)
   expect(await first).toEqual({ done: false, value: message[0] })
   expect((await iterator.next()).done).toBe(true)
 })
 
-it('pins proof callbacks to the active desktop turn and refuses cancelled or disconnected turns', async () => {
+it('pins proof callbacks to the active desktop turn and refuses cancelled or disconnected turns', async (context) => {
   const f = await fixture()
   let now = 1
   const owners: unknown[] = []
@@ -235,12 +237,7 @@ it('pins proof callbacks to the active desktop turn and refuses cancelled or dis
   const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: 'test', sessionId: null, taskId: 'review-task', toolPolicy: policy, signal: controller.signal, workspace: f.repository })[Symbol.asyncIterator]()
   const response = iterator.next()
   const stopped = expect(response).rejects.toThrow()
-  let turn: ReturnType<typeof broker.claim> = null
-  await vi.waitFor(() => {
-    turn = broker.claim()
-    expect(turn).not.toBeNull()
-  })
-  const claimed = turn as unknown as DesktopTurn
+  const claimed = await queuedTurn(broker, context.signal)
   const input = { taskId: 'review-task', headSha: policy.headSha, sourceSha256: 'b'.repeat(64), startedAt: '2026-10-07T00:00:00.000Z' }
   expect(await broker.proof(claimed.id, 'reserve', input)).toEqual({ _tag: 'Reserved', reservationId: 'controller-reservation' })
   expect(owners).toEqual([{ taskId: 'review-task', headSha: policy.headSha, workerId: 'reviewer', fence: 7 }])
@@ -253,7 +250,7 @@ it('pins proof callbacks to the active desktop turn and refuses cancelled or dis
   await expect(broker.proof(claimed.id, 'reserve', input)).rejects.toThrow('active Review')
 })
 
-it('revokes cancelled desktop work before accepting another result', async () => {
+it('revokes cancelled desktop work before accepting another result', async (context) => {
   const f = await fixture()
   const broker = createDesktopBroker({ now: () => 1 })
   broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
@@ -261,12 +258,7 @@ it('revokes cancelled desktop work before accepting another result', async () =>
   const iterator = broker.provider('codex').runTurn({ model: 'test', outputSchema: {}, prompt: 'test', sessionId: null, signal: signal.signal, workspace: f.repository })[Symbol.asyncIterator]()
   const response = iterator.next()
   const rejected = expect(response).rejects.toThrow()
-  let turn: ReturnType<typeof broker.claim> = null
-  await vi.waitFor(() => {
-    turn = broker.claim()
-    expect(turn).not.toBeNull()
-  })
-  const claimed = turn as unknown as DesktopTurn
+  const claimed = await queuedTurn(broker, context.signal)
   signal.abort()
   await rejected
   expect(broker.active(claimed.id)).toBe(false)
@@ -458,7 +450,7 @@ it('separates repositories that share a name across owners', () => {
   expect(() => desktopRepositoryPath('/cache', '/tmp/repo')).toThrow('not a GitHub repository')
 })
 
-it('stands down a desktop running another revision', async () => {
+it('stands down a desktop running another revision', async (context) => {
   const f = await fixture()
   const broker = createDesktopBroker({ now: () => 1 })
   broker.report({ protocol: DESKTOP_PROTOCOL - 1, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
@@ -474,12 +466,7 @@ it('stands down a desktop running another revision', async () => {
 
   // The same desktop, once it catches up, takes the turn already waiting.
   broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
-  let turn: ReturnType<typeof broker.claim> = null
-  await vi.waitFor(() => {
-    turn = broker.claim()
-    expect(turn).not.toBeNull()
-  })
-  const claimed = turn as unknown as DesktopTurn
+  const claimed = await queuedTurn(broker, context.signal)
   broker.events(claimed.id, [{ _tag: 'Message', text: 'finished' }], 0)
   broker.complete(claimed.id, claimed.worktree, null)
   expect(await response).toEqual({ done: false, value: { _tag: 'Message', text: 'finished' } })
@@ -594,7 +581,7 @@ it('reports a desktop Worktree that cannot be set up as a setup failure', async 
   expect((failure as Error).cause).toBe('desktop-setup')
 })
 
-it('runs the turn on Hogwild when the desktop fails before its Agent starts', async () => {
+it('runs the turn on Hogwild when the desktop fails before its Agent starts', async (context) => {
   const f = await fixture()
   const broker = createDesktopBroker({ now: () => 1 })
   broker.report({ protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 })
@@ -606,12 +593,7 @@ it('runs the turn on Hogwild when the desktop fails before its Agent starts', as
   local = 0
   const iterator = pool.provider(hogwild, broker.provider('codex')).runTurn({ model: 'test', outputSchema: {}, prompt: 'test', sessionId: null, signal: new AbortController().signal, workspace: f.repository })[Symbol.asyncIterator]()
   const response = iterator.next()
-  let turn: ReturnType<typeof broker.claim> = null
-  await vi.waitFor(() => {
-    turn = broker.claim()
-    expect(turn).not.toBeNull()
-  })
-  const claimed = turn as unknown as DesktopTurn
+  const claimed = await queuedTurn(broker, context.signal)
 
   broker.complete(claimed.id, null, { _tag: 'SetupFailed', reason: 'Worktrunk stopped: ✗ Branch desktop-turn-task-one already exists' })
   local = 1

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { CODEX_AGENT_PROFILE, OPENCODE_AGENT_PROFILE } from '../src/agent-profile.ts'
 import { conflictResolutionPrompt, createConflictWorker } from '../src/conflict-worker.ts'
 import { err, ok } from '../src/result.ts'
+import { parseConflictMergeWithFailingChecks } from '../src/worktree.ts'
 import { agentRuntime, agentTurnLedger, pullRequestItem, repositoryMapping, stubProvider, turnEvents } from './fixtures.ts'
 
 const resolved = {
@@ -11,6 +12,7 @@ const resolved = {
   checks: [{ command: 'pnpm test', outcome: 'passed', details: 'All tests passed.' }],
   commitMessage: 'merge: reconcile parser changes',
   unavailableCheck: { command: '', error: '' },
+  failures: [],
 }
 
 it('supplies conflict intent instead of asking a public-only CLI for private metadata', () => {
@@ -186,14 +188,13 @@ describe('conflict worker', () => {
     expect(committed).toBe(false)
   })
 
-  it('requires base evidence for an unchanged consumer failure and blocks repair outside the merge scope', () => {
+  it('requires base evidence for an unchanged consumer failure and keeps an unstartable check apart', () => {
     const task = conflictTask()
     const prompt = conflictResolutionPrompt(task, { path: '/tmp/conflict-prompt', conflictedFiles: ['src/producer.ts'], writablePaths: ['src/producer.ts'], headSha: task.pullRequest.headSha, baseSha: task.pullRequest.baseSha })
 
     expect(prompt).toMatch(/matching base evidence.*pre-existing/)
     expect(prompt).toMatch(/Otherwise, report its cause as unknown/)
     expect(prompt).not.toMatch(/A failure in a file that neither side of the merge changed is pre-existing/)
-    expect(prompt).toMatch(/check ran and failed outside the files the merge touched.*outcome blocked/)
     expect(prompt).toMatch(/cannot start.*outcome checks_unavailable/)
     expect(prompt).not.toMatch(/If setup fails.*outcome blocked/)
   })
@@ -296,6 +297,7 @@ describe('conflict worker', () => {
           checks: [{ command: diagnostic, outcome: surface === 'resolved' ? 'passed' : 'unavailable', details: diagnostic }],
           commitMessage: `fix: setup Bearer ${token}`,
           unavailableCheck: surface === 'resolved' ? { command: '', error: '' } : { command: diagnostic, error: diagnostic },
+          failures: [],
         }))),
         worktrees: { ...options.worktrees, commit: (_task, _worktree, _patch, value) => {
           message = value
@@ -572,5 +574,148 @@ describe('conflict worker', () => {
     expect(prompt).toContain('Never use npx.')
     expect(prompt).toContain('Leave no conflict markers in any file.')
     expect(prompt).not.toContain('unit-tests skill')
+  })
+})
+
+describe('conflict worker with a failing check outside the merge', () => {
+  const renderCheck = 'pnpm vitest run test/render.test.ts'
+  const withFailures = {
+    ...resolved,
+    outcome: 'resolved_with_failures',
+    summary: 'Merged. A test outside the merge still imports the removed helper.',
+    checks: [
+      { command: 'pnpm vitest run test/parser.test.ts', outcome: 'passed', details: 'Passed.' },
+      { command: renderCheck, outcome: 'failed', details: 'test/render.test.ts:41 imports a removed export.' },
+    ],
+    failures: [{ command: renderCheck, paths: ['test/render.test.ts:41', './src/render.ts'] }],
+  }
+
+  async function run(response: unknown) {
+    const repository = repositoryMapping()
+    const current = pullRequestItem({ baseSha: 'current-base' })
+    const options = conflictWorkerOptions(repository, current)
+    const attempts: string[] = []
+    const worker = createConflictWorker({
+      ...options,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, stubProvider(turnEvents(response))),
+      worktrees: {
+        ...options.worktrees,
+        prepare: () => Promise.resolve(ok({ _tag: 'Conflicted' as const, worktree: { path: '/tmp/worktree', headSha: current.headSha, baseSha: current.baseSha, conflictedFiles: ['src/parser.ts'], writablePaths: ['src/parser.ts', 'src/shared.ts'] } })),
+        verify: () => {
+          attempts.push('verify')
+          return options.worktrees.verify()
+        },
+        commit: () => {
+          attempts.push('commit')
+          return options.worktrees.commit()
+        },
+      },
+    })
+    return { attempts, current, result: await worker.run(conflictTask(repository, current), new AbortController().signal) }
+  }
+
+  it('publishes the resolved merge and records each failing check with the paths its fix needs', async () => {
+    const { attempts, current, result } = await run(withFailures)
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      _tag: 'Publish',
+      publication: expect.objectContaining({
+        _tag: 'UpdatePullRequest',
+        taskKind: 'resolve_conflict',
+        commitSha: 'commit',
+        expectedHeadSha: current.headSha,
+        headRef: current.headRef,
+      }),
+    })))
+    expect(attempts).toEqual(['verify', 'commit'])
+    const evidence = result._tag === 'Ok' && result.value._tag === 'Publish' ? result.value.evidence ?? null : null
+    expect(parseConflictMergeWithFailingChecks(evidence)).toEqual({
+      _tag: 'MergedWithFailingChecks',
+      commitSha: 'commit',
+      baseRef: 'main',
+      failures: [{ command: renderCheck, paths: ['test/render.test.ts', 'src/render.ts'] }],
+    })
+  })
+
+  it('publishes a fully passing merge with no failing check evidence', async () => {
+    const { result } = await run(resolved)
+
+    expect(result).toEqual(ok(expect.objectContaining({ _tag: 'Publish' })))
+    expect(result._tag === 'Ok' && result.value._tag === 'Publish' ? result.value.evidence : 'missing').toBeUndefined()
+  })
+
+  it.each([
+    ['a file', 'src/shared.ts:12', 'src/shared.ts'],
+    ['a directory holding a file', 'src', 'src'],
+  ])('stops like blocked when a failing check needs %s the merge touched', async (_name, named, reported) => {
+    const { attempts, result } = await run({
+      ...withFailures,
+      failures: [{ command: renderCheck, paths: ['test/render.test.ts', named] }],
+    })
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      _tag: 'ActionRequired',
+      reason: `The agent resolved the merge conflict, but ${renderCheck} fails, and its fix needs ${reported}, which the merge changed. Merge main into fix/broken-thing by hand.`,
+    })))
+    expect(attempts).toEqual([])
+  })
+
+  it.each([[], [{ command: renderCheck, paths: ['test/render.test.ts'] }]])('still stops when a required check could not start beside a failing one, with failures %j', async (...failures) => {
+    const { attempts, result } = await run({
+      ...withFailures,
+      outcome: 'checks_unavailable',
+      checks: [...withFailures.checks, { command: 'pnpm typecheck', outcome: 'unavailable', details: 'tsc is missing.' }],
+      failures,
+      unavailableCheck: { command: 'pnpm typecheck', error: 'tsc: command not found' },
+    })
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      _tag: 'ActionRequired',
+      reason: expect.stringContaining('pnpm typecheck could not start: tsc: command not found.'),
+    })))
+    expect(attempts).toEqual([])
+  })
+
+  it('keeps a blocked answer that describes a failure without its paths', async () => {
+    const { attempts, result } = await run({
+      ...withFailures,
+      outcome: 'blocked',
+      summary: 'Intent is ambiguous after the merge',
+      commitMessage: '',
+      failures: [{ command: renderCheck, paths: [] }],
+    })
+
+    expect(result).toEqual(ok(expect.objectContaining({
+      _tag: 'ActionRequired',
+      reason: 'Intent is ambiguous after the merge. Merge main into fix/broken-thing by hand.',
+    })))
+    expect(attempts).toEqual([])
+  })
+
+  it.each([
+    ['no check failed', { checks: [{ command: renderCheck, outcome: 'passed', details: 'Passed.' }] }],
+    ['a check could not start', { checks: [...withFailures.checks, { command: 'pnpm typecheck', outcome: 'unavailable', details: 'tsc is missing.' }] }],
+    ['an unavailable check is named', { unavailableCheck: { command: 'pnpm typecheck', error: 'tsc: command not found' } }],
+    ['a failed check has no failure entry', { failures: [] }],
+    ['a failure entry names a passing check', { failures: [{ command: 'pnpm vitest run test/parser.test.ts', paths: ['src/other.ts'] }] }],
+    ['a failure names no path', { failures: [{ command: renderCheck, paths: [] }] }],
+    ['a failure names an absolute path', { failures: [{ command: renderCheck, paths: ['/srv/checkout/test/render.test.ts'] }] }],
+    ['a failure names a parent path', { failures: [{ command: renderCheck, paths: ['../render.test.ts'] }] }],
+    ['the commit message is empty', { commitMessage: ' ' }],
+    ['a resolved merge lists failures', { outcome: 'resolved', checks: [{ command: renderCheck, outcome: 'passed', details: 'Passed.' }] }],
+  ])('rejects the result before verification or commit when %s', async (_name, change) => {
+    const { attempts, result } = await run({ ...withFailures, ...change })
+
+    expect(result).toEqual(err('The agent returned an invalid conflict resolution result.'))
+    expect(attempts).toEqual([])
+  })
+
+  it('tells the agent when a failing check pushes the merge and when it blocks', () => {
+    const task = conflictTask()
+    const prompt = conflictResolutionPrompt(task, { path: '/tmp/conflict-prompt', conflictedFiles: ['src/producer.ts'], writablePaths: ['src/producer.ts'], headSha: task.pullRequest.headSha, baseSha: task.pullRequest.baseSha })
+
+    expect(prompt).toMatch(/check ran and failed, and its fix needs a path outside the listed paths, return outcome resolved_with_failures/)
+    expect(prompt).toMatch(/fix needs a listed path, fix it.*outcome blocked/)
+    expect(prompt).toContain('relative to the repository root')
   })
 })

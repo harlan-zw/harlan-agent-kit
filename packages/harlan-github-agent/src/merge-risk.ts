@@ -1,4 +1,4 @@
-import { isInstructionPath, isProtectedPath } from './pull-request-triage.ts'
+import { isInstructionPath, isProtectedPath, protectedPathReason } from './pull-request-triage.ts'
 
 /**
  * How much a wrong merge of this pull request would cost.
@@ -94,16 +94,14 @@ export function mergeRiskFloor(files: readonly PullRequestFile[], policy: MergeR
   // later agent behaves. That is never one revert commit. A rename away from
   // one changes it as much as an edit does.
   const touched = files.flatMap(touchedPaths)
-  const instruction = touched.find(isInstructionPath)
-  if (instruction !== undefined)
-    return { _tag: 'Sensitive', reason: `${instruction} is read as instructions by an agent.` }
-  const protectedPath = touched.find(isProtectedPath)
-  if (protectedPath !== undefined)
-    return { _tag: 'Sensitive', reason: `${protectedPath} is a Protected path.` }
+  const protectedPath = touched.find(isInstructionPath) ?? touched.find(isProtectedPath)
+  const protectedReason = protectedPath === undefined ? null : protectedPathReason(protectedPath)
+  if (protectedReason !== null)
+    return { _tag: 'Sensitive', reason: protectedReason }
 
   const sensitive = files.find(file => policy.sensitivePaths.some(pattern => matchesGlob(pattern, file.path)))
   if (sensitive !== undefined)
-    return { _tag: 'Sensitive', reason: `${sensitive.path} is a sensitive path for this repository.` }
+    return { _tag: 'Sensitive', reason: `\`${sensitive.path}\` is a sensitive path for this repository.` }
 
   if (files.length > policy.maximumChangedFiles)
     return { _tag: 'Reviewable', reason: `The pull request changes ${files.length} files, above ${policy.maximumChangedFiles}.` }
@@ -114,12 +112,12 @@ export function mergeRiskFloor(files: readonly PullRequestFile[], policy: MergeR
 
   const moved = files.find(file => file.status === 'removed' || file.status === 'renamed')
   if (moved !== undefined)
-    return { _tag: 'Reviewable', reason: `${moved.path} is ${moved.status}, so something outside the diff may still reference it.` }
+    return { _tag: 'Reviewable', reason: `\`${moved.path}\` is ${moved.status}, so something outside the diff may still reference it.` }
 
   if (policy.containedPaths.length > 0) {
     const outside = files.find(file => !policy.containedPaths.some(pattern => matchesGlob(pattern, file.path)))
     if (outside !== undefined)
-      return { _tag: 'Reviewable', reason: `${outside.path} is outside the paths this repository lets Auto merge cover.` }
+      return { _tag: 'Reviewable', reason: `\`${outside.path}\` is outside the paths this repository lets Auto merge cover.` }
   }
 
   if (policy.requireTestChange && !files.some(file => TEST_PATH.test(file.path)))

@@ -271,6 +271,7 @@ async function reviewRepairHead(input: { source: ReviewRun, callerVerification?:
       priorReviewHistory: () => ({ _tag: 'FirstReview' as const }),
       latestReviewOfEarlierHead: () => input.source,
       repairSource: () => input.repaired === false ? null : { headSha: input.source.headSha, builtOnHeadSha: input.source.headSha, fingerprints: ['a'.repeat(64)] },
+      mergedWithFailingChecks: () => null,
       recordReviewRun: (run) => {
         recorded.push(run)
         return { _tag: 'Inserted', reviewRunId: run.id }
