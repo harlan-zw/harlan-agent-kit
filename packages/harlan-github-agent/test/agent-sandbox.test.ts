@@ -3,6 +3,7 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, w
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
@@ -653,21 +654,29 @@ it('runs the pnpm managed Node runtime that the mounted node shim targets', asyn
   }
 }, 30_000)
 
-it('saves worker commits after a pnpm upgrade prunes the mounted runtime', async () => {
+it('saves worker commits after an upgrade prunes a mounted executable', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-pnpm-runtime-prune-'))
+  const serviceNode = process.execPath
   let sandbox: Awaited<ReturnType<typeof prepareAgentSandbox>> | undefined
   try {
     const { home, profile, runtime, workspace } = await pnpmRuntimeWorkspace(root)
+    // The Service runs from a Node installation that an upgrade can also prune.
+    const prunableNode = join(root, 'service-node')
+    await copyFile(serviceNode, prunableNode)
+    process.execPath = prunableNode
     sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: home }, profilePath: profile, provider: 'codex' })
+    process.execPath = serviceNode
     await execute(sandbox.binary, [...sandbox.args, '/bin/sh', '-c', 'node --version && git -c user.name=Agent -c user.email=agent@example.com commit --allow-empty -m "test: keep worker commit"'], { env: sandbox.environment })
-    // A pnpm upgrade replaces the runtime while the turn still runs.
+    // Upgrades replace both executables while the turn still runs.
     await rm(runtime, { recursive: true })
+    await rm(prunableNode)
 
     await sandbox.release()
 
     expect((await execute('git', ['-C', workspace, 'log', '-1', '--format=%s'])).stdout.trim()).toBe('test: keep worker commit')
   }
   finally {
+    process.execPath = serviceNode
     await sandbox?.release()
     await rm(root, { recursive: true, force: true })
   }
