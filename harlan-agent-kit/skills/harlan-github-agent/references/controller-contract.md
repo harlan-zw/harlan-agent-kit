@@ -221,7 +221,9 @@ A head that the controller's own Repair pushed gets a Repair focus Review. It is
 - The Agent searches for every use of a symbol the delta adds, removes, renames, or changes.
 - The whole base-to-head diff stays readable through `review_read`. The Agent pages it when the delta changes behaviour that other parts of the pull request rely on.
 - The answered Review's other findings go to the Agent by identity. The Agent returns each one that still stands.
-- Findings, confidence, and Merge risk come only from this turn. The controller merges nothing from the answered Review.
+- The Agent answers premise, confidence, and Merge risk for the whole pull request. The prompt gives it the answered Review's Merge risk and confidence as the starting point.
+- Findings and confidence come only from this turn. The controller merges no finding from the answered Review.
+- The Merge risk claim is the more severe of this turn's claim and the answered Review's claim. A focused Agent did not reread the whole diff, so it can raise the claim but never lower it.
 - The run records its own policy digest. Its `Checked` clause names the head the focus started from.
 
 A rerun, the manual Review label, or a rebase starts a full Review. A Repair focus Review can answer a Repair of another Repair focus Review. The Repair round limit bounds that chain. A contributor commit ends the chain, so its head gets a full Review.

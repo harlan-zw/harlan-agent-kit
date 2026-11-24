@@ -1,5 +1,5 @@
 import type { RepairDelta } from '../src/review-scope.ts'
-import type { RecordReviewRunInput, ReviewFinding, ReviewGates, ReviewRun } from '../src/types.ts'
+import type { RecordReviewRunInput, RepositoryAutoMergeScope, ReviewFinding, ReviewGates, ReviewRun } from '../src/types.ts'
 import type { ProviderCapture } from './fixtures.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -140,6 +140,12 @@ function sourceRun(overrides: Partial<ReviewRun> = {}): ReviewRun {
   }
 }
 
+const sensitiveRisk: NonNullable<ReviewRun['mergeRisk']> = {
+  claim: { _tag: 'Sensitive', reason: 'The parser limit is a published default.' },
+  floor: { _tag: 'Reviewable', reason: 'Not on a contained path.' },
+  combined: { _tag: 'Sensitive', reason: 'The parser limit is a published default.' },
+}
+
 const repairDiff = 'diff --git a/parser.ts b/parser.ts\n-export const limit = 1\n+export const limit = 2\n'
 const repairDelta: RepairDelta = { _tag: 'Diff', diff: repairDiff, paths: ['parser.ts'] }
 
@@ -187,13 +193,20 @@ describe('repairFocusCoverage', () => {
   })
 })
 
+const containedScope: RepositoryAutoMergeScope = {
+  _tag: 'Contained',
+  labelOverridesRisk: true,
+  minimumConfidence: 90,
+  policy: { containedPaths: [], maximumChangedFiles: 12, maximumChangedLines: 300, requireTestChange: false, sensitivePaths: [] },
+}
+
 const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { _tag: 'CheckRun' as const, appId: 15368 }, name: 'test', status: 'completed', conclusion: 'success' }
 
 /**
  * Runs one Review of a Repair head and reports the prompt the Agent received
  * and what the Review run recorded.
  */
-async function reviewRepairHead(input: { source: ReviewRun, rerun?: boolean, repaired?: boolean, delta?: RepairDelta }) {
+async function reviewRepairHead(input: { source: ReviewRun, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
   const pullRequest = pullRequestItem({ mergeState: 'clean' })
   const capture: ProviderCapture = { requests: [] }
   const recorded: RecordReviewRunInput[] = []
@@ -204,6 +217,7 @@ async function reviewRepairHead(input: { source: ReviewRun, rerun?: boolean, rep
       premise: { verdict: 'sound', reason: 'The change keeps its intent.' },
       findings: [],
       confidence: 96,
+      ...(input.mergeRisk === undefined ? {} : { mergeRisk: input.mergeRisk }),
     }), capture)),
     github: {
       consumeApprovalLabel: () => Promise.reject(new Error('Unexpected label mutation.')),
@@ -282,7 +296,7 @@ async function reviewRepairHead(input: { source: ReviewRun, rerun?: boolean, rep
     revisionId: 'revision-2',
     state: { _tag: 'Running', workerId: 'worker-1', fence: 1, leaseExpiresAt: '2026-11-24T02:00:00.000Z' },
     updatedAt: '2026-11-24T01:00:00.000Z',
-    repositoryMapping: repositoryMapping(),
+    repositoryMapping: repositoryMapping({ autoMerge: containedScope }),
     pullRequest,
     rerun: input.rerun === true ? { _tag: 'Requested' } : { _tag: 'NotRequested' },
   }, new AbortController().signal)
@@ -324,6 +338,25 @@ describe('a Review of a Repair head', () => {
       confidence: 96,
       checked: 'the limit in parser.ts and its caller; focused on the Repair delta since abc1234, with the full diff available',
     })
+  })
+
+  it('asks the Agent to answer Merge risk for the whole pull request, starting from the answered Review\'s claim', async () => {
+    const review = await reviewRepairHead({ source: sourceRun({ mergeRisk: sensitiveRisk }) })
+
+    expect(review.prompt).toContain('for the whole pull request')
+    expect(review.prompt).toContain('merge risk sensitive')
+  })
+
+  it('never claims a lower Merge risk than the Review it answered, since it did not reread the whole diff', async () => {
+    const review = await reviewRepairHead({ source: sourceRun({ mergeRisk: sensitiveRisk }), mergeRisk: { verdict: 'contained', reason: 'One small file.' } })
+
+    expect(review.run?.mergeRisk?.claim).toEqual(sensitiveRisk.claim)
+  })
+
+  it('keeps a higher Merge risk the delta itself adds', async () => {
+    const review = await reviewRepairHead({ source: sourceRun({ mergeRisk: { claim: { _tag: 'Contained' }, floor: { _tag: 'Contained' }, combined: { _tag: 'Contained' } } }), mergeRisk: { verdict: 'sensitive', reason: 'The Repair changes a shared default.' } })
+
+    expect(review.run?.mergeRisk?.claim).toEqual({ _tag: 'Sensitive', reason: 'The Repair changes a shared default.' })
   })
 
   it('records a policy digest of its own, so a focused run is told apart from a full one', async () => {

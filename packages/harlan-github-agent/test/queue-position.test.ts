@@ -208,6 +208,9 @@ describe('listQueuedReviewStatuses', () => {
       priorOutcome: 'Blocked',
       findings: 1,
     })
+    // The Review of the Repair commit focuses on the Review this Repair answered,
+    // so that Review must still read as the current Review of an earlier head.
+    expect(store.latestReviewOfEarlierHead('harlan-zw/example', 30, repairCommit)).toMatchObject({ headSha: 'head30', outcome: { _tag: 'Blocked' } })
 
     // Once the Review of the Repair commit is recorded, the newest run answers this head,
     // so the history reads FirstReview. The Repair's own source Review still names what it fixed.

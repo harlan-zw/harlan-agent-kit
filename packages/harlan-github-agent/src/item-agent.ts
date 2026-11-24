@@ -545,6 +545,11 @@ function resolveMergeRisk(
   task: ClaimedAdversarialReviewTask,
   response: ReviewResponse,
   files: Result<PullRequestFile[], string>,
+  /**
+   * The claim of the Review a Repair focus run answered. A focused Agent did
+   * not reread the whole diff, so its claim may raise this one, never lower it.
+   */
+  answeredClaim: MergeRisk | null = null,
 ): MergeRiskRecord | null {
   const scope = task.repositoryMapping.autoMerge
   if (scope._tag !== 'Contained')
@@ -552,7 +557,8 @@ function resolveMergeRisk(
   const floor: MergeRisk = files._tag === 'Err'
     ? { _tag: 'Reviewable', reason: `The changed files could not be read: ${files.error}` }
     : mergeRiskFloor(files.value, scope.policy)
-  const claim = mergeRiskClaim(response)
+  const fresh = mergeRiskClaim(response)
+  const claim = answeredClaim === null ? fresh : combineMergeRisk(answeredClaim, fresh)
   return { claim, combined: combineMergeRisk(floor, claim), floor }
 }
 
@@ -1500,7 +1506,17 @@ The Repair delta below holds every change since that head. Start there:
 - For each symbol the delta adds, removes, renames, or changes, use review_search to find its uses. Read each use this pull request changed or that relied on the old behaviour.
 - When the delta changes behaviour that other parts of this pull request rely on, use review_read with revision diff and an empty path to page the full base-to-head diff.
 Leave the hunks the delta does not reach to the earlier Review.
+Answer premise, confidence, and mergeRisk for the whole pull request, not the delta alone.
+${answeredVerdict(focus.source)} Move these answers only for what the delta changes.
 ${paths}`
+}
+
+/** What the answered Review said about the whole pull request, as the starting point for a focused one. */
+function answeredVerdict(source: ReviewRun): string {
+  const claim = source.mergeRisk?.claim
+  const risk = claim === undefined ? 'no merge risk' : `merge risk ${claim._tag.toLowerCase()}`
+  const confidence = source.outcome.confidence === undefined ? '' : ` and confidence ${source.outcome.confidence}`
+  return `The Review of ${source.headSha} answered ${risk}${confidence}, with its findings still open.`
 }
 
 function repairFocusEvidence(task: ClaimedAdversarialReviewTask, focus: RepairFocusPrompt, targeted: readonly ReviewFinding[]): string {
@@ -1945,7 +1961,7 @@ export function createReviewWorker(options: ReviewWorkerOptions): ReviewWorker {
         gates,
         confidence: response.confidence,
         findings: scoped,
-        mergeRisk: resolveMergeRisk(task, response, changedFiles),
+        mergeRisk: resolveMergeRisk(task, response, changedFiles, focus?.source.mergeRisk?.claim ?? null),
         checked: focus === null ? response.checked : repairFocusCoverage(response.checked, focus.source.headSha),
         notChecked: response.notChecked,
       }, signal)
@@ -1970,10 +1986,12 @@ async function reviewScope(
   const readRepairDelta = options.workspaces.readRepairDelta
   if (readRepairDelta === undefined)
     return { _tag: 'Full', reason: 'This workspace cannot read a Repair delta.' }
+  // Most heads are not Repair heads, so the Review list is read only for one.
+  const repair = forced ? null : options.store.repairSource(task.revisionId)
   const source = repairFocusSource({
     forced,
-    repair: forced ? null : options.store.repairSource(task.revisionId),
-    earlier: forced ? undefined : options.store.latestReviewOfEarlierHead(task.repository, task.pullRequestNumber, task.pullRequest.headSha),
+    repair,
+    earlier: repair === null ? undefined : options.store.latestReviewOfEarlierHead(task.repository, task.pullRequestNumber, task.pullRequest.headSha),
   })
   if (source._tag === 'Err')
     return { _tag: 'Full', reason: source.error }
