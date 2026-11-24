@@ -2074,7 +2074,7 @@ async function reviewScope(
   // Recheck the whole diff instead of inheriting that unverified baseline.
   if (source.value.gates.review._tag !== 'Passed' && options.store.repairSource(source.value.revisionId) !== null)
     return { _tag: 'Full', reason: 'The earlier Repair Review did not pass.' }
-  const delta = await readRepairDelta(workspace, source.value.headSha, signal)
+  const delta = await readRepairDelta(workspace, source.value.headSha, signal, source.value.baseSha ?? null)
   return delta._tag === 'Err'
     ? { _tag: 'Full', reason: `Git could not read the Repair delta: ${delta.error}` }
     : repairFocusScope(source.value, delta.value)

@@ -1569,6 +1569,7 @@ interface ClaimRow extends TaskRow {
 }
 
 interface ReviewRunRow {
+  base_sha?: string | null
   gate_publication_id: string | null
   base_ref: string | null
   id: string
@@ -2997,6 +2998,7 @@ function reviewRunFromRow(row: ReviewRunRow, publications: ReviewPublication[]):
     revisionId: row.revision_id,
     headSha: row.head_sha,
     baseRef: row.base_ref,
+    baseSha: row.base_sha ?? null,
     provider: row.provider,
     sessionId: row.session_id,
     model: row.model,
@@ -10452,6 +10454,7 @@ export function openJournalStore(
         review_runs.revision_id,
         review_runs.head_sha,
         review_runs.base_ref,
+        json_extract(revisions.payload, '$.baseSha') AS base_sha,
         review_runs.provider,
         review_runs.session_id,
         review_runs.model,

@@ -514,6 +514,8 @@ export type ReviewGatePublication
     | { _tag: 'Published', publicationId: string }
 
 export interface ReviewRun {
+  /** The target commit observed by this Review. Absent when historical evidence is unavailable. */
+  baseSha?: string | null
   gatePublication: ReviewGatePublication
   /** The target branch whose diff this Review covered. */
   baseRef: string | null

@@ -45,11 +45,20 @@ function repositoryWithReviewedHead() {
 }
 
 describe('readRepairDelta', () => {
+  it.each([null, 'missing-target-commit'])('refuses Repair focus without historical target evidence: %s', async (sourceBaseSha) => {
+    const { directory, reviewed } = repositoryWithReviewedHead()
+    const headSha = commitFile(directory, 'parser.ts', 'export const limit = 2\n', 'repair')
+
+    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha, sourceBaseSha, baseSha: git(directory, 'rev-parse', 'main') }, 32_000, AbortSignal.timeout(10_000))
+
+    expect(delta).toEqual({ _tag: 'Err', error: sourceBaseSha === null ? 'The earlier Review has no target commit evidence.' : 'Could not resolve the earlier Review merge base.' })
+  })
+
   it('reads the diff and paths of the Repair commits since the reviewed head', async () => {
     const { directory, reviewed } = repositoryWithReviewedHead()
     const headSha = commitFile(directory, 'parser.ts', 'export const limit = 2\n', 'repair')
 
-    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha }, 32_000, AbortSignal.timeout(10_000))
+    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha, baseSha: git(directory, 'rev-parse', 'main'), sourceBaseSha: git(directory, 'rev-parse', 'main') }, 32_000, AbortSignal.timeout(10_000))
 
     expect(delta).toMatchObject({ _tag: 'Ok', value: { _tag: 'Diff', paths: ['parser.ts'] } })
     const diff = delta._tag === 'Ok' && delta.value._tag === 'Diff' ? delta.value.diff : ''
@@ -63,7 +72,7 @@ describe('readRepairDelta', () => {
     git(directory, 'reset', '-q', '--hard', 'HEAD~1')
     const headSha = commitFile(directory, 'parser.ts', 'export const limit = 2\n', 'rewritten')
 
-    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha }, 32_000, AbortSignal.timeout(10_000))
+    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha, baseSha: git(directory, 'rev-parse', 'main'), sourceBaseSha: git(directory, 'rev-parse', 'main') }, 32_000, AbortSignal.timeout(10_000))
 
     expect(delta).toEqual({ _tag: 'Ok', value: { _tag: 'Rewritten' } })
   })
@@ -76,7 +85,7 @@ describe('readRepairDelta', () => {
     execFileSync('git', ['-C', directory, 'merge', '-q', '--no-edit', 'main'], { stdio: 'ignore' })
     const headSha = commitFile(directory, 'parser.ts', 'export const limit = 2\n', 'repair')
 
-    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha }, 32_000, AbortSignal.timeout(10_000))
+    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha, baseSha: git(directory, 'rev-parse', 'main'), sourceBaseSha: git(directory, 'rev-parse', 'main') }, 32_000, AbortSignal.timeout(10_000))
 
     expect(delta).toEqual({ _tag: 'Ok', value: { _tag: 'IncludesMerge' } })
   })
@@ -85,7 +94,7 @@ describe('readRepairDelta', () => {
     const { directory, reviewed } = repositoryWithReviewedHead()
     const headSha = commitFile(directory, 'parser.ts', `${'export const limit = 2\n'.repeat(40)}`, 'large repair')
 
-    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha }, 200, AbortSignal.timeout(10_000))
+    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha, baseSha: git(directory, 'rev-parse', 'main'), sourceBaseSha: git(directory, 'rev-parse', 'main') }, 200, AbortSignal.timeout(10_000))
 
     expect(delta).toMatchObject({ _tag: 'Ok', value: { _tag: 'TooLarge' } })
   })
@@ -97,7 +106,7 @@ describe('readRepairDelta', () => {
     commitFile(directory, 'parser.ts', 'export const limit = 2\n', 'repair parser')
     const headSha = commitFile(directory, 'generated.ts', 'export const kept = 1\n', 'repair drops an export')
 
-    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha }, 32_000, AbortSignal.timeout(10_000))
+    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha, baseSha: git(directory, 'rev-parse', 'main'), sourceBaseSha: git(directory, 'rev-parse', 'main') }, 32_000, AbortSignal.timeout(10_000))
 
     expect(delta).toEqual({ _tag: 'Ok', value: { _tag: 'Opaque', paths: ['generated.ts'] } })
   })
@@ -221,7 +230,7 @@ const passingCheck = { id: 1, failure: { _tag: 'NotAsked' as const }, source: { 
  * Runs one Review of a Repair head and reports the prompt the Agent received
  * and what the Review run recorded.
  */
-async function reviewRepairHead(input: { source: ReviewRun, callerVerification?: 'complete' | 'incomplete' | null | ((prompt: string) => 'complete' | 'incomplete'), findings?: { identity: string, impact: number, line: number, nextAction: string, path: string, proof: string, regressionTest: string, summary: string }[], notChecked?: string | null, paths?: string[], task?: ClaimedAdversarialReviewTask, journal?: ReturnType<typeof openJournalStore>, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
+async function reviewRepairHead(input: { source: ReviewRun, callerVerification?: 'complete' | 'incomplete' | null | ((prompt: string) => 'complete' | 'incomplete'), findings?: { identity: string, impact: number, line: number, nextAction: string, path: string, proof: string, regressionTest: string, summary: string }[], notChecked?: string | null, paths?: string[], directory?: string, task?: ClaimedAdversarialReviewTask, journal?: ReturnType<typeof openJournalStore>, rerun?: boolean, repaired?: boolean, delta?: RepairDelta, mergeRisk?: { verdict: 'contained' | 'reviewable' | 'sensitive', reason: string } }) {
   const pullRequest = pullRequestItem({ mergeState: 'clean', ...input.task?.pullRequest })
   const capture: ProviderCapture = { requests: [] }
   const recorded: RecordReviewRunInput[] = []
@@ -318,9 +327,11 @@ async function reviewRepairHead(input: { source: ReviewRun, callerVerification?:
       prepareReview: () => Promise.resolve(ok({ path: '/tmp/review-worktree', baseSha: pullRequest.baseSha, headSha: pullRequest.headSha })),
       verifyReview: () => Promise.resolve(ok(undefined)),
       readHeadAdvance: () => Promise.resolve(ok({ _tag: 'NewCommits' as const })),
-      readRepairDelta: (_worktree, sourceHeadSha) => sourceHeadSha === input.source.headSha
-        ? Promise.resolve(ok(input.delta ?? repairDelta))
-        : Promise.reject(new Error('The delta must start at the head the Repair answered.')),
+      readRepairDelta: (_worktree, sourceHeadSha, signal, sourceBaseSha) => input.directory !== undefined
+        ? readRepairDelta(input.directory, { sourceHeadSha, headSha: pullRequest.headSha, baseSha: pullRequest.baseSha, sourceBaseSha }, 32_000, signal)
+        : sourceHeadSha === input.source.headSha
+          ? Promise.resolve(ok(input.delta ?? repairDelta))
+          : Promise.reject(new Error('The delta must start at the head the Repair answered.')),
     },
   })
 
@@ -485,7 +496,7 @@ describe('a Review of a Repair head', () => {
     const headSha = commitFile(directory, 'parser.ts', 'export const limit = (value: { count: number }) => value.count + 1\n', 'repair callee')
     const paths = git(directory, 'diff', '--name-only', `${baseSha}...${headSha}`).split('\n')
     expect(paths).toEqual(['parser.ts'])
-    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha }, 32_000, AbortSignal.timeout(10_000))
+    const delta = await readRepairDelta(directory, { sourceHeadSha: reviewed, headSha, baseSha: git(directory, 'rev-parse', 'main'), sourceBaseSha: git(directory, 'rev-parse', 'main') }, 32_000, AbortSignal.timeout(10_000))
     if (delta._tag !== 'Ok')
       throw new Error(delta.error)
     const reader = createReviewStaticReader(directory)
@@ -504,19 +515,32 @@ describe('a Review of a Repair head', () => {
     expect(review.prompt).toContain('If caller verification remains unavailable, report the verification limit.')
   })
 
-  it.each([false, true])('uses the published Repair delta unless a full Review was explicitly requested: %s', async (explicit) => {
+  it.each(['unchanged', 'advance', 'rewind', 'explicit'])('selects the full diff when a target rewind exposes inherited changes: %s', async (mode) => {
+    const explicit = mode === 'explicit'
+    const { directory, reviewed } = repositoryWithReviewedHead()
+    const originalBase = git(directory, 'rev-parse', 'main')
+    git(directory, 'branch', '-f', 'main', reviewed)
+    const sourceHead = commitFile(directory, 'parser.ts', 'export const limit = 3\n', 'stacked feature')
     const store = openJournalStore(':memory:')
     const at = (second: number) => `2026-11-24T00:10:${String(second).padStart(2, '0')}.000Z`
     try {
       store.syncRepositories([repositoryMapping()], at(0))
-      const observed = store.recordObservation({ externalId: 'source', observedAt: at(1), source: 'poll', subject: pullRequestItem({ mergeState: 'clean' }) })
+      const observed = store.recordObservation({ externalId: 'source', observedAt: at(1), source: 'poll', subject: pullRequestItem({ mergeState: 'clean', baseSha: reviewed, headSha: sourceHead }) })
       if (observed._tag !== 'Inserted')
         throw new Error('Expected a source Revision.')
       const review = store.claimNextAdversarialReviewTask('reviewer', at(2), 60_000)!
       expect(store.recordReviewRun({ ...sourceRun(), revisionId: observed.revisionId, headSha: review.pullRequest.headSha })._tag).toBe('Inserted')
       expect(store.queueReviewFixTaskForReview({ taskId: review.id, workerId: review.state.workerId, fence: review.state.fence, at: at(3) })._tag).toBe('Queued')
       const repair = store.claimNextReviewFixTask('repairer', at(4), 60_000)!
-      const headSha = 'e'.repeat(40)
+      const headSha = commitFile(directory, 'parser.ts', 'export const limit = 4\n', 'small repair')
+      if (mode === 'rewind')
+        git(directory, 'branch', '-f', 'main', originalBase)
+      if (mode === 'advance') {
+        git(directory, 'switch', '-q', 'main')
+        commitFile(directory, 'base-only.txt', 'advanced\n', 'advance target')
+        git(directory, 'switch', '-q', 'feature')
+      }
+      const baseSha = git(directory, 'rev-parse', 'main')
       expect(store.stagePublication({
         taskId: repair.id,
         workerId: repair.state.workerId,
@@ -526,20 +550,20 @@ describe('a Review of a Repair head', () => {
       })._tag).toBe('Staged')
       const publication = store.claimNextPublication('publisher', at(6), 60_000)!
       expect(store.completePublication({ commandId: publication.id, workerId: publication.workerId, fence: publication.fence, at: at(7), evidence: 'Published Repair.' })).toBe(true)
-      const repaired = store.recordObservation({ externalId: 'repaired', observedAt: at(8), source: 'poll', subject: pullRequestItem({ ...review.pullRequest, headSha, updatedAt: at(8) }) })
+      const repaired = store.recordObservation({ externalId: 'repaired', observedAt: at(8), source: 'poll', subject: pullRequestItem({ ...review.pullRequest, headSha, baseSha, updatedAt: at(8) }) })
       if (repaired._tag !== 'Inserted')
         throw new Error('Expected a repaired Revision.')
       if (explicit)
         expect(store.requestReviewRerun({ repository: review.repository, pullRequestNumber: 24, revisionId: repaired.revisionId, requestId: 'explicit', source: 'dashboard', requestedBy: 'harlan-zw', at: at(9) })._tag).toBe('AlreadyQueued')
       const task = store.claimNextAdversarialReviewTask('follow-up', at(10), 60_000)!
       const source = store.latestReviewOfEarlierHead(task.repository, 24, headSha)!
-      const result = await reviewRepairHead({ task, source, journal: store })
-      if (explicit) {
+      const result = await reviewRepairHead({ task, source, journal: store, directory })
+      if (explicit || mode === 'rewind') {
         expect(result.prompt).toContain(fullDiffMandate)
         expect(result.prompt).not.toContain(repairDiff)
       }
       else {
-        expect(result.prompt).toContain(repairDiff)
+        expect(result.prompt).toContain('+export const limit = 4')
         expect(result.run?.checked).toContain('focused on the Repair delta')
       }
     }

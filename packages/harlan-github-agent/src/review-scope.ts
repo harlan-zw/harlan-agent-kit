@@ -15,6 +15,8 @@ export const REPAIR_DELTA_CHARACTER_BUDGET = 32_000
 export type RepairDelta
   /** The answered head is not an ancestor: a rebase or force push. */
   = | { _tag: 'Rewritten' }
+    /** The target changed which inherited commits belong to the pull request diff. */
+    | { _tag: 'BaseChanged' }
   /** A merge came in after the answered head, so the delta is not only Repair work. */
     | { _tag: 'IncludesMerge' }
   /** The delta is over the budget, so its text stays out of the prompt. */
@@ -70,6 +72,8 @@ export function repairFocusSource(input: RepairFocusSourceInput): Result<ReviewR
 export function repairFocusScope(source: ReviewRun, delta: RepairDelta | null): ReviewScope {
   if (delta === null)
     return { _tag: 'Full', reason: 'Git could not read the Repair delta.' }
+  if (delta._tag === 'BaseChanged')
+    return { _tag: 'Full', reason: 'The earlier Review and Repair head do not share one merge base.' }
   if (delta._tag === 'Rewritten')
     return { _tag: 'Full', reason: 'The answered head is not an ancestor of this head.' }
   if (delta._tag === 'IncludesMerge')

@@ -191,7 +191,7 @@ export interface AgentWorkspaceManager {
   /** Reads what the commits after an earlier reviewed head contain. Read only. */
   readHeadAdvance: (worktree: PreparedWorkerWorkspace, earlierHeadSha: string, signal: AbortSignal) => Promise<Result<HeadAdvance, string>>
   /** Reads the Repair delta since the head a Repair answered. Read only. */
-  readRepairDelta: (worktree: PreparedWorkerWorkspace, sourceHeadSha: string, signal: AbortSignal) => Promise<Result<RepairDelta, string>>
+  readRepairDelta: (worktree: PreparedWorkerWorkspace, sourceHeadSha: string, signal: AbortSignal, sourceBaseSha: string | null) => Promise<Result<RepairDelta, string>>
 }
 
 /**
@@ -204,7 +204,7 @@ export interface AgentWorkspaceManager {
  */
 export async function readRepairDelta(
   path: string,
-  commits: { sourceHeadSha: string, headSha: string },
+  commits: { sourceHeadSha: string, headSha: string, sourceBaseSha: string | null, baseSha: string },
   characterBudget: number,
   signal: AbortSignal,
 ): Promise<Result<RepairDelta, string>> {
@@ -218,6 +218,17 @@ export async function readRepairDelta(
     return err(`Could not list the Repair commits: ${listed.stderr}`)
   if (listed.stdout !== '' && listed.stdout.split('\n').some(line => line.split(' ').length > 2))
     return ok({ _tag: 'IncludesMerge' })
+  if (commits.sourceBaseSha === null)
+    return err('The earlier Review has no target commit evidence.')
+  const earlierBase = await runGitScalar(path, ['merge-base', '--all', commits.sourceBaseSha, commits.sourceHeadSha], signal)
+  if (earlierBase.exitCode !== 0)
+    return err('Could not resolve the earlier Review merge base.')
+  const currentBase = await runGitScalar(path, ['merge-base', '--all', commits.baseSha, commits.headSha], signal)
+  if (currentBase.exitCode !== 0)
+    return err('Could not resolve the Repair head merge base.')
+  // Multiple merge bases cannot establish one shared boundary for both diffs.
+  if (earlierBase.stdout.includes('\n') || currentBase.stdout.includes('\n') || earlierBase.stdout !== currentBase.stdout)
+    return ok({ _tag: 'BaseChanged' })
   // Git counts no lines for a binary file or text marked `-diff`, and its patch
   // says only that the files differ. Such a delta would hide removed exports.
   const counted = await runGit(path, ['diff', '--numstat', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', commits.sourceHeadSha, commits.headSha], signal)
@@ -1345,8 +1356,8 @@ export function createAgentWorkspaceManager(options: ConflictWorktreeManagerOpti
       return readHeadAdvance(worktree.path, { earlierHeadSha, headSha: worktree.headSha, baseSha: worktree.baseSha }, signal)
     },
 
-    readRepairDelta(worktree, sourceHeadSha, signal) {
-      return readRepairDelta(worktree.path, { sourceHeadSha, headSha: worktree.headSha }, REPAIR_DELTA_CHARACTER_BUDGET, signal)
+    readRepairDelta(worktree, sourceHeadSha, signal, sourceBaseSha) {
+      return readRepairDelta(worktree.path, { sourceHeadSha, headSha: worktree.headSha, baseSha: worktree.baseSha, sourceBaseSha }, REPAIR_DELTA_CHARACTER_BUDGET, signal)
     },
   }
 }
