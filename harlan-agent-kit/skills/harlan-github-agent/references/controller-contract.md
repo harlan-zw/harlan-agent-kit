@@ -521,14 +521,18 @@ Replace each line that names a private detail with one fixed line. Never cut out
 Keep the removed line's indentation, blockquote, list or checkbox marker, a leading `Repair:`, and its HTML comment markers, so parsers and Markdown structure still hold. Remove every other word. Drop a marker that itself names a private detail.
 A control line whose label held a private detail keeps its marker, and its parser ignores the changed label.
 Multi-line markup inside code, a comment opener with no closer, and markup that would cross into another block render as text. They join no lines, so they never remove another line.
+A line starts another block only where CommonMark always ends the paragraph. A list item that cannot interrupt a paragraph continues it, such as an item numbered above 1, an empty item, or a marker after four spaces. A blockquote marker starts a block only past the most markers the paragraph's lines hold. Inside a raw HTML block, no Markdown marker starts a block. If a block may be inline HTML instead, such as a lone tag after a paragraph line, a fence opener still ends it. A code span never pairs across a line that might start a block.
+A removed line can change the Markdown around it, such as a fence opener. Read the structure again with the removed lines in place, and remove what it exposes.
 Guard a title and its body apart. A withheld body then keeps its own marker lines, and the title stays the title.
 Match entries glued to any option or assignment, such as `-I`, `CFLAGS=`, `-Wp,`, and `PATH=`, after removing every URL from the text.
 After line removal, check the body with its lines joined. If a private detail appears only across lines, withhold the whole body: keep the marker lines that name nothing private, then one fixed withheld line.
 Join the lines a second time without their blockquote markers, list markers, and indentation, as Markdown does before a URL parser reads an attribute.
+In that second join, keep a space before a list item line or a deeper blockquote line. Markdown never joins such a line to the line above.
 Record one `private_detail` Incident that names the item and the writer, only after GitHub accepts the redacted body. A no-op, a refused write, or a rejected write records nothing. If the Journal cannot record it, log the failure and keep the accepted write. Only a person resolves it.
 Compare a stored body with GitHub's text line by line, where a removed line stands for its source line, so a configuration change never strands a comment.
 Before the canonical comment compare and swap writes, a removed line stands for its source line only if the current deny list removes that line. A withheld body counts only if the current deny list withholds the source. A stale edit then never replaces a newer Review that differs only on a removed line.
 When an edit keeps a line GitHub shows removed, redact the intact new source first, then keep that removal. A kept removal then never hides a host from the rest of its tag.
+Also remove each line the guard removes from the source with the kept removals in place. A kept removal can change the Markdown around it, such as a removed fence opener.
 An approved Release note draft passes the guard again when the controller adds it to the GitHub release.
 Show an Agent provider failure in a comment as its cause, such as "The agent lost its sign-in." Keep the raw reason in the Journal and the Dashboard. Only a reason that starts with the provider's own wrapper counts. Other reasons stay as written.
 

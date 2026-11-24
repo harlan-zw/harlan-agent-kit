@@ -13,7 +13,7 @@ import { createGitHubIssuePublisher } from '../src/github.ts'
 import { nativeReviewBody } from '../src/native-review.ts'
 import { packageReleaseStatus } from '../src/package-release-controller.ts'
 import { releaseNoteApproval } from '../src/package-release.ts'
-import { createPublicTextGuard, encodeEntities, isPublishedForm, privateDetailsFor, publicBody, redactPrivateDetails } from '../src/public-text.ts'
+import { createPublicTextGuard, encodeEntities, isPublishedForm, privateDetailsFor, publicBody, publicFields, redactPrivateDetails, removalsByPosition } from '../src/public-text.ts'
 import { ok } from '../src/result.ts'
 import { mirrorReviewFindingThreads, reviewFindingThreadBody, reviewFindingThreadFingerprint, reviewFindingThreadMarker } from '../src/review-finding-threads.ts'
 import { openJournalStore } from '../src/store.ts'
@@ -1417,6 +1417,131 @@ describe('review findings on #754, follow-ups', () => {
 
     expect(edited).toEqual(ok(expect.objectContaining({ _tag: 'Edited' })))
     expect(comment.body).toBe(reviewBody('Stopped.', 'STOPPED'))
+  })
+})
+
+describe('review findings on #759', () => {
+  it.each<PublicTextWriter>(['automated review', 'automated triage', 'review comment', 'review', 'comment', 'issue', 'pull request description', 'release comment', 'GitHub release'])('removes a private multiline href inside raw HTML before sending a %s', async (writer) => {
+    for (const opening of ['<div>', '<custom>', '<pre>\n', '<div>\n>\n```html']) {
+      const source = `${opening}\nPublic prose.\nSee <a href="https://notes.localhost/\n> acquisition.pdf">docs</a>.\n</div>`
+      const input = writer === 'review' ? encodeEntities(source) : source
+      const guard = { details, report: () => {} }
+      const target = { repository: 'harlan-zw/example', itemNumber: 24, writer }
+      const sent = await publicBody(guard, target, input).send(async body => body)
+      const fields = await publicFields(guard, target, { title: 'Public title', body: input }).send(async fields => fields)
+
+      expectNoFragment(sent)
+      expect(sent).toContain(removed)
+      expect(fields).toEqual({ title: 'Public title', body: sent })
+    }
+  })
+
+  it.each([false, true])('removes filenames exposed by newly redacted fence openers with kept removals: %s', async (keep) => {
+    const source = 'Old private line.\n\n```html ~/notes\nSee <a href="https://notes.localhost/\nacquisition.pdf">docs</a>.\n```'
+    const published = source.replace('Old private line.', removed)
+    const outgoing = publicBody({ details, report: () => {} }, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'review comment' }, source, keep ? removalsByPosition(published) : undefined)
+    const sent = await outgoing.send(async body => body)
+
+    expectNoFragment(sent)
+    expect(sent).toBe(`${keep ? removed : 'Old private line.'}\n\n${removed}\n${removed}\n${removed}\n\`\`\``)
+  })
+
+  it.each([
+    ['an ordered item that does not start at one', '2. acquisition.pdf">docs</a>.', `2. ${removed}`],
+    ['an ordered item with a parenthesis', '3) acquisition.pdf">docs</a>.', `3) ${removed}`],
+    ['an empty bullet item', '*\nacquisition.pdf">docs</a>.', `${removed}\n${removed}`],
+    ['a quote marker after four spaces', '    > acquisition.pdf">docs</a>.', `    > ${removed}`],
+    ['a heading marker after four spaces', '    # acquisition.pdf">docs</a>.', `    ${removed}`],
+  ])('removes a private destination that continues on %s', (_name, continuation, expected) => {
+    const redacted = redactPrivateDetails(`See <a href="https://notes.localhost/\n${continuation}`, details)
+
+    expect(redacted.text).toBe(`${removed}\n${expected}`)
+    expectNoFragment(redacted.text)
+  })
+
+  it.each([
+    ['a blockquote', '> acquisition.pdf">docs</a>. `'],
+    ['a nested blockquote', '> > acquisition.pdf">docs</a>. `'],
+  ])('removes a private destination when a code span would have to cross into %s', (_name, continuation) => {
+    const quote = continuation.startsWith('> >') ? '> > ' : '> '
+    const redacted = redactPrivateDetails(`Run \`x\n${quote}See <a href="https://notes.localhost/\n${continuation}`, details)
+
+    expect(redacted.text).toBe(`Run \`x\n${quote}${removed}\n${quote}${removed}`)
+    expectNoFragment(redacted.text)
+  })
+
+  it.each([
+    ['a comment', 'See ~/notes/a.md <!--  literal\n>   marker  -->'],
+    ['a tag', 'See ~/notes/a.md <span title="  literal\n>   marker  ">'],
+    ['a comment and a nested quote', '> See ~/notes/a.md <!--  literal\n> >   marker  -->'],
+  ])('keeps a public blockquote line when %s would have to cross into it', (_name, text) => {
+    const [, quoted] = text.split('\n')
+    const structure = text.startsWith('>') ? '> ' : ''
+
+    expect(redactPrivateDetails(text, details).text).toBe(`${structure}${removed}\n${quoted}`)
+  })
+
+  it.each([
+    ['a quote inside a list item that starts four spaces in', '- a\n    > x <a href="https://notes.\n  > localhost/acquisition.pdf">y</a>', `- a\n    > ${removed}\n  > ${removed}`],
+    ['an HTML block before a quote marker', '<details>\nSee <a href="https://notes.localhost/\n> acquisition.pdf">docs</a>.\n</details>', `<details>\n${removed}\n> ${removed}\n</details>`],
+    ['an HTML block holding a heading marker', '<div>\n# Title <a href="https://notes.localhost/\nacquisition.pdf">docs</a>\n</div>', `<div>\n${removed}\n${removed}\n</div>`],
+    ['an HTML block holding a list marker', '<div>\nSee <a href="https://notes.localhost/\n- acquisition.pdf">docs</a>\n</div>', `<div>\n${removed}\n- ${removed}\n</div>`],
+  ])('removes every line of a private tag that continues through %s', (_name, text, expected) => {
+    const redacted = redactPrivateDetails(text, details)
+
+    expect(redacted.text).toBe(expected)
+    expectNoFragment(redacted.text)
+  })
+
+  it.each(['<br>', '<span class="x">', '</kbd>'])('removes a private tag after a fence that a lone %s inside a paragraph cannot hide', (tag) => {
+    const fence = '\`\`\`\ncode\n\nmore code\n\`\`\`'
+    const redacted = redactPrivateDetails(`Some prose\n${tag}\n${fence}\nSee <a href="https://notes.localhost/\nacquisition.pdf">docs</a>.`, details)
+
+    expect(redacted.text).toBe(`Some prose\n${tag}\n${fence}\n${removed}\n${removed}`)
+    expectNoFragment(redacted.text)
+  })
+
+  it('removes a private tag after a fence that a lone tag on a lazy quote line cannot hide', () => {
+    const fence = '\`\`\`\ncode\n\nmore code\n\`\`\`'
+    const redacted = redactPrivateDetails(`> Some prose\n<br>\n${fence}\nSee <a href="https://notes.localhost/\nacquisition.pdf">docs</a>.`, details)
+
+    expect(redacted.text).toBe(`> Some prose\n<br>\n${fence}\n${removed}\n${removed}`)
+    expectNoFragment(redacted.text)
+  })
+
+  it.each([
+    ['a setext heading', 'Title\n==='],
+    ['indented code', '    indented code'],
+  ])('removes a private tag inside the raw HTML block a lone tag opens after %s', (_name, before) => {
+    const redacted = redactPrivateDetails(`${before}\n<span>\nSee <a href="https://notes.localhost/\n> acquisition.pdf">docs</a>.`, details)
+
+    expect(redacted.text).toBe(`${before}\n<span>\n${removed}\n> ${removed}`)
+    expectNoFragment(redacted.text)
+  })
+
+  it('keeps the removals a carried fence removal exposes in a finding comment edit', async () => {
+    const header = '<!-- harlan-agent-kit:pr-triage -->\n**Minor (40/100): The cache leaks**\n'
+    const published = `${header}\n${removed}\nProof line two.`
+    const source = `${header}\n\`\`\`html\n<a href="https://notes.localhost/\nacquisition.pdf">docs</a>\n\`\`\``
+    const reports: PrivateDetailLeak[] = []
+
+    const outgoing = publicBody({ details, report: leak => reports.push(leak) }, { repository: 'harlan-zw/example', itemNumber: 24, writer: 'review comment' }, source, removalsByPosition(published))
+
+    const sent = await outgoing.send(async body => body)
+
+    expect(sent).toBe(`${header}\n${removed}\n${removed}\n${removed}\n\`\`\``)
+    expectNoFragment(sent)
+    expect(reports).toEqual([expect.objectContaining({ itemNumber: 24, hits: [{ _tag: 'Link', entry: 'notes.localhost' }] })])
+  })
+
+  it.each([
+    ['bullet items', '- Read the notes.\n- localhost is a loopback name.'],
+    ['numbered items', '1. Read the notes.\n2. localhost is a loopback name.'],
+    ['quoted bullet items', '> - Read the notes.\n> - localhost is a loopback name.'],
+    ['a heading', 'Read the notes.\n# localhost is a loopback name.'],
+    ['nested quote lines', '> Read the notes.\n> > localhost is a loopback name.'],
+  ])('keeps a body whose %s only touch at a public boundary', (_name, text) => {
+    expect(redactPrivateDetails(text, details)).toEqual({ text, hits: [] })
   })
 })
 
