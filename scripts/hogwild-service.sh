@@ -154,7 +154,9 @@ wait_for_restart() {
   local started=$SECONDS last_reported=-30 last_progress=''
   for attempt in $(seq 1 $((MAXIMUM_RESTART_SECONDS / RESTART_POLL_SECONDS))); do
     state=$(controller_request "$HOGWILD_ORIGIN/api/state" 2>/dev/null || true)
-    if [ -z "$state" ]; then
+    # A reply cut off while the Service restarts is no answer. Parsing it under
+    # `set -e` exited the helper before it updated the desktop client.
+    if [ -z "$state" ] || ! jq --exit-status 'type == "object"' >/dev/null 2>&1 <<< "$state"; then
       if [ "$last_progress" != 'Waiting for Service response.' ] || ((SECONDS - last_reported >= 30)); then
         echo "Waiting for Service response. Elapsed: $((SECONDS - started))s."
         last_progress='Waiting for Service response.'
