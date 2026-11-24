@@ -31,6 +31,9 @@ export const PERSISTED_HOME_PATHS = [
   '.cargo/git',
   '.cache/ms-playwright',
   '.dev-browser',
+  // pnpm versions that a repository's `packageManager` selects, and Rust toolchains.
+  '.local/share/pnpm/package-manager-store',
+  '.rustup',
   // The browser setup receipt and the lock that serializes setup across turns.
   '.local/state/harlan-agent-kit',
 ] as const

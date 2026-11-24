@@ -48,7 +48,7 @@ Writes outside the persisted paths go to a directory that the turn owns.
 The Service deletes that directory when the turn ends.
 
 These persisted paths write through to the shared worker home:
-`.codex`, `.local/share/opencode`, `.local/share/pnpm/store`, `.cache/pnpm`, `.npm/_cacache`, `.bun/install/cache`, `.cargo/registry`, `.cargo/git`, `.cache/ms-playwright`, `.dev-browser`, and `.local/state/harlan-agent-kit`.
+`.codex`, `.local/share/opencode`, `.local/share/pnpm/store`, `.cache/pnpm`, `.npm/_cacache`, `.bun/install/cache`, `.cargo/registry`, `.cargo/git`, `.cache/ms-playwright`, `.dev-browser`, `.local/share/pnpm/package-manager-store`, `.rustup`, and `.local/state/harlan-agent-kit`.
 A check-in Routine also keeps the state directory of its own repository.
 The sentry-checkin Routine also keeps `.local/state/sentry-checkin`.
 

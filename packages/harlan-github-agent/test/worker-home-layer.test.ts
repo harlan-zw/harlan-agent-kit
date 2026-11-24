@@ -47,6 +47,9 @@ it.skipIf(homeOverlayMissing)('keeps home writes outside the persisted paths to 
         echo login-2 > ~/.codex/auth.json.tmp && mv ~/.codex/auth.json.tmp ~/.codex/auth.json
         mkdir -p ~/.codex/sessions && echo session > ~/.codex/sessions/rollout
         mkdir -p ~/.local/share/pnpm/store/v11 && echo cached > ~/.local/share/pnpm/store/v11/entry
+        # Toolchain and package manager downloads are code caches that later turns reuse.
+        mkdir -p ~/.rustup/toolchains && echo toolchain > ~/.rustup/toolchains/entry
+        mkdir -p ~/.local/share/pnpm/package-manager-store/v11 && echo manager > ~/.local/share/pnpm/package-manager-store/v11/entry
         echo run > ~/.local/state/sentry-checkin/history.tsv
         echo other > ~/.local/state/other-record
       `)
@@ -63,6 +66,8 @@ it.skipIf(homeOverlayMissing)('keeps home writes outside the persisted paths to 
     expect(await readFile(join(worker, '.codex/auth.json'), 'utf8')).toBe('login-2\n')
     expect(await readFile(join(worker, '.codex/sessions/rollout'), 'utf8')).toBe('session\n')
     expect(await readFile(join(worker, '.local/share/pnpm/store/v11/entry'), 'utf8')).toBe('cached\n')
+    expect(await readFile(join(worker, '.rustup/toolchains/entry'), 'utf8')).toBe('toolchain\n')
+    expect(await readFile(join(worker, '.local/share/pnpm/package-manager-store/v11/entry'), 'utf8')).toBe('manager\n')
     expect(await readFile(join(worker, '.local/state/sentry-checkin/history.tsv'), 'utf8')).toBe('run\n')
 
     const second = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex', taskId: 'opaque-issue-work-task' })
