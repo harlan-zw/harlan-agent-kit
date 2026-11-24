@@ -170,6 +170,7 @@ printf '%s\n' \
   'if [[ "$*" == *api/state* ]]; then' \
   '  polls=$(($(cat "$HOGWILD_SERVICE_TEST_STATE_POLLS") + 1))' \
   '  printf '\''%s\n'\'' "$polls" > "$HOGWILD_SERVICE_TEST_STATE_POLLS"' \
+  '  if [ "${HOGWILD_SERVICE_TEST_TRUNCATED_POLL:-0}" = "$polls" ]; then printf '\''{"desktop":{"connected":tru'\''; exit; fi' \
   '  status=Requested' \
   '  if ((polls >= HOGWILD_SERVICE_TEST_RESTART_AFTER)); then status=Completed; fi' \
   '  if [ "$status" = Completed ] && [ -e "$HOGWILD_SERVICE_TEST_UPDATE_READY" ]; then printf '\''controller prepare-update\n'\'' >> "$HOGWILD_SERVICE_TEST_CALLS"; rm -f "$HOGWILD_SERVICE_TEST_UPDATE_READY" "$HOGWILD_SERVICE_TEST_UPDATE_PENDING"; fi' \
@@ -577,4 +578,21 @@ if [ "$(cat "$HOGWILD_SERVICE_TEST_DESKTOP_POLLS")" -lt 3 ] \
   exit 1
 fi
 printf '%s\n' 'Desktop connection tests passed'
+
+# A reply cut off while Hogwild restarts is not an answer. The helper waits
+# for the next one; it used to exit before updating the desktop client.
+rm -f "$HOGWILD_SERVICE_TEST_RESTART_FILED" "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED"
+printf '%s\n' 0 > "$HOGWILD_SERVICE_TEST_STATE_POLLS"
+export HOGWILD_SERVICE_TEST_RESTART_AFTER=3
+if ! HOGWILD_SERVICE_TEST_TRUNCATED_POLL=2 HOGWILD_SERVICE_TEST_DESKTOP_MODE=ready PATH="$test_root/bin:/usr/bin:/bin" \
+  bash "$script_dir/hogwild-service.sh" update > "$test_root/truncated.log" 2>&1; then
+  printf '%s\n' 'Update stopped on a truncated Service reply.' >&2
+  cat "$test_root/truncated.log" >&2
+  exit 1
+fi
+if [ ! -e "$HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED" ]; then
+  printf '%s\n' 'Update skipped the desktop client after a truncated Service reply.' >&2
+  exit 1
+fi
+printf '%s\n' 'Truncated reply tests passed'
 printf '%s\n' 'Hogwild service tests passed'
