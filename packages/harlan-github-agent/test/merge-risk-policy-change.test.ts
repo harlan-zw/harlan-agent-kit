@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { autoMergeDecision } from '../src/auto-merge.ts'
 import { openJournalStore, reviewPolicyDigest } from '../src/store.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { headChangedFiles, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 
@@ -107,6 +107,7 @@ describe('a Contained verdict recorded under one policy', () => {
 
     const decide = () => autoMergeDecision({
       attempts: store.listReviewRuns('harlan-zw/example', 24),
+      changedFiles: headChangedFiles(),
       policy,
       pullRequest: pullRequestItem({ mergeState: 'clean' }),
       repository: repositoryMapping({ autoMerge: looseScope }),

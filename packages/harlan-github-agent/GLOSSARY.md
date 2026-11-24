@@ -77,6 +77,7 @@ did not cover it.
 | Status line | first visible line of every comment | Controller | One per comment | none |
 | Stuck | canonical comment Status line | Controller | One comment state | Stuck |
 | Auto merge | `harlan-agent-auto-merge` label | GitHub | One per pull request | auto-merge |
+| Protected path | `isProtectedPath`, fixed in code | Controller | Any one changed holds Auto merge for that head commit | protected path |
 | Publication | `review_publications` | Journal | N to 1 Review run | automated review |
 | Approval | `pull_request_approvals` or `tasks.kind = issue_work` | Controller | N to 1 Revision | approval |
 | Legacy issue cutoff | `issue_cutoff` | Configuration | One per service | none |
@@ -551,7 +552,7 @@ Use Discussion route. Do not use question route or chat route. Shadow mode and l
 
 One routing decision for one exact pull request head commit, made at observation time before any Task is queued.
 
-The path rule decides first. One changed path outside the prose set requires Review without a model call. Agent instruction files and `.github/**` count as behaviour, not prose.
+The path rule decides first. One changed path outside the prose set requires Review without a model call. Every Protected path counts as behaviour, not prose.
 
 A prose-only pull request reuses the stored decision for the same head commit. Otherwise it asks the Classification service, which answers from the title and changed paths with a confidence. A skip needs confidence at or above its floor; any uncertainty or failure requires Review.
 
@@ -860,6 +861,16 @@ Two independent answers produce it. The controller computes a floor from the cha
 
 Use Merge risk. Do not use risk level, merge tier, risk score, or risk rating.
 
+### Protected path
+
+A changed path that Auto merge never merges, in any scope. The label never overrides it. A `Contained` Merge risk never overrides it either.
+
+It covers agent instruction files, every file under `.github/`, `CODEOWNERS`, `.gitattributes`, and `.gitmodules`. The list is fixed in code, so a repository cannot change it. Merge risk always marks a Protected path `Sensitive`.
+
+A repository's `sensitive_paths` is a different list. It marks Merge risk `Sensitive`, and the label can still override that. The terminal's `protectedPaths` setting is unrelated: it names local paths the terminal sandbox hides.
+
+Use Protected path. Do not use protected file or locked path.
+
 ### Benchmark
 
 One named, repeatable measurement a repository declares in its Benchmark manifest, at `perf/benchmarks.json`.
@@ -955,6 +966,7 @@ Evidence that a skill, policy, or workflow should change.
 | reasoning variant, thinking level, effort level | Reasoning effort | Codex's own name for the setting |
 | PR Owner, PR ownership, deployment ownership | Take Ownership | One workflow |
 | risk level, merge tier, skip review, review waiver, review exemption | Auto merge, or Merge risk for the routing value | Auto merge never affects whether review runs |
+| protected file, locked path | Protected path | One concept. A repository's `sensitive_paths` only routes Merge risk |
 | restart queue, drain mode | Restart request | Queue and Pause already name different service concepts |
 | upgrade, refresh, sync | Service update | These words name different package and data operations |
 | journal, lease, fence, mutation, publication, revision, snapshot, item, agent role | Name the issue, pull request, commit, or action the reader can see | These words name internal Service details in this context |

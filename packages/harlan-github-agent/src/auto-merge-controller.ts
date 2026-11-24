@@ -1,8 +1,9 @@
-import type { AutoMergePolicy } from './auto-merge.ts'
+import type { AutoMergePolicy, HeadChangedFiles } from './auto-merge.ts'
+import type { ChangedLinesReader } from './github-changed-lines.ts'
 import type { GitHubPullRequestMerger } from './github.ts'
 import type { JournalStore } from './store.ts'
 import type { GitHubItem, RepositoryMapping } from './types.ts'
-import { autoMergeCandidate, autoMergeDecision } from './auto-merge.ts'
+import { autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasCurrentPublishedReadyReview } from './auto-merge.ts'
 import { err, ok } from './result.ts'
 
 export type AutoMergeEvent
@@ -18,6 +19,8 @@ export interface AutoMergeController {
 }
 
 export interface AutoMergeControllerOptions {
+  /** Compares two exact commits, so the changed files belong to the head and base the decision names. */
+  changedLines: ChangedLinesReader
   merger: GitHubPullRequestMerger
   policy: AutoMergePolicy
   /** Every merge and every refusal is reported. A refusal never fails the poll. */
@@ -26,6 +29,37 @@ export interface AutoMergeControllerOptions {
 }
 
 export function createAutoMergeController(options: AutoMergeControllerOptions): AutoMergeController {
+  /**
+   * The last complete comparison for each pull request.
+   *
+   * Two fixed commits always compare the same, so a head that waits for
+   * GitHub's merge costs one read for each base commit it meets.
+   */
+  const compared = new Map<string, Extract<HeadChangedFiles, { _tag: 'Read' }>>()
+
+  /**
+   * The changed files of the exact observed base and head commits.
+   *
+   * The comparison names both commits by SHA, so its files can belong to no
+   * other head. A new base commit can move the merge base and change what the
+   * merge brings in, so it gets a new comparison.
+   */
+  const headChangedFiles = async (
+    repository: RepositoryMapping,
+    pullRequestNumber: number,
+    commits: { baseSha: string, headSha: string },
+    signal: AbortSignal,
+  ): Promise<HeadChangedFiles> => {
+    const key = `${repository.github}#${pullRequestNumber}`
+    const remembered = compared.get(key)
+    if (remembered !== undefined && remembered.baseSha === commits.baseSha && remembered.headSha === commits.headSha)
+      return remembered
+    const reading = comparedChangedFiles(commits, await options.changedLines(repository, commits.baseSha, commits.headSha, signal))
+    if (reading._tag === 'Read')
+      compared.set(key, reading)
+    return reading
+  }
+
   return {
     async reconcile(repository, subject, signal) {
       if (options.policy._tag === 'Disabled' || subject.kind !== 'pull_request' || !autoMergeCandidate(repository, subject))
@@ -70,8 +104,16 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
         return
       }
       const attempts = options.store.listReviewRuns(repository.github, subject.number)
+      // Without a current published READY Review the decision holds anyway, so
+      // only a head that has one spends a read on its changed files.
+      if (!hasCurrentPublishedReadyReview(attempts, subject.headSha, subject.baseRef))
+        return
+      // The decision reads the stored context, so the comparison uses its
+      // commits. The subject can name an older base commit.
+      const changedFiles = await headChangedFiles(repository, subject.number, { baseSha: context.pullRequest.baseSha, headSha: context.pullRequest.headSha }, signal)
       const decision = autoMergeDecision({
         attempts,
+        changedFiles,
         policy: options.policy,
         pullRequest: context.pullRequest,
         repository: context.repository,
@@ -94,6 +136,7 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
           const currentAttempts = options.store.listReviewRuns(repository.github, subject.number)
           const currentDecision = autoMergeDecision({
             attempts: currentAttempts,
+            changedFiles,
             policy: options.policy,
             pullRequest: current.pullRequest,
             repository: current.repository,

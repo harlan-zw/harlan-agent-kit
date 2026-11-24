@@ -5,7 +5,7 @@ import type { ReviewCheckRunOutcome } from '../src/review-check-run.ts'
 import type { LatestPullRequestTriageRun } from '../src/store.ts'
 import type { GitHubPullRequestItem, ReviewRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { classifyPullRequestPaths, createPullRequestTriageController, proseOnlyQuestions, triageDecider } from '../src/pull-request-triage.ts'
+import { classifyPullRequestPaths, createPullRequestTriageController, isProtectedPath, proseOnlyQuestions, triageDecider } from '../src/pull-request-triage.ts'
 import { err, ok } from '../src/result.ts'
 import { updatedAtLabel } from '../src/text.ts'
 import { pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -143,6 +143,8 @@ describe('classifyPullRequestPaths', () => {
     ['a Claude command', ['CHANGELOG.md', '.claude/commands/ship.md'], '.claude/commands/ship.md'],
     ['a Codex prompt', ['LICENSE', '.codex/prompts/review.md'], '.codex/prompts/review.md'],
     ['a Markdown file under .github', ['.github/PULL_REQUEST_TEMPLATE.md'], '.github/PULL_REQUEST_TEMPLATE.md'],
+    ['Review instructions', ['README.md', 'REVIEW.md'], 'REVIEW.md'],
+    ['code owners under docs', ['docs/guide.md', 'docs/CODEOWNERS'], 'docs/CODEOWNERS'],
     ['a code file under a nested docs directory', ['src/docs/parser.ts'], 'src/docs/parser.ts'],
     ['a fixture under a nested docs directory', ['test/docs/fixture.json'], 'test/docs/fixture.json'],
     ['no changed files', [], undefined],
@@ -165,6 +167,41 @@ describe('classifyPullRequestPaths', () => {
       'notes/todo.txt',
       'docs/assets/diagram.svg',
     ])).toEqual({ _tag: 'ProseOnly' })
+  })
+})
+
+describe('isProtectedPath', () => {
+  it.each([
+    '.github/workflows/ci.yml',
+    '.github/CODEOWNERS',
+    'CODEOWNERS',
+    'docs/CODEOWNERS',
+    '.gitattributes',
+    'packages/engine/.gitattributes',
+    '.gitmodules',
+    'REVIEW.md',
+    'packages/engine/REVIEW.md',
+    'CLAUDE.md',
+    'packages/engine/AGENTS.md',
+    'skills/pr/SKILL.md',
+    'GLOSSARY.md',
+    '.claude/settings.json',
+    '.codex/config.toml',
+    'agent-context/repository.md',
+  ])('protects %s', (path) => {
+    expect(isProtectedPath(path)).toBe(true)
+  })
+
+  it.each([
+    'src/index.ts',
+    'README.md',
+    'docs/guide.md',
+    'src/codeowners.ts',
+    'packages/engine/CODEOWNERS',
+    'vendor/library/.gitmodules',
+    'docs/REVIEW-GUIDE.md',
+  ])('leaves %s unprotected', (path) => {
+    expect(isProtectedPath(path)).toBe(false)
   })
 })
 

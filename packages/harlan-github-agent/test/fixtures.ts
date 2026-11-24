@@ -1,9 +1,29 @@
 import type { AgentRuntimeSource } from '../src/agent-profile.ts'
 import type { AgentEvent, AgentProvider, AgentProviderName, AgentTurnRequest } from '../src/agent-provider.ts'
+import type { HeadChangedFiles } from '../src/auto-merge.ts'
+import type { ChangedFile } from '../src/finding-scope.ts'
+import type { ChangedLinesReader } from '../src/github-changed-lines.ts'
 import type { PublicTextGuard } from '../src/public-text.ts'
 import type { AgentProfile, DashboardSnapshot, GitHubIssueItem, GitHubPullRequestItem, RepositoryMapping } from '../src/types.ts'
 import type { GitHubOwnershipEvidence } from '../src/worker-github-evidence.ts'
 import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { comparedChangedFiles } from '../src/auto-merge.ts'
+import { ok } from '../src/result.ts'
+
+/** One changed file in a GitHub comparison. Pass the old path for a rename. */
+export function comparedFile(path: string, previousPath: string | null = null): ChangedFile {
+  return { _tag: 'Changed', path, previousPath, added: new Set([1]) }
+}
+
+/** A complete comparison of the fixture pull request's base and head. The default is one ordinary source file. */
+export function headChangedFiles(files: ChangedFile[] = [comparedFile('src/index.ts')], commits = { baseSha: 'base123', headSha: 'abc123' }): HeadChangedFiles {
+  return comparedChangedFiles(commits, ok({ files, complete: true }))
+}
+
+/** A reader that finds the same changed files between any two commits. */
+export function changedLinesSource(files: ChangedFile[] = [comparedFile('src/index.ts')]): ChangedLinesReader {
+  return async () => ok({ files, complete: true })
+}
 
 /** A guard with nothing to redact, for tests about something other than private details. */
 export const testPublicText: PublicTextGuard = {

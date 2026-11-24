@@ -1,8 +1,9 @@
-import type { AutoMergePolicy } from '../src/auto-merge.ts'
+import type { AutoMergePolicy, HeadChangedFiles } from '../src/auto-merge.ts'
 import type { ReviewFinding, ReviewGates, ReviewGateState, ReviewOutcome, ReviewPublication, ReviewRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
-import { AUTO_MERGE_LABEL, autoMergeCandidate, autoMergeDecision, hasAutoMergeLabel } from '../src/auto-merge.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { AUTO_MERGE_LABEL, autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasAutoMergeLabel } from '../src/auto-merge.ts'
+import { err, ok } from '../src/result.ts'
+import { comparedFile, headChangedFiles, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const passed: ReviewGateState = { _tag: 'Passed', evidence: [] }
 
@@ -50,12 +51,14 @@ const enabled: AutoMergePolicy = { _tag: 'Enabled', minimumConfidence: 100, meth
 
 function decide(input: {
   attempts?: ReviewRun[]
+  changedFiles?: HeadChangedFiles
   policy?: AutoMergePolicy
   pullRequest?: Parameters<typeof pullRequestItem>[0]
   repository?: Parameters<typeof repositoryMapping>[0]
 } = {}) {
   return autoMergeDecision({
     attempts: input.attempts ?? [attempt()],
+    changedFiles: input.changedFiles ?? headChangedFiles(),
     policy: input.policy ?? enabled,
     pullRequest: pullRequestItem({ autoMerge: true, mergeState: 'clean', ...input.pullRequest }),
     repository: repositoryMapping(input.repository),
@@ -217,5 +220,80 @@ describe('auto merge scoped to every pull request', () => {
     expect(autoMergeCandidate(repositoryMapping(), pullRequestItem({ autoMerge: false }))).toBe(false)
     expect(autoMergeCandidate(repositoryMapping(), pullRequestItem({ autoMerge: true }))).toBe(true)
     expect(autoMergeCandidate(repositoryMapping(every), pullRequestItem({ autoMerge: false }))).toBe(true)
+  })
+})
+
+describe('auto merge and Protected paths', () => {
+  const ordinary = comparedFile('src/index.ts')
+  const commits = { baseSha: 'base123', headSha: 'abc123' }
+
+  it('merges an ordinary source change', () => {
+    expect(decide({ changedFiles: headChangedFiles([ordinary, comparedFile('test/index.test.ts')]) })._tag).toBe('Merge')
+  })
+
+  it.each([
+    ['a workflow', '.github/workflows/ci.yml'],
+    ['code owners', 'CODEOWNERS'],
+    ['git attributes', 'packages/engine/.gitattributes'],
+    ['submodules', '.gitmodules'],
+    ['Review instructions', 'REVIEW.md'],
+    ['agent instructions', 'packages/engine/CLAUDE.md'],
+  ])('holds a labelled pull request that changes %s', (_name, path) => {
+    expect(decide({ changedFiles: headChangedFiles([ordinary, comparedFile(path)]) })).toEqual({
+      _tag: 'Hold',
+      reason: `${path} is a Protected path. Auto merge never merges it.`,
+    })
+  })
+
+  it('holds a Protected path in a repository scoped to every pull request', () => {
+    expect(decide({
+      changedFiles: headChangedFiles([comparedFile('.github/workflows/release.yml')]),
+      pullRequest: { autoMerge: false },
+      repository: { autoMerge: { _tag: 'Every', minimumConfidence: 80 } },
+    })._tag).toBe('Hold')
+  })
+
+  it('holds a removed Protected path', () => {
+    const removed = comparedChangedFiles(commits, ok({ files: [{ _tag: 'Removed', path: 'CODEOWNERS' }], complete: true }))
+    expect(decide({ changedFiles: removed })._tag).toBe('Hold')
+  })
+
+  it('holds a rename away from a Protected path', () => {
+    expect(decide({ changedFiles: headChangedFiles([comparedFile('ci.yml.bak', '.github/workflows/ci.yml')]) })).toEqual({
+      _tag: 'Hold',
+      reason: '.github/workflows/ci.yml is a Protected path. Auto merge never merges it.',
+    })
+  })
+
+  it('holds when the comparison could not be read', () => {
+    expect(decide({ changedFiles: comparedChangedFiles(commits, err('GitHub returned 502.')) })).toEqual({
+      _tag: 'Hold',
+      reason: 'The changed files of the head commit are unavailable: GitHub returned 502.',
+    })
+  })
+
+  it('holds a comparison that GitHub may have cut', () => {
+    // A Protected path could sit past the end of a cut list.
+    const cut = comparedChangedFiles(commits, ok({ files: [ordinary], complete: false }))
+    expect(decide({ changedFiles: cut })._tag).toBe('Hold')
+  })
+
+  it('holds a comparison of another head commit', () => {
+    expect(decide({ changedFiles: headChangedFiles([ordinary], { baseSha: 'base123', headSha: 'older' }) })).toEqual({
+      _tag: 'Hold',
+      reason: 'The changed files were compared for another head commit.',
+    })
+  })
+
+  it('holds a comparison against another base commit', () => {
+    // A new base commit can move the merge base and change what the merge brings in.
+    expect(decide({ changedFiles: headChangedFiles([ordinary], { baseSha: 'older-base', headSha: 'abc123' }) })).toEqual({
+      _tag: 'Hold',
+      reason: 'The changed files were compared against another base commit.',
+    })
+  })
+
+  it('holds when GitHub lists no changed file', () => {
+    expect(decide({ changedFiles: headChangedFiles([]) })._tag).toBe('Hold')
   })
 })

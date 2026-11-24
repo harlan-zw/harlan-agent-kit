@@ -3,7 +3,7 @@ import type { MergeRiskRecord, RepositoryAutoMergeScope, ReviewGates } from '../
 import { afterEach, describe, expect, it } from 'vitest'
 import { autoMergeDecision } from '../src/auto-merge.ts'
 import { openJournalStore } from '../src/store.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { headChangedFiles, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const stores: Array<ReturnType<typeof openJournalStore>> = []
 
@@ -122,6 +122,7 @@ describe('a settlement carries the parent Review run Merge risk', () => {
 
     const decision = autoMergeDecision({
       attempts: store.listReviewRuns('harlan-zw/example', 24),
+      changedFiles: headChangedFiles(),
       policy,
       pullRequest: pullRequestItem({ autoMerge: false, mergeState: 'clean' }),
       repository: repositoryMapping({ autoMerge: containedScope }),

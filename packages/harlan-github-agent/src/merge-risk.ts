@@ -1,4 +1,4 @@
-import { isInstructionPath } from './pull-request-triage.ts'
+import { isInstructionPath, isProtectedPath } from './pull-request-triage.ts'
 
 /**
  * How much a wrong merge of this pull request would cost.
@@ -74,6 +74,11 @@ export function matchesGlob(pattern: string, path: string): boolean {
   return globToRegExp(pattern).test(path)
 }
 
+/** Every path one changed file touches: its name, and the name it had before a rename or copy. */
+function touchedPaths(file: PullRequestFile): string[] {
+  return file.previousFilename === null ? [file.path] : [file.path, file.previousFilename]
+}
+
 /**
  * The deterministic part of the verdict, from paths and counts alone.
  *
@@ -86,10 +91,15 @@ export function mergeRiskFloor(files: readonly PullRequestFile[], policy: MergeR
     return { _tag: 'Reviewable', reason: 'The pull request changes no file.' }
 
   // An agent reads these as instructions, so a wrong merge changes how every
-  // later agent behaves. That is never one revert commit.
-  const instruction = files.find(file => isInstructionPath(file.path))
+  // later agent behaves. That is never one revert commit. A rename away from
+  // one changes it as much as an edit does.
+  const touched = files.flatMap(touchedPaths)
+  const instruction = touched.find(isInstructionPath)
   if (instruction !== undefined)
-    return { _tag: 'Sensitive', reason: `${instruction.path} is read as instructions by an agent.` }
+    return { _tag: 'Sensitive', reason: `${instruction} is read as instructions by an agent.` }
+  const protectedPath = touched.find(isProtectedPath)
+  if (protectedPath !== undefined)
+    return { _tag: 'Sensitive', reason: `${protectedPath} is a Protected path.` }
 
   const sensitive = files.find(file => policy.sensitivePaths.some(pattern => matchesGlob(pattern, file.path)))
   if (sensitive !== undefined)

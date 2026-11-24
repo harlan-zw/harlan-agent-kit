@@ -10,7 +10,7 @@ Use `github.allowed_owners` before GitHub access. Ignore installations and perso
 
 For every tracked pull request authored by `harlan-zw`, run Pull request triage at observation time, before any Task is queued. The path rule decides first.
 If one changed path is outside the prose set, require an adversarial Review without a model call. The prose set is `*.md`, `*.mdx`, `*.txt`, `LICENSE*`, `CHANGELOG*`, and `docs/**`.
-Treat `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, `.github/**`, `.claude/**`, and `.codex*/**` as behaviour, not prose. They always require Review.
+Treat every Protected path as behaviour, not prose. It always requires Review. The Protected paths are `**/SKILL.md`, `**/AGENTS.md`, `**/CLAUDE.md`, `**/GLOSSARY.md`, `**/REVIEW.md`, `**/.github/**`, `**/.claude/**`, `**/.codex*/**`, `**/agent-context/**`, `CODEOWNERS`, `docs/CODEOWNERS`, `**/.gitattributes`, and `.gitmodules`.
 If every changed path is prose, reuse the stored decision for the same head commit. If none exists, ask the Classification service with the title and changed paths only.
 Classification skips only clearly judgment-free prose, formatting, or comment-only changes, and a skip needs confidence at or above 0.7. Uncertainty or failure requires Review.
 Store the decision source in the reason. A stored reason starts with `rule: ` or `model: `.
@@ -29,7 +29,7 @@ Match the recorded comment, current head commit, and target branch before adding
 Reject clicks from other accounts and stale or modified comments.
 Bind Approval to the exact head commit; never let the label approve a head commit twice.
 
-Review every tracked pull request, whatever its labels. Merge one pull request automatically only when it carries `harlan-agent-auto-merge`, `auto_merge.enabled` is true, the repository is owned, the author is trusted, and review returned `READY` at or above `auto_merge.minimum_confidence`. A repository block with `auto_merge.pull_requests: every` drops the label condition and uses its own `minimum_confidence`. Recheck the head commit at merge time. Everything else waits for Harlan.
+Review every tracked pull request, whatever its labels. Merge one pull request automatically only when it carries `harlan-agent-auto-merge`, `auto_merge.enabled` is true, the repository is owned, the author is trusted, and review returned `READY` at or above `auto_merge.minimum_confidence`. A repository block with `auto_merge.pull_requests: every` drops the label condition and uses its own `minimum_confidence`. Never merge a pull request that changes a Protected path, in any scope. The label and Merge risk never override this. Before the merge, compare the last observed base commit with the exact head commit, by SHA. If the comparison is unavailable, empty, or may be incomplete, hold. Hold when the observed base commit moves away from the compared one. Recheck the head commit at merge time. Everything else waits for Harlan.
 
 Auto merge targets the default branch only. If a stack's exact parent merged there, retarget the child before the next observation.
 Keep independent Issue work on the default branch, even when another pull request changes the same file.

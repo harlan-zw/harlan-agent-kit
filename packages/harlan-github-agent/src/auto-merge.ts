@@ -1,4 +1,7 @@
+import type { ChangedLines } from './finding-scope.ts'
+import type { Result } from './result.ts'
 import type { GitHubPullRequestItem, RepositoryMapping, ReviewRun } from './types.ts'
+import { isProtectedPath } from './pull-request-triage.ts'
 
 /**
  * Auto merge lets the controller merge one pull request without a per-pull-request
@@ -39,11 +42,56 @@ export type AutoMergeDecision
   = | { _tag: 'Merge', headSha: string, method: AutoMergeMethod, reviewRunId: string }
     | { _tag: 'Hold', reason: string }
 
+/**
+ * The changed paths of one exact comparison, `baseSha...headSha`.
+ *
+ * GitHub compared the two commits by SHA, so the reading belongs to them and
+ * to no other head or base. `paths` holds each changed path and the old path
+ * of each rename. `Unavailable` covers a failed read and a list GitHub may
+ * have cut. Auto merge holds on it, because a Protected path it cannot see
+ * must never merge.
+ */
+export type HeadChangedFiles
+  = | { _tag: 'Read', baseSha: string, headSha: string, paths: readonly string[] }
+    | { _tag: 'Unavailable', reason: string }
+
+/** Stamps one exact comparison with the two commits it was asked for. */
+export function comparedChangedFiles(commits: { baseSha: string, headSha: string }, comparison: Result<ChangedLines, string>): HeadChangedFiles {
+  if (comparison._tag === 'Err')
+    return { _tag: 'Unavailable', reason: comparison.error }
+  if (!comparison.value.complete)
+    return { _tag: 'Unavailable', reason: 'GitHub lists at most 300 files in one comparison, so some may be missing.' }
+  const paths = comparison.value.files.flatMap(file => file._tag === 'Changed' && file.previousPath !== null ? [file.path, file.previousPath] : [file.path])
+  return { _tag: 'Read', baseSha: commits.baseSha, headSha: commits.headSha, paths }
+}
+
 export interface AutoMergeInput {
   attempts: ReviewRun[]
+  /** Required in every scope: no label and no Merge risk verdict skips the Protected path check. */
+  changedFiles: HeadChangedFiles
   policy: AutoMergePolicy
   pullRequest: GitHubPullRequestItem
   repository: RepositoryMapping
+}
+
+/**
+ * Why the changed files keep this head from Auto merge, or null when they do not.
+ *
+ * The reading must name the exact head and base commits the decision is
+ * about. A new base commit can change the merge base, so an older comparison
+ * proves nothing about it.
+ */
+function changedFilesHold(changedFiles: HeadChangedFiles, pullRequest: GitHubPullRequestItem): string | null {
+  if (changedFiles._tag === 'Unavailable')
+    return `The changed files of the head commit are unavailable: ${changedFiles.reason}`
+  if (changedFiles.headSha !== pullRequest.headSha)
+    return 'The changed files were compared for another head commit.'
+  if (changedFiles.baseSha !== pullRequest.baseSha)
+    return 'The changed files were compared against another base commit.'
+  if (changedFiles.paths.length === 0)
+    return 'GitHub lists no changed file for the head commit.'
+  const path = changedFiles.paths.find(isProtectedPath)
+  return path === undefined ? null : `${path} is a Protected path. Auto merge never merges it.`
 }
 
 function latestReviewForHead(attempts: ReviewRun[], headSha: string, baseRef: string): ReviewRun | undefined {
@@ -63,7 +111,7 @@ export function hasCurrentPublishedReadyReview(attempts: ReviewRun[], headSha: s
 
 /** Every condition is rechecked against GitHub immediately before the merge. */
 export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
-  const { attempts, policy, pullRequest, repository } = input
+  const { attempts, changedFiles, policy, pullRequest, repository } = input
   if (policy._tag === 'Disabled')
     return { _tag: 'Hold', reason: 'Auto merge is disabled.' }
   if (!autoMergeCandidate(repository, pullRequest))
@@ -91,6 +139,11 @@ export function autoMergeDecision(input: AutoMergeInput): AutoMergeDecision {
   }
   if (attempt.findings.some(finding => finding._tag === 'Open'))
     return { _tag: 'Hold', reason: 'The review left an open finding.' }
+  // Before any scope rule, so neither the label nor a Merge risk verdict can
+  // reach around it.
+  const filesHold = changedFilesHold(changedFiles, pullRequest)
+  if (filesHold !== null)
+    return { _tag: 'Hold', reason: filesHold }
   const scope = repository.autoMerge
   // A pull request qualifies through Merge risk or through the label. Which one
   // it used decides which confidence bar it must clear, because the repository's

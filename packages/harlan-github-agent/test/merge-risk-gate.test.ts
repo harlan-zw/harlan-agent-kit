@@ -1,9 +1,10 @@
 import type { AutoMergePolicy } from '../src/auto-merge.ts'
+import type { ChangedFile } from '../src/finding-scope.ts'
 import type { MergeRisk } from '../src/merge-risk.ts'
 import type { MergeRiskRecord, RepositoryAutoMergeScope, ReviewGates, ReviewGateState, ReviewPublication, ReviewRun } from '../src/types.ts'
 import { describe, expect, it } from 'vitest'
 import { autoMergeDecision } from '../src/auto-merge.ts'
-import { pullRequestItem, repositoryMapping } from './fixtures.ts'
+import { comparedFile, headChangedFiles, pullRequestItem, repositoryMapping } from './fixtures.ts'
 
 const passed: ReviewGateState = { _tag: 'Passed', evidence: [] }
 const gates: ReviewGates = { ci: passed, merge: passed, review: passed }
@@ -66,12 +67,14 @@ const policy: AutoMergePolicy = { _tag: 'Enabled', method: 'squash', minimumConf
 
 function decide(input: {
   autoMerge?: RepositoryAutoMergeScope
+  changedFiles?: ChangedFile[]
   confidence?: number
   labelled?: boolean
   mergeRisk?: MergeRiskRecord | null
 }) {
   return autoMergeDecision({
     attempts: [attempt(input.mergeRisk ?? null, input.confidence ?? 100)],
+    changedFiles: headChangedFiles(input.changedFiles),
     policy,
     pullRequest: pullRequestItem({ autoMerge: input.labelled ?? false, headSha: 'abc123', mergeState: 'clean' }),
     repository: { ...repositoryMapping(), autoMerge: input.autoMerge ?? containedScope() },
@@ -114,6 +117,18 @@ describe('merge risk at the Auto merge gate', () => {
     expect(decision._tag).toBe('Hold')
     if (decision._tag === 'Hold')
       expect(decision.reason).toContain('runs a migration')
+  })
+
+  it('never lets the label carry a Protected path', () => {
+    // The label beats a Sensitive verdict by default. It must never beat a
+    // file that changes what CI, an agent, or GitHub itself enforces.
+    const decision = decide({
+      autoMerge: containedScope({ labelOverridesRisk: true }),
+      changedFiles: [comparedFile('src/index.ts'), comparedFile('AGENTS.md')],
+      labelled: true,
+      mergeRisk: agreed({ _tag: 'Sensitive', reason: 'AGENTS.md is read as instructions by an agent.' }),
+    })
+    expect(decision).toEqual({ _tag: 'Hold', reason: 'AGENTS.md is a Protected path. Auto merge never merges it.' })
   })
 
   it('keeps the existing label behaviour by default', () => {

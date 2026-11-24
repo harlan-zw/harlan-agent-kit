@@ -26,6 +26,18 @@ describe('the deterministic floor', () => {
     }
   })
 
+  it('never contains a Protected path', () => {
+    for (const path of ['CODEOWNERS', 'docs/CODEOWNERS', '.gitattributes', '.gitmodules', 'REVIEW.md']) {
+      const risk = mergeRiskFloor([file(path)], policy)
+      expect(risk._tag, path).toBe('Sensitive')
+    }
+  })
+
+  it('never contains a rename away from agent instructions', () => {
+    const risk = mergeRiskFloor([file('NOTES.md', { previousFilename: 'CLAUDE.md', status: 'renamed' })], policy)
+    expect(risk).toEqual({ _tag: 'Sensitive', reason: 'CLAUDE.md is read as instructions by an agent.' })
+  })
+
   it('holds the instruction floor even when a repository allows the path', () => {
     // The repository cannot opt out of this one by widening its own globs.
     const permissive = { ...policy, containedPaths: ['**'], sensitivePaths: [] }
