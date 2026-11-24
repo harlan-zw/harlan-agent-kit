@@ -1,7 +1,7 @@
 import type { ReviewFindingThread } from './review-finding-threads.ts'
 import type { ReviewFinding } from './types.ts'
 import { Buffer } from 'node:buffer'
-import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, FOLLOW_UP_GROUP_LABEL, FOLLOW_UP_ROW_MARKER, FOLLOW_UP_STATUS_LIMIT, isCanonicalFooter, listedFollowUp, plural } from './review-comment.ts'
+import { AUTOMATED_REVIEW_MARKER, automatedReviewHead, FOLLOW_UP_DETAIL_LINE, FOLLOW_UP_GROUP_LABEL, FOLLOW_UP_ROW_MARKER, FOLLOW_UP_STATUS_LIMIT, isCanonicalFooter, listedFollowUp, plural } from './review-comment.ts'
 import { cleanLine } from './text.ts'
 
 export type LoggedReviewFinding = Extract<ReviewFinding, { _tag: 'Logged' }>
@@ -109,6 +109,21 @@ export function withoutLoggedFindingControls(body: string): string {
     .trimEnd()
 }
 
+/** Every follow-up detail line, which the decorator drops for a finding with a thread beside the code. */
+const followUpDetailPattern = /^ {2}[^\n]* <!-- follow-up-detail: [a-f\d]{64} -->\n?/gm
+
+/**
+ * The part of a canonical body that every writer of that comment agrees on.
+ *
+ * A compare and swap reads it. It leaves out the decorations, and each
+ * follow-up's detail line too. The decorator drops that line for a finding
+ * with a thread beside the code, so GitHub can hold a body without it while
+ * the Journal text still has it.
+ */
+export function comparableCanonicalBody(body: string): string {
+  return withoutLoggedFindingControls(body).replace(followUpDetailPattern, '')
+}
+
 export function normalizeLoggedFindingControls(body: string): string {
   return body.replaceAll('\r\n', '\n')
     .replace(controlPattern, (_line, indent: string, _checked, fingerprint: string) => `${indent}${loggedFindingControl(fingerprint)}`)
@@ -208,15 +223,18 @@ function aboveFooter(body: string, block: string): string {
  *
  * A group label gets its sentence only when a row under it got a control.
  * A merged pull request gets one control for every unfixed follow-up.
- * `withoutLoggedFindingControls` undoes every decoration exactly.
+ * `withoutLoggedFindingControls` undoes every decoration exactly. It cannot
+ * bring back a detail line the decorator dropped for a thread, so two bodies
+ * compare through `comparableCanonicalBody`.
  */
 export function withLoggedFindingControls(body: string, findings: readonly ReviewFinding[], statuses: readonly LoggedFindingStatus[], options: {
   controls?: FollowUpControls | undefined
   /**
    * Findings whose thread opened beside the code, by fingerprint, to that thread's URL.
    *
-   * The row stays, so the fold keeps the count the native review shows, and
-   * the thread link replaces the control: the thread carries its own.
+   * The row stays, so the fold keeps the count the native review shows. The
+   * thread link replaces the control, because the thread carries its own.
+   * The row drops its detail line, because the thread shows the same proof and fix.
    */
   inline?: ReadonlyMap<string, string>
   baseRef?: string | undefined
@@ -233,7 +251,8 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
   let group: number | null = null
   let offered = false
   const decorated: string[] = []
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!
     if (FOLLOW_UP_GROUP_LABEL.test(line))
       group = decorated.length
     else if (line === '</details>')
@@ -249,18 +268,22 @@ export function withLoggedFindingControls(body: string, findings: readonly Revie
     }
     const fingerprint = finding.details.fingerprint
     rendered.add(fingerprint)
+    // The thread beside the code shows the proof and fix, and carries its own control.
+    const thread = options.inline?.get(fingerprint)
+    const next = lines[index + 1]
+    const detail = next !== undefined && FOLLOW_UP_DETAIL_LINE.exec(next)?.[1] === fingerprint ? next : undefined
+    if (detail !== undefined)
+      index++
+    decorated.push(line, ...(detail === undefined || thread !== undefined ? [] : [detail]))
     const status = statuses.find(status => status.fingerprint === fingerprint)
     if (status !== undefined) {
-      decorated.push(line, status._tag === 'Repair'
+      decorated.push(status._tag === 'Repair'
         ? `  Repair: ${statusText(status.status)} <!-- logged-finding: ${fingerprint} -->`
         : `  ${statusText(status.status)} <!-- logged-finding: ${fingerprint} -->`)
       if (open !== undefined && status._tag === 'Repair' && status.cancellable)
         decorated.push(dismissalControl(fingerprint))
       continue
     }
-    decorated.push(line)
-    // The thread beside the code carries its own control, so the row links it instead.
-    const thread = options.inline?.get(fingerprint)
     if (thread !== undefined) {
       decorated.push(`  [${threadLinkText}](${thread}) <!-- logged-finding: ${fingerprint} -->`)
       continue

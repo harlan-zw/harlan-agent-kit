@@ -282,9 +282,11 @@ The dot says who holds the work. ⚪ means the agent has it. 🟢 means READY. �
 Write outcome words in sentence case: Ready, Pending, Blocked, Queued, Reviewing, Repair, Stuck, Review skipped, Approval needed, Merged, Closed.
 Never restate what GitHub's merge box shows, such as CI status or a merge conflict. Name a failed gate only when it is the only reason for Blocked.
 Say what only the Review knows: `Checked … Not checked: …`, what Repair fixed, the issues to fix, and the follow-ups.
-Fold follow-ups and group them by Finding scope. List each with its score, title, location, proof, and fix. Count Logged findings below 40/100 and never list them or thread them.
-When a follow-up's thread opens beside the code, keep its row and link the thread in place of the control. A thread whose finding drops below 40/100 loses its control.
+Fold follow-ups and group them by Finding scope. List each on one line with its score, title, and location. Put its proof and fix on the line under it. Count Logged findings below 40/100 and never list them or thread them.
+When a follow-up's thread opens beside the code, keep its row and link the thread in place of the control. Drop the row's proof and fix line, because the thread shows them. A thread whose finding drops below 40/100 loses its control.
 End each follow-up row with a hidden marker that names its finding fingerprint. Bind a control to its row by that marker, never by the row's score or title.
+End the proof and fix line with its own fingerprint marker. A compare and swap of the canonical comment leaves that line out, because only the decorator knows which threads opened.
+A Follow-up issue has no threads, so each of its rows keeps its proof and fix.
 Fit every canonical comment and Follow-up issue within GitHub's 65536-character body limit, with room for the controls. Keep the Status line, the issues, and each follow-up's score and title. Leave out proofs first, then fixes, then whole rows, and say in small print what was left out.
 A fixed thread shows its fixing commit above its struck title and drops the merge label. A follow-up a rerun promotes to an issue rewrites its thread as an issue that blocks merge.
 
