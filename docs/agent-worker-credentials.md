@@ -56,6 +56,13 @@ Inside `.codex`, Codex reads some files as configuration, instructions, or code.
 Each turn gets its own copy of `config.toml`, `.env`, `AGENTS.override.md`, `AGENTS.md`, `hooks.json`, `plugins`, `skills`, `rules`, `prompts`, `shell_snapshots`, and `agents`.
 Changes to these paths last one turn.
 Codex account plugins are off for Agent turns.
+With plugins on, Codex downloads the account's plugins again in every turn.
+
+Codex turns load the kit from the read-only Service checkout, never from the worker home.
+The kit Skills mount read only at `.codex/skills/harlan-agent-kit`.
+The kit guards in `hooks/codex.json` mount read only in `/etc/codex`.
+Codex runs hooks from that system layer without a stored trust.
+A turn cannot change either one.
 
 ## Keep Agent tools current
 
