@@ -811,6 +811,12 @@ A repository block may widen the scope with `auto_merge.pull_requests: every` an
 
 Write GitHub's feature as "auto-merge", hyphenated. Do not use self merge, automatic approval, automerge, or merge tier.
 
+### Reservation observation
+
+A read-only estimate of what would block the next NuxtSEO merge or release a reservation for the main commit.
+The Board calls it **NuxtSEO reservation** and shows **Observation only**.
+The Service records the observation in the Journal. It changes no merge state.
+
 ### Legacy issue cutoff
 
 One fixed date. Ignore issues created before this date. Do not derive it from the current date.

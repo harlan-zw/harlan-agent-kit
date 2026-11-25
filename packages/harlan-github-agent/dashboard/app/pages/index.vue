@@ -7,6 +7,7 @@ import BoardCard from './_BoardCard.vue'
 import BoardColumn from './_BoardColumn.vue'
 import BoardCompletion from './_BoardCompletion.vue'
 import BoardIncidentRow from './_BoardIncidentRow.vue'
+import BoardReservationObservation from './_BoardReservationObservation.vue'
 
 /**
  * The board, in the order of the four questions. Needs you is a full-width
@@ -109,6 +110,7 @@ useHead({
     />
 
     <BoardCompletion v-if="snapshot.completionTasks?.length" :tasks="snapshot.completionTasks" />
+    <BoardReservationObservation v-if="snapshot.reservationObservations" :observations="snapshot.reservationObservations" :generated-at="snapshot.generatedAt" />
 
     <div v-if="workKinds.length > 1" class="filter-row flex shrink-0 flex-wrap items-center gap-1" role="group" aria-label="Filter by work">
       <UButton

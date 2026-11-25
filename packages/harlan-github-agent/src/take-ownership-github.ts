@@ -3,6 +3,11 @@ import type { CompletionSource, CompletionWorkflow } from './take-ownership-comp
 import { createAuthenticatedClient } from './github-auth.ts'
 import { err, ok } from './result.ts'
 
+export function workflowRunSource(title: string): Extract<CompletionWorkflow['source'], { _tag: 'WorkflowRun' }> | null {
+  const match = / \[take_ownership:([^:\s\]]+):push:([^:\s\]]+):([a-f0-9]{40})\]$/.exec(title)
+  return match === null ? null : { _tag: 'WorkflowRun', repository: match[1]!, branch: match[2]!, sha: match[3]! }
+}
+
 /** Uses the mapped read credential. Smoke requests carry no GitHub credential. */
 export function createCompletionSource(options: {
   tokens: GitHubTokenProvider
@@ -36,11 +41,11 @@ export function createCompletionSource(options: {
           source = { _tag: 'Push', sha: run.head_sha, branch: run.head_branch }
         }
         else if (run.event === 'workflow_run') {
-          const match = / \[take_ownership:([^:\s\]]+):push:([^:\s\]]+):([a-f0-9]{40})\]$/.exec(run.display_title)
+          const triggeringPush = workflowRunSource(run.display_title)
           // Missing or malformed provenance cannot satisfy delivery checks.
-          if (match === null)
+          if (triggeringPush === null)
             continue
-          source = { _tag: 'WorkflowRun', repository: match[1]!, branch: match[2]!, sha: match[3]! }
+          source = triggeringPush
         }
         else {
           continue

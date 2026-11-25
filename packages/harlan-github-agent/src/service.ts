@@ -70,6 +70,8 @@ import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-wor
 import { createIssueTriageWorker, createReviewWorker } from './item-agent.ts'
 import { applyLoggedFindingPickup, publishFollowUpIssues, publishLoggedFindingPickups, refreshLoggedFindingThreads } from './logged-finding-sweep.ts'
 import { createMaintenanceCheckCommand, createMaintenanceScopeProvider } from './maintenance-scope.ts'
+import { createReservationSource } from './merge-reservation-github.ts'
+import { observeMergeReservation, reservationObservationIntervalMs, reservationPilotRepository, unavailableReservationObservation } from './merge-reservation-observation.ts'
 import { reconcilePackageReleases } from './package-release-controller.ts'
 import { createPackageReleaseSource } from './package-release-github.ts'
 import { runPassStep, runPassStepResult } from './poll-pass.ts'
@@ -1385,6 +1387,30 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store.resolveIncidents(scope, at, 'review_gate_refresh', messages)
     return messages.length === 0 ? ok(undefined) : err(messages.join('\n'))
   }
+  const reservationPilot = config.triggers.includes('github')
+    ? config.repositories.find(repository => repository.github.toLowerCase() === reservationPilotRepository
+      && repository.enabled && repository.ownership === 'owned' && repository.defaultBranch === 'main'
+      && repository.takeOwnership._tag === 'Enabled')
+    : undefined
+  const readReservationEvidence = createReservationSource({ tokens: routedTokens, fetch: globalThis.fetch })
+  const reservationPoll: PollerOptions[] = reservationPilot === undefined
+    ? []
+    : [{
+        intervalMilliseconds: reservationObservationIntervalMs,
+        timeoutMilliseconds: 35_000,
+        async poll(signal) {
+          const observation = await readReservationEvidence(reservationPilot, signal)
+            .then(evidence => observeMergeReservation(evidence, now()))
+            .catch((error: unknown) => {
+              if (!signal.aborted)
+                options.logger.error(`NuxtSEO reservation observation: ${error instanceof Error ? error.message : 'The observation failed.'}`)
+              return unavailableReservationObservation(now())
+            })
+          if (!signal.aborted)
+            store.recordReservationObservation(observation)
+        },
+        onError: error => options.logger.error(error),
+      }]
   const poller = createIndependentPollers([{
     intervalMilliseconds: config.pollIntervalSeconds * 1_000,
     timeoutMilliseconds: Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000),
@@ -1670,7 +1696,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       recordPassIncidents('routine_report', reported.flatMap(result => result._tag === 'Err' ? [result.error] : []))
     },
     onError: error => options.logger.error(error),
-  }])
+  }, ...reservationPoll])
   // Timer and webhook reads share one poller per repository, so they cannot overlap.
   // Each repository backs off independently when its reads fail.
   const repositoryPollers = new Map(config.repositories
@@ -1808,6 +1834,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       : { model: options.classification.model, gatewayId: options.classification.gatewayId ?? 'default' }
     const current = {
       ...snapshot,
+      ...(reservationPilot === undefined ? {} : { reservationObservations: store.listReservationObservations() }),
       agentProviderOrder: config.agent.order,
       providerCapacities,
       agentModelCapacities: { opencodeGo: capacity.read('opencode', 'opencode-go/glm-5.3-flash'), zaiCodingPlan: capacity.read('opencode', 'zai-coding-plan/glm-5.3-flash') },

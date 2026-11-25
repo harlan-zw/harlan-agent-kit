@@ -166,6 +166,14 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Service state missing | The Service returned no state. | State request error |
 | Service data label | Unavailable | System chip after its last update expires |
 | Take Ownership section | Take Ownership | Board section for delivery checks |
+| Reservation observation | NuxtSEO reservation | Board section for the NuxtSEO pilot |
+| Reservation mode | Observation only | Badge for decisions that have no effect on merges |
+| Reservation phase | Before merge / After merge | Hypothetical decisions for the last observation |
+| Reservation verdict | Would block / Would allow / Would wait / Would release / Unknown | Observation decisions and their evidence |
+| Reservation evidence | View evidence | Link to a workflow run or another pull request |
+| Reservation empty state | Waiting for the first observation. | Board section before the first pilot sample |
+| Reservation stale | Observation is stale. | The last sample cannot support a current verdict |
+| Reservation history | Recent changes | Earlier observations with changed evidence |
 | Completion pending | Waiting for delivery checks | Completion Task queued or waiting to retry |
 | Completion running | Checking delivery | Completion Task running |
 | Completion passed | Completed | Completion Task with passing checks |
