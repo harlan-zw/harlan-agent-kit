@@ -280,6 +280,37 @@ it('runs a verified Completion Task when a different final pull request read fai
   finally { store.close() }
 })
 
+it('finishes an on-demand repository observation while Completion is still running', async () => {
+  vi.useFakeTimers()
+  const observe = vi.fn(() => Promise.resolve())
+  const observed = vi.fn()
+  const completion = Promise.withResolvers<void>()
+  const runCompletion = vi.fn(() => completion.promise)
+  const poller = createRepositoryPoller({
+    intervalMilliseconds: 1000,
+    poll: observe,
+    onError: (error) => {
+      throw error
+    },
+  }, runCompletion)
+  try {
+    poller.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(runCompletion).toHaveBeenCalledOnce()
+
+    void poller.runNow().then(observed)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(observe).toHaveBeenCalledTimes(2)
+    expect(observed).toHaveBeenCalledOnce()
+  }
+  finally {
+    completion.resolve()
+    await poller.stop()
+    vi.useRealTimers()
+  }
+})
+
 it('settles verified Completion work despite repeated repository lookup deadlines', async () => {
   vi.useFakeTimers()
   const store = openJournalStore(':memory:')
