@@ -118,6 +118,7 @@ expect_silent 'commit context' pre-commit-push.sh 'git commit -m "fix: x"'
 deny_input=$(command_input 'git worktree prune')
 codex_input=$(jq -nc '{session_id:"s",turn_id:"t",model:"m",tool_input:{command:"git worktree prune"}}')
 expect_surface 'opencode' opencode "$deny_input" HARLAN_AGENT_HOOK_SURFACE=opencode CLAUDE_PROJECT_DIR=/project
+expect_surface 'antigravity' antigravity "$deny_input" HARLAN_AGENT_HOOK_SURFACE=antigravity PLUGIN_ROOT=/plugin
 expect_surface 'claude' claude "$deny_input" CLAUDE_PROJECT_DIR=/project
 expect_surface 'claude before codex markers' claude "$codex_input" CLAUDE_PROJECT_DIR=/project
 expect_surface 'codex user Hook' codex "$codex_input"

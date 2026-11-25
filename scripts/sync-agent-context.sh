@@ -11,7 +11,9 @@ commit_hook="$repo_root/agent-context/git-hooks/commit-msg"
 plugin_hooks_dir="$repo_root/harlan-agent-kit/hooks"
 plugin_manifest="$repo_root/harlan-agent-kit/.claude-plugin/plugin.json"
 opencode_plugin="$repo_root/harlan-agent-kit/plugins/opencode/harlan-hooks.ts"
+antigravity_plugin_dir="$repo_root/harlan-agent-kit/plugins/antigravity"
 codex_hooks_source="$repo_root/harlan-agent-kit/hooks/codex.json"
+skilld_manifest="$repo_root/.skills/skilld.json"
 # The manifest registers every hook, so the list below is derived, never typed.
 if [ ! -f "$script_dir/agent-context-hooks.sh" ]; then
   printf '%s\n' "The hook list library is missing: $script_dir/agent-context-hooks.sh" >&2
@@ -23,6 +25,8 @@ installed_hook_files=()
 hooks_install_suffix='.local/share/harlan-agent-kit/hooks'
 manifest_install_suffix='.local/share/harlan-agent-kit/.claude-plugin/plugin.json'
 plugin_install_suffix='.config/opencode/plugins/harlan-hooks.ts'
+antigravity_install_suffix='.gemini/config/plugins/harlan-agent-kit'
+antigravity_skills_suffix='.gemini/config/skills.json'
 github_wrapper="$script_dir/github-public.sh"
 github_install_suffix='.local/share/harlan-agent-kit/github-bin/gh'
 github_cli_suffix='.local/bin/agent-gh'
@@ -97,6 +101,14 @@ require_sources() {
     [ -f "$source" ] || fail "An Agent command source is missing: $source"
   done
   [ -f "$opencode_plugin" ] || fail "The opencode plugin is missing: $opencode_plugin"
+  for source in \
+    "$antigravity_plugin_dir/plugin.json" \
+    "$antigravity_plugin_dir/package.json" \
+    "$antigravity_plugin_dir/hooks.json" \
+    "$antigravity_plugin_dir/scripts/antigravity-hook.ts"; do
+    [ -f "$source" ] || fail "An Antigravity plugin source is missing: $source"
+  done
+  [ -f "$skilld_manifest" ] || fail "The skilld manifest is missing: $skilld_manifest"
   [ -f "$plugin_manifest" ] || fail "The plugin manifest is missing: $plugin_manifest"
   mapfile -t installed_hook_files < <(agent_context_installed_hooks "$plugin_hooks_dir" "$plugin_manifest")
   [ "${#installed_hook_files[@]}" -gt 0 ] || fail "The plugin manifest registers no hooks: $plugin_manifest"
@@ -166,6 +178,24 @@ sync_local() {
   done
   install -m 644 "$plugin_manifest" "$target_home/$manifest_install_suffix"
   install -m 644 "$opencode_plugin" "$target_home/$plugin_install_suffix"
+  # Antigravity reads global plugins and skills from ~/.gemini/config, plus per-instance
+  # config under ~/.t3/userdata/providers/antigravity/*/config when running inside T3 Code.
+  mkdir -p "$target_home/$antigravity_install_suffix/rules" "$target_home/$antigravity_install_suffix/scripts"
+  install -m 644 "$antigravity_plugin_dir/plugin.json" "$target_home/$antigravity_install_suffix/plugin.json"
+  install -m 644 "$antigravity_plugin_dir/package.json" "$target_home/$antigravity_install_suffix/package.json"
+  install -m 644 "$antigravity_plugin_dir/hooks.json" "$target_home/$antigravity_install_suffix/hooks.json"
+  install -m 644 "$antigravity_plugin_dir/scripts/antigravity-hook.ts" "$target_home/$antigravity_install_suffix/scripts/antigravity-hook.ts"
+  install -m 644 "$shared_context" "$target_home/$antigravity_install_suffix/rules/AGENTS.md"
+  agent_context_render_antigravity_skills "$skilld_manifest" "$plugin_checkout" "$target_home" "$target_home/$antigravity_skills_suffix.next"
+  chmod 644 "$target_home/$antigravity_skills_suffix.next"
+  mv "$target_home/$antigravity_skills_suffix.next" "$target_home/$antigravity_skills_suffix"
+  for t3_config in "$target_home"/.t3/userdata/providers/antigravity/*/config; do
+    [ -d "$t3_config" ] || continue
+    install -m 644 "$target_home/$antigravity_skills_suffix" "$t3_config/skills.json"
+    agent_context_render_antigravity_plugins "$target_home/.gemini/config/plugins" "$t3_config/plugins.json.next"
+    chmod 644 "$t3_config/plugins.json.next"
+    mv "$t3_config/plugins.json.next" "$t3_config/plugins.json"
+  done
   # Codex runs the same installed scripts as user hooks, which keep their trust across kit updates.
   agent_context_codex_hooks_owned "$target_home/.codex/hooks.json" \
     || fail "$target_home/.codex/hooks.json holds hooks this sync does not manage. Move them into harlan-agent-kit/hooks/codex.json, then delete the file."

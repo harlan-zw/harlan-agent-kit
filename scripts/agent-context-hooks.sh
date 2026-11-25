@@ -60,3 +60,39 @@ agent_context_codex_hooks_owned() {
   local path=$1
   [ ! -e "$path" ] || jq -e --arg marker "$agent_context_codex_hooks_marker" '(.description // "") | startswith($marker)' "$path" >/dev/null 2>&1
 }
+
+# Renders Antigravity's skills.json so personal, skilld, and shared skills load without duplicates.
+agent_context_render_antigravity_skills() {
+  local manifest=$1 skills_checkout=$2 home=$3 output=$4
+  jq -n \
+    --arg kit_skills "$skills_checkout/harlan-agent-kit/skills" \
+    --arg skilld_skills "$home/.local/share/harlan-agent-kit/skilld/skills" \
+    --arg agents_skills "$home/.agents/skills" \
+    --slurpfile manifest "$manifest" '
+    {
+      entries: [
+        { path: $kit_skills },
+        { path: $skilld_skills },
+        {
+          path: $agents_skills,
+          exclude: (($manifest[0].skills // {}) | keys | sort)
+        }
+      ]
+    }
+  ' > "$output"
+}
+
+# Renders Antigravity's plugins.json for T3 Code provider directories.
+agent_context_render_antigravity_plugins() {
+  local plugins_dir=$1 output=$2
+  jq -n --arg path "$plugins_dir" '
+    {
+      entries: [
+        {
+          path: $path,
+          include_only: ["harlan-agent-kit"]
+        }
+      ]
+    }
+  ' > "$output"
+}

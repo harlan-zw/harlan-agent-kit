@@ -1,0 +1,45 @@
+{
+  "harlan-agent-kit": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "node --experimental-strip-types ./scripts/antigravity-hook.ts",
+        "timeout": 10
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --experimental-strip-types ./scripts/antigravity-hook.ts",
+            "timeout": 130
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "write_file|edit_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --experimental-strip-types ./scripts/antigravity-hook.ts",
+            "timeout": 35
+          }
+        ]
+      },
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --experimental-strip-types ./scripts/antigravity-hook.ts",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

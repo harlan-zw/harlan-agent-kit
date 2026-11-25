@@ -60,9 +60,11 @@ describe('summariseHits', () => {
       line('2026-11-18T00:00:00Z', 'pnpm-only.sh', 'claude', 'rewrite'),
       line('2026-11-23T00:00:00Z', 'wt-only.sh', 'claude'),
       line('2026-11-10T00:00:00Z', 'github-read-routing.sh', 'opencode'),
+      line('2026-11-10T00:00:00Z', 'wt-only.sh', 'antigravity'),
     ].join('\n'))
     expect(summariseHits(hits)).toEqual([
       { week: '2026-W46', hook: 'github-read-routing.sh', surface: 'opencode', hits: 1 },
+      { week: '2026-W46', hook: 'wt-only.sh', surface: 'antigravity', hits: 1 },
       { week: '2026-W47', hook: 'pnpm-only.sh', surface: 'claude', hits: 3 },
       { week: '2026-W47', hook: 'wt-only.sh', surface: 'claude', hits: 2 },
       { week: '2026-W47', hook: 'wt-only.sh', surface: 'codex', hits: 1 },

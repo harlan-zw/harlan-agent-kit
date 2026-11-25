@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 const hitLogFile = 'hook-hits.jsonl'
 
 const decisions = ['deny', 'rewrite'] as const
-const surfaces = ['claude', 'codex', 'opencode', 'unknown'] as const
+const surfaces = ['claude', 'codex', 'opencode', 'antigravity', 'unknown'] as const
 const utcTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/
 
 export interface Hit {

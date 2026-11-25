@@ -14,6 +14,10 @@ SOURCE_PLUGIN="$REPO_ROOT/harlan-agent-kit/plugins/opencode/harlan-hooks.ts"
 INSTALLED_HOOKS_DIR="$TARGET_HOME/.local/share/harlan-agent-kit/hooks"
 INSTALLED_MANIFEST="$TARGET_HOME/.local/share/harlan-agent-kit/.claude-plugin/plugin.json"
 INSTALLED_PLUGIN="$TARGET_HOME/.config/opencode/plugins/harlan-hooks.ts"
+SOURCE_ANTIGRAVITY="$REPO_ROOT/harlan-agent-kit/plugins/antigravity"
+INSTALLED_ANTIGRAVITY="$TARGET_HOME/.gemini/config/plugins/harlan-agent-kit"
+SKILLD_MANIFEST="$REPO_ROOT/.skills/skilld.json"
+PLUGIN_CHECKOUT="${HARLAN_AGENT_PLUGIN_CHECKOUT:-$HOME/pkg/harlan-agent-kit}"
 # The manifest owns the hook list, so this check derives it too.
 source "$REPO_ROOT/scripts/agent-context-hooks.sh"
 mapfile -t PLUGIN_HOOKS < <(agent_context_installed_hooks "$PLUGIN_HOOKS_DIR" "$SOURCE_MANIFEST")
@@ -114,6 +118,37 @@ agent_context_render_codex_hooks "$REPO_ROOT/harlan-agent-kit/hooks/codex.json" 
   "$TARGET_HOME/.local/share/harlan-agent-kit/hooks" "$EXPECTED_HOME/codex-hooks.json"
 cmp -s "$EXPECTED_HOME/codex-hooks.json" "$TARGET_HOME/.codex/hooks.json" \
   || bad "The Codex hooks differ. Run pnpm sync:context."
+
+for agy_file in plugin.json package.json hooks.json scripts/antigravity-hook.ts; do
+  if [ ! -f "$INSTALLED_ANTIGRAVITY/$agy_file" ]; then
+    bad "The Antigravity plugin file is missing: $agy_file. Run pnpm sync:context."
+  else
+    cmp -s "$SOURCE_ANTIGRAVITY/$agy_file" "$INSTALLED_ANTIGRAVITY/$agy_file" \
+      || bad "The Antigravity plugin file differs: $agy_file. Run pnpm sync:context."
+  fi
+done
+if [ ! -f "$INSTALLED_ANTIGRAVITY/rules/AGENTS.md" ]; then
+  bad "The Antigravity rules file is missing. Run pnpm sync:context."
+else
+  cmp -s "$REPO_ROOT/agent-context/context.md" "$INSTALLED_ANTIGRAVITY/rules/AGENTS.md" \
+    || bad "The Antigravity rules differ. Run pnpm sync:context."
+fi
+agent_context_render_antigravity_skills "$SKILLD_MANIFEST" "$PLUGIN_CHECKOUT" \
+  "$TARGET_HOME" "$EXPECTED_HOME/antigravity-skills.json"
+if [ ! -f "$TARGET_HOME/.gemini/config/skills.json" ]; then
+  bad "The Antigravity skills config is missing. Run pnpm sync:context."
+else
+  cmp -s "$EXPECTED_HOME/antigravity-skills.json" "$TARGET_HOME/.gemini/config/skills.json" \
+    || bad "The Antigravity skills config differs. Run pnpm sync:context."
+fi
+agent_context_render_antigravity_plugins "$TARGET_HOME/.gemini/config/plugins" "$EXPECTED_HOME/antigravity-plugins.json"
+for t3_config in "$TARGET_HOME"/.t3/userdata/providers/antigravity/*/config; do
+  [ -d "$t3_config" ] || continue
+  cmp -s "$EXPECTED_HOME/antigravity-skills.json" "$t3_config/skills.json" \
+    || bad "A T3 Antigravity skills config differs: $t3_config/skills.json. Run pnpm sync:context."
+  cmp -s "$EXPECTED_HOME/antigravity-plugins.json" "$t3_config/plugins.json" \
+    || bad "A T3 Antigravity plugins config differs: $t3_config/plugins.json. Run pnpm sync:context."
+done
 
 # The Claude Code and Codex plugins live in the real home, so a sandbox run skips them.
 if [ "$TARGET_HOME" = "$HOME" ]; then
