@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_HOME="${HARLAN_AGENT_CONTEXT_HOME:-$HOME}"
 CLAUDE="$TARGET_HOME/.claude/CLAUDE.md"
 CODEX="$TARGET_HOME/.codex/AGENTS.md"
+GEMINI="$TARGET_HOME/.gemini/GEMINI.md"
 COMMIT_HOOK="$TARGET_HOME/.config/git/hooks/commit-msg"
 SOURCE_HOOK="$REPO_ROOT/agent-context/git-hooks/commit-msg"
 PLUGIN_HOOKS_DIR="$REPO_ROOT/harlan-agent-kit/hooks"
@@ -26,12 +27,13 @@ EXPECTED_HOME=$(mktemp -d)
 trap 'rm -rf "$EXPECTED_HOME"' EXIT
 EXPECTED_CLAUDE="$EXPECTED_HOME/.claude/CLAUDE.md"
 EXPECTED_CODEX="$EXPECTED_HOME/.codex/AGENTS.md"
+EXPECTED_GEMINI="$EXPECTED_HOME/.gemini/GEMINI.md"
 
 fail=0
 note() { printf '%s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 
-for f in "$REPO_ROOT/agent-context/context.md" "$REPO_ROOT/agent-context/CLAUDE.md" "$REPO_ROOT/agent-context/AGENTS.md" "$SOURCE_MANIFEST" "$CLAUDE" "$CODEX" "$SKILL"; do
+for f in "$REPO_ROOT/agent-context/context.md" "$REPO_ROOT/agent-context/CLAUDE.md" "$REPO_ROOT/agent-context/AGENTS.md" "$REPO_ROOT/agent-context/GEMINI.md" "$SOURCE_MANIFEST" "$CLAUDE" "$CODEX" "$GEMINI" "$SKILL"; do
   [ -f "$f" ] || { bad "Missing file: $f"; }
 done
 [ "$fail" -eq 0 ] || exit 1
@@ -45,6 +47,7 @@ HARLAN_AGENT_CONTEXT_HOME="$EXPECTED_HOME" HARLAN_AGENT_CONTEXT_SKIP_MEMORY=1 \
 
 cmp -s "$EXPECTED_CLAUDE" "$CLAUDE" || bad "Claude instructions differ. Run pnpm sync:context."
 cmp -s "$EXPECTED_CODEX" "$CODEX" || bad "Codex instructions differ. Run pnpm sync:context."
+cmp -s "$EXPECTED_GEMINI" "$GEMINI" || bad "Gemini instructions differ. Run pnpm sync:context."
 
 if [ ! -f "$COMMIT_HOOK" ]; then
   bad "The commit-msg hook is not installed. Run pnpm sync:context."
@@ -127,11 +130,8 @@ for agy_file in plugin.json package.json hooks.json scripts/antigravity-hook.ts;
       || bad "The Antigravity plugin file differs: $agy_file. Run pnpm sync:context."
   fi
 done
-if [ ! -f "$INSTALLED_ANTIGRAVITY/rules/AGENTS.md" ]; then
-  bad "The Antigravity rules file is missing. Run pnpm sync:context."
-else
-  cmp -s "$REPO_ROOT/agent-context/context.md" "$INSTALLED_ANTIGRAVITY/rules/AGENTS.md" \
-    || bad "The Antigravity rules differ. Run pnpm sync:context."
+if [ -e "$INSTALLED_ANTIGRAVITY/rules/AGENTS.md" ]; then
+  bad "Stale Antigravity plugin rules file exists. Run pnpm sync:context."
 fi
 agent_context_render_antigravity_skills "$SKILLD_MANIFEST" "$PLUGIN_CHECKOUT" \
   "$TARGET_HOME" "$EXPECTED_HOME/antigravity-skills.json"
@@ -163,10 +163,12 @@ principles() { grep -E '^- \*\*(Make illegal|Errors as|No silent|Parse, don|Expl
 
 c_p=$(principles "$EXPECTED_CLAUDE")
 x_p=$(principles "$EXPECTED_CODEX")
+g_p=$(principles "$EXPECTED_GEMINI")
 s_p=$(principles "$SKILL")
 
 [ -n "$c_p" ] || bad "No design principles found in rendered Claude instructions."
 [ "$c_p" = "$x_p" ] || { bad "design principles differ between tracked files"; diff <(echo "$c_p") <(echo "$x_p") | sed 's/^/      /'; }
+[ "$c_p" = "$g_p" ] || { bad "design principles differ between tracked files"; diff <(echo "$c_p") <(echo "$g_p") | sed 's/^/      /'; }
 [ "$c_p" = "$s_p" ] || { bad "design principles differ from the skill"; diff <(echo "$c_p") <(echo "$s_p") | sed 's/^/      /'; }
 
 [ "$fail" -eq 0 ] && note 'ok    Agent instructions match tracked sources'

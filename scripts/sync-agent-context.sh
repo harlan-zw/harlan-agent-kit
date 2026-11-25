@@ -7,6 +7,7 @@ repo_root=$(cd "$script_dir/.." && pwd)
 shared_context="$repo_root/agent-context/context.md"
 template_claude="$repo_root/agent-context/CLAUDE.md"
 template_codex="$repo_root/agent-context/AGENTS.md"
+template_gemini="$repo_root/agent-context/GEMINI.md"
 commit_hook="$repo_root/agent-context/git-hooks/commit-msg"
 plugin_hooks_dir="$repo_root/harlan-agent-kit/hooks"
 plugin_manifest="$repo_root/harlan-agent-kit/.claude-plugin/plugin.json"
@@ -90,6 +91,7 @@ require_sources() {
   [ -f "$shared_context" ] || fail "Shared Agent instructions are missing: $shared_context"
   [ -f "$template_claude" ] || fail "Claude template is missing: $template_claude"
   [ -f "$template_codex" ] || fail "Codex template is missing: $template_codex"
+  [ -f "$template_gemini" ] || fail "Gemini template is missing: $template_gemini"
   [ -f "$commit_hook" ] || fail "The commit-msg hook is missing: $commit_hook"
   [ -f "$github_wrapper" ] || fail "The public GitHub CLI is missing: $github_wrapper"
   [ -f "$tools_sync" ] || fail "The Agent tool sync is missing: $tools_sync"
@@ -138,6 +140,7 @@ render_sources() {
   local staging=$1
   render_template "$template_claude" "$staging/CLAUDE.md"
   render_template "$template_codex" "$staging/AGENTS.md"
+  render_template "$template_gemini" "$staging/GEMINI.md"
 }
 
 validate_local_home() {
@@ -151,12 +154,13 @@ validate_hogwild() {
 
 sync_local() {
   validate_local_home
-  mkdir -p "$target_home/.claude" "$target_home/.codex"
+  mkdir -p "$target_home/.claude" "$target_home/.codex" "$target_home/.gemini"
   local_staging=$(mktemp -d "$target_home/.agent-context.XXXXXX")
   render_sources "$local_staging"
-  chmod 644 "$local_staging/CLAUDE.md" "$local_staging/AGENTS.md"
+  chmod 644 "$local_staging/CLAUDE.md" "$local_staging/AGENTS.md" "$local_staging/GEMINI.md"
   mv "$local_staging/CLAUDE.md" "$target_home/.claude/CLAUDE.md"
   mv "$local_staging/AGENTS.md" "$target_home/.codex/AGENTS.md"
+  mv "$local_staging/GEMINI.md" "$target_home/.gemini/GEMINI.md"
   rmdir "$local_staging"
   local_staging=''
   mkdir -p "$target_home/.config/git/hooks"
@@ -178,14 +182,16 @@ sync_local() {
   done
   install -m 644 "$plugin_manifest" "$target_home/$manifest_install_suffix"
   install -m 644 "$opencode_plugin" "$target_home/$plugin_install_suffix"
-  # Antigravity reads global plugins and skills from ~/.gemini/config, plus per-instance
-  # config under ~/.t3/userdata/providers/antigravity/*/config when running inside T3 Code.
-  mkdir -p "$target_home/$antigravity_install_suffix/rules" "$target_home/$antigravity_install_suffix/scripts"
+  # Antigravity reads global rules from ~/.gemini/GEMINI.md, plugins and skills from
+  # ~/.gemini/config, plus per-instance config under ~/.t3/userdata/providers/antigravity/*/config.
+  mkdir -p "$target_home/$antigravity_install_suffix/scripts"
   install -m 644 "$antigravity_plugin_dir/plugin.json" "$target_home/$antigravity_install_suffix/plugin.json"
   install -m 644 "$antigravity_plugin_dir/package.json" "$target_home/$antigravity_install_suffix/package.json"
   install -m 644 "$antigravity_plugin_dir/hooks.json" "$target_home/$antigravity_install_suffix/hooks.json"
   install -m 644 "$antigravity_plugin_dir/scripts/antigravity-hook.ts" "$target_home/$antigravity_install_suffix/scripts/antigravity-hook.ts"
-  install -m 644 "$shared_context" "$target_home/$antigravity_install_suffix/rules/AGENTS.md"
+  # Remove the legacy plugin rules copy so Antigravity does not inject context.md twice.
+  rm -f "$target_home/$antigravity_install_suffix/rules/AGENTS.md"
+  rmdir "$target_home/$antigravity_install_suffix/rules" 2>/dev/null || true
   agent_context_render_antigravity_skills "$skilld_manifest" "$plugin_checkout" "$target_home" "$target_home/$antigravity_skills_suffix.next"
   chmod 644 "$target_home/$antigravity_skills_suffix.next"
   mv "$target_home/$antigravity_skills_suffix.next" "$target_home/$antigravity_skills_suffix"

@@ -1,6 +1,6 @@
 {
   "name": "harlan-agent-kit",
-  "description": "Harlan's personal agent kit for Antigravity (rules and lifecycle hooks)",
+  "description": "Harlan's personal agent kit for Antigravity (lifecycle hooks)",
   "version": "6.0.0",
   "author": {
     "name": "Harlan Wilton"

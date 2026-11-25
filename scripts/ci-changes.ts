@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 const paths = readFileSync(0, 'utf8').split('\0').filter(Boolean)
 const code = paths.some(path => !path.endsWith('.md'))
 const instructions = code || paths.some((path) => {
-  if (/(?:^|\/)(?:AGENTS|CLAUDE|SKILL|GLOSSARY|COPY|DESIGN|VISION)\.md$/.test(path))
+  if (/(?:^|\/)(?:AGENTS|CLAUDE|GEMINI|SKILL|GLOSSARY|COPY|DESIGN|VISION)\.md$/.test(path))
     return true
   if (path.startsWith('harlan-agent-kit/') || path.startsWith('agent-context/') || path.startsWith('.github/'))
     return true
