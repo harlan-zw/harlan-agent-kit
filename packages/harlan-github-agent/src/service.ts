@@ -1805,6 +1805,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
   const app = createAgentApp({
     paybackPricing: config.payback,
+    ...(config.mutationsEnabled && config.triggers.includes('github') ? { registerCompletion: store.registerCompletion } : {}),
     ...(browserAuth ? { browserAuth } : {}),
     ...(browserAuth?.public?.bootstrapKind === 'passkey' ? { emergencyIsolation: emergencyIsolationRequest } : {}),
     pullRequestDiff: createGitHubPullRequestDiff({ tokens: routedTokens, now: () => now().getTime(), log: message => options.logger.error(message) }),

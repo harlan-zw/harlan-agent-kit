@@ -16524,6 +16524,8 @@ export function openJournalStore(
         input.disposition._tag,
         input.at,
       )
+      if (input.disposition._tag === 'Closed')
+        takeOwnershipStore.clearCompletionRegistration(row.subject_id)
       if (isAgentPullRequest(pullRequest, (JSON.parse(row.policy_json) as RepositoryMapping).writablePullRequestAuthors))
         recordClosureSignal(database, { subjectId: row.subject_id, pullRequest, at: input.at })
       // The rule is about the pull request a revert names, so it holds whoever wrote the revert.

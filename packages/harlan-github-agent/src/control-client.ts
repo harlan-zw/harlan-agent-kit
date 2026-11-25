@@ -3,6 +3,7 @@ import type { PullRequestWatchOptions, PullRequestWatchState, PullRequestWatchTa
 import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
 import type { Result } from './result.ts'
 import type { CancelTaskResult } from './store.ts'
+import type { CompletionRegistrationReceipt } from './take-ownership-store.ts'
 import type { AgentActivityItem, DashboardSnapshot, DashboardTask, Incident, IssueTriageRerunResult, RestartRequest, ReviewRun, RoutineRun, StoredAgentControl, WorkflowEvent, WorkflowEventStream } from './types.ts'
 import { Buffer } from 'node:buffer'
 import { parseIncidentResolutionReceipt, parseIncidentResolutionRequest } from './incident-resolution.ts'
@@ -71,6 +72,7 @@ export interface ControlClient {
   reviews: (query: ReviewQuery) => Promise<Result<{ runs: ControlReviewRun[] }, ControlApiError>>
   recoverRepair: (request: RepairRecoveryRequest) => Promise<Result<RepairRecoveryResponse, ControlApiError>>
   watchPullRequest: (target: PullRequestWatchTarget, options?: PullRequestWatchOptions) => Promise<Result<PullRequestWatchState, ControlApiError>>
+  registerCompletion: (target: PullRequestWatchTarget) => Promise<Result<CompletionRegistrationReceipt, ControlApiError>>
   health: () => Promise<Result<ControlHealth, ControlApiError>>
   state: () => Promise<Result<DashboardSnapshot, ControlApiError>>
   status: () => Promise<Result<ControlStatus, ControlApiError>>
@@ -294,6 +296,13 @@ function parseStoppedReview(value: unknown): Parsed<{ _tag: 'Stopped' | 'Already
   return err('The service returned an invalid stopped Review result.')
 }
 
+function parseCompletionRegistration(value: unknown): Parsed<CompletionRegistrationReceipt> {
+  const tag = record(value)?._tag
+  return tag === 'Registered' || tag === 'NotEnabled'
+    ? ok({ _tag: tag })
+    : err('The Service returned an invalid Completion registration.')
+}
+
 function parseWorkflowEvents(value: unknown): Parsed<WorkflowEvent[]> {
   const input = record(value)
   return Array.isArray(input?.events)
@@ -393,6 +402,7 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
       return result._tag === 'Err' ? result : ok({ runs: result.value.runs.filter(run => query.head === undefined || run.headSha === query.head) })
     },
     recoverRepair: body => request({ method: 'POST', path: 'api/tasks/recover-repair', body, acceptedStatuses: [200, 202], parse: parseRepairRecoveryResponse }),
+    registerCompletion: body => request({ method: 'POST', path: 'api/tasks/register-completion', body, parse: parseCompletionRegistration }),
     watchPullRequest(target, watchOptions = {}) {
       const parsed = parsePullRequestWatchTarget(target)
       if (parsed._tag === 'Err')

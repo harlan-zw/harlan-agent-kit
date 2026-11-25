@@ -37,6 +37,7 @@ export interface AgentAppOptions {
   emergencyIsolation?: EmergencyProxy
   pullRequestDiff?: ReturnType<typeof createPullRequestDiffSource>
   repairRecovery?: (request: RepairRecoveryRequest) => Promise<Result<RepairRecoveryResponse, string>>
+  registerCompletion?: JournalStore['registerCompletion']
   pullRequestWatch?: {
     state: (repository: string, number: number) => PullRequestWatchState | null
     observe: (target: PullRequestWatchTarget, signal: AbortSignal) => Promise<Result<void, string>>
@@ -942,6 +943,21 @@ export function createAgentApp(options: AgentAppOptions): H3 {
         ? 'The owning Task is active. Wait for it to finish.'
         : 'The incident changed. Read it again before resolving it.'
     throw createError({ status: result.error._tag === 'NotFound' ? 404 : 409, message })
+  })
+
+  app.post('/api/tasks/register-completion', async (event) => {
+    const target = parsePullRequestWatchTarget(await event.req.json().catch(() => {
+      // The parser reports malformed JSON as a bad request.
+      return undefined
+    }))
+    if (target._tag === 'Err')
+      throw createError({ status: 400, message: target.error })
+    if (options.registerCompletion === undefined)
+      throw createError({ status: 409, message: 'Completion registration is unavailable on this Service.' })
+    const result = options.registerCompletion(target.value)
+    if (result._tag === 'Unavailable')
+      throw createError({ status: 409, message: 'Completion needs a writable repository and an observed open pull request targeting the default branch.' })
+    return result
   })
 
   app.post('/api/reviews/stop', async (event) => {

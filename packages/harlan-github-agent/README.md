@@ -324,7 +324,7 @@ A finished chat needs a new turn before it can continue.
 
 ### Take Ownership
 
-For Service-created pull requests, enable `repositories[].take_ownership` to retain delivery checks after merge.
+Enable `repositories[].take_ownership` to retain delivery checks after merge.
 The repository must be owned and mapped inside a trusted sites root.
 
 ```yaml
@@ -334,6 +334,16 @@ take_ownership:
   required_workflows: [deploy.yml]
   smoke_paths: [/health]
 ```
+
+The Service tracks pull requests it opens. For a pull request opened in chat, the PR Skill registers Completion before handoff:
+
+```bash
+harlan-github-agent control register-completion --repository OWNER/REPOSITORY --number NUMBER
+```
+
+Register an observed open pull request targeting the default branch. Repeating the command is safe.
+The request survives Service restarts and later commits. A confirmed closure without merge clears it.
+After a merge, find the result under **Take Ownership** on the Board.
 
 The controller confirms the exact merge, then checks workflows at its merge commit.
 Use workflow filenames or unique workflow names in `required_workflows`.

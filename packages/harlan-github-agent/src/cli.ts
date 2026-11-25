@@ -73,6 +73,7 @@ type ControlCommandError
     | { _tag: 'InvalidReviewTarget', message: string }
     | { _tag: 'InvalidIssueTarget', message: string }
     | { _tag: 'InvalidWatchTarget', message: string }
+    | { _tag: 'InvalidCompletionTarget', message: string }
     | { _tag: 'InvalidBaseUrl', message: string }
 
 const workflowEventStreams = [
@@ -200,6 +201,23 @@ const controlCommand = defineCommand({
           return
         }
         await runControl(args, client => client.reviews({ ...target.value, ...(args.head === undefined ? {} : { head: args.head }) }))
+      },
+    }),
+    'register-completion': defineCommand({
+      meta: { name: 'register-completion', description: 'Register a pull request for delivery checks after merge.' },
+      args: {
+        ...controlConnectionArguments,
+        repository: { type: 'string', description: 'Repository as OWNER/NAME.', required: true },
+        number: { type: 'string', description: 'Pull request number.', required: true },
+      },
+      async run({ args }) {
+        const target = parsePullRequestWatchTarget({ repository: args.repository, number: Number(args.number) })
+        if (target._tag === 'Err') {
+          writeJson({ _tag: 'InvalidCompletionTarget', message: target.error } satisfies ControlCommandError, process.stderr)
+          process.exitCode = 1
+          return
+        }
+        await runControl(args, client => client.registerCompletion(target.value))
       },
     }),
     'watch-pr': defineCommand({

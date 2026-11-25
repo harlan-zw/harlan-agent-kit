@@ -377,13 +377,14 @@ If automatic merge cannot progress, report the exact blocker. Preserve the targe
 
 After current-head CI and Review pass, check whether only Harlan's merge decision remains.
 If so, hand the pull request back.
+Register [Completion after manual merge](references/pull-request-watch.md#register-completion-after-manual-merge) before ending the turn.
 Record the repository, number, URL, head SHA, branch, and absolute worktree path in the session scratchpad.
 Retain current-head CI and Review evidence, remaining findings, and required delivery stages with that target.
 List each review thread that stays open, with its link. These are Service findings above 80/100 that wait for verification, human threads that wait for their reviewer, and drafts that wait for Harlan.
 List the Follow-up threads you closed.
 Report readiness and the pull request link, then end the turn.
 Preserve unintegrated work. Release this task's live worktree claim while no mutation is active.
-Ownership of later delivery remains with the submitting Agent.
+The Service runs registered Completion checks. The submitting Agent still owns any later repair or cleanup.
 Do not start a background watch or promise an automatic chat wake-up.
 
 If Harlan requests an active merge wait, use [pull request watching](references/pull-request-watch.md) in the foreground.
