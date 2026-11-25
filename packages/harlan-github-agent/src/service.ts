@@ -8,6 +8,7 @@ import type { GitHubUserAccess } from './github-user-access.ts'
 import type { AgentSlotLimits } from './host-capacity.ts'
 import type { AgentSlotCounts } from './host-memory.ts'
 import type { NativeReviewMirror } from './native-review.ts'
+import type { Poller, PollerOptions } from './poller.ts'
 import type { PrivateDetails } from './public-text.ts'
 import type { Result } from './result.ts'
 import type { ReviewCheckRunReport } from './review-check-run.ts'
@@ -409,6 +410,17 @@ export function serviceNeedsUserLogin(
   return userRepositoryCount > 0 || config.releaseDefaults !== undefined
     || config.repositories.some(repository => repository.release !== undefined)
     || (config.mutationsEnabled && config.webhook._tag !== 'Disabled' && webhookSecret !== undefined)
+}
+
+export function createRepositoryPoller(observation: PollerOptions, completion: (signal: AbortSignal) => Promise<void>): Poller {
+  // Stored merge evidence lets Completion progress independently of GitHub reads.
+  return createIndependentPollers([observation, {
+    intervalMilliseconds: 60_000,
+    // Allow the worker's 60 second evidence deadline to settle a Pending result.
+    timeoutMilliseconds: 120_000,
+    poll: completion,
+    onError: observation.onError,
+  }])
 }
 
 export async function startAgentService(options: StartAgentServiceOptions): Promise<RunningAgentService> {
@@ -1663,7 +1675,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   // Each repository backs off independently when its reads fail.
   const repositoryPollers = new Map(config.repositories
     .filter(repository => repository.enabled && config.triggers.includes('github'))
-    .map(repository => [repository.github.toLowerCase(), createPoller({
+    .map(repository => [repository.github.toLowerCase(), createRepositoryPoller({
       intervalMilliseconds: (repository.pollIntervalSeconds ?? config.pollIntervalSeconds) * 1_000,
       timeoutMilliseconds: repository.pollIntervalSeconds === undefined
         ? Math.max(5 * 60_000, config.pollIntervalSeconds * 4_000)
@@ -1691,12 +1703,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           store,
           now,
           signal,
-          async runCompletion(mapping) {
-            if (config.mutationsEnabled && store.getAgentControl()._tag === 'Running'
-              && restartAllowsTaskClaims(store.getRestartRequest())) {
-              await runCompletionTask({ repository: mapping, store, now, workerId: 'take-ownership', source: createCompletionSource({ tokens, fetch: globalThis.fetch }) }, signal)
-            }
-          },
         })
         for (const result of results) {
           if (result._tag === 'Err')
@@ -1706,6 +1712,11 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         store.reconcileRoutineCandidates(now().toISOString(), repository.github)
       },
       onError: error => options.logger.error(error),
+    }, async (signal) => {
+      if (config.mutationsEnabled && store.getAgentControl()._tag === 'Running'
+        && restartAllowsTaskClaims(store.getRestartRequest())) {
+        await runCompletionTask({ repository, store, now, workerId: 'take-ownership', source: createCompletionSource({ tokens, fetch: globalThis.fetch }) }, signal)
+      }
     })] as const))
   const externalPoller = createPoller({
     intervalMilliseconds: 5 * 60_000,

@@ -5,11 +5,12 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { promisify } from 'node:util'
 import { H3 } from 'h3'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { createAgentApp } from '../src/app.ts'
 import { reconcileAllRepositories, reconcileRepository } from '../src/reconcile.ts'
 import { err, ok } from '../src/result.ts'
 import { startAgentServer } from '../src/server.ts'
+import { createRepositoryPoller } from '../src/service.ts'
 import { openJournalStore } from '../src/store.ts'
 import { runCompletionTask } from '../src/take-ownership-completion.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -277,6 +278,69 @@ it('runs a verified Completion Task when a different final pull request read fai
     expect(store.listCompletionTasks()).toMatchObject([{ target: { pullRequestNumber: 24 }, state: { _tag: 'Completed' } }])
   }
   finally { store.close() }
+})
+
+it('settles verified Completion work despite repeated repository lookup deadlines', async () => {
+  vi.useFakeTimers()
+  const store = openJournalStore(':memory:')
+  const errors: unknown[] = []
+  let lookups = 0
+  let deliveries = 0
+  published(store)
+  merged(store)()
+  store.queueCompletionTasks(repository, at(11))
+  store.recordPollObservation({ observedAt: at(11), subject: pullRequestItem({ number: 25 }) })
+  const now = () => new Date(at(12 + Date.now() / 1000))
+  vi.setSystemTime(0)
+  const poller = createRepositoryPoller({
+    intervalMilliseconds: 1000,
+    timeoutMilliseconds: 1000,
+    random: () => 0,
+    onError: error => errors.push(error),
+    poll: async (signal) => {
+      await reconcileAllRepositories([repository], {
+        github: {
+          listOpenItems: async () => ok([]),
+          getIssue: async () => ok(issueItem()),
+          getPullRequest: async () => {
+            lookups++
+            await new Promise<void>((resolve) => {
+              signal.addEventListener('abort', () => resolve(), { once: true })
+            })
+            return err({ repository: repository.github, message: 'Lookup timed out for #25.' })
+          },
+        },
+        store,
+        now,
+        signal,
+      })
+    },
+  }, async signal => runCompletionTask({ repository, store, workerId: 'completion', now, source: {
+    workflows: async () => {
+      deliveries++
+      return ok(deliveries === 1
+        ? []
+        : [
+            { id: 1, path: '.github/workflows/deploy.yml', source: { _tag: 'Push', sha: 'm'.repeat(40), branch: 'main' }, status: 'completed', conclusion: 'success', url: 'https://github.com/run/1' },
+          ])
+    },
+    smoke: async () => ok(new Response()),
+  } }, signal))
+  try {
+    poller.start()
+    await vi.advanceTimersByTimeAsync(74_000)
+    expect(lookups).toBeGreaterThan(1)
+    expect(errors).not.toEqual([])
+    expect(store.listCompletionTasks()).toMatchObject([
+      { target: { pullRequestNumber: 24 }, state: { _tag: 'Completed' } },
+    ])
+    expect(deliveries).toBe(2)
+  }
+  finally {
+    await poller.stop()
+    store.close()
+    vi.useRealTimers()
+  }
 })
 
 it('recovers a published pull request that merged before the first observation', async () => {
