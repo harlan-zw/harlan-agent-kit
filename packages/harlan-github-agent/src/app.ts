@@ -478,6 +478,7 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     })
     app.post('/api/handoffs', async (event) => {
       requireHandoffAccess(event.req)
+      // H3 checks Content-Length and limits the stream before the body read.
       assertBodySize(event, 12_000)
       const body = await event.req.text()
       let input: unknown

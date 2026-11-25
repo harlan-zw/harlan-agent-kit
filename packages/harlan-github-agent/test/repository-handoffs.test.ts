@@ -23,7 +23,7 @@ const logger = vi.fn()
 const taskId = 'a'.repeat(64)
 const issue = { _tag: 'Issue', number: 42 } as const
 
-function clientFor(store: ReturnType<typeof openJournalStore>, passwordOverride = password, ingress?: 'public') {
+function clientFor(store: ReturnType<typeof openJournalStore>, passwordOverride = password, ingress?: 'public', declareBodySize = false) {
   const handoffs = createHandoffController({ store, repositories: [repository, other], now: () => at })
   const app = createAgentApp({ store, handoffs, allowedOrigin: origin, dashboardPassword: password, now: () => at })
   const client = createControlClient({
@@ -32,6 +32,8 @@ function clientFor(store: ReturnType<typeof openJournalStore>, passwordOverride 
     async fetch(input, init) {
       const request = new Request(input, init)
       request.headers.set('host', new URL(request.url).host)
+      if (declareBodySize && typeof init?.body === 'string')
+        request.headers.set('content-length', String(Buffer.byteLength(init.body)))
       if (ingress !== undefined)
         request.headers.set('x-harlan-agent-ingress', ingress)
       return app.fetch(request)
@@ -68,10 +70,10 @@ it('keeps addressed Handoffs after restart and gives a retry the same receipt', 
   }
 })
 
-it('rejects an oversized Handoff before parsing its message', async () => {
+it.each([false, true])('rejects an oversized Handoff before parsing its message, with declared size %s', async (declareBodySize) => {
   const store = openJournalStore(':memory:', false)
   try {
-    await expect(clientFor(store).client.postHandoff({
+    await expect(clientFor(store, password, undefined, declareBodySize).client.postHandoff({
       repository,
       agent: 'fixture',
       requestId: 'size',
@@ -163,7 +165,8 @@ it.each([
       prompt: 'Implement the change.',
       workspace: '/tmp/fixture',
     }, new AbortController().signal)
-    expect(captured[0]?.prompt).toContain('The migration has shipped.')
+    expect(captured[0]?.prompt).not.toContain('The migration has shipped.')
+    expect(captured[0]?.prompt).toContain('return agentHandoff')
     expect(run._tag).toBe(result === 'implemented' ? 'Ok' : 'Err')
     const records = await client.handoffs({ repository, after: 1 })
     expect(records).toMatchObject({ _tag: 'Ok', value: { handoffs: shouldPost ? [{ message: 'Integration tests passed.', sender: { _tag: 'Task', taskId } }] : [] } })

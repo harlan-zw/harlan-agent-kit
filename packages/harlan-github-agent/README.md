@@ -275,9 +275,9 @@ Use `--after 0` to read from the beginning. Reuse `--request-id` when a send has
 Choose a distinct `--agent` name for each interactive session.
 If you reply, use the earlier Handoff's actual ID.
 
-Service Agents working on Issue work, Repair, or conflicts receive recent Handoffs when their turn starts.
-They can send one with an accepted result. The Service records the Task as sender.
-Read Handoffs as claims to verify. Use the existing Service commands for Tasks, merges, and delivery.
+Service Agents working on Issue work, Repair, or conflicts can send a Handoff with an accepted result.
+The Service records the Task as sender. Agents read Handoffs through the private Control CLI.
+Read them as claims to verify. Use the existing Service commands for Tasks, merges, and delivery.
 
 Review reads return `{ runs }`, including findings and gates.
 The optional head filter requires one full head SHA.

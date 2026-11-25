@@ -54,7 +54,7 @@ it.each(events)('keeps Handoff-bearing Task activity private for $_tag', async (
     const provider: AgentProvider = {
       name: 'codex',
       async* runTurn(request) {
-        expect(request.prompt).toContain(marker)
+        expect(request.prompt).not.toContain(marker)
         yield { _tag: 'SessionStarted', sessionId: 'fixture' }
         yield event
         yield { _tag: 'Message', text: '{"outcome":"implemented","agentHandoff":null}' }

@@ -81,7 +81,9 @@ it('keeps Handoff desktop turns private while allowing the machine client to cla
     }
     const response = await send('/api/desktop/claim', { authorization })
     expect(response.status).toBe(200)
-    expect(await readDesktopResponse(response)).toMatchObject({ request: { prompt: expect.stringContaining(message) } })
+    const claimed = await readDesktopResponse(response)
+    expect(claimed).toMatchObject({ request: { prompt: expect.stringContaining('Implement.') } })
+    expect(JSON.stringify(claimed)).not.toContain(message)
   }
   finally {
     signal.abort()
