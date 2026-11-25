@@ -54,12 +54,15 @@ function requiredString(source: UnknownRecord, key: string, path: string, issues
 }
 
 /** A string that may be absent. `null` means absent; `undefined` means invalid. */
-function optionalString(source: UnknownRecord, key: string, path: string, issues: ConfigIssue[]): string | null | undefined {
+function optionalString(source: UnknownRecord, key: string, path: string, issues: ConfigIssue[], { preserveWhitespace = false } = {}): string | null | undefined {
   const value = source[key]
   if (value === undefined)
     return null
-  if (typeof value === 'string' && value.trim().length > 0)
-    return value.trim()
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (trimmed.length > 0)
+      return preserveWhitespace ? value : trimmed
+  }
 
   issues.push({ path: `${path}.${key}`, message: 'Expected a non-empty string.' })
 }
@@ -343,7 +346,7 @@ function completionSmokeChecks(value: unknown, productionUrl: string, path: stri
     }
     seen.add(url.href)
     const header = optionalString(entry, 'revision_header', itemPath, issues)
-    const text = optionalString(entry, 'body_contains', itemPath, issues)
+    const text = optionalString(entry, 'body_contains', itemPath, issues, { preserveWhitespace: true })
     const assertions: CompletionSmokeAssertion[] = []
     if (header) {
       if (/^[!#$%&'*+.^\w`|~-]{1,100}$/.test(header))
