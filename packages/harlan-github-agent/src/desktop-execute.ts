@@ -9,7 +9,8 @@ import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { defaultAgentContextPaths, loadAgentContext, opencodeAgentEnvironment } from './agent-context.ts'
-import { DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
+import { DEFAULT_AGY_CACHED_CONTEXT_BUDGET, DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
+import { createAgyProvider } from './agy-provider.ts'
 import { createCodexProvider } from './codex-provider.ts'
 import { desktopErrorCause, parseDesktopWorktree } from './desktop-protocol.ts'
 import { desktopRepositoryPath, exportDesktopWorktree, prepareDesktopWorktree } from './desktop-worktree.ts'
@@ -97,7 +98,11 @@ async function main(): Promise<void> {
     throw new Error(environment.error)
   const proof = createReviewProofDuplex(process.stdin, process.stdout)
   const proofOptions: CodexProviderOptions & { reviewProofAuthority: ReviewProofAuthorityFactory } = { reviewProofAuthority: () => proof.authority }
-  const provider = turn.provider === 'codex' ? createCodexProvider(proofOptions) : createOpencodeProvider({ ...proofOptions, cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: environment.value })
+  const provider = turn.provider === 'codex'
+    ? createCodexProvider(proofOptions)
+    : turn.provider === 'agy'
+      ? createAgyProvider({ ...proofOptions, cachedContextBudget: DEFAULT_AGY_CACHED_CONTEXT_BUDGET, environment: process.env })
+      : createOpencodeProvider({ ...proofOptions, cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: environment.value })
   const setupFailed = (error: unknown): never => {
     // The desktop client reads this line and tells the controller that no
     // provider started. See `DesktopFailure`.

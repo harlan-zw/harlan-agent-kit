@@ -41,12 +41,30 @@ export const OPENCODE_AGENT_PROFILE = {
   },
 } as const satisfies AgentProfile
 
+export const AGY_AGENT_PROFILE: AgentProfile = {
+  provider: 'agy',
+  authentication: 'google-account',
+  maximumActiveAgents: 1,
+  roles: {
+    adversarial_review: { model: 'gemini-4-hydrogen-high', reasoningEffort: 'high' },
+    baseline_repair: { model: 'gemini-3.8-flash-medium', reasoningEffort: 'medium' },
+    conflict_resolution: { model: 'gemini-3.8-flash-medium', reasoningEffort: 'medium' },
+    issue_triage: { model: 'gemini-3.8-flash-medium', reasoningEffort: 'medium' },
+    issue_work: { model: 'gemini-3.8-flash-medium', reasoningEffort: 'medium' },
+    batch_plan: { model: 'gemini-3.8-flash-medium', reasoningEffort: 'medium' },
+    review_fix: { model: 'gemini-3.8-flash-medium', reasoningEffort: 'medium' },
+    routine_scan: { model: 'gemini-3.8-flash-medium', reasoningEffort: 'medium' },
+    routine_fix: { model: 'gemini-3.8-flash-medium', reasoningEffort: 'medium' },
+  },
+}
+
 const profiles: Record<AgentProviderName, AgentProfile> = {
   codex: CODEX_AGENT_PROFILE,
   opencode: OPENCODE_AGENT_PROFILE,
+  agy: AGY_AGENT_PROFILE,
 }
 
-export const AGENT_PROVIDER_NAMES = ['codex', 'opencode'] as const satisfies readonly AgentProviderName[]
+export const AGENT_PROVIDER_NAMES = ['codex', 'opencode', 'agy'] as const satisfies readonly AgentProviderName[]
 
 export const AGENT_ROLES = [
   'adversarial_review',
@@ -97,6 +115,25 @@ export const AGENT_MODELS = {
     'opencode-go/qwen3.6-plus',
     'opencode-go/qwen3.7-max',
     'opencode-go/qwen3.7-plus',
+  ],
+  agy: [
+    'gemini-3.8-flash-medium',
+    'gemini-3.8-flash-low',
+    'gemini-3.8-flash-high',
+    'gemini-4-hydrogen-high',
+    'gemini-4-hydrogen-medium',
+    'gemini-4-hydrogen-low',
+    'gemini-4-hydrogen-xhigh',
+    'gemini-4-argon-medium',
+    'gemini-4-argon-low',
+    'gemini-4-argon-high',
+    'gemini-4-carbon-medium',
+    'gemini-4-carbon-low',
+    'gemini-4-carbon-high',
+    'gemini-4-neon-medium',
+    'gemini-4-neon-low',
+    'gemini-4-neon-high',
+    'gemini-4-neon-xhigh',
   ],
 } as const satisfies Record<AgentProviderName, readonly AgentModel[]>
 
@@ -164,7 +201,7 @@ function parseProviderOrder(value: unknown): Result<readonly AgentProviderName[]
   for (const candidate of value) {
     const provider = AGENT_PROVIDER_NAMES.find(name => name === candidate)
     if (provider === undefined)
-      return err('Select codex or opencode as the Agent provider.')
+      return err('Select codex, opencode, or agy as the Agent provider.')
     if (order.includes(provider))
       return err('List every Agent provider once.')
     order.push(provider)
@@ -192,7 +229,7 @@ export function parseAgentSelection(value: unknown): Result<AgentSelection, stri
     return err('Pin an Agent provider, select automatic, or follow the configuration.')
   const provider = AGENT_PROVIDER_NAMES.find(candidate => candidate === body.provider)
   if (provider === undefined)
-    return err('Select codex or opencode as the Agent provider.')
+    return err('Select codex, opencode, or agy as the Agent provider.')
 
   const models: readonly AgentModel[] = AGENT_MODELS[provider]
   const requestedModel = body.model ?? null

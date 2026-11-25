@@ -3,7 +3,7 @@ import { access, open, readdir, readFile, realpath } from 'node:fs/promises'
 import { dirname, join, normalize } from 'node:path'
 import process from 'node:process'
 
-export const workerToolNames = ['gh', 'bun', 'wt', 'rg', 'fd', 'codex', 'opencode'] as const
+export const workerToolNames = ['gh', 'bun', 'wt', 'rg', 'fd', 'codex', 'opencode', 'agy'] as const
 
 /** Only controller-owned installation directories may supply Agent executables. */
 export async function resolveWorkerHostTools(home: string, directories: readonly string[]): Promise<Record<string, string>> {

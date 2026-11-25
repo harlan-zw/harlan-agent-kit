@@ -229,7 +229,7 @@ const agentProviderPatterns: RegExp[] = [
 
 /** Provider boundaries add this owner before a reason enters the Journal. */
 const ownedAgentProviderPatterns: RegExp[] = [
-  /\b(?:codex|opencode) session failed:/i,
+  /\b(?:codex|opencode|agy) session failed:/i,
 ]
 
 /**
@@ -378,7 +378,7 @@ const providerSignInPatterns: RegExp[] = [
  * and the publish boundary removes its private details.
  */
 export function publicFailureCause(reason: string): string {
-  if (!/^The (?:codex|opencode) session failed:/.test(reason))
+  if (!/^The (?:codex|opencode|agy) session failed:/.test(reason))
     return reason
   if (matches(providerSignInPatterns, reason))
     return 'The agent lost its sign-in. Harlan must sign it in again.'

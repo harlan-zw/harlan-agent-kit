@@ -147,7 +147,7 @@ function namedOpencodeLogin(source: string | null): Record<string, unknown> | un
 }
 
 /** Copies named provider login files. All executable configuration comes from the controller. */
-export async function createReviewProviderHome(input: { profilePath: string, provider: 'codex' | 'opencode', configuration: string }): Promise<{ home: string, release: () => Promise<ReviewHomeRelease> }> {
+export async function createReviewProviderHome(input: { profilePath: string, provider: 'codex' | 'opencode' | 'agy', configuration: string }): Promise<{ home: string, release: () => Promise<ReviewHomeRelease> }> {
   const profile = JSON.parse(await readFile(input.profilePath, 'utf8')) as { home?: unknown }
   if (typeof profile.home !== 'string' || !isAbsolute(profile.home))
     throw new Error('The Review worker home must use an absolute path.')
@@ -156,7 +156,11 @@ export async function createReviewProviderHome(input: { profilePath: string, pro
   if (lockDirectory === worker || lockDirectory.startsWith(`${worker}/`))
     throw new Error('The Review login lock must stay in the controller configuration directory.')
   const home = await mkdtemp(join(tmpdir(), 'review-provider-home-'))
-  const name = input.provider === 'codex' ? '.codex/auth.json' : '.local/share/opencode/auth.json'
+  const name = input.provider === 'codex'
+    ? '.codex/auth.json'
+    : input.provider === 'agy'
+      ? '.gemini/antigravity-cli/antigravity-oauth-token'
+      : '.local/share/opencode/auth.json'
   let original: string | null = null
   const release = async () => {
     try {
@@ -173,6 +177,34 @@ export async function createReviewProviderHome(input: { profilePath: string, pro
       await writeFile(join(home, name), original!, { mode: 0o600 })
       await writeFile(join(home, '.codex/config.toml'), input.configuration, { mode: 0o600 })
       await mkdir(join(home, '.config/opencode'), { recursive: true, mode: 0o700 })
+      await writeFile(join(home, '.config/opencode/opencode.json'), '{"permissions":[{"action":"*","resource":"*","effect":"deny"}]}', { mode: 0o600 })
+    }
+    else if (input.provider === 'agy') {
+      await Promise.all([
+        mkdir(join(home, '.gemini/antigravity-cli'), { recursive: true, mode: 0o700 }),
+        mkdir(join(home, '.gemini/config'), { recursive: true, mode: 0o700 }),
+        mkdir(join(home, '.config/antigravity'), { recursive: true, mode: 0o700 }),
+        mkdir(join(home, '.config/opencode'), { recursive: true, mode: 0o700 }),
+      ])
+      original = await namedFile(worker, name, true)
+      if (original === null || original.trim().length === 0)
+        throw new Error('The Review worker needs its named Antigravity login.')
+      await writeFile(join(home, name), original, { mode: 0o600 })
+      for (const extra of ['.gemini/antigravity-cli/installation_id', '.config/antigravity/plugin-secrets.json', '.config/antigravity/credential-user-scope']) {
+        const value = await namedFile(worker, extra, true)
+        if (value !== null)
+          await writeFile(join(home, extra), value, { mode: 0o600 })
+      }
+      await writeFile(join(home, '.gemini/config/mcp_config.json'), input.configuration, { mode: 0o600 })
+      await writeFile(join(home, '.gemini/antigravity-cli/settings.json'), JSON.stringify({
+        useG1Credits: false,
+        enableTerminalSandbox: false,
+        toolPermission: 'always-proceed',
+        permissions: {
+          allow: ['mcp(controller_review/*)'],
+          deny: ['command(*)', 'read_file(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)'],
+        },
+      }), { mode: 0o600 })
       await writeFile(join(home, '.config/opencode/opencode.json'), '{"permissions":[{"action":"*","resource":"*","effect":"deny"}]}', { mode: 0o600 })
     }
     else {

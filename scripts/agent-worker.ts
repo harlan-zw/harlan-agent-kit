@@ -11,6 +11,7 @@ const { values } = parseArgs({ options: {
   'config': { type: 'string' },
   'codex': { type: 'string' },
   'opencode': { type: 'string' },
+  'agy': { type: 'string' },
   'tool-dir': { type: 'string', multiple: true, default: [] },
   'read-only': { type: 'string', multiple: true, default: [] },
 } })
@@ -18,6 +19,8 @@ for (const key of ['source-home', 'worker-home', 'config', 'codex', 'opencode'] 
   if (!values[key] || !isAbsolute(values[key]))
     throw new Error(`Provide an absolute --${key} path.`)
 }
+if (values.agy !== undefined && !isAbsolute(values.agy))
+  throw new Error('Provide an absolute --agy path.')
 const source = resolve(values['source-home']!)
 const home = resolve(values['worker-home']!)
 await mkdir(home, { recursive: true, mode: 0o700 })
@@ -39,6 +42,10 @@ if (summarySource !== undefined) {
 const paths = [
   '.codex/auth.json',
   '.local/share/opencode/auth.json',
+  '.gemini/antigravity-cli/antigravity-oauth-token',
+  '.gemini/antigravity-cli/installation_id',
+  '.config/antigravity/plugin-secrets.json',
+  '.config/antigravity/credential-user-scope',
   '.config/harlan-agent-kit/github-public-token',
   '.config/git/hooks',
   '.local/share/harlan-agent-kit/github-bin',
@@ -62,13 +69,16 @@ for (const path of paths) {
     if (error.code !== 'ENOENT')
       throw error
   })
-  if (path.endsWith('/auth.json') || path.endsWith('/github-public-token')) {
+  if (path.endsWith('/auth.json') || path.endsWith('/github-public-token') || path.endsWith('/antigravity-oauth-token') || path.endsWith('/plugin-secrets.json')) {
     await chmod(destination, 0o600).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT')
         throw error
     })
   }
 }
+// Keep Antigravity worker settings isolated from host workspace trusts and Google One credit fallback.
+await mkdir(join(home, '.gemini/antigravity-cli'), { recursive: true, mode: 0o700 })
+await writeFile(join(home, '.gemini/antigravity-cli/settings.json'), JSON.stringify({ useG1Credits: false, enableTerminalSandbox: false, toolPermission: 'always-proceed' }), { mode: 0o600 })
 // Copy the configured provider login, never host MCP, plugins, or commands.
 const providerConfig = await readFile(join(source, '.config/opencode/opencode.json'), 'utf8').catch((error: NodeJS.ErrnoException) => {
   if (error.code === 'ENOENT')
@@ -87,9 +97,15 @@ await writeFile(join(home, '.config/opencode/opencode.json'), JSON.stringify({ p
 await writeFile(join(home, '.gitconfig'), '[user]\n name = Harlan Agent Kit\n email = agent@harlanzw.com\n', { mode: 0o600 })
 const codex = await realpath(values.codex!)
 const opencode = await realpath(values.opencode!)
-const tools = [...new Set([...values['tool-dir'], dirname(codex), dirname(opencode)])]
+const agyCandidate = values.agy ?? join(source, '.local/bin/agy')
+const agy = await realpath(agyCandidate).catch((error: NodeJS.ErrnoException) => {
+  if (values.agy === undefined && error.code === 'ENOENT')
+    return undefined
+  throw error
+})
+const tools = [...new Set([...values['tool-dir'], dirname(codex), dirname(opencode), ...(agy === undefined ? [] : [dirname(agy)])])]
 const config = values.config!
 await mkdir(dirname(config), { recursive: true, mode: 0o700 })
-await writeFile(config, JSON.stringify({ home, codex, opencode, tools, readOnlyPaths: values['read-only'] }, null, 2), { mode: 0o600 })
+await writeFile(config, JSON.stringify({ home, codex, opencode, ...(agy === undefined ? {} : { agy }), tools, readOnlyPaths: values['read-only'] }, null, 2), { mode: 0o600 })
 process.stdout.write(`Agent worker configuration created: ${config}\n`)
 process.stdout.write('Run the credential isolation smoke before restarting the Service.\n')

@@ -140,6 +140,7 @@ interface WorkerConfiguration {
   readOnlyPaths: string[]
   codex: string
   opencode: string
+  agy?: string
 }
 
 export interface AgentSandbox {
@@ -168,6 +169,8 @@ function configuration(value: unknown): WorkerConfiguration {
     if (typeof record[key] !== 'string' || !isAbsolute(record[key]))
       throw new Error(`The Agent worker ${key} path must be absolute.`)
   }
+  if (record.agy !== undefined && (typeof record.agy !== 'string' || !isAbsolute(record.agy)))
+    throw new Error('The Agent worker agy path must be absolute.')
   for (const key of ['tools', 'readOnlyPaths']) {
     if (!Array.isArray(record[key]) || !record[key].every(item => typeof item === 'string' && isAbsolute(item)))
       throw new Error(`The Agent worker ${key} must contain absolute paths.`)
@@ -179,19 +182,22 @@ async function currentWorkerConfiguration(home: string, profilePath: string) {
   const profile = configuration(JSON.parse(await readFile(profilePath, 'utf8')))
   const hostTools = await resolveWorkerHostTools(home, profile.tools)
   const obsoleteProviderDirectories: string[] = []
-  for (const provider of ['codex', 'opencode'] as const) {
+  for (const provider of ['codex', 'opencode', 'agy'] as const) {
     const current = hostTools[provider]
     if (current === undefined)
       continue
-    const previous = dirname(profile[provider])
-    // Versioned Codex vendor directories must not keep a pruned package mandatory.
-    if (previous.includes('/vendor/') || previous.includes('/releases/'))
-      obsoleteProviderDirectories.push(previous)
+    const configured = profile[provider]
+    if (configured !== undefined) {
+      const previous = dirname(configured)
+      // Versioned Codex vendor directories must not keep a pruned package mandatory.
+      if (previous.includes('/vendor/') || previous.includes('/releases/'))
+        obsoleteProviderDirectories.push(previous)
+    }
     profile[provider] = current
   }
   profile.tools = [...new Set([
     ...profile.tools.filter(path => !obsoleteProviderDirectories.includes(path)),
-    ...['codex', 'opencode'].flatMap(provider => hostTools[provider] === undefined ? [] : [dirname(hostTools[provider])]),
+    ...(['codex', 'opencode', 'agy'] as const).flatMap(provider => hostTools[provider] === undefined ? [] : [dirname(hostTools[provider])]),
   ])]
   const pnpmPackage = await resolvePnpmPackage(home, profile.tools)
   if (pnpmPackage !== undefined)
@@ -208,7 +214,7 @@ function within(path: string, root: string): boolean {
 /** Refuse broad mounts and the controller's credential stores, including symlink aliases. */
 async function permittedPath(path: string, controllerHome: string): Promise<string> {
   const canonical = await realpath(path)
-  const forbidden = ['.ssh', '.config', '.git-credentials', '.gitconfig', '.netrc', '.local/share/harlan-github-agent', '.codex/auth.json', '.local/share/opencode/auth.json']
+  const forbidden = ['.ssh', '.config', '.git-credentials', '.gitconfig', '.netrc', '.local/share/harlan-github-agent', '.codex/auth.json', '.local/share/opencode/auth.json', '.gemini/antigravity-cli/antigravity-oauth-token', '.config/antigravity/plugin-secrets.json']
   if (['/', '/home', '/root', '/tmp', '/run', '/proc', '/sys', '/etc', '/var'].includes(canonical)
     || within(controllerHome, canonical)
     || forbidden.some((suffix) => {
@@ -252,9 +258,10 @@ export async function checkAgentWorker(environment: NodeJS.ProcessEnv, profilePa
 } = {}): Promise<void> {
   const controllerHome = resolve(environment.HOME ?? '/home/harlan')
   const { profile, runtimePackages } = await currentWorkerConfiguration(controllerHome, profilePath ?? join(controllerHome, '.config/harlan-github-agent/worker.json'))
-  for (const path of [profile.home, ...profile.tools, ...profile.readOnlyPaths, ...runtimePackages, profile.codex, profile.opencode])
+  const providerBinaries = [profile.codex, profile.opencode, ...(profile.agy === undefined ? [] : [profile.agy])]
+  for (const path of [profile.home, ...profile.tools, ...profile.readOnlyPaths, ...runtimePackages, ...providerBinaries])
     await permittedPath(path, controllerHome)
-  for (const path of [profile.codex, profile.opencode]) {
+  for (const path of providerBinaries) {
     const metadata = await stat(path)
     if (!metadata.isFile() || (metadata.mode & 0o111) === 0)
       throw new Error(`The Agent provider binary must be executable: ${path}`)
@@ -274,7 +281,7 @@ export async function prepareAgentSandbox(input: {
   workspace: string
   environment: NodeJS.ProcessEnv
   profilePath?: string
-  provider: 'codex' | 'opencode'
+  provider: 'codex' | 'opencode' | 'agy'
   memoryPerAgentGiB?: number
   readOnlyPaths?: readonly string[]
   writablePaths?: readonly string[]
@@ -505,7 +512,7 @@ export async function prepareAgentSandbox(input: {
       // A private root omits configuration paths without following their aliases or assuming their file type.
       // Keep ordinary symlinks intact, so hiding a config alias never masks its repository target.
       args.push('--tmpfs', workspace)
-      const projectConfiguration = new Set(['.codex', '.opencode', 'opencode.json', 'opencode.jsonc'])
+      const projectConfiguration = new Set(['.codex', '.opencode', 'opencode.json', 'opencode.jsonc', '.gemini', '.agents'])
       for (const entry of await readdir(workspace, { withFileTypes: true })) {
         if (projectConfiguration.has(entry.name))
           continue
@@ -518,7 +525,7 @@ export async function prepareAgentSandbox(input: {
       args.push('--remount-ro', workspace)
     }
     if (input.reviewHome !== undefined) {
-      for (const name of ['.codex/config.toml', '.config/opencode/opencode.json']) {
+      for (const name of ['.codex/config.toml', '.config/opencode/opencode.json', '.gemini/config/mcp_config.json', '.gemini/antigravity-cli/settings.json']) {
         const path = join(isolatedHome, name)
         if (await stat(path).then(() => true).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error)))
           args.push('--ro-bind', path, join(workerHome, name))
@@ -626,7 +633,10 @@ export async function prepareAgentSandbox(input: {
     }
     const memory = input.memoryPerAgentGiB === undefined ? undefined : await workerMemoryCommand({ binary: '/usr/bin/bwrap', args, memoryGiB: input.memoryPerAgentGiB, ...(input.taskId === undefined ? {} : { taskId: input.taskId }) })
     const launchEnvironment = { ...guestEnvironment, ...(memory === undefined ? {} : { XDG_RUNTIME_DIR: input.environment.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: input.environment.DBUS_SESSION_BUS_ADDRESS }) }
-    return { binary: memory?.binary ?? '/usr/bin/bwrap', args: memory?.args ?? args, environment: launchEnvironment, workerStateHome, adapterPath, ...(skillCatalogPath === undefined ? {} : { skillCatalogPath }), providerBinary: hostTools[input.provider] === undefined ? profile[input.provider] : `/run/agent/host-tools/${input.provider}`, memoryExceeded: memory?.memoryExceeded ?? (async () => false), release: () => {
+    const configuredProviderBinary = profile[input.provider]
+    if (configuredProviderBinary === undefined && hostTools[input.provider] === undefined)
+      throw new Error(`The Agent worker configuration needs a ${input.provider} executable.`)
+    return { binary: memory?.binary ?? '/usr/bin/bwrap', args: memory?.args ?? args, environment: launchEnvironment, workerStateHome, adapterPath, ...(skillCatalogPath === undefined ? {} : { skillCatalogPath }), providerBinary: hostTools[input.provider] === undefined ? configuredProviderBinary! : `/run/agent/host-tools/${input.provider}`, memoryExceeded: memory?.memoryExceeded ?? (async () => false), release: () => {
       released ??= (async () => {
         try {
           if (!readOnly)

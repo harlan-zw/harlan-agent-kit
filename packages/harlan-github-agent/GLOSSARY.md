@@ -172,7 +172,7 @@ Never: workspace, folder. Use Project.
 
 ### Agent provider
 
-The one local agent runtime that answers every Agent turn: `codex` or `opencode`.
+The one local agent runtime that answers every Agent turn: `codex`, `opencode`, or `agy`.
 
 The Agent provider owns its models, reasoning efforts, and sessions. A saved session belongs to the provider that created it.
 

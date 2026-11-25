@@ -26,6 +26,7 @@ import { isSnapshotStale } from './dashboard.ts'
 export const providerLabels: Record<AgentProviderName, string> = {
   codex: 'Codex',
   opencode: 'opencode',
+  agy: 'Antigravity',
 }
 
 export interface SystemChipCounts {

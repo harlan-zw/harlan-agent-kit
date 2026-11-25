@@ -154,7 +154,7 @@ export function repositoryWritesControl(repository: RepositoryStatus): Repositor
 
 /** Human-readable live limit state for the System pane. */
 export function providerCapacityPresentation(entry: ProviderCapacityStatus): ProviderCapacityPresentation {
-  const label = entry.provider === 'codex' ? 'Weekly Codex limit' : 'opencode'
+  const label = entry.provider === 'codex' ? 'Weekly Codex limit' : entry.provider === 'agy' ? 'Antigravity' : 'opencode'
   if (entry.capacity._tag === 'Unavailable') {
     return { label, value: 'Unavailable', detail: entry.capacity.reason, tone: 'warning' }
   }

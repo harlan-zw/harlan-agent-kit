@@ -52,7 +52,7 @@ export function stableProviderFailureClass(reason: string): ProviderFailureClass
   // wording. Aligned with the provider_config kind in failure.ts.
   if (/\bvariant unavailable\b/i.test(reason))
     return 'provider_config'
-  if (/\b(?:limit exhausted|usage limit|quota exceeded|credits? exhausted|weekly\/monthly limit)\b/i.test(reason))
+  if (/\b(?:limit exhausted|usage limit|quota exceeded|credits? exhausted|weekly\/monthly limit|resource_exhausted|too many requests|rate[- ]limit(?:ed| exceeded)?)\b/i.test(reason))
     return 'usage_limit'
   if (/\b(?:network|ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed)\b/i.test(reason))
     return 'network'

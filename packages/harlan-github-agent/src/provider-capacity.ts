@@ -303,6 +303,25 @@ export interface ProviderCapacitySourceOptions {
   readCodex?: () => Promise<ProviderCapacity>
   readOpencode?: () => Promise<ProviderCapacity>
   readOpencodeGo?: () => Promise<ProviderCapacity>
+  readAgy?: () => Promise<ProviderCapacity>
+}
+
+/** Antigravity CLI stores its Google Account OAuth token under `~/.gemini/antigravity-cli`. */
+export const AGY_OAUTH_TOKEN_PATH = join(homedir(), '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+
+/** `agy` exposes no quota endpoint. Check its OAuth token file without leaking credentials. */
+export function readAgyCapacity(tokenPath = AGY_OAUTH_TOKEN_PATH): ProviderCapacity {
+  try {
+    const token = readFileSync(tokenPath, 'utf8')
+    return token.trim().length > 0
+      ? { _tag: 'Unpublished' }
+      : { _tag: 'Unavailable', reason: 'Sign in with agy before starting a scan.' }
+  }
+  catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')
+      return { _tag: 'Unavailable', reason: 'Sign in with agy before starting a scan.' }
+    throw error
+  }
 }
 
 /** Go has no supported limit-reading endpoint. Check its existing credential without exposing it. */
@@ -343,9 +362,11 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
   const readCodex = options.readCodex ?? (() => readCodexCapacity())
   const readOpencode = options.readOpencode ?? (() => readZaiCapacity())
   const readGo = options.readOpencodeGo ?? (async () => readOpencodeGoCapacity())
+  const readAgy = options.readAgy ?? (async () => readAgyCapacity())
   let codex: ProviderCapacity = { _tag: 'Unavailable', reason: 'The Codex weekly window has not been read yet.' }
   let opencode: ProviderCapacity = { _tag: 'Unavailable', reason: 'The GLM Coding Plan quota has not been read yet.' }
   let go: ProviderCapacity = { _tag: 'Unavailable', reason: 'OpenCode Go credentials have not been read yet.' }
+  let agy: ProviderCapacity = { _tag: 'Unavailable', reason: 'Google Antigravity credentials have not been read yet.' }
   let timer: NodeJS.Timeout | undefined
   let stopped = true
   let active: Promise<void> = Promise.resolve()
@@ -371,16 +392,18 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
         const readAt = now()
         // One failing provider must not stop the other being read, or a Codex
         // outage would make opencode look exhausted and stop the fleet.
-        const [nextCodex, nextOpencode, nextGo] = await Promise.all([
+        const [nextCodex, nextOpencode, nextGo, nextAgy] = await Promise.all([
           readCodex().catch(() => ({ _tag: 'Unavailable', reason: 'The Codex weekly window could not be read.' }) as ProviderCapacity),
           readOpencode().catch(() => ({ _tag: 'Unavailable', reason: 'The GLM Coding Plan quota could not be read.' }) as ProviderCapacity),
           readGo().catch(() => ({ _tag: 'Unavailable', reason: 'OpenCode Go credentials could not be read.' }) as ProviderCapacity),
+          readAgy().catch(() => ({ _tag: 'Unavailable', reason: 'Google Antigravity credentials could not be read.' }) as ProviderCapacity),
         ])
         const settledCodex = settle('codex', nextCodex)
         const settledOpencode = settle('opencode', nextOpencode)
         codex = settledCodex.capacity
         opencode = settledOpencode.capacity
         go = nextGo
+        agy = nextAgy
         failures = settledCodex.failed || settledOpencode.failed ? failures + 1 : 0
         if (nextCodex._tag === 'Available' && nextCodex.usedPercent < 100)
           options.onUsageAllowed?.('codex', readAt)
@@ -402,7 +425,7 @@ export function createProviderCapacitySource(options: ProviderCapacitySourceOpti
   }
 
   return {
-    read: (provider, model) => provider === 'codex' ? codex : model?.startsWith('opencode-go/') ? go : model === undefined || model.startsWith('zai-coding-plan/') ? opencode : { _tag: 'Unpublished' },
+    read: (provider, model) => provider === 'codex' ? codex : provider === 'agy' ? agy : model?.startsWith('opencode-go/') ? go : model === undefined || model.startsWith('zai-coding-plan/') ? opencode : { _tag: 'Unpublished' },
     refresh,
     start: () => {
       if (!stopped)

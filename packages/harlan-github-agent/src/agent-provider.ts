@@ -8,7 +8,7 @@
 import type { AgentMedia } from './github-media.ts'
 import type { VitalsComparisonRequest, VitalsComparisonResult } from './vitals-comparison.ts'
 
-export type AgentProviderName = 'codex' | 'opencode'
+export type AgentProviderName = 'codex' | 'opencode' | 'agy'
 
 /** Keeps the failure owner intact after workers persist only its reason. */
 export function agentProviderFailureReason(provider: AgentProviderName, reason: string): string {
@@ -152,6 +152,9 @@ export interface AgentTurnRequest {
  * bounds the bill.
  */
 export const DEFAULT_CACHED_CONTEXT_BUDGET = 20_000_000
+
+/** Tighter cached context budget for Antigravity to pace subscription usage. */
+export const DEFAULT_AGY_CACHED_CONTEXT_BUDGET = 6_000_000
 
 /**
  * Share of the Context budget a session reads before it is asked to wrap up.

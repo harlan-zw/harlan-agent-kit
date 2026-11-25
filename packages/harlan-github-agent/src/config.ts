@@ -417,10 +417,11 @@ function takeOwnership(source: UnknownRecord, path: string, repositoryOwnership:
 const DEFAULT_RESERVE_PERCENT: Record<AgentProviderName, number> = {
   codex: 20,
   opencode: 50,
+  agy: 0,
 }
 
 /** opencode answers on the GLM Coding Plan, so the fleet prefers it. */
-const DEFAULT_PROVIDER_ORDER: readonly AgentProviderName[] = ['opencode', 'codex']
+const DEFAULT_PROVIDER_ORDER: readonly AgentProviderName[] = ['opencode', 'codex', 'agy']
 
 function reservePercent(value: unknown, issues: ConfigIssue[]): Record<AgentProviderName, number> | undefined {
   if (value === undefined)
@@ -431,7 +432,7 @@ function reservePercent(value: unknown, issues: ConfigIssue[]): Record<AgentProv
   }
   const unknownKey = Object.keys(value).find(key => providerName(key) === undefined)
   if (unknownKey !== undefined) {
-    issues.push({ path: `$.agent.reserve_percent.${unknownKey}`, message: 'Expected codex or opencode.' })
+    issues.push({ path: `$.agent.reserve_percent.${unknownKey}`, message: 'Expected codex, opencode, or agy.' })
     return undefined
   }
   const reserve = { ...DEFAULT_RESERVE_PERCENT }
@@ -457,7 +458,7 @@ function roleReasoningEfforts(value: unknown, path: string, issues: ConfigIssue[
   for (const [providerKey, roles] of Object.entries(value)) {
     const provider = providerName(providerKey)
     if (provider === undefined) {
-      issues.push({ path: `${path}.${providerKey}`, message: 'Expected codex or opencode.' })
+      issues.push({ path: `${path}.${providerKey}`, message: 'Expected codex, opencode, or agy.' })
       return undefined
     }
     if (!isRecord(roles)) {
@@ -484,7 +485,7 @@ function roleReasoningEfforts(value: unknown, path: string, issues: ConfigIssue[
 }
 
 function providerName(value: unknown): AgentProviderName | undefined {
-  return value === 'codex' || value === 'opencode' ? value : undefined
+  return value === 'codex' || value === 'opencode' || value === 'agy' ? value : undefined
 }
 
 /** Keeps the control UI on the local proxy or one private Tailscale HTTPS name. */
@@ -548,7 +549,7 @@ function agentSettings(source: UnknownRecord, issues: ConfigIssue[]): AgentConfi
 
   const provider = agent.provider === undefined ? 'codex' : providerName(agent.provider)
   if (provider === undefined)
-    issues.push({ path: '$.agent.provider', message: 'Expected codex or opencode.' })
+    issues.push({ path: '$.agent.provider', message: 'Expected codex, opencode, or agy.' })
 
   const reserve = reservePercent(agent.reserve_percent, issues)
 

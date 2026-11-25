@@ -562,16 +562,20 @@ agent:
   it('runs Codex until the configuration names another agent provider', () => {
     const parsed = parseConfigText(configText)
     expect(parsed._tag === 'Ok' && parsed.value.agent.provider).toBe('codex')
+    expect(parsed._tag === 'Ok' && parsed.value.agent.order).toEqual(['opencode', 'codex', 'agy'])
 
     const opencode = parseConfigText(`agent:\n  provider: opencode\n${configText}`)
     expect(opencode._tag === 'Ok' && opencode.value.agent.provider).toBe('opencode')
+
+    const agy = parseConfigText(`agent:\n  provider: agy\n${configText}`)
+    expect(agy._tag === 'Ok' && agy.value.agent.provider).toBe('agy')
   })
 
   it('rejects an unknown agent provider', () => {
     const parsed = parseConfigText(`agent:\n  provider: gemini\n${configText}`)
     expect(parsed).toEqual({
       _tag: 'Err',
-      error: expect.arrayContaining([{ path: '$.agent.provider', message: 'Expected codex or opencode.' }]),
+      error: expect.arrayContaining([{ path: '$.agent.provider', message: 'Expected codex, opencode, or agy.' }]),
     })
   })
 

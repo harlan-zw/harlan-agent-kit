@@ -23,6 +23,8 @@ export const PERSISTED_HOME_PATHS = [
   // Provider login refresh, sessions, and state databases. Masks below replace what Codex loads as configuration.
   '.codex',
   '.local/share/opencode',
+  '.gemini/antigravity-cli',
+  '.config/antigravity',
   // Package and browser caches that keep turns fast.
   '.local/share/pnpm/store',
   '.cache/pnpm',

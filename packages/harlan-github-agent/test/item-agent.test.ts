@@ -84,6 +84,7 @@ describe('subject Workers', () => {
             },
           },
           opencode: stubProvider([], undefined, 'opencode'),
+          agy: stubProvider([], undefined, 'agy'),
         },
         repositoryReasoningEfforts: new Map([['harlan-zw/example', { codex: { adversarial_review: 'medium' } }]]),
         selection: () => ({ _tag: 'FollowsConfiguration' }),

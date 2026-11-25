@@ -158,7 +158,21 @@ describe('building the scan prompt', () => {
       const runtime = createAgentRuntimeSource({
         configuredProvider: 'opencode',
         maximumActiveAgents: 1,
-        providers: { codex: provider, opencode: { name: 'opencode', async* runTurn() { yield { _tag: 'Failed', reason: 'OpenCode is exhausted.' } } } },
+        providers: {
+          codex: provider,
+          opencode: {
+            name: 'opencode',
+            async* runTurn() {
+              yield { _tag: 'Failed', reason: 'OpenCode is exhausted.' }
+            },
+          },
+          agy: {
+            name: 'agy',
+            async* runTurn() {
+              yield { _tag: 'Failed', reason: 'Antigravity is exhausted.' }
+            },
+          },
+        },
         selection: () => ({ _tag: 'Pinned', provider: 'opencode', model: 'zai-coding-plan/glm-5.3', reasoningEffort: 'high' }),
       })
       const task = { ...claimStoredRun(store), agentSelection: { provider: 'codex' as const, model: 'gpt-6.1-sol' as const, reasoningEffort: 'medium' as const } }

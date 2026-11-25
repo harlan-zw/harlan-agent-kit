@@ -7783,7 +7783,29 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${repositoryHandoffSchema} PRAGMA user_version = 114;`)
     version = 114
   }
-  if (version === 114)
+  if (version === 114) {
+    const statements = ['worker_sessions', 'subject_worker_sessions', 'review_runs', 'agent_selection', 'provider_circuits', 'agent_turns'].flatMap((table) => {
+      const schema = database.prepare('SELECT sql FROM sqlite_master WHERE type = \'table\' AND name = ?').get(table) as { sql: string } | undefined
+      if (schema === undefined || schema.sql.includes('\'agy\''))
+        return []
+      const widened = schema.sql
+        .replace(/^CREATE TABLE[^(]+/, `CREATE TABLE ${table}_v115 `)
+        .replace('\'codex\', \'opencode\'', '\'codex\', \'opencode\', \'agy\'')
+      if (!widened.includes('\'agy\''))
+        throw new Error(`The ${table} provider constraint could not be widened.`)
+      const indexes = (database.prepare('SELECT sql FROM sqlite_master WHERE type = \'index\' AND tbl_name = ? AND sql IS NOT NULL').all(table) as Array<{ sql: string }>).map(row => `${row.sql};`).join('\n')
+      return [`
+        ${widened};
+        INSERT INTO ${table}_v115 SELECT * FROM ${table};
+        DROP TABLE ${table};
+        ALTER TABLE ${table}_v115 RENAME TO ${table};
+        ${indexes}
+      `]
+    })
+    applyForeignKeyMigration(database, `${statements.join('\n')}\nPRAGMA user_version = 115;`)
+    version = 115
+  }
+  if (version === 115)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }

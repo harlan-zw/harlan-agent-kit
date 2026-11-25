@@ -12,8 +12,8 @@ const { values } = parseArgs({ options: {
 } })
 if (!values.workspace || !isAbsolute(values.workspace))
   throw new Error('Provide an absolute --workspace path to a linked worktree.')
-if (values.provider !== 'codex' && values.provider !== 'opencode')
-  throw new Error('Provide --provider codex or --provider opencode.')
+if (values.provider !== 'codex' && values.provider !== 'opencode' && values.provider !== 'agy')
+  throw new Error('Provide --provider codex, opencode, or agy.')
 const sandbox = await prepareAgentSandbox({
   workspace: values.workspace,
   environment: process.env,

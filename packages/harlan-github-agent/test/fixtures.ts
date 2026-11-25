@@ -140,10 +140,11 @@ export function dashboardSnapshot(overrides: Partial<DashboardSnapshot> = {}): D
     agentProfile: CODEX_AGENT_PROFILE,
     agentSelection: { _tag: 'FollowsConfiguration' },
     agentStart: { _tag: 'WritesDisabled' },
-    agentProviderOrder: ['opencode', 'codex'],
+    agentProviderOrder: ['opencode', 'codex', 'agy'],
     agentModels: {
       codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
       opencode: ['zai-coding-plan/glm-5.3-flash'],
+      agy: ['gemini-3.8-flash-medium', 'gemini-4-hydrogen-high'],
     },
     reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     providerCapacities: [],

@@ -41,7 +41,7 @@ export const REVIEW_CODEX_FEATURES = Object.fromEntries([
   'view_image',
 ].map(name => [name, false]))
 
-export async function createReviewRuntime(input: { request: AgentTurnRequest, provider: 'codex' | 'opencode', environment: NodeJS.ProcessEnv, authority: ReviewProofAuthorityFactory }): Promise<ReviewRuntime> {
+export async function createReviewRuntime(input: { request: AgentTurnRequest, provider: 'codex' | 'opencode' | 'agy', environment: NodeJS.ProcessEnv, authority: ReviewProofAuthorityFactory }): Promise<ReviewRuntime> {
   const { request } = input
   if (request.toolPolicy?._tag !== 'Review' || request.taskId === undefined)
     throw new Error('The Review tools require controller Task ownership.')
@@ -83,7 +83,9 @@ export async function createReviewRuntime(input: { request: AgentTurnRequest, pr
     const command = ['/run/agent/node', '--experimental-strip-types', entry, request.workspace, socket, evidence]
     const configuration = input.provider === 'codex'
       ? ['[features]', ...Object.entries(REVIEW_CODEX_FEATURES).map(([name, value]) => `${name} = ${value}`), '[agents]', 'enabled = false', 'max_depth = 0', '[mcp_servers.controller_review]', 'command = "/run/agent/node"', `args = ${JSON.stringify(command.slice(1))}`, 'required = true', 'enabled_tools = ["review_read", "review_search", "review_proof"]', 'default_tools_approval_mode = "approve"', 'omit_tools_from = ["code_mode", "deferred"]'].join('\n')
-      : JSON.stringify({ plugins: [], instructions: request.instructionPaths ?? [], permissions: [{ action: '*', resource: '*', effect: 'deny' }, ...REVIEW_TOOL_NAMES.map(action => ({ action, resource: '*', effect: 'allow' }))], mcp: { servers: { controller_review: { type: 'local', command, disabled: false, codemode: false } } } })
+      : input.provider === 'agy'
+        ? JSON.stringify({ mcpServers: { controller_review: { command: '/run/agent/node', args: command.slice(1), disabled: false } } })
+        : JSON.stringify({ plugins: [], instructions: request.instructionPaths ?? [], permissions: [{ action: '*', resource: '*', effect: 'deny' }, ...REVIEW_TOOL_NAMES.map(action => ({ action, resource: '*', effect: 'allow' }))], mcp: { servers: { controller_review: { type: 'local', command, disabled: false, codemode: false } } } })
     const profilePath = join(input.environment.HOME ?? '/home/harlan', '.config/harlan-github-agent/worker.json')
     home = await createReviewProviderHome({ profilePath, provider: input.provider, configuration })
     const reviewHome = home.home
