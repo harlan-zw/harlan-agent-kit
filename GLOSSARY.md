@@ -27,7 +27,7 @@ Where the two files disagree about a service word, the package glossary wins.
 | Reference | `skills/<name>/references/`, `harlan-agent-kit/references/` | one Skill, mid-task | N to 1 Skill, or shared across Skills | "reference" |
 | Hook | `harlan-agent-kit/hooks/*.sh` | Claude Code, Codex, per event | N per event, disabled by `.claude/hooks.json` | "hook" |
 | Git hook | `agent-context/git-hooks/commit-msg` | git, for every Agent provider | 1 per commit, under `~/pkg` and `~/sites` | "commit hook" |
-| Agent instructions | `agent-context/CLAUDE.md`, `AGENTS.md`, `context.md` | Claude Code, Codex, at session start | 1 tracked source, 2 installed copies | "Agent instructions" |
+| Agent instructions | `agent-context/CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `context.md` | Claude Code, Codex, Antigravity, at session start | 1 tracked source, 3 installed copies | "Agent instructions" |
 | Root docs | every repository root, `references/root-docs.md` | every Agent, on demand | 1 set per repository | "root docs" |
 | Brief | `docs/work/EXECUTE-<topic>.md` | every Agent, Harlan | 1 per open initiative | "brief" |
 | Check | `bin/check`, `harlan-agent-kit/hooks/check.sh` | `pre-commit-push.sh`, Harlan | 1 per commit or push | "`check`" |

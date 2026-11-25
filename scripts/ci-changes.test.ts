@@ -10,6 +10,7 @@ it.each([
   [['harlan-agent-kit/skills/pr/SKILL.md'], 'code=false\ninstructions=true\n'],
   [['harlan-agent-kit/evals/pr-ship-it/graders/criteria.md'], 'code=false\ninstructions=true\n'],
   [['agent-context/AGENTS.md', 'AGENTS.md'], 'code=false\ninstructions=true\n'],
+  [['agent-context/GEMINI.md', 'GEMINI.md'], 'code=false\ninstructions=true\n'],
   [['.github/PULL_REQUEST_TEMPLATE.md'], 'code=false\ninstructions=true\n'],
   [['docs/agent-terminal.md'], 'code=false\ninstructions=true\n'],
   [['docs/plans/AGENTS.md'], 'code=false\ninstructions=true\n'],

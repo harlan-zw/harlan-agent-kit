@@ -32,14 +32,21 @@ mkdir -p "$(dirname "$sites_fixture")"
 printf '%s\n' '# Sites' '- example.com' > "$sites_fixture"
 export HARLAN_AGENT_CONTEXT_SITES_FILE="$sites_fixture"
 
-mkdir -p "$test_home/.t3/userdata/providers/antigravity/instance-1/config"
+mkdir -p "$test_home/.t3/userdata/providers/antigravity/instance-1/config" \
+  "$test_home/.gemini/config/plugins/harlan-agent-kit/rules"
+printf '%s\n' 'NEVER commit to git unless explicitly asked.' > "$test_home/.gemini/GEMINI.md"
+printf '%s\n' '# Legacy duplicate plugin rules' > "$test_home/.gemini/config/plugins/harlan-agent-kit/rules/AGENTS.md"
 HARLAN_AGENT_CONTEXT_HOME="$test_home" bash "$script_dir/sync-agent-context.sh" local >/dev/null
 
 agy_dir="$test_home/.gemini/config/plugins/harlan-agent-kit"
 for agy_file in plugin.json package.json hooks.json scripts/antigravity-hook.ts; do
   cmp "$repo_root/harlan-agent-kit/plugins/antigravity/$agy_file" "$agy_dir/$agy_file"
 done
-cmp "$repo_root/agent-context/context.md" "$agy_dir/rules/AGENTS.md"
+cmp "$repo_root/agent-context/context.md" "$test_home/.gemini/GEMINI.md"
+if [ -e "$agy_dir/rules/AGENTS.md" ]; then
+  printf '%s\n' 'The sync kept the legacy Antigravity plugin rules copy.' >&2
+  exit 1
+fi
 jq -e --arg kit "$HOME/pkg/harlan-agent-kit/harlan-agent-kit/skills" \
   --arg skilld "$test_home/.local/share/harlan-agent-kit/skilld/skills" \
   --arg agents "$test_home/.agents/skills" '
@@ -66,14 +73,21 @@ fi
 
 # A note the desktop deleted must not survive on the worker host.
 printf '%s\n' '# Stale' > "$test_home/.claude/projects/$primary_slug/memory/stale.md"
-mkdir -p "$test_home/.t3/userdata/providers/antigravity/instance-1/config"
+mkdir -p "$test_home/.t3/userdata/providers/antigravity/instance-1/config" \
+  "$test_home/.gemini/config/plugins/harlan-agent-kit/rules"
+printf '%s\n' 'NEVER commit to git unless explicitly asked.' > "$test_home/.gemini/GEMINI.md"
+printf '%s\n' '# Legacy duplicate plugin rules' > "$test_home/.gemini/config/plugins/harlan-agent-kit/rules/AGENTS.md"
 HARLAN_AGENT_CONTEXT_HOME="$test_home" bash "$script_dir/sync-agent-context.sh" local >/dev/null
 
 agy_dir="$test_home/.gemini/config/plugins/harlan-agent-kit"
 for agy_file in plugin.json package.json hooks.json scripts/antigravity-hook.ts; do
   cmp "$repo_root/harlan-agent-kit/plugins/antigravity/$agy_file" "$agy_dir/$agy_file"
 done
-cmp "$repo_root/agent-context/context.md" "$agy_dir/rules/AGENTS.md"
+cmp "$repo_root/agent-context/context.md" "$test_home/.gemini/GEMINI.md"
+if [ -e "$agy_dir/rules/AGENTS.md" ]; then
+  printf '%s\n' 'The sync kept the legacy Antigravity plugin rules copy.' >&2
+  exit 1
+fi
 jq -e --arg kit "$HOME/pkg/harlan-agent-kit/harlan-agent-kit/skills" \
   --arg skilld "$test_home/.local/share/harlan-agent-kit/skilld/skills" \
   --arg agents "$test_home/.agents/skills" '
@@ -91,14 +105,16 @@ fi
 
 cmp "$repo_root/agent-context/context.md" "$test_home/.claude/CLAUDE.md"
 cmp "$repo_root/agent-context/context.md" "$test_home/.codex/AGENTS.md"
-if rg -F '{{> context.md}}' "$test_home/.claude/CLAUDE.md" "$test_home/.codex/AGENTS.md" >/dev/null; then
+cmp "$repo_root/agent-context/context.md" "$test_home/.gemini/GEMINI.md"
+if rg -F '{{> context.md}}' "$test_home/.claude/CLAUDE.md" "$test_home/.codex/AGENTS.md" "$test_home/.gemini/GEMINI.md" >/dev/null; then
   printf '%s\n' 'Installed Agent instructions contain a template tag.' >&2
   exit 1
 fi
-if rg -F 'Once work turns long with no name assigned' "$test_home/.claude/CLAUDE.md" "$test_home/.codex/AGENTS.md" >/dev/null; then
+if rg -F 'Once work turns long with no name assigned' "$test_home/.claude/CLAUDE.md" "$test_home/.codex/AGENTS.md" "$test_home/.gemini/GEMINI.md" >/dev/null; then
   printf '%s\n' 'Installed Agent instructions contain the chat rename rule.' >&2
   exit 1
 fi
+HARLAN_AGENT_CONTEXT_HOME="$test_home" bash "$script_dir/check-agent-context.sh" >/dev/null
 
 # Every hook plugin.json registers, plus the files they source. The list comes
 # from the same derivation the sync script uses, so a new hook needs no edit
