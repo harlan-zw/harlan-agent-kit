@@ -5,6 +5,7 @@ import { boardColumns, columnEmptyReason, incidentEntries, presentWorkKinds } fr
 import { isTypingTarget, overlayOpen } from '../utils/keyboard.ts'
 import BoardCard from './_BoardCard.vue'
 import BoardColumn from './_BoardColumn.vue'
+import BoardCompletion from './_BoardCompletion.vue'
 import BoardIncidentRow from './_BoardIncidentRow.vue'
 
 /**
@@ -106,6 +107,8 @@ useHead({
       :more="incidents.length - 1"
       @open="openSystem"
     />
+
+    <BoardCompletion v-if="snapshot.completionTasks?.length" :tasks="snapshot.completionTasks" />
 
     <div v-if="workKinds.length > 1" class="filter-row flex shrink-0 flex-wrap items-center gap-1" role="group" aria-label="Filter by work">
       <UButton

@@ -1,12 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { CompletionEvidence, CompletionResult, CompletionTarget } from './take-ownership-completion.ts'
+import type { PullRequestWatchTarget } from './pull-request-watch.ts'
+import type { CompletionResult, CompletionTarget } from './take-ownership-completion.ts'
 import type { RepositoryMapping } from './types.ts'
 
 export type CompletionState
   = | { _tag: 'Queued', reason: string | null }
     | { _tag: 'Running', workerId: string, fence: number, leaseExpiresAt: string }
-    | { _tag: 'Completed', evidence: CompletionEvidence }
-    | { _tag: 'ActionRequired', reason: string }
+    | Exclude<CompletionResult, { _tag: 'Pending' }>
 
 export interface CompletionTask {
   id: string
@@ -23,6 +23,7 @@ export interface ClaimedCompletionTask extends CompletionTask {
 }
 
 export type TakeOwnershipStore = ReturnType<typeof createTakeOwnershipStore>
+export type CompletionRegistrationReceipt = { _tag: 'Registered' } | { _tag: 'NotEnabled' }
 
 interface CompletionRow {
   id: string
@@ -54,6 +55,9 @@ function completionState(row: CompletionRow): CompletionState {
 /** Completion uses the existing Journal and exact closure evidence. */
 export function createTakeOwnershipStore(database: DatabaseSync) {
   database.exec(`
+    CREATE TABLE IF NOT EXISTS take_ownership_registrations (
+      subject_id INTEGER PRIMARY KEY REFERENCES subjects(id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS take_ownership_tasks (
       id TEXT PRIMARY KEY, repository TEXT NOT NULL, pull_request_number INTEGER NOT NULL,
       target TEXT NOT NULL, policy TEXT NOT NULL,
@@ -70,7 +74,36 @@ export function createTakeOwnershipStore(database: DatabaseSync) {
     AND json_extract(policy_json,'$.takeOwnership._tag')='Enabled'
     AND json_extract(policy_json,'$.takeOwnership')=take_ownership_tasks.policy)`
   return {
-    /** Published numbers recover a missed webhook before the first open observation. */
+    registerCompletion(target: PullRequestWatchTarget): CompletionRegistrationReceipt | { _tag: 'Unavailable' } {
+      const repository = database.prepare(`
+        SELECT id, writes_enabled, paused, json_extract(policy_json, '$.defaultBranch') AS default_branch
+        FROM repositories
+        WHERE github=? COLLATE NOCASE AND enabled=1 AND ownership='owned'
+          AND json_extract(policy_json,'$.takeOwnership._tag')='Enabled'
+      `).get(target.repository) as { id: number, writes_enabled: number, paused: number, default_branch: string } | undefined
+      if (repository === undefined)
+        return { _tag: 'NotEnabled' }
+      if (!repository.writes_enabled || repository.paused)
+        return { _tag: 'Unavailable' }
+      const subject = database.prepare(`
+        SELECT subjects.id
+        FROM subjects JOIN revisions ON revisions.id=subjects.current_revision_id
+        LEFT JOIN take_ownership_registrations AS registration ON registration.subject_id=subjects.id
+        WHERE subjects.repository_id=? AND subjects.kind='pull_request' AND subjects.github_number=?
+          AND (registration.subject_id IS NOT NULL OR (
+            json_extract(revisions.payload,'$.state')='open'
+            AND json_extract(revisions.payload,'$.baseRef')=?
+          ))
+      `).get(repository.id, target.number, repository.default_branch) as { id: number } | undefined
+      if (subject === undefined)
+        return { _tag: 'Unavailable' }
+      database.prepare('INSERT OR IGNORE INTO take_ownership_registrations (subject_id) VALUES (?)').run(subject.id)
+      return { _tag: 'Registered' }
+    },
+    clearCompletionRegistration(subjectId: number): void {
+      database.prepare('DELETE FROM take_ownership_registrations WHERE subject_id=?').run(subjectId)
+    },
+    /** Recover exact closure evidence for published or registered pull requests. */
     listUnverifiedCompletionPullRequestNumbers(repository: RepositoryMapping): number[] {
       if (!repository.enabled || repository.ownership !== 'owned' || repository.takeOwnership._tag === 'Disabled')
         return []
@@ -91,7 +124,18 @@ export function createTakeOwnershipStore(database: DatabaseSync) {
           AND (pull.id IS NULL OR (json_extract(revisions.payload,'$.state')='closed'
             AND (verification.subject_id IS NULL OR (verification.disposition_tag='Merged'
               AND json_extract(revisions.payload,'$.mergeCommitSha') IS NULL))))
-        ORDER BY number LIMIT 20`).all(repository.github) as Array<{ number: number }>
+        UNION
+        SELECT subjects.github_number AS number
+        FROM take_ownership_registrations JOIN subjects ON subjects.id=take_ownership_registrations.subject_id
+        JOIN repositories ON repositories.id=subjects.repository_id
+        JOIN revisions ON revisions.id=subjects.current_revision_id
+        LEFT JOIN pull_request_closure_verifications AS verification
+          ON verification.subject_id=subjects.id AND verification.revision_id=revisions.id
+        WHERE repositories.github=? AND repositories.enabled=1 AND repositories.writes_enabled=1
+          AND repositories.paused=0 AND json_extract(revisions.payload,'$.state')='closed'
+          AND (verification.subject_id IS NULL OR (verification.disposition_tag='Merged'
+            AND json_extract(revisions.payload,'$.mergeCommitSha') IS NULL))
+        ORDER BY number LIMIT 20`).all(repository.github, repository.github) as Array<{ number: number }>
       return rows.map(row => row.number)
     },
     queueCompletionTasks(repository: RepositoryMapping, at: string): number {
@@ -126,13 +170,14 @@ export function createTakeOwnershipStore(database: DatabaseSync) {
           AND json_extract(revisions.payload,'$.state')='closed'
           AND json_extract(revisions.payload,'$.mergedAt') IS NOT NULL
           AND length(json_extract(revisions.payload,'$.mergeCommitSha'))=40
-          AND EXISTS (SELECT 1 FROM publication_commands
+          AND (EXISTS (SELECT 1 FROM take_ownership_registrations WHERE subject_id=subjects.id)
+            OR EXISTS (SELECT 1 FROM publication_commands
             JOIN tasks ON tasks.id=publication_commands.task_id
             JOIN subjects AS source ON source.id=tasks.subject_id
             WHERE source.repository_id=repositories.id AND publication_commands.state_tag='Published'
               AND publication_commands.pull_request_number=subjects.github_number
               AND publication_commands.pull_request_title IS NOT NULL
-              AND tasks.kind IN ('issue_work','baseline_repair','review_fix'))
+              AND tasks.kind IN ('issue_work','baseline_repair','review_fix')))
       `).run(policy, at, new Date(Date.parse(at) + 24 * 60 * 60_000).toISOString(), at, repository.github, policy, repository.defaultBranch).changes)
     },
     listCompletionTasks(repository?: string): CompletionTask[] {

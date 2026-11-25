@@ -1,9 +1,15 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
+import { promisify } from 'node:util'
+import { H3 } from 'h3'
 import { expect, it } from 'vitest'
+import { createAgentApp } from '../src/app.ts'
 import { reconcileRepository } from '../src/reconcile.ts'
 import { ok } from '../src/result.ts'
+import { startAgentServer } from '../src/server.ts'
 import { openJournalStore } from '../src/store.ts'
 import { runCompletionTask } from '../src/take-ownership-completion.ts'
 import { issueItem, pullRequestItem, repositoryMapping } from './fixtures.ts'
@@ -74,6 +80,123 @@ it('queues only an exactly confirmed Service-created merge, once across restart'
     store.close()
     rmSync(directory, { recursive: true, force: true })
   }
+})
+
+it('checks a manual merge after the submitting CLI exits and the Service restarts', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'completion-handoff-'))
+  const path = join(directory, 'state.sqlite')
+  const passwordPath = join(directory, 'password')
+  const checkout = join(directory, 'checkout')
+  mkdirSync(checkout)
+  const execute = promisify(execFile)
+  const git = async (...args: string[]) => (await execute('git', ['-c', 'user.name=Completion Test', '-c', 'user.email=completion@example.test', ...args], { cwd: checkout })).stdout.trim()
+  const password = 'local-test-password-with-at-least-32-bytes'
+  writeFileSync(passwordPath, password, { mode: 0o600 })
+  let store = openJournalStore(path)
+  try {
+    await git('init', '--initial-branch=main')
+    await git('commit', '--allow-empty', '-m', 'chore: create base')
+    const baseSha = await git('rev-parse', 'HEAD')
+    await git('switch', '-c', 'feature')
+    await git('commit', '--allow-empty', '-m', 'feat: open test pull request')
+    const subject = pullRequestItem({ updatedAt: at(1), baseSha, headSha: await git('rev-parse', 'HEAD') })
+    store.syncRepositories([repository], at(0))
+    store.setRepositoryWritesEnabled(repository.github, true)
+    store.recordPollObservation({ observedAt: at(1), subject })
+    let app: ReturnType<typeof createAgentApp> | undefined
+    const gateway = new H3()
+    gateway.post('/api/tasks/register-completion', (event) => {
+      if (app === undefined)
+        throw new Error('The test service is not ready.')
+      return app.fetch(event.req)
+    })
+    const server = await startAgentServer({ app: gateway, hostname: '127.0.0.1', port: 0 })
+    try {
+      if (server.url === undefined)
+        throw new Error('The test server has no URL.')
+      const url = server.url
+      app = createAgentApp({ allowedOrigin: url, dashboardPassword: password, now: () => new Date(at(2)), store, registerCompletion: store.registerCompletion })
+      const cli = join(import.meta.dirname, '..', 'src', 'cli.ts')
+      const registration = await execute(process.execPath, ['--experimental-strip-types', cli, 'control', 'register-completion', '--repository', repository.github, '--number', String(subject.number), '--url', url, '--password-file', passwordPath], { timeout: 30_000 })
+      expect(JSON.parse(registration.stdout)).toEqual({ _tag: 'Registered' })
+      expect(store.registerCompletion({ repository: repository.github, number: subject.number })).toEqual({ _tag: 'Registered' })
+    }
+    finally { await server.close() }
+    expect(store.queueCompletionTasks(repository, at(3))).toBe(0)
+
+    // No client is connected when the exact GitHub read first reports the merge.
+    store.close()
+    store = openJournalStore(path)
+    await git('commit', '--allow-empty', '-m', 'fix: update the test pull request')
+    const mergedHead = await git('rev-parse', 'HEAD')
+    await git('switch', 'main')
+    await git('merge', '--no-ff', '-m', 'Merge the test pull request', 'feature')
+    const mergeSha = await git('rev-parse', 'HEAD')
+    const github = {
+      listOpenItems: async () => ok([]),
+      getIssue: async () => ok(issueItem()),
+      getPullRequest: async () => ok({ ...subject, state: 'closed' as const, mergedAt: at(4), updatedAt: at(4), headSha: mergedHead, mergeCommitSha: mergeSha }),
+    }
+    expect((await reconcileRepository(repository, { github, store, now: () => new Date(at(5)) }))._tag).toBe('Ok')
+    await runCompletionTask({ repository, store, now: () => new Date(at(6)), workerId: 'completion', source: {
+      workflows: async () => ok([
+        { id: 1, path: '.github/workflows/deploy.yml', source: { _tag: 'Push', sha: subject.headSha, branch: 'main' }, status: 'completed', conclusion: 'failure', url: 'https://github.com/run/1' },
+        { id: 2, path: '.github/workflows/deploy.yml', source: { _tag: 'Push', sha: mergeSha, branch: 'main' }, status: 'completed', conclusion: 'success', url: 'https://github.com/run/2' },
+      ]),
+      smoke: async () => ok(200),
+    } }, new AbortController().signal)
+    expect(store.getDashboardSnapshot(at(7)).completionTasks).toMatchObject([
+      { target: { headSha: mergedHead, mergeSha }, state: { _tag: 'Completed', evidence: {
+        workflows: [{ name: 'deploy.yml', url: 'https://github.com/run/2' }],
+        smoke: [{ url: 'https://example.com/health', status: 200 }],
+      } } },
+    ])
+    expect(store.queueCompletionTasks(repository, at(8))).toBe(0)
+  }
+  finally {
+    store.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+}, 45_000)
+
+it('drops registration when GitHub confirms an unmerged closure', async () => {
+  const store = openJournalStore(':memory:')
+  const subject = pullRequestItem({ updatedAt: at(1) })
+  try {
+    store.syncRepositories([repository], at(0))
+    store.setRepositoryWritesEnabled(repository.github, true)
+    store.recordPollObservation({ observedAt: at(1), subject })
+    expect(store.registerCompletion({ repository: repository.github, number: subject.number })).toEqual({ _tag: 'Registered' })
+    const github = {
+      listOpenItems: async () => ok([]),
+      getIssue: async () => ok(issueItem()),
+      getPullRequest: async () => ok({ ...subject, state: 'closed' as const, updatedAt: at(3) }),
+    }
+    expect((await reconcileRepository(repository, { github, store, now: () => new Date(at(4)) }))._tag).toBe('Ok')
+    expect(store.queueCompletionTasks(repository, at(5))).toBe(0)
+    store.recordPollObservation({ observedAt: at(6), subject: { ...subject, updatedAt: at(6) } })
+    expect(merged(store, subject.number)()).toBe(true)
+    expect(store.queueCompletionTasks(repository, at(11))).toBe(0)
+  }
+  finally { store.close() }
+})
+
+it('only registers open pull requests targeting the default branch with Take Ownership enabled', () => {
+  const store = openJournalStore(':memory:')
+  const subject = pullRequestItem({ baseRef: 'release', updatedAt: at(1) })
+  const target = { repository: repository.github, number: subject.number }
+  try {
+    store.syncRepositories([{ ...repository, takeOwnership: { _tag: 'Disabled' } }], at(0))
+    store.setRepositoryWritesEnabled(repository.github, true)
+    expect(store.registerCompletion(target)).toEqual({ _tag: 'NotEnabled' })
+    store.syncRepositories([repository], at(1))
+    expect(store.registerCompletion(target)).toEqual({ _tag: 'Unavailable' })
+    store.recordPollObservation({ observedAt: at(2), subject })
+    expect(store.registerCompletion(target)).toEqual({ _tag: 'Unavailable' })
+    store.recordPollObservation({ observedAt: at(3), subject: { ...subject, baseRef: repository.defaultBranch, updatedAt: at(3) } })
+    expect(store.registerCompletion(target)).toEqual({ _tag: 'Registered' })
+  }
+  finally { store.close() }
 })
 
 it('fences old claims and respects repository pause and policy revocation', () => {

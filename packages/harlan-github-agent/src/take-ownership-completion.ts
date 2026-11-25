@@ -29,7 +29,7 @@ export interface CompletionEvidence {
 
 export type CompletionResult
   = | { _tag: 'Pending', reason: string }
-    | { _tag: 'ActionRequired', reason: string }
+    | { _tag: 'ActionRequired', reason: string, workflowUrl?: string }
     | { _tag: 'Completed', evidence: CompletionEvidence }
 
 export interface CompletionSource {
@@ -60,7 +60,7 @@ export async function verifyCompletion(repository: RepositoryMapping, target: Co
       if (run.status !== 'completed')
         return { _tag: 'Pending', reason: `Workflow ${name} is ${run.status ?? 'pending'}.` }
       if (run.conclusion !== 'success')
-        return { _tag: 'ActionRequired', reason: `Workflow ${name} concluded ${run.conclusion ?? 'unknown'}: ${run.url}` }
+        return { _tag: 'ActionRequired', reason: `GitHub reported ${run.conclusion ?? 'no result'} for ${name}.`, workflowUrl: run.url }
       evidence.workflows.push({ name, url: run.url })
     }
   }

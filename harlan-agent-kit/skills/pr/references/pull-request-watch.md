@@ -58,6 +58,24 @@ After readiness, read terminal findings and complete the PR Skill's remaining ch
 If the Review wait reaches its limit, apply [Review queue capacity](review-queue.md).
 Never treat a timeout or connection error as an empty Queue or successful Review.
 
+## Register Completion after manual merge
+
+At the ready handoff for a Service-tracked pull request, use the same Control CLI connection:
+
+```bash
+harlan-github-agent control register-completion \
+  --repository OWNER/REPOSITORY --number NUMBER
+```
+
+`Registered` means the Service keeps this request after the chat ends.
+Use this handoff message.
+
+> The Service will check delivery after you merge into the default branch. See the result under Take Ownership on the Board.
+
+The Service follows later pushes to the pull request and checks the exact merge commit.
+`NotEnabled` means the repository has no applicable Take Ownership policy.
+If registration fails, report the reason and retain the existing handoff details.
+
 ## Wait for merge
 
 After readiness, resolve the merge path under the PR Skill's [Auto merge contract](../../../references/auto-merge.md).
@@ -65,6 +83,7 @@ If the current head qualifies for automatic merge, keep a foreground watch throu
 If only Harlan's merge decision remains, hand the pull request back and end the turn.
 If Harlan requests an active wait for that decision, use a foreground merge watch.
 Retain the exact target and delivery evidence for the next turn.
+Use the Completion registration above for delivery checks after handoff.
 Never start a background watch or promise an automatic chat wake-up.
 
 The default stops at merge, closure, Dismissal, or actionable work without an active Service Task.
