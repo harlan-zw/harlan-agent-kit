@@ -108,8 +108,12 @@ it('sends a real smoke request without credentials and does not follow redirects
     invalidate: () => {},
   }, fetch })
   try {
-    expect(await source.smoke(`http://127.0.0.1:${address.port}/health`, new AbortController().signal)).toEqual(ok(200))
-    expect(await source.smoke(`http://127.0.0.1:${address.port}/redirect`, new AbortController().signal)).toEqual(ok(302))
+    for (const [path, status] of [['/health', 200], ['/redirect', 302]] as const) {
+      const result = await source.smoke(`http://127.0.0.1:${address.port}${path}`, new AbortController().signal)
+      expect(result).toMatchObject({ _tag: 'Ok', value: { status } })
+      if (result._tag === 'Ok')
+        await result.value.body?.cancel()
+    }
     expect(requests).toEqual(['/health', '/redirect'])
   }
   finally {

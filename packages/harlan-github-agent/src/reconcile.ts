@@ -355,8 +355,15 @@ export async function reconcileRepository(repository: RepositoryMapping, depende
   })
 }
 
-export function reconcileAllRepositories(repositories: RepositoryMapping[], dependencies: ReconciliationDependencies): Promise<Array<Result<ReconciliationSummary, ReconciliationError>>> {
+export function reconcileAllRepositories(repositories: RepositoryMapping[], dependencies: ReconciliationDependencies & {
+  runCompletion?: (repository: RepositoryMapping) => Promise<void>
+}): Promise<Array<Result<ReconciliationSummary, ReconciliationError>>> {
   return Promise.all(repositories
     .filter(repository => repository.enabled)
-    .map(repository => reconcileRepository(repository, dependencies)))
+    .map(async (repository) => {
+      const result = await reconcileRepository(repository, dependencies)
+      // Completion already has its own confirmed merge evidence.
+      await dependencies.runCompletion?.(repository)
+      return result
+    }))
 }

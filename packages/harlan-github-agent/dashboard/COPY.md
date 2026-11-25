@@ -172,6 +172,8 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Completion failed | Action required | Completion Task with a failed check |
 | Completion failed workflow | GitHub reported {result} for {workflow}. | Completion Task detail when a workflow fails |
 | Completion workflow | View workflow run | Link to the failed workflow run |
+| Completion served revision | Served commit {commit} | Smoke check confirmed the merged revision |
+| Completion response text | Expected content found | Smoke check found the configured text |
 | Routine incomplete coverage | Blocked | Routine result badge |
 | Routine passing checks | Clear | Routine result badge |
 | Routine warning or failure | Action required | Routine result badge |

@@ -35,8 +35,12 @@ const states = {
           <a v-for="workflow in task.state.evidence.workflows" :key="workflow.url" class="entity-link" :href="workflow.url">
             {{ workflow.name }}
           </a>
-          <a v-for="smoke in task.state.evidence.smoke" :key="smoke.url" class="entity-link break-all" :href="smoke.url">
-            {{ smoke.url }} · HTTP {{ smoke.status }}
+          <a v-for="smoke in task.state.evidence.smoke" :key="smoke.url" class="entity-link" :href="smoke.url">
+            <span class="break-all">{{ smoke.url }}</span> · HTTP {{ smoke.status }}
+            <template v-for="assertion in smoke.assertions" :key="assertion._tag">
+              <span v-if="assertion._tag === 'Revision'"> · Served commit {{ assertion.sha.slice(0, 7) }}</span>
+              <span v-else> · Expected content found</span>
+            </template>
           </a>
         </div>
         <p v-else-if="task.state._tag === 'Queued' && task.state.reason" class="break-words text-sm text-muted">

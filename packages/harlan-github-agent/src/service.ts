@@ -1691,6 +1691,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           store,
           now,
           signal,
+          async runCompletion(mapping) {
+            if (config.mutationsEnabled && store.getAgentControl()._tag === 'Running'
+              && restartAllowsTaskClaims(store.getRestartRequest())) {
+              await runCompletionTask({ repository: mapping, store, now, workerId: 'take-ownership', source: createCompletionSource({ tokens, fetch: globalThis.fetch }) }, signal)
+            }
+          },
         })
         for (const result of results) {
           if (result._tag === 'Err')
@@ -1698,10 +1704,6 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
           options.logger.info(`${result.value.repository}: observed ${result.value.subjects} open pull requests and issues.`)
         }
         store.reconcileRoutineCandidates(now().toISOString(), repository.github)
-        if (config.mutationsEnabled && store.getAgentControl()._tag === 'Running'
-          && restartAllowsTaskClaims(store.getRestartRequest())) {
-          await runCompletionTask({ repository, store, now, workerId: 'take-ownership', source: createCompletionSource({ tokens, fetch: globalThis.fetch }) }, signal)
-        }
       },
       onError: error => options.logger.error(error),
     })] as const))
