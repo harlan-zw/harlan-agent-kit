@@ -2,12 +2,12 @@
 # Shared hit log for Hooks that deny or rewrite a command.
 # Source this in other hooks: source "$(dirname "$0")/hit-log.sh"
 
-# Prints the surface that ran this Hook: claude, codex, opencode, or unknown.
+# Prints the surface that ran this Hook: claude, codex, opencode, antigravity, or unknown.
 # Claude Code sets CLAUDE_PROJECT_DIR on Hooks only. Codex user Hooks inherit its process environment,
 # so stdin turn_id marks them: openai/codex rust-v0.169.0 hooks/src/registry.rs and schema.rs.
 hook_surface() {
   case "${HARLAN_AGENT_HOOK_SURFACE:-}" in
-    claude | codex | opencode)
+    claude | codex | opencode | antigravity)
       printf '%s' "$HARLAN_AGENT_HOOK_SURFACE"
       return
       ;;

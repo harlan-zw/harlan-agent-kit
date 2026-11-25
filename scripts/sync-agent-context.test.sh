@@ -32,7 +32,24 @@ mkdir -p "$(dirname "$sites_fixture")"
 printf '%s\n' '# Sites' '- example.com' > "$sites_fixture"
 export HARLAN_AGENT_CONTEXT_SITES_FILE="$sites_fixture"
 
+mkdir -p "$test_home/.t3/userdata/providers/antigravity/instance-1/config"
 HARLAN_AGENT_CONTEXT_HOME="$test_home" bash "$script_dir/sync-agent-context.sh" local >/dev/null
+
+agy_dir="$test_home/.gemini/config/plugins/harlan-agent-kit"
+for agy_file in plugin.json package.json hooks.json scripts/antigravity-hook.ts; do
+  cmp "$repo_root/harlan-agent-kit/plugins/antigravity/$agy_file" "$agy_dir/$agy_file"
+done
+cmp "$repo_root/agent-context/context.md" "$agy_dir/rules/AGENTS.md"
+jq -e --arg kit "$HOME/pkg/harlan-agent-kit/harlan-agent-kit/skills" \
+  --arg skilld "$test_home/.local/share/harlan-agent-kit/skilld/skills" \
+  --arg agents "$test_home/.agents/skills" '
+  (.entries | map(.path)) == [$kit, $skilld, $agents]
+  and ((.entries[2].exclude | index("pull-request-summary")) != null)
+' "$test_home/.gemini/config/skills.json" >/dev/null
+cmp "$test_home/.gemini/config/skills.json" "$test_home/.t3/userdata/providers/antigravity/instance-1/config/skills.json"
+jq -e --arg plugins "$test_home/.gemini/config/plugins" '
+  .entries == [{ path: $plugins, include_only: ["harlan-agent-kit"] }]
+' "$test_home/.t3/userdata/providers/antigravity/instance-1/config/plugins.json" >/dev/null
 
 cmp "$memory_root/$primary_slug/memory/MEMORY.md" "$test_home/.claude/projects/$primary_slug/memory/MEMORY.md"
 cmp "$memory_root/$primary_slug/memory/deployment.md" "$test_home/.claude/projects/$primary_slug/memory/deployment.md"
@@ -49,7 +66,24 @@ fi
 
 # A note the desktop deleted must not survive on the worker host.
 printf '%s\n' '# Stale' > "$test_home/.claude/projects/$primary_slug/memory/stale.md"
+mkdir -p "$test_home/.t3/userdata/providers/antigravity/instance-1/config"
 HARLAN_AGENT_CONTEXT_HOME="$test_home" bash "$script_dir/sync-agent-context.sh" local >/dev/null
+
+agy_dir="$test_home/.gemini/config/plugins/harlan-agent-kit"
+for agy_file in plugin.json package.json hooks.json scripts/antigravity-hook.ts; do
+  cmp "$repo_root/harlan-agent-kit/plugins/antigravity/$agy_file" "$agy_dir/$agy_file"
+done
+cmp "$repo_root/agent-context/context.md" "$agy_dir/rules/AGENTS.md"
+jq -e --arg kit "$HOME/pkg/harlan-agent-kit/harlan-agent-kit/skills" \
+  --arg skilld "$test_home/.local/share/harlan-agent-kit/skilld/skills" \
+  --arg agents "$test_home/.agents/skills" '
+  (.entries | map(.path)) == [$kit, $skilld, $agents]
+  and ((.entries[2].exclude | index("pull-request-summary")) != null)
+' "$test_home/.gemini/config/skills.json" >/dev/null
+cmp "$test_home/.gemini/config/skills.json" "$test_home/.t3/userdata/providers/antigravity/instance-1/config/skills.json"
+jq -e --arg plugins "$test_home/.gemini/config/plugins" '
+  .entries == [{ path: $plugins, include_only: ["harlan-agent-kit"] }]
+' "$test_home/.t3/userdata/providers/antigravity/instance-1/config/plugins.json" >/dev/null
 if [ -e "$test_home/.claude/projects/$primary_slug/memory/stale.md" ]; then
   printf '%s\n' 'The sync kept a note the desktop no longer has.' >&2
   exit 1
@@ -248,7 +282,8 @@ grep -E "chmod 644 '$manifest_target.next\.[0-9.]+'" "$calls" >/dev/null
 # A hook added to plugin.json must reach both installs with no other edit.
 fixture="$test_root/fixture"
 mkdir -p "$fixture/scripts" "$fixture/harlan-agent-kit/hooks" \
-  "$fixture/harlan-agent-kit/.claude-plugin" "$fixture/harlan-agent-kit/plugins/opencode"
+  "$fixture/harlan-agent-kit/.claude-plugin" "$fixture/harlan-agent-kit/plugins/opencode" \
+  "$fixture/harlan-agent-kit/plugins/antigravity/scripts" "$fixture/.skills"
 mkdir -p "$fixture/bin"
 cp "$repo_root/bin/check" "$fixture/bin/check"
 cp "$repo_root/scripts/sync-agent-context.sh" "$repo_root/scripts/agent-context-hooks.sh" "$repo_root/scripts/github-public.sh" "$repo_root/scripts/agent-check.ts" "$repo_root/scripts/agent-tools.ts" "$repo_root/scripts/agent-plugins.ts" "$fixture/scripts/"
@@ -258,6 +293,13 @@ cp "$repo_root/harlan-agent-kit/skills/hogwild/scripts/"*.ts "$fixture/harlan-ag
 cp -r "$repo_root/agent-context" "$fixture/agent-context"
 cp "$repo_root/harlan-agent-kit/hooks/"*.sh "$repo_root/harlan-agent-kit/hooks/codex.json" "$fixture/harlan-agent-kit/hooks/"
 cp "$repo_root/harlan-agent-kit/plugins/opencode/harlan-hooks.ts" "$fixture/harlan-agent-kit/plugins/opencode/"
+cp "$repo_root/harlan-agent-kit/plugins/antigravity/plugin.json" \
+  "$repo_root/harlan-agent-kit/plugins/antigravity/package.json" \
+  "$repo_root/harlan-agent-kit/plugins/antigravity/hooks.json" \
+  "$fixture/harlan-agent-kit/plugins/antigravity/"
+cp "$repo_root/harlan-agent-kit/plugins/antigravity/scripts/antigravity-hook.ts" \
+  "$fixture/harlan-agent-kit/plugins/antigravity/scripts/"
+cp "$repo_root/.skills/skilld.json" "$fixture/.skills/skilld.json"
 printf '%s\n' '#!/usr/bin/env bash' 'source "$(dirname "$0")/check-config.sh"' 'exit 0' \
   > "$fixture/harlan-agent-kit/hooks/proof-hook.sh"
 jq '.hooks.PreToolUse[0].hooks += [{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/proof-hook.sh","timeout":7000}]' \

@@ -187,6 +187,9 @@ jobs:
       - name: Opencode hooks
         run: pnpm test:opencode-hooks
 
+      - name: Antigravity hooks
+        run: pnpm test:antigravity-hooks
+
       - name: Hogwild CLI
         run: pnpm test:hogwild
 
