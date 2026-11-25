@@ -413,14 +413,23 @@ export function serviceNeedsUserLogin(
 }
 
 export function createRepositoryPoller(observation: PollerOptions, completion: (signal: AbortSignal) => Promise<void>): Poller {
-  // Stored merge evidence lets Completion progress independently of GitHub reads.
-  return createIndependentPollers([observation, {
+  const observationPoller = createPoller(observation)
+  const completionPoller = createPoller({
     intervalMilliseconds: 60_000,
     // Allow the worker's 60 second evidence deadline to settle a Pending result.
     timeoutMilliseconds: 120_000,
     poll: completion,
     onError: observation.onError,
-  }])
+  })
+  return {
+    start: () => {
+      observationPoller.start()
+      completionPoller.start()
+    },
+    stop: async () => { await Promise.all([observationPoller.stop(), completionPoller.stop()]) },
+    // Pull request watches and webhook hints only need fresh GitHub observations.
+    runNow: observationPoller.runNow,
+  }
 }
 
 export async function startAgentService(options: StartAgentServiceOptions): Promise<RunningAgentService> {
