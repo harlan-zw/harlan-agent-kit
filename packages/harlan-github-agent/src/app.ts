@@ -118,14 +118,14 @@ function dashboardSnapshot(options: AgentAppOptions): DashboardSnapshot {
   const activityLog = options.activityLog
   if (options.hostTasks !== undefined)
     snapshot.hostTasks = options.hostTasks()
-  if (activityLog === undefined)
-    return snapshot
+  // A resumed Task can quote any earlier Handoff. Keep its whole activity private.
+  const privateActivity = (repository: string) => options.handoffs?.allows(repository.toLowerCase()) === true
   return {
     ...snapshot,
     agents: snapshot.agents.map(agent => agent._tag === 'ActiveAgent'
-      ? { ...agent, activity: activityLog.read(agent.id) }
+      ? { ...agent, activity: privateActivity(agent.repository) ? [] : activityLog?.read(agent.id) ?? agent.activity }
       : agent),
-    routineRuns: snapshot.routineRuns.map(run => ({ ...run, activity: activityLog.read(run.id) })),
+    routineRuns: snapshot.routineRuns.map(run => ({ ...run, activity: activityLog?.read(run.id) ?? run.activity })),
   }
 }
 
@@ -541,6 +541,10 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const task = options.store.getTask(taskId)
     if (task === null)
       return { _tag: 'Err', error: { _tag: 'TaskNotFound', taskId, message: 'The Service has no record of this Task.' } }
+    if (options.handoffs?.allows(task.repository.toLowerCase())
+      && (event.req.headers.get('x-harlan-agent-ingress') === 'public' || !machineDashboardAccess(event.req))) {
+      throw createError({ status: 401, statusText: 'Unauthorized' })
+    }
     if (task.state._tag !== 'Running' && task.state._tag !== 'Publishing')
       return { _tag: 'Err', error: { _tag: 'TaskActivityUnavailable', taskId, state: task.state._tag, message: `This Task is ${task.state._tag}. Live activity is available while a Task runs.` } }
     if (options.activityLog === undefined)

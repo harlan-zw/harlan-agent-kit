@@ -158,6 +158,12 @@ export function withRepositoryHandoffs(provider: AgentProvider, options: {
           failed = true
         if (event._tag === 'TurnCompleted')
           completed = true
+        // Progress text also becomes a durable public Task label.
+        // Keep untrusted text in private activity and use trusted phase labels.
+        if (event._tag === 'Progress') {
+          yield { _tag: 'Reasoning', text: event.text }
+          continue
+        }
         if (event._tag !== 'Message') {
           yield event
           continue
