@@ -1046,7 +1046,7 @@ export function createGitHubPullRequestPublisher(options: GitHubBodyPublisherOpt
 }
 
 /**
- * How one pull request reached its merge.
+ * What happened when the controller asked GitHub to merge a pull request.
  *
  * `AutoMergeEnabled` means GitHub owns the merge from here and will perform it
  * when its own branch protection is satisfied. `Merged` means GitHub had
@@ -1055,6 +1055,7 @@ export function createGitHubPullRequestPublisher(options: GitHubBodyPublisherOpt
 export type MergeHandoff
   = | { _tag: 'AutoMergeEnabled' }
     | { _tag: 'Merged', sha: string }
+    | { _tag: 'RepositoryAutoMergeDisabled' }
 
 export interface GitHubPullRequestMerger {
   /** Moves a stack to the default branch only after its exact parent merged there. */
@@ -1266,6 +1267,8 @@ export function createGitHubPullRequestMerger(options: GitHubPullRequestPublishe
         .then((): Result<MergeHandoff, GitHubReadError> => ok({ _tag: 'AutoMergeEnabled' }))
         .catch((error: unknown) => {
           const message = error instanceof Error ? error.message : 'GitHub request failed.'
+          if (/(?:^|\n\s*-\s*)Auto merge is not allowed for this repository\.?$/i.test(message.trim()))
+            return ok({ _tag: 'RepositoryAutoMergeDisabled' })
           return refusedBecauseNothingToWaitFor(message) ? mergeNow() : failure(error)
         })
     },
