@@ -4,7 +4,7 @@ import type { CompletionTask } from '../../../src/take-ownership-store.ts'
 const { tasks } = defineProps<{ tasks: CompletionTask[] }>()
 const needsAction = computed(() => tasks.some(task => task.state._tag === 'ActionRequired'))
 const states = {
-  Queued: { label: 'Checking delivery', tone: 'neutral' },
+  Queued: { label: 'Waiting for delivery checks', tone: 'neutral' },
   Running: { label: 'Checking delivery', tone: 'neutral' },
   Completed: { label: 'Completed', tone: 'success' },
   ActionRequired: { label: 'Action required', tone: 'error' },

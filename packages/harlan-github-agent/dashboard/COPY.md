@@ -166,9 +166,11 @@ The dashboard uses short, direct controls and specific state descriptions.
 | Service state missing | The Service returned no state. | State request error |
 | Service data label | Unavailable | System chip after its last update expires |
 | Take Ownership section | Take Ownership | Board section for delivery checks |
-| Completion pending | Checking delivery | Completion Task waiting or running |
+| Completion pending | Waiting for delivery checks | Completion Task queued or waiting to retry |
+| Completion running | Checking delivery | Completion Task running |
 | Completion passed | Completed | Completion Task with passing checks |
 | Completion failed | Action required | Completion Task with a failed check |
+| Completion failed workflow | GitHub reported {result} for {workflow}. | Completion Task detail when a workflow fails |
 | Completion workflow | View workflow run | Link to the failed workflow run |
 | Routine incomplete coverage | Blocked | Routine result badge |
 | Routine passing checks | Clear | Routine result badge |

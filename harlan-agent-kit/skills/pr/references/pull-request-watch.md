@@ -68,9 +68,11 @@ harlan-github-agent control register-completion \
 ```
 
 `Registered` means the Service keeps this request after the chat ends.
-Tell Harlan that delivery checks are registered for after merge.
-The Board shows the Completion Task after GitHub confirms the merge.
-Registration follows later commits and targets the default branch.
+Use this handoff message.
+
+> The Service will check delivery after you merge into the default branch. See the result under Take Ownership on the Board.
+
+The Service follows later pushes to the pull request and checks the exact merge commit.
 `NotEnabled` means the repository has no applicable Take Ownership policy.
 If registration fails, report the reason and retain the existing handoff details.
 

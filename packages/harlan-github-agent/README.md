@@ -341,9 +341,10 @@ The Service tracks pull requests it opens. For a pull request opened in chat, th
 harlan-github-agent control register-completion --repository OWNER/REPOSITORY --number NUMBER
 ```
 
-Register an observed open pull request targeting the default branch. Repeating the command is safe.
-The request survives Service restarts and later commits. A confirmed closure without merge clears it.
-After a merge, find the result under **Take Ownership** on the Board.
+Use an open pull request that the Service has observed and that targets the default branch.
+You can repeat the command. The Service keeps the request across restarts and tracks later pushes.
+If you close the pull request without merging, the Service clears the request when GitHub confirms closure.
+After you merge, open **Take Ownership** on the Board to see the result.
 
 The controller confirms the exact merge, then checks workflows at its merge commit.
 Use workflow filenames or unique workflow names in `required_workflows`.
