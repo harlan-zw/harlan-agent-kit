@@ -423,6 +423,11 @@ export function createAgentApp(options: AgentAppOptions): H3 {
       const publicIngress = event.req.headers.get('x-harlan-agent-ingress') === 'public'
       const authority = publicIngress ? options.browserAuth?.public : options.browserAuth?.private
       const path = new URL(event.req.url).pathname
+      // Desktop turns carry private prompts and Worktrees. Browser sessions cannot own them.
+      if ((path === '/api/desktop' || path.startsWith('/api/desktop/'))
+        && (publicIngress || !machineDashboardAccess(event.req))) {
+        throw createError({ status: 401, statusText: 'Unauthorized', message: 'Dashboard credentials are required.' })
+      }
       if (authority && path.startsWith('/api/browser-auth/'))
         return
       const browserShell = options.browserAuth && (event.req.method === 'GET' || event.req.method === 'HEAD') && !path.startsWith('/api/') && path !== '/health'

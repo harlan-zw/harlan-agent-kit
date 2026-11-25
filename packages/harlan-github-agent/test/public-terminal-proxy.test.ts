@@ -35,8 +35,8 @@ it.skipIf(!caddy)('refuses foreign WebSocket origins before translating the publ
     proxy.once('error', reject)
     proxy.once('exit', () => reject(new Error('Caddy exited before readiness')))
   })
-  const get = (path: string, origin?: string, upgrade = false) => new Promise<number>((resolve, reject) => {
-    const call = request(`http://127.0.0.1:${proxyAddress.port}${path}`, { headers: { host: 'agent.harlanzw.com', ...(origin ? { origin } : {}), ...(upgrade ? { connection: 'Upgrade', upgrade: 'WebSocket' } : {}) } }, (response) => {
+  const get = (path: string, origin?: string, upgrade = false, method = 'GET') => new Promise<number>((resolve, reject) => {
+    const call = request(`http://127.0.0.1:${proxyAddress.port}${path}`, { method, headers: { host: 'agent.harlanzw.com', ...(origin ? { origin } : {}), ...(upgrade ? { connection: 'Upgrade', upgrade: 'WebSocket' } : {}) } }, (response) => {
       response.resume()
       resolve(response.statusCode ?? 500)
     })
@@ -52,6 +52,11 @@ it.skipIf(!caddy)('refuses foreign WebSocket origins before translating the publ
     expect(received).toEqual([expect.objectContaining({ 'host': 'hogwild.tailcad325.ts.net', 'origin': 'https://hogwild.tailcad325.ts.net', 'x-harlan-agent-ingress': 'public' })])
     for (const path of ['/api/sessions', '/api/desktop/sessions/report', '/api/items/pull-request-diff'])
       expect(await get(path, 'https://agent.harlanzw.com')).toBe(403)
+    for (const action of ['', '/capacity', '/report', '/claim', '/defer', '/heartbeat', '/events', '/proof', '/complete']) {
+      for (const method of ['GET', 'POST'])
+        expect(await get(`/api/desktop${action}`, 'https://agent.harlanzw.com', false, method)).toBe(403)
+    }
+    expect(received).toHaveLength(1)
   }
   finally {
     proxy.kill('SIGTERM')
