@@ -68,6 +68,7 @@ export const AUTO_MERGE_HOLD_CAUSES = {
   NoConfidence: 'The review reported no confidence.',
   BelowConfidence: 'Review confidence is below the bar.',
   MergedWithFailingChecks: 'A conflict resolution pushed this head with checks failing.',
+  GitHubAutoMergeDisabled: 'GitHub has disabled Auto merge for this repository.',
 } as const
 
 export type AutoMergeHoldCause = keyof typeof AUTO_MERGE_HOLD_CAUSES

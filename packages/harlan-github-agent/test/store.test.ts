@@ -2526,7 +2526,7 @@ describe('journal store', () => {
     expect(store.listStoppedReviews()).toEqual([])
   })
 
-  it('finalizes a completed PENDING Review after GitHub closes its pull request', () => {
+  it.each(['### 🤖 PENDING\n\n- **CI gate:** PENDING. Base branch CI is still running.', '### 🤖 MERGED'])('finalizes a completed Review with prior body %s', (priorBody) => {
     const store = createStore()
     store.syncRepositories([repositoryMapping()], '2026-08-13T00:00:00.000Z')
     const pullRequest = pullRequestItem({ mergeState: 'clean' })
@@ -2550,7 +2550,8 @@ describe('journal store', () => {
       at: '2026-08-13T01:02:00.000Z',
       revisionId: review.revisionId,
       expectedHeadSha: pullRequest.headSha,
-      body: '### 🤖 PENDING\n\n- **CI gate:** PENDING. Base branch CI is still running.',
+      body: priorBody,
+      desiredOutcome: 'PENDING',
     })
     if (staged._tag === 'Rejected')
       throw new Error(staged.reason)

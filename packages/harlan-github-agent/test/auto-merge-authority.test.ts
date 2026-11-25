@@ -80,6 +80,8 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, co
   let duringRead = () => {}
   let finalRead = false
   let reads = 0
+  let now = new Date(changed)
+  let enableError: Error | undefined
   const comparisons: Array<[string, string]> = []
   const current = {
     node_id: 'PR_node_1',
@@ -96,7 +98,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, co
       comparisons.push([baseSha, headSha])
       return compare(baseSha, headSha)
     },
-    now: () => new Date(changed),
+    now: () => now,
     policy: { _tag: 'Enabled', minimumConfidence: 90, method: 'squash' },
     store,
     report: event => events.push(event),
@@ -105,6 +107,8 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, co
       createClient: () => ({
         graphql: async () => {
           mutations.push('enable')
+          if (enableError !== undefined)
+            throw enableError
           if (boundary === 'fallback') {
             await Promise.resolve()
             if (!finalRead)
@@ -141,6 +145,7 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, co
   }
   const observe = (overrides: Partial<GitHubPullRequestItem>) => store.recordObservation({ externalId: 'changed', observedAt: changed, source: 'poll', subject: { ...pullRequest, ...overrides } })
   const policy = (overrides: Partial<RepositoryMapping>) => store.syncRepositories([{ ...repository, ...overrides }], changed)
+  const controller = createAutoMergeController(options)
   return {
     store,
     repository,
@@ -154,10 +159,16 @@ function harness(boundary: 'enable' | 'fallback' | 'retarget', every = false, co
     recordReview,
     publish,
     comparisons,
+    setMergeError(error?: Error) {
+      enableError = error
+    },
+    advanceTime(milliseconds: number) {
+      now = new Date(now.getTime() + milliseconds)
+    },
     run(change = () => {}, duringFinalRead = false) {
       duringRead = change
       finalRead = duringFinalRead
-      return createAutoMergeController(options).reconcile(repository, pullRequest, new AbortController().signal)
+      return controller.reconcile(repository, pullRequest, new AbortController().signal)
     },
   }
 }
@@ -254,6 +265,44 @@ it('refuses to retarget when the parent branch advances during its merge lookup'
     test.current.base.sha = 'unmerged-parent'
   })
   expect(test.mutations).toEqual([])
+})
+
+it('backs off after GitHub disables Auto merge and recovers when the setting changes', async () => {
+  const test = harness('enable')
+  test.setMergeError(new Error('Request failed due to following response errors:\n - Auto merge is not allowed for this repository'))
+  await test.run()
+  await test.run()
+
+  expect(test.mutations).toEqual(['enable'])
+  expect(test.events).toEqual([expect.objectContaining({ _tag: 'Refused' })])
+  expect(test.store.listTrialAutoMergeHolds({ from: started, to: '2026-08-14T00:00:00.000Z' }).holds).toEqual([
+    expect.objectContaining({ headSha: test.pullRequest.headSha, cause: 'GitHubAutoMergeDisabled' }),
+  ])
+
+  test.setMergeError()
+  test.advanceTime(60 * 60_000)
+  await test.run()
+  expect(test.mutations).toEqual(['enable', 'enable'])
+  expect(test.events.at(-1)).toEqual(expect.objectContaining({ _tag: 'AutoMergeEnabled' }))
+})
+
+it('retries a temporary GitHub error at the next observation', async () => {
+  const test = harness('enable')
+  test.setMergeError(new Error('GitHub returned 502.'))
+  await test.run()
+  test.setMergeError()
+  await test.run()
+
+  expect(test.mutations).toEqual(['enable', 'enable'])
+  expect(test.events.at(-1)).toEqual(expect.objectContaining({ _tag: 'AutoMergeEnabled' }))
+})
+
+it('reports a repository refusal once when merge requests are already in flight', async () => {
+  const test = harness('enable')
+  test.setMergeError(new Error('Auto merge is not allowed for this repository'))
+  await Promise.all([test.run(), test.run()])
+
+  expect(test.events).toEqual([expect.objectContaining({ _tag: 'Refused' })])
 })
 
 describe('comparing the changed files of the reviewed head', () => {

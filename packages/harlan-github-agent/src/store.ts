@@ -16426,7 +16426,6 @@ export function openJournalStore(
 
   const recordStoppedReviewStatus: JournalStore['recordStoppedReviewStatus'] = (input) => {
     const bodySha256 = digest(input.body)
-    const commandId = digest(`${input.taskKind}:${input.taskId}:stopped:${bodySha256}`)
     const taskTable = input.taskKind === 'adversarial_review' ? 'worker_tasks' : 'tasks'
     database.exec('BEGIN IMMEDIATE')
     try {
@@ -16455,12 +16454,20 @@ export function openJournalStore(
         database.exec('COMMIT')
         return false
       }
-      database.prepare(`
+      const commandId = digest(`${input.taskKind}:${input.taskId}:${authorized.fence}:stopped:${bodySha256}`)
+      // The same terminal body can already exist under another command ID.
+      // Keep that identity and any Review projection that points to it.
+      const recorded = database.prepare(`
         INSERT INTO review_status_commands (
           id, task_kind, task_id, task_fence, revision_id, expected_head_sha, phase, body, body_sha256,
           state_tag, github_comment_id, github_url, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, 'terminal', ?, ?, 'Published', ?, ?, ?, ?)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT (task_kind, task_id, task_fence, phase, body_sha256) DO UPDATE SET
+          state_tag = 'Published', outcome_unknown = 0, reason = NULL,
+          revision_id = excluded.revision_id, expected_head_sha = excluded.expected_head_sha,
+          github_comment_id = excluded.github_comment_id, github_url = excluded.github_url,
+          updated_at = excluded.updated_at
+        WHERE review_status_commands.state_tag != 'Running'
       `).run(
         commandId,
         input.taskKind,
@@ -16476,7 +16483,7 @@ export function openJournalStore(
         input.at,
       )
       database.exec('COMMIT')
-      return true
+      return recorded.changes > 0
     }
     catch (error) {
       database.exec('ROLLBACK')

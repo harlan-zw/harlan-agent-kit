@@ -1,10 +1,12 @@
-import type { AutoMergeInput, AutoMergePolicy, HeadChangedFiles } from './auto-merge.ts'
+import type { AutoMergeHoldCause, AutoMergeInput, AutoMergePolicy, HeadChangedFiles } from './auto-merge.ts'
 import type { ChangedLinesReader } from './github-changed-lines.ts'
 import type { GitHubPullRequestMerger } from './github.ts'
 import type { JournalStore } from './store.ts'
 import type { GitHubItem, RepositoryMapping } from './types.ts'
 import { autoMergeCandidate, autoMergeDecision, comparedChangedFiles, hasCurrentPublishedReadyReview, heldOnlyByLabel } from './auto-merge.ts'
 import { err, ok } from './result.ts'
+
+const repositoryAutoMergeRetryMs = 60 * 60_000
 
 export type AutoMergeEvent
   /** GitHub owns the merge from here and performs it when its checks pass. */
@@ -31,6 +33,8 @@ export interface AutoMergeControllerOptions {
 }
 
 export function createAutoMergeController(options: AutoMergeControllerOptions): AutoMergeController {
+  const repositoryRetryAt = new Map<string, number>()
+
   /**
    * The last complete comparison for each pull request.
    *
@@ -121,27 +125,33 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
         pullRequest: context.pullRequest,
         repository: context.repository,
       }
+      const recordHold = (cause: AutoMergeHoldCause, heldOnlyByLabel = false) => options.store.recordAutoMergeHold({
+        repository: repository.github,
+        pullRequestNumber: subject.number,
+        headSha: context.pullRequest.headSha,
+        cause,
+        heldOnlyByLabel,
+        at: options.now().toISOString(),
+      })
       // A recorded local failure holds inside the decision, which authorize
       // reads again immediately before either GitHub merge path.
       const decision = autoMergeDecision(input)
       if (decision._tag === 'Hold') {
         // Only a head that reached a published READY Review gets here, so the
         // record says why a reviewed candidate waited for Harlan.
-        if (autoMergeCandidate(context.repository, context.pullRequest)) {
-          options.store.recordAutoMergeHold({
-            repository: repository.github,
-            pullRequestNumber: subject.number,
-            headSha: context.pullRequest.headSha,
-            cause: decision.cause,
-            heldOnlyByLabel: heldOnlyByLabel(input),
-            at: options.now().toISOString(),
-          })
-        }
+        if (autoMergeCandidate(context.repository, context.pullRequest))
+          recordHold(decision.cause, heldOnlyByLabel(input))
         return
       }
       const publication = attempts.find(attempt => attempt.id === decision.reviewRunId)?.gatePublication
       if (publication?._tag !== 'Published')
         return
+
+      const repositoryKey = repository.github.toLowerCase()
+      if ((repositoryRetryAt.get(repositoryKey) ?? 0) > options.now().getTime()) {
+        recordHold('GitHubAutoMergeDisabled')
+        return
+      }
 
       const handoff = await options.merger.merge({
         repository: context.repository,
@@ -173,6 +183,16 @@ export function createAutoMergeController(options: AutoMergeControllerOptions): 
         options.report({ _tag: 'Refused', repository: repository.github, pullRequestNumber: subject.number, reason: handoff.error.message })
         return
       }
+      if (handoff.value._tag === 'RepositoryAutoMergeDisabled') {
+        recordHold('GitHubAutoMergeDisabled')
+        const now = options.now().getTime()
+        if ((repositoryRetryAt.get(repositoryKey) ?? 0) > now)
+          return
+        repositoryRetryAt.set(repositoryKey, now + repositoryAutoMergeRetryMs)
+        options.report({ _tag: 'Refused', repository: repository.github, pullRequestNumber: subject.number, reason: 'GitHub has disabled Auto merge for this repository. The Service will check again in one hour.' })
+        return
+      }
+      repositoryRetryAt.delete(repositoryKey)
       options.report(handoff.value._tag === 'AutoMergeEnabled'
         ? { _tag: 'AutoMergeEnabled', repository: repository.github, pullRequestNumber: subject.number }
         : { _tag: 'Merged', repository: repository.github, pullRequestNumber: subject.number, sha: handoff.value.sha })
