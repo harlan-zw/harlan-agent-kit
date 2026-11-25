@@ -19,6 +19,7 @@ import { parseIncidentResolutionRequest } from './incident-resolution.ts'
 import { privateDetailsFor } from './public-text.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { discoverLocalCheckouts } from './repository-discovery.ts'
+import { parseHandoffQuery, parsePostHandoff } from './repository-handoff-types.ts'
 import { err } from './result.ts'
 import { describePreflightIssues, loadServiceInputs } from './service-preflight.ts'
 import { combineServiceState } from './service-state.ts'
@@ -74,6 +75,7 @@ type ControlCommandError
     | { _tag: 'InvalidIssueTarget', message: string }
     | { _tag: 'InvalidWatchTarget', message: string }
     | { _tag: 'InvalidCompletionTarget', message: string }
+    | { _tag: 'InvalidHandoff', message: string }
     | { _tag: 'InvalidBaseUrl', message: string }
 
 const workflowEventStreams = [
@@ -272,6 +274,64 @@ const controlCommand = defineCommand({
       meta: { name: 'tasks', description: 'List current Tasks.' },
       args: controlConnectionArguments,
       run: ({ args }) => runControl(args, client => client.tasks()),
+    }),
+    'handoffs': defineCommand({
+      meta: { name: 'handoffs', description: 'Read private Handoffs for one repository.' },
+      args: {
+        ...controlConnectionArguments,
+        'repository': { type: 'string', required: true, description: 'Repository as OWNER/NAME.' },
+        'after': { type: 'string', description: 'Return Handoffs after this cursor. Use 0 to start at the beginning.' },
+        'limit': { type: 'string', description: 'Maximum Handoffs from 1 to 50.' },
+        'wait-seconds': { type: 'string', description: 'With --after, wait up to 25 seconds for a new Handoff.' },
+      },
+      async run({ args }) {
+        const search = new URLSearchParams({ repository: args.repository })
+        for (const key of ['after', 'limit', 'wait-seconds'] as const) {
+          if (args[key] !== undefined)
+            search.set(key, args[key])
+        }
+        const query = parseHandoffQuery(search)
+        if (query._tag === 'Err') {
+          writeJson({ _tag: 'InvalidHandoff', message: query.error } satisfies ControlCommandError, process.stderr)
+          process.exitCode = 1
+          return
+        }
+        await runControl(args, client => client.handoffs(query.value))
+      },
+    }),
+    'post-handoff': defineCommand({
+      meta: { name: 'post-handoff', description: 'Send a private Handoff to Agents working on one repository.' },
+      args: {
+        ...controlConnectionArguments,
+        'repository': { type: 'string', required: true, description: 'Repository as OWNER/NAME.' },
+        'agent': { type: 'string', required: true, description: 'The name of your Agent session.' },
+        'message': { type: 'string', required: true, description: 'A concise update or a next action for other Agents.' },
+        'issue': { type: 'string', description: 'Optional Issue number.' },
+        'pull-request': { type: 'string', description: 'Optional pull request number.' },
+        'reply-to': { type: 'string', description: 'Optional earlier Handoff ID in the same repository.' },
+        'request-id': { type: 'string', required: true, description: 'Reuse this ID if you retry the same Handoff.' },
+      },
+      async run({ args }) {
+        const item = args.issue !== undefined
+          ? { _tag: 'Issue', number: Number(args.issue) }
+          : args['pull-request'] !== undefined ? { _tag: 'PullRequest', number: Number(args['pull-request']) } : undefined
+        const parsed = args.issue !== undefined && args['pull-request'] !== undefined
+          ? err('Link a Handoff to one Issue or pull request.')
+          : parsePostHandoff({
+              repository: args.repository,
+              agent: args.agent,
+              message: args.message,
+              item,
+              replyTo: args['reply-to'] === undefined ? undefined : Number(args['reply-to']),
+              requestId: args['request-id'],
+            })
+        if (parsed._tag === 'Err') {
+          writeJson({ _tag: 'InvalidHandoff', message: parsed.error } satisfies ControlCommandError, process.stderr)
+          process.exitCode = 1
+          return
+        }
+        await runControl(args, client => client.postHandoff(parsed.value))
+      },
     }),
     'incidents': defineCommand({
       meta: { name: 'incidents', description: 'List unresolved Incidents.' },

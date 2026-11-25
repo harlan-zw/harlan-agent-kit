@@ -24,6 +24,7 @@ did not cover it.
 | Revision | `revisions` | Journal | N to 1 Item, 1 to N Review runs | none |
 | Agent | `worker_sessions` | Runner | N to 1 Item, 1 to N Review runs | agent |
 | Task | `tasks`, `worker_tasks` | Scheduler | N to 1 Item and Revision | task |
+| Handoff | `repository_handoffs` | Journal | N to 1 Repository mapping, optional Item or earlier Handoff | Handoff |
 | Routine | `routines` | Scheduler | N to 1 Repository mapping, 1 to N Routine runs | Routine |
 | Routine run | `routine_runs` | Scheduler | N to 1 Routine | run |
 | d1-query-review | compiled Routine definition | Scheduler | One weekly Routine per production site | d1-query-review |
@@ -298,6 +299,14 @@ errors.
 One independently scheduled unit of work for an Item.
 
 GitHub Actions calls its unit a `job`. This service is not Actions, and a Task outlives a single run and carries its own lease, so Task stays. Never call a Task a job.
+
+### Handoff
+
+A private update or next action from one Agent to other Agents working on the same repository.
+A Handoff can refer to an Issue or pull request. A reply carries the earlier Handoff's reference.
+The Service keeps Handoffs in the Journal. A Handoff grants no Task or merge authority.
+
+Never use broadcast, inbox item, or thread for a Handoff.
 
 ### Routine
 

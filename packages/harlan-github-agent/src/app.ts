@@ -7,6 +7,7 @@ import type { PaybackPricing } from './payback.ts'
 import type { createPullRequestDiffSource } from './pull-request-diff.ts'
 import type { PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
 import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
+import type { HandoffController } from './repository-handoffs.ts'
 import type { Result } from './result.ts'
 import type { SessionController } from './session-controller.ts'
 import type { StatsRangeError } from './stats.ts'
@@ -18,7 +19,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, extname, join, relative } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { createError, createEventStream, H3, setResponseStatus } from 'h3'
+import { assertBodySize, createError, createEventStream, H3, setResponseStatus } from 'h3'
 import { parseAgentFeedback } from './agent-feedback.ts'
 import { parseAgentSelection } from './agent-profile.ts'
 import { parseDesktopEvents, parseDesktopFailure, parseDesktopReport, parseDesktopWorktree } from './desktop-protocol.ts'
@@ -29,6 +30,7 @@ import { latestDelivery } from './latest-delivery.ts'
 import { buildPayback } from './payback.ts'
 import { parsePullRequestWatchTarget } from './pull-request-watch.ts'
 import { parseRepairRecoveryRequest } from './repair-recovery.ts'
+import { parseHandoffQuery, parsePostHandoff } from './repository-handoff-types.ts'
 import { registerSessionRoutes } from './session-routes.ts'
 import { parseStatsRange } from './stats.ts'
 import { parseTimelineWindow, timelineWindowMessage } from './timeline.ts'
@@ -43,6 +45,7 @@ export interface AgentAppOptions {
     observe: (target: PullRequestWatchTarget, signal: AbortSignal) => Promise<Result<void, string>>
   }
   reloadExternalWatches?: () => Promise<Result<{ repositories: number, issues: number }, string>>
+  handoffs?: HandoffController
   sessions?: SessionController
   desktop?: DesktopBroker
   hostCapacity?: () => HostCapacity
@@ -115,14 +118,14 @@ function dashboardSnapshot(options: AgentAppOptions): DashboardSnapshot {
   const activityLog = options.activityLog
   if (options.hostTasks !== undefined)
     snapshot.hostTasks = options.hostTasks()
-  if (activityLog === undefined)
-    return snapshot
+  // A resumed Task can quote any earlier Handoff. Keep its whole activity private.
+  const privateActivity = (repository: string) => options.handoffs?.allows(repository.toLowerCase()) === true
   return {
     ...snapshot,
     agents: snapshot.agents.map(agent => agent._tag === 'ActiveAgent'
-      ? { ...agent, activity: activityLog.read(agent.id) }
+      ? { ...agent, activity: privateActivity(agent.repository) ? [] : activityLog?.read(agent.id) ?? agent.activity }
       : agent),
-    routineRuns: snapshot.routineRuns.map(run => ({ ...run, activity: activityLog.read(run.id) })),
+    routineRuns: snapshot.routineRuns.map(run => ({ ...run, activity: activityLog?.read(run.id) ?? run.activity })),
   }
 }
 
@@ -434,6 +437,11 @@ export function createAgentApp(options: AgentAppOptions): H3 {
           ...(options.browserAuth ? {} : { headers: { 'www-authenticate': 'Basic realm="harlan-github-agent", charset="UTF-8"' } }),
         })
       }
+      // Desktop turns carry private prompts and Worktrees. Browser sessions cannot own them.
+      if ((path === '/api/desktop' || path.startsWith('/api/desktop/'))
+        && (publicIngress || !machineDashboardAccess(event.req))) {
+        throw createError({ status: 401, statusText: 'Unauthorized', message: 'Dashboard credentials are required.' })
+      }
     },
     onResponse(response, event) {
       Object.entries(framing.securityHeaders).forEach(([name, value]) => response.headers.set(name, value))
@@ -448,6 +456,47 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     return authority?.handle(event.req, publicIngress ? options.allowedOrigin : undefined)
       ?? new Response(JSON.stringify({ _tag: 'Err', reason: 'AuthenticationRequired' }), { status: 401 })
   })
+
+  const handoffs = options.handoffs
+  if (handoffs !== undefined) {
+    function requireHandoffAccess(request: Request): void {
+      if (request.headers.get('x-harlan-agent-ingress') === 'public' || !machineDashboardAccess(request))
+        throw createError({ status: 401, message: 'Use a Control credential to access Handoffs.' })
+    }
+    app.get('/api/handoffs', async (event) => {
+      requireHandoffAccess(event.req)
+      const query = parseHandoffQuery(new URL(event.req.url).searchParams)
+      if (query._tag === 'Err')
+        throw createError({ status: 400, message: query.error })
+      const signal = options.shutdownSignal === undefined
+        ? event.req.signal
+        : AbortSignal.any([event.req.signal, options.shutdownSignal])
+      const result = await handoffs.list(query.value, signal)
+      if (result._tag === 'Err')
+        throw createError({ status: 404, message: result.error.message })
+      return result.value
+    })
+    app.post('/api/handoffs', async (event) => {
+      requireHandoffAccess(event.req)
+      // H3 checks Content-Length and limits the stream before the body read.
+      assertBodySize(event, 12_000)
+      const body = await event.req.text()
+      let input: unknown
+      try {
+        input = JSON.parse(body)
+      }
+      catch {
+        throw createError({ status: 400, message: 'The Handoff request must contain JSON.' })
+      }
+      const command = parsePostHandoff(input)
+      if (command._tag === 'Err')
+        throw createError({ status: 400, message: command.error })
+      const result = handoffs.postControl(command.value)
+      if (result._tag === 'Err')
+        throw createError({ status: result.error._tag === 'RequestConflict' ? 409 : 404, message: result.error.message })
+      return result.value
+    })
+  }
 
   if (options.emergencyIsolation) {
     registerEmergencyRoutes(app, options.emergencyIsolation, (headers) => {
@@ -493,6 +542,10 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     const task = options.store.getTask(taskId)
     if (task === null)
       return { _tag: 'Err', error: { _tag: 'TaskNotFound', taskId, message: 'The Service has no record of this Task.' } }
+    if (options.handoffs?.allows(task.repository.toLowerCase())
+      && (event.req.headers.get('x-harlan-agent-ingress') === 'public' || !machineDashboardAccess(event.req))) {
+      throw createError({ status: 401, statusText: 'Unauthorized' })
+    }
     if (task.state._tag !== 'Running' && task.state._tag !== 'Publishing')
       return { _tag: 'Err', error: { _tag: 'TaskActivityUnavailable', taskId, state: task.state._tag, message: `This Task is ${task.state._tag}. Live activity is available while a Task runs.` } }
     if (options.activityLog === undefined)

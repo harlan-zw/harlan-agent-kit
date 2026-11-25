@@ -1,6 +1,7 @@
 import type { IncidentResolutionReceipt, IncidentResolutionRequest } from './incident-resolution.ts'
 import type { PullRequestWatchOptions, PullRequestWatchState, PullRequestWatchTarget } from './pull-request-watch.ts'
 import type { RepairRecoveryRequest, RepairRecoveryResponse } from './repair-recovery.ts'
+import type { HandoffPage, HandoffQuery, PostHandoff, RepositoryHandoff } from './repository-handoff-types.ts'
 import type { Result } from './result.ts'
 import type { CancelTaskResult } from './store.ts'
 import type { CompletionRegistrationReceipt } from './take-ownership-store.ts'
@@ -9,6 +10,7 @@ import { Buffer } from 'node:buffer'
 import { parseIncidentResolutionReceipt, parseIncidentResolutionRequest } from './incident-resolution.ts'
 import { parsePullRequestWatchTarget, watchPullRequestStream } from './pull-request-watch.ts'
 import { parseRepairRecoveryCandidate, parseRepairRecoveryResponse } from './repair-recovery.ts'
+import { parseHandoffPage, parseHandoffReceipt } from './repository-handoff-types.ts'
 import { err, ok } from './result.ts'
 
 export interface ControlHealth {
@@ -73,6 +75,8 @@ export interface ControlClient {
   recoverRepair: (request: RepairRecoveryRequest) => Promise<Result<RepairRecoveryResponse, ControlApiError>>
   watchPullRequest: (target: PullRequestWatchTarget, options?: PullRequestWatchOptions) => Promise<Result<PullRequestWatchState, ControlApiError>>
   registerCompletion: (target: PullRequestWatchTarget) => Promise<Result<CompletionRegistrationReceipt, ControlApiError>>
+  handoffs: (query: HandoffQuery) => Promise<Result<HandoffPage, ControlApiError>>
+  postHandoff: (input: PostHandoff) => Promise<Result<RepositoryHandoff, ControlApiError>>
   health: () => Promise<Result<ControlHealth, ControlApiError>>
   state: () => Promise<Result<DashboardSnapshot, ControlApiError>>
   status: () => Promise<Result<ControlStatus, ControlApiError>>
@@ -393,6 +397,15 @@ export function createControlClient(options: ControlClientOptions): Result<Contr
   const state = () => request({ method: 'GET', path: 'api/state', parse: parseState })
 
   return ok({
+    handoffs(query) {
+      const search = new URLSearchParams({ repository: query.repository })
+      for (const [key, value] of [['after', query.after], ['limit', query.limit], ['wait-seconds', query.waitSeconds]] as const) {
+        if (value !== undefined)
+          search.set(key, String(value))
+      }
+      return request({ method: 'GET', path: `api/handoffs?${search}`, parse: parseHandoffPage })
+    },
+    postHandoff: input => request({ method: 'POST', path: 'api/handoffs', body: input, parse: parseHandoffReceipt }),
     async reviews(query) {
       const target = parsePullRequestWatchTarget(query)
       if (target._tag === 'Err' || (query.head !== undefined && !/^[a-f\d]{40}$/.test(query.head)))

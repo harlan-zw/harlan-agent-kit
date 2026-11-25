@@ -389,6 +389,7 @@ export function createConflictWorker(options: ConflictWorkerOptions): ConflictWo
       const parsed = parseAgentResponse(turn.value.response)
       if (parsed._tag === 'Err')
         return parsed
+      turn.value.acceptHandoff?.()
       const result = parsed.value
       if (result._tag === 'Blocked') {
         return ok({
