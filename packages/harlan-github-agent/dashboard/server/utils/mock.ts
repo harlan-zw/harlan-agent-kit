@@ -69,6 +69,7 @@ function fixture(): DashboardSnapshot {
     providerCapacities: [
       { provider: 'codex', reservePercent: 20, capacity: { _tag: 'Available', usedPercent: 63.4, resetsAt: daysAhead(3) } },
       { provider: 'opencode', reservePercent: 0, capacity: { _tag: 'Unpublished' } },
+      { provider: 'agy', reservePercent: 0, capacity: { _tag: 'Unpublished' } },
     ],
     repositories: [
       { github: nuxtSeo, enabled: true, writesEnabled: true, ownership: 'owned', lastAttemptAt: minutesAgo(1), lastSuccessAt: minutesAgo(1), lastError: null, paused: false, subjectCount: 4 },

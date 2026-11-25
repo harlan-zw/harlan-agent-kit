@@ -18,6 +18,52 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+it('upgrades version 114 tables so agy selections, turns, circuits, and sessions persist', () => {
+  const path = join(directory, 'state.sqlite')
+  const before = openJournalStore(path)
+  before.close()
+  const legacy = new DatabaseSync(path)
+  legacy.exec(`PRAGMA foreign_keys = OFF;
+    CREATE TABLE agent_selection_legacy (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      tag TEXT NOT NULL CHECK (tag IN ('FollowsConfiguration', 'Pinned', 'Automatic')),
+      provider TEXT CHECK (provider IN ('codex', 'opencode')),
+      model TEXT,
+      reasoning_effort TEXT,
+      provider_order TEXT CHECK (provider_order IS NULL OR json_valid(provider_order)),
+      updated_at TEXT NOT NULL,
+      CHECK ((tag = 'Pinned') = (provider IS NOT NULL)),
+      CHECK ((tag = 'Automatic') = (provider_order IS NOT NULL))
+    );
+    INSERT INTO agent_selection_legacy SELECT * FROM agent_selection;
+    DROP TABLE agent_selection;
+    ALTER TABLE agent_selection_legacy RENAME TO agent_selection;
+    PRAGMA user_version = 114;`)
+  legacy.close()
+  const migrated = openJournalStore(path)
+  try {
+    migrated.selectAgent({ _tag: 'Pinned', provider: 'agy', model: 'gemini-3.8-flash-medium', reasoningEffort: null }, '2026-11-25T01:00:00.000Z')
+    expect(migrated.getAgentSelection()).toEqual({ _tag: 'Pinned', provider: 'agy', model: 'gemini-3.8-flash-medium', reasoningEffort: null })
+    migrated.recordProviderFailure({
+      provider: 'agy',
+      credential: 'google-account',
+      model: 'gemini-3.8-flash-medium',
+      failureClass: 'usage_limit',
+      detail: '429 RESOURCE_EXHAUSTED',
+      at: '2026-11-25T01:00:00.000Z',
+    })
+    expect(migrated.providerCanStart({
+      provider: 'agy',
+      credential: 'google-account',
+      model: 'gemini-3.8-flash-medium',
+      at: '2026-11-25T01:00:00.000Z',
+    })).toBe(false)
+  }
+  finally {
+    migrated.close()
+  }
+})
+
 it('upgrades version 96 Routines so a spec can set when', () => {
   const path = join(directory, 'state.sqlite')
   const at = '2026-11-17T01:00:00.000Z'

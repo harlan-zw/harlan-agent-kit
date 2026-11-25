@@ -43,7 +43,7 @@ export const agentTurnSchema = `
     role TEXT NOT NULL,
     repository TEXT NOT NULL,
     item_number INTEGER NOT NULL,
-    provider TEXT NOT NULL CHECK (provider IN ('codex', 'opencode')),
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'opencode', 'agy')),
     model TEXT NOT NULL,
     reasoning_effort TEXT,
     session_id TEXT,

@@ -21,6 +21,11 @@ const opencodeProvider: AgentProvider = {
   runTurn: () => (async function* () {})(),
 }
 
+const agyProvider: AgentProvider = {
+  name: 'agy',
+  runTurn: () => (async function* () {})(),
+}
+
 describe('agent selection parsing', () => {
   it('accepts a provider on its own and keeps every role default', () => {
     const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'opencode' })
@@ -55,7 +60,7 @@ describe('agent selection parsing', () => {
   it('rejects an unknown provider', () => {
     const parsed = parseAgentSelection({ _tag: 'Pinned', provider: 'claude' })
 
-    expect(parsed).toEqual({ _tag: 'Err', error: 'Select codex or opencode as the Agent provider.' })
+    expect(parsed).toEqual({ _tag: 'Err', error: 'Select codex, opencode, or agy as the Agent provider.' })
   })
 
   it('rejects an unknown reasoning effort', () => {
@@ -159,6 +164,7 @@ describe('agent runtime source', () => {
       providers: {
         codex: stubProvider(turnEvents({ outcome: 'resolved' }), capture),
         opencode: stubProvider(turnEvents({ outcome: 'resolved' }), capture, 'opencode'),
+        agy: agyProvider,
       },
       roleReasoningEfforts: { [provider]: { review_fix: 'low' } },
       repositoryReasoningEfforts: new Map([
@@ -206,7 +212,7 @@ describe('agent runtime source', () => {
     const runtime = createAgentRuntimeSource({
       configuredProvider: 'codex',
       maximumActiveAgents: 3,
-      providers: { codex: codexProvider, opencode: opencodeProvider },
+      providers: { codex: codexProvider, opencode: opencodeProvider, agy: agyProvider },
       selection: () => selection,
     })
 
@@ -234,6 +240,7 @@ describe('switching the Agent selection at runtime', () => {
         providers: {
           codex: stubProvider(turnEvents({ outcome: 'resolved' }), codex),
           opencode: stubProvider(turnEvents({ outcome: 'resolved' }), opencode, 'opencode'),
+          agy: agyProvider,
         },
         selection: store.getAgentSelection,
       }),

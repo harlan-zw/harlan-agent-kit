@@ -4,8 +4,9 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
+import { DEFAULT_AGY_CACHED_CONTEXT_BUDGET, DEFAULT_CACHED_CONTEXT_BUDGET } from './agent-provider.ts'
 import { runAgentSandboxCommand } from './agent-sandbox.ts'
+import { createAgyProvider } from './agy-provider.ts'
 import { createCodexProvider } from './codex-provider.ts'
 import { createOpencodeProvider } from './opencode-provider.ts'
 import { createReviewProofDuplex } from './review-proof-duplex.ts'
@@ -27,14 +28,16 @@ async function main(): Promise<void> {
     emit({ _tag: 'CheckResult', exitCode: result.exitCode, stdout: result.stdout ?? '', stderr: result.stderr ?? '' })
     return
   }
-  if (input._tag !== 'Turn' || (input.name !== 'codex' && input.name !== 'opencode'))
+  if (input._tag !== 'Turn' || (input.name !== 'codex' && input.name !== 'opencode' && input.name !== 'agy'))
     throw new Error('The maintenance request is invalid.')
   const proof = createReviewProofDuplex(process.stdin, process.stdout)
   // No nested systemd slices: every sandbox inherits the already charged scope.
   const proofOptions = { reviewProofAuthority: () => proof.authority }
   const provider = input.name === 'codex'
     ? createCodexProvider(proofOptions)
-    : createOpencodeProvider({ ...proofOptions, cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: process.env })
+    : input.name === 'agy'
+      ? createAgyProvider({ ...proofOptions, cachedContextBudget: DEFAULT_AGY_CACHED_CONTEXT_BUDGET, environment: process.env })
+      : createOpencodeProvider({ ...proofOptions, cachedContextBudget: DEFAULT_CACHED_CONTEXT_BUDGET, environment: process.env })
   try {
     for await (const event of provider.runTurn({ ...input.request, signal: controller.signal }))
       emit(event)

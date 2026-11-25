@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { prepareAgentSandbox } from './agent-sandbox.ts'
 
 /** Collect immutable evidence before exposing any tools. No Agent input selects Git commands. */
-export async function prepareReviewEvidence(input: { root: string, request: AgentTurnRequest, provider: 'codex' | 'opencode', environment: NodeJS.ProcessEnv }): Promise<string> {
+export async function prepareReviewEvidence(input: { root: string, request: AgentTurnRequest, provider: 'codex' | 'opencode' | 'agy', environment: NodeJS.ProcessEnv }): Promise<string> {
   const { request, root } = input
   if (request.toolPolicy?._tag !== 'Review')
     throw new Error('Exact revision evidence requires controller Review ownership.')

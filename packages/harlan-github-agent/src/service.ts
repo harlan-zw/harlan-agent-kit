@@ -654,6 +654,12 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
         provider: handoffProvider(hosts.provider(createMaintenanceScopeProvider({ ...maintenanceAdmission, name: 'opencode', reviewProofAuthority, environment: opencodeEnvironment.value }), desktop.provider('opencode'))),
         store,
       }),
+      agy: createCircuitProtectedProvider({
+        credential: agentProfile('agy').authentication,
+        now,
+        provider: handoffProvider(hosts.provider(createMaintenanceScopeProvider({ ...maintenanceAdmission, name: 'agy', reviewProofAuthority }), desktop.provider('agy'))),
+        store,
+      }),
     },
     selection: store.getAgentSelection,
   })

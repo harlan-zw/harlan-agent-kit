@@ -144,11 +144,11 @@ def find_session_log(session_id, root=SESSION_ROOT):
 
 
 def validate_session_id(provider, session_id):
-    pattern = SESSION_ID if provider == 'codex' else OPENCODE_SESSION_ID if provider == 'opencode' else None
+    pattern = SESSION_ID if provider in ('codex', 'agy') else OPENCODE_SESSION_ID if provider == 'opencode' else None
     if pattern is None:
         raise ValueError('Unsupported Agent provider.')
     if pattern.fullmatch(session_id) is None:
-        label = 'Codex' if provider == 'codex' else 'opencode'
+        label = 'Codex' if provider == 'codex' else 'Antigravity' if provider == 'agy' else 'opencode'
         raise ValueError(f'Invalid {label} session ID.')
     return session_id
 

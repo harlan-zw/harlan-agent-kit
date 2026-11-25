@@ -10,6 +10,7 @@ import {
   chooseAgentProvider,
   createProviderCapacitySource,
   hasSpendableCapacity,
+  readAgyCapacity,
   readOpencodeGoCapacity,
   readZaiApiKey,
   readZaiCapacity,
@@ -100,7 +101,7 @@ describe('choosing an Agent provider automatically', () => {
     const chosen = chooseAgentProvider({
       capacity: capacities({ _tag: 'Available', usedPercent: 10, resetsAt: '' }),
       order: ['codex', 'opencode'],
-      reservePercent: { codex: 20, opencode: 20 },
+      reservePercent: { codex: 20, opencode: 20, agy: 0 },
     })
 
     expect(chosen).toBe('codex')
@@ -110,7 +111,7 @@ describe('choosing an Agent provider automatically', () => {
     const chosen = chooseAgentProvider({
       capacity: capacities({ _tag: 'Available', usedPercent: 85, resetsAt: '' }),
       order: ['codex', 'opencode'],
-      reservePercent: { codex: 20, opencode: 20 },
+      reservePercent: { codex: 20, opencode: 20, agy: 0 },
     })
 
     expect(chosen).toBe('opencode')
@@ -120,7 +121,7 @@ describe('choosing an Agent provider automatically', () => {
     const chosen = chooseAgentProvider({
       capacity: () => ({ _tag: 'Unavailable', reason: 'unread' }),
       order: ['codex', 'opencode'],
-      reservePercent: { codex: 20, opencode: 20 },
+      reservePercent: { codex: 20, opencode: 20, agy: 0 },
     })
 
     expect(chosen).toBeNull()
@@ -130,7 +131,7 @@ describe('choosing an Agent provider automatically', () => {
     const chosen = chooseAgentProvider({
       capacity: capacities({ _tag: 'Available', usedPercent: 0, resetsAt: '' }),
       order: ['opencode', 'codex'],
-      reservePercent: { codex: 20, opencode: 20 },
+      reservePercent: { codex: 20, opencode: 20, agy: 0 },
     })
 
     expect(chosen).toBe('opencode')
@@ -277,7 +278,7 @@ describe('parsing an automatic Agent selection', () => {
   it('defaults to every provider when the order is omitted', () => {
     expect(parseAgentSelection({ _tag: 'Automatic' })).toEqual({
       _tag: 'Ok',
-      value: { _tag: 'Automatic', order: ['codex', 'opencode'] },
+      value: { _tag: 'Automatic', order: ['codex', 'opencode', 'agy'] },
     })
   })
 
@@ -298,7 +299,7 @@ describe('parsing an automatic Agent selection', () => {
   it('rejects an unknown provider in the order', () => {
     expect(parseAgentSelection({ _tag: 'Automatic', order: ['claude'] })).toEqual({
       _tag: 'Err',
-      error: 'Select codex or opencode as the Agent provider.',
+      error: 'Select codex, opencode, or agy as the Agent provider.',
     })
   })
 })
@@ -332,7 +333,7 @@ describe('resolving an automatic Agent selection', () => {
       chooseProvider: () => chosen,
       configuredProvider: 'codex',
       maximumActiveAgents: 3,
-      providers: { codex: stubProvider('codex'), opencode: stubProvider('opencode') },
+      providers: { codex: stubProvider('codex'), opencode: stubProvider('opencode'), agy: stubProvider('agy') },
       selection: () => ({ _tag: 'Automatic', order: ['codex', 'opencode'] }),
     })
 
@@ -377,13 +378,36 @@ describe('the capacity source', () => {
     const source = createAgentRuntimeSource({
       configuredProvider: 'opencode',
       maximumActiveAgents: 1,
-      providers: { codex: stubProvider('codex'), opencode: stubProvider('opencode') },
+      providers: { codex: stubProvider('codex'), opencode: stubProvider('opencode'), agy: stubProvider('agy') },
       selection: () => ({ _tag: 'Automatic', order: ['opencode'] }),
       automaticSelection: provider => ({ provider, model: 'opencode-go/glm-5.3-flash', reasoningEffort: null }),
     })
     expect(source().profile.roles.routine_scan.model).toBe('opencode-go/glm-5.3-flash')
     expect(source('harlan-zw/example', { provider: 'opencode', model: 'zai-coding-plan/glm-5.3', reasoningEffort: 'high' }).profile.roles.routine_scan.model).toBe('zai-coding-plan/glm-5.3')
   })
+  it('reports agy as unavailable until its OAuth token exists', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agy-capacity-'))
+    try {
+      const tokenPath = join(root, 'antigravity-oauth-token')
+      expect(readAgyCapacity(tokenPath)).toEqual({ _tag: 'Unavailable', reason: 'Sign in with agy before starting a scan.' })
+      writeFileSync(tokenPath, 'token-value')
+      expect(readAgyCapacity(tokenPath)).toEqual({ _tag: 'Unpublished' })
+
+      const source = createProviderCapacitySource({
+        onError: () => undefined,
+        readCodex: async () => ({ _tag: 'Unpublished' }),
+        readOpencode: async () => ({ _tag: 'Unpublished' }),
+        readOpencodeGo: async () => ({ _tag: 'Unpublished' }),
+        readAgy: async () => readAgyCapacity(tokenPath),
+      })
+      await source.refresh()
+      expect(source.read('agy')).toEqual({ _tag: 'Unpublished' })
+    }
+    finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('keeps OpenCode Go separate from an exhausted GLM Coding Plan', async () => {
     const source = createProviderCapacitySource({
       onError: () => undefined,

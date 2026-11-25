@@ -61,7 +61,7 @@ export function parseSessionHost(value: unknown): SessionHost {
 export function parseStartSession(value: unknown): StartSessionRequest {
   const input = sessionRecord(value)
   const provider = input.provider
-  if (provider !== 'codex' && provider !== 'opencode')
+  if (provider !== 'codex' && provider !== 'opencode' && provider !== 'agy')
     throw new Error('Select a supported Agent provider.')
   const model = sessionText(input.model, 'model')
   if (!(AGENT_MODELS[provider] as readonly string[]).includes(model))

@@ -1578,7 +1578,25 @@ export type OpencodeAgentModel
     | 'opencode-go/qwen3.6-plus'
     | 'opencode-go/qwen3.7-max'
     | 'opencode-go/qwen3.7-plus'
-export type AgentModel = CodexAgentModel | OpencodeAgentModel
+export type AgyAgentModel
+  = | 'gemini-3.8-flash-low'
+    | 'gemini-3.8-flash-medium'
+    | 'gemini-3.8-flash-high'
+    | 'gemini-4-hydrogen-low'
+    | 'gemini-4-hydrogen-medium'
+    | 'gemini-4-hydrogen-high'
+    | 'gemini-4-hydrogen-xhigh'
+    | 'gemini-4-argon-low'
+    | 'gemini-4-argon-medium'
+    | 'gemini-4-argon-high'
+    | 'gemini-4-carbon-low'
+    | 'gemini-4-carbon-medium'
+    | 'gemini-4-carbon-high'
+    | 'gemini-4-neon-low'
+    | 'gemini-4-neon-medium'
+    | 'gemini-4-neon-high'
+    | 'gemini-4-neon-xhigh'
+export type AgentModel = CodexAgentModel | OpencodeAgentModel | AgyAgentModel
 export type CodexReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /** Reasoning effort overrides keyed by Agent provider, then by Agent role. */
@@ -1594,7 +1612,7 @@ export interface RoleProfile {
 
 export interface AgentProfile {
   provider: AgentProviderName
-  authentication: 'chatgpt' | 'opencode-go'
+  authentication: 'chatgpt' | 'opencode-go' | 'google-account'
   maximumActiveAgents: number
   roles: Record<AgentRole, RoleProfile>
 }

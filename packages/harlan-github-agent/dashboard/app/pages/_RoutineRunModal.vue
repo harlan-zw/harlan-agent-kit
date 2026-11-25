@@ -62,7 +62,7 @@ async function submit(): Promise<void> {
           Applies to this scan only.
         </p>
         <UFormField label="Agent provider" required>
-          <USelect v-model="provider" :items="[{ label: 'Codex', value: 'codex' }, { label: 'OpenCode', value: 'opencode' }]" aria-label="Agent provider" class="min-h-11 w-full" :disabled="pending" />
+          <USelect v-model="provider" :items="[{ label: 'Codex', value: 'codex' }, { label: 'OpenCode', value: 'opencode' }, { label: 'Antigravity', value: 'agy' }]" aria-label="Agent provider" class="min-h-11 w-full" :disabled="pending" />
         </UFormField>
         <UFormField label="Model" required>
           <USelect v-model="model" :items="models" aria-label="Model" class="min-h-11 w-full" :disabled="pending" />
