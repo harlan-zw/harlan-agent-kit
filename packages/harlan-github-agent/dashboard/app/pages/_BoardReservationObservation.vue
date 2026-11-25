@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import type { ReservationObservation } from '../../../src/merge-reservation-observation.ts'
 
-const { observations, generatedAt } = defineProps<{ observations: ReservationObservation[], generatedAt: string }>()
+const { observations, now } = defineProps<{ observations: ReservationObservation[], now: Date }>()
 const latest = computed(() => observations[0])
 const stale = computed(() => latest.value !== undefined
-  && Date.parse(generatedAt) - Date.parse(latest.value.observedAt) > 6 * 60_000)
+  && now.getTime() - Date.parse(latest.value.observedAt) > 6 * 60_000)
 const verdicts = {
   WouldBlock: { label: 'Would block', tone: 'warning' },
   WouldAllow: { label: 'Would allow', tone: 'success' },
@@ -38,7 +38,7 @@ const date = new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle:
               {{ phase }}
               <StateBadge :tone="stale ? 'neutral' : verdicts[result.verdict].tone" :label="stale ? 'Unknown' : verdicts[result.verdict].label" />
             </dt>
-            <dd class="mt-1 break-words text-muted">
+            <dd v-if="!stale" class="mt-1 break-words text-muted">
               {{ result.reason }}
               <a v-if="result.url" class="entity-link ms-1" :href="result.url">View evidence</a>
             </dd>

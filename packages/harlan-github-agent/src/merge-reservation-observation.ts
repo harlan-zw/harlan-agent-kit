@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 export const reservationPilotRepository = 'harlan-zw/nuxtseo.com'
 export const reservationObservationIntervalMs = 2 * 60_000
 const deliveryWindowMs = 45 * 60_000
+const dispatchLookbackMs = 65 * 60_000
 
 export interface ReservationRun {
   id: number
@@ -19,6 +20,7 @@ export interface ReservationEvidence {
   code: ReservationRun[]
   /** A push SHA from trusted provenance, or null when the run cannot prove one. */
   deploys: { run: ReservationRun, sourceSha: string | null }[]
+  activeDocsPolls: ReservationRun[]
   handoffs: { number: number, url: string }[]
   servedRevision: string | null
   mergedAt: string | null
@@ -50,30 +52,41 @@ function matchesRevision(sha: string, served: string | null): boolean {
   return served === sha || served === createHash('sha256').update(sha).digest('hex')
 }
 
+function canStartDeploy(run: ReservationRun): boolean {
+  return run.status === 'completed' && run.conclusion === 'success'
+}
+
+function followsCode(deploy: ReservationEvidence['deploys'][number], codeRun: ReservationRun): boolean {
+  return deploy.sourceSha === codeRun.sha && deploy.run.startedAt >= codeRun.updatedAt
+}
+
+function runFinding(run: ReservationRun | undefined, reason: string): ReservationFinding | undefined {
+  return run === undefined ? undefined : { reason, url: run.url }
+}
+
 export function observeMergeReservation(evidence: ReservationEvidence, at: Date): ReservationObservation {
   const { mainSha, handoffs, code, deploys } = evidence
   const mainCode = newest(code.filter(run => run.sha === mainSha), run => run.id)
-  const mainDeploy = newest(deploys.filter(({ sourceSha }) => sourceSha === mainSha), ({ run }) => run.id)?.run
+  const mainDeploy = mainCode !== undefined && canStartDeploy(mainCode)
+    ? newest(deploys.filter(deploy => followsCode(deploy, mainCode)), ({ run }) => run.id)?.run
+    : undefined
   const activeDeploy = deploys.find(({ run }) => run.status !== 'completed')?.run
   const activeCode = code.find(run => run.status !== 'completed')
+  const activeWork = runFinding(activeDeploy, 'A production deploy is queued or running.')
+    ?? runFinding(activeCode, 'Code on main could still start a deploy.')
+    ?? runFinding(evidence.activeDocsPolls[0], 'Docs poll could still start a deploy.')
   const handoff = handoffs[0]
-  // A rerun of an earlier Code workflow can finish after the current deploy
-  // starts and still be about to dispatch another deploy.
-  const dispatchGap = mainDeploy === undefined
-    ? undefined
-    : code.find(run => run.status === 'completed' && run.conclusion === 'success'
-      && run.updatedAt > mainDeploy.startedAt
-      && !deploys.some(deploy => deploy.sourceSha === run.sha && deploy.run.startedAt >= run.updatedAt))
+  // An earlier Code run can still dispatch a deploy after main's deploy starts.
+  const dispatchGap = code.find(run => canStartDeploy(run)
+    && Date.parse(run.updatedAt) >= at.getTime() - dispatchLookbackMs
+    && !deploys.some(deploy => followsCode(deploy, run)))
 
   let beforeMerge: ReservationObservation['beforeMerge']
   if (handoff !== undefined) {
     beforeMerge = { verdict: 'WouldBlock', reason: `GitHub auto-merge is enabled for PR #${handoff.number}.`, url: handoff.url }
   }
-  else if (activeDeploy !== undefined) {
-    beforeMerge = { verdict: 'WouldBlock', reason: 'A production deploy is queued or running.', url: activeDeploy.url }
-  }
-  else if (activeCode !== undefined) {
-    beforeMerge = { verdict: 'WouldBlock', reason: 'Code on main could still start a deploy.', url: activeCode.url }
+  else if (activeWork !== undefined) {
+    beforeMerge = { verdict: 'WouldBlock', ...activeWork }
   }
   else if (mainCode === undefined) {
     beforeMerge = { verdict: 'Unknown', reason: 'GitHub has no Code run for this main commit.' }
@@ -92,9 +105,9 @@ export function observeMergeReservation(evidence: ReservationEvidence, at: Date)
   }
 
   let afterMerge: ReservationObservation['afterMerge']
-  if (mainCode?.status === 'completed' && mainCode.conclusion === 'success'
-    && mainDeploy?.status === 'completed' && mainDeploy.conclusion === 'success'
-    && dispatchGap === undefined && matchesRevision(mainSha, evidence.servedRevision)) {
+  if (mainDeploy?.status === 'completed' && mainDeploy.conclusion === 'success'
+    && activeWork === undefined && dispatchGap === undefined
+    && matchesRevision(mainSha, evidence.servedRevision)) {
     afterMerge = { verdict: 'WouldRelease', reason: 'Production serves the exact main commit.', url: mainDeploy.url }
   }
   else if (mainCode?.status === 'completed' && mainCode.conclusion !== null && mainCode.conclusion !== 'success') {
@@ -105,6 +118,9 @@ export function observeMergeReservation(evidence: ReservationEvidence, at: Date)
   }
   else if (evidence.mergedAt !== null && at.getTime() >= Date.parse(evidence.mergedAt) + deliveryWindowMs) {
     afterMerge = { verdict: 'WouldRelease', reason: 'The 45-minute delivery window expired.' }
+  }
+  else if (activeWork !== undefined) {
+    afterMerge = { verdict: 'WouldWait', ...activeWork }
   }
   else if (dispatchGap !== undefined) {
     afterMerge = { verdict: 'WouldWait', reason: 'A successful Code run could still start a deploy.', url: dispatchGap.url }

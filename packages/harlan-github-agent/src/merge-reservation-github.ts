@@ -46,17 +46,28 @@ interface HandoffSnapshot {
 }
 
 type WorkflowRun = Awaited<ReturnType<Octokit['rest']['actions']['listWorkflowRuns']>>['data']['workflow_runs'][number]
+const activeStatuses = ['queued', 'in_progress', 'requested', 'pending', 'waiting'] as const
 
 function runEvidence(run: WorkflowRun): ReservationRun {
   return {
     id: run.id,
     sha: run.head_sha,
-    startedAt: run.created_at,
+    startedAt: run.run_started_at ?? run.created_at,
     updatedAt: run.updated_at,
     status: run.status,
     conclusion: run.conclusion,
     url: run.html_url,
   }
+}
+
+function includeActiveRuns(recent: WorkflowRun[], active: WorkflowRun[]): WorkflowRun[] {
+  const runs = new Map(recent.map(run => [run.id, run]))
+  for (const run of active) {
+    const current = runs.get(run.id)
+    if (current === undefined || run.updated_at >= current.updated_at)
+      runs.set(run.id, run)
+  }
+  return [...runs.values()]
 }
 
 export function createReservationSource(options: {
@@ -104,6 +115,19 @@ export function createReservationSource(options: {
       ...(event === undefined ? {} : { event }),
       request,
     }).then(response => response.data.workflow_runs)
+    const listActive = async () => (await Promise.all(activeStatuses.map(async (status) => {
+      const { data } = await actionsClient.rest.actions.listWorkflowRunsForRepo({
+        owner,
+        repo,
+        branch,
+        status,
+        per_page: 100,
+        request,
+      })
+      if (data.total_count > data.workflow_runs.length)
+        throw new Error('GitHub returned incomplete active workflow runs.')
+      return data.workflow_runs
+    }))).flat()
     const served = options.fetch('https://nuxtseo.com/', { signal, redirect: 'manual', headers: { 'user-agent': 'harlan-github-agent' } })
       .then(async (response) => {
         await response.body?.cancel()
@@ -113,10 +137,14 @@ export function createReservationSource(options: {
         // Missing production evidence must leave the delivery in WouldWait.
         return null
       })
-    const [codeRuns, deployRuns, servedRevision] = await Promise.all([list('code.yml', 'push'), list('deploy-prod.yml'), served])
+    const [recentCode, recentDeploys, active, servedRevision] = await Promise.all([list('code.yml', 'push'), list('deploy-prod.yml'), listActive(), served])
     const current = await repositoryClient.rest.repos.getBranch({ owner, repo, branch, request })
     if (current.data.commit.sha !== mainSha)
       throw new Error('The default branch changed during the observation.')
+    const codeRuns = includeActiveRuns(recentCode, active.filter(run => run.event === 'push'
+      && run.path.split('@')[0] === '.github/workflows/code.yml'))
+    const deployRuns = includeActiveRuns(recentDeploys, active.filter(run => run.path.split('@')[0] === '.github/workflows/deploy-prod.yml'))
+    const activeDocsPolls = includeActiveRuns([], active.filter(run => run.path.split('@')[0] === '.github/workflows/docs-poll.yml')).map(runEvidence)
     const deploys = deployRuns.flatMap<ReservationEvidence['deploys'][number]>((run) => {
       if (run.event === 'workflow_dispatch')
         return [{ run: runEvidence(run), sourceSha: null }]
@@ -129,6 +157,6 @@ export function createReservationSource(options: {
         ? []
         : [{ run: runEvidence(run), sourceSha: null }]
     })
-    return { mainSha, code: codeRuns.map(runEvidence), deploys, handoffs, servedRevision, mergedAt }
+    return { mainSha, code: codeRuns.map(runEvidence), deploys, activeDocsPolls, handoffs, servedRevision, mergedAt }
   }
 }

@@ -1389,8 +1389,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
   }
   const reservationPilot = config.triggers.includes('github')
     ? config.repositories.find(repository => repository.github.toLowerCase() === reservationPilotRepository
-      && repository.enabled && repository.ownership === 'owned' && repository.defaultBranch === 'main'
-      && repository.takeOwnership._tag === 'Enabled')
+      && repository.enabled && repository.ownership === 'owned' && repository.defaultBranch === 'main')
     : undefined
   const readReservationEvidence = createReservationSource({ tokens: routedTokens, fetch: globalThis.fetch })
   const reservationPoll: PollerOptions[] = reservationPilot === undefined

@@ -18,7 +18,7 @@ const deploy: ReservationRun = { ...code, id: 2, url: deployUrl, startedAt: '202
 const digest = createHash('sha256').update(sha).digest('hex')
 
 function evidence(overrides: Partial<ReservationEvidence> = {}): ReservationEvidence {
-  return { mainSha: sha, code: [code], deploys: [{ run: deploy, sourceSha: sha }], handoffs: [], servedRevision: digest, mergedAt: merge, ...overrides }
+  return { mainSha: sha, code: [code], deploys: [{ run: deploy, sourceSha: sha }], activeDocsPolls: [], handoffs: [], servedRevision: digest, mergedAt: merge, ...overrides }
 }
 
 it('blocks when main Code passes before GitHub shows a matching deploy', () => {
@@ -47,10 +47,32 @@ it('blocks on a queued standalone deploy without using it as revision evidence',
   expect(result.afterMerge.verdict).toBe('WouldWait')
 })
 
+it('waits while Docs poll can still dispatch a production deploy', () => {
+  const poll = { ...code, id: 3, status: 'in_progress', conclusion: null, url: 'https://github.com/run/3' }
+  const result = observeMergeReservation(evidence({ activeDocsPolls: [poll] }), now)
+  expect(result.beforeMerge).toMatchObject({ verdict: 'WouldBlock', url: poll.url })
+  expect(result.afterMerge).toMatchObject({ verdict: 'WouldWait', url: poll.url })
+})
+
 it('detects an earlier push that can still trigger an overlapping deploy', () => {
   const prior = { ...code, id: 3, sha: older, updatedAt: '2026-11-25T01:08:00Z', url: 'https://github.com/run/3' }
   const result = observeMergeReservation(evidence({ code: [code, prior] }), now)
   expect(result.beforeMerge).toMatchObject({ verdict: 'WouldBlock', url: prior.url })
+  expect(result.afterMerge.verdict).toBe('WouldWait')
+})
+
+it('waits for a recent unpaired Code run that finished before the current deploy', () => {
+  const prior = { ...code, id: 3, sha: older, updatedAt: '2026-11-25T01:03:00Z', url: 'https://github.com/run/3' }
+  const result = observeMergeReservation(evidence({ code: [code, prior] }), now)
+  expect(result.beforeMerge).toMatchObject({ verdict: 'WouldBlock', url: prior.url })
+  expect(result.afterMerge).toMatchObject({ verdict: 'WouldWait', url: prior.url })
+})
+
+it.each(['in_progress', 'completed'])('waits for the current Code retry when its status is %s', (status) => {
+  const retry = { ...code, status, conclusion: status === 'completed' ? 'success' : null, updatedAt: '2026-11-25T01:22:00Z' }
+  const failed = { ...deploy, conclusion: 'failure' }
+  const result = observeMergeReservation(evidence({ code: [retry], deploys: [{ run: failed, sourceSha: sha }] }), now)
+  expect(result.beforeMerge.verdict).toBe('WouldBlock')
   expect(result.afterMerge.verdict).toBe('WouldWait')
 })
 

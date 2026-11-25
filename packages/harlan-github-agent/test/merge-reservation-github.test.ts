@@ -10,7 +10,7 @@ const otherSha = 'b'.repeat(40)
 const mergedAt = '2026-11-25T03:00:00Z'
 const current = { head_sha: sha, created_at: mergedAt, updated_at: mergedAt, status: 'in_progress', conclusion: null, html_url: 'https://github.com/run/1' }
 
-function sourceFor(options: { moved?: boolean, incomplete?: boolean } = {}) {
+function sourceFor(options: { moved?: boolean, incomplete?: boolean, oldActive?: boolean } = {}) {
   const credentials: string[] = []
   const source = createReservationSource({
     tokens: {
@@ -46,6 +46,16 @@ function sourceFor(options: { moved?: boolean, incomplete?: boolean } = {}) {
       if (url.pathname.endsWith('/branches/main'))
         return reply({ commit: { sha: options.moved ? otherSha : sha } })
       expect(url.searchParams.get('branch')).toBe('main')
+      if (url.pathname.endsWith('/actions/runs')) {
+        const status = url.searchParams.get('status')
+        const workflowRuns = options.oldActive && status === 'in_progress'
+          ? [
+              { ...current, id: 66, head_sha: otherSha, path: '.github/workflows/code.yml@main', event: 'push' },
+              { ...current, id: 67, head_sha: otherSha, path: '.github/workflows/docs-poll.yml', event: 'schedule' },
+            ]
+          : []
+        return reply({ total_count: workflowRuns.length, workflow_runs: workflowRuns })
+      }
       if (url.pathname.endsWith('/code.yml/runs')) {
         expect(url.searchParams.get('event')).toBe('push')
         return reply({ workflow_runs: [{ ...current, id: 1 }] })
@@ -74,6 +84,12 @@ it('collects default branch evidence with read access and uses only trusted push
     code: [{ id: 1 }],
     deploys: [{ run: { id: 2, sha: otherSha }, sourceSha: sha }, { run: { id: 4 }, sourceSha: null }, { run: { id: 5 }, sourceSha: null }],
   })
+})
+
+it('includes an active rerun outside the recent workflow history', async () => {
+  const evidence = await sourceFor({ oldActive: true }).source(repository, new AbortController().signal)
+  expect(evidence.code).toContainEqual(expect.objectContaining({ id: 66, sha: otherSha, status: 'in_progress' }))
+  expect(evidence.activeDocsPolls).toEqual([expect.objectContaining({ id: 67, status: 'in_progress' })])
 })
 
 it.each([

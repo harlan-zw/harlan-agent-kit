@@ -396,14 +396,15 @@ The controller creates no repair, deploy, release, or cleanup action from these 
 
 ### NuxtSEO reservation observation
 
-An enabled, owned `harlan-zw/nuxtseo.com` mapping on `main` with Take Ownership starts this pilot.
+An enabled, owned `harlan-zw/nuxtseo.com` mapping on `main` starts this pilot.
 The Board shows what would block the next merge or release a hypothetical reservation for the current main commit.
-The observer reads GitHub auto-merge handoffs, main `code.yml` runs, `deploy-prod.yml`, and the home page’s `x-release-sha` header.
+The observer reads GitHub auto-merge handoffs, main Code runs, active Docs poll runs, production deploys, and the home page’s `x-release-sha` header.
 The observer never holds a merge, requests a reservation, or writes to GitHub.
 
 The Service checks every two minutes and keeps changed observations for seven days.
 If GitHub has no Code run for the main commit, the pre-merge verdict stays unknown.
 If Code passes and the deployment has yet to appear, the verdict shows the gap.
+The Service also checks active runs and looks for unmatched Code completions from the past 65 minutes.
 Release evidence includes the exact served revision, a terminal workflow failure, or expiry 45 minutes after a confirmed merge.
 Use `harlan-github-agent control status` and read `state.reservationObservations` for the same evidence.
 
