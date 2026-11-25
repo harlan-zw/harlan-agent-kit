@@ -5,6 +5,7 @@ import type { DesktopBroker } from './desktop-broker.ts'
 import type { FindingScope } from './finding-scope.ts'
 import type { GitHubRateLimitHold } from './github-rate-limit.ts'
 import type { AgentSlotLimits, HostCapacity } from './host-capacity.ts'
+import type { ReservationObservation } from './merge-reservation-observation.ts'
 import type { MergeRisk, MergeRiskPolicy } from './merge-risk.ts'
 import type { PackageReleaseConfig, PackageReleaseDefaults } from './package-release.ts'
 import type { PaybackPricing } from './payback.ts'
@@ -1803,6 +1804,7 @@ export interface TriageSkip {
 export interface DashboardSnapshot {
   /** Controller delivery checks, exposed by the Control API. */
   completionTasks?: CompletionTask[]
+  reservationObservations?: ReservationObservation[]
   hostTasks?: Array<{ taskId: string | null, host: 'hogwild' | 'desktop' }>
   hostCapacity?: HostCapacity
   agentSlots?: AgentSlotLimits

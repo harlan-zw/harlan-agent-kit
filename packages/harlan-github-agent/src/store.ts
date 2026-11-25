@@ -11,6 +11,7 @@ import type { IncidentResolutionError, IncidentResolutionReceipt, IncidentResolu
 import type { IssueClassificationDecision, IssueRouteReading } from './issue-classification.ts'
 import type { IssueTriageResult, IssueTriageState } from './issue-triage.ts'
 import type { LoggedFindingStore } from './logged-finding-store.ts'
+import type { ReservationObservation } from './merge-reservation-observation.ts'
 import type { PullRequestFile } from './merge-risk.ts'
 import type { PackageReleaseStore } from './package-release-store.ts'
 import type { PaybackStore } from './payback-store.ts'
@@ -154,6 +155,7 @@ import { createImplicitSignalStore, implicitSignalIndexes, implicitSignalSchema,
 import { routedResult } from './issue-classification.ts'
 import { isIssueTriageState } from './issue-triage.ts'
 import { createLoggedFindingStore, followUpIssueSchema, loggedFindingSchema } from './logged-finding-store.ts'
+import { createReservationObservationStore, reservationObservationSchema } from './merge-reservation-store.ts'
 import { createPackageReleaseStore } from './package-release-store.ts'
 import { createPaybackStore } from './payback-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON, triageDecider } from './pull-request-triage.ts'
@@ -1100,6 +1102,8 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   deferIssueTriageComment: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => boolean
   failPublication: (input: { commandId: string, workerId: string, fence: number, at: string, reason: string }) => 'Retrying' | 'Failed' | 'Rejected'
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
+  recordReservationObservation: (observation: ReservationObservation) => void
+  listReservationObservations: () => ReservationObservation[]
   getStats: (range: StatsRange, generatedAt: string) => StatsSnapshot
   /**
    * Newest append-only workflow events. Reasons are redacted before storage.
@@ -7767,7 +7771,11 @@ function installSchema(database: DatabaseSync): void {
     }
     version = 112
   }
-  if (version === 112)
+  if (version === 112) {
+    applyMigration(database, `${reservationObservationSchema} PRAGMA user_version = 113;`)
+    version = 113
+  }
+  if (version === 113)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -8054,6 +8062,7 @@ export function openJournalStore(
   const database = openDatabase(path)
   const packageReleaseStore = createPackageReleaseStore(database)
   const takeOwnershipStore = createTakeOwnershipStore(database)
+  const reservationObservationStore = createReservationObservationStore(database)
   const reviewProofStore = createReviewProofStore(database)
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
@@ -18191,6 +18200,7 @@ export function openJournalStore(
     getAgentSlots,
     setAgentSlots,
     getDashboardSnapshot,
+    ...reservationObservationStore,
     getStats,
     listWorkflowEvents,
     groupWorkflowFailures,
