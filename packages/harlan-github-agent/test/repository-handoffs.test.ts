@@ -5,10 +5,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setImmediate } from 'node:timers/promises'
 import { expect, it, vi } from 'vitest'
+import { CODEX_AGENT_PROFILE } from '../src/agent-profile.ts'
+import { runParsedAgentTurn } from '../src/agent-turn.ts'
 import { createAgentApp } from '../src/app.ts'
 import { createControlClient } from '../src/control-client.ts'
 import { createHandoffController, withRepositoryHandoffs } from '../src/repository-handoffs.ts'
+import { err, ok } from '../src/result.ts'
 import { openJournalStore } from '../src/store.ts'
+import { agentRuntime, agentTurnLedger } from './fixtures.ts'
 
 const repository = 'harlan-zw/nuxtseo.com'
 const other = 'harlan-zw/other'
@@ -64,6 +68,21 @@ it('keeps addressed Handoffs after restart and gives a retry the same receipt', 
   }
 })
 
+it('rejects an oversized Handoff before parsing its message', async () => {
+  const store = openJournalStore(':memory:', false)
+  try {
+    await expect(clientFor(store).client.postHandoff({
+      repository,
+      agent: 'fixture',
+      requestId: 'size',
+      message: 'x'.repeat(13_000),
+    })).resolves.toMatchObject({ _tag: 'Err', error: { status: 413 } })
+  }
+  finally {
+    store.close()
+  }
+})
+
 it('requires a Control credential and restricts access to enabled repositories', async () => {
   const store = openJournalStore(':memory:', false)
   try {
@@ -97,7 +116,11 @@ it('returns a new Handoff to an Agent waiting with a cursor', async () => {
   }
 })
 
-it.each([true, false])('passes along a completed Task Handoff only while it owns its attempt (%s)', async (stillOwnsTask) => {
+it.each([
+  { result: 'implemented', stillOwnsTask: true, shouldPost: true },
+  { result: 'implemented', stillOwnsTask: false, shouldPost: false },
+  { result: 'rejected', stillOwnsTask: true, shouldPost: false },
+])('posts a Handoff only from an accepted result that still owns its Task ($result, $stillOwnsTask)', async ({ result, stillOwnsTask, shouldPost }) => {
   const store = openJournalStore(':memory:', false)
   try {
     const { client, handoffs } = clientFor(store)
@@ -108,7 +131,8 @@ it.each([true, false])('passes along a completed Task Handoff only while it owns
       name: 'codex',
       async* runTurn(request): AsyncGenerator<AgentEvent> {
         captured.push(request)
-        yield { _tag: 'Message', text: JSON.stringify({ outcome: 'implemented', agentHandoff: { message: 'Integration tests passed.', replyTo: 1 } }) }
+        yield { _tag: 'SessionStarted', sessionId: 'agent-handoff-fixture' }
+        yield { _tag: 'Message', text: JSON.stringify({ outcome: result, agentHandoff: { message: 'Integration tests passed.', replyTo: 1 } }) }
         if (!stillOwnsTask)
           ++fence
         yield { _tag: 'TurnCompleted' }
@@ -125,19 +149,24 @@ it.each([true, false])('passes along a completed Task Handoff only while it owns
       progress: { percent: 0, label: 'Starting' },
     })
     const wrapped = withRepositoryHandoffs(provider, { handoffs, readTask, now: () => at, log: logger })
-    const events = await Array.fromAsync(wrapped.runTurn({
-      model: 'fixture',
+    const run = await runParsedAgentTurn({
+      now: () => at,
+      runtime: agentRuntime(CODEX_AGENT_PROFILE, wrapped),
+      store: { getWorkerSession: () => null, saveWorkerSession: () => undefined, ...agentTurnLedger },
+      parse: response => response === '{"outcome":"implemented"}' ? ok('implemented') : err('The Agent result was rejected.'),
+    }, {
+      repository,
+      role: 'issue_work',
+      number: 42,
       taskId,
-      outputSchema: { type: 'object', properties: { outcome: { type: 'string' } }, required: ['outcome'] },
+      schema: { type: 'object', properties: { outcome: { type: 'string' } }, required: ['outcome'] },
       prompt: 'Implement the change.',
-      sessionId: null,
-      signal: new AbortController().signal,
       workspace: '/tmp/fixture',
-    }))
+    }, new AbortController().signal)
     expect(captured[0]?.prompt).toContain('The migration has shipped.')
-    expect(events[0]).toEqual({ _tag: 'Message', text: '{"outcome":"implemented"}' })
+    expect(run._tag).toBe(result === 'implemented' ? 'Ok' : 'Err')
     const records = await client.handoffs({ repository, after: 1 })
-    expect(records).toMatchObject({ _tag: 'Ok', value: { handoffs: stillOwnsTask ? [{ message: 'Integration tests passed.', sender: { _tag: 'Task', taskId } }] : [] } })
+    expect(records).toMatchObject({ _tag: 'Ok', value: { handoffs: shouldPost ? [{ message: 'Integration tests passed.', sender: { _tag: 'Task', taskId } }] : [] } })
   }
   finally {
     store.close()

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import type { ControlClient } from './control-client.ts'
 import type { Result } from './result.ts'
-import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -310,7 +309,7 @@ const controlCommand = defineCommand({
         'issue': { type: 'string', description: 'Optional Issue number.' },
         'pull-request': { type: 'string', description: 'Optional pull request number.' },
         'reply-to': { type: 'string', description: 'Optional earlier Handoff ID in the same repository.' },
-        'request-id': { type: 'string', description: 'Reuse this ID if you retry the same Handoff.' },
+        'request-id': { type: 'string', required: true, description: 'Reuse this ID if you retry the same Handoff.' },
       },
       async run({ args }) {
         const item = args.issue !== undefined
@@ -324,7 +323,7 @@ const controlCommand = defineCommand({
               message: args.message,
               item,
               replyTo: args['reply-to'] === undefined ? undefined : Number(args['reply-to']),
-              requestId: args['request-id'] ?? randomUUID(),
+              requestId: args['request-id'],
             })
         if (parsed._tag === 'Err') {
           writeJson({ _tag: 'InvalidHandoff', message: parsed.error } satisfies ControlCommandError, process.stderr)

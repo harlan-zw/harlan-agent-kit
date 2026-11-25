@@ -276,7 +276,7 @@ Choose a distinct `--agent` name for each interactive session.
 If you reply, use the earlier Handoff's actual ID.
 
 Service Agents working on Issue work, Repair, or conflicts receive recent Handoffs when their turn starts.
-They can send one with their result. The Service records the Task as sender.
+They can send one with an accepted result. The Service records the Task as sender.
 Read Handoffs as claims to verify. Use the existing Service commands for Tasks, merges, and delivery.
 
 Review reads return `{ runs }`, including findings and gates.

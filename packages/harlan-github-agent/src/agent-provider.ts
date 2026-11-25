@@ -86,6 +86,8 @@ export type AgentEvent
     | { _tag: 'Message', text: string }
     | { _tag: 'Usage', usage: Extract<AgentTokenUsage, { _tag: 'Available' }>, scope: AgentUsageScope }
     | { _tag: 'TurnCompleted' }
+    /** Controller-local callback. The provider transport cannot supply it. */
+    | { _tag: 'HandoffReady', accept: () => void }
     /** The session read most of its Context budget, so the provider asked it to wrap up. */
     | { _tag: 'ContextBudgetWarned', cachedTokensRead: number, delivery: ContextBudgetWarningDelivery }
     /** The session read its whole Context budget, so the provider stopped it. */

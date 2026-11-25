@@ -188,21 +188,27 @@ export function withRepositoryHandoffs(provider: AgentProvider, options: {
 
       if (draft === undefined || request.signal.aborted || !completed || failed)
         return
-      const current = options.readTask(task.id)
-      if (current?.state._tag !== 'Running' || current.state.workerId !== workerId || current.state.fence !== fence
-        || Date.parse(current.state.leaseExpiresAt) <= options.now().getTime()) {
-        return
-      }
-      try {
-        const posted = options.handoffs.postTask(task, fence, {
-          message: draft.message,
-          ...(draft.replyTo === undefined ? { item: taskItem(task) } : { replyTo: draft.replyTo }),
-        })
-        if (posted._tag === 'Err')
-          options.log(`Task ${task.id} could not post a Handoff. ${posted.error.message}`)
-      }
-      catch (error) {
-        options.log(`Task ${task.id} could not post a Handoff. ${redactSecrets(error instanceof Error ? error.message : 'The Journal write failed.')}`)
+      const acceptedDraft = draft
+      yield {
+        _tag: 'HandoffReady',
+        accept: () => {
+          const current = options.readTask(task.id)
+          if (request.signal.aborted || current?.state._tag !== 'Running' || current.state.workerId !== workerId || current.state.fence !== fence
+            || Date.parse(current.state.leaseExpiresAt) <= options.now().getTime()) {
+            return
+          }
+          try {
+            const posted = options.handoffs.postTask(task, fence, {
+              message: acceptedDraft.message,
+              ...(acceptedDraft.replyTo === undefined ? { item: taskItem(task) } : { replyTo: acceptedDraft.replyTo }),
+            })
+            if (posted._tag === 'Err')
+              options.log(`Task ${task.id} could not post a Handoff. ${posted.error.message}`)
+          }
+          catch (error) {
+            options.log(`Task ${task.id} could not post a Handoff. ${redactSecrets(error instanceof Error ? error.message : 'The Journal write failed.')}`)
+          }
+        },
       }
     },
   }
