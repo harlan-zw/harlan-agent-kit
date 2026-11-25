@@ -3,6 +3,8 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { loadGitHubAppPrivateKey, normalizeGitHubRemote, parseConfigText, validateRepositoryMappings } from '../src/config.ts'
+import { ok } from '../src/result.ts'
+import { verifyCompletion } from '../src/take-ownership-completion.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -701,6 +703,35 @@ agent:
         { _tag: 'BodyText', text: 'Find a guide' },
       ] }],
     })
+  })
+
+  it.each([
+    { body: 'not_ready', expected: 'ActionRequired' },
+    { body: 'Service ready now', expected: 'Completed' },
+  ])('requires the configured spaces in smoke response text ($expected)', async ({ body, expected }) => {
+    const config = parseConfigText(configText.replace('take_ownership:\n      enabled: false', `take_ownership:
+      enabled: true
+      production_url: https://example.com
+      required_workflows: []
+      smoke_paths: []
+      smoke_checks:
+        - path: /health
+          body_contains: " ready "`))
+    expect(config._tag).toBe('Ok')
+    if (config._tag !== 'Ok')
+      return
+
+    const result = await verifyCompletion(config.value.repositories[0]!, {
+      pullRequestNumber: 24,
+      headSha: 'a'.repeat(40),
+      mergeSha: 'b'.repeat(40),
+      mergedAt: '2026-10-05T00:00:00Z',
+    }, {
+      workflows: async () => ok([]),
+      smoke: async () => ok(new Response(body)),
+    }, new AbortController().signal)
+
+    expect(result._tag).toBe(expected)
   })
 
   it('rejects a smoke check on another origin', () => {
