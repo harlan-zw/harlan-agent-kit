@@ -2,7 +2,7 @@ import type { AgentProviderName } from './agent-provider.ts'
 import type { AutoMergePolicy } from './auto-merge.ts'
 import type { PaybackPricing, PaybackRate } from './payback.ts'
 import type { Result } from './result.ts'
-import type { AgentConfig, AgentRole, AgentSessionsCodexMode, ClassificationConfig, CodexReasoningEffort, ExternalRepositoryWatch, GitHubAccount, IssueDiscussionRoute, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, ServiceUpdateSchedule, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
+import type { AgentConfig, AgentRole, AgentSessionsCodexMode, ClassificationConfig, CodexReasoningEffort, CompletionSmokeAssertion, CompletionSmokeCheck, ExternalRepositoryWatch, GitHubAccount, IssueDiscussionRoute, RepositoryAutoMergeScope, RepositoryMapping, RepositoryOwnership, RoleReasoningEfforts, ServiceTrigger, ServiceUpdateSchedule, TakeOwnershipConfig, ValidatedAgentConfig, WebhookConfig } from './types.ts'
 import { execFile } from 'node:child_process'
 import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -317,6 +317,55 @@ function ownership(source: UnknownRecord, path: string, issues: ConfigIssue[]): 
   issues.push({ path: `${path}.ownership`, message: 'Expected owned, maintained, or external.' })
 }
 
+function completionSmokeChecks(value: unknown, productionUrl: string, path: string, issues: ConfigIssue[]): CompletionSmokeCheck[] {
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: 'Expected a list of smoke checks.' })
+    return []
+  }
+  const origin = URL.parse(productionUrl)?.origin
+  const seen = new Set<string>()
+  return value.flatMap((entry, index) => {
+    const itemPath = `${path}[${index}]`
+    if (!isRecord(entry)) {
+      issues.push({ path: itemPath, message: 'Expected a smoke check object.' })
+      return []
+    }
+    const configuredPath = requiredString(entry, 'path', itemPath, issues)
+    const url = configuredPath === undefined ? null : URL.parse(configuredPath, productionUrl)
+    if (configuredPath === undefined || !configuredPath.startsWith('/') || url === null || url.origin !== origin || url.username || url.password || url.hash) {
+      if (configuredPath !== undefined)
+        issues.push({ path: `${itemPath}.path`, message: 'Use a path on the production origin without credentials or a fragment.' })
+      return []
+    }
+    if (seen.has(url.href)) {
+      issues.push({ path: `${itemPath}.path`, message: 'Set one smoke check per URL.' })
+      return []
+    }
+    seen.add(url.href)
+    const header = optionalString(entry, 'revision_header', itemPath, issues)
+    const text = optionalString(entry, 'body_contains', itemPath, issues)
+    const assertions: CompletionSmokeAssertion[] = []
+    if (header) {
+      if (/^[!#$%&'*+.^\w`|~-]{1,100}$/.test(header))
+        assertions.push({ _tag: 'Revision', header: header.toLowerCase() })
+      else
+        issues.push({ path: `${itemPath}.revision_header`, message: 'Use a valid HTTP header name.' })
+    }
+    if (text) {
+      if (text.length <= 512)
+        assertions.push({ _tag: 'BodyText', text })
+      else
+        issues.push({ path: `${itemPath}.body_contains`, message: 'Use at most 512 characters.' })
+    }
+    const [first, ...rest] = assertions
+    if (first !== undefined)
+      return [{ path: configuredPath, assertions: [first, ...rest] }]
+    if (header === null && text === null)
+      issues.push({ path: itemPath, message: 'Set revision_header, body_contains, or both.' })
+    return []
+  })
+}
+
 function takeOwnership(source: UnknownRecord, path: string, repositoryOwnership: RepositoryOwnership | undefined, issues: ConfigIssue[]): TakeOwnershipConfig | undefined {
   const ownershipConfig = requiredRecord(source, 'take_ownership', path, issues)
   if (ownershipConfig === undefined)
@@ -347,6 +396,11 @@ function takeOwnership(source: UnknownRecord, path: string, repositoryOwnership:
     productionUrl,
     requiredWorkflows,
     smokePaths,
+    ...(ownershipConfig.smoke_checks === undefined
+      ? {}
+      : {
+          smokeChecks: completionSmokeChecks(ownershipConfig.smoke_checks, productionUrl, `${path}.take_ownership.smoke_checks`, issues),
+        }),
   }
 }
 

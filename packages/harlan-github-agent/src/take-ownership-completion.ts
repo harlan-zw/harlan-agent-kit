@@ -1,6 +1,7 @@
 import type { Result } from './result.ts'
 import type { TakeOwnershipStore } from './take-ownership-store.ts'
-import type { RepositoryMapping } from './types.ts'
+import type { CompletionSmokeAssertion, RepositoryMapping } from './types.ts'
+import { createHash } from 'node:crypto'
 
 export interface CompletionTarget {
   pullRequestNumber: number
@@ -24,8 +25,10 @@ export interface CompletionWorkflow {
 export interface CompletionEvidence {
   mergeSha: string
   workflows: { name: string, url: string }[]
-  smoke: { url: string, status: number }[]
+  smoke: { url: string, status: number, assertions?: SmokeEvidence[] }[]
 }
+
+type SmokeEvidence = { _tag: 'Revision', sha: string } | { _tag: 'BodyText' }
 
 export type CompletionResult
   = | { _tag: 'Pending', reason: string }
@@ -34,7 +37,35 @@ export type CompletionResult
 
 export interface CompletionSource {
   workflows: (repository: RepositoryMapping, target: CompletionTarget, signal: AbortSignal) => Promise<Result<CompletionWorkflow[], string>>
-  smoke: (url: string, signal: AbortSignal) => Promise<Result<number, string>>
+  smoke: (url: string, signal: AbortSignal) => Promise<Result<Response, string>>
+}
+
+const smokeBodyLimit = 1024 * 1024
+
+async function responseContains(response: Response, text: string): Promise<boolean> {
+  if (response.body === null)
+    return false
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let remaining = smokeBodyLimit
+  let tail = ''
+  try {
+    while (remaining > 0) {
+      const chunk = await reader.read()
+      if (chunk.done)
+        break
+      const prefix = chunk.value.subarray(0, remaining)
+      remaining -= prefix.length
+      const content = tail + decoder.decode(prefix, { stream: true })
+      if (content.includes(text))
+        return true
+      tail = content.slice(Math.max(0, content.length - text.length + 1))
+    }
+    return (tail + decoder.decode()).includes(text)
+  }
+  finally {
+    await reader.cancel()
+  }
 }
 
 /** Reads delivery evidence. It never deploys, repairs, or publishes GitHub state. */
@@ -67,16 +98,43 @@ export async function verifyCompletion(repository: RepositoryMapping, target: Co
   const origin = URL.parse(policy.productionUrl)
   if (origin === null || origin.protocol !== 'https:' || origin.username || origin.password)
     return { _tag: 'ActionRequired', reason: 'Take Ownership requires an HTTPS production URL without credentials.' }
-  for (const path of policy.smokePaths) {
+  const smokeChecks = new Map<string, readonly CompletionSmokeAssertion[]>(policy.smokePaths.map(path => [path, []]))
+  for (const check of policy.smokeChecks ?? [])
+    smokeChecks.set(check.path, check.assertions)
+  for (const [path, assertions] of smokeChecks) {
     const url = URL.parse(path, origin)
     if (!path.startsWith('/') || url === null || url.origin !== origin.origin || url.username || url.password)
       return { _tag: 'ActionRequired', reason: 'Every smoke path must stay on the production origin.' }
     const read = await source.smoke(url.href, signal)
     if (read._tag === 'Err')
       return { _tag: 'Pending', reason: read.error }
-    if (read.value < 200 || read.value >= 300)
-      return { _tag: 'ActionRequired', reason: `Smoke request returned HTTP ${read.value}: ${url.href}` }
-    evidence.smoke.push({ url: url.href, status: read.value })
+    const response = read.value
+    try {
+      if (!response.ok)
+        return { _tag: 'ActionRequired', reason: `Smoke request returned HTTP ${response.status}: ${url.href}` }
+      const checked: SmokeEvidence[] = []
+      for (const assertion of assertions) {
+        if (assertion._tag === 'Revision') {
+          const served = response.headers.get(assertion.header)?.trim().toLowerCase()
+          if (served === undefined || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(served))
+            return { _tag: 'Pending', reason: `Waiting for a valid ${assertion.header} header at ${url.href}.` }
+          const expected = served.length === 64 ? createHash('sha256').update(target.mergeSha).digest('hex') : target.mergeSha
+          if (served !== expected)
+            return { _tag: 'Pending', reason: `The served revision at ${url.href} differs from merge commit ${target.mergeSha.slice(0, 12)}.` }
+          checked.push({ _tag: 'Revision', sha: target.mergeSha })
+        }
+        else {
+          if (!await responseContains(response, assertion.text))
+            return { _tag: 'ActionRequired', reason: `Expected content is missing from the first 1 MiB at ${url.href}.` }
+          checked.push({ _tag: 'BodyText' })
+        }
+      }
+      evidence.smoke.push({ url: url.href, status: response.status, ...(checked.length === 0 ? {} : { assertions: checked }) })
+    }
+    finally {
+      if (!response.bodyUsed)
+        await response.body?.cancel()
+    }
   }
   return { _tag: 'Completed', evidence }
 }

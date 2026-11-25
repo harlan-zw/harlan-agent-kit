@@ -16,6 +16,15 @@ import type { CompletionTask } from './take-ownership-store.ts'
 export type RepositoryOwnership = 'owned' | 'maintained' | 'external'
 export type AgentSessionsCodexMode = 'restricted' | 'full_access'
 
+export type CompletionSmokeAssertion
+  = | { _tag: 'Revision', header: string }
+    | { _tag: 'BodyText', text: string }
+
+export interface CompletionSmokeCheck {
+  path: string
+  assertions: [CompletionSmokeAssertion, ...CompletionSmokeAssertion[]]
+}
+
 export type TakeOwnershipConfig
   = | { _tag: 'Disabled' }
     | {
@@ -23,6 +32,7 @@ export type TakeOwnershipConfig
       productionUrl: string
       requiredWorkflows: string[]
       smokePaths: string[]
+      smokeChecks?: CompletionSmokeCheck[]
     }
 
 export type RepositoryAuthentication = 'app' | 'user'

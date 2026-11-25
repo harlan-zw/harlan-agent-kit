@@ -684,6 +684,37 @@ agent:
     })
   })
 
+  it('accepts smoke checks beside plain HTTP smoke paths', () => {
+    const result = parseConfigText(configText.replace('take_ownership:\n      enabled: false', `take_ownership:
+      enabled: true
+      production_url: https://example.com
+      required_workflows: [deploy.yml]
+      smoke_paths: [/health]
+      smoke_checks:
+        - path: /guides
+          revision_header: X-Release-SHA
+          body_contains: Find a guide`))
+    expect(result._tag === 'Ok' && result.value.repositories[0]?.takeOwnership).toMatchObject({
+      smokePaths: ['/health'],
+      smokeChecks: [{ path: '/guides', assertions: [
+        { _tag: 'Revision', header: 'x-release-sha' },
+        { _tag: 'BodyText', text: 'Find a guide' },
+      ] }],
+    })
+  })
+
+  it('rejects a smoke check on another origin', () => {
+    const result = parseConfigText(configText.replace('take_ownership:\n      enabled: false', `take_ownership:
+      enabled: true
+      production_url: https://example.com
+      required_workflows: []
+      smoke_paths: []
+      smoke_checks:
+        - path: //other.example/guides
+          revision_header: x-release-sha`))
+    expect(result._tag === 'Err' && result.error.map(issue => issue.path)).toContain('$.repositories[0].take_ownership.smoke_checks[0].path')
+  })
+
   it('rejects non-loopback servers and unsafe ownership', () => {
     const result = parseConfigText(configText
       .replace('127.0.0.1', '0.0.0.0')

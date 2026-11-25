@@ -52,8 +52,7 @@ export function createCompletionSource(options: {
     async smoke(url, signal) {
       // A redirect cannot prove this configured URL serves the deployed site.
       const response = await options.fetch(url, { signal, redirect: 'manual', headers: { 'user-agent': 'harlan-github-agent' } })
-      await response.body?.cancel()
-      return ok(response.status)
+      return ok(response)
     },
   }
 }

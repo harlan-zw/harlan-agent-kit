@@ -333,6 +333,10 @@ take_ownership:
   production_url: https://example.com
   required_workflows: [deploy.yml]
   smoke_paths: [/health]
+  smoke_checks:
+    - path: /guides
+      revision_header: x-release-sha
+      body_contains: Find a guide
 ```
 
 The Service tracks pull requests it opens. For a pull request opened in chat, the PR Skill registers Completion before handoff:
@@ -353,6 +357,13 @@ The newest matching run must finish successfully.
 After those runs pass, each smoke URL must return HTTP 2xx without a redirect.
 Smoke requests carry no GitHub credentials and stay on the configured production origin.
 Empty workflow or smoke lists omit that stage.
+
+Use `smoke_checks` to check a revision header, response text, or both on the same request.
+Serve the full lowercase merge SHA in the header, or its lowercase SHA-256 digest.
+The controller retries when the header is missing or the site serves a different revision.
+It reports Action required after the retry deadline if the site still serves a different revision.
+If you specify `body_contains`, the first 1 MiB of the response must contain that case-sensitive text.
+Paths in `smoke_paths` can still use HTTP status alone.
 
 For a downstream deployment, record its triggering push in `run-name`:
 
@@ -380,7 +391,7 @@ Failed workflows and smoke responses also report Action required.
 If the policy changes, the Task reports Action required for the original delivery target.
 Pause and disabled writes prevent claims and completion writes.
 
-These checks verify workflow results and HTTP availability. They do not prove which commit a URL serves.
+The Board shows the served commit and found content when a smoke check verifies them.
 The controller creates no repair, deploy, release, or cleanup action from these checks.
 
 Set `webhook.enabled` to start the separate listener on port 3211.
