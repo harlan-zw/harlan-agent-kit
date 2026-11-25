@@ -1,5 +1,5 @@
 import type { ConsolaInstance } from 'consola'
-import type { AgentProviderName } from './agent-provider.ts'
+import type { AgentProvider, AgentProviderName } from './agent-provider.ts'
 import type { ReloadableExternalWatchController } from './external-watch.ts'
 import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
@@ -88,6 +88,7 @@ import { reconcileAllRepositories } from './reconcile.ts'
 import { createReleaseNoteWorker } from './release-note-worker.ts'
 import { createRepairRecoveryController } from './repair-recovery.ts'
 import { buildRepositoryMappings, discoverGitHubAppRepositories, discoverLocalCheckouts, discoverUserRepositories, installedWithoutCheckout } from './repository-discovery.ts'
+import { createHandoffController, withRepositoryHandoffs } from './repository-handoffs.ts'
 import { canReleasePackages } from './repository-policy.ts'
 import { createRestartController, restartAllowsTaskClaims } from './restart-request.ts'
 import { err, ok } from './result.ts'
@@ -513,6 +514,20 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     maximumActiveAgents: config.agent.maximumActiveAgents ?? providerProfile.maximumActiveAgents,
   }
   const store = openJournalStore(config.storage.path, config.mutationsEnabled, configuredProfile, config.maxOpenPullRequests, options.serviceUpdate.read, config.agent.reasoningEffort)
+  const handoffs = createHandoffController({
+    store,
+    repositories: config.triggers.includes('github')
+      ? config.repositories.filter(repository => repository.enabled && repository.ownership === 'owned'
+        && repository.github.toLowerCase() === 'harlan-zw/nuxtseo.com').map(repository => repository.github)
+      : [],
+    now,
+  })
+  const handoffProvider = (provider: AgentProvider) => withRepositoryHandoffs(provider, {
+    handoffs,
+    readTask: store.getTask,
+    now,
+    log: message => options.logger.error(message),
+  })
   // Every GitHub writer below takes this guard, so no body reaches GitHub unredacted.
   const publicText = createPublicTextGuard({ details: options.privateDetails, store, now, log: message => options.logger.error(message) })
   let releaseWebhookReady = false
@@ -630,13 +645,13 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       codex: createCircuitProtectedProvider({
         credential: agentProfile('codex').authentication,
         now,
-        provider: hosts.provider(createMaintenanceScopeProvider({ ...maintenanceAdmission, name: 'codex', reviewProofAuthority }), desktop.provider('codex')),
+        provider: handoffProvider(hosts.provider(createMaintenanceScopeProvider({ ...maintenanceAdmission, name: 'codex', reviewProofAuthority }), desktop.provider('codex'))),
         store,
       }),
       opencode: createCircuitProtectedProvider({
         credential: agentProfile('opencode').authentication,
         now,
-        provider: hosts.provider(createMaintenanceScopeProvider({ ...maintenanceAdmission, name: 'opencode', reviewProofAuthority, environment: opencodeEnvironment.value }), desktop.provider('opencode')),
+        provider: handoffProvider(hosts.provider(createMaintenanceScopeProvider({ ...maintenanceAdmission, name: 'opencode', reviewProofAuthority, environment: opencodeEnvironment.value }), desktop.provider('opencode'))),
         store,
       }),
     },
@@ -1852,6 +1867,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     return { ...current, agentStart: resolveAgentStartState(current) }
   }
   const app = createAgentApp({
+    handoffs,
     paybackPricing: config.payback,
     ...(config.mutationsEnabled && config.triggers.includes('github') ? { registerCompletion: store.registerCompletion } : {}),
     ...(browserAuth ? { browserAuth } : {}),

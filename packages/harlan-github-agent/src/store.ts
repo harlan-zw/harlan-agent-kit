@@ -161,6 +161,7 @@ import { createPaybackStore } from './payback-store.ts'
 import { PULL_REQUEST_TRIAGE_OVERRIDE_REASON, triageDecider } from './pull-request-triage.ts'
 import { repairRecoveryProof } from './repair-recovery.ts'
 import { planRepairRound, REPAIR_ROUND_LIMIT } from './repair-rounds.ts'
+import { createRepositoryHandoffStore, repositoryHandoffSchema } from './repository-handoff-store.ts'
 import { canRepairBaseline, canRepairPullRequestHead, canResolveConflictPullRequestHead, canWorkIssues, conflictWriteBoundary } from './repository-policy.ts'
 import { err, ok } from './result.ts'
 import { canonicalCommentOutcome } from './review-comment.ts'
@@ -1104,6 +1105,9 @@ export interface JournalStore extends BatchStore, PackageReleaseStore, LoggedFin
   getDashboardSnapshot: (generatedAt: string) => DashboardSnapshot
   recordReservationObservation: (observation: ReservationObservation) => void
   listReservationObservations: () => ReservationObservation[]
+  listHandoffs: ReturnType<typeof createRepositoryHandoffStore>['listHandoffs']
+  findHandoff: ReturnType<typeof createRepositoryHandoffStore>['findHandoff']
+  appendHandoff: ReturnType<typeof createRepositoryHandoffStore>['appendHandoff']
   getStats: (range: StatsRange, generatedAt: string) => StatsSnapshot
   /**
    * Newest append-only workflow events. Reasons are redacted before storage.
@@ -7775,7 +7779,11 @@ function installSchema(database: DatabaseSync): void {
     applyMigration(database, `${reservationObservationSchema} PRAGMA user_version = 113;`)
     version = 113
   }
-  if (version === 113)
+  if (version === 113) {
+    applyMigration(database, `${repositoryHandoffSchema} PRAGMA user_version = 114;`)
+    version = 114
+  }
+  if (version === 114)
     return
   throw new Error(`Unsupported database schema version: ${version}.`)
 }
@@ -8063,6 +8071,7 @@ export function openJournalStore(
   const packageReleaseStore = createPackageReleaseStore(database)
   const takeOwnershipStore = createTakeOwnershipStore(database)
   const reservationObservationStore = createReservationObservationStore(database)
+  const handoffStore = createRepositoryHandoffStore(database)
   const reviewProofStore = createReviewProofStore(database)
   const configuredSelection = providerAgentSelection(profile.provider)
   const repositoryWriteAuthoritySql = mutationsEnabled ? 'AND repositories.writes_enabled = 1' : ''
@@ -18201,6 +18210,7 @@ export function openJournalStore(
     setAgentSlots,
     getDashboardSnapshot,
     ...reservationObservationStore,
+    ...handoffStore,
     getStats,
     listWorkflowEvents,
     groupWorkflowFailures,

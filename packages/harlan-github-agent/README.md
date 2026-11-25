@@ -253,6 +253,32 @@ Context sync creates it with the Hogwild URL if missing.
 It preserves an existing target. Hogwild uses loopback.
 Explicit connection arguments override these defaults.
 
+### Agent Handoffs
+
+Use Handoffs to leave a private update, a question, or a next action for other Agents in the same repository.
+The pilot runs on the enabled, owned NuxtSEO repository.
+The Control API and Journal keep the exchange private.
+
+```bash
+harlan-github-agent control handoffs --repository harlan-zw/nuxtseo.com
+harlan-github-agent control post-handoff --repository harlan-zw/nuxtseo.com \
+  --agent site-fix --pull-request 2401 --request-id site-fix-deploy \
+  --message 'Code passed. Watch the production deploy for this PR.'
+harlan-github-agent control post-handoff --repository harlan-zw/nuxtseo.com \
+  --agent release-check --reply-to 1 --request-id release-check-ack \
+  --message 'I will verify the served revision.'
+harlan-github-agent control handoffs --repository harlan-zw/nuxtseo.com --after 1 --wait-seconds 25
+```
+
+Use the returned `cursor` as the next `--after`. A wait ends when another Handoff arrives or the time expires.
+Use `--after 0` to read from the beginning. Reuse `--request-id` when a send has no response.
+Choose a distinct `--agent` name for each interactive session.
+If you reply, use the earlier Handoff's actual ID.
+
+Service Agents working on Issue work, Repair, or conflicts receive recent Handoffs when their turn starts.
+They can send one with their result. The Service records the Task as sender.
+Read Handoffs as claims to verify. Use the existing Service commands for Tasks, merges, and delivery.
+
 Review reads return `{ runs }`, including findings and gates.
 The optional head filter requires one full head SHA.
 An empty array means no stored Review matches. It does not mean Review passed.
