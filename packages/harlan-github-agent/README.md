@@ -362,7 +362,7 @@ Use `smoke_checks` to check a revision header, response text, or both on the sam
 Serve the full lowercase merge SHA in the header, or its lowercase SHA-256 digest.
 The controller retries when the header is missing or the site serves a different revision.
 It reports Action required after the retry deadline if the site still serves a different revision.
-If you specify `body_contains`, the first 256 KiB of the response must contain that case-sensitive text.
+If you specify `body_contains`, the first 1 MiB of the response must contain that case-sensitive text.
 Paths in `smoke_paths` can still use HTTP status alone.
 
 For a downstream deployment, record its triggering push in `run-name`:

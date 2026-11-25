@@ -78,8 +78,8 @@ it.each([
 })
 
 it.each([
-  { first: 'Find a ', expected: 'Completed' },
-  { first: `${' '.repeat(256 * 1024)}Find a `, expected: 'ActionRequired' },
+  { first: `${' '.repeat(512 * 1024)}Find a `, expected: 'Completed' },
+  { first: `${' '.repeat(1024 * 1024)}Find a `, expected: 'ActionRequired' },
 ] as const)('checks text across response chunks within the read limit ($expected)', async ({ first, expected }) => {
   const checked = repositoryMapping({ takeOwnership: {
     _tag: 'Enabled',

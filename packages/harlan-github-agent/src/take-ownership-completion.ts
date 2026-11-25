@@ -40,7 +40,7 @@ export interface CompletionSource {
   smoke: (url: string, signal: AbortSignal) => Promise<Result<Response, string>>
 }
 
-const smokeBodyLimit = 256 * 1024
+const smokeBodyLimit = 1024 * 1024
 
 async function responseContains(response: Response, text: string): Promise<boolean> {
   if (response.body === null)
@@ -125,7 +125,7 @@ export async function verifyCompletion(repository: RepositoryMapping, target: Co
         }
         else {
           if (!await responseContains(response, assertion.text))
-            return { _tag: 'ActionRequired', reason: `Expected content is missing from the first 256 KiB at ${url.href}.` }
+            return { _tag: 'ActionRequired', reason: `Expected content is missing from the first 1 MiB at ${url.href}.` }
           checked.push({ _tag: 'BodyText' })
         }
       }
