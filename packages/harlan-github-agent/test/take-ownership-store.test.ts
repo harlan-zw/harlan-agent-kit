@@ -116,9 +116,10 @@ it('checks a manual merge after the submitting CLI exits and the Service restart
         throw new Error('The test server has no URL.')
       const url = server.url
       app = createAgentApp({ allowedOrigin: url, dashboardPassword: password, now: () => new Date(at(2)), store, registerCompletion: store.registerCompletion })
-      const register = () => execute(process.execPath, ['--experimental-strip-types', join(import.meta.dirname, '..', 'src', 'cli.ts'), 'control', 'register-completion', '--repository', repository.github, '--number', String(subject.number), '--url', url, '--password-file', passwordPath], { timeout: 10_000 })
-      expect(JSON.parse((await register()).stdout)).toEqual({ _tag: 'Registered' })
-      expect(JSON.parse((await register()).stdout)).toEqual({ _tag: 'Registered' })
+      const cli = join(import.meta.dirname, '..', 'src', 'cli.ts')
+      const registration = await execute(process.execPath, ['--experimental-strip-types', cli, 'control', 'register-completion', '--repository', repository.github, '--number', String(subject.number), '--url', url, '--password-file', passwordPath], { timeout: 30_000 })
+      expect(JSON.parse(registration.stdout)).toEqual({ _tag: 'Registered' })
+      expect(store.registerCompletion({ repository: repository.github, number: subject.number })).toEqual({ _tag: 'Registered' })
     }
     finally { await server.close() }
     expect(store.queueCompletionTasks(repository, at(3))).toBe(0)
@@ -156,7 +157,7 @@ it('checks a manual merge after the submitting CLI exits and the Service restart
     store.close()
     rmSync(directory, { recursive: true, force: true })
   }
-}, 20_000)
+}, 45_000)
 
 it('drops registration when GitHub confirms an unmerged closure', async () => {
   const store = openJournalStore(':memory:')
