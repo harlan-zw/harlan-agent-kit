@@ -106,6 +106,7 @@ fi
 cmp "$repo_root/agent-context/context.md" "$test_home/.claude/CLAUDE.md"
 cmp "$repo_root/agent-context/context.md" "$test_home/.codex/AGENTS.md"
 cmp "$repo_root/agent-context/context.md" "$test_home/.gemini/GEMINI.md"
+cmp "$repo_root/agent-context/worker.md" "$test_home/.local/share/harlan-agent-kit/worker.md"
 if rg -F '{{> context.md}}' "$test_home/.claude/CLAUDE.md" "$test_home/.codex/AGENTS.md" "$test_home/.gemini/GEMINI.md" >/dev/null; then
   printf '%s\n' 'Installed Agent instructions contain a template tag.' >&2
   exit 1
@@ -171,6 +172,8 @@ printf '%s %s\n' harlan-hooks.ts \
   "$(/usr/bin/sha256sum "$repo_root/harlan-agent-kit/plugins/opencode/harlan-hooks.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' plugin.json \
   "$(/usr/bin/sha256sum "$repo_root/harlan-agent-kit/.claude-plugin/plugin.json" | cut -d' ' -f1)" >> "$opencode_hashes"
+printf '%s %s\n' worker.md \
+  "$(/usr/bin/sha256sum "$repo_root/agent-context/worker.md" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' agent-gh "$(/usr/bin/sha256sum "$repo_root/scripts/github-public.sh" | cut -d' ' -f1)" >> "$opencode_hashes"
 printf '%s %s\n' agent-tools.ts "$(/usr/bin/sha256sum "$repo_root/scripts/agent-tools.ts" | cut -d' ' -f1)" >> "$opencode_hashes"
@@ -294,6 +297,10 @@ manifest_target=/home/harlan/.local/share/harlan-agent-kit/.claude-plugin/plugin
 grep -F "hogwild:$manifest_target.next" "$calls" >/dev/null
 grep -E "mv '$manifest_target.next\.[0-9.]+' '$manifest_target'" "$calls" >/dev/null
 grep -E "chmod 644 '$manifest_target.next\.[0-9.]+'" "$calls" >/dev/null
+worker_target=/home/harlan/.local/share/harlan-agent-kit/worker.md
+grep -F "hogwild:$worker_target.next" "$calls" >/dev/null
+grep -E "mv '$worker_target.next\.[0-9.]+' '$worker_target'" "$calls" >/dev/null
+grep -E "chmod 644 '$worker_target.next\.[0-9.]+'" "$calls" >/dev/null
 
 # A hook added to plugin.json must reach both installs with no other edit.
 fixture="$test_root/fixture"
@@ -347,6 +354,8 @@ for hook_file in "${fixture_hook_files[@]}"; do
 done
 printf '%s %s\n' plugin.json \
   "$(/usr/bin/sha256sum "$fixture/harlan-agent-kit/.claude-plugin/plugin.json" | cut -d' ' -f1)" >> "$fixture_hashes"
+printf '%s %s\n' worker.md \
+  "$(/usr/bin/sha256sum "$fixture/agent-context/worker.md" | cut -d' ' -f1)" >> "$fixture_hashes"
 printf '%s %s\n' harlan-hooks.ts \
   "$(/usr/bin/sha256sum "$fixture/harlan-agent-kit/plugins/opencode/harlan-hooks.ts" | cut -d' ' -f1)" >> "$fixture_hashes"
 

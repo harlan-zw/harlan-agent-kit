@@ -63,21 +63,22 @@ export function defaultAgentContextPaths(
   environment: NodeJS.ProcessEnv = process.env,
   workingDirectory = process.cwd(),
 ): AgentContextPaths {
-  const codexHome = environment.CODEX_HOME === undefined
-    ? join(homedir(), '.codex')
-    : resolve(environment.CODEX_HOME)
+  const home = environment.HOME ?? homedir()
   const claudeHome = environment.CLAUDE_CONFIG_DIR === undefined
-    ? join(environment.HOME ?? homedir(), '.claude')
+    ? join(home, '.claude')
     : resolve(environment.CLAUDE_CONFIG_DIR)
+  const instructionsPath = environment.HARLAN_AGENT_WORKER_INSTRUCTIONS !== undefined
+    ? resolve(environment.HARLAN_AGENT_WORKER_INSTRUCTIONS)
+    : join(home, '.local/share/harlan-agent-kit/worker.md')
   return {
     claudeHome,
-    instructionsPath: join(codexHome, 'AGENTS.md'),
+    instructionsPath,
     skillsRoot: join(workingDirectory, 'harlan-agent-kit', 'skills'),
-    requiredSkillDirectories: Object.keys(skillManifest.skills).map(name => join(environment.HOME ?? homedir(), '.local/share/harlan-agent-kit/skilld/skills', name)),
+    requiredSkillDirectories: Object.keys(skillManifest.skills).map(name => join(home, '.local/share/harlan-agent-kit/skilld/skills', name)),
     declaredSkills: {
       binary: environment.HARLAN_AGENT_SKILLD_BINARY ?? 'skilld',
       manifest: join(workingDirectory, '.skills/skilld.json'),
-      dataRoot: join(environment.HOME ?? homedir(), '.local/share/harlan-agent-kit/skilld'),
+      dataRoot: join(home, '.local/share/harlan-agent-kit/skilld'),
       environment,
     },
   }
@@ -378,7 +379,7 @@ export type CheckScope = typeof CHECK_SCOPES[keyof typeof CHECK_SCOPES]
 /** The check budget every Agent turn that verifies its own change gets. */
 export function checkBudgetLines(scope: CheckScope): string {
   const fullSuiteRule = scope === CHECK_SCOPES.focusedPerformance
-    ? `Do not run the full test suite or full typecheck. CI runs those.
+    ? `Prefer narrow checks; CI runs the full test suite and full typecheck.
 When the issue requires a local performance comparison, build the before and after applications serially.
 Use the repository's build scripts and the same local runner, strategy, and measurement settings for both.
 These builds provide inputs for the focused comparison. They do not authorize production deployment or unrelated validation builds.
@@ -386,25 +387,17 @@ If the required comparison cannot run, return blocked with the exact blocker.
 Compare the target metric with run-to-run variation.
 If the comparison does not establish the claimed benefit, return blocked with measurements.
 Report other metric changes and HTML size beside the target result.`
-    : 'Do not run the full test suite, the full typecheck, or a build. CI runs those.'
+    : 'Prefer narrow checks; CI runs the full test suite, full typecheck, and build. Run a broader check or build only when needed to prove your change.'
   const lastResort = scope === CHECK_SCOPES.failingCheck
-    ? ' Exception: when no narrower command reproduces the failure, run the failing check\'s exact command, even if it is the full suite.'
+    ? ' When no narrower command reproduces the failure, run the failing check\'s exact command, even if it is the full suite.'
     : ''
   return `Check budget: ${scope}
 ${fullSuiteRule}${lastResort}
 Run checks serially. Use one test worker and disable file parallelism when the test runner supports it.
 Stop each dev server after its focused check. Do not leave builds or test runners running in the background.
-Run test commands without pipes. If you pipe output, set pipefail in the same shell command and report the program's exit code.
-For complete logs without pipes, use the installed agent-check.ts <plan.json>. Put its plan and logs in scratch.
-The JSON plan has prerequisites (argv arrays), check (one argv array), and logDirectory. It stops on the first nonzero exit.
-Declare prerequisites only from the repository's scripts or the failing workflow. Run only preparation needed by the focused check.
-Exception: an explicitly declared prerequisite build may generate missing inputs for that check. It does not authorize a full validation build.
-If Nuxt types or workspace exports are missing, inspect those declarations once. Do not guess package names or retry the same check.
-Use rg -n for matching lines or rg -l for paths. Never use rg -r for recursive search; -r replaces matches.
-Regenerate pnpm-lock.yaml with the pinned pnpm version. Never edit its YAML by hand.
+If you pipe test output, set pipefail in the same shell command and report the program's exit code.
 If matching base evidence proves the failure existed, report it as pre-existing. Otherwise, report its cause as unknown.
-A filtered diagnostic list does not prove the command passed. Report its original exit code and the verification limit.
-Do not stash changes to verify the base. Use available base CI evidence.`
+A filtered diagnostic list does not prove the command passed. Report its original exit code and the verification limit.`
 }
 
 /** The core of the unit-tests skill, inlined so no Agent reads the file each session. */
@@ -412,8 +405,7 @@ export const UNIT_TEST_LINES = `Unit test rules:
 - Write the failing test first. Confirm it fails for the stated reason.
 - Test through the exported API: build an input, call the export, assert the return value, the thrown error, or a boundary side effect.
 - Do not assert on file contents, module shape, key counts, or that a symbol exists.
-- Delete a test that can fail while the code is correct. Delete a test that can pass while the code is broken.
-- When behaviour changes on purpose, delete the old test and write the new one.
+- Delete a test that can fail while the code is correct, or pass while the code is broken. When behaviour changes on purpose, replace the old test.
 - Prefer a real fixture over a mock.`
 
 /**
@@ -422,17 +414,12 @@ export const UNIT_TEST_LINES = `Unit test rules:
  * and costs a reviewer's trust before the diff is open.
  */
 export const PULL_REQUEST_BODY_LINES = `Pull request description rules:
-- Say why the change is needed. The fix itself gets one or two sentences. Never walk through the implementation or name the functions you touched. The diff shows how.
-- Write as the person who hit the problem. When the work started from an issue, say so. Never invent an experience you did not have.
-- Paste the evidence instead of describing it: the real error line, the output before and after, the config a user writes.
-- Say what you are unsure about: the dead end you abandoned, the follow-up you did not take, the question a reviewer should answer.
-- No verification, testing, or QA section, and no passing mention of what you ran. CI reports that.
-- Include a number only when it changes what a reviewer does, and only when you measured it.
-- Tick a checkbox only when it is true, and only the template's own. Never add a checklist of your own.
-- Delete an empty section. Never write "None" or "N/A" under a heading.
-- Length follows risk: one to three sentences for a fix, more only for a behaviour change, a migration, or a non-obvious tradeoff.
-- Vary the shape. Do not open every paragraph with "This". Bullets and fragments are fine.
-- No em dashes. Plain words. No "this means that" takeaway.`
+- State why the change is needed, with one or two sentences on what changed. Never walk through the diff or list touched functions.
+- Paste the evidence instead of describing it: real error lines, before/after output, or user config. Include measured numbers only when they affect review.
+- Name what you are unsure about: abandoned dead ends, deferred follow-ups, or open questions for the reviewer.
+- Omit verification, testing, or QA sections and mentions of commands you ran; CI reports that.
+- Tick only true checkboxes from the template and delete empty sections. Never write "None" or "N/A".
+- Match length to risk (one to three sentences for a small fix). Use plain words and no em dashes.`
 
 /**
  * Images arrive as controller-fetched pixels on either host. Worker credentials
@@ -447,10 +434,6 @@ Do not retry another repository slug or credential after a private read fails.`
 
 /** Toolchain rules for every Agent turn that may run a command. */
 export const TOOLCHAIN_LINES = `Use pnpm for every package command. Never use npx.
-The worker GitHub CLI supports public reads only. When a controller snapshot is supplied, use it for private repository evidence.
-If required private evidence is missing, report that limitation. Do not request credentials or bypass the worker CLI.
+The worker GitHub CLI supports public reads only. Use the controller snapshot for private repository evidence; if required private evidence is missing, report that limitation instead of requesting credentials or bypassing the CLI.
 Never add debug output to tracked files.
-For secret diagnostics, report only whether a value exists or whether two values match.
-Never print secret values, prefixes, cookies, tokens, signing keys, or configuration objects that contain them.
-Do not print environment files or unfiltered environment variables. Inspect only the named setting and return a boolean.
-Keep failing test evidence. Redact secret values before displaying logs or adding evidence to reports.`
+Never print secret values, prefixes, cookies, tokens, signing keys, or environment file contents. For secret diagnostics, report presence or equality as booleans only, and redact secrets from logs and reports.`

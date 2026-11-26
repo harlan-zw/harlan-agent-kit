@@ -91,7 +91,7 @@ describe('issueWorkPrompt', () => {
       instructionFiles: ['AGENTS.md'],
     })
 
-    expect(prompt).toContain('Do not run the full test suite, the full typecheck, or a build. CI runs those.')
+    expect(prompt).toContain('Prefer narrow checks; CI runs the full test suite, full typecheck, and build. Run a broader check or build only when needed to prove your change.')
     expect(prompt).toContain('Use pnpm for every package command. Never use npx.')
     expect(prompt).toContain('Write the failing test first.')
     expect(prompt).toContain('pullRequestTitle is a Conventional Commit subject under 70 characters')

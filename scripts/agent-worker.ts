@@ -76,6 +76,12 @@ for (const path of paths) {
     })
   }
 }
+// Prefer the trimmed worker AGENTS.md when context sync has installed it.
+const workerInstructions = join(source, '.local/share/harlan-agent-kit/worker.md')
+await cp(workerInstructions, join(home, '.codex/AGENTS.md'), { dereference: true, preserveTimestamps: true }).catch((error: NodeJS.ErrnoException) => {
+  if (error.code !== 'ENOENT')
+    throw error
+})
 // Keep Antigravity worker settings isolated from host workspace trusts and Google One credit fallback.
 await mkdir(join(home, '.gemini/antigravity-cli'), { recursive: true, mode: 0o700 })
 await writeFile(join(home, '.gemini/antigravity-cli/settings.json'), JSON.stringify({ useG1Credits: false, enableTerminalSandbox: false, toolPermission: 'always-proceed' }), { mode: 0o600 })

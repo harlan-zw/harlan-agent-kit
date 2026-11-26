@@ -133,6 +133,32 @@ it.skipIf(homeOverlayMissing)('replaces what Codex loads as configuration, instr
   }
 })
 
+it.skipIf(homeOverlayMissing)('mounts controller worker.md over the shared home copy', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-home-worker-instructions-'))
+  try {
+    const { controller, worker, workspace, profile } = await fixture(root)
+    const instructions = join(controller, '.local/share/harlan-agent-kit/worker.md')
+    await mkdir(join(controller, '.local/share/harlan-agent-kit'), { recursive: true })
+    await writeFile(instructions, 'Slim worker instructions.')
+    const sandbox = await prepareAgentSandbox({ workspace, environment: { HOME: controller }, profilePath: profile, provider: 'codex', taskId: 'opaque-issue-work-task' })
+    try {
+      const result = await run(sandbox, `
+        test "$(cat ~/.codex/AGENTS.md)" = 'Slim worker instructions.' || exit 10
+        if echo planted > ~/.codex/AGENTS.md; then exit 11; fi
+        echo slim
+      `)
+      expect(result.stdout.trim()).toBe('slim')
+    }
+    finally {
+      await sandbox.release()
+    }
+    expect(await readFile(join(worker, '.codex/AGENTS.md'), 'utf8')).toBe('Shared instructions.')
+  }
+  finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 it.skipIf(homeOverlayMissing)('refuses a persisted path that aliases a directory outside the shared home', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-home-alias-'))
   try {

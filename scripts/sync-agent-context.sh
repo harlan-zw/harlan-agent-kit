@@ -5,6 +5,7 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
 shared_context="$repo_root/agent-context/context.md"
+worker_context="$repo_root/agent-context/worker.md"
 template_claude="$repo_root/agent-context/CLAUDE.md"
 template_codex="$repo_root/agent-context/AGENTS.md"
 template_gemini="$repo_root/agent-context/GEMINI.md"
@@ -25,6 +26,7 @@ installed_hook_files=()
 # The stable paths the opencode plugin resolves the hooks and the manifest from.
 hooks_install_suffix='.local/share/harlan-agent-kit/hooks'
 manifest_install_suffix='.local/share/harlan-agent-kit/.claude-plugin/plugin.json'
+worker_context_install_suffix='.local/share/harlan-agent-kit/worker.md'
 plugin_install_suffix='.config/opencode/plugins/harlan-hooks.ts'
 antigravity_install_suffix='.gemini/config/plugins/harlan-agent-kit'
 antigravity_skills_suffix='.gemini/config/skills.json'
@@ -89,6 +91,7 @@ fail() {
 
 require_sources() {
   [ -f "$shared_context" ] || fail "Shared Agent instructions are missing: $shared_context"
+  [ -f "$worker_context" ] || fail "Worker Agent instructions are missing: $worker_context"
   [ -f "$template_claude" ] || fail "Claude template is missing: $template_claude"
   [ -f "$template_codex" ] || fail "Codex template is missing: $template_codex"
   [ -f "$template_gemini" ] || fail "Gemini template is missing: $template_gemini"
@@ -181,6 +184,7 @@ sync_local() {
     install -m 755 "$plugin_hooks_dir/$hook_file" "$target_home/$hooks_install_suffix/$hook_file"
   done
   install -m 644 "$plugin_manifest" "$target_home/$manifest_install_suffix"
+  install -m 644 "$worker_context" "$target_home/$worker_context_install_suffix"
   install -m 644 "$opencode_plugin" "$target_home/$plugin_install_suffix"
   # Antigravity reads global rules from ~/.gemini/GEMINI.md, plugins and skills from
   # ~/.gemini/config, plus per-instance config under ~/.t3/userdata/providers/antigravity/*/config.
@@ -253,6 +257,7 @@ opencode_remote_targets() {
     printf '%s\n' "$hogwild_home/$hooks_install_suffix/$hook_file"
   done
   printf '%s\n' "$hogwild_home/$manifest_install_suffix"
+  printf '%s\n' "$hogwild_home/$worker_context_install_suffix"
   printf '%s\n' "$hogwild_home/$plugin_install_suffix"
   printf '%s\n' "$hogwild_home/$github_install_suffix"
   printf '%s\n' "$hogwild_home/$github_cli_suffix"
@@ -273,6 +278,7 @@ opencode_local_sources() {
     printf '%s\n' "$plugin_hooks_dir/$hook_file"
   done
   printf '%s\n' "$plugin_manifest"
+  printf '%s\n' "$worker_context"
   printf '%s\n' "$opencode_plugin"
   printf '%s\n' "$github_wrapper"
   printf '%s\n' "$github_wrapper"
@@ -328,7 +334,7 @@ sync_hogwild() {
       fail "Hogwild did not receive $(basename "$source")."
     fi
     case "$target" in
-      "$hogwild_home/$manifest_install_suffix" | "$hogwild_home/$plugin_install_suffix" | "$hogwild_home/$plugins_sync_suffix" | "$hogwild_home/.local/bin/agent-cli-plan.ts" | "$hogwild_home/.local/share/harlan-agent-kit/hogwild/scripts/"*) mode=644 ;;
+      "$hogwild_home/$manifest_install_suffix" | "$hogwild_home/$worker_context_install_suffix" | "$hogwild_home/$plugin_install_suffix" | "$hogwild_home/$plugins_sync_suffix" | "$hogwild_home/.local/bin/agent-cli-plan.ts" | "$hogwild_home/.local/share/harlan-agent-kit/hogwild/scripts/"*) mode=644 ;;
       *) mode=755 ;;
     esac
     staged_list="$staged_list '$target.$stage_token'"

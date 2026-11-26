@@ -346,7 +346,21 @@ export async function prepareAgentSandbox(input: {
       ? await resolveCodexKit(await Promise.all(profile.readOnlyPaths.map(async path => ({ path, source: await permittedPath(path, controllerHome) }))))
       : undefined
     if (input.reviewHome === undefined) {
-      homeLayer = await prepareHomeLayer({ controllerHome, sharedHome: isolatedHome, ...(input.taskId === undefined ? {} : { taskId: input.taskId }), ...(codexKit === undefined ? {} : { codexKit }) })
+      const workerInstructionsCandidate = join(controllerHome, '.local/share/harlan-agent-kit/worker.md')
+      const workerInstructionsPath = await stat(workerInstructionsCandidate).then(metadata => metadata.isFile()).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT')
+          return false
+        throw error
+      })
+        ? await permittedPath(workerInstructionsCandidate, controllerHome)
+        : undefined
+      homeLayer = await prepareHomeLayer({
+        controllerHome,
+        sharedHome: isolatedHome,
+        ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+        ...(codexKit === undefined ? {} : { codexKit }),
+        ...(workerInstructionsPath === undefined ? {} : { instructionsPath: workerInstructionsPath }),
+      })
       args.push(...homeLayer.args)
     }
     else {
