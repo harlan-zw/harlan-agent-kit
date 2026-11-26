@@ -33,6 +33,39 @@ it('does not treat a skipped upstream trigger as an idle pipeline', () => {
   expect(result.afterMerge.verdict).toBe('Unknown')
 })
 
+it('blocks and waits while a direct push deploy is in progress without a Code run', () => {
+  const running = { ...deploy, status: 'in_progress', conclusion: null }
+  const result = observeMergeReservation(evidence({ code: [], deploys: [{ run: running, sourceSha: sha }] }), now)
+  expect(result.beforeMerge).toMatchObject({ verdict: 'WouldBlock', url: deployUrl })
+  expect(result.afterMerge).toMatchObject({ verdict: 'WouldWait', url: deployUrl })
+})
+
+it('allows and releases when a direct push deploy passes and production serves its revision', () => {
+  const result = observeMergeReservation(evidence({ code: [], deploys: [{ run: deploy, sourceSha: sha }] }), now)
+  expect(result.beforeMerge).toEqual({ verdict: 'WouldAllow', reason: 'The observed deploy pipeline has settled.', url: deployUrl })
+  expect(result.afterMerge).toEqual({ verdict: 'WouldRelease', reason: 'Production serves the exact main commit.', url: deployUrl })
+})
+
+it('allows and releases when a direct push deploy fails without a Code run', () => {
+  const failed = { ...deploy, conclusion: 'failure' }
+  const result = observeMergeReservation(evidence({ code: [], deploys: [{ run: failed, sourceSha: sha }] }), now)
+  expect(result.beforeMerge).toEqual({ verdict: 'WouldAllow', reason: 'The observed deploy pipeline has settled.', url: deployUrl })
+  expect(result.afterMerge).toEqual({ verdict: 'WouldRelease', reason: 'The production deploy concluded failure.', url: deployUrl })
+})
+
+it('stays unknown before merge and waits after merge when a direct push deploy has no conclusion', () => {
+  const unreported = { ...deploy, status: 'completed', conclusion: null }
+  const result = observeMergeReservation(evidence({ code: [], deploys: [{ run: unreported, sourceSha: sha }] }), now)
+  expect(result.beforeMerge).toMatchObject({ verdict: 'Unknown', url: deployUrl })
+  expect(result.afterMerge).toMatchObject({ verdict: 'WouldWait', url: deployUrl })
+})
+
+it('allows before merge and waits after merge when a direct push deploy passed before production serves its revision', () => {
+  const result = observeMergeReservation(evidence({ code: [], deploys: [{ run: deploy, sourceSha: sha }], servedRevision: older }), now)
+  expect(result.beforeMerge).toEqual({ verdict: 'WouldAllow', reason: 'The observed deploy pipeline has settled.', url: deployUrl })
+  expect(result.afterMerge).toMatchObject({ verdict: 'WouldWait', url: deployUrl })
+})
+
 it('blocks an enabled GitHub Auto merge handoff even when the deploy settled', () => {
   const url = 'https://github.com/harlan-zw/nuxtseo.com/pull/40'
   const result = observeMergeReservation(evidence({ handoffs: [{ number: 40, url }] }), now)

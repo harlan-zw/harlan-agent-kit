@@ -10,7 +10,7 @@ const otherSha = 'b'.repeat(40)
 const mergedAt = '2026-11-25T03:00:00Z'
 const current = { head_sha: sha, created_at: mergedAt, updated_at: mergedAt, status: 'in_progress', conclusion: null, html_url: 'https://github.com/run/1' }
 
-function sourceFor(options: { moved?: boolean, incomplete?: boolean, oldActive?: boolean } = {}) {
+function sourceFor(options: { moved?: boolean, incomplete?: boolean, oldActive?: boolean, directPush?: boolean } = {}) {
   const credentials: string[] = []
   const source = createReservationSource({
     tokens: {
@@ -58,15 +58,17 @@ function sourceFor(options: { moved?: boolean, incomplete?: boolean, oldActive?:
       }
       if (url.pathname.endsWith('/code.yml/runs')) {
         expect(url.searchParams.get('event')).toBe('push')
-        return reply({ workflow_runs: [{ ...current, id: 1 }] })
+        return reply({ workflow_runs: options.directPush ? [] : [{ ...current, id: 1 }] })
       }
       expect(url.pathname).toMatch(/\/deploy-prod\.yml\/runs$/)
-      return reply({ workflow_runs: [
-        { ...current, id: 2, event: 'workflow_run', head_sha: otherSha, display_title: `Deploy [take_ownership:${repository.github}:push:main:${sha}]` },
-        { ...current, id: 3, event: 'workflow_run', display_title: `Deploy [take_ownership:${repository.github}:pull_request:main:${sha}]` },
-        { ...current, id: 4, event: 'workflow_dispatch', display_title: 'Deploy' },
-        { ...current, id: 5, event: 'workflow_run', display_title: 'Deploy with unknown source' },
-      ] })
+      return reply({ workflow_runs: options.directPush
+        ? [{ ...current, id: 6, event: 'push', head_sha: sha, display_title: 'Direct deploy' }]
+        : [
+            { ...current, id: 2, event: 'workflow_run', head_sha: otherSha, display_title: `Deploy [take_ownership:${repository.github}:push:main:${sha}]` },
+            { ...current, id: 3, event: 'workflow_run', display_title: `Deploy [take_ownership:${repository.github}:pull_request:main:${sha}]` },
+            { ...current, id: 4, event: 'workflow_dispatch', display_title: 'Deploy' },
+            { ...current, id: 5, event: 'workflow_run', display_title: 'Deploy with unknown source' },
+          ] })
     } } } as never),
   })
   return { source, credentials }
@@ -84,6 +86,14 @@ it('collects default branch evidence with read access and uses only trusted push
     code: [{ id: 1 }],
     deploys: [{ run: { id: 2, sha: otherSha }, sourceSha: sha }, { run: { id: 4 }, sourceSha: null }, { run: { id: 5 }, sourceSha: null }],
   })
+})
+
+it('records head_sha as sourceSha for direct push production deploys', async () => {
+  const evidence = await sourceFor({ directPush: true }).source(repository, new AbortController().signal)
+  expect(evidence.code).toEqual([])
+  expect(evidence.deploys).toEqual([
+    { run: expect.objectContaining({ id: 6, sha }), sourceSha: sha },
+  ])
 })
 
 it('includes an active rerun outside the recent workflow history', async () => {
