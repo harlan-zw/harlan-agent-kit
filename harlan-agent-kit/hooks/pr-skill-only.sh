@@ -80,7 +80,9 @@ for segment in "${segments[@]}"; do
 done
 
 # Also inspect quoted `cd "..."` if the unquoted scan left target_dir unchanged.
-if [ "$target_dir" = "$base_dir" ] && [[ "$command" =~ (^|[|&;\(\n])[[:space:]]*cd[[:space:]]+[\'\"]([^\'\"\n]+)[\'\"] ]]; then
+nl=$'\n'
+quoted_cd_re="(^|[|&;\(${nl}])[[:space:]]*cd[[:space:]]+['\"]([^'\"${nl}]+)['\"]"
+if [ "$target_dir" = "$base_dir" ] && [[ "$command" =~ $quoted_cd_re ]]; then
   candidate="${BASH_REMATCH[2]/#\~/$HOME}"
   if [[ "$candidate" = /* ]]; then
     target_dir="$candidate"
@@ -96,9 +98,11 @@ fi
 
 # Extract body text from --body-file / -F when it points to an existing file not written in this command.
 body_text="$command"
+body_file_re="(--body-file|-F)(=|[[:space:]]+)['\"]?([^'\"[:space:]|&;\)]+)['\"]?"
+cat_file_re="\\\$\\(cat[[:space:]]+['\"]?([^'\"[:space:]|&;\)]+)['\"]?[[:space:]]*\\)"
 if [[ "$gh_segment" =~ [[:space:]](--body-file|-F)(=|[[:space:]]|$) ]]; then
   body_file=""
-  if [[ "$command" =~ (--body-file|-F)(=|[[:space:]]+)[\'\"]?([^\'\"[:space:]|&;\)\n]+)[\'\"]? ]]; then
+  if [[ "$command" =~ $body_file_re ]]; then
     body_file="${BASH_REMATCH[3]}"
   fi
   if [ -n "$body_file" ] && [ "$body_file" != "-" ] && [[ "$command" != *'<<'* ]]; then
@@ -115,7 +119,7 @@ if [[ "$gh_segment" =~ [[:space:]](--body-file|-F)(=|[[:space:]]|$) ]]; then
       body_text=$(cat "$resolved_file")
     fi
   fi
-elif [[ "$command" != *'<<'* ]] && [[ "$command" =~ \$\(cat[[:space:]]+[\'\"]?([^\'\"[:space:]|&;\)\n]+)[\'\"]?[[:space:]]*\) ]]; then
+elif [[ "$command" != *'<<'* ]] && [[ "$command" =~ $cat_file_re ]]; then
   cat_file="${BASH_REMATCH[1]/#\~/$HOME}"
   if [[ "$cat_file" != /* ]] && [ -f "$target_dir/$cat_file" ]; then
     cat_file="$target_dir/$cat_file"

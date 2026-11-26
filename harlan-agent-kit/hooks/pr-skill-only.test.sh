@@ -40,8 +40,12 @@ expect() {
   fi
 }
 
-valid_file="$work/valid-pr.md"
+valid_file="$work/valid-named-pr.md"
 valid_body > "$valid_file"
+
+quoted_dir="$work/nested dir name"
+mkdir -p "$quoted_dir"
+valid_body > "$quoted_dir/named-body.md"
 
 bad_no_disclosure="$work/no-disclosure.md"
 printf '### ❓ Type of change\n\n- [x] 🐞 Bug fix\n\n### 📚 Description\n\nFixes the issue.\n\n*Drafted with Antigravity AI assistance.*\n' > "$bad_no_disclosure"
@@ -77,7 +81,9 @@ expect allow "HARLAN_AGENT_PR_SKILL=1 gh pr edit 42 --body \"$(valid_body)\""
 expect deny "$(printf 'cd /repo\ngh pr create --fill')"
 expect deny "$(printf 'cat > /tmp/pr.md <<EOF\nbody\nEOF\ngh pr create --body-file /tmp/pr.md')"
 expect deny "$(printf 'cd /repo\ngh pr edit 42 --body-file /tmp/pr.md')"
-expect allow "$(printf 'cd %s\nHARLAN_AGENT_PR_SKILL=1 gh pr create --title "fix: example" --body-file valid-pr.md' "$work")"
+expect allow "$(printf 'cd %s\nHARLAN_AGENT_PR_SKILL=1 gh pr create --title "fix: example" --body-file valid-named-pr.md' "$work")"
+expect allow "$(printf 'cd "%s" && HARLAN_AGENT_PR_SKILL=1 gh pr create --title "fix: example" --body-file named-body.md' "$quoted_dir")"
+expect allow "$(printf 'HARLAN_AGENT_PR_SKILL=1 gh pr create --title "fix: example" --body "$(cat %s)"' "$valid_file")"
 expect allow 'gh pr edit 42 --add-label ready'
 expect allow 'HARLAN_AGENT_PR_SKILL=1 gh pr edit 42 --add-label harlan-agent-review'
 expect allow 'gh pr view 42 --json body'
