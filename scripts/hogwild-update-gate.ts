@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 export const PAIRED_FILE_PATTERNS: readonly RegExp[] = [
   /^packages\/harlan-github-agent\/src\/desktop-[^/]+\.ts$/,
+  /^packages\/harlan-github-agent\/bin\/harlan-github-(?:agent|runner)-indicator$/,
   /^scripts\/desktop-agent\.service$/,
   /^scripts\/hogwild-service\.conf$/,
   /^scripts\/repository-env-files$/,

@@ -29,6 +29,8 @@ describe('decideHogwildUpdate', () => {
   it.each([
     'packages/harlan-github-agent/src/desktop-protocol.ts',
     'packages/harlan-github-agent/src/desktop-session-client.ts',
+    'packages/harlan-github-agent/bin/harlan-github-agent-indicator',
+    'packages/harlan-github-agent/bin/harlan-github-runner-indicator',
     'scripts/desktop-agent.service',
     'scripts/hogwild-service.conf',
     'scripts/repository-env-files',

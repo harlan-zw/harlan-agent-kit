@@ -504,6 +504,41 @@ wait_for_desktop() {
   return 1
 }
 
+update_desktop_indicators() {
+  local ref=$1
+  local checkout=${HARLAN_GITHUB_AGENT_CHECKOUT:-$HOME/.local/share/harlan-github-agent/service}
+  local package_dir="$checkout/packages/harlan-github-agent"
+  local bin_dir=${HARLAN_GITHUB_AGENT_BIN_DIR:-$HOME/.local/bin}
+  local indicators_dir=${HARLAN_GITHUB_AGENT_INDICATORS_DIR:-$HOME/.local/share/harlan-github-agent/indicators}
+  local agent_bin="$package_dir/bin/harlan-github-agent-indicator"
+  local runner_bin="$package_dir/bin/harlan-github-runner-indicator"
+  if [ ! -f "$agent_bin" ] || [ ! -f "$runner_bin" ]; then
+    return 0
+  fi
+  if [ ! -e "$bin_dir/harlan-github-agent-indicator" ] && [ ! -e "$bin_dir/harlan-github-runner-indicator" ]; then
+    return 0
+  fi
+  local target="$indicators_dir/$ref"
+  mkdir -p "$target/bin" "$target/assets" "$bin_dir"
+  install -m 0755 "$agent_bin" "$target/bin/harlan-github-agent-indicator"
+  install -m 0755 "$runner_bin" "$target/bin/harlan-github-runner-indicator"
+  if [ -f "$package_dir/assets/github-app-icon.png" ]; then
+    install -m 0644 "$package_dir/assets/github-app-icon.png" "$target/assets/github-app-icon.png"
+  fi
+  if [ -f "$package_dir/assets/github-runner-icon.svg" ]; then
+    install -m 0644 "$package_dir/assets/github-runner-icon.svg" "$target/assets/github-runner-icon.svg"
+  fi
+  ln -sfn "$target/bin/harlan-github-agent-indicator" "$bin_dir/harlan-github-agent-indicator"
+  ln -sfn "$target/bin/harlan-github-runner-indicator" "$bin_dir/harlan-github-runner-indicator"
+  local unit
+  for unit in harlan-github-agent-indicator.service harlan-github-runner-indicator.service; do
+    if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+      systemctl --user restart "$unit"
+    fi
+  done
+  echo "Desktop tray indicators: $ref"
+}
+
 update_desktop_client() {
   local ref=$1
   if ! systemctl --user list-unit-files "$DESKTOP_UNIT.service" >/dev/null 2>&1 \
@@ -519,6 +554,7 @@ update_desktop_client() {
   install -Dm644 "$SCRIPT_DIR/desktop-agent.service" "$DESKTOP_UNIT_DIR/$DESKTOP_UNIT.service"
   systemctl --user daemon-reload
   systemctl --user restart "$DESKTOP_UNIT"
+  update_desktop_indicators "$ref"
   wait_for_desktop
   echo "Desktop client: $(git -C "${HARLAN_GITHUB_AGENT_CHECKOUT:-$HOME/.local/share/harlan-github-agent/service}" log --oneline -1)"
 }
