@@ -156,10 +156,11 @@ describe('tool.execute.before', () => {
     await expect(runShellHook('gh pr create --fill')).rejects.toThrow(/PR skill/)
   })
 
-  it('allows gh pr create from the PR skill', async () => {
-    await expect(runShellHook('HARLAN_AGENT_PR_SKILL=1 gh pr create --fill'))
+  it('allows gh pr create from the PR skill with a valid body', async () => {
+    const command = 'HARLAN_AGENT_PR_SKILL=1 gh pr create --title "fix: x" --body "> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source)."'
+    await expect(runShellHook(command))
       .resolves
-      .toBe('HARLAN_AGENT_PR_SKILL=1 gh pr create --fill')
+      .toBe(command)
   })
 
   it('leaves a tool that is not the shell alone', async () => {

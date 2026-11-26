@@ -75,12 +75,17 @@ describe('preToolUse', () => {
     })
   })
 
-  it('gates gh pr create behind HARLAN_AGENT_PR_SKILL=1', async () => {
+  it('gates gh pr create behind HARLAN_AGENT_PR_SKILL=1 and body validation', async () => {
+    const validBody = '### ❓ Type of change\n\n- [x] 🐞 Bug fix\n\n### 📚 Description\n\nFixes x.\n\n> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).'
     await expect(runCommandHook('gh pr create --fill')).resolves.toEqual({
       decision: 'deny',
       reason: expect.stringMatching(/PR skill/),
     })
-    await expect(runCommandHook('HARLAN_AGENT_PR_SKILL=1 gh pr create --fill')).resolves.toEqual({
+    await expect(runCommandHook('HARLAN_AGENT_PR_SKILL=1 gh pr create --title "fix: x" --body "missing disclosure"')).resolves.toEqual({
+      decision: 'deny',
+      reason: expect.stringMatching(/AI disclosure/),
+    })
+    await expect(runCommandHook(`HARLAN_AGENT_PR_SKILL=1 gh pr create --title "fix: x" --body "${validBody}"`)).resolves.toEqual({
       decision: 'allow',
     })
   })
