@@ -20,7 +20,8 @@ from gi.repository import AyatanaAppIndicator3, GLib, Gtk
 
 RUNNER_LABEL = 'com.harlanzw.desktop-runner=true'
 RUNNER_HOSTS_ENV = 'HARLAN_GITHUB_RUNNER_HOSTS'
-JOBS_REFRESH_SECONDS = 30
+JOBS_REFRESH_SECONDS = 15
+STATUS_URL = os.environ.get('HARLAN_HOGWILD_STATUS_URL', 'https://hogwild.tailcad325.ts.net/').rstrip('/') + '/'
 RUNNER_ICON = Path(__file__).resolve().parent.parent / 'assets/github-runner-icon.svg'
 
 
@@ -236,7 +237,7 @@ def merge_runner_source(previous, current, now=None):
     return {'_tag': 'Available', 'hosts': hosts}
 
 
-def request_runner_snapshot(host, run):
+def request_runner_snapshot_raw(host, run):
     docker_url = urlparse(host['dockerHost'])
     system = host.get('control', {}).get('scope') == 'system'
     path = '/run/github-runner/harlan-desktop-github-runner/status.json' if system else str(
@@ -255,9 +256,166 @@ def request_runner_snapshot(host, run):
         raise ValueError('The runner snapshot requires an SSH or Unix Docker URL.')
     completed = run(command, check=True, capture_output=True, text=True, timeout=8)
     snapshot = json.loads(completed.stdout)
-    if not isinstance(snapshot, dict) or not isinstance(snapshot.get('workflowJobs'), list):
+    if not isinstance(snapshot, dict):
+        raise ValueError('The runner snapshot is invalid.')
+    return snapshot
+
+
+def request_runner_snapshot(host, run):
+    snapshot = request_runner_snapshot_raw(host, run)
+    if not isinstance(snapshot.get('workflowJobs'), list):
         raise ValueError('The runner snapshot has no workflow jobs.')
     return snapshot['workflowJobs']
+
+
+def format_gib(byte_count):
+    gib = byte_count / (1024 ** 3)
+    rounded = round(gib, 1)
+    return f'{int(rounded)}' if rounded == int(rounded) else f'{rounded:.1f}'
+
+
+def format_elapsed(started_at_ms, now=None):
+    now_ms = (time.time() if now is None else now) * 1000
+    seconds = max(0, int((now_ms - started_at_ms) // 1000))
+    if seconds >= 3600:
+        return f'{seconds // 3600}h {(seconds % 3600) // 60}m'
+    if seconds >= 60:
+        return f'{seconds // 60}m {seconds % 60}s'
+    return f'{seconds}s'
+
+
+def describe_pool_hold(hold):
+    if not isinstance(hold, dict):
+        return None
+    tag = hold.get('_tag')
+    if tag == 'NotHeld':
+        return None
+    if tag == 'AtMaximum':
+        return ('At pool limit', f"{hold.get('live', 0)}/{hold.get('maximum', 0)} active")
+    if tag == 'CpuBudget':
+        return ('CPU budget', f"{hold.get('inFlightCpu', 0)}/{hold.get('budgetCpu', 0)} CPU, needs {hold.get('poolCpu', 0)}")
+    if tag == 'MemoryBudget':
+        return (
+            'Memory budget',
+            f"{format_gib(hold.get('inFlightBytes', 0))}/{format_gib(hold.get('budgetBytes', 0))} GiB, needs {format_gib(hold.get('poolBytes', 0))} GiB",
+        )
+    if tag == 'MemoryHeadroom':
+        return (
+            'Memory headroom',
+            f"{format_gib(hold.get('availableBytes', 0))} GiB free, keeps {format_gib(hold.get('headroomBytes', 0))} GiB",
+        )
+    if tag == 'MemoryUnknown':
+        return ('Memory unknown', 'host memory unavailable')
+    if tag == 'DemandUnavailable':
+        return ('Demand unavailable', 'could not read queue')
+    if tag == 'HoldUnreadable':
+        return ('Held', 'unreadable hold state')
+    return None
+
+
+def parse_runner_snapshot_details(snapshot):
+    if not isinstance(snapshot, dict):
+        return None
+    budgets = snapshot.get('budgets')
+    pools = snapshot.get('pools')
+    if not isinstance(budgets, dict) or not isinstance(pools, list):
+        return None
+    cpu_budget = budgets.get('cpu')
+    mem_budget_bytes = budgets.get('memoryBytes')
+    headroom_bytes = budgets.get('memoryHeadroomBytes')
+    if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (cpu_budget, mem_budget_bytes, headroom_bytes)):
+        return None
+
+    cpu_reserved = 0
+    mem_reserved_bytes = 0
+    held_pools = []
+    for pool in pools:
+        if not isinstance(pool, dict):
+            continue
+        live = pool.get('live', 0) if isinstance(pool.get('live'), int) else 0
+        cpu_per = pool.get('cpuPerRunner', 0) if isinstance(pool.get('cpuPerRunner'), int) else 0
+        mem_unit = pool.get('memoryLimitBytes', pool.get('memoryReservationBytes', 0))
+        mem_res = mem_unit if isinstance(mem_unit, (int, float)) else 0
+        cpu_reserved += live * cpu_per
+        mem_reserved_bytes += live * mem_res
+        hold = pool.get('hold')
+        described = describe_pool_hold(hold)
+        queued = pool.get('queued', 0) if isinstance(pool.get('queued'), int) else 0
+        if described is not None and not (isinstance(hold, dict) and hold.get('_tag') == 'AtMaximum' and queued == 0):
+            held_pools.append({
+                'name': pool.get('name') or pool.get('repository') or 'Runner pool',
+                'repository': pool.get('repository'),
+                'label': described[0],
+                'detail': described[1],
+                'queued': queued,
+            })
+
+    runner_started_at = {}
+    for runner in snapshot.get('runners', []):
+        if not isinstance(runner, dict):
+            continue
+        name = runner.get('name')
+        job = runner.get('job')
+        if isinstance(name, str) and isinstance(job, dict) and isinstance(job.get('startedAt'), (int, float)):
+            runner_started_at[name] = job['startedAt']
+
+    return {
+        'cpuReserved': cpu_reserved,
+        'cpuBudget': int(cpu_budget),
+        'memoryReservedGiB': format_gib(mem_reserved_bytes),
+        'memoryBudgetGiB': format_gib(mem_budget_bytes),
+        'memoryHeadroomGiB': format_gib(headroom_bytes),
+        'heldPools': held_pools,
+        'runnerStartedAt': runner_started_at,
+    }
+
+
+def request_host_snapshots(hosts, on_error=None, run=None, now=None):
+    run = run or subprocess.run
+    now = time.time() if now is None else now
+    observations = {}
+    failures = {}
+    capacities = {}
+
+    def fetch(host):
+        return host, request_runner_snapshot_raw(host, run)
+
+    with ThreadPoolExecutor(max_workers=max(1, len(hosts))) as executor:
+        futures = [executor.submit(fetch, host) for host in hosts]
+        for host, future in zip(hosts, futures):
+            try:
+                _, snapshot = future.result()
+            except Exception as caught:
+                if on_error is not None:
+                    on_error(f"{host['name']} · Jobs unavailable · {caught}")
+                continue
+            details = parse_runner_snapshot_details(snapshot)
+            if details is not None:
+                capacities[host['name']] = details
+            rows = snapshot.get('workflowJobs')
+            if not isinstance(rows, list):
+                if on_error is not None:
+                    on_error(f"{host['name']} · Jobs unavailable · The runner snapshot has no workflow jobs.")
+                continue
+            for row in rows:
+                try:
+                    observation = parse_workflow_observation(row, now)
+                    repository = observation['repository']
+                    if observation['_tag'] == 'Unavailable':
+                        failures[repository] = observation['reason']
+                        continue
+                    previous = observations.get(repository)
+                    if previous is None or observation['observedAt'] > previous['observedAt']:
+                        observations[repository] = observation
+                except Exception as caught:
+                    if on_error is not None:
+                        on_error(f"{host['name']} · Jobs unavailable · {caught}")
+    if on_error is not None:
+        for repository, reason in failures.items():
+            if repository not in observations:
+                on_error(f'{repository} · Jobs unavailable · {reason}')
+    jobs = [job for observation in observations.values() for job in observation['jobs']]
+    return jobs, capacities
 
 
 def parse_workflow_observation(observation, now):
@@ -333,7 +491,7 @@ def counted(count, singular, plural=None):
     return f'{count} {singular if count == 1 else plural or f"{singular}s"}'
 
 
-def runner_label(runner):
+def runner_label(runner, started_at_ms=None, now=None):
     labels = runner['RunnerLabels']
     repository = labels.get('com.harlanzw.desktop-runner.repository', 'Unknown repository')
     name = runner.get('Names') or labels.get('com.harlanzw.desktop-runner.pool', 'runner')
@@ -346,7 +504,8 @@ def runner_label(runner):
         'Unknown': '🟠',
     }.get(activity['_tag'], '🟠')
     if activity['_tag'] == 'Running':
-        return f"{marker} Running · {activity['job']} · {repository} · {name}"
+        elapsed = '' if started_at_ms is None else f' · {format_elapsed(started_at_ms, now)}'
+        return f"{marker} Running · {activity['job']}{elapsed} · {repository} · {name}"
     if activity['_tag'] == 'Offline':
         return f"{marker} Offline · {repository} · {name} · {activity['detail']}"
     if activity['_tag'] == 'Unknown':
@@ -394,11 +553,33 @@ def runner_host_status_label(host, now=None):
         return f"🔴 {host['name']} · unavailable · {host['message'][:100]}"
     status = github_actions_status_label(host['runners'], None)
     marker, detail = status.split(' ', 1)
+    capacity = host.get('capacity')
     if host.get('stale') is not None:
         now = time.monotonic() if now is None else now
         age = max(0, int(now - host['stale']['observedAt']))
         return f"🟠 {host['name']} · last known status {age}s old · {detail}"
+    if isinstance(capacity, dict):
+        running = sum(runner.get('Activity', {}).get('_tag') == 'Running' for runner in host['runners'])
+        held = len(capacity.get('heldPools', []))
+        if held > 0 and marker == '⚪':
+            marker = '🟠'
+        activity = f'{running} running' if running > 0 else ('idle' if not host['runners'] else detail)
+        parts = [
+            f"{marker} {host['name']}",
+            activity,
+            f"{capacity['memoryReservedGiB']}/{capacity['memoryBudgetGiB']} GiB",
+            f"{capacity['cpuReserved']}/{capacity['cpuBudget']} CPU",
+        ]
+        if held > 0:
+            parts.append(f'{held} held')
+        return ' · '.join(parts)
     return f"{marker} {host['name']} · {detail}"
+
+
+def held_pool_label(pool, host_name=None):
+    prefix = f'{host_name} · ' if host_name else ''
+    queued = f" · {pool['queued']} queued" if pool.get('queued', 0) > 0 else ''
+    return f"🟠 {prefix}{pool['name']} · {pool['label']} ({pool['detail']}){queued}"
 
 
 def menu_item(label, url=None, enabled=True):
@@ -419,7 +600,11 @@ def submenu_item(label, items):
 
 
 def section_item(label):
-    item = Gtk.MenuItem(label=label)
+    item = Gtk.MenuItem()
+    text = Gtk.Label()
+    text.set_markup(f'<b>{GLib.markup_escape_text(label)}</b>')
+    text.set_xalign(0)
+    item.add(text)
     item.set_sensitive(False)
     return item
 
@@ -446,10 +631,10 @@ def workflow_job_label(job):
 def job_menu(label, jobs):
     if not jobs:
         return menu_item(f'{label} · 0', enabled=False)
-    return submenu_item(
-        f'{label} · {len(jobs)}',
-        [menu_item(workflow_job_label(job), job['url']) for job in jobs],
-    )
+    items = [menu_item(workflow_job_label(job), job['url']) for job in jobs[:15]]
+    if len(jobs) > 15:
+        items.append(menu_item(f'Open Hogwild status for {len(jobs) - 15} more', STATUS_URL))
+    return submenu_item(f'{label} · {len(jobs)}', items)
 
 
 def host_control_status_label(control):
@@ -496,7 +681,9 @@ def build_menu(indicator, source, jobs_source, action_error, refresh, set_accept
         menu.append(menu_item(error[:100], enabled=False))
     if action_error is not None:
         menu.append(menu_item(action_error[:100], enabled=False))
+    menu.append(menu_item('Open Hogwild status', STATUS_URL))
 
+    menu.append(separator())
     if jobs_source['_tag'] == 'Loading':
         menu.append(menu_item('Queued jobs · Loading…', enabled=False))
     elif jobs_source['_tag'] == 'Unavailable':
@@ -508,17 +695,59 @@ def build_menu(indicator, source, jobs_source, action_error, refresh, set_accept
         for message in jobs_source.get('errors', []):
             menu.append(menu_item(message[:100], enabled=False))
 
+    all_held = [
+        (host['name'], pool)
+        for host in hosts
+        if host['_tag'] == 'Available' and isinstance(host.get('capacity'), dict)
+        for pool in host['capacity'].get('heldPools', [])
+    ]
+    if all_held:
+        menu.append(submenu_item(
+            f'🟠 Held pools · {len(all_held)}',
+            [
+                menu_item(
+                    held_pool_label(pool, host_name),
+                    None if not pool.get('repository') else f"https://github.com/{pool['repository']}/actions",
+                    enabled=bool(pool.get('repository')),
+                )
+                for host_name, pool in all_held
+            ],
+        ))
+
+    if hosts:
+        menu.append(separator())
+        menu.append(section_item('Hosts'))
     for host in hosts:
         control = host.get('control')
-        if control is None and (host['_tag'] == 'Unavailable' or not host['runners']):
+        capacity = host.get('capacity') if host['_tag'] == 'Available' else None
+        if control is None and capacity is None and (host['_tag'] == 'Unavailable' or not host['runners']):
             menu.append(menu_item(runner_host_status_label(host), enabled=False))
             continue
         items = []
-        if host['_tag'] == 'Available':
+        if isinstance(capacity, dict):
+            items.append(menu_item(
+                f"Memory · {capacity['memoryReservedGiB']} / {capacity['memoryBudgetGiB']} GiB (keeps {capacity['memoryHeadroomGiB']} GiB)",
+                enabled=False,
+            ))
+            items.append(menu_item(
+                f"CPU · {capacity['cpuReserved']} / {capacity['cpuBudget']} reserved",
+                enabled=False,
+            ))
+            for pool in capacity.get('heldPools', []):
+                items.append(menu_item(
+                    held_pool_label(pool),
+                    None if not pool.get('repository') else f"https://github.com/{pool['repository']}/actions",
+                    enabled=bool(pool.get('repository')),
+                ))
+        if host['_tag'] == 'Available' and host['runners']:
+            if items:
+                items.append(separator())
+            started_map = capacity.get('runnerStartedAt', {}) if isinstance(capacity, dict) else {}
             for runner in sorted(host['runners'], key=runner_label):
                 repository = runner['RunnerLabels'].get('com.harlanzw.desktop-runner.repository')
+                started_at = started_map.get(runner.get('Names'))
                 items.append(menu_item(
-                    runner_label(runner),
+                    runner_label(runner, started_at),
                     None if repository is None else f'https://github.com/{repository}/actions',
                     enabled=repository is not None,
                 ))
@@ -551,14 +780,37 @@ def build_menu(indicator, source, jobs_source, action_error, refresh, set_accept
     indicator.set_menu(menu)
 
 
-def indicator_summary(source):
+def indicator_summary(source, jobs_source=None):
     if source['_tag'] == 'Loading':
         return ('🟡', 'Loading GitHub Actions')
     runners = source_runners(source)
     status = github_actions_status_label(runners, runner_error(source))
     marker, detail = status.split(' ', 1)
     running = sum(runner.get('Activity', {}).get('_tag') == 'Running' for runner in runners)
-    return (f'{marker} {running}' if running else marker, f'GitHub Actions · {detail}')
+    queued = 0
+    if isinstance(jobs_source, dict) and jobs_source.get('_tag') == 'Available':
+        queued = sum(job.get('_tag') == 'Queued' for job in jobs_source.get('jobs', []))
+    held = 0
+    if source['_tag'] == 'Available':
+        held = sum(
+            len(host['capacity'].get('heldPools', []))
+            for host in source['hosts']
+            if host['_tag'] == 'Available' and isinstance(host.get('capacity'), dict)
+        )
+    if running:
+        label = f'{marker} {running} · {queued}q' if queued else f'{marker} {running}'
+    elif held:
+        label = f'🟠 {queued}q' if queued else '🟠'
+    elif queued:
+        label = f'🟡 {queued}q'
+    else:
+        label = marker
+    title_parts = [f'GitHub Actions · {detail}']
+    if queued:
+        title_parts.append(f'{queued} queued')
+    if held:
+        title_parts.append(f'{held} held')
+    return (label, ' · '.join(title_parts))
 
 
 def main():
@@ -582,17 +834,48 @@ def main():
     indicator.set_title('GitHub Actions')
     refreshing = {'active': False}
     pending_action = {'value': None}
-    jobs_cache = {'source': {'_tag': 'Loading'}, 'updatedAt': 0.0}
+    jobs_cache = {'source': {'_tag': 'Loading'}, 'capacities': {}, 'updatedAt': 0.0}
     runner_cache = {'source': None}
+    last_signature = {'value': None}
+
+    def attach_capacities(source, capacities):
+        if source['_tag'] != 'Available' or not capacities:
+            return source
+        return {
+            '_tag': 'Available',
+            'hosts': [
+                {**host, 'capacity': capacities[host['name']]}
+                if host['_tag'] == 'Available' and host['name'] in capacities
+                else host
+                for host in source['hosts']
+            ],
+        }
+
+    def state_signature(source, jobs_source, action_error, label, title):
+        # Strip monotonic timestamps so unchanged state does not rebuild the DBusMenu while open.
+        if source['_tag'] == 'Available':
+            stable_source = {
+                '_tag': 'Available',
+                'hosts': [
+                    {key: value for key, value in host.items() if key != 'observedAt'}
+                    for host in source['hosts']
+                ],
+            }
+        else:
+            stable_source = source
+        return json.dumps([label, title, stable_source, jobs_source, action_error], sort_keys=True)
 
     def apply_state(source, jobs_source, action_error, complete=True):
         if complete:
             refreshing['active'] = False
-        label, title = indicator_summary(source)
-        indicator.set_label(label, '🟢 99')
-        indicator.set_icon_full(str(RUNNER_ICON), 'GitHub Actions')
-        indicator.set_title(title)
-        build_menu(indicator, source, jobs_source, action_error, manual_refresh, change_host_capacity)
+        label, title = indicator_summary(source, jobs_source)
+        signature = state_signature(source, jobs_source, action_error, label, title)
+        if signature != last_signature['value']:
+            last_signature['value'] = signature
+            indicator.set_label(label, '🟢 99 · 99q')
+            indicator.set_icon_full(str(RUNNER_ICON), 'GitHub Actions')
+            indicator.set_title(title)
+            build_menu(indicator, source, jobs_source, action_error, manual_refresh, change_host_capacity)
         if complete and pending_action['value'] is not None:
             refresh()
         return False
@@ -612,16 +895,17 @@ def main():
         runner_cache['source'] = source
         stale = time.monotonic() - jobs_cache['updatedAt'] >= JOBS_REFRESH_SECONDS
         if stale:
-            GLib.idle_add(apply_state, source, jobs_cache['source'], action_error, False)
+            GLib.idle_add(apply_state, attach_capacities(source, jobs_cache['capacities']), jobs_cache['source'], action_error, False)
             errors = []
-            jobs = request_workflow_jobs(runner_hosts, errors.append)
+            jobs, capacities = request_host_snapshots(runner_hosts, errors.append)
             jobs_cache['source'] = (
                 {'_tag': 'Unavailable', 'message': '\n'.join(errors)}
                 if errors and not jobs
                 else {'_tag': 'Available', 'jobs': jobs, 'errors': errors}
             )
+            jobs_cache['capacities'] = capacities
             jobs_cache['updatedAt'] = time.monotonic()
-        GLib.idle_add(apply_state, source, jobs_cache['source'], action_error, True)
+        GLib.idle_add(apply_state, attach_capacities(source, jobs_cache['capacities']), jobs_cache['source'], action_error, True)
 
     def refresh(*_args):
         if refreshing['active']:
