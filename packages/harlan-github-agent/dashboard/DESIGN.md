@@ -119,12 +119,12 @@ An incompatible desktop shows Update required and takes no new work.
 The API returns every open Incident. The pane shows 50 rows, with errors first, and offers Show more.
 Recovery shows a retry deadline or names the next operation. A due deadline never claims execution.
 
-1. **Hosts**: Hogwild and the desktop, each with its running Agents, its Agent slot control, and the memory it holds. The slot buttons run from zero to the ceiling the controller allows. Host memory sits under them as advice, in amber when the count passes it.
-2. **Service**: Service update state, deployed and latest commits, last check time. The update control appears only when available.
-3. **Capacity**: each Agent provider, percent left, Reserve, reset countdown. Circuit state when open or half open.
-4. **Incidents**: kind, scope link, message, Recovery, occurrence count, age. No dismiss control.
-5. **Routines**: name, schedule, latest run state. Candidates and terminal behind disclosures. Only when the host answers the Routine trigger.
-6. **Host**: temperatures, load, services, only on the Tailscale host.
+1. **Hosts**: Hogwild and the desktop in symmetric cards with running Agents, GitHub Actions, shared memory and CPU progress bars, pause-time Actions expansion when active, held runner pools when any are held, live job elapsed times, and the Agent slot control. Empty task and job lists stay silent.
+2. **Capacity**: each Agent provider, percent left with progress bar, Reserve, reset countdown. Circuit state when open or half open.
+3. **Incidents**: kind, scope link, message, Recovery, occurrence count, age. No dismiss control.
+4. **Service**: Service update state, deployed and latest commits, last check time, and Classification summary. The update control appears only when available.
+5. **Routines**: folded when clear with a link to Routines; expanded when any Routine needs attention.
+6. **Host**: temperatures, load, services, only on the Tailscale host. Emergency isolation and power off sit behind a disclosure at the foot.
 
 An unresolved Incident also renders as one compact error row above the board columns. It is the one System item that must be seen now.
 

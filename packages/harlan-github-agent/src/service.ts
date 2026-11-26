@@ -5,7 +5,7 @@ import type { GitIdentity } from './git-identity.ts'
 import type { GitHubTokenProvider } from './github-auth.ts'
 import type { GitHubQuota } from './github-rate-limit.ts'
 import type { GitHubUserAccess } from './github-user-access.ts'
-import type { AgentSlotLimits } from './host-capacity.ts'
+import type { AgentSlotLimits, HostSharedMemory } from './host-capacity.ts'
 import type { AgentSlotCounts } from './host-memory.ts'
 import type { NativeReviewMirror } from './native-review.ts'
 import type { Poller, PollerOptions } from './poller.ts'
@@ -63,7 +63,7 @@ import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitH
 import { createGitHubIssuePublisher, createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createHostAgentPool } from './host-capacity.ts'
 import { agentSlotLine, agentSlotSizing, localAgentMemoryBytes } from './host-memory.ts'
-import { effectiveMaintenanceReserve, setHostSlotPolicy } from './host-slot-policy.ts'
+import { effectiveMaintenanceReserve, readHostSharedMemory, setHostSlotPolicy } from './host-slot-policy.ts'
 import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
@@ -630,10 +630,28 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       desktopMaintenanceReserve: effectiveMaintenanceReserve(slots.desktop, paused),
     }
   }
+  let localSharedMemory: HostSharedMemory | undefined
+  let localMemoryInFlight = false
+  const refreshLocalSharedMemory = async (): Promise<void> => {
+    if (localMemoryInFlight)
+      return
+    localMemoryInFlight = true
+    try {
+      localSharedMemory = await readHostSharedMemory(maintenanceAdmission.capacityCommand)
+    }
+    catch {
+      // Transient broker restart or unavailable authority; clear stale memory reading without interrupting Agent control.
+      localSharedMemory = undefined
+    }
+    finally {
+      localMemoryInFlight = false
+    }
+  }
   const syncHogwildSlotPolicy = async (slots: number, paused: boolean): Promise<void> => {
     const reserve = effectiveMaintenanceReserve(slots, paused)
     try {
       await setHostSlotPolicy(maintenanceAdmission.capacityCommand, slots, reserve)
+      await refreshLocalSharedMemory()
     }
     catch (cause) {
       // Older brokers reject maintenanceReserve=0 while agentSlots > 0. Fall back to the active
@@ -641,6 +659,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       if (paused && reserve === 0 && slots > 0) {
         options.logger.error(`Host capacity authority refused paused maintenanceReserve=0 (${cause instanceof Error ? cause.message : String(cause)}); keeping active reserve until broker update.`)
         await setHostSlotPolicy(maintenanceAdmission.capacityCommand, slots, Math.min(1, slots))
+        await refreshLocalSharedMemory()
         return
       }
       throw cause
@@ -651,6 +670,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     store.close()
     throw cause
   })
+  const localMemoryTimer = setInterval(() => {
+    void refreshLocalSharedMemory()
+  }, 10_000)
+  localMemoryTimer.unref()
   const hosts = createHostAgentPool({
     localMaximum: () => agentSlots().hogwild,
     desktopMaximum: () => agentSlots().desktop,
@@ -1943,7 +1966,10 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       : {}),
     ...(reloadExternalWatches === undefined ? {} : { reloadExternalWatches }),
     desktop,
-    hostCapacity: hosts.read,
+    hostCapacity: () => ({
+      ...hosts.read(),
+      ...(localSharedMemory === undefined ? {} : { localMemory: localSharedMemory }),
+    }),
     hostTasks: hosts.tasks,
     agentSlots: slotLimits,
     hostSlotPolicy,
@@ -2237,6 +2263,7 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     server,
     waitForRestart: restartController.waitForRestart,
     stop: async (stages) => {
+      clearInterval(localMemoryTimer)
       restartController.stop()
       updateScheduler?.stop()
       // One stage per stoppable part, so an overrun names the part still running.

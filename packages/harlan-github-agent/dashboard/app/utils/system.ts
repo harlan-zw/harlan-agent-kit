@@ -151,14 +151,16 @@ export interface CapacityRow {
   detail: string
   resetsAt: string | null
   tone: 'neutral' | 'warning'
+  remainingPercent: number | null
+  reservePercent: number
 }
 
 export function capacityRow(entry: ProviderCapacityStatus): CapacityRow {
   const name = providerLabels[entry.provider]
   if (entry.capacity._tag === 'Unavailable')
-    return { provider: entry.provider, name, value: 'Unavailable', detail: entry.capacity.reason, resetsAt: null, tone: 'warning' }
+    return { provider: entry.provider, name, value: 'Unavailable', detail: entry.capacity.reason, resetsAt: null, tone: 'warning', remainingPercent: null, reservePercent: entry.reservePercent }
   if (entry.capacity._tag === 'Unpublished')
-    return { provider: entry.provider, name, value: 'Not published', detail: 'No Reserve applies', resetsAt: null, tone: 'neutral' }
+    return { provider: entry.provider, name, value: 'Not published', detail: 'No Reserve applies', resetsAt: null, tone: 'neutral', remainingPercent: null, reservePercent: entry.reservePercent }
   const remaining = Math.max(0, Math.round((100 - entry.capacity.usedPercent) * 10) / 10)
   const reserveReached = !hasSpendableCapacity(entry.capacity, entry.reservePercent)
   return {
@@ -168,7 +170,46 @@ export function capacityRow(entry: ProviderCapacityStatus): CapacityRow {
     detail: `Reserve ${entry.reservePercent}%${reserveReached ? ' reached' : ''}`,
     resetsAt: entry.capacity.resetsAt,
     tone: reserveReached ? 'warning' : 'neutral',
+    remainingPercent: remaining,
+    reservePercent: entry.reservePercent,
   }
+}
+
+export function formatElapsed(startedAt: number, now: Date): string {
+  const seconds = Math.max(0, Math.floor((now.getTime() - startedAt) / 1000))
+  if (!Number.isFinite(seconds))
+    return '0s'
+  if (seconds >= 3600)
+    return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`
+  if (seconds >= 60)
+    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  return `${seconds}s`
+}
+
+export function memoryUtilizationTone(reserved: number, budget: number): 'neutral' | 'warning' {
+  return budget > 0 && reserved / budget >= 0.85 ? 'warning' : 'neutral'
+}
+
+export function hostPauseScalingNote(input: {
+  host: 'hogwild' | 'desktop'
+  paused: boolean
+  memoryGiB?: number
+  actionsMemoryGiB?: number
+  maintenanceReserve?: number
+  desktopCurrent?: boolean
+}): string | null {
+  if (!input.paused)
+    return null
+  if (input.host === 'hogwild') {
+    if (input.maintenanceReserve === 0 && input.memoryGiB !== undefined && input.actionsMemoryGiB !== undefined && input.actionsMemoryGiB > input.memoryGiB)
+      return `Paused: maintenance slot released. Actions memory expanded from ${input.memoryGiB} to ${input.actionsMemoryGiB} GiB.`
+    if (input.maintenanceReserve === 0)
+      return 'Paused: maintenance slot released to GitHub Actions.'
+    return null
+  }
+  if (input.desktopCurrent && input.memoryGiB !== undefined)
+    return `Paused: maintenance slot released. All ${input.memoryGiB} GiB open to GitHub Actions.`
+  return null
 }
 
 export type CircuitNotice

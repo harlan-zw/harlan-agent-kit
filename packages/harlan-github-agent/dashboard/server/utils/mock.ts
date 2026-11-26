@@ -52,8 +52,15 @@ function fixture(): DashboardSnapshot {
   })
   return dashboardSnapshot({
     agentModels: AGENT_MODELS,
-    hostCapacity: { localActive: 1, localMaximum: 2, desktopActive: 1, desktopMaximum: 1, desktopAvailable: true },
-    agentSlots: { hogwildCeiling: 4, hogwildMemoryMaximum: 2, desktopCeiling: 2, memoryPerAgentGiB: 8 },
+    hostCapacity: {
+      localActive: 1,
+      localMaximum: 4,
+      desktopActive: 1,
+      desktopMaximum: 2,
+      desktopAvailable: true,
+      localMemory: { memoryGiB: 42, actionsMemoryGiB: 42, reservedGiB: 22, maintenanceReserve: 1, actions: 2, agents: 1 },
+    },
+    agentSlots: { hogwildCeiling: 4, hogwildMemoryMaximum: 4, desktopCeiling: 2, memoryPerAgentGiB: 8 },
     hostTasks: [{ taskId: hex('1'), host: 'desktop' }, { taskId: 'run-1', host: 'hogwild' }],
     desktop: { connected: true, current: true, protocol: DESKTOP_PROTOCOL, report: { protocol: DESKTOP_PROTOCOL, memoryGiB: 16, reservedGiB: 12, agents: 1, actions: 1, jobs: { _tag: 'Available', jobs: [{ runner: 'desktop-1', repository: nuxtSeo, name: 'Build and test sitemap fixtures across supported Nuxt versions', startedAt: Date.now() - 120_000 }] } } },
     status: 'degraded',
@@ -273,7 +280,20 @@ Weekly/Monthly Limit Exhausted
       }
     }
     case 'paused':
-      return { ...base, agentControl: { _tag: 'Paused', pausedAt: minutesAgo(5), safeToRestart: false }, agentStart: { _tag: 'Paused' } }
+      return {
+        ...base,
+        agentControl: { _tag: 'Paused', pausedAt: minutesAgo(5), safeToRestart: true },
+        agentStart: { _tag: 'Paused' },
+        hostCapacity: {
+          localActive: 0,
+          localMaximum: 4,
+          desktopActive: 0,
+          desktopMaximum: 2,
+          desktopAvailable: true,
+          localMemory: { memoryGiB: 42, actionsMemoryGiB: 52, reservedGiB: 32, maintenanceReserve: 0, actions: 5, agents: 0 },
+        },
+        hostTasks: [],
+      }
     case 'calm':
       return { ...base, status: 'ready', incidents: [], repairRecoveryCandidates: [], queue: base.queue.filter(entry => entry.state._tag !== 'AwaitingApproval'), repositories: base.repositories.map(repository => ({ ...repository, lastError: null })) }
     case 'recovery':

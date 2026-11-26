@@ -10,6 +10,7 @@ import {
   formatHogwildTemperature,
   formatHogwildTemperatures,
   hogwildLiveUrl,
+  hogwildRunnerSummary,
   hogwildStatusFresh,
   parseHogwildStatus,
   sparklineProjection,
@@ -170,6 +171,76 @@ describe('hogwild status boundary', () => {
     expect(sparklineProjection([10, 11, 12])).toMatchObject({
       end: { x: 94.5, y: 1.5 },
       summary: 'upward trend, averaging 10 early to 12 recently',
+    })
+  })
+
+  it('summarises runner budgets and surfaces held pools without listing quiet ones', () => {
+    const payload = structuredClone(activeStatus)
+    payload.privateDetails.runners = {
+      _tag: 'Available',
+      budgets: {
+        cpu: 48,
+        memoryBytes: 52 * 1024 ** 3,
+        memoryHeadroomBytes: 8 * 1024 ** 3,
+      },
+      pools: [
+        {
+          name: 'gscdump-com-ci',
+          repository: 'harlan-zw/gscdump.com',
+          cpuPerRunner: 4,
+          live: 2,
+          maximum: 4,
+          memoryLimitBytes: 8 * 1024 ** 3,
+          memoryReservationBytes: 6 * 1024 ** 3,
+          queue: { _tag: 'Available', jobs: 3 },
+          running: 2,
+          hold: {
+            _tag: 'MemoryBudget',
+            budgetBytes: 52 * 1024 ** 3,
+            inFlightBytes: 48 * 1024 ** 3,
+            poolBytes: 6 * 1024 ** 3,
+            since: 1_787_899_300_000,
+          },
+        },
+        {
+          name: 'gscdump-com-light',
+          repository: 'harlan-zw/gscdump.com',
+          cpuPerRunner: 2,
+          live: 1,
+          maximum: 6,
+          memoryLimitBytes: 2 * 1024 ** 3,
+          memoryReservationBytes: 2 * 1024 ** 3,
+          queue: { _tag: 'Available', jobs: 0 },
+          running: 1,
+          hold: { _tag: 'NotHeld' },
+        },
+      ],
+      updatedAt: 1_787_899_378_238,
+    }
+    const parsed = parseHogwildStatus(JSON.stringify(payload))
+    expect(parsed._tag).toBe('Ok')
+    if (parsed._tag !== 'Ok')
+      return
+    expect(hogwildRunnerSummary(parsed.value.runners)).toEqual({
+      running: 3,
+      queued: 3,
+      live: 3,
+      maximum: 10,
+      cpuReserved: 10,
+      cpuBudget: 48,
+      memoryReservedGiB: 14,
+      memoryBudgetGiB: 52,
+      memoryHeadroomGiB: 8,
+      heldPools: [{
+        name: 'gscdump-com-ci',
+        repository: 'harlan-zw/gscdump.com',
+        label: 'Memory budget',
+        detail: '48 GiB / 52 GiB reserved, needs 6 GiB',
+        tone: 'warning',
+        queued: 3,
+        live: 2,
+        maximum: 4,
+      }],
     })
   })
 })

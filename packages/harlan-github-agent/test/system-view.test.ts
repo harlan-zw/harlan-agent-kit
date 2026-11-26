@@ -8,7 +8,10 @@ import {
   desktopPresentation,
   documentTitle,
   faviconTone,
+  formatElapsed,
   githubRateLimitRow,
+  hostPauseScalingNote,
+  memoryUtilizationTone,
   nextRoutineInstant,
   restartNotice,
   retryDeadline,
@@ -348,5 +351,31 @@ describe('faviconTone', () => {
     expect(faviconTone(dashboardSnapshot(), 2)).toBe('warning')
     expect(faviconTone(dashboardSnapshot({ incidents: [incident()] }), 0)).toBe('warning')
     expect(faviconTone(dashboardSnapshot(), 0)).toBe('success')
+  })
+})
+
+describe('host capacity presentation', () => {
+  it('formats elapsed job runtime concisely', () => {
+    const now = new Date('2026-11-26T05:00:00Z')
+    expect(formatElapsed(now.getTime() - 42_000, now)).toBe('42s')
+    expect(formatElapsed(now.getTime() - 195_000, now)).toBe('3m 15s')
+    expect(formatElapsed(now.getTime() - 4_500_000, now)).toBe('1h 15m')
+  })
+
+  it('describes pause-time memory expansion and reserve release for each host', () => {
+    expect(hostPauseScalingNote({ host: 'hogwild', paused: false, memoryGiB: 42, actionsMemoryGiB: 52, maintenanceReserve: 0 })).toBeNull()
+    expect(hostPauseScalingNote({ host: 'hogwild', paused: true, memoryGiB: 42, actionsMemoryGiB: 52, maintenanceReserve: 0 }))
+      .toBe('Paused: maintenance slot released. Actions memory expanded from 42 to 52 GiB.')
+    expect(hostPauseScalingNote({ host: 'hogwild', paused: true, memoryGiB: 42, actionsMemoryGiB: 42, maintenanceReserve: 0 }))
+      .toBe('Paused: maintenance slot released to GitHub Actions.')
+    expect(hostPauseScalingNote({ host: 'desktop', paused: true, memoryGiB: 16, desktopCurrent: true }))
+      .toBe('Paused: maintenance slot released. All 16 GiB open to GitHub Actions.')
+    expect(hostPauseScalingNote({ host: 'desktop', paused: true, memoryGiB: 16, desktopCurrent: false })).toBeNull()
+  })
+
+  it('signals warning only when host memory or CPU utilisation reaches 85 percent', () => {
+    expect(memoryUtilizationTone(32, 52)).toBe('neutral')
+    expect(memoryUtilizationTone(45, 52)).toBe('warning')
+    expect(memoryUtilizationTone(0, 0)).toBe('neutral')
   })
 })
