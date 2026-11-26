@@ -24,6 +24,7 @@ DASHBOARD_ORIGIN = DASHBOARD_URL.rstrip('/')
 PASSWORD_FILE = Path.home() / '.config/harlan-github-agent/dashboard-password'
 APP_ICON = Path(__file__).resolve().parent.parent / 'assets/github-app-icon.png'
 PROVIDER_LABELS = {
+    'agy': 'Antigravity',
     'codex': 'Codex',
     'opencode': 'opencode',
 }
@@ -274,6 +275,7 @@ def agent_slot_choices(dashboard, host):
 
 def agent_slot_items(dashboard, host, set_agent_slots):
     items = []
+    limits = (dashboard or {}).get('agentSlots') or {}
     for entry in agent_slot_choices(dashboard, host):
         if entry['_tag'] == 'Heading':
             items.append(separator())
@@ -283,7 +285,48 @@ def agent_slot_items(dashboard, host, set_agent_slots):
         if set_agent_slots is not None:
             item.connect('activate', lambda *_args, count=entry['slots']: set_agent_slots(host, count))
         items.append(item)
+    if items and host == 'hogwild':
+        suggested = limits.get('hogwildMemoryMaximum')
+        per_agent = limits.get('memoryPerAgentGiB')
+        if isinstance(suggested, int) and isinstance(per_agent, int):
+            items.append(menu_item(f'Host memory suggests {suggested} ({per_agent} GiB each)', enabled=False))
     return items
+
+
+def hogwild_memory_label(dashboard):
+    capacity = (dashboard or {}).get('hostCapacity') or {}
+    memory = capacity.get('localMemory')
+    if not isinstance(memory, dict):
+        return None
+    reserved = memory.get('reservedGiB')
+    budget = memory.get('actionsMemoryGiB', memory.get('memoryGiB'))
+    base = memory.get('memoryGiB')
+    if not isinstance(reserved, int) or not isinstance(budget, int):
+        return None
+    parts = [f'Hogwild memory · {reserved} / {budget} GiB']
+    actions = memory.get('actions')
+    if isinstance(actions, int) and actions > 0:
+        parts.append(counted(actions, 'Action'))
+    paused = (dashboard or {}).get('agentControl', {}).get('_tag') == 'Paused'
+    if paused and memory.get('maintenanceReserve') == 0 and isinstance(base, int) and budget > base:
+        parts.append(f'+{budget - base} GiB paused')
+    elif paused and memory.get('maintenanceReserve') == 0:
+        parts.append('Reserve released')
+    return ' · '.join(parts)
+
+
+def desktop_memory_label(dashboard):
+    desktop = (dashboard or {}).get('desktop') or {}
+    report = desktop.get('report')
+    if not desktop.get('connected') or not isinstance(report, dict):
+        return 'Desktop · disconnected'
+    if desktop.get('current') is False:
+        return '🟠 Desktop · update required'
+    base = f"Desktop memory · {report['reservedGiB']} / {report['memoryGiB']} GiB"
+    paused = (dashboard or {}).get('agentControl', {}).get('_tag') == 'Paused'
+    if paused and desktop.get('current') is True:
+        return f'{base} · Reserve released'
+    return base
 
 
 def agent_selection_items(dashboard, select_agent):
@@ -561,6 +604,13 @@ def harlan_github_agent_status_label(dashboard, agents, error):
         status = 'Restarting' if restart.get('_tag') == 'Restarting' else 'Restart requested'
         return f'🟡 {status} · {queue_label}'
     if agent_control.get('_tag') == 'Paused':
+        local_memory = (dashboard.get('hostCapacity') or {}).get('localMemory')
+        if not agents and isinstance(local_memory, dict) and local_memory.get('maintenanceReserve') == 0:
+            actions_gib = local_memory.get('actionsMemoryGiB')
+            base_gib = local_memory.get('memoryGiB')
+            if isinstance(actions_gib, int) and isinstance(base_gib, int) and actions_gib > base_gib:
+                return f'🟡 Paused · Actions expanded ({actions_gib} GiB) · {queue_label}'
+            return f'🟡 Paused · Reserve released · {queue_label}'
         finishing = counted(len(agents), 'agent finishing', 'agents finishing')
         return f'🟡 Paused · {finishing} · {queue_label}'
     if attention['_tag'] == 'ApprovalRequired':
@@ -598,7 +648,7 @@ def incident_recovery_label(incident):
 
 def incident_label(incident):
     marker = '🔴' if incident.get('severity') == 'error' else '🟠'
-    message = incident.get('message', 'Incident details unavailable')[:80]
+    message = ' '.join(str(incident.get('message', 'Incident details unavailable')).split())[:80]
     return f'{marker} {incident_recovery_label(incident)} · {incident_scope_label(incident)} · {message}'
 
 
@@ -625,20 +675,23 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, sel
     menu.append(menu_item('Open dashboard', DASHBOARD_URL))
 
     if dashboard is not None:
-        for capacity_label in provider_capacity_labels(dashboard):
-            menu.append(menu_item(capacity_label, enabled=False))
-        agent_control = dashboard.get('agentControl', {'_tag': 'Running'})
+        service_update = dashboard.get('serviceUpdate') or {}
+        if service_update.get('_tag') == 'Available':
+            menu.append(menu_item('⬆ Service update available', DASHBOARD_URL))
         selection_label = selection_mode_label(dashboard)
         if selection_label is not None:
             menu.append(menu_item(selection_label, enabled=False))
+
+        menu.append(separator())
+        menu.append(section_item('Hosts'))
         assignments = {turn['taskId']: turn['host'] for turn in dashboard.get('hostTasks', [])
                        if turn.get('taskId') is not None}
         host_menus = {}
         for host, name in (('hogwild', 'Hogwild'), ('desktop', 'Desktop')):
             turns = [turn for turn in dashboard.get('hostTasks', []) if turn['host'] == host]
             slots = agent_slots(dashboard, host)
-            counted = f'{len(turns)} running' if slots is None else f'{len(turns)} of {slots} running'
-            host_item = submenu_item(f'{name} · {counted}', [])
+            counted_label = f'{len(turns)} running' if slots is None else f'{len(turns)} of {slots} running'
+            host_item = submenu_item(f'{name} · {counted_label}', [])
             host_menus[host] = host_item.get_submenu()
             if not turns:
                 host_menus[host].append(menu_item('No Agent tasks running', enabled=False))
@@ -646,13 +699,12 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, sel
                 if not any(item.get('id') == turn.get('taskId') for item in [*agents, *routine_runs]):
                     host_menus[host].append(menu_item('Agent task · Running', enabled=False))
             menu.append(host_item)
-        desktop = dashboard.get('desktop', {})
-        report = desktop.get('report')
-        if desktop.get('connected') and report is not None:
-            menu.append(menu_item(
-                f"Desktop memory · {report['reservedGiB']} / {report['memoryGiB']} GiB", enabled=False))
-        else:
-            menu.append(menu_item('Desktop · disconnected', enabled=False))
+            if host == 'hogwild':
+                hogwild_mem = hogwild_memory_label(dashboard)
+                if hogwild_mem is not None:
+                    menu.append(menu_item(hogwild_mem, enabled=False))
+            else:
+                menu.append(menu_item(desktop_memory_label(dashboard), enabled=False))
         for agent in agents:
             kind = 'issue' if agent.get('subjectKind') == 'issue' else 'pull request'
             links = [
@@ -687,7 +739,14 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, sel
             for item in agent_slot_items(dashboard, host, set_agent_slots):
                 host_menus[host].append(item)
 
+        capacity_labels = provider_capacity_labels(dashboard)
         incidents = dashboard.get('incidents', [])
+        if capacity_labels or incidents or queue:
+            menu.append(separator())
+            menu.append(section_item('Work and limits'))
+        for capacity_label in capacity_labels:
+            menu.append(menu_item(capacity_label, enabled=False))
+
         if incidents:
             menu.append(submenu_item(
                 f'Incidents · {len(incidents)}',
@@ -712,6 +771,9 @@ def build_menu(indicator, sources, action_error, refresh, set_agent_control, sel
                 f'Queue · {len(queue)}',
                 queue_items,
             ))
+
+        menu.append(separator())
+        menu.append(section_item('Controls'))
         menu.append(submenu_item(agent_provider_label(dashboard), agent_selection_items(dashboard, select_agent)))
         control_label, action = agent_control_action(dashboard.get('agentControl', {'_tag': 'Running'}))
         control_item = menu_item(control_label)
@@ -755,6 +817,18 @@ def main():
     indicator.set_title('Harlan GitHub Agent')
     refreshing = {'active': False}
     pending_action = {'value': None}
+    last_signature = {'value': None}
+
+    def state_signature(sources, control_error, label, title):
+        dashboard = source_dashboard(sources)
+        if dashboard is None:
+            return json.dumps([label, title, sources, control_error], sort_keys=True)
+        # Drop volatile timestamps so unchanged state does not rebuild the DBusMenu while open.
+        stable = {key: value for key, value in dashboard.items() if key != 'generatedAt'}
+        if isinstance(stable.get('desktop'), dict):
+            stable['desktop'] = {key: value for key, value in stable['desktop'].items() if key != 'seenAt'}
+        return json.dumps([label, title, stable, control_error], sort_keys=True)
+
     def apply_state(sources, control_error):
         refreshing['active'] = False
         dashboard = source_dashboard(sources)
@@ -763,10 +837,13 @@ def main():
         dashboard_source = sources['harlanGithubAgent']
         dashboard_error = dashboard_source.get('message') if dashboard_source['_tag'] == 'Unavailable' else None
         label, title = indicator_summary(dashboard, [*agents, *routine_runs], dashboard_error)
-        indicator.set_label(label, '🟢 99')
-        indicator.set_icon_full(str(APP_ICON), 'Harlan GitHub Agent')
-        indicator.set_title(title)
-        build_menu(indicator, sources, control_error, refresh, set_agent_control, select_agent, restart_service, set_agent_slots)
+        signature = state_signature(sources, control_error, label, title)
+        if signature != last_signature['value']:
+            last_signature['value'] = signature
+            indicator.set_label(label, '🟢 99')
+            indicator.set_icon_full(str(APP_ICON), 'Harlan GitHub Agent')
+            indicator.set_title(title)
+            build_menu(indicator, sources, control_error, refresh, set_agent_control, select_agent, restart_service, set_agent_slots)
         if pending_action['value'] is not None:
             refresh()
         return False

@@ -1150,6 +1150,109 @@ class TrayHostTest(unittest.TestCase):
             result = runner_indicator.request_runner_host({'name': 'Hogwild', 'dockerHost': 'ssh://hogwild'})
         self.assertIn('permission denied on Docker socket', result['message'])
 
+    def test_shows_hogwild_shared_memory_and_paused_expansion_in_agent_tray(self):
+        dashboard = {
+            'status': 'ready',
+            'agentControl': {'_tag': 'Paused', 'pausedAt': '2026-11-26T00:00:00Z'},
+            'serviceUpdate': {'_tag': 'Available', 'deployedCommit': 'a' * 40, 'latestCommit': 'b' * 40, 'checkedAt': '2026-11-26T00:00:00Z'},
+            'agents': [],
+            'queue': [{'position': 1, 'repository': 'harlan-zw/example', 'number': 42, 'subjectUrl': 'https://github.com/harlan-zw/example/pull/42', 'state': {'_tag': 'Queued'}}],
+            'incidents': [],
+            'hostCapacity': {
+                'localActive': 0,
+                'localMaximum': 4,
+                'desktopActive': 0,
+                'desktopMaximum': 2,
+                'desktopAvailable': True,
+                'localMemory': {
+                    'memoryGiB': 42,
+                    'actionsMemoryGiB': 52,
+                    'reservedGiB': 40,
+                    'maintenanceReserve': 0,
+                    'actions': 6,
+                    'agents': 0,
+                },
+            },
+            'desktop': {'connected': True, 'current': True, 'report': {'reservedGiB': 0, 'memoryGiB': 16}},
+        }
+        stub = StubIndicator()
+        indicator.build_menu(
+            stub,
+            {'harlanGithubAgent': {'_tag': 'Available', 'dashboard': dashboard}},
+            None,
+            lambda: None,
+            lambda *_: None,
+            lambda *_: None,
+        )
+        labels = menu_labels(stub.menus[0])
+        self.assertIn('🟡 Paused · Actions expanded (52 GiB) · 1 in Queue', labels)
+        self.assertIn('⬆ Service update available', labels)
+        self.assertIn('Hogwild memory · 40 / 52 GiB · 6 Actions · +10 GiB paused', labels)
+        self.assertIn('Desktop memory · 0 / 16 GiB · Reserve released', labels)
+
+    def test_parses_runner_capacity_holds_and_surfaces_them_in_runner_tray(self):
+        snapshot = {
+            'budgets': {'cpu': 48, 'memoryBytes': 52 * 1024 ** 3, 'memoryHeadroomBytes': 8 * 1024 ** 3},
+            'pools': [
+                {
+                    'name': 'gscdump-com-ci',
+                    'repository': 'harlan-zw/gscdump.com',
+                    'live': 2,
+                    'maximum': 4,
+                    'queued': 3,
+                    'cpuPerRunner': 4,
+                    'memoryLimitBytes': 8 * 1024 ** 3,
+                    'memoryReservationBytes': 6 * 1024 ** 3,
+                    'hold': {
+                        '_tag': 'MemoryBudget',
+                        'budgetBytes': 52 * 1024 ** 3,
+                        'inFlightBytes': 48 * 1024 ** 3,
+                        'poolBytes': 6 * 1024 ** 3,
+                    },
+                },
+            ],
+            'runners': [{'name': 'runner-1', 'job': {'name': 'unit', 'startedAt': 940000}}],
+        }
+        capacity = runner_indicator.parse_runner_snapshot_details(snapshot)
+        self.assertEqual(capacity['cpuReserved'], 8)
+        self.assertEqual(capacity['cpuBudget'], 48)
+        self.assertEqual(capacity['memoryReservedGiB'], '16')
+        self.assertEqual(capacity['memoryBudgetGiB'], '52')
+        self.assertEqual(len(capacity['heldPools']), 1)
+
+        runner = {
+            'Activity': {'_tag': 'Running', 'job': 'unit'},
+            'Names': 'runner-1',
+            'RunnerLabels': {'com.harlanzw.desktop-runner.repository': 'harlan-zw/gscdump.com'},
+        }
+        source = {'_tag': 'Available', 'hosts': [{
+            '_tag': 'Available',
+            'name': 'Hogwild',
+            'runners': [runner],
+            'capacity': capacity,
+        }]}
+        jobs = {'_tag': 'Available', 'jobs': [
+            {'_tag': 'Queued', 'repository': 'harlan-zw/gscdump.com', 'workflow': 'CI', 'name': 'test', 'url': 'https://github.com/harlan-zw/gscdump.com/actions/runs/1'},
+        ]}
+        self.assertEqual(
+            runner_indicator.indicator_summary(source, jobs),
+            ('🟢 1 · 1q', 'GitHub Actions · 1 self-hosted runner · 1 running · 1 queued · 1 held'),
+        )
+        self.assertEqual(
+            runner_indicator.runner_label(runner, started_at_ms=940000, now=1000),
+            '🟢 Running · unit · 1m 0s · harlan-zw/gscdump.com · runner-1',
+        )
+        stub = StubIndicator()
+        runner_indicator.build_menu(stub, source, jobs, None, lambda: None, lambda *_: None)
+        labels = menu_labels(stub.menus[0])
+        self.assertIn('🟠 Held pools · 1', labels)
+        self.assertIn('🟢 Hogwild · 1 running · 16/52 GiB · 8/48 CPU · 1 held', labels)
+        host_item = next(item for item in stub.menus[0].get_children() if (item.get_label() or '').startswith('🟢 Hogwild'))
+        host_labels = menu_labels(host_item.get_submenu())
+        self.assertIn('Memory · 16 / 52 GiB (keeps 8 GiB)', host_labels)
+        self.assertIn('CPU · 8 / 48 reserved', host_labels)
+        self.assertTrue(any('gscdump-com-ci · Memory budget' in (label or '') for label in host_labels))
+
 
 if __name__ == '__main__':
     unittest.main()
