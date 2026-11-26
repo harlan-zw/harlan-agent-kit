@@ -30,8 +30,9 @@ function record(value: unknown): value is Record<string, unknown> {
  * 13: trusted SEO and vitals Routine provenance carried into implementation turns.
  * 14: fresh vitals comparison requests and provider-verified evidence carried across hosts.
  * 15: Usage events say whether they count one turn or the whole session.
+ * 16: Desktop report responses can set maintenanceReserve to 0 while Agents are Paused.
  */
-export const DESKTOP_PROTOCOL = 15
+export const DESKTOP_PROTOCOL = 16
 
 export const DESKTOP_TURN_LEASE_MILLISECONDS = 15_000
 

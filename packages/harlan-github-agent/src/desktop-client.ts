@@ -71,11 +71,12 @@ async function main(): Promise<void> {
     if (requested.memoryGiB !== state.memoryGiB)
       throw new Error('The Controller returned a different host memory budget.')
     if (!Number.isSafeInteger(requested.agentSlots) || requested.agentSlots < 0 || requested.agentSlots > DESKTOP_AGENT_SLOT_CEILING
-      || requested.maintenanceReserve !== Math.min(1, requested.agentSlots)) {
+      || !Number.isSafeInteger(requested.maintenanceReserve)
+      || (requested.maintenanceReserve !== 0 && requested.maintenanceReserve !== Math.min(1, requested.agentSlots))) {
       throw new Error('The Controller returned no shared Agent slot policy.')
     }
     if (state.policy.agentSlots !== requested.agentSlots || state.policy.maintenanceReserve !== requested.maintenanceReserve)
-      await setHostSlotPolicy(capacity, requested.agentSlots)
+      await setHostSlotPolicy(capacity, requested.agentSlots, requested.maintenanceReserve)
     return state.memoryGiB - state.reservedGiB >= DESKTOP_MEMORY_PER_AGENT_GIB
   }
 

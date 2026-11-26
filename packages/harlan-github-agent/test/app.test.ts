@@ -625,6 +625,38 @@ describe('dashboard HTTP app', () => {
     expect(controls).toEqual([{ _tag: 'Pause', at: now().toISOString() }, { _tag: 'Resume', at: now().toISOString() }])
   })
 
+  it('sends desktopMaintenanceReserve=0 to protocol 16 desktop clients and keeps active reserve for protocol 15', async () => {
+    const reports: unknown[] = []
+    const app = createAgentApp({
+      allowedOrigin,
+      dashboardPassword,
+      dashboardRoot,
+      now,
+      hostSlotPolicy: () => ({ hogwild: 4, desktop: 2, desktopMaintenanceReserve: 0 }),
+      desktop: {
+        report: (value: { memoryGiB: number }) => {
+          reports.push(value)
+          return { memoryGiB: value.memoryGiB }
+        },
+      } as never,
+      store: { ...agentControls } as never,
+    })
+    const headers = { authorization, 'host': allowedHost, 'origin': allowedOrigin, 'content-type': 'application/json' }
+    const v16 = await app.request(`http://${allowedHost}/api/desktop/report`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ protocol: 16, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 }),
+    })
+    const v15 = await app.request(`http://${allowedHost}/api/desktop/report`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ protocol: 15, memoryGiB: 16, reservedGiB: 0, agents: 0, actions: 0 }),
+    })
+    expect(await v16.json()).toEqual({ memoryGiB: 16, agentSlots: 2, maintenanceReserve: 0 })
+    expect(await v15.json()).toEqual({ memoryGiB: 16, agentSlots: 2, maintenanceReserve: 1 })
+    expect(reports).toHaveLength(2)
+  })
+
   it('opens a Routine run for the current minute on request', async () => {
     const opened: unknown[] = []
     const routine = {

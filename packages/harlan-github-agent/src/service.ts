@@ -63,7 +63,7 @@ import { createGitHubWriteGate, isRepositoryWriteQuarantineReason, preflightGitH
 import { createGitHubIssuePublisher, createGitHubPullRequestMerger, createGitHubPullRequestPublisher, createGitHubSource } from './github.ts'
 import { createHostAgentPool } from './host-capacity.ts'
 import { agentSlotLine, agentSlotSizing, localAgentMemoryBytes } from './host-memory.ts'
-import { setHostSlotPolicy } from './host-slot-policy.ts'
+import { effectiveMaintenanceReserve, setHostSlotPolicy } from './host-slot-policy.ts'
 import { createIssueClassificationController } from './issue-classification.ts'
 import { createIssueTriageCommentController } from './issue-triage-comment-controller.ts'
 import { createIssueWorkWorker, pullRequestTemplateBody } from './issue-work-worker.ts'
@@ -621,8 +621,33 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
       desktop: Math.min(setting.desktop ?? 2, slotLimits.desktopCeiling),
     }
   }
+  const maintenancePaused = (): boolean => store.getAgentControl()._tag === 'Paused'
+  const hostSlotPolicy = () => {
+    const slots = agentSlots()
+    const paused = maintenancePaused()
+    return {
+      ...slots,
+      desktopMaintenanceReserve: effectiveMaintenanceReserve(slots.desktop, paused),
+    }
+  }
+  const syncHogwildSlotPolicy = async (slots: number, paused: boolean): Promise<void> => {
+    const reserve = effectiveMaintenanceReserve(slots, paused)
+    try {
+      await setHostSlotPolicy(maintenanceAdmission.capacityCommand, slots, reserve)
+    }
+    catch (cause) {
+      // Older brokers reject maintenanceReserve=0 while agentSlots > 0. Fall back to the active
+      // reserve instead of blocking startup or Pause until the root host-capacity broker is updated.
+      if (paused && reserve === 0 && slots > 0) {
+        options.logger.error(`Host capacity authority refused paused maintenanceReserve=0 (${cause instanceof Error ? cause.message : String(cause)}); keeping active reserve until broker update.`)
+        await setHostSlotPolicy(maintenanceAdmission.capacityCommand, slots, Math.min(1, slots))
+        return
+      }
+      throw cause
+    }
+  }
   options.logger.info(agentSlotLine(agentSlots(), sizing))
-  await setHostSlotPolicy(maintenanceAdmission.capacityCommand, agentSlots().hogwild).catch((cause: unknown) => {
+  await syncHogwildSlotPolicy(agentSlots().hogwild, maintenancePaused()).catch((cause: unknown) => {
     store.close()
     throw cause
   })
@@ -1921,12 +1946,26 @@ export async function startAgentService(options: StartAgentServiceOptions): Prom
     hostCapacity: hosts.read,
     hostTasks: hosts.tasks,
     agentSlots: slotLimits,
-    hostSlotPolicy: agentSlots,
+    hostSlotPolicy,
     setAgentSlots: async (host, slots) => {
       if (host === 'hogwild')
-        await setHostSlotPolicy(maintenanceAdmission.capacityCommand, slots)
+        await syncHogwildSlotPolicy(slots, maintenancePaused())
       store.setAgentSlots({ host, slots, at: now().toISOString() })
       return hosts.read()
+    },
+    pauseAgents: async (at) => {
+      const control = store.pauseAgents(at)
+      await syncHogwildSlotPolicy(agentSlots().hogwild, true).catch((cause: unknown) => {
+        options.logger.error(`Could not release host maintenance Reserve on Pause: ${cause instanceof Error ? cause.message : String(cause)}`)
+      })
+      return control
+    },
+    resumeAgents: async (at) => {
+      const control = store.resumeAgents(at)
+      await syncHogwildSlotPolicy(agentSlots().hogwild, false).catch((cause: unknown) => {
+        options.logger.error(`Could not restore host maintenance Reserve on Resume: ${cause instanceof Error ? cause.message : String(cause)}`)
+      })
+      return control
     },
     activityLog,
     store: {
