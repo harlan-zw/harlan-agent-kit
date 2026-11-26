@@ -53,7 +53,9 @@ export interface AgentAppOptions {
   /** The bounds of the Agent slot control. Absent means the control is unavailable. */
   agentSlots?: AgentSlotLimits
   setAgentSlots?: (host: AgentHost, slots: number) => HostCapacity | Promise<HostCapacity>
-  hostSlotPolicy?: () => { hogwild: number, desktop: number }
+  hostSlotPolicy?: () => { hogwild: number, desktop: number, desktopMaintenanceReserve?: number }
+  pauseAgents?: (at: string) => ReturnType<JournalStore['pauseAgents']> | Promise<ReturnType<JournalStore['pauseAgents']>>
+  resumeAgents?: (at: string) => ReturnType<JournalStore['resumeAgents']> | Promise<ReturnType<JournalStore['resumeAgents']>>
   /** Dated rates and an hourly value for Payback. Absent leaves every cost unpriced. */
   paybackPricing?: PaybackPricing
   store: Pick<JournalStore, 'getTask' | 'listTasks' | 'listCompletionTasks' | 'listIncidents' | 'getOpenPullRequest' | 'approveIssue' | 'approvePullRequest' | 'cancelTask' | 'getDashboardSnapshot' | 'getOpenPullRequestStatus' | 'getOpenIssueStatus' | 'getStats' | 'getTimelineHistory' | 'listAgentTurns' | 'listPaybackRoutineRuns' | 'listPaybackSignals' | 'listPaybackTasks' | 'listReviewRuns' | 'listWorkflowEvents' | 'listRoutines' | 'openRoutineRun' | 'pauseAgents' | 'recordAgentFeedback' | 'requestRestart' | 'finishUpdatePreparation' | 'requestReviewRerun' | 'requestIssueTriageRerun' | 'resumeAgents' | 'selectAgent' | 'setRepositoryPaused' | 'setSelectionMode' | 'dismissItem' | 'restoreItem' | 'setRepositoryWritesEnabled' | 'stopReviewForHead' | 'resolveIncident'>
@@ -610,8 +612,14 @@ export function createAgentApp(options: AgentAppOptions): H3 {
   app.post('/api/desktop/report', async (event) => {
     if (options.desktop === undefined)
       throw createError({ statusCode: 503, message: 'Desktop execution is unavailable.' })
+    const report = desktopInput(parseDesktopReport, await desktopBody(event))
     const policy = options.hostSlotPolicy?.()
-    return { ...options.desktop.report(desktopInput(parseDesktopReport, await desktopBody(event))), ...(policy === undefined ? {} : { agentSlots: policy.desktop, maintenanceReserve: Math.min(1, policy.desktop) }) }
+    const maintenanceReserve = policy === undefined
+      ? undefined
+      : report.protocol >= 16
+        ? (policy.desktopMaintenanceReserve ?? Math.min(1, policy.desktop))
+        : Math.min(1, policy.desktop)
+    return { ...options.desktop.report(report), ...(policy === undefined ? {} : { agentSlots: policy.desktop, maintenanceReserve }) }
   })
   app.post('/api/desktop/claim', () => options.desktop?.claim() ?? null)
   app.post('/api/desktop/defer', async (event) => {
@@ -657,9 +665,9 @@ export function createAgentApp(options: AgentAppOptions): H3 {
     return write(request.host, request.slots)
   })
 
-  app.post('/api/agents/pause', () => options.store.pauseAgents(options.now().toISOString()))
+  app.post('/api/agents/pause', () => (options.pauseAgents ?? options.store.pauseAgents)(options.now().toISOString()))
 
-  app.post('/api/agents/resume', () => options.store.resumeAgents(options.now().toISOString()))
+  app.post('/api/agents/resume', () => (options.resumeAgents ?? options.store.resumeAgents)(options.now().toISOString()))
 
   app.post('/api/service/restart', async (event) => {
     const body = await event.req.json().catch(() => {

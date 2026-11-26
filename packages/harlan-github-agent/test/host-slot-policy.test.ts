@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { afterEach, describe, expect, it } from 'vitest'
-import { setHostSlotPolicy } from '../src/host-slot-policy.ts'
+import { effectiveMaintenanceReserve, setHostSlotPolicy } from '../src/host-slot-policy.ts'
 
 const directories: string[] = []
 async function authority(response: unknown, exitCode = 0, raw = false) {
@@ -28,6 +28,19 @@ describe('shared host slot policy', () => {
     const cli = await authority(status(slots))
     await expect(setHostSlotPolicy(cli.command, slots)).resolves.toBeUndefined()
     expect(await cli.arguments()).toEqual(['policy', String(slots), String(Math.min(1, slots))])
+  })
+  it('accepts maintenanceReserve=0 while keeping interactive slots available', async () => {
+    const cli = await authority(status(4, 0))
+    await expect(setHostSlotPolicy(cli.command, 4, 0)).resolves.toBeUndefined()
+    expect(await cli.arguments()).toEqual(['policy', '4', '0'])
+    expect(effectiveMaintenanceReserve(4, true)).toBe(0)
+    expect(effectiveMaintenanceReserve(4, false)).toBe(1)
+    expect(effectiveMaintenanceReserve(0, false)).toBe(0)
+  })
+  it.each([-1, 2, 1.5])('rejects invalid explicit maintenance reserve %s', async (reserve) => {
+    const cli = await authority(status(4, 1))
+    await expect(setHostSlotPolicy(cli.command, 4, reserve)).rejects.toThrow('Set a valid maintenance Reserve count.')
+    await expect(cli.arguments()).rejects.toMatchObject({ code: 'ENOENT' })
   })
   it.each([
     { _tag: 'Status', policy: { agentSlots: 2, maintenanceReserve: 1 } },
