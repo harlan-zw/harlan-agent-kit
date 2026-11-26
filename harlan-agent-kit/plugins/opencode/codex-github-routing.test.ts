@@ -53,8 +53,10 @@ describe('registered Codex GitHub routing', () => {
   })
 
   it('retains the PR skill requirement for writes', () => {
+    const validBody = '### ❓ Type of change\n\n- [x] 🐞 Bug fix\n\n### 📚 Description\n\nFixes x.\n\n> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source).'
     expect(decision('gh pr create --fill')).toMatch(/PR skill/)
-    expect(decision('HARLAN_AGENT_PR_SKILL=1 gh pr create --fill')).toBeUndefined()
+    expect(decision('HARLAN_AGENT_PR_SKILL=1 gh pr create --fill')).toMatch(/PR skill/)
+    expect(decision(`HARLAN_AGENT_PR_SKILL=1 gh pr create --title "fix: x" --body "${validBody}"`)).toBeUndefined()
   })
 
   it.each([

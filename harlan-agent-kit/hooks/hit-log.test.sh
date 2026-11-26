@@ -109,7 +109,7 @@ expect_silent 'wt list' wt-only.sh 'wt list --format=json'
 expect_silent 'pnpm install' pnpm-only.sh 'pnpm install'
 expect_silent 'himalaya read' himalaya-read-only.sh 'himalaya envelope list'
 expect_silent 'agent-gh read' github-read-routing.sh 'agent-gh pr view 1 --repo owner/public'
-expect_silent 'pr skill create' pr-skill-only.sh 'HARLAN_AGENT_PR_SKILL=1 gh pr create --fill'
+expect_silent 'pr skill create' pr-skill-only.sh 'HARLAN_AGENT_PR_SKILL=1 gh pr create --title "fix: x" --body "> 🤖 AI disclosure: [Harlan Agent Kit](https://github.com/harlan-zw/harlan-agent-kit) modified this description. [My AI open-source policy](https://harlanzw.com/blog/ai-in-open-source)."'
 expect_silent 'commit context' pre-commit-push.sh 'git commit -m "fix: x"'
 
 # Surface inference. The opencode plugin names itself. Claude Code sets
