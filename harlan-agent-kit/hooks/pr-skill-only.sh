@@ -26,13 +26,13 @@ code=$(command_code "$command")
 command_start='(^[[:space:]]*|[|&;\(`][[:space:]]*)'
 # An inline assignment or an env or timeout wrapper keeps gh at the command
 # position, so the patterns must see through a leading prefix of them.
-wrap='(env|timeout([[:space:]]+[^[:space:]]+)?)'
 lead_item='[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|env|timeout([[:space:]]+[^[:space:]]+)?'
 lead="((${lead_item})[[:space:]]+)*"
-# The allow patterns accept wrappers around the skill assignment, but the
-# assignment itself must be exactly HARLAN_AGENT_PR_SKILL=1.
-skill_item='HARLAN_AGENT_PR_SKILL=1|env|timeout([[:space:]]+[^[:space:]]+)?'
-skill_lead="((${skill_item})[[:space:]]+)*HARLAN_AGENT_PR_SKILL=1[[:space:]]+(${wrap}[[:space:]]+)*"
+# The allow patterns accept other inline assignments (such as
+# HARLAN_AGENT_GITHUB_PRIVATE=owner/repo) and wrappers around
+# HARLAN_AGENT_PR_SKILL=1, while rejecting a later override to another value.
+skill_lead="${lead}HARLAN_AGENT_PR_SKILL=1[[:space:]]+${lead}"
+skill_override='HARLAN_AGENT_PR_SKILL=1[[:space:]].*HARLAN_AGENT_PR_SKILL=([^1[:space:]]|1[^[:space:]]|$|[[:space:]])'
 body_flag='(--body-file|--body|-b|-F)(=|[[:space:]]|$)'
 pr_create="${command_start}${lead}gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)"
 pr_body_edit="${command_start}${lead}gh[[:space:]]+pr[[:space:]]+edit[[:space:]][^|&;]*${body_flag}"
@@ -42,10 +42,14 @@ skill_body_edit="${command_start}${skill_lead}gh[[:space:]]+pr[[:space:]]+edit[[
 is_skill_call=false
 is_create=false
 if [[ "$code" =~ $skill_create ]]; then
-  is_skill_call=true
-  is_create=true
+  if [[ ! "${BASH_REMATCH[0]}" =~ $skill_override ]]; then
+    is_skill_call=true
+    is_create=true
+  fi
 elif [[ "$code" =~ $skill_body_edit ]]; then
-  is_skill_call=true
+  if [[ ! "${BASH_REMATCH[0]}" =~ $skill_override ]]; then
+    is_skill_call=true
+  fi
 fi
 
 if [ "$is_skill_call" = false ]; then
