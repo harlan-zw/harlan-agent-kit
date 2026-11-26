@@ -6,22 +6,21 @@ const rows = computed(() => snapshot.value.githubRateLimits.map(hold => githubRa
 </script>
 
 <template>
-  <section aria-labelledby="system-github">
-    <h3 id="system-github" class="text-base font-medium">
+  <section v-if="rows.length > 0" aria-labelledby="system-github">
+    <h3 id="system-github" class="field-label flex items-center gap-2">
       GitHub rate limits
+      <span class="h-px flex-1 bg-border" aria-hidden="true" />
     </h3>
-    <ul v-if="rows.length > 0" class="mt-3 divide-y divide-default border-y border-default">
-      <li v-for="row in rows" :key="`${row.credential}:${row.owner}`" class="space-y-2 py-4">
+    <ul class="mt-2 divide-y divide-default rounded-md border border-warning/40 bg-elevated px-3">
+      <li v-for="row in rows" :key="`${row.credential}:${row.owner}`" class="space-y-1.5 py-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <span class="break-all font-medium">{{ row.owner }}</span>
           <StateBadge tone="warning" :label="row.limit" />
         </div>
-        <p class="text-sm text-muted">
-          {{ row.credential }}
-        </p>
-        <p class="font-mono text-sm">
-          {{ row.retry }}
-        </p>
+        <div class="flex flex-wrap items-center justify-between gap-2 text-sm">
+          <span class="text-muted">{{ row.credential }}</span>
+          <span class="font-mono status-warning">{{ row.retry }}</span>
+        </div>
         <p class="text-sm">
           {{ row.detail }}
         </p>
@@ -30,11 +29,5 @@ const rows = computed(() => snapshot.value.githubRateLimits.map(hold => githubRa
         </p>
       </li>
     </ul>
-    <p v-else-if="snapshot.generatedAt.length === 0" class="mt-2 text-sm text-muted">
-      Checking GitHub rate limits.
-    </p>
-    <p v-else class="mt-2 text-sm text-muted">
-      The Service has no paused GitHub requests.
-    </p>
   </section>
 </template>

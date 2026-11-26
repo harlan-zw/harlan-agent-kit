@@ -1,53 +1,55 @@
 <script setup lang="ts">
 import type { RunnerJobs } from '../../../../src/runner-jobs.ts'
 import type { hostTasks } from '../../utils/host-tasks.ts'
+import { formatElapsed } from '../../utils/system.ts'
 
-defineProps<{
+const { tasks, tasksAvailable, jobs, now } = defineProps<{
   tasks: ReturnType<typeof hostTasks>
   tasksAvailable: boolean
   jobs: RunnerJobs
+  now: Date
 }>()
+
+const showTasks = computed(() => !tasksAvailable || tasks.length > 0)
+const showJobs = computed(() => jobs._tag === 'Unavailable' || jobs.jobs.length > 0)
 </script>
 
 <template>
-  <div class="mt-4 space-y-4 text-sm">
-    <div>
+  <div v-if="showTasks || showJobs" class="mt-3 space-y-3 border-t border-default pt-3 text-sm">
+    <div v-if="showTasks">
       <h5 class="field-label">
-        Agents
+        Running Agents
       </h5>
-      <p v-if="!tasksAvailable" class="mt-2 text-muted">
+      <p v-if="!tasksAvailable" class="mt-1.5 text-muted">
         Task details unavailable.
       </p>
-      <p v-else-if="tasks.length === 0" class="mt-2 text-muted">
-        No Agent tasks running.
-      </p>
-      <ul v-else class="mt-2 divide-y divide-default">
-        <li v-for="task in tasks" :key="task.id" class="py-2 first:pt-0">
-          <a v-if="task.url" :href="task.url" target="_blank" rel="noopener noreferrer" class="block break-words font-medium hover:underline focus-visible:outline-2 focus-visible:outline-primary">{{ task.title }}</a>
-          <span v-else class="font-medium">{{ task.title }}</span>
-          <p v-if="task.detail" class="mt-1 break-words text-xs text-muted">
+      <ul v-else class="mt-1.5 divide-y divide-default">
+        <li v-for="task in tasks" :key="task.id" class="py-2 first:pt-0 last:pb-0">
+          <div class="flex items-baseline justify-between gap-2">
+            <a v-if="task.url" :href="task.url" target="_blank" rel="noopener noreferrer" class="entity-link break-words font-medium">{{ task.title }}</a>
+            <span v-else class="break-words font-medium">{{ task.title }}</span>
+            <span class="shrink-0 font-mono text-muted">{{ task.progress }}</span>
+          </div>
+          <p v-if="task.detail" class="mt-0.5 break-words text-muted">
             {{ task.detail }}
-          </p>
-          <p class="mt-1 break-words text-xs text-muted">
-            {{ task.progress }}
           </p>
         </li>
       </ul>
     </div>
-    <div>
+    <div v-if="showJobs">
       <h5 class="field-label">
-        GitHub Actions
+        Running GitHub Actions
       </h5>
-      <p v-if="jobs._tag === 'Unavailable'" class="mt-2 text-muted">
+      <p v-if="jobs._tag === 'Unavailable'" class="mt-1.5 text-muted">
         Job details unavailable.
       </p>
-      <p v-else-if="jobs.jobs.length === 0" class="mt-2 text-muted">
-        No GitHub Actions jobs running.
-      </p>
-      <ul v-else class="mt-2 divide-y divide-default">
-        <li v-for="job in jobs.jobs" :key="job.runner" class="py-2 first:pt-0">
-          <span class="block break-words font-medium">{{ job.name }}</span>
-          <a :href="`https://github.com/${job.repository}/actions`" target="_blank" rel="noopener noreferrer" class="mt-1 block break-words text-xs text-muted hover:underline focus-visible:outline-2 focus-visible:outline-primary">{{ job.repository }} · Actions ↗</a>
+      <ul v-else class="mt-1.5 divide-y divide-default">
+        <li v-for="job in jobs.jobs" :key="job.runner" class="py-2 first:pt-0 last:pb-0">
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="break-words font-medium">{{ job.name }}</span>
+            <span v-if="job.startedAt > 0" class="shrink-0 font-mono text-muted">{{ formatElapsed(job.startedAt, now) }}</span>
+          </div>
+          <a :href="`https://github.com/${job.repository}/actions`" target="_blank" rel="noopener noreferrer" class="entity-link mt-0.5 inline-block break-words text-muted">{{ job.repository }} ↗</a>
         </li>
       </ul>
     </div>

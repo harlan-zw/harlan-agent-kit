@@ -92,36 +92,46 @@ const resultMessage = computed(() => outcome.value === 'accepted'
 </script>
 
 <template>
-  <section v-if="visible" aria-labelledby="emergency-isolation-title" class="space-y-3">
-    <h3 id="emergency-isolation-title" class="field-label">
-      Emergency isolation
+  <section v-if="visible" aria-labelledby="emergency-isolation-title">
+    <h3 id="emergency-isolation-title" class="field-label flex items-center gap-2">
+      Host controls
+      <span class="h-px flex-1 bg-border" aria-hidden="true" />
     </h3>
-    <p class="text-sm text-muted">
-      Stop Hogwild workloads and block their network access. Power stays on.
-    </p>
-    <p v-if="error && !open" role="status" class="text-sm status-warning">
-      {{ error }}
-    </p>
-    <p v-if="outcome !== 'idle' && !open" role="status" class="text-sm">
-      {{ resultMessage }}
-    </p>
-    <UButton color="error" variant="outline" :disabled="!ready || outcome !== 'idle'" class="min-h-11" @click="begin('isolate')">
-      Isolate Hogwild
-    </UButton>
-    <UButton v-if="!ready && outcome === 'idle'" color="neutral" variant="ghost" :loading="checking" class="min-h-11" @click="check">
-      Check again
-    </UButton>
-    <div v-if="poweroffAvailable" class="space-y-3 border-t border-default pt-4">
-      <h3 class="field-label">
-        Power off
-      </h3>
-      <p class="text-sm text-muted">
-        Turn Hogwild off when you no longer need it. Someone must physically turn it back on.
-      </p>
-      <UButton color="error" variant="outline" :disabled="!ready || outcome !== 'idle'" class="min-h-11" @click="begin('poweroff')">
-        Power off Hogwild
-      </UButton>
-    </div>
+    <details class="mt-2 rounded-md border border-default bg-elevated p-3" :open="Boolean(error) || outcome !== 'idle'">
+      <summary class="cursor-pointer text-sm font-medium text-muted">
+        Emergency isolation{{ poweroffAvailable ? ' and power off' : '' }}
+      </summary>
+      <div class="mt-3 space-y-3 border-t border-default pt-3">
+        <p class="text-sm text-muted">
+          Stop Hogwild workloads and block their network access. Power stays on.
+        </p>
+        <p v-if="error && !open" role="status" class="text-sm status-warning">
+          {{ error }}
+        </p>
+        <p v-if="outcome !== 'idle' && !open" role="status" class="text-sm">
+          {{ resultMessage }}
+        </p>
+        <div class="flex flex-wrap items-center gap-2">
+          <UButton color="error" variant="outline" :disabled="!ready || outcome !== 'idle'" class="min-h-11" @click="begin('isolate')">
+            Isolate Hogwild
+          </UButton>
+          <UButton v-if="!ready && outcome === 'idle'" color="neutral" variant="ghost" :loading="checking" class="min-h-11" @click="check">
+            Check again
+          </UButton>
+        </div>
+        <div v-if="poweroffAvailable" class="space-y-3 border-t border-default pt-3">
+          <h4 class="field-label">
+            Power off
+          </h4>
+          <p class="text-sm text-muted">
+            Turn Hogwild off when you no longer need it. Someone must physically turn it back on.
+          </p>
+          <UButton color="error" variant="outline" :disabled="!ready || outcome !== 'idle'" class="min-h-11" @click="begin('poweroff')">
+            Power off Hogwild
+          </UButton>
+        </div>
+      </div>
+    </details>
     <UModal v-model:open="open" :title="poweroff ? 'Power off Hogwild?' : 'Isolate Hogwild?'" :description="description" :dismissible="!phase" :close="!phase">
       <template #body>
         <p v-if="outcome === 'accepted'" role="status" class="text-sm">

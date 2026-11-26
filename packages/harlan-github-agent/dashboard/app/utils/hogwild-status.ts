@@ -14,6 +14,29 @@ export type HogwildServiceState
     | { _tag: 'Inactive' }
     | { _tag: 'Unavailable' }
 
+export type HogwildRunnerHold
+  = | { _tag: 'NotHeld' }
+    | { _tag: 'AtMaximum', live: number, maximum: number, since?: number }
+    | { _tag: 'CpuBudget', budgetCpu: number, inFlightCpu: number, poolCpu: number, since?: number }
+    | { _tag: 'DemandUnavailable', since?: number }
+    | { _tag: 'HoldUnreadable' }
+    | { _tag: 'MemoryBudget', budgetBytes: number, inFlightBytes: number, poolBytes: number, since?: number }
+    | { _tag: 'MemoryHeadroom', availableBytes: number, headroomBytes: number, poolBytes: number, ramBackedBytes: number, since?: number }
+    | { _tag: 'MemoryUnknown', since?: number }
+
+export interface HogwildRunnerPool {
+  cpuPerRunner: number
+  hold?: HogwildRunnerHold
+  live: number
+  maximum: number
+  memoryLimitBytes: number
+  memoryReservationBytes: number
+  name?: string
+  queue: { _tag: 'Available', jobs: number } | { _tag: 'Unavailable' }
+  repository?: string
+  running: number
+}
+
 export type HogwildRunnerStatus
   = | { _tag: 'Unavailable' }
     | {
@@ -24,17 +47,33 @@ export type HogwildRunnerStatus
         memoryBytes: number
         memoryHeadroomBytes: number
       }
-      pools: Array<{
-        cpuPerRunner: number
-        live: number
-        maximum: number
-        memoryLimitBytes: number
-        memoryReservationBytes: number
-        queue: { _tag: 'Available', jobs: number } | { _tag: 'Unavailable' }
-        running: number
-      }>
+      pools: HogwildRunnerPool[]
       updatedAt: number
     }
+
+export interface HogwildHeldPool {
+  name: string
+  repository?: string
+  label: string
+  detail: string
+  tone: 'warning' | 'neutral'
+  queued: number
+  live: number
+  maximum: number
+}
+
+export interface HogwildRunnerSummary {
+  running: number
+  queued: number | undefined
+  live: number
+  maximum: number
+  cpuReserved: number
+  cpuBudget: number
+  memoryReservedGiB: number
+  memoryBudgetGiB: number
+  memoryHeadroomGiB: number
+  heldPools: HogwildHeldPool[]
+}
 
 export interface HogwildStatus {
   host: {
@@ -223,6 +262,75 @@ export function formatHogwildRunnerCapacity(status: HogwildRunnerStatus): string
   return `${running} running · ${queued} queued · ${live} / ${maximum} live · ${cpuReserved} / ${status.budgets.cpu} CPU reserved · ${formatGibibytes(memoryReserved)} / ${formatGibibytes(status.budgets.memoryBytes)} memory reserved · ${formatGibibytes(largestHardLimit)} largest hard limit · keeps ${formatGibibytes(status.budgets.memoryHeadroomBytes)} available`
 }
 
+function roundGibibytes(bytes: number): number {
+  return Math.round((bytes / 1024 ** 3) * 10) / 10
+}
+
+function describePoolHold(hold: HogwildRunnerHold): { label: string, detail: string, tone: 'warning' | 'neutral' } | undefined {
+  switch (hold._tag) {
+    case 'NotHeld':
+      return undefined
+    case 'AtMaximum':
+      return { label: 'At pool limit', detail: `${hold.live} / ${hold.maximum} runners active`, tone: 'neutral' }
+    case 'CpuBudget':
+      return { label: 'CPU budget', detail: `${hold.inFlightCpu} / ${hold.budgetCpu} CPU reserved, needs ${hold.poolCpu}`, tone: 'warning' }
+    case 'MemoryBudget':
+      return { label: 'Memory budget', detail: `${formatGibibytes(hold.inFlightBytes)} / ${formatGibibytes(hold.budgetBytes)} reserved, needs ${formatGibibytes(hold.poolBytes)}`, tone: 'warning' }
+    case 'MemoryHeadroom':
+      return { label: 'Memory headroom', detail: `${formatGibibytes(hold.availableBytes)} free, keeps ${formatGibibytes(hold.headroomBytes)} spare`, tone: 'warning' }
+    case 'MemoryUnknown':
+      return { label: 'Memory unknown', detail: 'Host memory reading unavailable', tone: 'warning' }
+    case 'DemandUnavailable':
+      return { label: 'Demand unavailable', detail: 'Could not read queued jobs', tone: 'warning' }
+    case 'HoldUnreadable':
+      return { label: 'Held', detail: 'Pool hold state is unreadable', tone: 'warning' }
+  }
+}
+
+export function hogwildRunnerSummary(status: HogwildRunnerStatus): HogwildRunnerSummary | undefined {
+  if (status._tag === 'Unavailable')
+    return undefined
+  const running = sum(status.pools, pool => pool.running)
+  const queued = status.pools.every(pool => pool.queue._tag === 'Available')
+    ? sum(status.pools, pool => pool.queue._tag === 'Available' ? pool.queue.jobs : 0)
+    : undefined
+  const live = sum(status.pools, pool => pool.live)
+  const maximum = sum(status.pools, pool => pool.maximum)
+  const cpuReserved = sum(status.pools, pool => pool.live * pool.cpuPerRunner)
+  const memoryReservedBytes = sum(status.pools, pool => pool.live * pool.memoryReservationBytes)
+  const heldPools: HogwildHeldPool[] = []
+  for (const pool of status.pools) {
+    if (pool.hold === undefined)
+      continue
+    const described = describePoolHold(pool.hold)
+    if (described === undefined)
+      continue
+    const poolQueued = pool.queue._tag === 'Available' ? pool.queue.jobs : 0
+    if (pool.hold._tag === 'AtMaximum' && poolQueued === 0)
+      continue
+    heldPools.push({
+      name: pool.name ?? pool.repository ?? 'Runner pool',
+      ...(pool.repository === undefined ? {} : { repository: pool.repository }),
+      ...described,
+      queued: poolQueued,
+      live: pool.live,
+      maximum: pool.maximum,
+    })
+  }
+  return {
+    running,
+    queued,
+    live,
+    maximum,
+    cpuReserved,
+    cpuBudget: status.budgets.cpu,
+    memoryReservedGiB: roundGibibytes(memoryReservedBytes),
+    memoryBudgetGiB: roundGibibytes(status.budgets.memoryBytes),
+    memoryHeadroomGiB: roundGibibytes(status.budgets.memoryHeadroomBytes),
+    heldPools,
+  }
+}
+
 function formatGibibytes(bytes: number): string {
   const gibibytes = bytes / 1024 ** 3
   return `${Number.isInteger(gibibytes) ? gibibytes : gibibytes.toFixed(1)} GiB`
@@ -302,7 +410,56 @@ function parseRunners(value: unknown): HogwildRunnerStatus | undefined {
   }
 }
 
-function parseRunnerPool(value: unknown): Extract<HogwildRunnerStatus, { _tag: 'Available' }>['pools'][number] | undefined {
+function parseRunnerHold(value: unknown): HogwildRunnerHold | undefined {
+  if (!isRecord(value) || typeof value._tag !== 'string')
+    return undefined
+  const since = count(value.since)
+  const optionalSince = since === undefined ? {} : { since }
+  switch (value._tag) {
+    case 'NotHeld':
+      return { _tag: 'NotHeld' }
+    case 'HoldUnreadable':
+      return { _tag: 'HoldUnreadable' }
+    case 'DemandUnavailable':
+      return { _tag: 'DemandUnavailable', ...optionalSince }
+    case 'MemoryUnknown':
+      return { _tag: 'MemoryUnknown', ...optionalSince }
+    case 'AtMaximum': {
+      const live = count(value.live)
+      const maximum = count(value.maximum)
+      return live === undefined || maximum === undefined ? undefined : { _tag: 'AtMaximum', live, maximum, ...optionalSince }
+    }
+    case 'CpuBudget': {
+      const budgetCpu = count(value.budgetCpu)
+      const inFlightCpu = count(value.inFlightCpu)
+      const poolCpu = count(value.poolCpu)
+      return budgetCpu === undefined || inFlightCpu === undefined || poolCpu === undefined
+        ? undefined
+        : { _tag: 'CpuBudget', budgetCpu, inFlightCpu, poolCpu, ...optionalSince }
+    }
+    case 'MemoryBudget': {
+      const budgetBytes = count(value.budgetBytes)
+      const inFlightBytes = count(value.inFlightBytes)
+      const poolBytes = count(value.poolBytes)
+      return budgetBytes === undefined || inFlightBytes === undefined || poolBytes === undefined
+        ? undefined
+        : { _tag: 'MemoryBudget', budgetBytes, inFlightBytes, poolBytes, ...optionalSince }
+    }
+    case 'MemoryHeadroom': {
+      const availableBytes = count(value.availableBytes)
+      const headroomBytes = count(value.headroomBytes)
+      const poolBytes = count(value.poolBytes)
+      const ramBackedBytes = count(value.ramBackedBytes)
+      return availableBytes === undefined || headroomBytes === undefined || poolBytes === undefined || ramBackedBytes === undefined
+        ? undefined
+        : { _tag: 'MemoryHeadroom', availableBytes, headroomBytes, poolBytes, ramBackedBytes, ...optionalSince }
+    }
+    default:
+      return undefined
+  }
+}
+
+function parseRunnerPool(value: unknown): HogwildRunnerPool | undefined {
   if (!isRecord(value))
     return undefined
   const cpuPerRunner = count(value.cpuPerRunner)
@@ -321,17 +478,23 @@ function parseRunnerPool(value: unknown): Extract<HogwildRunnerStatus, { _tag: '
     return undefined
   }
   const queue = parseRunnerQueue(value.queue)
-  return queue === undefined
-    ? undefined
-    : {
-        cpuPerRunner,
-        live,
-        maximum,
-        memoryLimitBytes,
-        memoryReservationBytes,
-        queue,
-        running,
-      }
+  if (queue === undefined)
+    return undefined
+  const name = nonEmptyString(value.name) ? value.name : undefined
+  const repository = nonEmptyString(value.repository) ? value.repository : undefined
+  const hold = value.hold === undefined ? undefined : parseRunnerHold(value.hold)
+  return {
+    cpuPerRunner,
+    ...(hold === undefined ? {} : { hold }),
+    live,
+    maximum,
+    memoryLimitBytes,
+    memoryReservationBytes,
+    ...(name === undefined ? {} : { name }),
+    queue,
+    ...(repository === undefined ? {} : { repository }),
+    running,
+  }
 }
 
 function parseRunnerQueue(value: unknown): Extract<HogwildRunnerStatus, { _tag: 'Available' }>['pools'][number]['queue'] | undefined {

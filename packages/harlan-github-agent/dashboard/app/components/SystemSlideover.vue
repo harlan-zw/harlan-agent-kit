@@ -16,16 +16,27 @@ import {
   formatHogwildLoad,
   formatHogwildServiceMetrics,
   formatHogwildTemperature,
+  hogwildRunnerSummary,
   hogwildStatusFresh,
 } from '../utils/hogwild-status.ts'
 import { hostTasks } from '../utils/host-tasks.ts'
-import { batchRow, capacityRow, circuitNotice, desktopPresentation, nextRoutineInstant, retryDeadline, serviceUpdatePresentation } from '../utils/system.ts'
+import {
+  batchRow,
+  capacityRow,
+  circuitNotice,
+  desktopPresentation,
+  hostPauseScalingNote,
+  memoryUtilizationTone,
+  nextRoutineInstant,
+  retryDeadline,
+  serviceUpdatePresentation,
+} from '../utils/system.ts'
 import EmergencyIsolation from './system/EmergencyIsolation.vue'
 import GitHubRateLimits from './system/GitHubRateLimits.vue'
 import HostWork from './system/HostWork.vue'
 
 /**
- * Reference material behind one chip: Capacity, Incidents, Routines, Host.
+ * Reference material behind one chip: Exceptions, Hosts, Capacity, Incidents, Service, Routines, Host.
  *
  * Watch logs opens Sessions from the running Agent. Retained Repairs offer inspection here.
  */
@@ -42,6 +53,7 @@ const { connection: host, history: hostHistory } = useHogwildStatus()
 const incidentLimit = ref(50)
 const visibleIncidents = computed(() => incidents.value.slice(0, incidentLimit.value))
 const desktopState = computed(() => desktopPresentation(snapshot.value.desktop, !controlsUnavailable.value))
+const isPaused = computed(() => snapshot.value.agentControl._tag === 'Paused')
 
 const capacity = computed(() => snapshot.value.providerCapacities.map(capacityRow))
 const circuits = computed(() => activeProviderCircuits(snapshot.value.providerCircuits).flatMap(circuit => circuitNotice(circuit) ?? []))
@@ -77,6 +89,7 @@ const routines = computed(() => {
     }
   })
 })
+const routinesNeedAttention = computed(() => routines.value.some(record => record.tone === 'error' || record.tone === 'warning' || record.reportPending || record.reportFailed))
 
 /**
  * Agent slots are Harlan's number, and host memory is advice under it.
@@ -86,12 +99,13 @@ const routines = computed(() => {
 const slotLimits = computed(() => snapshot.value.agentSlots)
 const hogwildSlots = computed(() => snapshot.value.hostCapacity?.localMaximum)
 const desktopSlots = computed(() => snapshot.value.hostCapacity?.desktopMaximum)
+const localMemory = computed(() => snapshot.value.hostCapacity?.localMemory)
 const slotChoices = (ceiling: number): number[] => Array.from({ length: ceiling + 1 }, (_value, count) => count)
 const memoryAdvice = computed(() => {
   const limits = slotLimits.value
   if (limits === undefined)
     return null
-  return `Host memory suggests ${limits.hogwildMemoryMaximum} at ${limits.memoryPerAgentGiB} GiB for each Agent.`
+  return `Host memory suggests ${limits.hogwildMemoryMaximum} at ${limits.memoryPerAgentGiB} GiB per Agent.`
 })
 const overMemory = computed(() => slotLimits.value !== undefined && hogwildSlots.value !== undefined && hogwildSlots.value > slotLimits.value.hogwildMemoryMaximum)
 
@@ -100,19 +114,62 @@ const desktopReport = computed(() => desktopState.value.report)
 const hogwildTasks = computed(() => hostTasks(snapshot.value, 'hogwild'))
 const desktopTasks = computed(() => hostTasks(snapshot.value, 'desktop'))
 const hogwildRunningJobs = computed(() => {
+  if (host.value._tag === 'NotOnHogwild')
+    return { _tag: 'Available' as const, jobs: [] }
   const runners = hostStatus.value?.runners
   return runners?._tag === 'Available' && hogwildStatusFresh(runners.updatedAt, now.value)
     ? runners.jobs ?? { _tag: 'Unavailable' as const }
     : { _tag: 'Unavailable' as const }
 })
-const runnerPools = computed(() => {
+const hogwildRunners = computed(() => {
   const runners = hostStatus.value?.runners
-  return runners?._tag === 'Available' && hogwildStatusFresh(runners.updatedAt, now.value) ? runners.pools : undefined
+  if (runners?._tag !== 'Available' || !hogwildStatusFresh(runners.updatedAt, now.value))
+    return undefined
+  return hogwildRunnerSummary(runners)
 })
-const hogwildJobs = computed(() => runnerPools.value?.reduce((total, pool) => total + pool.running, 0))
-const hogwildQueued = computed(() => runnerPools.value?.every(pool => pool.queue._tag === 'Available')
-  ? runnerPools.value.reduce((total, pool) => total + (pool.queue._tag === 'Available' ? pool.queue.jobs : 0), 0)
-  : undefined)
+const hogwildJobs = computed(() => hogwildRunners.value?.running ?? localMemory.value?.actions)
+const hogwildQueued = computed(() => hogwildRunners.value?.queued)
+const hogwildMemoryBar = computed(() => {
+  if (localMemory.value !== undefined) {
+    const budget = localMemory.value.actionsMemoryGiB
+    return {
+      reserved: localMemory.value.reservedGiB,
+      budget,
+      tone: memoryUtilizationTone(localMemory.value.reservedGiB, budget),
+    }
+  }
+  if (hogwildRunners.value !== undefined && hogwildRunners.value.memoryBudgetGiB > 0) {
+    return {
+      reserved: hogwildRunners.value.memoryReservedGiB,
+      budget: hogwildRunners.value.memoryBudgetGiB,
+      tone: memoryUtilizationTone(hogwildRunners.value.memoryReservedGiB, hogwildRunners.value.memoryBudgetGiB),
+    }
+  }
+  return null
+})
+const hogwildPauseNote = computed(() => hostPauseScalingNote({
+  host: 'hogwild',
+  paused: isPaused.value,
+  memoryGiB: localMemory.value?.memoryGiB,
+  actionsMemoryGiB: localMemory.value?.actionsMemoryGiB,
+  maintenanceReserve: localMemory.value?.maintenanceReserve,
+}))
+const hogwildBadge = computed(() => {
+  if (isPaused.value && localMemory.value !== undefined && localMemory.value.maintenanceReserve === 0 && localMemory.value.actionsMemoryGiB > localMemory.value.memoryGiB)
+    return { label: 'Actions expanded', tone: 'success' as const }
+  if (isPaused.value && localMemory.value?.maintenanceReserve === 0)
+    return { label: 'Reserve released', tone: 'neutral' as const }
+  return { label: 'Primary', tone: 'neutral' as const }
+})
+const desktopPauseNote = computed(() => hostPauseScalingNote({
+  host: 'desktop',
+  paused: isPaused.value,
+  memoryGiB: desktopReport.value?.memoryGiB,
+  desktopCurrent: snapshot.value.desktop?.current,
+}))
+const desktopMemoryTone = computed(() => desktopReport.value
+  ? memoryUtilizationTone(desktopReport.value.reservedGiB, desktopReport.value.memoryGiB)
+  : 'neutral' as const)
 
 const batches = computed(() => snapshot.value.batches.map(batchRow))
 const healthEntries = computed(() => {
@@ -147,17 +204,15 @@ function activityLine(item: AgentActivityItem): string {
     case 'Command': return `$ ${item.command}${item.exitCode !== null && item.exitCode !== 0 ? ` (exit ${item.exitCode})` : ''}${item.output.length > 0 ? `\n${item.output}` : ''}`
     case 'FileChange': return `edited ${item.changes.map(change => change.path).join(', ')}`
     case 'Progress': return item.text
-
     case 'Reasoning': return item.text
   }
 }
 </script>
 
 <template>
-  <USlideover v-model:open="open" title="System" :ui="{ body: 'space-y-10 wrap-anywhere' }">
+  <USlideover v-model:open="open" title="System" :ui="{ body: 'space-y-7 wrap-anywhere' }">
     <template #body>
-      <EmergencyIsolation :active="open" />
-      <section v-if="controlsUnavailable" role="status" aria-label="Service data unavailable">
+      <section v-if="controlsUnavailable" role="status" aria-label="Service data unavailable" class="rounded-md border border-warning/40 bg-elevated p-3.5">
         <p class="text-sm status-warning">
           Service data is unavailable. Reload before changing settings or work.
         </p>
@@ -173,95 +228,157 @@ function activityLine(item: AgentActivityItem): string {
       </section>
       <template v-else>
         <section v-if="healthEntries.length > 0" aria-labelledby="system-health" aria-live="polite">
-          <h3 id="system-health" class="field-label">
-            System
+          <h3 id="system-health" class="field-label flex items-center gap-2">
+            Needs attention
+            <span class="font-mono">{{ healthEntries.length }}</span>
+            <span class="h-px flex-1 bg-border" aria-hidden="true" />
           </h3>
-          <ul class="mt-2 divide-y divide-default">
-            <li v-for="entry in healthEntries" :key="entry.key" class="py-2">
-              <a :href="`#${entry.target}`" class="entity-link text-sm" :class="entry.tone === 'error' ? 'status-error' : 'status-warning'">{{ entry.label }}</a>
-              <p class="mt-1 text-sm break-words">
+          <ul class="mt-2 divide-y divide-default rounded-md border border-default bg-elevated px-3">
+            <li v-for="entry in healthEntries" :key="entry.key" class="py-2.5">
+              <div class="flex items-baseline justify-between gap-2">
+                <a :href="`#${entry.target}`" class="entity-link text-sm font-medium" :class="entry.tone === 'error' ? 'status-error' : 'status-warning'">{{ entry.label }}</a>
+                <span v-if="entry.at" class="shrink-0 font-mono text-sm text-muted">{{ relativeTime(entry.at) }}</span>
+              </div>
+              <p class="mt-0.5 break-words text-sm text-muted">
                 {{ entry.detail }}
-              </p>
-              <p v-if="entry.at" class="mt-1 text-xs text-muted">
-                Last seen {{ relativeTime(entry.at) }}.
               </p>
             </li>
           </ul>
         </section>
+
+        <GitHubRateLimits />
+
         <section class="lg:hidden" aria-label="Agent selection">
           <AgentSelectionMenu />
         </section>
-        <GitHubRateLimits />
+
         <section aria-labelledby="system-execution">
           <h3 id="system-execution" class="field-label flex items-center gap-2">
             Hosts
             <span class="h-px flex-1 bg-border" aria-hidden="true" />
           </h3>
-          <p class="mt-2 text-sm text-muted">
-            Hogwild takes work first. Desktop helps only when Hogwild has no capacity for queued work.
-          </p>
-          <div class="mt-4 divide-y divide-default border-y border-default">
-            <div class="py-4">
+          <div class="mt-3 space-y-3">
+            <article class="rounded-md border border-default bg-elevated p-3.5">
               <div class="flex items-center justify-between gap-3">
-                <h4 class="font-medium">
+                <h4 class="font-medium text-highlighted">
                   Hogwild
                 </h4>
-                <StateBadge tone="neutral" label="Primary" />
+                <StateBadge :tone="hogwildBadge.tone" :label="hogwildBadge.label" />
               </div>
+              <p v-if="hogwildPauseNote" class="mt-2 text-sm text-muted">
+                {{ hogwildPauseNote }}
+              </p>
               <dl class="mt-3 grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <dt class="text-muted">
                     Agents
-                  </dt><dd class="mt-1 font-mono">
+                  </dt>
+                  <dd class="mt-0.5 font-mono text-highlighted">
                     {{ snapshot.hostCapacity ? `${snapshot.hostCapacity.localActive} / ${snapshot.hostCapacity.localMaximum}` : 'Unavailable' }}
                   </dd>
                 </div>
                 <div>
                   <dt class="text-muted">
                     GitHub Actions
-                  </dt><dd class="mt-1 font-mono">
-                    {{ hogwildJobs === undefined ? 'Unavailable' : `${hogwildJobs} running` }}
+                  </dt>
+                  <dd class="mt-0.5 font-mono text-highlighted">
+                    <template v-if="hogwildJobs === undefined">
+                      Unavailable
+                    </template>
+                    <template v-else>
+                      {{ hogwildJobs }} running<span v-if="hogwildQueued !== undefined && hogwildQueued > 0" :class="hogwildRunners?.heldPools.length ? 'status-warning' : 'text-muted'"> · {{ hogwildQueued }} queued</span>
+                    </template>
                   </dd>
                 </div>
               </dl>
-              <p v-if="hogwildQueued !== undefined" class="mt-2 text-xs text-muted">
-                {{ hogwildQueued }} GitHub Actions jobs queued
-              </p>
-              <div v-if="slotLimits && hogwildSlots !== undefined" class="mt-4">
-                <span id="hogwild-slots-label" class="field-label">Agent slots</span>
-                <div class="mt-2 flex flex-wrap items-center gap-1.5" role="group" aria-labelledby="hogwild-slots-label">
-                  <UButton
-                    v-for="count in slotChoices(slotLimits.hogwildCeiling)"
-                    :key="count"
-                    size="sm"
-                    class="font-mono"
-                    :color="count === hogwildSlots ? 'primary' : 'neutral'"
-                    :variant="count === hogwildSlots ? 'solid' : 'outline'"
-                    :aria-pressed="count === hogwildSlots"
-                    :aria-label="`${count} Agent slots on Hogwild`"
-                    :disabled="controlPending"
-                    @click="setAgentSlots('hogwild', count)"
-                  >
-                    {{ count }}
-                  </UButton>
+
+              <div v-if="hogwildMemoryBar || hogwildRunners" class="mt-3 space-y-2.5 border-t border-default pt-3">
+                <div v-if="hogwildMemoryBar">
+                  <div class="flex items-center justify-between gap-2 text-sm">
+                    <span class="text-muted">Memory committed</span>
+                    <span class="font-mono" :class="hogwildMemoryBar.tone === 'warning' ? 'status-warning' : 'text-highlighted'">{{ hogwildMemoryBar.reserved }} / {{ hogwildMemoryBar.budget }} GiB</span>
+                  </div>
+                  <UProgress
+                    class="mt-1.5"
+                    :color="hogwildMemoryBar.tone"
+                    :model-value="Math.min(hogwildMemoryBar.reserved, hogwildMemoryBar.budget)"
+                    :max="hogwildMemoryBar.budget"
+                    aria-label="Hogwild memory committed"
+                  />
                 </div>
-                <p class="mt-2 text-xs" :class="overMemory ? 'status-warning' : 'text-muted'">
+                <div v-if="hogwildRunners && hogwildRunners.cpuBudget > 0">
+                  <div class="flex items-center justify-between gap-2 text-sm">
+                    <span class="text-muted">Runner CPU reserved</span>
+                    <span class="font-mono" :class="memoryUtilizationTone(hogwildRunners.cpuReserved, hogwildRunners.cpuBudget) === 'warning' ? 'status-warning' : 'text-highlighted'">{{ hogwildRunners.cpuReserved }} / {{ hogwildRunners.cpuBudget }} CPU</span>
+                  </div>
+                  <UProgress
+                    class="mt-1.5"
+                    :color="memoryUtilizationTone(hogwildRunners.cpuReserved, hogwildRunners.cpuBudget)"
+                    :model-value="Math.min(hogwildRunners.cpuReserved, hogwildRunners.cpuBudget)"
+                    :max="hogwildRunners.cpuBudget"
+                    aria-label="Hogwild runner CPU reserved"
+                  />
+                </div>
+              </div>
+
+              <div v-if="hogwildRunners && hogwildRunners.heldPools.length > 0" class="mt-3 border-t border-default pt-3">
+                <h5 class="field-label">
+                  Held runner pools
+                </h5>
+                <ul class="mt-1.5 space-y-2 text-sm">
+                  <li v-for="pool in hogwildRunners.heldPools" :key="pool.name" class="rounded-sm border border-default bg-muted px-2.5 py-2">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <span class="font-mono font-medium">{{ pool.name }}</span>
+                      <StateBadge :tone="pool.tone" :label="pool.label" />
+                    </div>
+                    <p class="mt-1 text-sm text-muted">
+                      {{ pool.detail }}<template v-if="pool.queued > 0">
+                        · {{ pool.queued }} queued
+                      </template>
+                    </p>
+                  </li>
+                </ul>
+              </div>
+
+              <HostWork :tasks="hogwildTasks" :tasks-available="snapshot.hostTasks !== undefined" :jobs="hogwildRunningJobs" :now="now" />
+
+              <div v-if="slotLimits && hogwildSlots !== undefined" class="mt-3 border-t border-default pt-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <span id="hogwild-slots-label" class="field-label">Agent slots</span>
+                  <UFieldGroup role="group" aria-labelledby="hogwild-slots-label">
+                    <UButton
+                      v-for="count in slotChoices(slotLimits.hogwildCeiling)"
+                      :key="count"
+                      size="sm"
+                      class="font-mono"
+                      :color="count === hogwildSlots ? 'primary' : 'neutral'"
+                      :variant="count === hogwildSlots ? 'solid' : 'outline'"
+                      :aria-pressed="count === hogwildSlots"
+                      :aria-label="`${count} Agent slots on Hogwild`"
+                      :disabled="controlPending"
+                      @click="setAgentSlots('hogwild', count)"
+                    >
+                      {{ count }}
+                    </UButton>
+                  </UFieldGroup>
+                </div>
+                <p class="mt-2 text-sm" :class="overMemory ? 'status-warning' : 'text-muted'">
                   {{ memoryAdvice }}<template v-if="overMemory">
                     Hogwild may run out of memory.
                   </template>
                 </p>
               </div>
-              <HostWork :tasks="hogwildTasks" :tasks-available="snapshot.hostTasks !== undefined" :jobs="hogwildRunningJobs" />
-            </div>
-            <div class="py-4">
+            </article>
+
+            <article class="rounded-md border border-default bg-elevated p-3.5">
               <div class="flex items-center justify-between gap-3">
-                <h4 id="system-desktop" class="font-medium">
+                <h4 id="system-desktop" class="font-medium text-highlighted">
                   Desktop
                 </h4>
                 <StateBadge :tone="desktopState.tone" :label="desktopState.label" />
               </div>
-              <p class="mt-2 text-sm text-muted">
-                {{ desktopState.detail }}
+              <p v-if="!desktopReport || desktopPauseNote" class="mt-2 text-sm text-muted">
+                {{ desktopPauseNote || desktopState.detail }}
               </p>
               <details v-if="snapshot.desktop?.connected && !snapshot.desktop.current" class="mt-2 text-sm">
                 <summary class="cursor-pointer entity-link">
@@ -271,7 +388,7 @@ function activityLine(item: AgentActivityItem): string {
                   After active work finishes, run this command from the desktop control checkout. It updates both hosts.
                 </p>
                 <code class="mt-2 block break-all">pnpm service:hogwild:update</code>
-                <p class="mt-2 font-mono text-xs text-muted">
+                <p class="mt-2 font-mono text-sm text-muted">
                   Desktop protocol {{ snapshot.desktop.report?.protocol }}. Service protocol {{ snapshot.desktop.protocol }}.
                 </p>
               </details>
@@ -280,108 +397,64 @@ function activityLine(item: AgentActivityItem): string {
                   <div>
                     <dt class="text-muted">
                       Agents
-                    </dt><dd class="mt-1 font-mono">
+                    </dt>
+                    <dd class="mt-0.5 font-mono text-highlighted">
                       {{ desktopSlots === undefined ? `${desktopReport.agents} running` : `${desktopReport.agents} / ${desktopSlots}` }}
                     </dd>
                   </div>
                   <div>
                     <dt class="text-muted">
                       GitHub Actions
-                    </dt><dd class="mt-1 font-mono">
+                    </dt>
+                    <dd class="mt-0.5 font-mono text-highlighted">
                       {{ desktopReport.actions }} running
                     </dd>
                   </div>
                 </dl>
-                <div class="mt-4 flex items-center justify-between gap-2 text-sm">
-                  <span class="text-muted">Memory committed</span>
-                  <span class="font-mono">{{ desktopReport.reservedGiB }} / {{ desktopReport.memoryGiB }} GiB</span>
+                <div class="mt-3 border-t border-default pt-3">
+                  <div class="flex items-center justify-between gap-2 text-sm">
+                    <span class="text-muted">Desktop memory</span>
+                    <span class="font-mono" :class="desktopMemoryTone === 'warning' ? 'status-warning' : 'text-highlighted'">{{ desktopReport.reservedGiB }} / {{ desktopReport.memoryGiB }} GiB</span>
+                  </div>
+                  <UProgress
+                    class="mt-1.5"
+                    :color="desktopMemoryTone"
+                    :model-value="Math.min(desktopReport.reservedGiB, desktopReport.memoryGiB)"
+                    :max="desktopReport.memoryGiB"
+                    aria-label="Desktop memory committed"
+                  />
+                  <p class="mt-1.5 text-sm text-muted">
+                    Shared by Agents and GitHub Actions.
+                  </p>
                 </div>
-                <UProgress class="mt-2" :model-value="desktopReport.reservedGiB" :max="desktopReport.memoryGiB" aria-label="Desktop memory committed" />
-                <HostWork :tasks="desktopTasks" :tasks-available="snapshot.hostTasks !== undefined" :jobs="desktopReport.jobs ?? { _tag: 'Unavailable' }" />
+                <HostWork :tasks="desktopTasks" :tasks-available="snapshot.hostTasks !== undefined" :jobs="desktopReport.jobs ?? { _tag: 'Unavailable' }" :now="now" />
               </template>
-              <div v-if="slotLimits && desktopSlots !== undefined" class="mt-4">
-                <span id="desktop-slots-label" class="field-label">Agent slots</span>
-                <div class="mt-2 flex flex-wrap items-center gap-1.5" role="group" aria-labelledby="desktop-slots-label">
-                  <UButton
-                    v-for="count in slotChoices(slotLimits.desktopCeiling)"
-                    :key="count"
-                    size="sm"
-                    class="font-mono"
-                    :color="count === desktopSlots ? 'primary' : 'neutral'"
-                    :variant="count === desktopSlots ? 'solid' : 'outline'"
-                    :aria-pressed="count === desktopSlots"
-                    :aria-label="`${count} Agent slots on the desktop`"
-                    :disabled="controlPending"
-                    @click="setAgentSlots('desktop', count)"
-                  >
-                    {{ count }}
-                  </UButton>
+              <div v-if="slotLimits && desktopSlots !== undefined" class="mt-3 border-t border-default pt-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <span id="desktop-slots-label" class="field-label">Agent slots</span>
+                  <UFieldGroup role="group" aria-labelledby="desktop-slots-label">
+                    <UButton
+                      v-for="count in slotChoices(slotLimits.desktopCeiling)"
+                      :key="count"
+                      size="sm"
+                      class="font-mono"
+                      :color="count === desktopSlots ? 'primary' : 'neutral'"
+                      :variant="count === desktopSlots ? 'solid' : 'outline'"
+                      :aria-pressed="count === desktopSlots"
+                      :aria-label="`${count} Agent slots on the desktop`"
+                      :disabled="controlPending"
+                      @click="setAgentSlots('desktop', count)"
+                    >
+                      {{ count }}
+                    </UButton>
+                  </UFieldGroup>
                 </div>
-                <p class="mt-2 text-xs text-muted">
-                  Zero keeps every Agent on Hogwild. Each desktop Agent needs {{ slotLimits.memoryPerAgentGiB }} GiB.
+                <p class="mt-2 text-sm text-muted">
+                  Overflow only when Hogwild is full. Zero keeps every Agent on Hogwild.
                 </p>
               </div>
-              <div class="mt-4">
-                <span class="field-label">Desktop memory</span>
-                <p class="mt-2 font-mono text-sm">
-                  {{ desktopReport ? `${desktopReport.memoryGiB} GiB` : 'Unavailable' }}
-                </p>
-                <p class="mt-2 text-xs text-muted">
-                  Shared by Agents and GitHub Actions.
-                </p>
-              </div>
-            </div>
+            </article>
           </div>
-        </section>
-
-        <section aria-labelledby="system-service">
-          <h3 id="system-service" class="field-label flex items-center gap-2">
-            Service
-            <span class="h-px flex-1 bg-border" aria-hidden="true" />
-          </h3>
-          <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <StateBadge :tone="update.tone" :label="update.label" />
-            <UButton
-              v-if="snapshot.serviceUpdate._tag === 'Available'"
-              color="neutral"
-              variant="outline"
-              size="sm"
-              icon="i-octicon-sync-16"
-              :disabled="controlPending || updatePending"
-              @click="requestUpdate"
-            >
-              Update after current work
-            </UButton>
-          </div>
-          <dl class="mt-3 divide-y divide-default border-t border-default">
-            <div class="flex items-center justify-between gap-4 py-2.5">
-              <dt class="field-label">
-                Deployed commit
-              </dt>
-              <dd class="break-all font-mono text-sm text-muted">
-                {{ update.deployedCommit || 'Unknown' }}
-              </dd>
-            </div>
-            <div v-if="update.latestCommit" class="flex items-center justify-between gap-4 py-2.5">
-              <dt class="field-label">
-                Latest commit
-              </dt>
-              <dd class="break-all font-mono text-sm text-muted">
-                {{ update.latestCommit }}
-              </dd>
-            </div>
-            <div class="flex items-center justify-between gap-4 py-2.5">
-              <dt class="field-label">
-                Last checked
-              </dt>
-              <dd class="text-sm text-muted">
-                {{ update.checkedAt ? relativeTime(update.checkedAt) : 'Checking now' }}
-              </dd>
-            </div>
-          </dl>
-          <p v-if="update.detail" class="mt-2 text-sm status-warning">
-            {{ update.detail }}
-          </p>
         </section>
 
         <section aria-labelledby="system-capacity">
@@ -392,10 +465,18 @@ function activityLine(item: AgentActivityItem): string {
           <ul v-if="capacity.length > 0" class="mt-1 divide-y divide-default">
             <li v-for="row in capacity" :key="row.provider" class="py-2.5">
               <div class="flex items-baseline justify-between gap-3">
-                <span class="text-sm text-highlighted">{{ row.name }}</span>
+                <span class="text-sm font-medium text-highlighted">{{ row.name }}</span>
                 <span class="font-mono text-sm" :class="row.tone === 'warning' ? 'status-warning' : undefined">{{ row.value }}</span>
               </div>
-              <p class="mt-0.5 text-sm text-muted">
+              <UProgress
+                v-if="row.remainingPercent !== null"
+                class="mt-1.5"
+                :color="row.tone"
+                :model-value="row.remainingPercent"
+                :max="100"
+                :aria-label="`${row.name} capacity remaining`"
+              />
+              <p class="mt-1 text-sm text-muted">
                 {{ row.detail }}<template v-if="row.resetsAt">
                   · resets {{ relativeTime(row.resetsAt) }}
                 </template>
@@ -409,26 +490,6 @@ function activityLine(item: AgentActivityItem): string {
             {{ notice.text }}<template v-if="notice._tag === 'Open'">
               {{ retryDeadline(notice.retryAt, now) }}. The next Agent request will check whether the provider is available.
             </template>
-          </p>
-        </section>
-
-        <section aria-labelledby="system-classification">
-          <h3 id="system-classification" class="field-label flex items-center gap-2">
-            Classification
-            <span class="h-px flex-1 bg-border" aria-hidden="true" />
-          </h3>
-          <div v-if="snapshot.classification !== undefined" class="mt-1 py-2.5">
-            <div class="flex items-baseline justify-between gap-3">
-              <span class="text-sm text-highlighted">Jev</span>
-              <span class="font-mono text-sm text-muted">{{ snapshot.classification.model }}</span>
-            </div>
-            <p class="mt-0.5 text-sm text-muted">
-              Pull request triage decisions via the {{ snapshot.classification.gatewayId }} gateway.
-              Last 24 hours: {{ triageSummary }}.
-            </p>
-          </div>
-          <p v-else class="mt-2 text-sm text-muted">
-            Classification is not configured. Prose-only pull requests get a full Review.
           </p>
         </section>
 
@@ -450,13 +511,13 @@ function activityLine(item: AgentActivityItem): string {
               <p class="text-sm text-muted">
                 {{ incidentRecoveryLabel(incident, now) }} · <span class="font-mono">{{ incident.occurrences }}×</span>
               </p>
-              <p class="text-xs text-muted">
+              <p class="text-sm text-muted">
                 First seen {{ relativeTime(incident.firstSeenAt) }}. Last seen {{ relativeTime(incident.lastSeenAt) }}.
               </p>
-              <p v-if="incident.recovery._tag === 'Retrying'" class="text-xs text-muted">
+              <p v-if="incident.recovery._tag === 'Retrying'" class="text-sm text-muted">
                 A due retry starts when the Controller has capacity. Check again after the next update.
               </p>
-              <p v-else-if="incident.recovery._tag !== 'OnNextOperation'" class="text-xs text-muted">
+              <p v-else-if="incident.recovery._tag !== 'OnNextOperation'" class="text-sm text-muted">
                 Open the linked repository or pull request to inspect the Incident.
               </p>
             </li>
@@ -530,70 +591,149 @@ function activityLine(item: AgentActivityItem): string {
           </ul>
         </section>
 
-        <section v-if="routines.length > 0" aria-labelledby="system-routines">
-          <h3 id="system-routines" class="field-label flex items-center gap-2">
-            Routines
+        <section aria-labelledby="system-service">
+          <h3 id="system-service" class="field-label flex items-center gap-2">
+            Service
             <span class="h-px flex-1 bg-border" aria-hidden="true" />
           </h3>
-          <ul class="mt-1 divide-y divide-default">
-            <li v-for="record in routines" :key="record.routine.id" class="space-y-1 py-3">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="font-mono text-sm text-highlighted">{{ record.routine.name }}</span>
-                <a
-                  v-if="record.trackingUrl"
-                  :href="record.trackingUrl"
-                  target="_blank"
-                  rel="noreferrer"
-                  class="entity-link font-mono text-sm text-muted"
-                ><RepositoryIdentity :repository="record.routine.repository"> #{{ record.routine.trackingIssueNumber }}</RepositoryIdentity></a>
-                <RepositoryIdentity v-else :repository="record.routine.repository" class="font-mono text-sm text-muted" />
-                <StateBadge :tone="record.tone" :label="record.label" class="ms-auto" />
-              </div>
-              <p class="text-sm text-muted">
-                <template v-if="!record.routine.enabled">
-                  Disabled.
-                </template>
-                <template v-else>
-                  <template v-if="record.routine.lastRunAt">
-                    Last {{ relativeTime(record.routine.lastRunAt) }}.
+          <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <StateBadge :tone="update.tone" :label="update.label" />
+            <UButton
+              v-if="snapshot.serviceUpdate._tag === 'Available'"
+              color="neutral"
+              variant="outline"
+              size="sm"
+              icon="i-octicon-sync-16"
+              :disabled="controlPending || updatePending"
+              @click="requestUpdate"
+            >
+              Update after current work
+            </UButton>
+          </div>
+          <dl class="mt-3 divide-y divide-default border-t border-default">
+            <div class="flex items-center justify-between gap-4 py-2">
+              <dt class="field-label">
+                Deployed commit
+              </dt>
+              <dd class="break-all font-mono text-sm text-muted">
+                {{ update.deployedCommit || 'Unknown' }}
+              </dd>
+            </div>
+            <div v-if="update.latestCommit && update.latestCommit !== update.deployedCommit" class="flex items-center justify-between gap-4 py-2">
+              <dt class="field-label">
+                Latest commit
+              </dt>
+              <dd class="break-all font-mono text-sm text-muted">
+                {{ update.latestCommit }}
+              </dd>
+            </div>
+            <div class="flex items-center justify-between gap-4 py-2">
+              <dt class="field-label">
+                Last checked
+              </dt>
+              <dd class="text-sm text-muted">
+                {{ update.checkedAt ? relativeTime(update.checkedAt) : 'Checking now' }}
+              </dd>
+            </div>
+          </dl>
+          <p v-if="update.detail" class="mt-2 text-sm status-warning">
+            {{ update.detail }}
+          </p>
+        </section>
+
+        <section aria-labelledby="system-classification">
+          <h3 id="system-classification" class="field-label flex items-center gap-2">
+            Classification
+            <span class="h-px flex-1 bg-border" aria-hidden="true" />
+          </h3>
+          <div v-if="snapshot.classification !== undefined" class="mt-1 py-2">
+            <div class="flex items-baseline justify-between gap-3">
+              <span class="text-sm font-medium text-highlighted">Jev</span>
+              <span class="font-mono text-sm text-muted">{{ snapshot.classification.model }}</span>
+            </div>
+            <p class="mt-0.5 text-sm text-muted">
+              Last 24 hours: {{ triageSummary }} via {{ snapshot.classification.gatewayId }}.
+            </p>
+          </div>
+          <p v-else class="mt-2 text-sm text-muted">
+            Classification is not configured. Prose-only pull requests get a full Review.
+          </p>
+        </section>
+
+        <section v-if="routines.length > 0" aria-labelledby="system-routines">
+          <div class="flex items-center gap-2">
+            <h3 id="system-routines" class="field-label">
+              Routines <span class="font-mono">{{ routines.length }}</span>
+            </h3>
+            <span class="h-px flex-1 bg-border" aria-hidden="true" />
+            <NuxtLink to="/routines" class="entity-link text-sm text-muted" @click="open = false">
+              View all
+            </NuxtLink>
+          </div>
+          <details class="mt-2" :open="routinesNeedAttention">
+            <summary class="cursor-pointer text-sm text-muted">
+              {{ routinesNeedAttention ? 'Routines needing attention' : `${routines.length} scheduled ${routines.length === 1 ? 'Routine' : 'Routines'}` }}
+            </summary>
+            <ul class="mt-2 divide-y divide-default border-t border-default">
+              <li v-for="record in routines" :key="record.routine.id" class="space-y-1 py-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="font-mono text-sm text-highlighted">{{ record.routine.name }}</span>
+                  <a
+                    v-if="record.trackingUrl"
+                    :href="record.trackingUrl"
+                    target="_blank"
+                    rel="noreferrer"
+                    class="entity-link font-mono text-sm text-muted"
+                  ><RepositoryIdentity :repository="record.routine.repository"> #{{ record.routine.trackingIssueNumber }}</RepositoryIdentity></a>
+                  <RepositoryIdentity v-else :repository="record.routine.repository" class="font-mono text-sm text-muted" />
+                  <StateBadge :tone="record.tone" :label="record.label" class="ms-auto" />
+                </div>
+                <p class="text-sm text-muted">
+                  <template v-if="!record.routine.enabled">
+                    Disabled.
                   </template>
-                  <template v-if="record.next">
-                    Next {{ relativeTime(record.next) }}.
+                  <template v-else>
+                    <template v-if="record.routine.lastRunAt">
+                      Last {{ relativeTime(record.routine.lastRunAt) }}.
+                    </template>
+                    <template v-if="record.next">
+                      Next {{ relativeTime(record.next) }}.
+                    </template>
                   </template>
-                </template>
-              </p>
-              <p v-if="record.detail" class="text-sm">
-                {{ record.detail }}
-              </p>
-              <p v-if="record.reportPending" class="text-sm status-warning">
-                Report pending. <NuxtLink to="/watching" class="entity-link">
-                  Enable writes in Watching.
-                </NuxtLink>
-              </p>
-              <p v-if="record.reportFailed" class="text-sm status-error">
-                Report failed after every attempt.
-              </p>
-              <details v-if="record.latestRun && record.latestRun.candidates.length > 0" class="text-sm">
-                <summary class="cursor-pointer text-muted">
-                  {{ record.latestRun.candidates.length }} {{ record.latestRun.candidates.length === 1 ? 'candidate' : 'candidates' }}
-                </summary>
-                <ul class="mt-2 space-y-2">
-                  <li v-for="candidate in record.latestRun.candidates" :key="candidate.id" class="rounded-md border border-default p-3">
-                    <p>{{ candidate.claim }}</p>
-                    <p class="mt-1 break-all font-mono text-sm text-muted">
-                      {{ candidate.target }}
-                    </p>
-                  </li>
-                </ul>
-              </details>
-              <details v-if="record.latestRun && record.latestRun.activity.length > 0" class="text-sm">
-                <summary class="cursor-pointer text-muted">
-                  Terminal
-                </summary>
-                <pre class="terminal mt-2">{{ record.latestRun.activity.map(activityLine).join('\n') }}</pre>
-              </details>
-            </li>
-          </ul>
+                </p>
+                <p v-if="record.detail" class="text-sm">
+                  {{ record.detail }}
+                </p>
+                <p v-if="record.reportPending" class="text-sm status-warning">
+                  Report pending. <NuxtLink to="/watching" class="entity-link" @click="open = false">
+                    Enable writes in Watching.
+                  </NuxtLink>
+                </p>
+                <p v-if="record.reportFailed" class="text-sm status-error">
+                  Report failed after every attempt.
+                </p>
+                <details v-if="record.latestRun && record.latestRun.candidates.length > 0" class="text-sm">
+                  <summary class="cursor-pointer text-muted">
+                    {{ record.latestRun.candidates.length }} {{ record.latestRun.candidates.length === 1 ? 'candidate' : 'candidates' }}
+                  </summary>
+                  <ul class="mt-2 space-y-2">
+                    <li v-for="candidate in record.latestRun.candidates" :key="candidate.id" class="rounded-md border border-default p-3">
+                      <p>{{ candidate.claim }}</p>
+                      <p class="mt-1 break-all font-mono text-sm text-muted">
+                        {{ candidate.target }}
+                      </p>
+                    </li>
+                  </ul>
+                </details>
+                <details v-if="record.latestRun && record.latestRun.activity.length > 0" class="text-sm">
+                  <summary class="cursor-pointer text-muted">
+                    Terminal
+                  </summary>
+                  <pre class="terminal mt-2">{{ record.latestRun.activity.map(activityLine).join('\n') }}</pre>
+                </details>
+              </li>
+            </ul>
+          </details>
         </section>
 
         <section v-if="host._tag !== 'NotOnHogwild'" aria-labelledby="system-host">
@@ -631,7 +771,7 @@ function activityLine(item: AgentActivityItem): string {
                 </dd>
               </div>
             </dl>
-            <ul class="mt-4 divide-y divide-default border-t border-default">
+            <ul class="mt-3 divide-y divide-default border-t border-default">
               <li v-for="service in hostStatus.services" :key="service.name" class="py-2.5">
                 <div class="flex items-baseline justify-between gap-3">
                   <span class="text-sm">{{ service.name }}</span>
@@ -648,6 +788,8 @@ function activityLine(item: AgentActivityItem): string {
             {{ host._tag === 'Connecting' ? 'Waiting for host status.' : host._tag === 'Unavailable' ? host.reason : host._tag === 'Stale' ? `Last host update ${relativeTime(new Date(host.updatedAt).toISOString())}. Host data is unavailable.` : '' }}
           </p>
         </section>
+
+        <EmergencyIsolation :active="open" />
       </template>
     </template>
   </USlideover>

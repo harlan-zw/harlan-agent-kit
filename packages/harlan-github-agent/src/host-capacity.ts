@@ -1,6 +1,15 @@
 import type { AgentProvider, AgentTurnRequest } from './agent-provider.ts'
 import { desktopTurnMayMove } from './desktop-protocol.ts'
 
+export interface HostSharedMemory {
+  memoryGiB: number
+  actionsMemoryGiB: number
+  reservedGiB: number
+  maintenanceReserve: number
+  actions: number
+  agents: number
+}
+
 export interface HostCapacity {
   localActive: number
   localMaximum: number
@@ -8,6 +17,8 @@ export interface HostCapacity {
   desktopMaximum: number
   /** Protocol and free memory permit Agent work. state.desktop.connected reports the connection. */
   desktopAvailable: boolean
+  /** Aggregate shared broker memory on Hogwild. Root diagnostics stay private. */
+  localMemory?: HostSharedMemory
 }
 
 export type AgentHost = 'hogwild' | 'desktop'

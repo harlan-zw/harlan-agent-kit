@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { afterEach, describe, expect, it } from 'vitest'
-import { effectiveMaintenanceReserve, setHostSlotPolicy } from '../src/host-slot-policy.ts'
+import { effectiveMaintenanceReserve, parseHostSharedMemory, readHostSharedMemory, setHostSlotPolicy } from '../src/host-slot-policy.ts'
 
 const directories: string[] = []
 async function authority(response: unknown, exitCode = 0, raw = false) {
@@ -66,5 +66,39 @@ describe('shared host slot policy', () => {
     const cli = await authority(status(2))
     await expect(setHostSlotPolicy(cli.command, slots)).rejects.toThrow('Set a valid Agent slot count.')
     await expect(cli.arguments()).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+  it('reads aggregate shared memory and paused Actions expansion from broker status', async () => {
+    const cli = await authority({
+      _tag: 'Status',
+      hostId: 'host',
+      bootId: 'boot',
+      memoryGiB: 42,
+      actionsMemoryGiB: 52,
+      reservedGiB: 32,
+      policy: { agentSlots: 4, maintenanceReserve: 0 },
+      reservations: {
+        'actions:a': { kind: 'actions', memoryGiB: 16 },
+        'actions:b': { kind: 'actions', memoryGiB: 6 },
+        'agent:1': { kind: 'agent', memoryGiB: 8 },
+      },
+    })
+    await expect(readHostSharedMemory(cli.command)).resolves.toEqual({
+      memoryGiB: 42,
+      actionsMemoryGiB: 52,
+      reservedGiB: 32,
+      maintenanceReserve: 0,
+      actions: 2,
+      agents: 1,
+    })
+    expect(await cli.arguments()).toEqual(['status'])
+    expect(parseHostSharedMemory({ _tag: 'Status', memoryGiB: 42, reservedGiB: 10, policy: { maintenanceReserve: 1 } })).toEqual({
+      memoryGiB: 42,
+      actionsMemoryGiB: 42,
+      reservedGiB: 10,
+      maintenanceReserve: 1,
+      actions: 0,
+      agents: 0,
+    })
+    expect(parseHostSharedMemory({ _tag: 'Status', memoryGiB: 42, actionsMemoryGiB: 30, reservedGiB: 0, policy: { maintenanceReserve: 0 } })).toBeUndefined()
   })
 })
