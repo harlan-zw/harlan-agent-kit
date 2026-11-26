@@ -428,7 +428,7 @@ The observer reads GitHub auto-merge handoffs, main Code runs, active Docs poll 
 The observer never holds a merge, requests a reservation, or writes to GitHub.
 
 The Service checks every two minutes and keeps changed observations for seven days.
-If GitHub has no Code run for the main commit, the pre-merge verdict stays unknown.
+If GitHub has no Code or production deploy run for the main commit, the pre-merge verdict stays unknown.
 If Code passes and the deployment has yet to appear, the verdict shows the gap.
 The Service also checks active runs and looks for unmatched Code completions from the past 65 minutes.
 Release evidence includes the exact served revision, a terminal workflow failure, or expiry 45 minutes after a confirmed merge.

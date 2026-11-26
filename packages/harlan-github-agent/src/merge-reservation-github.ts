@@ -146,6 +146,8 @@ export function createReservationSource(options: {
     const deployRuns = includeActiveRuns(recentDeploys, active.filter(run => run.path.split('@')[0] === '.github/workflows/deploy-prod.yml'))
     const activeDocsPolls = includeActiveRuns([], active.filter(run => run.path.split('@')[0] === '.github/workflows/docs-poll.yml')).map(runEvidence)
     const deploys = deployRuns.flatMap<ReservationEvidence['deploys'][number]>((run) => {
+      if (run.event === 'push')
+        return [{ run: runEvidence(run), sourceSha: run.head_sha }]
       if (run.event === 'workflow_dispatch')
         return [{ run: runEvidence(run), sourceSha: null }]
       const source = workflowRunSource(run.display_title)

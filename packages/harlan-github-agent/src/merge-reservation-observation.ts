@@ -67,9 +67,14 @@ function runFinding(run: ReservationRun | undefined, reason: string): Reservatio
 export function observeMergeReservation(evidence: ReservationEvidence, at: Date): ReservationObservation {
   const { mainSha, handoffs, code, deploys } = evidence
   const mainCode = newest(code.filter(run => run.sha === mainSha), run => run.id)
-  const mainDeploy = mainCode !== undefined && canStartDeploy(mainCode)
-    ? newest(deploys.filter(deploy => followsCode(deploy, mainCode)), ({ run }) => run.id)?.run
+  const directMainDeploy = mainCode === undefined
+    ? newest(deploys.filter(deploy => deploy.sourceSha === mainSha), ({ run }) => run.id)?.run
     : undefined
+  const mainDeploy = mainCode !== undefined
+    ? (canStartDeploy(mainCode)
+        ? newest(deploys.filter(deploy => followsCode(deploy, mainCode)), ({ run }) => run.id)?.run
+        : undefined)
+    : directMainDeploy
   const activeDeploy = deploys.find(({ run }) => run.status !== 'completed')?.run
   const activeCode = code.find(run => run.status !== 'completed')
   const activeWork = runFinding(activeDeploy, 'A production deploy is queued or running.')
@@ -88,14 +93,16 @@ export function observeMergeReservation(evidence: ReservationEvidence, at: Date)
   else if (activeWork !== undefined) {
     beforeMerge = { verdict: 'WouldBlock', ...activeWork }
   }
-  else if (mainCode === undefined) {
-    beforeMerge = { verdict: 'Unknown', reason: 'GitHub has no Code run for this main commit.' }
-  }
-  else if (mainCode.conclusion !== 'success') {
+  else if (mainCode !== undefined && mainCode.conclusion !== 'success') {
     beforeMerge = { verdict: 'WouldBlock', reason: 'Code has no passing result for this main commit.', url: mainCode.url }
   }
-  else if (mainDeploy === undefined || dispatchGap !== undefined) {
-    beforeMerge = { verdict: 'WouldBlock', reason: 'Code passed. GitHub has yet to show its production deploy.', url: (dispatchGap ?? mainCode).url }
+  else if (mainDeploy === undefined) {
+    beforeMerge = mainCode === undefined
+      ? { verdict: 'Unknown', reason: 'GitHub has no Code or production deploy run for this main commit.' }
+      : { verdict: 'WouldBlock', reason: 'Code passed. GitHub has yet to show its production deploy.', url: (dispatchGap ?? mainCode).url }
+  }
+  else if (dispatchGap !== undefined) {
+    beforeMerge = { verdict: 'WouldBlock', reason: 'Code passed. GitHub has yet to show its production deploy.', url: dispatchGap.url }
   }
   else if (mainDeploy.conclusion === null) {
     beforeMerge = { verdict: 'Unknown', reason: 'GitHub has yet to report the production deploy result.', url: mainDeploy.url }
