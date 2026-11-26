@@ -48,12 +48,19 @@ export HARLAN_AGENT_CONTEXT_SITES_FILE="$test_root/SITES.md"
 export HARLAN_GITHUB_AGENT_DESKTOP_UNIT=harlan-desktop-agent-fixture
 export HARLAN_GITHUB_AGENT_SERVICE_SCRIPT="$test_root/bin/service-fixture.sh"
 export HARLAN_GITHUB_AGENT_CHECKOUT="$test_home/sites/example"
+export HARLAN_GITHUB_AGENT_BIN_DIR="$test_home/.local/bin"
+export HARLAN_GITHUB_AGENT_INDICATORS_DIR="$test_home/.local/share/harlan-github-agent/indicators"
 export XDG_CONFIG_HOME="$test_home/.config"
 export XDG_STATE_HOME="$test_home/.local/state"
 export HOGWILD_SERVICE_TEST_DESKTOP_RESTARTED="$test_root/desktop-restarted"
 export HOGWILD_SERVICE_TEST_DESKTOP_POLLS="$test_root/desktop-polls"
 
-mkdir -p "$test_home/.config/harlan-github-agent" "$test_home/sites/example" "$test_root/bin"
+mkdir -p "$test_home/.config/harlan-github-agent" "$test_home/sites/example/packages/harlan-github-agent/bin" "$test_home/sites/example/packages/harlan-github-agent/assets" "$HARLAN_GITHUB_AGENT_BIN_DIR" "$test_root/bin"
+printf '%s\n' '#!/usr/bin/python3' > "$test_home/sites/example/packages/harlan-github-agent/bin/harlan-github-agent-indicator"
+printf '%s\n' '#!/usr/bin/python3' > "$test_home/sites/example/packages/harlan-github-agent/bin/harlan-github-runner-indicator"
+printf 'png' > "$test_home/sites/example/packages/harlan-github-agent/assets/github-app-icon.png"
+printf 'svg' > "$test_home/sites/example/packages/harlan-github-agent/assets/github-runner-icon.svg"
+touch "$HARLAN_GITHUB_AGENT_BIN_DIR/harlan-github-agent-indicator" "$HARLAN_GITHUB_AGENT_BIN_DIR/harlan-github-runner-indicator"
 printf '%s\n' 'password' > "$HARLAN_GITHUB_AGENT_PASSWORD_FILE"
 git init --quiet --initial-branch=main "$test_home/sites/example"
 printf '%s\n' '.env' > "$test_home/sites/example/.gitignore"
@@ -288,6 +295,16 @@ if [ ! -f "$XDG_CONFIG_HOME/systemd/user/$HARLAN_GITHUB_AGENT_DESKTOP_UNIT.servi
   printf '%s\n' 'The deploy did not install the desktop unit.' >&2
   exit 1
 fi
+for indicator_name in harlan-github-agent-indicator harlan-github-runner-indicator; do
+  if [ "$(readlink "$HARLAN_GITHUB_AGENT_BIN_DIR/$indicator_name")" != "$HARLAN_GITHUB_AGENT_INDICATORS_DIR/$HOGWILD_SERVICE_TEST_DEPLOYED_SHA/bin/$indicator_name" ]; then
+    printf '%s\n' "The deploy did not update $indicator_name to $HOGWILD_SERVICE_TEST_DEPLOYED_SHA." >&2
+    exit 1
+  fi
+  if ! grep -qx "systemctl --user restart $indicator_name.service" "$HOGWILD_SERVICE_TEST_CALLS"; then
+    printf '%s\n' "The deploy did not restart active $indicator_name.service." >&2
+    exit 1
+  fi
+done
 if ! grep -Fx 'Paired files changed: scripts/desktop-agent.service' "$test_root/update.log" >/dev/null; then
   printf '%s\n' 'The deploy did not name the paired file that let it run.' >&2
   exit 1
