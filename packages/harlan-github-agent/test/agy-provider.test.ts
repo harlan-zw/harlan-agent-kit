@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { AGY_AGENT_PROFILE, parseAgentSelection, resolveAgentProfile } from '../src/agent-profile.ts'
-import { agyAgentEvent, agyArguments, agyStepUsage, createAgyProvider } from '../src/agy-provider.ts'
+import { agyAgentEvent, agyArguments, agyStepUsage, createAgyProvider, resolveAgyModelSelection } from '../src/agy-provider.ts'
 import { stableProviderFailureClass } from '../src/provider-circuit.ts'
 
 function fakeAgyChild(onStdinLine: (line: string, child: EventEmitter & { stdout: PassThrough, stderr: PassThrough, stdin: PassThrough, killed: string[], pid: number, kill: (signal: NodeJS.Signals) => boolean }) => void) {
@@ -73,22 +73,32 @@ describe('agy provider mapping and flags', () => {
   it('disables Google One credit fallback and enables Review restrictions in CLI flags', () => {
     const args = agyArguments({
       model: 'gemini-4-hydrogen-high',
-      reasoningEffort: 'high',
+      reasoningEffort: 'low',
       outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] },
       sessionId: 'conv-123',
+      workspace: '/home/harlan/sites/example',
     }, true)
     const settings = JSON.parse(args[args.indexOf('--settings') + 1]!) as {
       useG1Credits: boolean
       permissions?: { allow: string[], deny: string[] }
     }
     expect(settings.useG1Credits).toBe(false)
-    expect(settings.permissions?.allow).toEqual(['mcp(controller_review/*)'])
-    expect(settings.permissions?.deny).toContain('read_file(*)')
+    expect(settings.permissions?.allow).toEqual([
+      'mcp(controller_review/*)',
+      'read_file(/home/agent/.gemini/antigravity-cli/brain)',
+    ])
+    expect(settings.permissions?.deny).toContain('read_file(/home/harlan/sites/example)')
+    expect(settings.permissions?.deny).toContain('read_file(/home/agent/.gemini/antigravity-cli/antigravity-oauth-token)')
+    expect(settings.permissions?.deny).not.toContain('read_file(*)')
+    expect(args[args.indexOf('--model') + 1]).toBe('gemini-4-hydrogen-low')
+    expect(args).not.toContain('--effort')
     expect(args).toContain('--mode')
     expect(args).toContain('plan')
     expect(args).toContain('--conversation')
     expect(args).toContain('conv-123')
     expect(args.at(-1)).toBe('-p=')
+
+    expect(resolveAgyModelSelection('gemini-3.8-flash-medium', 'max')).toEqual({ model: 'gemini-3.8-flash-high' })
   })
 
   it('maps step updates, token usage, structured output, and errors', () => {

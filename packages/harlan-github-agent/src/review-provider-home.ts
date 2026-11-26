@@ -5,6 +5,7 @@ import { constants } from 'node:fs'
 import { lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
+import { agyReviewPermissions } from './agy-provider.ts'
 
 export interface ReviewHomeRelease { _tag: 'Released', warnings: string[] }
 
@@ -200,10 +201,7 @@ export async function createReviewProviderHome(input: { profilePath: string, pro
         useG1Credits: false,
         enableTerminalSandbox: false,
         toolPermission: 'always-proceed',
-        permissions: {
-          allow: ['mcp(controller_review/*)'],
-          deny: ['command(*)', 'read_file(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)'],
-        },
+        permissions: agyReviewPermissions(),
       }), { mode: 0o600 })
       await writeFile(join(home, '.config/opencode/opencode.json'), '{"permissions":[{"action":"*","resource":"*","effect":"deny"}]}', { mode: 0o600 })
     }

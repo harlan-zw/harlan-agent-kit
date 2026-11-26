@@ -5,6 +5,7 @@ import type { ReviewProofAuthorityFactory } from './review-proof-authority.ts'
 import type { ReviewRuntime } from './review-runtime.ts'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import { AGENT_MODELS } from './agent-profile.ts'
 import { advanceContextBudget, agentProviderFailureReason, agentTextEvent, contextBudgetWrapUpPrompt, DEFAULT_AGY_CACHED_CONTEXT_BUDGET, extractJsonObject, jsonOutputInstruction } from './agent-provider.ts'
 import { prepareAgentSandbox } from './agent-sandbox.ts'
 import { agentSkillCatalogPrompt } from './agent-skill-catalog.ts'
@@ -196,6 +197,59 @@ export function agyAgentEvent(line: AgyLine, outputSchema?: unknown): AgentEvent
   return undefined
 }
 
+const WORKER_HOME_BRAIN = '/home/agent/.gemini/antigravity-cli/brain'
+const effortSuffixedModel = /^(.+)-(low|medium|high|xhigh)$/
+const agyModelSet = new Set<string>(AGENT_MODELS.agy)
+
+/** Review permissions that block direct workspace reads while allowing spilled MCP tool output in the brain directory. */
+export function agyReviewPermissions(workspace?: string): { allow: string[], deny: string[] } {
+  return {
+    allow: ['mcp(controller_review/*)', `read_file(${WORKER_HOME_BRAIN})`],
+    deny: [
+      'command(*)',
+      'write_file(*)',
+      'read_url(*)',
+      'execute_url(*)',
+      ...(workspace === undefined ? [] : [`read_file(${workspace})`]),
+      'read_file(/home/harlan)',
+      'read_file(/home/agent/.config)',
+      'read_file(/home/agent/.codex)',
+      'read_file(/home/agent/.local)',
+      'read_file(/home/agent/.gemini/config)',
+      'read_file(/home/agent/.gemini/antigravity-cli/antigravity-oauth-token)',
+      'read_file(/tmp)',
+      'read_file(/etc)',
+      'read_file(/usr)',
+      'read_file(/var)',
+      'read_file(/opt)',
+      'read_file(/run)',
+    ],
+  }
+}
+
+/** Maps reasoning effort overrides onto Antigravity suffixed models without passing conflicting `--effort` flags. */
+export function resolveAgyModelSelection(
+  model: string,
+  reasoningEffort?: string,
+): { model: string, effort?: string } {
+  const match = effortSuffixedModel.exec(model)
+  if (match === null) {
+    return reasoningEffort === undefined || reasoningEffort === 'none'
+      ? { model }
+      : { model, effort: reasoningEffort }
+  }
+  const [, base, current] = match
+  if (reasoningEffort === undefined || reasoningEffort === 'none' || reasoningEffort === current)
+    return { model }
+  const mapped = reasoningEffort === 'max' ? 'xhigh' : reasoningEffort
+  const candidate = `${base}-${mapped}`
+  if (agyModelSet.has(candidate))
+    return { model: candidate }
+  if (mapped === 'xhigh' && agyModelSet.has(`${base}-high`))
+    return { model: `${base}-high` }
+  return { model }
+}
+
 /** Builds CLI flags for headless NDJSON Antigravity turns inside `bwrap`. */
 export function agyArguments(
   request: {
@@ -203,21 +257,16 @@ export function agyArguments(
     reasoningEffort?: string | undefined
     outputSchema?: unknown
     sessionId: string | null
+    workspace?: string | undefined
   },
   reviewMode = false,
 ): string[] {
+  const selection = resolveAgyModelSelection(request.model, request.reasoningEffort)
   const settings = {
     useG1Credits: false,
     enableTerminalSandbox: false,
     toolPermission: 'always-proceed',
-    ...(reviewMode
-      ? {
-          permissions: {
-            allow: ['mcp(controller_review/*)'],
-            deny: ['command(*)', 'read_file(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)'],
-          },
-        }
-      : {}),
+    ...(reviewMode ? { permissions: agyReviewPermissions(request.workspace) } : {}),
   }
   return [
     '--output-format',
@@ -225,8 +274,8 @@ export function agyArguments(
     '--input-format',
     'stream-json',
     '--model',
-    request.model,
-    ...(request.reasoningEffort !== undefined && request.reasoningEffort !== 'none' ? ['--effort', request.reasoningEffort] : []),
+    selection.model,
+    ...(selection.effort === undefined ? [] : ['--effort', selection.effort]),
     '--disable-slash-commands',
     '--dangerously-skip-permissions',
     ...(reviewMode ? ['--mode', 'plan'] : []),
