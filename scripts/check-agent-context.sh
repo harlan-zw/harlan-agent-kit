@@ -7,6 +7,8 @@ TARGET_HOME="${HARLAN_AGENT_CONTEXT_HOME:-$HOME}"
 CLAUDE="$TARGET_HOME/.claude/CLAUDE.md"
 CODEX="$TARGET_HOME/.codex/AGENTS.md"
 GEMINI="$TARGET_HOME/.gemini/GEMINI.md"
+WORKER_SOURCE="$REPO_ROOT/agent-context/worker.md"
+WORKER_INSTALLED="$TARGET_HOME/.local/share/harlan-agent-kit/worker.md"
 COMMIT_HOOK="$TARGET_HOME/.config/git/hooks/commit-msg"
 SOURCE_HOOK="$REPO_ROOT/agent-context/git-hooks/commit-msg"
 PLUGIN_HOOKS_DIR="$REPO_ROOT/harlan-agent-kit/hooks"
@@ -33,7 +35,7 @@ fail=0
 note() { printf '%s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 
-for f in "$REPO_ROOT/agent-context/context.md" "$REPO_ROOT/agent-context/CLAUDE.md" "$REPO_ROOT/agent-context/AGENTS.md" "$REPO_ROOT/agent-context/GEMINI.md" "$SOURCE_MANIFEST" "$CLAUDE" "$CODEX" "$GEMINI" "$SKILL"; do
+for f in "$REPO_ROOT/agent-context/context.md" "$WORKER_SOURCE" "$REPO_ROOT/agent-context/CLAUDE.md" "$REPO_ROOT/agent-context/AGENTS.md" "$REPO_ROOT/agent-context/GEMINI.md" "$SOURCE_MANIFEST" "$CLAUDE" "$CODEX" "$GEMINI" "$WORKER_INSTALLED" "$SKILL"; do
   [ -f "$f" ] || { bad "Missing file: $f"; }
 done
 [ "$fail" -eq 0 ] || exit 1
@@ -48,6 +50,7 @@ HARLAN_AGENT_CONTEXT_HOME="$EXPECTED_HOME" HARLAN_AGENT_CONTEXT_SKIP_MEMORY=1 \
 cmp -s "$EXPECTED_CLAUDE" "$CLAUDE" || bad "Claude instructions differ. Run pnpm sync:context."
 cmp -s "$EXPECTED_CODEX" "$CODEX" || bad "Codex instructions differ. Run pnpm sync:context."
 cmp -s "$EXPECTED_GEMINI" "$GEMINI" || bad "Gemini instructions differ. Run pnpm sync:context."
+cmp -s "$WORKER_SOURCE" "$WORKER_INSTALLED" || bad "Worker instructions differ. Run pnpm sync:context."
 
 if [ ! -f "$COMMIT_HOOK" ]; then
   bad "The commit-msg hook is not installed. Run pnpm sync:context."
@@ -164,11 +167,13 @@ principles() { grep -E '^- \*\*(Make illegal|Errors as|No silent|Parse, don|Expl
 c_p=$(principles "$EXPECTED_CLAUDE")
 x_p=$(principles "$EXPECTED_CODEX")
 g_p=$(principles "$EXPECTED_GEMINI")
+w_p=$(principles "$WORKER_SOURCE")
 s_p=$(principles "$SKILL")
 
 [ -n "$c_p" ] || bad "No design principles found in rendered Claude instructions."
 [ "$c_p" = "$x_p" ] || { bad "design principles differ between tracked files"; diff <(echo "$c_p") <(echo "$x_p") | sed 's/^/      /'; }
 [ "$c_p" = "$g_p" ] || { bad "design principles differ between tracked files"; diff <(echo "$c_p") <(echo "$g_p") | sed 's/^/      /'; }
+[ "$w_p" = "$s_p" ] || { bad "worker design principles differ from the skill"; diff <(echo "$w_p") <(echo "$s_p") | sed 's/^/      /'; }
 [ "$c_p" = "$s_p" ] || { bad "design principles differ from the skill"; diff <(echo "$c_p") <(echo "$s_p") | sed 's/^/      /'; }
 
 [ "$fail" -eq 0 ] && note 'ok    Agent instructions match tracked sources'

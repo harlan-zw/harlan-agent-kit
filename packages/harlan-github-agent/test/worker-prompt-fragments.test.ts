@@ -163,10 +163,10 @@ describe('agent prompt fragments', () => {
     expect(reviewFixPrompt({ task: reviewFixTask(), findings, instructionFiles: [] })).not.toContain(CHECK_SCOPES.failingCheck)
   })
 
-  it('never tells a turn to run the full suite CI already runs', () => {
+  it('prefers narrow checks while allowing broader checks when needed to prove a change', () => {
     for (const worker of Object.values(prompts)) {
       if (worker.checkBudget !== null)
-        expect(worker.build()).toContain('Do not run the full test suite, the full typecheck, or a build. CI runs those.')
+        expect(worker.build()).toContain('Prefer narrow checks; CI runs the full test suite, full typecheck, and build. Run a broader check or build only when needed to prove your change.')
     }
   })
 
@@ -174,7 +174,7 @@ describe('agent prompt fragments', () => {
     const prompt = prompts.baselineRepair.build()
     expect(prompt).toContain('failed step "Run pnpm test"')
     expect(prompt).toContain('run the exact command of the failing check only when no narrower command reproduces it')
-    expect(prompt).toContain('Exception: when no narrower command reproduces the failure, run the failing check\'s exact command, even if it is the full suite.')
+    expect(prompt).toContain('When no narrower command reproduces the failure, run the failing check\'s exact command, even if it is the full suite.')
   })
 
   it.each(['vitals-review', 'seo-review', null] as const)('limits local performance builds to trusted vitals provenance, source %s', (routineName) => {
@@ -191,14 +191,14 @@ describe('agent prompt fragments', () => {
 
     if (routineName === 'vitals-review') {
       expect(prompt).toContain(permission)
-      expect(prompt).not.toContain('Do not run the full test suite, the full typecheck, or a build.')
-      expect(prompt).toContain('Do not run the full test suite or full typecheck. CI runs those.')
+      expect(prompt).not.toContain('Prefer narrow checks; CI runs the full test suite, full typecheck, and build.')
+      expect(prompt).toContain('Prefer narrow checks; CI runs the full test suite and full typecheck.')
       expect(prompt).toContain('If the required comparison cannot run, return blocked with the exact blocker.')
       expect(prompt).toContain('If the comparison does not establish the claimed benefit, return blocked with measurements.')
     }
     else {
       expect(prompt).not.toContain(permission)
-      expect(prompt).toContain('Do not run the full test suite, the full typecheck, or a build.')
+      expect(prompt).toContain('Prefer narrow checks; CI runs the full test suite, full typecheck, and build.')
     }
   })
 })

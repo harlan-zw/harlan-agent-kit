@@ -232,6 +232,8 @@ export async function prepareHomeLayer(input: {
   taskId?: string
   /** The kit Codex Skills and guards, from a trusted read-only mount. */
   codexKit?: CodexKit
+  /** Worker-specific AGENTS.md from the controller, overriding the shared home copy. */
+  instructionsPath?: string
 }): Promise<HomeLayer> {
   const layer = await privateDirectory(input.controllerHome, [...layerParent, randomUUID()])
   let released: Promise<void> | undefined
@@ -251,7 +253,10 @@ export async function prepareHomeLayer(input: {
         throw new Error(`The Agent worker home must keep ${path} inside itself.`)
       persisted.push({ path, source })
     }
-    const instructions = await prepareCodexMasks(join(input.sharedHome, '.codex'))
+    const sharedInstructions = await prepareCodexMasks(join(input.sharedHome, '.codex'))
+    const instructions = input.instructionsPath === undefined
+      ? sharedInstructions
+      : await boundedFile(input.instructionsPath)
     const codex = join(layer, 'codex')
     const kit = input.codexKit
     await Promise.all([

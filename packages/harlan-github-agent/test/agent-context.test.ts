@@ -1,16 +1,21 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { claudeProjectSlug, defaultAgentContextPaths, findRepositoryMemory, instructionFilesLine, listInstructionFiles, loadAgentContext, opencodeAgentEnvironment, opencodeTurnEnvironment, repositoryMemoryIndexPath, repositoryMemoryLine } from '../src/agent-context.ts'
 
 describe('defaultAgentContextPaths', () => {
   it('uses the supplied service directory and Agent home for context paths', () => {
-    const paths = defaultAgentContextPaths({ CODEX_HOME: '/agent-home', HOME: '/agent-home' }, '/service')
+    const paths = defaultAgentContextPaths({ HOME: '/agent-home' }, '/service')
     expect(paths.claudeHome).toBe('/agent-home/.claude')
-    expect(paths.instructionsPath).toBe('/agent-home/AGENTS.md')
+    expect(paths.instructionsPath).toBe('/agent-home/.local/share/harlan-agent-kit/worker.md')
     expect(paths.skillsRoot).toBe('/service/harlan-agent-kit/skills')
     expect(paths.requiredSkillDirectories).toContain('/agent-home/.local/share/harlan-agent-kit/skilld/skills/im-part-human')
+  })
+
+  it('honors an explicit worker instructions override', () => {
+    const paths = defaultAgentContextPaths({ HOME: '/agent-home', HARLAN_AGENT_WORKER_INSTRUCTIONS: '/custom/worker.md' }, '/service')
+    expect(paths.instructionsPath).toBe('/custom/worker.md')
   })
 })
 
@@ -23,10 +28,10 @@ describe('loadAgentContext', () => {
       await chmod(binary, 0o755)
       const paths = defaultAgentContextPaths({
         HOME: root,
-        CODEX_HOME: root,
         PATH: join(root, 'empty-path'),
         HARLAN_AGENT_SKILLD_BINARY: binary,
       }, root)
+      await mkdir(dirname(paths.instructionsPath), { recursive: true })
       await writeFile(paths.instructionsPath, '# Instructions\n')
       await mkdir(join(paths.skillsRoot, 'pr'), { recursive: true })
       await writeFile(join(paths.skillsRoot, 'pr/SKILL.md'), 'Personal policy.\n')

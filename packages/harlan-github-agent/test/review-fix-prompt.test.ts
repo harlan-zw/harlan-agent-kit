@@ -38,10 +38,10 @@ describe('reviewFixPrompt', () => {
     const prompt = reviewFixPrompt({ task: task(), findings, instructionFiles: [] })
 
     expect(prompt).toContain('Check budget: run the regression test file, its direct dependants, and lint and typecheck on the changed files only.')
-    expect(prompt).toContain('Do not run the full test suite, the full typecheck, or a build. CI runs those.')
+    expect(prompt).toContain('Prefer narrow checks; CI runs the full test suite, full typecheck, and build. Run a broader check or build only when needed to prove your change.')
     expect(prompt).toContain('Use pnpm for every package command. Never use npx.')
     expect(prompt).toContain('Never add debug output to tracked files.')
-    expect(prompt).toContain('Delete a test that can fail while the code is correct.')
+    expect(prompt).toContain('Delete a test that can fail while the code is correct, or pass while the code is broken.')
     expect(prompt).not.toContain('unit-tests skill')
   })
 
