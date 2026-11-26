@@ -78,6 +78,14 @@ fi
 
 expect allow "HARLAN_AGENT_PR_SKILL=1 gh pr create --title \"fix: example\" --body \"$(valid_body)\""
 expect allow "HARLAN_AGENT_PR_SKILL=1 gh pr edit 42 --body \"$(valid_body)\""
+# Inline env assignments (such as HARLAN_AGENT_GITHUB_PRIVATE on private repos) may appear beside HARLAN_AGENT_PR_SKILL=1.
+expect allow "HARLAN_AGENT_GITHUB_PRIVATE=owner/repo HARLAN_AGENT_PR_SKILL=1 gh pr create --title \"fix: example\" --body \"$(valid_body)\""
+expect allow "HARLAN_AGENT_PR_SKILL=1 HARLAN_AGENT_GITHUB_PRIVATE=owner/repo gh pr create --title \"fix: example\" --body \"$(valid_body)\""
+expect allow "HARLAN_AGENT_GITHUB_PRIVATE=owner/repo HARLAN_AGENT_PR_SKILL=1 gh pr edit 42 --body \"$(valid_body)\""
+expect allow "HARLAN_AGENT_PR_SKILL=1 HARLAN_AGENT_GITHUB_PRIVATE=owner/repo gh pr edit 42 --body \"$(valid_body)\""
+expect deny "HARLAN_AGENT_PR_SKILL=1 HARLAN_AGENT_GITHUB_PRIVATE=owner/repo gh pr create --fill"
+expect deny "HARLAN_AGENT_PR_SKILL=0 HARLAN_AGENT_GITHUB_PRIVATE=owner/repo gh pr create --title \"fix: example\" --body \"$(valid_body)\""
+expect deny "HARLAN_AGENT_PR_SKILL=1 HARLAN_AGENT_PR_SKILL=0 gh pr create --title \"fix: example\" --body \"$(valid_body)\""
 expect deny "$(printf 'cd /repo\ngh pr create --fill')"
 expect deny "$(printf 'cat > /tmp/pr.md <<EOF\nbody\nEOF\ngh pr create --body-file /tmp/pr.md')"
 expect deny "$(printf 'cd /repo\ngh pr edit 42 --body-file /tmp/pr.md')"
